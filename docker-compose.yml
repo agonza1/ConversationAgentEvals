@@ -1,0 +1,54 @@
+services:
+  api:
+    image: conversation-agent-evals-api:latest
+    env_file:
+      - .env
+    environment:
+      API_BASE_URL: http://api:8000
+      PIPECAT_SERVICE_URL: http://pipecat:8110
+    ports:
+      - "${API_PORT:-8025}:8000"
+    volumes:
+      - ./apps/api:/workspace/apps/api
+      - ./storage:/workspace/storage
+      - ./apps/api/sales_presenter.db:/workspace/apps/api/sales_presenter.db
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  pipecat:
+    image: conversation-agent-evals-pipecat:latest
+    env_file:
+      - .env
+    environment:
+      API_BASE_URL: http://api:8000
+      PIPECAT_SERVICE_URL: http://pipecat:8110
+    volumes:
+      - ./apps/pipecat:/app
+    ports:
+      - "${PIPECAT_PORT:-8110}:8110"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  web:
+    image: conversation-agent-evals-web:latest
+    env_file:
+      - .env
+    environment:
+      PORT: 3000
+      API_BASE_URL: http://api:8000
+      PIPECAT_SERVICE_URL: http://pipecat:8110
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:${API_PORT:-8025}
+      NEXT_PUBLIC_PIPECAT_SERVICE_URL: http://localhost:${PIPECAT_PORT:-8110}
+    volumes:
+      - ./apps/web:/app/apps/web
+    ports:
+      - "${PORT:-3012}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+      pipecat:
+        condition: service_started
