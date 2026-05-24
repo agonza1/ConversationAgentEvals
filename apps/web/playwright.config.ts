@@ -33,7 +33,6 @@ export default defineConfig({
   ],
   use: {
     baseURL,
-    channel: 'chrome',
     headless: true,
   },
 });
