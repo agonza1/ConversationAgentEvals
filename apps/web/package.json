@@ -6,7 +6,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test tests/product-flow.spec.ts --config playwright.config.ts"
   },
   "dependencies": {
     "next": "^15.5.15",

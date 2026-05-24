@@ -8,6 +8,7 @@ Benchmark conversation, voice, and group-call AI agents end to end, scoring task
 - Runs scenario tests against conversation evidence: transcript, action/tool trace, and final observed state.
 - Scores task completion, required actions, forbidden actions, policy constraints, final-state correctness, and evidence quality.
 - Provides a focused benchmark runner UI at `/benchmarks`.
+- Exposes a product config API for Free, Starter, Team, and Business gates, including Firebase-ready auth metadata, saved runs, and credit rules.
 - Keeps the architecture ready for voice, WebRTC, phone, and group-call evaluation as the product expands.
 
 ## Product Direction
@@ -17,6 +18,15 @@ Most conversation eval tools grade tone or transcript quality. This project is a
 > Did the AI agent actually complete the job?
 
 The MVP starts with text-first scenario simulation and deterministic scoring, then graduates the same benchmark shape to voice AI calls, group calls, tool execution, and vCon-compatible artifacts.
+
+## Pricing And Access Model
+
+- Free: browser transcript evals, deterministic checks, sample benchmarks, local report preview.
+- Starter: `$19/month`, unlimited seats, saved projects, custom suites, LLM judge credits, exports.
+- Team: `$99/month`, unlimited seats, higher credits, CI/API access, version comparisons, shared audit history, voice/WebRTC access.
+- Business: Contact Us for custom integration, readiness assessment, consulting, high-volume evals, phone/SIP, and compliance exports.
+
+Usage is credits/runs-based. Deterministic browser evals are cheap; LLM judging, voice minutes, API/CI runs, persistence, and custom integrations are the paid value.
 
 ## Benchmark Families
 
@@ -32,9 +42,13 @@ flowchart LR
   Web[Next.js web app] -->|scenario selection and evidence| API[FastAPI app]
   API --> Suites[Benchmark suite service]
   API --> Evaluator[Deterministic benchmark evaluator]
+  API --> Product[Product config, saved runs, judge gates]
   Evaluator --> Report[Scores, evidence, failures, suggested fixes]
   Web --> Report
 
+  Auth[Firebase Auth] --> Web
+  Billing[Stripe usage and subscriptions] --> API
+  Cloud[Google Cloud Run, Firestore, Storage, Tasks] --> API
   Voice[Future voice/WebRTC/phone runs] --> API
   GroupCalls[Future group-call artifacts] --> API
   Tools[Future agent tool traces] --> Evaluator
@@ -91,12 +105,13 @@ npm run test:voice-proof
 
 ## Current MVP Boundary
 
-The current product surface is a SaaS homepage plus a focused benchmark runner. The runner can load benchmark suites, simulate a scenario, inspect transcript/action/final-state evidence, and produce a scored benchmark report.
+The current product surface is a SaaS homepage plus a focused benchmark runner. The runner can load benchmark suites, simulate a scenario, inspect transcript/action/final-state evidence, produce a scored benchmark report, show pricing gates, request a paid LLM judge gate, and save runs behind a Firebase-ready signup flow.
 
 Near-term next slices:
 
-- Persist benchmark run history.
-- Add richer synthetic user and mock-agent simulation.
+- Replace in-memory saved runs with Firestore documents scoped by Firebase users/projects.
+- Wire Stripe price IDs for Starter and Team.
+- Execute LLM judge requests through a provider/Vertex abstraction with spend controls.
 - Add voice/WebRTC call artifacts to the same benchmark schema.
 - Add group-call evidence support: speakers, decisions, commitments, and follow-up actions.
 - Export vCon-compatible records for voice workflows.

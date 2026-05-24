@@ -400,6 +400,127 @@ select {
   box-shadow: 0 16px 44px rgba(24, 36, 45, 0.08);
 }
 
+.product-console {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
+  gap: 14px;
+}
+
+.console-panel,
+.auth-panel,
+.pricing-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 18px;
+  box-shadow: 0 12px 32px rgba(24, 36, 45, 0.06);
+}
+
+.console-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.console-panel h2,
+.auth-panel h3 {
+  margin: 0;
+}
+
+.console-panel p:not(.eyebrow),
+.auth-panel p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.usage-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.usage-strip span {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-alt);
+  padding: 6px 10px;
+  font-size: 13px;
+  font-weight: 820;
+}
+
+.auth-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.auth-panel label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 820;
+}
+
+.auth-panel input {
+  min-height: 42px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: white;
+  padding: 10px 12px;
+}
+
+.pricing-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.pricing-card {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 220px;
+  color: var(--text);
+  text-align: left;
+}
+
+.pricing-card.selected {
+  border-color: rgba(15, 118, 110, 0.5);
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12), 0 12px 32px rgba(24, 36, 45, 0.06);
+}
+
+.pricing-card span {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.pricing-card strong {
+  font-size: 25px;
+}
+
+.pricing-card small {
+  color: var(--muted);
+  font-weight: 760;
+}
+
+.pricing-card ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.validation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
 .hero-section {
   min-height: 520px;
   display: grid;
@@ -591,8 +712,14 @@ select {
   .signal-grid,
   .surface-grid,
   .workflow-grid,
-  .domain-strip {
+  .domain-strip,
+  .pricing-grid {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .product-console,
+  .validation-grid {
+    grid-template-columns: 1fr;
   }
 
   .hero-section {
@@ -640,7 +767,8 @@ select {
   .signal-grid,
   .surface-grid,
   .workflow-grid,
-  .domain-strip {
+  .domain-strip,
+  .pricing-grid {
     grid-template-columns: 1fr;
   }
 
