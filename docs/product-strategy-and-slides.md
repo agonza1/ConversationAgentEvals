@@ -91,20 +91,21 @@ This is the acquisition loop: users should get value before signup.
 
 Goal: prove value instantly.
 
-### Starter: $29-$49/month
+### Starter: $19/month
 
 - Saved projects and run history.
 - Custom benchmark suites.
-- More runs.
+- Credits-based runs.
 - Basic LLM judge credits.
 - Export reports.
+- Unlimited seats.
 
 Best for solo builders and early voice-agent teams.
 
-### Team: $149-$299/month
+### Team: $99/month
 
-- Team seats.
-- Higher LLM judge limits.
+- Unlimited seats.
+- Higher included run and judge credit limits.
 - CI/API access.
 - Version comparisons.
 - Shared reports and audit history.
@@ -112,8 +113,11 @@ Best for solo builders and early voice-agent teams.
 
 Best for agencies and teams shipping agents for customers.
 
-### Business: $799+/month
+### Business: Contact Us
 
+- Custom integration.
+- Readiness assessment.
+- Consulting and benchmark design.
 - High-volume evals.
 - Phone/SIP or deeper voice integrations.
 - Custom benchmarks.
@@ -123,7 +127,7 @@ Best for agencies and teams shipping agents for customers.
 
 Best for call centers, healthcare, fintech, education, and regulated workflows.
 
-Pricing metric should be a blend of seats, saved projects, eval runs, voice minutes, and LLM judge credits. Keep deterministic/browser evals cheap; charge for expensive judges, persistence, team workflows, API/CI, and voice minutes.
+Pricing should be simple: unlimited seats on paid plans, with usage governed by credits/runs. Keep deterministic browser evals cheap; charge for expensive LLM judges, saved history, API/CI usage, voice minutes, integrations, and custom consulting.
 
 ## Suggested Next Slides
 
@@ -176,10 +180,31 @@ Pricing metric should be a blend of seats, saved projects, eval runs, voice minu
    - CI/API integrations.
    - vCon import/export and group-call reports.
 
+11. E2E Validation
+   - Playwright validates the full browser path: free eval, signup prompt, saved project flow, paid-gated judge/voice actions, and report rendering.
+
+## Today's Build Goal
+
+Ship the first end-to-end product skeleton today, with enough real behavior to prove the direction:
+
+1. Free browser eval that can score pasted transcript evidence without signup.
+2. Real deterministic eval path for task completion, required actions, forbidden actions, final state, and policy checks.
+3. Call-center benchmark suite with realistic scenarios as the first wedge.
+4. Firebase Auth-ready signup/login surface and project model.
+5. Saved runs/projects flow behind authentication.
+6. Pricing and upgrade gates: Free, Starter $19, Team $99, Business Contact Us.
+7. Credit/run model foundation for LLM judges, voice minutes, and API usage.
+8. Paid LLM judge abstraction with evidence citations and cost controls.
+9. Voice/WebRTC integration path defined in the app, gated for paid/team usage until fully wired.
+10. Google Cloud deployment architecture documented and reflected in env/config naming.
+11. Playwright e2e validation covering the core free-to-paid eval journey.
+
 ## Immediate Build Priorities
 
 1. Replace demo/mock paths with a real eval path for pasted transcripts and browser-run text scenarios.
-2. Add Firebase Auth and project-scoped saved runs.
-3. Add a paid LLM judge abstraction with cost controls and evidence citations.
-4. Build one excellent call-center voice AI benchmark suite before expanding too broadly.
-5. Add Stripe only after signup, saved projects, and paid judge limits are clear.
+2. Add pricing/upgrade UI for Free, Starter $19, Team $99, and Business Contact Us.
+3. Add Firebase Auth scaffolding and project-scoped saved runs.
+4. Add a paid LLM judge abstraction with cost controls and evidence citations.
+5. Build one excellent call-center voice AI benchmark suite before expanding too broadly.
+6. Add Playwright e2e coverage for the full browser validation path.
+7. Add Stripe only after signup, saved projects, and paid judge limits are clear.
