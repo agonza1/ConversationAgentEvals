@@ -49,6 +49,7 @@ interface BenchmarkReport {
   action_trace?: unknown;
   final_state?: unknown;
   run_metadata?: RunMetadata;
+  evidence_audit_summary?: EvidenceAuditSummary;
 }
 
 interface RunMetadata {
@@ -56,6 +57,22 @@ interface RunMetadata {
   prompt_version?: string;
   model_name?: string;
   notes?: string;
+}
+
+interface EvidenceAuditSummary {
+  run_started_at?: string;
+  evaluated_at?: string;
+  input_artifact_types?: string[];
+  transcript_present?: boolean;
+  action_trace_present?: boolean;
+  final_state_present?: boolean;
+  metadata_labels?: string[];
+  evaluator_version?: string;
+  export_readiness?: {
+    ready?: boolean;
+    format?: string;
+    missing?: string[];
+  };
 }
 
 interface PricingPlan {
@@ -370,6 +387,20 @@ function metadataChangeSummary(current?: RunMetadata, previous?: RunMetadata) {
     .map((item) => `${item.label}: ${previous?.[item.key] ?? 'unset'} -> ${item.value}`);
 
   return changes.length ? changes.join('; ') : entries.length ? 'No version label changes from prior saved run.' : 'No version labels captured.';
+}
+
+function formatAuditTimestamp(value?: string) {
+  if (!value) return 'Not captured';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function formatBoolean(value?: boolean) {
+  return value ? 'Present' : 'Missing';
+}
+
+function artifactLabel(value: string) {
+  return value.replace(/_/g, ' ');
 }
 
 export function BenchmarkRunner() {
@@ -963,6 +994,7 @@ export function BenchmarkRunner() {
           </div>
 
           <RunMetadataPanel metadata={report.run_metadata} />
+          <EvidenceAuditPanel summary={report.evidence_audit_summary} />
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
             <ReportList title="Failure categories" items={report.failure_categories} empty="No failure categories reported." />
@@ -1095,6 +1127,64 @@ function RunMetadataPanel({ metadata }: { metadata?: RunMetadata }) {
       ) : (
         <p style={{ margin: 0, color: 'var(--muted)' }}>No prompt, model, or version labels captured.</p>
       )}
+    </div>
+  );
+}
+
+function EvidenceAuditPanel({ summary }: { summary?: EvidenceAuditSummary }) {
+  const artifactTypes = summary?.input_artifact_types ?? [];
+  const metadataLabels = summary?.metadata_labels ?? [];
+  const exportReady = summary?.export_readiness?.ready;
+
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14, display: 'grid', gap: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <p style={{ margin: '0 0 4px', color: 'var(--muted)', fontSize: 13, fontWeight: 800 }}>Evidence audit</p>
+          <p style={{ margin: 0, fontWeight: 850 }}>
+            {exportReady ? 'Export ready' : summary ? 'Needs evidence before export' : 'Not captured'}
+          </p>
+        </div>
+        <span
+          style={{
+            border: `1px solid ${exportReady ? 'var(--success-border)' : 'var(--border)'}`,
+            borderRadius: 8,
+            background: exportReady ? 'var(--success-bg)' : 'var(--panel-alt)',
+            color: exportReady ? 'var(--success-text)' : 'var(--muted)',
+            padding: '6px 8px',
+            fontSize: 13,
+            fontWeight: 800,
+            alignSelf: 'start',
+          }}
+        >
+          {summary?.evaluator_version ?? 'no evaluator version'}
+        </span>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+        <AuditFact label="Transcript" value={formatBoolean(summary?.transcript_present)} />
+        <AuditFact label="Action trace" value={formatBoolean(summary?.action_trace_present)} />
+        <AuditFact label="Final state" value={formatBoolean(summary?.final_state_present)} />
+        <AuditFact label="Evaluated" value={formatAuditTimestamp(summary?.evaluated_at)} />
+      </div>
+
+      <div style={{ display: 'grid', gap: 6 }}>
+        <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13 }}>
+          Artifacts: {artifactTypes.length ? artifactTypes.map(artifactLabel).join(', ') : 'none'}
+        </p>
+        <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13 }}>
+          Labels: {metadataLabels.length ? metadataLabels.map(artifactLabel).join(', ') : 'none'}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function AuditFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 10, background: 'var(--panel-alt)' }}>
+      <p style={{ margin: '0 0 4px', color: 'var(--muted)', fontSize: 12, fontWeight: 800 }}>{label}</p>
+      <p style={{ margin: 0, fontWeight: 800 }}>{value}</p>
     </div>
   );
 }

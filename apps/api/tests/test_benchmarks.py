@@ -96,6 +96,33 @@ def test_run_scenario_persists_prompt_model_and_version_labels():
     }
 
 
+def test_run_scenario_includes_evidence_audit_summary():
+    result = run_scenario(
+        {
+            'suite_id': 'fintech-support-agent',
+            'scenario_id': 'suspicious-card-charge',
+            'transcript': 'Agent: I will verify your account identity and file a fraud dispute case.',
+            'action_trace': [{'action': 'verify account identity', 'status': 'completed'}],
+            'final_state': {'complete': True, 'case_id': 'FRD-1001'},
+            'metadata': {
+                'agent_version': 'agent-v12',
+                'prompt_version': 'prompt-2026-05-25',
+            },
+        }
+    )
+
+    summary = result['evidence_audit_summary']
+    assert summary['run_started_at']
+    assert summary['evaluated_at']
+    assert summary['input_artifact_types'] == ['transcript', 'action_trace', 'final_state']
+    assert summary['transcript_present'] is True
+    assert summary['action_trace_present'] is True
+    assert summary['final_state_present'] is True
+    assert summary['metadata_labels'] == ['agent_version', 'prompt_version']
+    assert summary['evaluator_version'] == 'deterministic-agentic-v1'
+    assert summary['export_readiness'] == {'ready': True, 'format': 'saved_run_json', 'missing': []}
+
+
 def test_simulate_scenario_carries_metadata_into_report_and_response():
     result = simulate_scenario(
         {

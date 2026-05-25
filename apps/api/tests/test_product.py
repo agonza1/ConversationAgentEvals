@@ -81,6 +81,43 @@ def test_saved_runs_preserve_run_metadata_in_history_and_export():
     assert export_response.json()['report']['run_metadata']['model_name'] == 'gpt-4.1-mini'
 
 
+def test_saved_runs_preserve_evidence_audit_summary_in_history_and_export():
+    audit_summary = {
+        'run_started_at': '2026-05-25T12:00:00+00:00',
+        'evaluated_at': '2026-05-25T12:00:01+00:00',
+        'input_artifact_types': ['transcript', 'action_trace', 'final_state'],
+        'transcript_present': True,
+        'action_trace_present': True,
+        'final_state_present': True,
+        'metadata_labels': ['agent_version', 'prompt_version'],
+        'evaluator_version': 'deterministic-agentic-v1',
+        'export_readiness': {'ready': True, 'format': 'saved_run_json', 'missing': []},
+    }
+    response = client.post(
+        '/api/product/runs',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'call-center',
+            'plan': 'starter',
+            'report': {
+                'run_id': 'abc',
+                'overall_score': 92,
+                'evidence_audit_summary': audit_summary,
+            },
+            'transcript': 'Agent: verified and completed the update.',
+        },
+    )
+
+    assert response.status_code == 200
+    saved = response.json()
+
+    list_response = client.get('/api/product/runs', params={'user_id': 'demo-user', 'project_id': 'call-center'})
+    assert list_response.json()[0]['report']['evidence_audit_summary'] == audit_summary
+
+    export_response = client.get(f"/api/product/runs/{saved['id']}/export", params={'user_id': 'demo-user'})
+    assert export_response.json()['report']['evidence_audit_summary'] == audit_summary
+
+
 def test_saved_run_export_returns_owner_scoped_json_payload():
     create_response = client.post(
         '/api/product/runs',

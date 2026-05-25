@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 from copy import deepcopy
+from datetime import UTC, datetime
 from typing import Any
 
 from app.services.benchmark_evaluator import BenchmarkEvaluation, evaluate_benchmark
@@ -10,6 +11,7 @@ from app.services.benchmark_evaluator import BenchmarkEvaluation, evaluate_bench
 
 BenchmarkScenario = dict[str, Any]
 BenchmarkSuite = dict[str, Any]
+DETERMINISTIC_EVALUATOR_VERSION = 'deterministic-agentic-v1'
 
 
 _SUITES: tuple[BenchmarkSuite, ...] = (
@@ -281,6 +283,7 @@ def get_suite(suite_id: str) -> BenchmarkSuite | None:
 
 
 def run_scenario(request: Any) -> dict[str, Any]:
+    run_started_at = datetime.now(UTC).isoformat()
     payload = _payload_to_dict(request)
     suite_id = _first_string(payload, 'suite_id', 'suiteId')
     scenario_id = _first_string(payload, 'scenario_id', 'scenarioId')
@@ -322,6 +325,13 @@ def run_scenario(request: Any) -> dict[str, Any]:
         'scenario_title': scenario['title'],
         'provider': suite['provider'],
         'run_metadata': run_metadata,
+        'evidence_audit_summary': _evidence_audit_summary(
+            payload=payload,
+            run_metadata=run_metadata,
+            run_id=run_id,
+            run_started_at=run_started_at,
+            evaluated_at=datetime.now(UTC).isoformat(),
+        ),
         'overall_score': overall_score,
         'verdict': verdict,
         'required_action_score': required_score,
@@ -396,6 +406,7 @@ def _payload_to_dict(request: Any) -> dict[str, Any]:
             'scenarioId',
             'conversation',
             'transcript',
+            'call',
             'vcon',
             'agent_profile',
             'agentProfile',
@@ -426,6 +437,55 @@ def _run_metadata(payload: dict[str, Any]) -> dict[str, str]:
         'notes': _first_string(payload, 'notes') or _string_from_metadata(metadata, 'notes'),
     }
     return {key: value for key, value in normalized.items() if value}
+
+
+def _evidence_audit_summary(
+    *,
+    payload: dict[str, Any],
+    run_metadata: dict[str, str],
+    run_id: str,
+    run_started_at: str,
+    evaluated_at: str,
+) -> dict[str, Any]:
+    input_artifact_types = [
+        key
+        for key in ('transcript', 'conversation', 'call', 'vcon', 'observed_actions', 'action_trace', 'final_state')
+        if _artifact_present(payload.get(key))
+    ]
+    transcript_present = bool(_conversation_text(payload))
+    action_trace_present = _artifact_present(payload.get('action_trace'))
+    final_state_present = _artifact_present(payload.get('final_state'))
+    missing_for_export = []
+    if not input_artifact_types:
+        missing_for_export.append('input_artifacts')
+    if not run_id:
+        missing_for_export.append('run_id')
+
+    return {
+        'run_started_at': run_started_at,
+        'evaluated_at': evaluated_at,
+        'input_artifact_types': input_artifact_types,
+        'transcript_present': transcript_present,
+        'action_trace_present': action_trace_present,
+        'final_state_present': final_state_present,
+        'metadata_labels': sorted(run_metadata.keys()),
+        'evaluator_version': DETERMINISTIC_EVALUATOR_VERSION,
+        'export_readiness': {
+            'ready': not missing_for_export,
+            'format': 'saved_run_json',
+            'missing': missing_for_export,
+        },
+    }
+
+
+def _artifact_present(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        return bool(value)
+    if isinstance(value, list):
+        return bool(value)
+    return value is not None
 
 
 def _run_metadata_payload(payload: dict[str, Any]) -> dict[str, Any]:
