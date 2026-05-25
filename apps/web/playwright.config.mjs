@@ -20,7 +20,7 @@ export default defineConfig({
     reuseExistingServer: !process.env.PLAYWRIGHT_REUSE_EXISTING_SERVER,
   },
   use: {
-    baseURL,
+    baseURL: baseUrl,
     headless: true,
   },
 });
