@@ -16,11 +16,17 @@
     "docker:up": "docker compose up --build -d",
     "docker:down": "docker compose down",
     "test:api": "apps/api/.venv/bin/python -m pytest apps/api/tests -q",
-    "test:voice-proof": "npx playwright test apps/web/tests/voice-proof.spec.ts --config apps/web/playwright.config.ts",
-    "test:e2e": "npm --workspace apps/web run test:e2e"
+    "install:e2e": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npx playwright install chromium",
+    "test:voice-proof": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npx playwright test apps/web/tests/voice-proof.spec.ts --config apps/web/playwright.config.ts",
+    "test:e2e": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npm --workspace apps/web run test:e2e",
+    "test:e2e:browser": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npm --workspace apps/web run test:e2e:browser"
   },
   "overrides": {
     "postcss": "8.5.10",
     "protobufjs": "7.5.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "playwright": "^1.60.0"
   }
 }

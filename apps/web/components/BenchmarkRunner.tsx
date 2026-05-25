@@ -29,8 +29,10 @@ interface BenchmarkScenario {
 }
 
 interface BenchmarkReport {
+  run_id?: string;
   verdict?: string;
   overall?: string;
+  scenario_title?: string;
   score?: number;
   overall_score?: number;
   task_completion_score?: number;
@@ -46,6 +48,63 @@ interface BenchmarkReport {
   transcript?: string;
   action_trace?: unknown;
   final_state?: unknown;
+}
+
+interface PricingPlan {
+  id: 'free' | 'starter' | 'team' | 'business';
+  name: string;
+  price_label: string;
+  seats: string;
+  included_credits?: number | null;
+  cta: string;
+  features: string[];
+}
+
+interface UsageRule {
+  id: string;
+  label: string;
+  credits: number;
+  gated_plan?: PricingPlan['id'] | null;
+}
+
+interface ProductConfig {
+  pricing: PricingPlan[];
+  usage_rules: UsageRule[];
+  auth: {
+    enabled: boolean;
+    mode: 'configured' | 'placeholder';
+    providers: string[];
+    project_id?: string | null;
+    api_key_configured: boolean;
+  };
+  voice_status: 'planned' | 'gated' | 'enabled';
+  llm_judge_status: 'planned' | 'gated' | 'enabled';
+}
+
+interface SavedRun {
+  id: string;
+  project_id: string;
+  plan: PricingPlan['id'];
+  report: BenchmarkReport;
+  transcript?: string | null;
+  created_at: string;
+}
+
+interface SavedRunExport {
+  id: string;
+  filename: string;
+  project_id: string;
+  report: BenchmarkReport;
+  transcript?: string | null;
+  created_at: string;
+}
+
+interface JudgeGate {
+  status: 'blocked' | 'ready';
+  required_plan: PricingPlan['id'];
+  credits: number;
+  message: string;
+  evidence_citations: string[];
 }
 
 interface BenchmarkSimulationResponse {
@@ -207,6 +266,48 @@ async function simulateBenchmark(payload: { suite_id: string; scenario_id: strin
   );
 }
 
+async function fetchProductConfig(): Promise<ProductConfig> {
+  return handleJson<ProductConfig>(await fetch(`${getApiBase()}/api/product/config`, { cache: 'no-store' }));
+}
+
+async function saveBenchmarkRun(payload: {
+  user_id: string;
+  project_id: string;
+  plan: PricingPlan['id'];
+  report: BenchmarkReport;
+  transcript: string;
+}) {
+  return handleJson<SavedRun>(
+    await fetch(`${getApiBase()}/api/product/runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+async function listSavedRuns(userId: string, projectId: string) {
+  return handleJson<SavedRun[]>(
+    await fetch(`${getApiBase()}/api/product/runs?user_id=${encodeURIComponent(userId)}&project_id=${encodeURIComponent(projectId)}`, { cache: 'no-store' }),
+  );
+}
+
+async function exportSavedRun(userId: string, runId: string) {
+  return handleJson<SavedRunExport>(
+    await fetch(`${getApiBase()}/api/product/runs/${encodeURIComponent(runId)}/export?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
+  );
+}
+
+async function requestJudge(payload: { plan: PricingPlan['id']; report: BenchmarkReport; transcript: string }) {
+  return handleJson<JudgeGate>(
+    await fetch(`${getApiBase()}/api/product/judge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
 function scoreColor(score: number | undefined) {
   if (score === undefined) return 'var(--muted)';
   if (score >= 80) return 'var(--success-text)';
@@ -224,6 +325,7 @@ function EvidenceItem({ item }: { item: string | JsonRecord }) {
 
 export function BenchmarkRunner() {
   const [suites, setSuites] = useState<BenchmarkSuite[]>([]);
+  const [productConfig, setProductConfig] = useState<ProductConfig | null>(null);
   const [selectedSuiteId, setSelectedSuiteId] = useState('');
   const [selectedScenarioId, setSelectedScenarioId] = useState('');
   const [transcript, setTranscript] = useState('');
@@ -232,6 +334,13 @@ export function BenchmarkRunner() {
   const [agentProfile, setAgentProfile] = useState('mock text agent');
   const [includeFailure, setIncludeFailure] = useState(false);
   const [report, setReport] = useState<BenchmarkReport | null>(null);
+  const [userId, setUserId] = useState('');
+  const [projectId, setProjectId] = useState('call-center-demo');
+  const [plan, setPlan] = useState<PricingPlan['id']>('free');
+  const [savedRuns, setSavedRuns] = useState<SavedRun[]>([]);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const [judgeGate, setJudgeGate] = useState<JudgeGate | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -256,8 +365,10 @@ export function BenchmarkRunner() {
 
       try {
         const nextSuites = await fetchBenchmarkSuites();
+        const nextConfig = await fetchProductConfig();
         if (!isMounted) return;
         setSuites(nextSuites);
+        setProductConfig(nextConfig);
         setSelectedSuiteId(nextSuites[0]?.id ?? '');
         setSelectedScenarioId(nextSuites[0]?.scenarios[0]?.id ?? '');
       } catch (err) {
@@ -276,6 +387,36 @@ export function BenchmarkRunner() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const storedUser = window.localStorage.getItem('conversation-evals-demo-user');
+    const storedProject = window.localStorage.getItem('conversation-evals-demo-project');
+    const storedPlan = window.localStorage.getItem('conversation-evals-demo-plan') as PricingPlan['id'] | null;
+    if (storedUser) setUserId(storedUser);
+    if (storedProject) setProjectId(storedProject);
+    if (storedPlan && ['free', 'starter', 'team', 'business'].includes(storedPlan)) setPlan(storedPlan);
+  }, []);
+
+  useEffect(() => {
+    if (!userId) {
+      setSavedRuns([]);
+      return;
+    }
+
+    let isMounted = true;
+    listSavedRuns(userId, projectId)
+      .then((runs) => {
+        if (isMounted) setSavedRuns(runs);
+      })
+      .catch(() => {
+        if (isMounted) setSavedRuns([]);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [projectId, userId]);
+
+  useEffect(() => {
     if (!selectedSuite) return;
     setSelectedScenarioId((current) => (
       selectedSuite.scenarios.some((scenario) => scenario.id === current) ? current : selectedSuite.scenarios[0]?.id ?? ''
@@ -289,8 +430,79 @@ export function BenchmarkRunner() {
     setActionTrace(stringifyEditable(selectedScenario.sample_action_trace, '[]'));
     setFinalState(stringifyEditable(selectedScenario.sample_final_state ?? selectedScenario.expected_final_state, '{}'));
     setReport(null);
+    setSaveMessage(null);
+    setJudgeGate(null);
     setRunError(null);
   }, [selectedScenario]);
+
+  function signInDemo() {
+    const nextUser = `demo-user-${Math.random().toString(36).slice(2, 8)}`;
+    setUserId(nextUser);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('conversation-evals-demo-user', nextUser);
+      window.localStorage.setItem('conversation-evals-demo-project', projectId);
+      window.localStorage.setItem('conversation-evals-demo-plan', plan);
+    }
+    setSaveMessage('Signed in with local Firebase-ready demo identity. Real Firebase credentials can replace this without changing the product flow.');
+  }
+
+  function updatePlan(nextPlan: PricingPlan['id']) {
+    setPlan(nextPlan);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('conversation-evals-demo-plan', nextPlan);
+    }
+  }
+
+  async function onSaveRun() {
+    if (!report) return;
+    if (!userId) {
+      setSaveMessage('Sign up first to save projects and run history.');
+      return;
+    }
+
+    try {
+      const saved = await saveBenchmarkRun({ user_id: userId, project_id: projectId, plan, report, transcript });
+      setSavedRuns((current) => [saved, ...current.filter((run) => run.id !== saved.id)]);
+      setSaveMessage(`Saved run ${saved.id} to ${projectId}.`);
+    } catch (err) {
+      setSaveMessage(err instanceof Error ? err.message : 'Could not save this run.');
+    }
+  }
+
+  async function onJudge() {
+    if (!report) return;
+    try {
+      setJudgeGate(await requestJudge({ plan, report, transcript }));
+    } catch (err) {
+      setJudgeGate({
+        status: 'blocked',
+        required_plan: 'starter',
+        credits: 10,
+        message: err instanceof Error ? err.message : 'Judge request failed.',
+        evidence_citations: [],
+      });
+    }
+  }
+
+  async function onExportRun(runId: string) {
+    if (!userId) return;
+
+    try {
+      const exported = await exportSavedRun(userId, runId);
+      const blob = new Blob([JSON.stringify(exported, null, 2)], { type: 'application/json' });
+      const href = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = href;
+      link.download = exported.filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(href);
+      setExportMessage(`Exported ${exported.filename}.`);
+    } catch (err) {
+      setExportMessage(err instanceof Error ? err.message : 'Could not export this saved run.');
+    }
+  }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -344,9 +556,76 @@ export function BenchmarkRunner() {
   const evidence = report?.evidence_spans ?? report?.evidence ?? [];
   const score = report?.score ?? report?.overall_score;
   const verdict = report?.verdict ?? report?.overall;
+  const pricing = productConfig?.pricing ?? [];
+  const deterministicRule = productConfig?.usage_rules.find((rule) => rule.id === 'deterministic_eval');
+  const judgeRule = productConfig?.usage_rules.find((rule) => rule.id === 'llm_judge');
+  const voiceRule = productConfig?.usage_rules.find((rule) => rule.id === 'voice_webrtc_minute');
 
   return (
     <section style={{ display: 'grid', gap: 20 }}>
+      {productConfig ? (
+        <section className="product-console" aria-label="Product plan and authentication controls">
+          <div className="console-panel">
+            <p className="eyebrow">Free browser eval</p>
+            <h2>Run deterministic checks now. Save and judge after signup.</h2>
+            <p>
+              This path is real: the browser sends transcript, action trace, and final state evidence to the benchmark API.
+              Paid gates control persistence, LLM judging, CI/API, and voice minutes.
+            </p>
+            <div className="usage-strip">
+              <span>{deterministicRule?.credits ?? 1} credit browser eval</span>
+              <span>{judgeRule?.credits ?? 10} credits LLM judge</span>
+              <span>{voiceRule?.credits ?? 5} credits voice minute</span>
+            </div>
+          </div>
+
+          <div className="auth-panel">
+            <div>
+              <p className="eyebrow">Auth</p>
+              <h3>{userId ? 'Signed in' : 'Firebase-ready signup'}</h3>
+              <p>
+                {productConfig.auth.mode === 'configured'
+                  ? `Firebase project ${productConfig.auth.project_id} is configured.`
+                  : 'Firebase providers are scaffolded; add project keys to use live auth.'}
+              </p>
+            </div>
+            <label>
+              <span>Project</span>
+              <input
+                value={projectId}
+                onChange={(event) => {
+                  setProjectId(event.target.value);
+                  if (typeof window !== 'undefined') window.localStorage.setItem('conversation-evals-demo-project', event.target.value);
+                }}
+              />
+            </label>
+            <button type="button" className="primary-link" onClick={signInDemo}>
+              {userId ? 'Refresh demo identity' : 'Sign up to save'}
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      {pricing.length ? (
+        <section className="pricing-grid" aria-label="Pricing and upgrade gates">
+          {pricing.map((item) => (
+            <button
+              type="button"
+              className={`pricing-card ${plan === item.id ? 'selected' : ''}`}
+              key={item.id}
+              onClick={() => updatePlan(item.id)}
+            >
+              <span>{item.name}</span>
+              <strong>{item.price_label}</strong>
+              <small>{item.seats}</small>
+              <ul>
+                {item.features.slice(0, 4).map((feature) => <li key={feature}>{feature}</li>)}
+              </ul>
+            </button>
+          ))}
+        </section>
+      ) : null}
+
       <form onSubmit={onSubmit} className="card" style={{ padding: 24, display: 'grid', gap: 18 }}>
         {loadError ? (
           <div style={{ border: '1px solid var(--error-border)', background: 'var(--error-bg)', color: 'var(--error-text)', borderRadius: 8, padding: 12 }}>
@@ -508,9 +787,55 @@ export function BenchmarkRunner() {
           >
             {isRunning ? 'Running benchmark...' : 'Run benchmark'}
           </button>
+          <button
+            type="button"
+            disabled={!report}
+            onClick={onSaveRun}
+            style={{
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              background: userId ? 'white' : 'var(--panel-alt)',
+              color: 'var(--text)',
+              padding: '12px 18px',
+              fontWeight: 800,
+              opacity: report ? 1 : 0.65,
+            }}
+          >
+            Save run
+          </button>
+          <button
+            type="button"
+            disabled={!report}
+            onClick={onJudge}
+            style={{
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              background: plan === 'free' ? 'var(--panel-alt)' : 'white',
+              color: 'var(--text)',
+              padding: '12px 18px',
+              fontWeight: 800,
+              opacity: report ? 1 : 0.65,
+            }}
+          >
+            Request LLM judge
+          </button>
         </div>
 
         {runError ? <p style={{ color: 'var(--error-text)', margin: 0 }}>{runError}</p> : null}
+        {saveMessage ? <p style={{ color: 'var(--muted)', margin: 0 }}>{saveMessage}</p> : null}
+        {judgeGate ? (
+          <div
+            style={{
+              border: `1px solid ${judgeGate.status === 'ready' ? 'var(--success-border)' : 'var(--error-border)'}`,
+              background: judgeGate.status === 'ready' ? 'var(--success-bg)' : 'var(--error-bg)',
+              color: judgeGate.status === 'ready' ? 'var(--success-text)' : 'var(--error-text)',
+              borderRadius: 8,
+              padding: 12,
+            }}
+          >
+            <strong>{judgeGate.status === 'ready' ? 'Judge gate ready' : 'Upgrade required'}:</strong> {judgeGate.message}
+          </div>
+        ) : null}
       </form>
 
       {report ? (
@@ -560,6 +885,48 @@ export function BenchmarkRunner() {
           </details>
         </section>
       ) : null}
+
+      <section className="validation-grid" aria-label="Saved runs and e2e validation">
+        <div className="card" style={{ padding: 20, display: 'grid', gap: 12 }}>
+          <p className="eyebrow">Saved runs</p>
+          <h3 style={{ margin: 0 }}>{userId ? `${savedRuns.length} saved for ${projectId}` : 'Signup required'}</h3>
+          {savedRuns.length ? (
+            <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--muted)', display: 'grid', gap: 8 }}>
+              {savedRuns.slice(0, 4).map((run) => (
+                <li key={run.id}>
+                  <span>{run.id}: {run.report.scenario_title ?? run.report.run_id ?? 'benchmark run'} ({run.report.overall_score ?? run.report.score ?? 'n/a'})</span>
+                  <button
+                    type="button"
+                    onClick={() => void onExportRun(run.id)}
+                    style={{
+                      marginLeft: 8,
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'white',
+                      color: 'var(--text)',
+                      padding: '6px 10px',
+                      fontWeight: 800,
+                    }}
+                  >
+                    Export JSON
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p style={{ margin: 0, color: 'var(--muted)' }}>Run a benchmark, sign up, then save it to build project history.</p>
+          )}
+          {exportMessage ? <p style={{ margin: 0, color: 'var(--muted)' }}>{exportMessage}</p> : null}
+        </div>
+
+        <div className="card" style={{ padding: 20, display: 'grid', gap: 12 }}>
+          <p className="eyebrow">Voice path</p>
+          <h3 style={{ margin: 0 }}>Team-gated WebRTC evals</h3>
+          <p style={{ margin: 0, color: 'var(--muted)' }}>
+            Voice minutes are modeled in credits now. The visible gate keeps the product honest while the WebRTC/SIP runner is wired to real call evidence.
+          </p>
+        </div>
+      </section>
     </section>
   );
 }

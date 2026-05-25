@@ -1,4 +1,6 @@
 /** @type {import('next').NextConfig} */
+const path = require('path');
+
 // Rewrites run server-side inside Next. In Docker, prefer internal service URLs
 // (`API_BASE_URL=http://api:8000`) over browser-facing NEXT_PUBLIC localhost URLs.
 const apiBase = (process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8025').replace(/\/$/, '');
@@ -7,6 +9,7 @@ const productionFlag = process.env.PRODUCTION === 'true' || process.env.NEXT_PUB
 
 const nextConfig = {
   typedRoutes: true,
+  outputFileTracingRoot: path.join(__dirname, '../..'),
   env: {
     NEXT_PUBLIC_PRODUCTION: String(productionFlag),
   },
