@@ -48,6 +48,31 @@ interface BenchmarkReport {
   transcript?: string;
   action_trace?: unknown;
   final_state?: unknown;
+  run_metadata?: RunMetadata;
+  evidence_audit_summary?: EvidenceAuditSummary;
+}
+
+interface RunMetadata {
+  agent_version?: string;
+  prompt_version?: string;
+  model_name?: string;
+  notes?: string;
+}
+
+interface EvidenceAuditSummary {
+  run_started_at?: string;
+  evaluated_at?: string;
+  input_artifact_types?: string[];
+  transcript_present?: boolean;
+  action_trace_present?: boolean;
+  final_state_present?: boolean;
+  metadata_labels?: string[];
+  evaluator_version?: string;
+  export_readiness?: {
+    ready?: boolean;
+    format?: string;
+    missing?: string[];
+  };
 }
 
 interface PricingPlan {
@@ -85,6 +110,15 @@ interface SavedRun {
   id: string;
   project_id: string;
   plan: PricingPlan['id'];
+  report: BenchmarkReport;
+  transcript?: string | null;
+  created_at: string;
+}
+
+interface SavedRunExport {
+  id: string;
+  filename: string;
+  project_id: string;
   report: BenchmarkReport;
   transcript?: string | null;
   created_at: string;
@@ -237,6 +271,10 @@ async function runBenchmark(payload: {
   transcript: string;
   action_trace: string | JsonRecord | unknown[];
   final_state: string | JsonRecord | unknown[];
+  agent_version?: string;
+  prompt_version?: string;
+  model_name?: string;
+  notes?: string;
 }) {
   return handleJson<BenchmarkReport>(
     await fetch(`${getApiBase()}/api/benchmarks/run`, {
@@ -247,7 +285,16 @@ async function runBenchmark(payload: {
   );
 }
 
-async function simulateBenchmark(payload: { suite_id: string; scenario_id: string; agent_profile?: string; include_failure?: boolean }) {
+async function simulateBenchmark(payload: {
+  suite_id: string;
+  scenario_id: string;
+  agent_profile?: string;
+  include_failure?: boolean;
+  agent_version?: string;
+  prompt_version?: string;
+  model_name?: string;
+  notes?: string;
+}) {
   return handleJson<BenchmarkSimulationResponse>(
     await fetch(`${getApiBase()}/api/benchmarks/simulate`, {
       method: 'POST',
@@ -283,6 +330,12 @@ async function listSavedRuns(userId: string, projectId: string) {
   );
 }
 
+async function exportSavedRun(userId: string, runId: string) {
+  return handleJson<SavedRunExport>(
+    await fetch(`${getApiBase()}/api/product/runs/${encodeURIComponent(runId)}/export?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
+  );
+}
+
 async function requestJudge(payload: { plan: PricingPlan['id']; report: BenchmarkReport; transcript: string }) {
   return handleJson<JudgeGate>(
     await fetch(`${getApiBase()}/api/product/judge`, {
@@ -308,6 +361,48 @@ function EvidenceItem({ item }: { item: string | JsonRecord }) {
   return <li><code>{JSON.stringify(item)}</code></li>;
 }
 
+function cleanRunMetadata(metadata: RunMetadata): RunMetadata {
+  return Object.fromEntries(
+    Object.entries(metadata).map(([key, value]) => [key, value?.trim()]).filter(([, value]) => Boolean(value)),
+  ) as RunMetadata;
+}
+
+function metadataEntries(metadata?: RunMetadata) {
+  const labels: Record<keyof RunMetadata, string> = {
+    agent_version: 'Agent',
+    prompt_version: 'Prompt',
+    model_name: 'Model',
+    notes: 'Notes',
+  };
+
+  return (Object.keys(labels) as Array<keyof RunMetadata>)
+    .map((key) => ({ key, label: labels[key], value: metadata?.[key] }))
+    .filter((item) => item.value);
+}
+
+function metadataChangeSummary(current?: RunMetadata, previous?: RunMetadata) {
+  const entries = metadataEntries(current);
+  const changes = entries
+    .filter((item) => previous?.[item.key] !== item.value)
+    .map((item) => `${item.label}: ${previous?.[item.key] ?? 'unset'} -> ${item.value}`);
+
+  return changes.length ? changes.join('; ') : entries.length ? 'No version label changes from prior saved run.' : 'No version labels captured.';
+}
+
+function formatAuditTimestamp(value?: string) {
+  if (!value) return 'Not captured';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function formatBoolean(value?: boolean) {
+  return value ? 'Present' : 'Missing';
+}
+
+function artifactLabel(value: string) {
+  return value.replace(/_/g, ' ');
+}
+
 export function BenchmarkRunner() {
   const [suites, setSuites] = useState<BenchmarkSuite[]>([]);
   const [productConfig, setProductConfig] = useState<ProductConfig | null>(null);
@@ -317,6 +412,10 @@ export function BenchmarkRunner() {
   const [actionTrace, setActionTrace] = useState('');
   const [finalState, setFinalState] = useState('');
   const [agentProfile, setAgentProfile] = useState('mock text agent');
+  const [agentVersion, setAgentVersion] = useState('');
+  const [promptVersion, setPromptVersion] = useState('');
+  const [modelName, setModelName] = useState('');
+  const [runNotes, setRunNotes] = useState('');
   const [includeFailure, setIncludeFailure] = useState(false);
   const [report, setReport] = useState<BenchmarkReport | null>(null);
   const [userId, setUserId] = useState('');
@@ -324,6 +423,7 @@ export function BenchmarkRunner() {
   const [plan, setPlan] = useState<PricingPlan['id']>('free');
   const [savedRuns, setSavedRuns] = useState<SavedRun[]>([]);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [judgeGate, setJudgeGate] = useState<JudgeGate | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
@@ -468,6 +568,26 @@ export function BenchmarkRunner() {
     }
   }
 
+  async function onExportRun(runId: string) {
+    if (!userId) return;
+
+    try {
+      const exported = await exportSavedRun(userId, runId);
+      const blob = new Blob([JSON.stringify(exported, null, 2)], { type: 'application/json' });
+      const href = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = href;
+      link.download = exported.filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(href);
+      setExportMessage(`Exported ${exported.filename}.`);
+    } catch (err) {
+      setExportMessage(err instanceof Error ? err.message : 'Could not export this saved run.');
+    }
+  }
+
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedSuite || !selectedScenario) return;
@@ -477,12 +597,19 @@ export function BenchmarkRunner() {
     setReport(null);
 
     try {
+      const runMetadata = cleanRunMetadata({
+        agent_version: agentVersion,
+        prompt_version: promptVersion,
+        model_name: modelName,
+        notes: runNotes,
+      });
       const nextReport = await runBenchmark({
         suite_id: selectedSuite.id,
         scenario_id: selectedScenario.id,
         transcript,
         action_trace: parseMaybeJson(actionTrace),
         final_state: parseMaybeJson(finalState),
+        ...runMetadata,
       });
       setReport(nextReport);
     } catch (err) {
@@ -500,11 +627,18 @@ export function BenchmarkRunner() {
     setReport(null);
 
     try {
+      const runMetadata = cleanRunMetadata({
+        agent_version: agentVersion,
+        prompt_version: promptVersion,
+        model_name: modelName,
+        notes: runNotes,
+      });
       const simulation = await simulateBenchmark({
         suite_id: selectedSuite.id,
         scenario_id: selectedScenario.id,
         agent_profile: agentProfile,
         include_failure: includeFailure,
+        ...runMetadata,
       });
       setTranscript(simulation.transcript);
       setActionTrace(stringifyEditable(simulation.action_trace, '[]'));
@@ -680,6 +814,44 @@ export function BenchmarkRunner() {
               Failure baseline
             </label>
           </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+            <label style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontWeight: 700 }}>Agent version</span>
+              <input
+                value={agentVersion}
+                onChange={(event) => setAgentVersion(event.target.value)}
+                placeholder="agent-v12"
+                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+              />
+            </label>
+            <label style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontWeight: 700 }}>Prompt version</span>
+              <input
+                value={promptVersion}
+                onChange={(event) => setPromptVersion(event.target.value)}
+                placeholder="prompt-2026-05-25"
+                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+              />
+            </label>
+            <label style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontWeight: 700 }}>Model</span>
+              <input
+                value={modelName}
+                onChange={(event) => setModelName(event.target.value)}
+                placeholder="gpt-4.1-mini"
+                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+              />
+            </label>
+            <label style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontWeight: 700 }}>Notes</span>
+              <input
+                value={runNotes}
+                onChange={(event) => setRunNotes(event.target.value)}
+                placeholder="tightened escalation policy"
+                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+              />
+            </label>
+          </div>
         </div>
 
         <details>
@@ -821,6 +993,9 @@ export function BenchmarkRunner() {
             <ScoreTile label="Final state" score={report.final_state_score} />
           </div>
 
+          <RunMetadataPanel metadata={report.run_metadata} />
+          <EvidenceAuditPanel summary={report.evidence_audit_summary} />
+
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
             <ReportList title="Failure categories" items={report.failure_categories} empty="No failure categories reported." />
             <ReportList title="Missing actions" items={report.missing_actions} empty="No missing required actions reported." />
@@ -855,14 +1030,37 @@ export function BenchmarkRunner() {
           <p className="eyebrow">Saved runs</p>
           <h3 style={{ margin: 0 }}>{userId ? `${savedRuns.length} saved for ${projectId}` : 'Signup required'}</h3>
           {savedRuns.length ? (
-            <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--muted)' }}>
-              {savedRuns.slice(0, 4).map((run) => (
-                <li key={run.id}>{run.id}: {run.report.scenario_title ?? run.report.run_id ?? 'benchmark run'} ({run.report.overall_score ?? run.report.score ?? 'n/a'})</li>
+            <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--muted)', display: 'grid', gap: 8 }}>
+              {savedRuns.slice(0, 4).map((run, index) => (
+                <li key={run.id}>
+                  <span>
+                    {run.id}: {run.report.scenario_title ?? run.report.run_id ?? 'benchmark run'} ({run.report.overall_score ?? run.report.score ?? 'n/a'})
+                  </span>
+                  <div style={{ marginTop: 4, fontSize: 13 }}>
+                    {metadataChangeSummary(run.report.run_metadata, savedRuns[index + 1]?.report.run_metadata)}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void onExportRun(run.id)}
+                    style={{
+                      marginLeft: 8,
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'white',
+                      color: 'var(--text)',
+                      padding: '6px 10px',
+                      fontWeight: 800,
+                    }}
+                  >
+                    Export JSON
+                  </button>
+                </li>
               ))}
             </ul>
           ) : (
             <p style={{ margin: 0, color: 'var(--muted)' }}>Run a benchmark, sign up, then save it to build project history.</p>
           )}
+          {exportMessage ? <p style={{ margin: 0, color: 'var(--muted)' }}>{exportMessage}</p> : null}
         </div>
 
         <div className="card" style={{ padding: 20, display: 'grid', gap: 12 }}>
@@ -897,6 +1095,96 @@ function ScoreTile({ label, score }: { label: string; score?: number }) {
     <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14 }}>
       <p style={{ margin: '0 0 6px', color: 'var(--muted)', fontSize: 13 }}>{label}</p>
       <p style={{ margin: 0, fontSize: 24, fontWeight: 900, color: scoreColor(score) }}>{score ?? 'n/a'}</p>
+    </div>
+  );
+}
+
+function RunMetadataPanel({ metadata }: { metadata?: RunMetadata }) {
+  const entries = metadataEntries(metadata);
+
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14, display: 'grid', gap: 8 }}>
+      <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13, fontWeight: 800 }}>Run labels</p>
+      {entries.length ? (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {entries.map((item) => (
+            <span
+              key={item.key}
+              style={{
+                border: '1px solid var(--border)',
+                borderRadius: 8,
+                background: 'var(--panel-alt)',
+                color: 'var(--text)',
+                padding: '6px 8px',
+                fontSize: 13,
+                fontWeight: 760,
+              }}
+            >
+              {item.label}: {item.value}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p style={{ margin: 0, color: 'var(--muted)' }}>No prompt, model, or version labels captured.</p>
+      )}
+    </div>
+  );
+}
+
+function EvidenceAuditPanel({ summary }: { summary?: EvidenceAuditSummary }) {
+  const artifactTypes = summary?.input_artifact_types ?? [];
+  const metadataLabels = summary?.metadata_labels ?? [];
+  const exportReady = summary?.export_readiness?.ready;
+
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14, display: 'grid', gap: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <p style={{ margin: '0 0 4px', color: 'var(--muted)', fontSize: 13, fontWeight: 800 }}>Evidence audit</p>
+          <p style={{ margin: 0, fontWeight: 850 }}>
+            {exportReady ? 'Export ready' : summary ? 'Needs evidence before export' : 'Not captured'}
+          </p>
+        </div>
+        <span
+          style={{
+            border: `1px solid ${exportReady ? 'var(--success-border)' : 'var(--border)'}`,
+            borderRadius: 8,
+            background: exportReady ? 'var(--success-bg)' : 'var(--panel-alt)',
+            color: exportReady ? 'var(--success-text)' : 'var(--muted)',
+            padding: '6px 8px',
+            fontSize: 13,
+            fontWeight: 800,
+            alignSelf: 'start',
+          }}
+        >
+          {summary?.evaluator_version ?? 'no evaluator version'}
+        </span>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+        <AuditFact label="Transcript" value={formatBoolean(summary?.transcript_present)} />
+        <AuditFact label="Action trace" value={formatBoolean(summary?.action_trace_present)} />
+        <AuditFact label="Final state" value={formatBoolean(summary?.final_state_present)} />
+        <AuditFact label="Evaluated" value={formatAuditTimestamp(summary?.evaluated_at)} />
+      </div>
+
+      <div style={{ display: 'grid', gap: 6 }}>
+        <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13 }}>
+          Artifacts: {artifactTypes.length ? artifactTypes.map(artifactLabel).join(', ') : 'none'}
+        </p>
+        <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13 }}>
+          Labels: {metadataLabels.length ? metadataLabels.map(artifactLabel).join(', ') : 'none'}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function AuditFact({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 10, background: 'var(--panel-alt)' }}>
+      <p style={{ margin: '0 0 4px', color: 'var(--muted)', fontSize: 12, fontWeight: 800 }}>{label}</p>
+      <p style={{ margin: 0, fontWeight: 800 }}>{value}</p>
     </div>
   );
 }

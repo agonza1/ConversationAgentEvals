@@ -6,7 +6,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
-    "test:e2e": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers playwright test tests/product-flow.spec.ts --config playwright.config.ts"
+    "test:e2e": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers playwright test tests/product-request-flow.spec.ts --config playwright.config.ts",
+    "test:e2e:browser": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers playwright test tests/product-flow.spec.ts --config playwright.config.ts"
   },
   "dependencies": {
     "next": "^15.5.15",
