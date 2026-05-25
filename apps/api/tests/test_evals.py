@@ -17,6 +17,8 @@ def test_run_eval_from_transcript():
 
     assert response.status_code == 200, response.text
     payload = response.json()
+    assert payload['run_id'].startswith('eval_')
+    assert payload['created_at']
     assert payload['title'] == 'Appointment setter QA'
     assert payload['source_format'] == 'transcript'
     assert payload['overall_score'] > 0
@@ -25,11 +27,26 @@ def test_run_eval_from_transcript():
     assert payload['checks'][0]['layer'] == 'caller_behavior'
     assert payload['checks'][0]['root_cause_tag'] == 'none'
     assert payload['vcon_analysis']['type'] == 'voice_ai_eval'
+    assert payload['vcon_analysis']['body']['run_id'] == payload['run_id']
+    assert payload['vcon_analysis']['body']['artifact_manifest'] == payload['artifact_manifest']
+    assert payload['vcon_analysis']['body']['audit_events'] == payload['audit_events']
     assert payload['vcon_analysis']['body']['checks']
     assert payload['vcon_export']['analysis'][0]['type'] == 'voice_ai_eval'
     assert payload['vcon_export']['dialog'][0]['originator'] == 'Agent'
     assert payload['vcon_export']['dialog'][1]['originator'] == 'Caller'
     assert payload['vcon_export']['parties'] == [{'name': 'Agent'}, {'name': 'Caller'}]
+    artifact_ids = {artifact['id'] for artifact in payload['artifact_manifest']}
+    assert artifact_ids == {'input_transcript', 'eval_criteria', 'deterministic_report'}
+    assert all(len(artifact['sha256']) == 64 for artifact in payload['artifact_manifest'])
+    assert payload['audit_events'] == [
+        {
+            'event_type': 'eval.run.created',
+            'actor': 'system',
+            'at': payload['created_at'],
+            'summary': 'Created deterministic eval run from transcript input.',
+            'artifact_ids': ['input_transcript', 'eval_criteria', 'deterministic_report'],
+        }
+    ]
 
 
 def test_run_eval_from_vcon_like_json():

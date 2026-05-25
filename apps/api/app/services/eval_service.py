@@ -7,7 +7,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any
 
-from app.schemas.evals import EvalCheck, EvalRunRequest, EvalRunResponse
+from app.schemas.evals import EvalArtifact, EvalAuditEvent, EvalCheck, EvalRunRequest, EvalRunResponse
 
 
 def _split_criteria(criteria: str) -> list[str]:
@@ -182,10 +182,28 @@ def _classify_failure_layer(criterion: str) -> tuple[str, str]:
     return 'conversation_quality', 'missing_conversation_evidence'
 
 
+def _canonical_json_bytes(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(',', ':'), default=str).encode('utf-8')
+
+
+def _artifact(artifact_id: str, artifact_type: str, value: str | dict[str, Any], source: str) -> EvalArtifact:
+    data = value.encode('utf-8') if isinstance(value, str) else _canonical_json_bytes(value)
+    return EvalArtifact(
+        id=artifact_id,
+        type=artifact_type,
+        sha256=hashlib.sha256(data).hexdigest(),
+        bytes=len(data),
+        source=source,
+    )
+
+
 def run_eval(payload: EvalRunRequest) -> EvalRunResponse:
     transcript, source_format, parsed_source = normalize_conversation(payload.conversation)
     criteria = _split_criteria(payload.criteria)
     checks: list[EvalCheck] = []
+    created_at = datetime.now(UTC).isoformat()
+    run_seed = f'{payload.criteria}\n{transcript}\n{created_at}'.encode('utf-8')
+    run_id = f'eval_{hashlib.sha256(run_seed).hexdigest()[:16]}'
 
     for criterion in criteria:
         evidence = _evidence_for(transcript, criterion)
@@ -213,19 +231,40 @@ def run_eval(payload: EvalRunRequest) -> EvalRunResponse:
     ] or ['Keep this eval in the regression suite and compare future calls against it.']
     analysis_id = hashlib.sha256(f'{payload.criteria}\n{transcript}'.encode('utf-8')).hexdigest()[:16]
 
+    report_body = {
+        'id': analysis_id,
+        'run_id': run_id,
+        'title': payload.title or 'Voice AI call eval',
+        'created_at': created_at,
+        'overall_score': overall_score,
+        'verdict': verdict,
+        'checks': [item.model_dump() for item in checks],
+        'risk_flags': risk_flags,
+        'suggested_fixes': suggested_fixes,
+    }
+
+    artifact_manifest = [
+        _artifact('input_transcript', 'transcript', transcript, source_format),
+        _artifact('eval_criteria', 'criteria', payload.criteria, 'request'),
+        _artifact('deterministic_report', 'eval_report', report_body, 'eval_service'),
+    ]
+    audit_events = [
+        EvalAuditEvent(
+            event_type='eval.run.created',
+            actor='system',
+            at=created_at,
+            summary=f'Created deterministic eval run from {source_format} input.',
+            artifact_ids=[item.id for item in artifact_manifest],
+        )
+    ]
+
+    report_body['artifact_manifest'] = [item.model_dump() for item in artifact_manifest]
+    report_body['audit_events'] = [item.model_dump() for item in audit_events]
+
     vcon_analysis = {
         'type': 'voice_ai_eval',
         'encoding': 'json',
-        'body': {
-            'id': analysis_id,
-            'title': payload.title or 'Voice AI call eval',
-            'created_at': datetime.now(UTC).isoformat(),
-            'overall_score': overall_score,
-            'verdict': verdict,
-            'checks': [item.model_dump() for item in checks],
-            'risk_flags': risk_flags,
-            'suggested_fixes': suggested_fixes,
-        },
+        'body': report_body,
     }
 
     if parsed_source is not None:
@@ -237,6 +276,8 @@ def run_eval(payload: EvalRunRequest) -> EvalRunResponse:
     vcon_export = _build_vcon_export(transcript, source_format, parsed_source, vcon_analysis)
 
     return EvalRunResponse(
+        run_id=run_id,
+        created_at=created_at,
         title=payload.title or 'Voice AI call eval',
         source_format=source_format,
         overall_score=overall_score,
@@ -245,6 +286,8 @@ def run_eval(payload: EvalRunRequest) -> EvalRunResponse:
         risk_flags=risk_flags,
         suggested_fixes=suggested_fixes,
         transcript_preview=transcript[:700],
+        artifact_manifest=artifact_manifest,
+        audit_events=audit_events,
         vcon_analysis=vcon_analysis,
         vcon_export=vcon_export,
     )
