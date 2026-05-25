@@ -91,8 +91,11 @@ Default local endpoints:
 ```bash
 npm run build:web
 npm run test:api
+npm run test:benchmark-smoke
 npm run test:e2e
 ```
+
+`npm run test:benchmark-smoke` is an API-level smoke path for the benchmark runner. It does not need browser or voice credentials; it lists suites, simulates pass and failure runs, verifies run metadata and audit fields, then saves, lists, and exports a run.
 
 Voice proof against a running stack:
 

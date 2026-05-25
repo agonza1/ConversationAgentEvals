@@ -21,4 +21,5 @@ jobs:
       - run: python -m venv apps/api/.venv
       - run: apps/api/.venv/bin/python -m pip install -r apps/api/requirements.txt
       - run: npm run test:api
+      - run: npm run test:benchmark-smoke
       - run: npm run build:web
