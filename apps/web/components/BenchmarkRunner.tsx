@@ -308,6 +308,43 @@ function EvidenceItem({ item }: { item: string | JsonRecord }) {
   return <li><code>{JSON.stringify(item)}</code></li>;
 }
 
+function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: string) {
+  const verdict = report.verdict ?? report.overall ?? 'complete';
+  const score = report.score ?? report.overall_score ?? 'n/a';
+  const scenario = report.scenario_title ?? fallbackScenarioTitle ?? 'Selected scenario';
+  const failureCategories = report.failure_categories?.length ? report.failure_categories.join(', ') : 'None reported';
+  const missingActions = report.missing_actions?.length ? report.missing_actions.join('; ') : 'None reported';
+  const forbiddenActions = report.forbidden_actions_observed?.length ? report.forbidden_actions_observed.join('; ') : 'None reported';
+  const suggestedFixes = report.suggested_fixes?.length ? report.suggested_fixes.join('; ') : 'None reported';
+
+  return [
+    `Scenario: ${scenario}`,
+    `Verdict: ${verdict}`,
+    `Score: ${score}`,
+    `Failure categories: ${failureCategories}`,
+    `Missing actions: ${missingActions}`,
+    `Forbidden actions observed: ${forbiddenActions}`,
+    `Suggested fixes: ${suggestedFixes}`,
+  ].join('\n');
+}
+
+async function copyText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', 'true');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand('copy');
+  textarea.remove();
+}
+
 export function BenchmarkRunner() {
   const [suites, setSuites] = useState<BenchmarkSuite[]>([]);
   const [productConfig, setProductConfig] = useState<ProductConfig | null>(null);
@@ -325,6 +362,7 @@ export function BenchmarkRunner() {
   const [savedRuns, setSavedRuns] = useState<SavedRun[]>([]);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [judgeGate, setJudgeGate] = useState<JudgeGate | null>(null);
+  const [copyMessage, setCopyMessage] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -416,6 +454,7 @@ export function BenchmarkRunner() {
     setReport(null);
     setSaveMessage(null);
     setJudgeGate(null);
+    setCopyMessage(null);
     setRunError(null);
   }, [selectedScenario]);
 
@@ -475,6 +514,7 @@ export function BenchmarkRunner() {
     setIsRunning(true);
     setRunError(null);
     setReport(null);
+    setCopyMessage(null);
 
     try {
       const nextReport = await runBenchmark({
@@ -498,6 +538,7 @@ export function BenchmarkRunner() {
     setIsSimulating(true);
     setRunError(null);
     setReport(null);
+    setCopyMessage(null);
 
     try {
       const simulation = await simulateBenchmark({
@@ -520,6 +561,7 @@ export function BenchmarkRunner() {
   const evidence = report?.evidence_spans ?? report?.evidence ?? [];
   const score = report?.score ?? report?.overall_score;
   const verdict = report?.verdict ?? report?.overall;
+  const reportBrief = report ? formatReportBrief(report, selectedScenario?.title) : '';
   const pricing = productConfig?.pricing ?? [];
   const deterministicRule = productConfig?.usage_rules.find((rule) => rule.id === 'deterministic_eval');
   const judgeRule = productConfig?.usage_rules.find((rule) => rule.id === 'llm_judge');
@@ -820,6 +862,52 @@ export function BenchmarkRunner() {
             <ScoreTile label="Forbidden actions" score={report.forbidden_action_score} />
             <ScoreTile label="Final state" score={report.final_state_score} />
           </div>
+
+          <section style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 12, background: 'var(--panel-alt)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div>
+                <h3 style={{ margin: 0 }}>Report brief</h3>
+                <p style={{ margin: '4px 0 0', color: 'var(--muted)' }}>Share-ready summary for handoff, tickets, and customer updates.</p>
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await copyText(reportBrief);
+                    setCopyMessage('Copied report brief.');
+                  } catch {
+                    setCopyMessage('Could not copy report brief.');
+                  }
+                }}
+                style={{
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  background: 'white',
+                  color: 'var(--text)',
+                  padding: '10px 14px',
+                  fontWeight: 800,
+                }}
+              >
+                Copy brief
+              </button>
+            </div>
+            <pre
+              aria-label="Report brief"
+              style={{
+                margin: 0,
+                whiteSpace: 'pre-wrap',
+                overflowWrap: 'anywhere',
+                background: 'white',
+                border: '1px solid var(--border)',
+                borderRadius: 8,
+                padding: 14,
+                lineHeight: 1.5,
+              }}
+            >
+              {reportBrief}
+            </pre>
+            {copyMessage ? <p style={{ margin: 0, color: 'var(--muted)' }}>{copyMessage}</p> : null}
+          </section>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
             <ReportList title="Failure categories" items={report.failure_categories} empty="No failure categories reported." />
