@@ -48,6 +48,14 @@ interface BenchmarkReport {
   transcript?: string;
   action_trace?: unknown;
   final_state?: unknown;
+  run_metadata?: RunMetadata;
+}
+
+interface RunMetadata {
+  agent_version?: string;
+  prompt_version?: string;
+  model_name?: string;
+  notes?: string;
 }
 
 interface PricingPlan {
@@ -246,6 +254,10 @@ async function runBenchmark(payload: {
   transcript: string;
   action_trace: string | JsonRecord | unknown[];
   final_state: string | JsonRecord | unknown[];
+  agent_version?: string;
+  prompt_version?: string;
+  model_name?: string;
+  notes?: string;
 }) {
   return handleJson<BenchmarkReport>(
     await fetch(`${getApiBase()}/api/benchmarks/run`, {
@@ -256,7 +268,16 @@ async function runBenchmark(payload: {
   );
 }
 
-async function simulateBenchmark(payload: { suite_id: string; scenario_id: string; agent_profile?: string; include_failure?: boolean }) {
+async function simulateBenchmark(payload: {
+  suite_id: string;
+  scenario_id: string;
+  agent_profile?: string;
+  include_failure?: boolean;
+  agent_version?: string;
+  prompt_version?: string;
+  model_name?: string;
+  notes?: string;
+}) {
   return handleJson<BenchmarkSimulationResponse>(
     await fetch(`${getApiBase()}/api/benchmarks/simulate`, {
       method: 'POST',
@@ -323,6 +344,34 @@ function EvidenceItem({ item }: { item: string | JsonRecord }) {
   return <li><code>{JSON.stringify(item)}</code></li>;
 }
 
+function cleanRunMetadata(metadata: RunMetadata): RunMetadata {
+  return Object.fromEntries(
+    Object.entries(metadata).map(([key, value]) => [key, value?.trim()]).filter(([, value]) => Boolean(value)),
+  ) as RunMetadata;
+}
+
+function metadataEntries(metadata?: RunMetadata) {
+  const labels: Record<keyof RunMetadata, string> = {
+    agent_version: 'Agent',
+    prompt_version: 'Prompt',
+    model_name: 'Model',
+    notes: 'Notes',
+  };
+
+  return (Object.keys(labels) as Array<keyof RunMetadata>)
+    .map((key) => ({ key, label: labels[key], value: metadata?.[key] }))
+    .filter((item) => item.value);
+}
+
+function metadataChangeSummary(current?: RunMetadata, previous?: RunMetadata) {
+  const entries = metadataEntries(current);
+  const changes = entries
+    .filter((item) => previous?.[item.key] !== item.value)
+    .map((item) => `${item.label}: ${previous?.[item.key] ?? 'unset'} -> ${item.value}`);
+
+  return changes.length ? changes.join('; ') : entries.length ? 'No version label changes from prior saved run.' : 'No version labels captured.';
+}
+
 export function BenchmarkRunner() {
   const [suites, setSuites] = useState<BenchmarkSuite[]>([]);
   const [productConfig, setProductConfig] = useState<ProductConfig | null>(null);
@@ -332,6 +381,10 @@ export function BenchmarkRunner() {
   const [actionTrace, setActionTrace] = useState('');
   const [finalState, setFinalState] = useState('');
   const [agentProfile, setAgentProfile] = useState('mock text agent');
+  const [agentVersion, setAgentVersion] = useState('');
+  const [promptVersion, setPromptVersion] = useState('');
+  const [modelName, setModelName] = useState('');
+  const [runNotes, setRunNotes] = useState('');
   const [includeFailure, setIncludeFailure] = useState(false);
   const [report, setReport] = useState<BenchmarkReport | null>(null);
   const [userId, setUserId] = useState('');
@@ -513,12 +566,19 @@ export function BenchmarkRunner() {
     setReport(null);
 
     try {
+      const runMetadata = cleanRunMetadata({
+        agent_version: agentVersion,
+        prompt_version: promptVersion,
+        model_name: modelName,
+        notes: runNotes,
+      });
       const nextReport = await runBenchmark({
         suite_id: selectedSuite.id,
         scenario_id: selectedScenario.id,
         transcript,
         action_trace: parseMaybeJson(actionTrace),
         final_state: parseMaybeJson(finalState),
+        ...runMetadata,
       });
       setReport(nextReport);
     } catch (err) {
@@ -536,11 +596,18 @@ export function BenchmarkRunner() {
     setReport(null);
 
     try {
+      const runMetadata = cleanRunMetadata({
+        agent_version: agentVersion,
+        prompt_version: promptVersion,
+        model_name: modelName,
+        notes: runNotes,
+      });
       const simulation = await simulateBenchmark({
         suite_id: selectedSuite.id,
         scenario_id: selectedScenario.id,
         agent_profile: agentProfile,
         include_failure: includeFailure,
+        ...runMetadata,
       });
       setTranscript(simulation.transcript);
       setActionTrace(stringifyEditable(simulation.action_trace, '[]'));
@@ -716,6 +783,44 @@ export function BenchmarkRunner() {
               Failure baseline
             </label>
           </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+            <label style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontWeight: 700 }}>Agent version</span>
+              <input
+                value={agentVersion}
+                onChange={(event) => setAgentVersion(event.target.value)}
+                placeholder="agent-v12"
+                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+              />
+            </label>
+            <label style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontWeight: 700 }}>Prompt version</span>
+              <input
+                value={promptVersion}
+                onChange={(event) => setPromptVersion(event.target.value)}
+                placeholder="prompt-2026-05-25"
+                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+              />
+            </label>
+            <label style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontWeight: 700 }}>Model</span>
+              <input
+                value={modelName}
+                onChange={(event) => setModelName(event.target.value)}
+                placeholder="gpt-4.1-mini"
+                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+              />
+            </label>
+            <label style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontWeight: 700 }}>Notes</span>
+              <input
+                value={runNotes}
+                onChange={(event) => setRunNotes(event.target.value)}
+                placeholder="tightened escalation policy"
+                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+              />
+            </label>
+          </div>
         </div>
 
         <details>
@@ -857,6 +962,8 @@ export function BenchmarkRunner() {
             <ScoreTile label="Final state" score={report.final_state_score} />
           </div>
 
+          <RunMetadataPanel metadata={report.run_metadata} />
+
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
             <ReportList title="Failure categories" items={report.failure_categories} empty="No failure categories reported." />
             <ReportList title="Missing actions" items={report.missing_actions} empty="No missing required actions reported." />
@@ -892,9 +999,14 @@ export function BenchmarkRunner() {
           <h3 style={{ margin: 0 }}>{userId ? `${savedRuns.length} saved for ${projectId}` : 'Signup required'}</h3>
           {savedRuns.length ? (
             <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--muted)', display: 'grid', gap: 8 }}>
-              {savedRuns.slice(0, 4).map((run) => (
+              {savedRuns.slice(0, 4).map((run, index) => (
                 <li key={run.id}>
-                  <span>{run.id}: {run.report.scenario_title ?? run.report.run_id ?? 'benchmark run'} ({run.report.overall_score ?? run.report.score ?? 'n/a'})</span>
+                  <span>
+                    {run.id}: {run.report.scenario_title ?? run.report.run_id ?? 'benchmark run'} ({run.report.overall_score ?? run.report.score ?? 'n/a'})
+                  </span>
+                  <div style={{ marginTop: 4, fontSize: 13 }}>
+                    {metadataChangeSummary(run.report.run_metadata, savedRuns[index + 1]?.report.run_metadata)}
+                  </div>
                   <button
                     type="button"
                     onClick={() => void onExportRun(run.id)}
@@ -951,6 +1063,38 @@ function ScoreTile({ label, score }: { label: string; score?: number }) {
     <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14 }}>
       <p style={{ margin: '0 0 6px', color: 'var(--muted)', fontSize: 13 }}>{label}</p>
       <p style={{ margin: 0, fontSize: 24, fontWeight: 900, color: scoreColor(score) }}>{score ?? 'n/a'}</p>
+    </div>
+  );
+}
+
+function RunMetadataPanel({ metadata }: { metadata?: RunMetadata }) {
+  const entries = metadataEntries(metadata);
+
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14, display: 'grid', gap: 8 }}>
+      <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13, fontWeight: 800 }}>Run labels</p>
+      {entries.length ? (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {entries.map((item) => (
+            <span
+              key={item.key}
+              style={{
+                border: '1px solid var(--border)',
+                borderRadius: 8,
+                background: 'var(--panel-alt)',
+                color: 'var(--text)',
+                padding: '6px 8px',
+                fontSize: 13,
+                fontWeight: 760,
+              }}
+            >
+              {item.label}: {item.value}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p style={{ margin: 0, color: 'var(--muted)' }}>No prompt, model, or version labels captured.</p>
+      )}
     </div>
   );
 }

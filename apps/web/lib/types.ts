@@ -320,7 +320,18 @@ export interface BenchmarkRunPayload {
   conversation?: string | Record<string, unknown> | unknown[];
   action_trace?: string | Array<Record<string, unknown>> | Record<string, unknown>;
   final_state?: Record<string, unknown> | string | unknown[] | null;
-  metadata?: Record<string, unknown>;
+  agent_version?: string;
+  prompt_version?: string;
+  model_name?: string;
+  notes?: string;
+  metadata?: BenchmarkRunMetadata | Record<string, unknown>;
+}
+
+export interface BenchmarkRunMetadata {
+  agent_version?: string;
+  prompt_version?: string;
+  model_name?: string;
+  notes?: string;
 }
 
 export interface BenchmarkRunCheck {
@@ -365,6 +376,7 @@ export interface BenchmarkRunResponse {
   evidence?: Array<string | Record<string, unknown>>;
   evidence_spans?: Array<string | Record<string, unknown>>;
   evidence_artifacts?: Record<string, unknown>;
+  run_metadata?: BenchmarkRunMetadata;
 }
 
 export interface BenchmarkSimulationResponse {
@@ -375,5 +387,6 @@ export interface BenchmarkSimulationResponse {
   transcript: string;
   action_trace: Array<Record<string, unknown>>;
   final_state: Record<string, unknown>;
+  run_metadata?: BenchmarkRunMetadata;
   benchmark_report: BenchmarkRunResponse;
 }

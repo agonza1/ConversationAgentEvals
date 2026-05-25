@@ -303,7 +303,9 @@ def run_scenario(request: Any) -> dict[str, Any]:
     penalty = min(40, len(forbidden_hits) * 20)
     overall_score = max(0, round((required_score * 0.45) + (rubric_score * 0.55) - penalty))
     verdict = 'pass' if overall_score >= 75 and not forbidden_hits else 'needs_review'
-    run_id = hashlib.sha256(f'{suite_id}:{scenario_id}:{transcript}'.encode('utf-8')).hexdigest()[:16]
+    run_metadata = _run_metadata(payload)
+    run_id_seed = f'{suite_id}:{scenario_id}:{transcript}:{repr(sorted(run_metadata.items()))}'
+    run_id = hashlib.sha256(run_id_seed.encode('utf-8')).hexdigest()[:16]
     action_trace = payload.get('action_trace')
     final_state = payload.get('final_state')
     agentic_evaluation = _agentic_evaluation(scenario, action_trace, final_state) if _has_agentic_evidence(payload) else None
@@ -319,6 +321,7 @@ def run_scenario(request: Any) -> dict[str, Any]:
         'scenario_id': scenario_id,
         'scenario_title': scenario['title'],
         'provider': suite['provider'],
+        'run_metadata': run_metadata,
         'overall_score': overall_score,
         'verdict': verdict,
         'required_action_score': required_score,
@@ -360,6 +363,7 @@ def simulate_scenario(request: Any) -> dict[str, Any]:
             'transcript': transcript,
             'action_trace': action_trace,
             'final_state': final_state,
+            **_run_metadata_payload(payload),
         }
     )
 
@@ -371,6 +375,7 @@ def simulate_scenario(request: Any) -> dict[str, Any]:
         'transcript': transcript,
         'action_trace': action_trace,
         'final_state': final_state,
+        'run_metadata': benchmark_report['run_metadata'],
         'benchmark_report': benchmark_report,
     }
 
@@ -398,9 +403,41 @@ def _payload_to_dict(request: Any) -> dict[str, Any]:
             'observed_actions',
             'action_trace',
             'final_state',
+            'agent_version',
+            'agentVersion',
+            'prompt_version',
+            'promptVersion',
+            'model_name',
+            'modelName',
+            'notes',
+            'metadata',
         )
         if hasattr(request, name)
     }
+
+
+def _run_metadata(payload: dict[str, Any]) -> dict[str, str]:
+    raw_metadata = payload.get('metadata')
+    metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+    normalized = {
+        'agent_version': _first_string(payload, 'agent_version', 'agentVersion') or _string_from_metadata(metadata, 'agent_version', 'agentVersion'),
+        'prompt_version': _first_string(payload, 'prompt_version', 'promptVersion') or _string_from_metadata(metadata, 'prompt_version', 'promptVersion'),
+        'model_name': _first_string(payload, 'model_name', 'modelName') or _string_from_metadata(metadata, 'model_name', 'modelName'),
+        'notes': _first_string(payload, 'notes') or _string_from_metadata(metadata, 'notes'),
+    }
+    return {key: value for key, value in normalized.items() if value}
+
+
+def _run_metadata_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {'metadata': _run_metadata(payload)}
+
+
+def _string_from_metadata(metadata: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
 
 
 def _has_agentic_evidence(payload: dict[str, Any]) -> bool:

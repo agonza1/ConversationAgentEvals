@@ -75,6 +75,48 @@ def test_run_scenario_scores_matching_transcript_deterministically():
     assert [check['status'] for check in first['rubric_checks']] == ['pass', 'pass', 'pass', 'pass']
 
 
+def test_run_scenario_persists_prompt_model_and_version_labels():
+    result = run_scenario(
+        {
+            'suite_id': 'fintech-support-agent',
+            'scenario_id': 'suspicious-card-charge',
+            'transcript': 'Agent: I will verify your account identity and file a fraud dispute case.',
+            'agent_version': 'agent-v12',
+            'prompt_version': 'prompt-2026-05-25',
+            'model_name': 'gpt-4.1-mini',
+            'notes': 'tightened fraud escalation wording',
+        }
+    )
+
+    assert result['run_metadata'] == {
+        'agent_version': 'agent-v12',
+        'prompt_version': 'prompt-2026-05-25',
+        'model_name': 'gpt-4.1-mini',
+        'notes': 'tightened fraud escalation wording',
+    }
+
+
+def test_simulate_scenario_carries_metadata_into_report_and_response():
+    result = simulate_scenario(
+        {
+            'suiteId': 'call-center-voice-ai',
+            'scenarioId': 'billing-address-change',
+            'metadata': {
+                'agentVersion': 'agent-v2',
+                'promptVersion': 'billing-prompt-v4',
+                'modelName': 'gpt-4.1',
+            },
+        }
+    )
+
+    assert result['run_metadata'] == {
+        'agent_version': 'agent-v2',
+        'prompt_version': 'billing-prompt-v4',
+        'model_name': 'gpt-4.1',
+    }
+    assert result['benchmark_report']['run_metadata'] == result['run_metadata']
+
+
 def test_run_scenario_penalizes_forbidden_actions():
     result = run_scenario(
         {

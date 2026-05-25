@@ -50,6 +50,37 @@ def test_saved_runs_are_project_scoped_and_require_user_id():
     assert missing_user.status_code == 422
 
 
+def test_saved_runs_preserve_run_metadata_in_history_and_export():
+    response = client.post(
+        '/api/product/runs',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'call-center',
+            'plan': 'starter',
+            'report': {
+                'run_id': 'abc',
+                'overall_score': 92,
+                'run_metadata': {
+                    'agent_version': 'agent-v12',
+                    'prompt_version': 'prompt-2026-05-25',
+                    'model_name': 'gpt-4.1-mini',
+                    'notes': 'tightened escalation wording',
+                },
+            },
+            'transcript': 'Agent: verified and completed the update.',
+        },
+    )
+
+    assert response.status_code == 200
+    saved = response.json()
+
+    list_response = client.get('/api/product/runs', params={'user_id': 'demo-user', 'project_id': 'call-center'})
+    assert list_response.json()[0]['report']['run_metadata']['prompt_version'] == 'prompt-2026-05-25'
+
+    export_response = client.get(f"/api/product/runs/{saved['id']}/export", params={'user_id': 'demo-user'})
+    assert export_response.json()['report']['run_metadata']['model_name'] == 'gpt-4.1-mini'
+
+
 def test_saved_run_export_returns_owner_scoped_json_payload():
     create_response = client.post(
         '/api/product/runs',
