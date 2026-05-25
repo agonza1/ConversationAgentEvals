@@ -72,7 +72,38 @@ def test_run_scenario_scores_matching_transcript_deterministically():
     assert first['rubric_score'] == 100
     assert first['missing_actions'] == []
     assert first['forbidden_action_hits'] == []
+    assert first['evidence_artifacts']['evidence_fingerprint']
+    assert [artifact['type'] for artifact in first['evidence_artifacts']['artifacts']] == ['transcript_text']
     assert [check['status'] for check in first['rubric_checks']] == ['pass', 'pass', 'pass', 'pass']
+
+
+def test_run_scenario_run_id_includes_retained_artifact_fingerprints():
+    base_request = {
+        'suite_id': 'fintech-support-agent',
+        'scenario_id': 'failed-ach-transfer',
+        'action_trace': [
+            {'action': 'verify business account', 'status': 'completed'},
+            {'action': 'collect transfer amount and date', 'status': 'completed'},
+            {'action': 'explain failure reason without exposing sensitive bank data', 'status': 'completed'},
+            {'action': 'offer retry or payments support escalation', 'status': 'completed'},
+            {'action': 'provide reference number', 'status': 'completed'},
+        ],
+        'final_state': {'complete': True, 'reference_number': 'ACH-1001'},
+    }
+    retry_request = {
+        **base_request,
+        'final_state': {'complete': True, 'reference_number': 'ACH-2002'},
+    }
+
+    first = run_scenario(base_request)
+    second = run_scenario(base_request)
+    retry = run_scenario(retry_request)
+
+    assert first['run_id'] == second['run_id']
+    assert retry['run_id'] != first['run_id']
+    assert retry['evidence_artifacts']['evidence_fingerprint'] != first['evidence_artifacts']['evidence_fingerprint']
+    assert [artifact['type'] for artifact in first['evidence_artifacts']['artifacts']] == ['action_trace', 'final_state']
+    assert all(artifact['sha256'] for artifact in first['evidence_artifacts']['artifacts'])
 
 
 def test_run_scenario_penalizes_forbidden_actions():
