@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from copy import deepcopy
 from typing import Any
@@ -303,7 +304,6 @@ def run_scenario(request: Any) -> dict[str, Any]:
     penalty = min(40, len(forbidden_hits) * 20)
     overall_score = max(0, round((required_score * 0.45) + (rubric_score * 0.55) - penalty))
     verdict = 'pass' if overall_score >= 75 and not forbidden_hits else 'needs_review'
-    run_id = hashlib.sha256(f'{suite_id}:{scenario_id}:{transcript}'.encode('utf-8')).hexdigest()[:16]
     action_trace = payload.get('action_trace')
     final_state = payload.get('final_state')
     agentic_evaluation = _agentic_evaluation(scenario, action_trace, final_state) if _has_agentic_evidence(payload) else None
@@ -312,8 +312,9 @@ def run_scenario(request: Any) -> dict[str, Any]:
         overall_score = agentic_evaluation.overall_score
         verdict = 'pass' if overall_score >= 75 and agentic_evaluation.forbidden_action_avoidance.passed else 'needs_review'
 
+    evidence_artifacts = _evidence_artifacts(payload, transcript)
     report = {
-        'run_id': run_id,
+        'run_id': _run_id(suite_id, scenario_id, evidence_artifacts),
         'suite_id': suite_id,
         'suite_name': suite['name'],
         'scenario_id': scenario_id,
@@ -329,6 +330,7 @@ def run_scenario(request: Any) -> dict[str, Any]:
         'rubric_checks': rubric_checks,
         'expected_final_state': scenario['expected_final_state'],
         'transcript_preview': transcript[:700],
+        'evidence_artifacts': evidence_artifacts,
         'recommendations': _recommendations(completed_actions, forbidden_hits, scenario),
     }
     if agentic_evaluation:
@@ -477,6 +479,66 @@ def _agentic_suggested_fixes(missing_actions: list[str], forbidden_observed: lis
     if final_state_missing:
         fixes.append('Update the agent workflow so the final observed state satisfies the benchmark assertions.')
     return fixes or ['Keep this scenario in the regression suite and compare future voice runs against this baseline.']
+
+
+def _run_id(suite_id: str, scenario_id: str, evidence_artifacts: dict[str, Any]) -> str:
+    fingerprint = evidence_artifacts.get('evidence_fingerprint')
+    seed = f'{suite_id}:{scenario_id}:{fingerprint or ""}'
+    return hashlib.sha256(seed.encode('utf-8')).hexdigest()[:16]
+
+
+def _evidence_artifacts(payload: dict[str, Any], transcript: str) -> dict[str, Any]:
+    artifacts = []
+    if transcript:
+        artifacts.append(_artifact_summary('transcript_text', transcript))
+
+    for key in ('observed_actions', 'action_trace', 'final_state', 'conversation', 'call', 'vcon'):
+        value = payload.get(key)
+        if _has_artifact_content(value):
+            artifacts.append(_artifact_summary(key, value))
+
+    fingerprint_seed = [
+        {'type': artifact['type'], 'sha256': artifact['sha256']}
+        for artifact in artifacts
+    ]
+    return {
+        'evidence_fingerprint': _stable_digest(fingerprint_seed),
+        'artifacts': artifacts,
+    }
+
+
+def _artifact_summary(artifact_type: str, value: Any) -> dict[str, Any]:
+    encoded = _stable_json(value)
+    summary: dict[str, Any] = {
+        'type': artifact_type,
+        'sha256': hashlib.sha256(encoded.encode('utf-8')).hexdigest(),
+        'size_bytes': len(encoded.encode('utf-8')),
+    }
+    if isinstance(value, list):
+        summary['item_count'] = len(value)
+    elif isinstance(value, dict):
+        summary['keys'] = sorted(str(key) for key in value.keys())
+    return summary
+
+
+def _has_artifact_content(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        return bool(value)
+    if isinstance(value, list):
+        return bool(value)
+    return value is not None
+
+
+def _stable_digest(value: Any) -> str:
+    return hashlib.sha256(_stable_json(value).encode('utf-8')).hexdigest()
+
+
+def _stable_json(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, sort_keys=True, separators=(',', ':'), default=str)
 
 
 def _first_string(payload: dict[str, Any], *keys: str) -> str | None:
