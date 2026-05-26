@@ -52,8 +52,11 @@ Set secrets separately instead of committing them to env files:
 gcloud run services update conversation-agent-evals-api \
   --project "${GOOGLE_CLOUD_PROJECT}" \
   --region "${GOOGLE_CLOUD_LOCATION}" \
+  --set-secrets DATABASE_URL=database-url:latest \
   --set-secrets OPENAI_API_KEY=openai-api-key:latest
 ```
+
+Use a persistent PostgreSQL database for `DATABASE_URL` in production, such as Cloud SQL with the Cloud Run service connected through its private IP or Cloud SQL connector. Without `DATABASE_URL`, the API falls back to local SQLite, which is ephemeral on Cloud Run instances.
 
 ## Smoke Check
 

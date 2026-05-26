@@ -425,8 +425,12 @@ function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: stri
 
 async function copyText(text: string) {
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall back to the textarea copy path below when async clipboard is blocked.
+    }
   }
 
   if (typeof document.execCommand !== 'function') {

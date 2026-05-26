@@ -41,3 +41,26 @@ test('benchmark report shows copy failure when fallback copy is rejected', async
   await page.getByRole('button', { name: 'Copy brief' }).click();
   await expect(page.getByText('Could not copy report brief.')).toBeVisible();
 });
+
+test('benchmark report falls back when async clipboard copy is rejected', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: () => Promise.reject(new Error('blocked')),
+      },
+    });
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: () => true,
+    });
+  });
+
+  await page.goto('/benchmarks');
+  await page.getByRole('button', { name: 'Simulate scenario' }).click();
+
+  await expect(page.getByRole('heading', { name: 'Report brief' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Copy brief' }).click();
+  await expect(page.getByText('Copied report brief.')).toBeVisible();
+});
