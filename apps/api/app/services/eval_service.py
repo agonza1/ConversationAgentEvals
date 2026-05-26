@@ -197,6 +197,15 @@ def _artifact(artifact_id: str, artifact_type: str, value: str | dict[str, Any],
     )
 
 
+def _artifact_reference(artifact_id: str, artifact_type: str, source: str) -> dict[str, str]:
+    return {
+        'id': artifact_id,
+        'type': artifact_type,
+        'source': source,
+        'digest_location': 'artifact_manifest',
+    }
+
+
 def run_eval(payload: EvalRunRequest) -> EvalRunResponse:
     transcript, source_format, parsed_source = normalize_conversation(payload.conversation)
     criteria = _split_criteria(payload.criteria)
@@ -257,14 +266,16 @@ def run_eval(payload: EvalRunRequest) -> EvalRunResponse:
         )
     ]
 
-    report_body['artifact_manifest'] = [item.model_dump() for item in source_artifacts]
+    report_body['artifact_manifest'] = [
+        *[item.model_dump() for item in source_artifacts],
+        _artifact_reference('deterministic_report', 'eval_report', 'eval_service'),
+    ]
     report_body['audit_events'] = [item.model_dump() for item in audit_events]
     report_artifact = _artifact('deterministic_report', 'eval_report', report_body, 'eval_service')
     artifact_manifest = [
         *source_artifacts,
         report_artifact,
     ]
-    report_body['artifact_manifest'] = [item.model_dump() for item in artifact_manifest]
 
     vcon_analysis = {
         'type': 'voice_ai_eval',

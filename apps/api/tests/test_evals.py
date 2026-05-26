@@ -12,14 +12,6 @@ def _canonical_json_bytes(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), default=str).encode('utf-8')
 
 
-def _report_digest_body(body):
-    digest_body = dict(body)
-    digest_body['artifact_manifest'] = [
-        artifact for artifact in body['artifact_manifest'] if artifact['id'] != 'deterministic_report'
-    ]
-    return digest_body
-
-
 def test_run_eval_from_transcript():
     response = client.post(
         '/api/evals/run',
@@ -43,7 +35,14 @@ def test_run_eval_from_transcript():
     assert payload['checks'][0]['root_cause_tag'] == 'none'
     assert payload['vcon_analysis']['type'] == 'voice_ai_eval'
     assert payload['vcon_analysis']['body']['run_id'] == payload['run_id']
-    assert payload['vcon_analysis']['body']['artifact_manifest'] == payload['artifact_manifest']
+    body_manifest = payload['vcon_analysis']['body']['artifact_manifest']
+    assert {artifact['id'] for artifact in body_manifest} == {'input_transcript', 'eval_criteria', 'deterministic_report'}
+    assert body_manifest[-1] == {
+        'id': 'deterministic_report',
+        'type': 'eval_report',
+        'source': 'eval_service',
+        'digest_location': 'artifact_manifest',
+    }
     assert payload['vcon_analysis']['body']['audit_events'] == payload['audit_events']
     assert payload['vcon_analysis']['body']['checks']
     assert payload['vcon_export']['analysis'][0]['type'] == 'voice_ai_eval'
@@ -54,7 +53,7 @@ def test_run_eval_from_transcript():
     assert artifact_ids == {'input_transcript', 'eval_criteria', 'deterministic_report'}
     assert all(len(artifact['sha256']) == 64 for artifact in payload['artifact_manifest'])
     report_artifact = next(artifact for artifact in payload['artifact_manifest'] if artifact['id'] == 'deterministic_report')
-    report_body_bytes = _canonical_json_bytes(_report_digest_body(payload['vcon_analysis']['body']))
+    report_body_bytes = _canonical_json_bytes(payload['vcon_analysis']['body'])
     assert report_artifact['sha256'] == hashlib.sha256(report_body_bytes).hexdigest()
     assert report_artifact['bytes'] == len(report_body_bytes)
     body_artifact_ids = {artifact['id'] for artifact in payload['vcon_analysis']['body']['artifact_manifest']}
