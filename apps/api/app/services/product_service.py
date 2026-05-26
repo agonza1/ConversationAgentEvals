@@ -6,6 +6,8 @@ import os
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.database import SessionLocal
@@ -108,17 +110,19 @@ def upsert_project(db: Session, user_id: str, project_id: str, name: str, plan: 
     db.add(project)
     db.commit()
     db.refresh(project)
-    return _serialize_project(project)
+    return _serialize_project(project, run_count=_project_run_count(db, project.id))
 
 
 def list_projects(db: Session, user_id: str) -> list[ProductProjectResponse]:
-    projects = (
-        db.query(ProductProject)
+    rows = (
+        db.query(ProductProject, func.count(ProductSavedRun.id))
+        .outerjoin(ProductSavedRun, ProductSavedRun.project_id == ProductProject.id)
         .filter(ProductProject.user_id == user_id)
+        .group_by(ProductProject.id)
         .order_by(ProductProject.updated_at.desc(), ProductProject.created_at.desc())
         .all()
     )
-    return [_serialize_project(project) for project in projects]
+    return [_serialize_project(project, run_count=run_count) for project, run_count in rows]
 
 
 def save_run(db: Session, user_id: str, project_id: str, plan: str, report: dict[str, Any], transcript: str | None) -> SavedRunResponse:
@@ -256,18 +260,37 @@ def _get_or_create_project(
         plan=plan,
     )
     db.add(project)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        project = (
+            db.query(ProductProject)
+            .filter(ProductProject.user_id == user_id, ProductProject.project_key == project_id)
+            .one()
+        )
+        if name:
+            project.name = name
     return project
 
 
-def _serialize_project(project: ProductProject) -> ProductProjectResponse:
+def _project_run_count(db: Session, project_id: str) -> int:
+    return (
+        db.query(func.count(ProductSavedRun.id))
+        .filter(ProductSavedRun.project_id == project_id)
+        .scalar()
+        or 0
+    )
+
+
+def _serialize_project(project: ProductProject, run_count: int) -> ProductProjectResponse:
     return ProductProjectResponse(
         id=project.id,
         user_id=project.user_id,
         project_id=project.project_key,
         name=project.name,
         plan=project.plan,  # type: ignore[arg-type]
-        run_count=len(project.saved_runs),
+        run_count=run_count,
         created_at=project.created_at.replace(tzinfo=UTC).isoformat(),
         updated_at=project.updated_at.replace(tzinfo=UTC).isoformat(),
         last_run_at=project.last_run_at.replace(tzinfo=UTC).isoformat() if project.last_run_at else None,

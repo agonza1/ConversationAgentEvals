@@ -1,7 +1,7 @@
 from datetime import datetime
 import uuid
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql.sqltypes import String
 
@@ -88,6 +88,7 @@ class PresentationEvent(Base):
 
 class ProductProject(Base):
     __tablename__ = 'product_projects'
+    __table_args__ = (UniqueConstraint('user_id', 'project_key', name='uq_product_projects_user_project_key'),)
 
     id = Column(String, primary_key=True, default=lambda: f'proj_{uuid.uuid4().hex[:12]}')
     user_id = Column(String, nullable=False, index=True)

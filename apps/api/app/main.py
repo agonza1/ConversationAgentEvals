@@ -51,8 +51,23 @@ def _ensure_deck_columns() -> None:
                 connection.execute(text(statement))
 
 
+def _ensure_product_project_indexes() -> None:
+    inspector = inspect(engine)
+    if 'product_projects' not in inspector.get_table_names():
+        return
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                'CREATE UNIQUE INDEX IF NOT EXISTS uq_product_projects_user_project_key '
+                'ON product_projects (user_id, project_key)'
+            )
+        )
+
+
 _ensure_session_columns()
 _ensure_deck_columns()
+_ensure_product_project_indexes()
 
 app = FastAPI(title='Live Sales AI Presenter API', version='0.1.0')
 app.add_middleware(
