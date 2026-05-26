@@ -1,6 +1,9 @@
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import IntegrityError
 
+from app.db.database import SessionLocal
 from app.main import app
+from app.models.entities import ProductProject
 from app.services.product_service import reset_saved_runs_for_tests
 
 client = TestClient(app)
@@ -26,6 +29,18 @@ def test_product_config_exposes_pricing_auth_and_usage_gates():
 
 
 def test_saved_runs_are_project_scoped_and_require_user_id():
+    project_response = client.post(
+        '/api/product/projects',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'call-center',
+            'name': 'Call Center QA',
+            'plan': 'starter',
+        },
+    )
+    assert project_response.status_code == 200
+    assert project_response.json()['project_id'] == 'call-center'
+
     response = client.post(
         '/api/product/runs',
         json={
@@ -41,13 +56,85 @@ def test_saved_runs_are_project_scoped_and_require_user_id():
     saved = response.json()
     assert saved['id']
     assert saved['project_id'] == 'call-center'
+    assert saved['project_name'] == 'Call Center QA'
+    assert saved['artifacts']['overall_score'] == 92
 
     list_response = client.get('/api/product/runs', params={'user_id': 'demo-user', 'project_id': 'call-center'})
     assert list_response.status_code == 200
     assert [run['id'] for run in list_response.json()] == [saved['id']]
 
+    projects_response = client.get('/api/product/projects', params={'user_id': 'demo-user'})
+    assert projects_response.status_code == 200
+    assert projects_response.json()[0]['run_count'] == 1
+    assert projects_response.json()[0]['last_run_at']
+
     missing_user = client.get('/api/product/runs')
     assert missing_user.status_code == 422
+
+
+def test_product_projects_are_unique_per_user_and_project_key():
+    first = client.post(
+        '/api/product/projects',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'call-center',
+            'name': 'Call Center QA',
+            'plan': 'starter',
+        },
+    )
+    second = client.post(
+        '/api/product/projects',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'call-center',
+            'name': 'Renamed Call Center',
+            'plan': 'team',
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()['id'] == first.json()['id']
+    assert second.json()['name'] == 'Renamed Call Center'
+    assert second.json()['plan'] == 'team'
+
+    with SessionLocal() as db:
+        project_count = (
+            db.query(ProductProject)
+            .filter(ProductProject.user_id == 'demo-user', ProductProject.project_key == 'call-center')
+            .count()
+        )
+        duplicate = ProductProject(user_id='demo-user', project_key='call-center', name='Duplicate', plan='free')
+        db.add(duplicate)
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+        else:
+            raise AssertionError('Expected duplicate project key to violate unique constraint')
+
+    assert project_count == 1
+
+
+def test_project_list_reports_run_counts_per_project():
+    for project_id, run_id in [('call-center', 'run-1'), ('call-center', 'run-2'), ('telehealth', 'run-3')]:
+        response = client.post(
+            '/api/product/runs',
+            json={
+                'user_id': 'demo-user',
+                'project_id': project_id,
+                'plan': 'starter',
+                'report': {'run_id': run_id, 'overall_score': 90},
+                'transcript': 'Agent: completed the task.',
+            },
+        )
+        assert response.status_code == 200
+
+    response = client.get('/api/product/projects', params={'user_id': 'demo-user'})
+
+    assert response.status_code == 200
+    counts = {project['project_id']: project['run_count'] for project in response.json()}
+    assert counts == {'call-center': 2, 'telehealth': 1}
 
 
 def test_saved_runs_preserve_run_metadata_in_history_and_export():
@@ -137,7 +224,9 @@ def test_saved_run_export_returns_owner_scoped_json_payload():
     exported = export_response.json()
     assert exported['id'] == saved['id']
     assert exported['filename'] == f"agentbench-call-center-{saved['id']}.json"
+    assert exported['project_name'] == 'Call Center'
     assert exported['report']['overall_score'] == 92
+    assert exported['artifacts']['transcript_lines'] == 1
     assert exported['transcript'] == 'Agent: verified and completed the update.'
 
     wrong_owner = client.get(f"/api/product/runs/{saved['id']}/export", params={'user_id': 'other-user'})

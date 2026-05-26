@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.db.database import SessionLocal
+from app.models.entities import ProductProject, ProductSavedRun
 from app.schemas.product import (
     FirebaseAuthConfig,
     JudgeResponse,
     PricingPlan,
+    ProductProjectResponse,
     ProductConfig,
     SavedRunExportResponse,
     SavedRunResponse,
@@ -84,8 +92,6 @@ USAGE_RULES = [
     UsageRule(id='api_ci_run', label='CI/API benchmark run', credits=3, gated_plan='team'),
 ]
 
-_SAVED_RUNS: list[SavedRunResponse] = []
-
 
 def product_config() -> ProductConfig:
     return ProductConfig(
@@ -97,41 +103,87 @@ def product_config() -> ProductConfig:
     )
 
 
-def save_run(user_id: str, project_id: str, plan: str, report: dict[str, Any], transcript: str | None) -> SavedRunResponse:
-    created_at = datetime.now(UTC).isoformat()
-    seed = f'{user_id}:{project_id}:{created_at}:{report.get("run_id", "")}'
-    saved = SavedRunResponse(
+def upsert_project(db: Session, user_id: str, project_id: str, name: str, plan: str) -> ProductProjectResponse:
+    project = _get_or_create_project(db=db, user_id=user_id, project_id=project_id, plan=plan, name=name)
+    project.name = name
+    project.plan = plan
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+    return _serialize_project(project, run_count=_project_run_count(db, project.id))
+
+
+def list_projects(db: Session, user_id: str) -> list[ProductProjectResponse]:
+    rows = (
+        db.query(ProductProject, func.count(ProductSavedRun.id))
+        .outerjoin(ProductSavedRun, ProductSavedRun.project_id == ProductProject.id)
+        .filter(ProductProject.user_id == user_id)
+        .group_by(ProductProject.id)
+        .order_by(ProductProject.updated_at.desc(), ProductProject.created_at.desc())
+        .all()
+    )
+    return [_serialize_project(project, run_count=run_count) for project, run_count in rows]
+
+
+def save_run(db: Session, user_id: str, project_id: str, plan: str, report: dict[str, Any], transcript: str | None) -> SavedRunResponse:
+    project = _get_or_create_project(db=db, user_id=user_id, project_id=project_id, plan=plan)
+    created_at = datetime.now(UTC)
+    seed = f'{user_id}:{project_id}:{created_at.isoformat()}:{report.get("run_id", "")}'
+    artifact_payload = _build_artifacts(report=report, transcript=transcript)
+    saved = ProductSavedRun(
         id=hashlib.sha256(seed.encode('utf-8')).hexdigest()[:16],
         user_id=user_id,
-        project_id=project_id,
-        plan=plan,  # type: ignore[arg-type]
-        report=report,
+        project_id=project.id,
+        plan=plan,
+        report_json=json.dumps(report),
         transcript=transcript,
+        artifact_json=json.dumps(artifact_payload),
         created_at=created_at,
     )
-    _SAVED_RUNS.append(saved)
-    return saved
+    project.plan = plan
+    project.last_run_at = created_at
+    db.add(project)
+    db.add(saved)
+    db.commit()
+    db.refresh(saved)
+    db.refresh(project)
+    return _serialize_saved_run(saved, project)
 
 
-def list_saved_runs(user_id: str, project_id: str | None = None) -> list[SavedRunResponse]:
-    return [
-        run for run in reversed(_SAVED_RUNS)
-        if run.user_id == user_id and (project_id is None or run.project_id == project_id)
-    ]
+def list_saved_runs(db: Session, user_id: str, project_id: str | None = None) -> list[SavedRunResponse]:
+    query = (
+        db.query(ProductSavedRun, ProductProject)
+        .join(ProductProject, ProductProject.id == ProductSavedRun.project_id)
+        .filter(ProductSavedRun.user_id == user_id)
+    )
+    if project_id is not None:
+        query = query.filter(ProductProject.project_key == project_id)
+
+    rows = query.order_by(ProductSavedRun.created_at.desc()).all()
+    return [_serialize_saved_run(saved_run, project) for saved_run, project in rows]
 
 
-def export_saved_run(user_id: str, run_id: str) -> SavedRunExportResponse | None:
-    for run in _SAVED_RUNS:
-        if run.id == run_id and run.user_id == user_id:
-            return SavedRunExportResponse(
-                id=run.id,
-                filename=f'agentbench-{run.project_id}-{run.id}.json',
-                project_id=run.project_id,
-                report=run.report,
-                transcript=run.transcript,
-                created_at=run.created_at,
-            )
-    return None
+def export_saved_run(db: Session, user_id: str, run_id: str) -> SavedRunExportResponse | None:
+    row = (
+        db.query(ProductSavedRun, ProductProject)
+        .join(ProductProject, ProductProject.id == ProductSavedRun.project_id)
+        .filter(ProductSavedRun.id == run_id, ProductSavedRun.user_id == user_id)
+        .first()
+    )
+    if row is None:
+        return None
+
+    saved_run, project = row
+    return SavedRunExportResponse(
+        id=saved_run.id,
+        filename=f'agentbench-{project.project_key}-{saved_run.id}.json',
+        project_id=project.project_key,
+        project_name=project.name,
+        report=_load_json(saved_run.report_json, {}),
+        artifacts=_load_json(saved_run.artifact_json, {}),
+        transcript=saved_run.transcript,
+        created_at=saved_run.created_at.replace(tzinfo=UTC).isoformat(),
+    )
 
 
 def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> JudgeResponse:
@@ -154,7 +206,10 @@ def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> Jud
 
 
 def reset_saved_runs_for_tests() -> None:
-    _SAVED_RUNS.clear()
+    with SessionLocal() as db:
+        db.query(ProductSavedRun).delete()
+        db.query(ProductProject).delete()
+        db.commit()
 
 
 def _firebase_auth_config() -> FirebaseAuthConfig:
@@ -179,3 +234,101 @@ def _judge_citations(report: dict[str, Any], transcript: str | None) -> list[str
     if transcript and len(citations) < 2:
         citations.extend(line.strip()[:180] for line in transcript.splitlines() if line.strip())
     return citations[:4]
+
+
+def _get_or_create_project(
+    db: Session,
+    user_id: str,
+    project_id: str,
+    plan: str,
+    name: str | None = None,
+) -> ProductProject:
+    project = (
+        db.query(ProductProject)
+        .filter(ProductProject.user_id == user_id, ProductProject.project_key == project_id)
+        .first()
+    )
+    if project is not None:
+        if name:
+            project.name = name
+        return project
+
+    project = ProductProject(
+        user_id=user_id,
+        project_key=project_id,
+        name=name or _default_project_name(project_id),
+        plan=plan,
+    )
+    db.add(project)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        project = (
+            db.query(ProductProject)
+            .filter(ProductProject.user_id == user_id, ProductProject.project_key == project_id)
+            .one()
+        )
+        if name:
+            project.name = name
+    return project
+
+
+def _project_run_count(db: Session, project_id: str) -> int:
+    return (
+        db.query(func.count(ProductSavedRun.id))
+        .filter(ProductSavedRun.project_id == project_id)
+        .scalar()
+        or 0
+    )
+
+
+def _serialize_project(project: ProductProject, run_count: int) -> ProductProjectResponse:
+    return ProductProjectResponse(
+        id=project.id,
+        user_id=project.user_id,
+        project_id=project.project_key,
+        name=project.name,
+        plan=project.plan,  # type: ignore[arg-type]
+        run_count=run_count,
+        created_at=project.created_at.replace(tzinfo=UTC).isoformat(),
+        updated_at=project.updated_at.replace(tzinfo=UTC).isoformat(),
+        last_run_at=project.last_run_at.replace(tzinfo=UTC).isoformat() if project.last_run_at else None,
+    )
+
+
+def _serialize_saved_run(saved_run: ProductSavedRun, project: ProductProject) -> SavedRunResponse:
+    return SavedRunResponse(
+        id=saved_run.id,
+        user_id=saved_run.user_id,
+        project_id=project.project_key,
+        project_name=project.name,
+        plan=saved_run.plan,  # type: ignore[arg-type]
+        report=_load_json(saved_run.report_json, {}),
+        artifacts=_load_json(saved_run.artifact_json, {}),
+        transcript=saved_run.transcript,
+        created_at=saved_run.created_at.replace(tzinfo=UTC).isoformat(),
+    )
+
+
+def _build_artifacts(report: dict[str, Any], transcript: str | None) -> dict[str, Any]:
+    return {
+        'run_id': report.get('run_id'),
+        'overall_score': report.get('overall_score'),
+        'evidence_spans': report.get('evidence_spans') or report.get('evidence') or [],
+        'transcript_lines': len([line for line in (transcript or '').splitlines() if line.strip()]),
+    }
+
+
+def _load_json(raw: str | None, fallback: dict[str, Any]) -> dict[str, Any]:
+    if not raw:
+        return fallback
+    try:
+        loaded = json.loads(raw)
+    except json.JSONDecodeError:
+        return fallback
+    return loaded if isinstance(loaded, dict) else fallback
+
+
+def _default_project_name(project_id: str) -> str:
+    return project_id.replace('-', ' ').replace('_', ' ').title() or 'Default Project'
