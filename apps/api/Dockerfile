@@ -17,4 +17,4 @@ ENV APP_ENV=development
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "uvicorn app.main:app --app-dir /workspace/apps/api --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "exec uvicorn app.main:app --app-dir /workspace/apps/api --host 0.0.0.0 --port ${PORT:-8000}"]
