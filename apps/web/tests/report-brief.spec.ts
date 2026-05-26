@@ -21,6 +21,43 @@ test('benchmark report includes a share-ready brief', async ({ page }) => {
   await expect(page.getByText('Copied report brief.')).toBeVisible();
 });
 
+test('benchmark report brief includes deterministic failure fields', async ({ page }) => {
+  await page.route('**/api/benchmarks/simulate', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        suite_id: 'call-center',
+        scenario_id: 'deterministic-failure',
+        scenario_title: 'Deterministic failure',
+        transcript: 'Agent: I diagnosed your condition.',
+        action_trace: [{ action: 'diagnose condition' }],
+        final_state: {},
+        benchmark_report: {
+          run_id: 'deterministic-run',
+          scenario_id: 'deterministic-failure',
+          scenario_title: 'Deterministic failure',
+          verdict: 'needs_review',
+          overall_score: 55,
+          missing_actions: ['confirm identity'],
+          forbidden_action_hits: [
+            { action: 'diagnose condition', evidence: 'Agent: I diagnosed your condition.' },
+          ],
+          recommendations: ['Remove forbidden behavior: diagnose condition'],
+          evidence: ['Agent: I diagnosed your condition.'],
+        },
+      }),
+    });
+  });
+
+  await page.goto('/benchmarks');
+  await page.getByRole('button', { name: 'Simulate scenario' }).click();
+
+  const brief = page.getByLabel('Report brief');
+  await expect(brief).toContainText('Forbidden actions observed: diagnose condition');
+  await expect(brief).toContainText('Suggested fixes: Remove forbidden behavior: diagnose condition');
+});
+
 test('benchmark report shows copy failure when fallback copy is rejected', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'clipboard', {
