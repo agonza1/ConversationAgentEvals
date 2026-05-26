@@ -231,7 +231,7 @@ def run_eval(payload: EvalRunRequest) -> EvalRunResponse:
     ] or ['Keep this eval in the regression suite and compare future calls against it.']
     analysis_id = hashlib.sha256(f'{payload.criteria}\n{transcript}'.encode('utf-8')).hexdigest()[:16]
 
-    report_body = {
+    report_body: dict[str, Any] = {
         'id': analysis_id,
         'run_id': run_id,
         'title': payload.title or 'Voice AI call eval',
@@ -243,10 +243,9 @@ def run_eval(payload: EvalRunRequest) -> EvalRunResponse:
         'suggested_fixes': suggested_fixes,
     }
 
-    artifact_manifest = [
+    source_artifacts = [
         _artifact('input_transcript', 'transcript', transcript, source_format),
         _artifact('eval_criteria', 'criteria', payload.criteria, 'request'),
-        _artifact('deterministic_report', 'eval_report', report_body, 'eval_service'),
     ]
     audit_events = [
         EvalAuditEvent(
@@ -254,12 +253,16 @@ def run_eval(payload: EvalRunRequest) -> EvalRunResponse:
             actor='system',
             at=created_at,
             summary=f'Created deterministic eval run from {source_format} input.',
-            artifact_ids=[item.id for item in artifact_manifest],
+            artifact_ids=[item.id for item in source_artifacts] + ['deterministic_report'],
         )
     ]
 
-    report_body['artifact_manifest'] = [item.model_dump() for item in artifact_manifest]
+    report_body['artifact_manifest'] = [item.model_dump() for item in source_artifacts]
     report_body['audit_events'] = [item.model_dump() for item in audit_events]
+    artifact_manifest = [
+        *source_artifacts,
+        _artifact('deterministic_report', 'eval_report', report_body, 'eval_service'),
+    ]
 
     vcon_analysis = {
         'type': 'voice_ai_eval',
