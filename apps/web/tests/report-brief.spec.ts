@@ -20,3 +20,24 @@ test('benchmark report includes a share-ready brief', async ({ page }) => {
   await page.getByRole('button', { name: 'Copy brief' }).click();
   await expect(page.getByText('Copied report brief.')).toBeVisible();
 });
+
+test('benchmark report shows copy failure when fallback copy is rejected', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: undefined,
+    });
+    Object.defineProperty(document, 'execCommand', {
+      configurable: true,
+      value: () => false,
+    });
+  });
+
+  await page.goto('/benchmarks');
+  await page.getByRole('button', { name: 'Simulate scenario' }).click();
+
+  await expect(page.getByRole('heading', { name: 'Report brief' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Copy brief' }).click();
+  await expect(page.getByText('Could not copy report brief.')).toBeVisible();
+});

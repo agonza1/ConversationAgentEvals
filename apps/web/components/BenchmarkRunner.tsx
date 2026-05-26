@@ -334,6 +334,10 @@ async function copyText(text: string) {
     return;
   }
 
+  if (typeof document.execCommand !== 'function') {
+    throw new Error('Clipboard copy is not supported.');
+  }
+
   const textarea = document.createElement('textarea');
   textarea.value = text;
   textarea.setAttribute('readonly', 'true');
@@ -341,8 +345,15 @@ async function copyText(text: string) {
   textarea.style.left = '-9999px';
   document.body.appendChild(textarea);
   textarea.select();
-  document.execCommand('copy');
-  textarea.remove();
+
+  try {
+    const copied = document.execCommand('copy');
+    if (!copied) {
+      throw new Error('Clipboard copy failed.');
+    }
+  } finally {
+    textarea.remove();
+  }
 }
 
 export function BenchmarkRunner() {
