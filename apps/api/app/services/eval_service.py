@@ -202,7 +202,7 @@ def run_eval(payload: EvalRunRequest) -> EvalRunResponse:
     criteria = _split_criteria(payload.criteria)
     checks: list[EvalCheck] = []
     created_at = datetime.now(UTC).isoformat()
-    run_seed = f'{payload.criteria}\n{transcript}\n{created_at}'.encode('utf-8')
+    run_seed = f'{payload.criteria}\n{transcript}'.encode('utf-8')
     run_id = f'eval_{hashlib.sha256(run_seed).hexdigest()[:16]}'
 
     for criterion in criteria:
@@ -259,10 +259,12 @@ def run_eval(payload: EvalRunRequest) -> EvalRunResponse:
 
     report_body['artifact_manifest'] = [item.model_dump() for item in source_artifacts]
     report_body['audit_events'] = [item.model_dump() for item in audit_events]
+    report_artifact = _artifact('deterministic_report', 'eval_report', report_body, 'eval_service')
     artifact_manifest = [
         *source_artifacts,
-        _artifact('deterministic_report', 'eval_report', report_body, 'eval_service'),
+        report_artifact,
     ]
+    report_body['artifact_manifest'] = [item.model_dump() for item in artifact_manifest]
 
     vcon_analysis = {
         'type': 'voice_ai_eval',
