@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class BenchmarkAction(BaseModel):
@@ -39,6 +39,8 @@ class BenchmarkSuiteSummary(BaseModel):
 
 
 class BenchmarkRunRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     suite_id: str | None = None
     suiteId: str | None = None
     scenario_id: str | None = None
@@ -50,6 +52,14 @@ class BenchmarkRunRequest(BaseModel):
     vcon: dict[str, Any] | None = None
     action_trace: str | dict[str, Any] | list[Any] | None = None
     final_state: dict[str, Any] | str | list[Any] = Field(default_factory=dict)
+    agent_version: str | None = None
+    agentVersion: str | None = None
+    prompt_version: str | None = None
+    promptVersion: str | None = None
+    model_name: str | None = None
+    modelName: str | None = None
+    notes: str | None = None
+    metadata: dict[str, Any] | None = None
 
     @model_validator(mode='after')
     def evidence_must_not_be_blank(self) -> 'BenchmarkRunRequest':
@@ -81,6 +91,8 @@ def _has_text(value: Any) -> bool:
 
 
 class BenchmarkSimulationRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     suite_id: str | None = None
     suiteId: str | None = None
     scenario_id: str | None = None
@@ -88,6 +100,14 @@ class BenchmarkSimulationRequest(BaseModel):
     agent_profile: str | None = None
     agentProfile: str | None = None
     include_failure: bool = False
+    agent_version: str | None = None
+    agentVersion: str | None = None
+    prompt_version: str | None = None
+    promptVersion: str | None = None
+    model_name: str | None = None
+    modelName: str | None = None
+    notes: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class BenchmarkSimulationResponse(BaseModel):
@@ -96,6 +116,7 @@ class BenchmarkSimulationResponse(BaseModel):
     transcript: str
     action_trace: list[dict[str, Any]]
     final_state: dict[str, Any]
+    run_metadata: dict[str, Any] = Field(default_factory=dict)
     benchmark_report: dict[str, Any]
 
 

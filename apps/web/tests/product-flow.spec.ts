@@ -31,3 +31,20 @@ test('free-to-paid eval journey works end to end', async ({ page }) => {
 
   await expect(page.getByRole('heading', { name: 'Team-gated WebRTC evals' })).toBeVisible();
 });
+
+test('failure baseline surfaces actionable benchmark report issues', async ({ page }) => {
+  await page.goto('/benchmarks');
+
+  await expect(page.getByRole('heading', { name: 'Run an agentic scenario test.' })).toBeVisible();
+
+  await page.getByLabel('Failure baseline').check();
+  await page.getByRole('button', { name: 'Simulate scenario' }).click();
+
+  await expect(page.getByRole('heading', { name: 'needs_review' })).toBeVisible();
+  await expect(page.getByText('Benchmark report').last()).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Failure categories' })).toBeVisible();
+  await expect(page.getByText('required_action_execution')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Missing actions' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Forbidden actions observed' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Suggested fixes' })).toBeVisible();
+});

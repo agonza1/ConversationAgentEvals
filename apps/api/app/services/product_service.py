@@ -10,6 +10,7 @@ from app.schemas.product import (
     JudgeResponse,
     PricingPlan,
     ProductConfig,
+    SavedRunExportResponse,
     SavedRunResponse,
     UsageRule,
 )
@@ -117,6 +118,20 @@ def list_saved_runs(user_id: str, project_id: str | None = None) -> list[SavedRu
         run for run in reversed(_SAVED_RUNS)
         if run.user_id == user_id and (project_id is None or run.project_id == project_id)
     ]
+
+
+def export_saved_run(user_id: str, run_id: str) -> SavedRunExportResponse | None:
+    for run in _SAVED_RUNS:
+        if run.id == run_id and run.user_id == user_id:
+            return SavedRunExportResponse(
+                id=run.id,
+                filename=f'agentbench-{run.project_id}-{run.id}.json',
+                project_id=run.project_id,
+                report=run.report,
+                transcript=run.transcript,
+                created_at=run.created_at,
+            )
+    return None
 
 
 def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> JudgeResponse:
