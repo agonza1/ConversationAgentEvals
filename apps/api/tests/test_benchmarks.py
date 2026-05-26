@@ -129,6 +129,23 @@ def test_run_scenario_preserves_artifact_scalar_type_in_hashes_and_run_ids():
     assert string_result['run_id'] != list_result['run_id']
 
 
+def test_run_scenario_accepts_mixed_type_artifact_dict_keys():
+    request = {
+        'suite_id': 'fintech-support-agent',
+        'scenario_id': 'failed-ach-transfer',
+        'observed_actions': {'a': 1, 2: 'b'},
+    }
+
+    first = run_scenario(request)
+    second = run_scenario(request)
+    artifact = first['evidence_artifacts']['artifacts'][0]
+
+    assert first['run_id'] == second['run_id']
+    assert first['evidence_artifacts']['evidence_fingerprint']
+    assert artifact['type'] == 'observed_actions'
+    assert artifact['sha256']
+
+
 def test_run_scenario_penalizes_forbidden_actions():
     result = run_scenario(
         {

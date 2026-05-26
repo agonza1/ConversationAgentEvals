@@ -536,7 +536,30 @@ def _stable_digest(value: Any) -> str:
 
 
 def _stable_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(',', ':'), default=str)
+    return json.dumps(_stable_json_value(value), sort_keys=True, separators=(',', ':'), default=str)
+
+
+def _stable_json_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        items = [
+            [_stable_json_key(key), _stable_json_value(item_value)]
+            for key, item_value in value.items()
+        ]
+        items.sort(key=lambda item: json.dumps(item[0], sort_keys=True, separators=(',', ':'), default=str))
+        return {'__type__': 'dict', 'items': items}
+    if isinstance(value, list):
+        return [_stable_json_value(item) for item in value]
+    if isinstance(value, tuple):
+        return {'__type__': 'tuple', 'items': [_stable_json_value(item) for item in value]}
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return {'__type__': type(value).__name__, 'value': str(value)}
+
+
+def _stable_json_key(key: Any) -> dict[str, Any]:
+    if isinstance(key, (str, int, float, bool)) or key is None:
+        return {'type': type(key).__name__, 'value': key}
+    return {'type': type(key).__name__, 'value': str(key)}
 
 
 def _first_string(payload: dict[str, Any], *keys: str) -> str | None:
