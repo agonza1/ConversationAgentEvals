@@ -228,7 +228,16 @@ export async function runBenchmarkScenario(payload: BenchmarkRunPayload): Promis
   return handleResponse<BenchmarkRunResponse>(response);
 }
 
-export async function simulateBenchmarkScenario(payload: { suite_id: string; scenario_id: string; agent_profile?: string; include_failure?: boolean }): Promise<BenchmarkSimulationResponse> {
+export async function simulateBenchmarkScenario(payload: {
+  suite_id: string;
+  scenario_id: string;
+  agent_profile?: string;
+  include_failure?: boolean;
+  agent_version?: string;
+  prompt_version?: string;
+  model_name?: string;
+  notes?: string;
+}): Promise<BenchmarkSimulationResponse> {
   const response = await fetch(`${getApiBase()}/api/benchmarks/simulate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

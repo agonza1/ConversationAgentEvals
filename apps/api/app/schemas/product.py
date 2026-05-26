@@ -59,6 +59,15 @@ class SavedRunResponse(BaseModel):
     created_at: str
 
 
+class SavedRunExportResponse(BaseModel):
+    id: str
+    filename: str
+    project_id: str
+    report: dict[str, Any]
+    transcript: str | None = None
+    created_at: str
+
+
 class JudgeRequest(BaseModel):
     plan: PlanId = 'free'
     report: dict[str, Any] = Field(default_factory=dict)
