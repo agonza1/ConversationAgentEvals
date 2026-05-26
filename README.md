@@ -77,8 +77,18 @@ npm run dev
 Or use Docker:
 
 ```bash
+npm run docker:check
 npm run docker:up
 ```
+
+The Docker path is intended to mirror a production-style container startup:
+
+- `docker compose up --build` builds the API, Pipecat, and web images from the checked-in Dockerfiles.
+- Containers run the code baked into those images; source directories are not bind-mounted over the built app.
+- Local state remains mounted for MVP persistence: `./storage` and `./apps/api/sales_presenter.db`.
+- The web image builds Next.js during `docker build` with compose-provided build args for internal service URLs and browser-facing localhost ports, then starts the prebuilt app at container runtime.
+- Compose uses internal service URLs for server-side traffic (`http://api:8000`, `http://pipecat:8110`) and localhost URLs only for browser-facing `NEXT_PUBLIC_*` values.
+- `npm run docker:check` is a fast static smoke check for compose defaults and Dockerfile parity. It does not build images or require Docker to be running.
 
 Default local endpoints:
 
@@ -91,8 +101,11 @@ Default local endpoints:
 ```bash
 npm run build:web
 npm run test:api
+npm run test:benchmark-smoke
 npm run test:e2e
 ```
+
+`npm run test:benchmark-smoke` is an API-level smoke path for the benchmark runner. It does not need browser or voice credentials; it lists suites, simulates pass and failure runs, verifies run metadata and audit fields, then saves, lists, and exports a run.
 
 Voice proof against a running stack:
 

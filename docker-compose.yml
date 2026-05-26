@@ -1,6 +1,9 @@
 services:
   api:
     image: conversation-agent-evals-api:latest
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
     env_file:
       - .env
     environment:
@@ -9,7 +12,6 @@ services:
     ports:
       - "${API_PORT:-8025}:8000"
     volumes:
-      - ./apps/api:/workspace/apps/api
       - ./storage:/workspace/storage
       - ./apps/api/sales_presenter.db:/workspace/apps/api/sales_presenter.db
     healthcheck:
@@ -20,21 +22,37 @@ services:
 
   pipecat:
     image: conversation-agent-evals-pipecat:latest
+    build:
+      context: .
+      dockerfile: apps/pipecat/Dockerfile
     env_file:
       - .env
     environment:
       API_BASE_URL: http://api:8000
       PIPECAT_SERVICE_URL: http://pipecat:8110
-    volumes:
-      - ./apps/pipecat:/app
     ports:
       - "${PIPECAT_PORT:-8110}:8110"
     depends_on:
       api:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8110/health', timeout=5).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
   web:
     image: conversation-agent-evals-web:latest
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        API_BASE_URL: http://api:8000
+        PIPECAT_SERVICE_URL: http://pipecat:8110
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:${API_PORT:-8025}
+        NEXT_PUBLIC_PIPECAT_SERVICE_URL: http://localhost:${PIPECAT_PORT:-8110}
+        APP_ENV: ${APP_ENV:-development}
+        PRODUCTION: ${PRODUCTION:-false}
     env_file:
       - .env
     environment:
@@ -43,12 +61,10 @@ services:
       PIPECAT_SERVICE_URL: http://pipecat:8110
       NEXT_PUBLIC_API_BASE_URL: http://localhost:${API_PORT:-8025}
       NEXT_PUBLIC_PIPECAT_SERVICE_URL: http://localhost:${PIPECAT_PORT:-8110}
-    volumes:
-      - ./apps/web:/app/apps/web
     ports:
       - "${PORT:-3012}:3000"
     depends_on:
       api:
         condition: service_healthy
       pipecat:
-        condition: service_started
+        condition: service_healthy

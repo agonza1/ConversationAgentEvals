@@ -6,6 +6,10 @@ const baseUrl = process.env.PLAYWRIGHT_BASE_URL || `http://127.0.0.1:${port}`;
 // Mock sessions store
 let sessions = {};
 
+function isSessionActionPath(path) {
+  return ["/start", "/next-slide", "/pause", "/end"].some((suffix) => path.endsWith(suffix));
+}
+
 function handleRequest(req, res) {
   const url = new URL(req.url, baseUrl);
   const path = url.pathname;
@@ -40,7 +44,7 @@ function handleRequest(req, res) {
   }
   
   // Get single session
-  if (path.startsWith('/api/sessions/')) {
+  if (path.startsWith('/api/sessions/') && !isSessionActionPath(path)) {
     const sessionId = path.split('/').pop();
     if (sessionId && sessions[sessionId]) {
       res.statusCode = 200;

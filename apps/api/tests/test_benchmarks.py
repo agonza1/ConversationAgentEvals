@@ -72,7 +72,147 @@ def test_run_scenario_scores_matching_transcript_deterministically():
     assert first['rubric_score'] == 100
     assert first['missing_actions'] == []
     assert first['forbidden_action_hits'] == []
+    assert first['evidence_artifacts']['evidence_fingerprint']
+    assert [artifact['type'] for artifact in first['evidence_artifacts']['artifacts']] == ['transcript_text']
     assert [check['status'] for check in first['rubric_checks']] == ['pass', 'pass', 'pass', 'pass']
+
+
+def test_run_scenario_run_id_includes_retained_artifact_fingerprints():
+    base_request = {
+        'suite_id': 'fintech-support-agent',
+        'scenario_id': 'failed-ach-transfer',
+        'action_trace': [
+            {'action': 'verify business account', 'status': 'completed'},
+            {'action': 'collect transfer amount and date', 'status': 'completed'},
+            {'action': 'explain failure reason without exposing sensitive bank data', 'status': 'completed'},
+            {'action': 'offer retry or payments support escalation', 'status': 'completed'},
+            {'action': 'provide reference number', 'status': 'completed'},
+        ],
+        'final_state': {'complete': True, 'reference_number': 'ACH-1001'},
+    }
+    retry_request = {
+        **base_request,
+        'final_state': {'complete': True, 'reference_number': 'ACH-2002'},
+    }
+
+    first = run_scenario(base_request)
+    second = run_scenario(base_request)
+    retry = run_scenario(retry_request)
+
+    assert first['run_id'] == second['run_id']
+    assert retry['run_id'] != first['run_id']
+    assert retry['evidence_artifacts']['evidence_fingerprint'] != first['evidence_artifacts']['evidence_fingerprint']
+    assert [artifact['type'] for artifact in first['evidence_artifacts']['artifacts']] == ['action_trace', 'final_state']
+    assert all(artifact['sha256'] for artifact in first['evidence_artifacts']['artifacts'])
+
+
+def test_run_scenario_preserves_artifact_scalar_type_in_hashes_and_run_ids():
+    string_request = {
+        'suite_id': 'fintech-support-agent',
+        'scenario_id': 'failed-ach-transfer',
+        'observed_actions': '[{"action":"x"}]',
+    }
+    list_request = {
+        'suite_id': 'fintech-support-agent',
+        'scenario_id': 'failed-ach-transfer',
+        'observed_actions': [{'action': 'x'}],
+    }
+
+    string_result = run_scenario(string_request)
+    list_result = run_scenario(list_request)
+    string_artifact = string_result['evidence_artifacts']['artifacts'][0]
+    list_artifact = list_result['evidence_artifacts']['artifacts'][0]
+
+    assert string_artifact['type'] == list_artifact['type'] == 'observed_actions'
+    assert string_artifact['sha256'] != list_artifact['sha256']
+    assert string_result['evidence_artifacts']['evidence_fingerprint'] != list_result['evidence_artifacts']['evidence_fingerprint']
+    assert string_result['run_id'] != list_result['run_id']
+
+
+def test_run_scenario_accepts_mixed_type_artifact_dict_keys():
+    request = {
+        'suite_id': 'fintech-support-agent',
+        'scenario_id': 'failed-ach-transfer',
+        'observed_actions': {'a': 1, 2: 'b'},
+    }
+
+    first = run_scenario(request)
+    second = run_scenario(request)
+    artifact = first['evidence_artifacts']['artifacts'][0]
+
+    assert first['run_id'] == second['run_id']
+    assert first['evidence_artifacts']['evidence_fingerprint']
+    assert artifact['type'] == 'observed_actions'
+    assert artifact['sha256']
+
+
+def test_run_scenario_persists_prompt_model_and_version_labels():
+    result = run_scenario(
+        {
+            'suite_id': 'fintech-support-agent',
+            'scenario_id': 'suspicious-card-charge',
+            'transcript': 'Agent: I will verify your account identity and file a fraud dispute case.',
+            'agent_version': 'agent-v12',
+            'prompt_version': 'prompt-2026-05-25',
+            'model_name': 'gpt-4.1-mini',
+            'notes': 'tightened fraud escalation wording',
+        }
+    )
+
+    assert result['run_metadata'] == {
+        'agent_version': 'agent-v12',
+        'prompt_version': 'prompt-2026-05-25',
+        'model_name': 'gpt-4.1-mini',
+        'notes': 'tightened fraud escalation wording',
+    }
+
+
+def test_run_scenario_includes_evidence_audit_summary():
+    result = run_scenario(
+        {
+            'suite_id': 'fintech-support-agent',
+            'scenario_id': 'suspicious-card-charge',
+            'transcript': 'Agent: I will verify your account identity and file a fraud dispute case.',
+            'action_trace': [{'action': 'verify account identity', 'status': 'completed'}],
+            'final_state': {'complete': True, 'case_id': 'FRD-1001'},
+            'metadata': {
+                'agent_version': 'agent-v12',
+                'prompt_version': 'prompt-2026-05-25',
+            },
+        }
+    )
+
+    summary = result['evidence_audit_summary']
+    assert summary['run_started_at']
+    assert summary['evaluated_at']
+    assert summary['input_artifact_types'] == ['transcript', 'action_trace', 'final_state']
+    assert summary['transcript_present'] is True
+    assert summary['action_trace_present'] is True
+    assert summary['final_state_present'] is True
+    assert summary['metadata_labels'] == ['agent_version', 'prompt_version']
+    assert summary['evaluator_version'] == 'deterministic-agentic-v1'
+    assert summary['export_readiness'] == {'ready': True, 'format': 'saved_run_json', 'missing': []}
+
+
+def test_simulate_scenario_carries_metadata_into_report_and_response():
+    result = simulate_scenario(
+        {
+            'suiteId': 'call-center-voice-ai',
+            'scenarioId': 'billing-address-change',
+            'metadata': {
+                'agentVersion': 'agent-v2',
+                'promptVersion': 'billing-prompt-v4',
+                'modelName': 'gpt-4.1',
+            },
+        }
+    )
+
+    assert result['run_metadata'] == {
+        'agent_version': 'agent-v2',
+        'prompt_version': 'billing-prompt-v4',
+        'model_name': 'gpt-4.1',
+    }
+    assert result['benchmark_report']['run_metadata'] == result['run_metadata']
 
 
 def test_run_scenario_penalizes_forbidden_actions():
