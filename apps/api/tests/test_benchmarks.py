@@ -106,6 +106,29 @@ def test_run_scenario_run_id_includes_retained_artifact_fingerprints():
     assert all(artifact['sha256'] for artifact in first['evidence_artifacts']['artifacts'])
 
 
+def test_run_scenario_preserves_artifact_scalar_type_in_hashes_and_run_ids():
+    string_request = {
+        'suite_id': 'fintech-support-agent',
+        'scenario_id': 'failed-ach-transfer',
+        'observed_actions': '[{"action":"x"}]',
+    }
+    list_request = {
+        'suite_id': 'fintech-support-agent',
+        'scenario_id': 'failed-ach-transfer',
+        'observed_actions': [{'action': 'x'}],
+    }
+
+    string_result = run_scenario(string_request)
+    list_result = run_scenario(list_request)
+    string_artifact = string_result['evidence_artifacts']['artifacts'][0]
+    list_artifact = list_result['evidence_artifacts']['artifacts'][0]
+
+    assert string_artifact['type'] == list_artifact['type'] == 'observed_actions'
+    assert string_artifact['sha256'] != list_artifact['sha256']
+    assert string_result['evidence_artifacts']['evidence_fingerprint'] != list_result['evidence_artifacts']['evidence_fingerprint']
+    assert string_result['run_id'] != list_result['run_id']
+
+
 def test_run_scenario_penalizes_forbidden_actions():
     result = run_scenario(
         {

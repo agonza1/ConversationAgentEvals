@@ -536,8 +536,6 @@ def _stable_digest(value: Any) -> str:
 
 
 def _stable_json(value: Any) -> str:
-    if isinstance(value, str):
-        return value
     return json.dumps(value, sort_keys=True, separators=(',', ':'), default=str)
 
 
