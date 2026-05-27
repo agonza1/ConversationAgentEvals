@@ -16,6 +16,7 @@ from app.schemas.product import (
 from app.services.product_service import (
     add_workspace_member,
     export_saved_run,
+    get_saved_run,
     invite_workspace_member,
     judge_gate,
     list_projects,
@@ -144,6 +145,14 @@ def create_saved_run(payload: SavedRunRequest, db: Session = Depends(get_db)):
 @router.get('/runs')
 def get_saved_runs(user_id: str = Query(min_length=1), project_id: str | None = None, db: Session = Depends(get_db)):
     return list_saved_runs(db=db, user_id=user_id, project_id=project_id)
+
+
+@router.get('/runs/{run_id}')
+def get_saved_run_report(run_id: str, user_id: str = Query(min_length=1), db: Session = Depends(get_db)):
+    saved_run = get_saved_run(db=db, user_id=user_id, run_id=run_id)
+    if saved_run is None:
+        raise HTTPException(status_code=404, detail='Saved run not found')
+    return saved_run
 
 
 @router.get('/runs/{run_id}/export')

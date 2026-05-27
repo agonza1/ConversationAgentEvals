@@ -291,6 +291,20 @@ def list_saved_runs(db: Session, user_id: str, project_id: str | None = None) ->
     return [_serialize_saved_run(saved_run, project) for saved_run, project in rows]
 
 
+def get_saved_run(db: Session, user_id: str, run_id: str) -> SavedRunResponse | None:
+    row = (
+        db.query(ProductSavedRun, ProductProject)
+        .join(ProductProject, ProductProject.id == ProductSavedRun.project_id)
+        .filter(ProductSavedRun.id == run_id, ProductSavedRun.user_id == user_id)
+        .first()
+    )
+    if row is None:
+        return None
+
+    saved_run, project = row
+    return _serialize_saved_run(saved_run, project)
+
+
 def project_regression_summary(db: Session, user_id: str, project_id: str) -> ProductProjectRegressionSummary | None:
     project = (
         db.query(ProductProject)

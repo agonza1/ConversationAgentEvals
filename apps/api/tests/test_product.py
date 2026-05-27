@@ -250,6 +250,13 @@ def test_saved_runs_are_project_scoped_and_require_user_id():
     assert list_response.status_code == 200
     assert [run['id'] for run in list_response.json()] == [saved['id']]
 
+    detail_response = client.get(f"/api/product/runs/{saved['id']}", params={'user_id': 'demo-user'})
+    assert detail_response.status_code == 200
+    assert detail_response.json() == saved
+
+    forbidden_detail = client.get(f"/api/product/runs/{saved['id']}", params={'user_id': 'other-user'})
+    assert forbidden_detail.status_code == 404
+
     projects_response = client.get('/api/product/projects', params={'user_id': 'demo-user'})
     assert projects_response.status_code == 200
     assert projects_response.json()[0]['run_count'] == 1
