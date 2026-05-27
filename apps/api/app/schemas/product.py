@@ -41,6 +41,25 @@ class ProductConfig(BaseModel):
     llm_judge_status: Literal['planned', 'gated', 'enabled']
 
 
+class ProductProjectRequest(BaseModel):
+    user_id: str = Field(min_length=1)
+    project_id: str = Field(default='default')
+    name: str = Field(default='Default Project', min_length=1, max_length=80)
+    plan: PlanId = 'free'
+
+
+class ProductProjectResponse(BaseModel):
+    id: str
+    user_id: str
+    project_id: str
+    name: str
+    plan: PlanId
+    run_count: int = 0
+    created_at: str
+    updated_at: str
+    last_run_at: str | None = None
+
+
 class SavedRunRequest(BaseModel):
     user_id: str = Field(min_length=1)
     project_id: str = Field(default='default')
@@ -53,8 +72,10 @@ class SavedRunResponse(BaseModel):
     id: str
     user_id: str
     project_id: str
+    project_name: str
     plan: PlanId
     report: dict[str, Any]
+    artifacts: dict[str, Any] = Field(default_factory=dict)
     transcript: str | None = None
     created_at: str
 
@@ -63,7 +84,9 @@ class SavedRunExportResponse(BaseModel):
     id: str
     filename: str
     project_id: str
+    project_name: str
     report: dict[str, Any]
+    artifacts: dict[str, Any] = Field(default_factory=dict)
     transcript: str | None = None
     created_at: str
 

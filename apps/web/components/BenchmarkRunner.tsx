@@ -42,8 +42,10 @@ interface BenchmarkReport {
   evidence_spans?: Array<string | JsonRecord>;
   evidence?: Array<string | JsonRecord>;
   missing_actions?: string[];
+  forbidden_action_hits?: Array<string | JsonRecord>;
   forbidden_actions_observed?: string[];
   failure_categories?: string[];
+  recommendations?: string[];
   suggested_fixes?: string[];
   transcript?: string;
   action_trace?: unknown;
@@ -403,14 +405,33 @@ function artifactLabel(value: string) {
   return value.replace(/_/g, ' ');
 }
 
+function formatForbiddenActionHit(hit: string | JsonRecord) {
+  if (typeof hit === 'string') return hit;
+
+  const action = typeof hit.action === 'string' ? hit.action : null;
+  const evidence = typeof hit.evidence === 'string' ? hit.evidence : null;
+  if (action && evidence) return `${action} (${evidence})`;
+  if (action) return action;
+
+  return JSON.stringify(hit);
+}
+
 function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: string) {
   const verdict = report.verdict ?? report.overall ?? 'complete';
   const score = report.score ?? report.overall_score ?? 'n/a';
   const scenario = report.scenario_title ?? fallbackScenarioTitle ?? 'Selected scenario';
   const failureCategories = report.failure_categories?.length ? report.failure_categories.join(', ') : 'None reported';
   const missingActions = report.missing_actions?.length ? report.missing_actions.join('; ') : 'None reported';
-  const forbiddenActions = report.forbidden_actions_observed?.length ? report.forbidden_actions_observed.join('; ') : 'None reported';
-  const suggestedFixes = report.suggested_fixes?.length ? report.suggested_fixes.join('; ') : 'None reported';
+  const forbiddenActions = report.forbidden_actions_observed?.length
+    ? report.forbidden_actions_observed.join('; ')
+    : report.forbidden_action_hits?.length
+      ? report.forbidden_action_hits.map(formatForbiddenActionHit).join('; ')
+      : 'None reported';
+  const suggestedFixes = report.suggested_fixes?.length
+    ? report.suggested_fixes.join('; ')
+    : report.recommendations?.length
+      ? report.recommendations.join('; ')
+      : 'None reported';
 
   return [
     `Scenario: ${scenario}`,
@@ -425,8 +446,12 @@ function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: stri
 
 async function copyText(text: string) {
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall back to the textarea copy path below when async clipboard is blocked.
+    }
   }
 
   if (typeof document.execCommand !== 'function') {

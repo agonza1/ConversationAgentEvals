@@ -1,7 +1,7 @@
 from datetime import datetime
 import uuid
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, Text
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql.sqltypes import String
 
@@ -84,3 +84,34 @@ class PresentationEvent(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     session = relationship('PresentationSession', back_populates='presentation_events')
+
+
+class ProductProject(Base):
+    __tablename__ = 'product_projects'
+    __table_args__ = (UniqueConstraint('user_id', 'project_key', name='uq_product_projects_user_project_key'),)
+
+    id = Column(String, primary_key=True, default=lambda: f'proj_{uuid.uuid4().hex[:12]}')
+    user_id = Column(String, nullable=False, index=True)
+    project_key = Column(String, nullable=False, index=True)
+    name = Column(String, nullable=False, default='Default Project')
+    plan = Column(String, nullable=False, default='free')
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_run_at = Column(DateTime, nullable=True)
+
+    saved_runs = relationship('ProductSavedRun', back_populates='project', cascade='all, delete-orphan')
+
+
+class ProductSavedRun(Base):
+    __tablename__ = 'product_saved_runs'
+
+    id = Column(String, primary_key=True, default=lambda: f'run_{uuid.uuid4().hex[:16]}')
+    user_id = Column(String, nullable=False, index=True)
+    project_id = Column(String, ForeignKey('product_projects.id'), nullable=False, index=True)
+    plan = Column(String, nullable=False, default='free')
+    report_json = Column(Text, nullable=False, default='{}')
+    transcript = Column(Text, nullable=True)
+    artifact_json = Column(Text, nullable=False, default='{}')
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    project = relationship('ProductProject', back_populates='saved_runs')
