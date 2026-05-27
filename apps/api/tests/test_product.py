@@ -367,6 +367,51 @@ def test_saved_runs_include_project_regression_delta():
     assert list_response.json()[0]['artifacts']['regression_delta']['status'] == 'improved'
 
 
+def test_project_regression_summary_reports_latest_trend():
+    for run_id, score in [('run-1', 82), ('run-2', 94), ('run-3', 88)]:
+        response = client.post(
+            '/api/product/runs',
+            json={
+                'user_id': 'demo-user',
+                'project_id': 'call-center',
+                'plan': 'starter',
+                'report': {'run_id': run_id, 'overall_score': score},
+                'transcript': 'Agent: completed the benchmark.',
+            },
+        )
+        assert response.status_code == 200
+
+    summary_response = client.get(
+        '/api/product/projects/call-center/regression-summary',
+        params={'user_id': 'demo-user'},
+    )
+
+    assert summary_response.status_code == 200
+    assert summary_response.json() == {
+        'user_id': 'demo-user',
+        'project_id': 'call-center',
+        'run_count': 3,
+        'latest_run_id': 'run-3',
+        'latest_score': 88,
+        'previous_score': 94,
+        'latest_delta': -6,
+        'latest_status': 'regressed',
+        'best_score': 94,
+        'worst_score': 82,
+        'average_score': 88.0,
+    }
+
+
+def test_project_regression_summary_rejects_missing_project():
+    response = client.get(
+        '/api/product/projects/missing/regression-summary',
+        params={'user_id': 'demo-user'},
+    )
+
+    assert response.status_code == 404
+    assert response.json()['detail'] == 'Project not found'
+
+
 def test_saved_runs_preserve_run_metadata_in_history_and_export():
     response = client.post(
         '/api/product/runs',

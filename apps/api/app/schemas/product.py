@@ -67,6 +67,20 @@ class ProductProjectResponse(BaseModel):
     last_run_at: str | None = None
 
 
+class ProductProjectRegressionSummary(BaseModel):
+    user_id: str
+    project_id: str
+    run_count: int
+    latest_run_id: str | None = None
+    latest_score: int | float | None = None
+    previous_score: int | float | None = None
+    latest_delta: int | float | None = None
+    latest_status: Literal['baseline', 'improved', 'regressed', 'unchanged', 'none']
+    best_score: int | float | None = None
+    worst_score: int | float | None = None
+    average_score: float | None = None
+
+
 class ProductWorkspaceRequest(BaseModel):
     owner_user_id: str = Field(min_length=1)
     workspace_id: str = Field(default='default')

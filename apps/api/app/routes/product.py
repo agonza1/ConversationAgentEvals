@@ -22,6 +22,7 @@ from app.services.product_service import (
     list_saved_runs,
     list_workspaces,
     product_config,
+    project_regression_summary,
     save_run,
     upsert_project,
     upsert_workspace,
@@ -118,6 +119,14 @@ def patch_project_settings(project_id: str, payload: ProductProjectSettingsReque
     if project is None:
         raise HTTPException(status_code=404, detail='Project not found')
     return project
+
+
+@router.get('/projects/{project_id}/regression-summary')
+def get_project_regression_summary(project_id: str, user_id: str = Query(min_length=1), db: Session = Depends(get_db)):
+    summary = project_regression_summary(db=db, user_id=user_id, project_id=project_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail='Project not found')
+    return summary
 
 
 @router.post('/runs')

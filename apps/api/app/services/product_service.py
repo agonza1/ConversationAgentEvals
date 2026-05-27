@@ -22,6 +22,7 @@ from app.schemas.product import (
     FirebaseAuthConfig,
     JudgeResponse,
     PricingPlan,
+    ProductProjectRegressionSummary,
     ProductProjectSettingsRequest,
     ProductProjectResponse,
     ProductWorkspaceInvitationResponse,
@@ -288,6 +289,46 @@ def list_saved_runs(db: Session, user_id: str, project_id: str | None = None) ->
 
     rows = query.order_by(ProductSavedRun.created_at.desc()).all()
     return [_serialize_saved_run(saved_run, project) for saved_run, project in rows]
+
+
+def project_regression_summary(db: Session, user_id: str, project_id: str) -> ProductProjectRegressionSummary | None:
+    project = (
+        db.query(ProductProject)
+        .filter(ProductProject.user_id == user_id, ProductProject.project_key == project_id)
+        .first()
+    )
+    if project is None:
+        return None
+
+    saved_runs = (
+        db.query(ProductSavedRun)
+        .filter(ProductSavedRun.user_id == user_id, ProductSavedRun.project_id == project.id)
+        .order_by(ProductSavedRun.created_at.desc())
+        .all()
+    )
+    scored_runs = [
+        (saved_run, _numeric_score(_report_score(_load_json(saved_run.report_json, {}))))
+        for saved_run in saved_runs
+    ]
+    scores = [score for _, score in scored_runs if score is not None]
+    latest_report = _load_json(saved_runs[0].report_json, {}) if saved_runs else {}
+    latest_score = scored_runs[0][1] if scored_runs else None
+    previous_score = next((score for _, score in scored_runs[1:] if score is not None), None)
+    latest_delta = latest_score - previous_score if latest_score is not None and previous_score is not None else None
+
+    return ProductProjectRegressionSummary(
+        user_id=user_id,
+        project_id=project.project_key,
+        run_count=len(saved_runs),
+        latest_run_id=str(latest_report.get('run_id')) if latest_report.get('run_id') else None,
+        latest_score=latest_score,
+        previous_score=previous_score,
+        latest_delta=latest_delta,
+        latest_status=_delta_status(latest_score, previous_score),
+        best_score=max(scores) if scores else None,
+        worst_score=min(scores) if scores else None,
+        average_score=round(sum(scores) / len(scores), 2) if scores else None,
+    )
 
 
 def export_saved_run(db: Session, user_id: str, run_id: str) -> SavedRunExportResponse | None:
@@ -590,6 +631,18 @@ def _regression_delta(report: dict[str, Any], previous_report: dict[str, Any] | 
         'current_overall_score': current_score,
         'score_delta': score_delta,
     }
+
+
+def _delta_status(current_score: int | float | None, previous_score: int | float | None) -> str:
+    if current_score is None:
+        return 'none'
+    if previous_score is None:
+        return 'baseline'
+    if current_score > previous_score:
+        return 'improved'
+    if current_score < previous_score:
+        return 'regressed'
+    return 'unchanged'
 
 
 def _numeric_score(value: Any) -> int | float | None:
