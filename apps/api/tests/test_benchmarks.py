@@ -50,6 +50,30 @@ def test_get_suite_includes_full_scenario_contract_and_returns_copy():
     assert 'mutated action' not in fresh_suite['scenarios'][0]['required_actions']
 
 
+def test_scenarios_endpoint_returns_full_scenario_contract():
+    response = client.get('/api/benchmarks/suites/telehealth-agent/scenarios')
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    scenario = payload['scenarios'][0]
+    assert payload['suite_id'] == 'telehealth-agent'
+    assert {
+        'persona',
+        'goal',
+        'required_actions',
+        'forbidden_actions',
+        'expected_final_state',
+        'rubric',
+    }.issubset(scenario)
+
+
+def test_scenarios_endpoint_rejects_unknown_suite():
+    response = client.get('/api/benchmarks/suites/missing/scenarios')
+
+    assert response.status_code == 404
+    assert response.json()['detail'] == 'Benchmark suite not found.'
+
+
 def test_run_scenario_scores_matching_transcript_deterministically():
     request = {
         'suite_id': 'fintech-support-agent',

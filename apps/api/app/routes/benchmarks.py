@@ -23,6 +23,15 @@ def get_benchmark_suite(suite_id: str):
     return suite
 
 
+@router.get('/{suite_id}/scenarios')
+@router.get('/suites/{suite_id}/scenarios')
+def list_benchmark_scenarios(suite_id: str):
+    suite = get_suite(suite_id)
+    if suite is None:
+        raise HTTPException(status_code=404, detail='Benchmark suite not found.')
+    return {'suite_id': suite_id, 'scenarios': suite['scenarios']}
+
+
 @router.post('/run')
 def run_benchmark(payload: BenchmarkRunRequest):
     try:
