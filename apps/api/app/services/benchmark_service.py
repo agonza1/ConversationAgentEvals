@@ -411,6 +411,8 @@ def _payload_to_dict(request: Any) -> dict[str, Any]:
             'conversation',
             'transcript',
             'call',
+            'group_call',
+            'groupCall',
             'vcon',
             'agent_profile',
             'agentProfile',
@@ -453,7 +455,7 @@ def _evidence_audit_summary(
 ) -> dict[str, Any]:
     input_artifact_types = [
         key
-        for key in ('transcript', 'conversation', 'call', 'vcon', 'observed_actions', 'action_trace', 'final_state')
+        for key in ('transcript', 'conversation', 'call', 'group_call', 'groupCall', 'vcon', 'observed_actions', 'action_trace', 'final_state')
         if _artifact_present(payload.get(key))
     ]
     transcript_present = bool(_conversation_text(payload))
@@ -512,7 +514,7 @@ def _evidence_artifacts(payload: dict[str, Any], transcript: str) -> dict[str, A
     if transcript:
         artifacts.append(_artifact_summary('transcript_text', transcript))
 
-    for key in ('observed_actions', 'action_trace', 'final_state', 'conversation', 'call', 'vcon'):
+    for key in ('observed_actions', 'action_trace', 'final_state', 'conversation', 'call', 'group_call', 'groupCall', 'vcon'):
         value = payload.get(key)
         if _artifact_present(value):
             artifacts.append(_artifact_summary(key, value))
@@ -778,31 +780,83 @@ def _first_string(payload: dict[str, Any], *keys: str) -> str | None:
 
 
 def _conversation_text(payload: dict[str, Any]) -> str:
-    for key in ('transcript', 'conversation', 'call', 'vcon'):
+    for key in ('transcript', 'conversation', 'call', 'group_call', 'groupCall', 'vcon'):
         value = payload.get(key)
         if isinstance(value, str):
             return value.strip()
         if isinstance(value, dict):
-            dialog = value.get('dialog')
-            if isinstance(dialog, list):
-                turns = []
-                for item in dialog:
-                    if isinstance(item, dict):
-                        body = item.get('body') or item.get('text') or item.get('transcript')
-                        if body:
-                            turns.append(str(body))
-                return '\n'.join(turns)
-        if isinstance(value, list):
-            turns = []
-            for item in value:
-                if isinstance(item, str):
-                    turns.append(item)
-                elif isinstance(item, dict):
-                    body = item.get('body') or item.get('text') or item.get('transcript') or item.get('content')
-                    if body:
-                        turns.append(str(body))
+            turns = _structured_conversation_turns(value)
             if turns:
                 return '\n'.join(turns)
+            summary = _group_call_summary_text(value)
+            if summary:
+                return summary
+        if isinstance(value, list):
+            turns = _structured_conversation_turns({'dialog': value})
+            if turns:
+                return '\n'.join(turns)
+    return ''
+
+
+def _structured_conversation_turns(value: dict[str, Any]) -> list[str]:
+    turns = []
+    for key in ('dialog', 'messages', 'utterances', 'transcript', 'turns'):
+        items = value.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if isinstance(item, str):
+                turns.append(item)
+            elif isinstance(item, dict):
+                speaker = item.get('speaker') or item.get('party') or item.get('role') or item.get('participant')
+                body = item.get('body') or item.get('text') or item.get('transcript') or item.get('content') or item.get('message')
+                if body:
+                    prefix = f'{speaker}: ' if speaker is not None else ''
+                    turns.append(f'{prefix}{body}')
+        if turns:
+            return turns
+    return turns
+
+
+def _group_call_summary_text(value: dict[str, Any]) -> str:
+    lines: list[str] = []
+    for key, label in (
+        ('decisions', 'Decision'),
+        ('commitments', 'Commitment'),
+        ('follow_up_actions', 'Follow-up'),
+        ('followUps', 'Follow-up'),
+        ('action_items', 'Action item'),
+    ):
+        items = value.get(key)
+        if isinstance(items, list):
+            for item in items:
+                text = _group_call_item_text(item)
+                if text:
+                    lines.append(f'{label}: {text}')
+    return '\n'.join(lines)
+
+
+def _group_call_item_text(item: Any) -> str:
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        body = (
+            item.get('body')
+            or item.get('text')
+            or item.get('description')
+            or item.get('decision')
+            or item.get('commitment')
+            or item.get('action')
+            or item.get('task')
+        )
+        owner = item.get('owner') or item.get('assignee') or item.get('speaker')
+        due = item.get('due') or item.get('due_date') or item.get('deadline')
+        parts = [str(body)] if body else []
+        if owner:
+            parts.append(f'owner {owner}')
+        if due:
+            parts.append(f'due {due}')
+        return '; '.join(parts)
     return ''
 
 
