@@ -77,6 +77,22 @@ interface EvidenceAuditSummary {
   };
 }
 
+interface RegressionDelta {
+  status?: 'baseline' | 'improved' | 'regressed' | 'unchanged' | string;
+  previous_run_id?: string | null;
+  previous_overall_score?: number | null;
+  current_overall_score?: number | null;
+  score_delta?: number | null;
+}
+
+interface SavedRunArtifacts {
+  overall_score?: number;
+  transcript_lines?: number;
+  has_transcript?: boolean;
+  evidence_items?: number;
+  regression_delta?: RegressionDelta;
+}
+
 interface PricingPlan {
   id: 'free' | 'starter' | 'team' | 'business';
   name: string;
@@ -113,6 +129,7 @@ interface SavedRun {
   project_id: string;
   plan: PricingPlan['id'];
   report: BenchmarkReport;
+  artifacts?: SavedRunArtifacts;
   transcript?: string | null;
   created_at: string;
 }
@@ -122,6 +139,7 @@ interface SavedRunExport {
   filename: string;
   project_id: string;
   report: BenchmarkReport;
+  artifacts?: SavedRunArtifacts;
   transcript?: string | null;
   created_at: string;
 }
@@ -389,6 +407,23 @@ function metadataChangeSummary(current?: RunMetadata, previous?: RunMetadata) {
     .map((item) => `${item.label}: ${previous?.[item.key] ?? 'unset'} -> ${item.value}`);
 
   return changes.length ? changes.join('; ') : entries.length ? 'No version label changes from prior saved run.' : 'No version labels captured.';
+}
+
+function regressionDeltaSummary(delta?: RegressionDelta) {
+  if (!delta) return 'No prior run comparison captured.';
+  if (delta.status === 'baseline') return 'Baseline run for this project.';
+  const currentScore = delta.current_overall_score ?? 'n/a';
+  const previousScore = delta.previous_overall_score ?? 'n/a';
+  const signedDelta = typeof delta.score_delta === 'number' && delta.score_delta > 0 ? `+${delta.score_delta}` : delta.score_delta ?? 'n/a';
+
+  return `${delta.status ?? 'compared'}: ${currentScore} vs ${previousScore} (${signedDelta})`;
+}
+
+function regressionDeltaColor(status?: string) {
+  if (status === 'improved') return 'var(--success-text)';
+  if (status === 'regressed') return 'var(--danger)';
+  if (status === 'unchanged') return 'var(--muted)';
+  return 'var(--text)';
 }
 
 function formatAuditTimestamp(value?: string) {
@@ -1162,6 +1197,9 @@ export function BenchmarkRunner() {
                   </span>
                   <div style={{ marginTop: 4, fontSize: 13 }}>
                     {metadataChangeSummary(run.report.run_metadata, savedRuns[index + 1]?.report.run_metadata)}
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: 13, color: regressionDeltaColor(run.artifacts?.regression_delta?.status) }}>
+                    {regressionDeltaSummary(run.artifacts?.regression_delta)}
                   </div>
                   <button
                     type="button"
