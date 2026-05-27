@@ -324,6 +324,49 @@ def test_project_list_reports_run_counts_per_project():
     assert counts == {'call-center': 2, 'telehealth': 1}
 
 
+def test_saved_runs_include_project_regression_delta():
+    first = client.post(
+        '/api/product/runs',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'call-center',
+            'plan': 'starter',
+            'report': {'run_id': 'run-1', 'overall_score': 82},
+            'transcript': 'Agent: completed most of the task.',
+        },
+    )
+    second = client.post(
+        '/api/product/runs',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'call-center',
+            'plan': 'starter',
+            'report': {'run_id': 'run-2', 'overall_score': 94},
+            'transcript': 'Agent: completed the task.',
+        },
+    )
+
+    assert first.status_code == 200
+    assert first.json()['artifacts']['regression_delta'] == {
+        'status': 'baseline',
+        'previous_run_id': None,
+        'previous_overall_score': None,
+        'current_overall_score': 82,
+        'score_delta': None,
+    }
+    assert second.status_code == 200
+    assert second.json()['artifacts']['regression_delta'] == {
+        'status': 'improved',
+        'previous_run_id': 'run-1',
+        'previous_overall_score': 82,
+        'current_overall_score': 94,
+        'score_delta': 12,
+    }
+
+    list_response = client.get('/api/product/runs', params={'user_id': 'demo-user', 'project_id': 'call-center'})
+    assert list_response.json()[0]['artifacts']['regression_delta']['status'] == 'improved'
+
+
 def test_saved_runs_preserve_run_metadata_in_history_and_export():
     response = client.post(
         '/api/product/runs',

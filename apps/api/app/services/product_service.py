@@ -249,7 +249,14 @@ def save_run(db: Session, user_id: str, project_id: str, plan: str, report: dict
     project = _get_or_create_project(db=db, user_id=user_id, project_id=project_id, plan=plan)
     created_at = datetime.now(UTC)
     seed = f'{user_id}:{project_id}:{created_at.isoformat()}:{report.get("run_id", "")}'
-    artifact_payload = _build_artifacts(report=report, transcript=transcript)
+    previous_run = (
+        db.query(ProductSavedRun)
+        .filter(ProductSavedRun.project_id == project.id, ProductSavedRun.user_id == user_id)
+        .order_by(ProductSavedRun.created_at.desc())
+        .first()
+    )
+    previous_report = _load_json(previous_run.report_json, {}) if previous_run else None
+    artifact_payload = _build_artifacts(report=report, transcript=transcript, previous_report=previous_report)
     saved = ProductSavedRun(
         id=hashlib.sha256(seed.encode('utf-8')).hexdigest()[:16],
         user_id=user_id,
@@ -545,13 +552,52 @@ def _serialize_saved_run(saved_run: ProductSavedRun, project: ProductProject) ->
     )
 
 
-def _build_artifacts(report: dict[str, Any], transcript: str | None) -> dict[str, Any]:
+def _build_artifacts(report: dict[str, Any], transcript: str | None, previous_report: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         'run_id': report.get('run_id'),
         'overall_score': report.get('overall_score'),
+        'regression_delta': _regression_delta(report, previous_report),
         'evidence_spans': report.get('evidence_spans') or report.get('evidence') or [],
         'transcript_lines': len([line for line in (transcript or '').splitlines() if line.strip()]),
     }
+
+
+def _regression_delta(report: dict[str, Any], previous_report: dict[str, Any] | None) -> dict[str, Any]:
+    current_score = _numeric_score(_report_score(report))
+    previous_score = _numeric_score(_report_score(previous_report)) if previous_report else None
+
+    if previous_report is None or previous_score is None or current_score is None:
+        return {
+            'status': 'baseline',
+            'previous_run_id': previous_report.get('run_id') if previous_report else None,
+            'previous_overall_score': previous_score,
+            'current_overall_score': current_score,
+            'score_delta': None,
+        }
+
+    score_delta = current_score - previous_score
+    if score_delta > 0:
+        status = 'improved'
+    elif score_delta < 0:
+        status = 'regressed'
+    else:
+        status = 'unchanged'
+
+    return {
+        'status': status,
+        'previous_run_id': previous_report.get('run_id'),
+        'previous_overall_score': previous_score,
+        'current_overall_score': current_score,
+        'score_delta': score_delta,
+    }
+
+
+def _numeric_score(value: Any) -> int | float | None:
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _report_score(report: dict[str, Any]) -> Any:
+    return report.get('overall_score') if 'overall_score' in report else report.get('score')
 
 
 def _load_json(raw: str | None, fallback: dict[str, Any]) -> dict[str, Any]:
