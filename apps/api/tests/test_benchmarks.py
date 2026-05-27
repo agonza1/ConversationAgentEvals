@@ -413,6 +413,35 @@ def test_run_endpoint_accepts_vcon_without_duplicate_transcript_field():
     assert payload['transcript_preview'].startswith('This outage is frustrating')
 
 
+def test_run_endpoint_accepts_group_call_artifacts():
+    response = client.post(
+        '/api/benchmarks/run',
+        json={
+            'suiteId': 'call-center-voice-ai',
+            'scenarioId': 'angry-outage-escalation',
+            'groupCall': {
+                'messages': [
+                    {'speaker': 'caller', 'text': 'This outage is frustrating and I want a human.'},
+                    {'speaker': 'agent', 'text': 'I am sorry. I checked outage status and created ticket ABC.'},
+                    {'speaker': 'supervisor', 'text': 'We will escalate to a representative now.'},
+                ],
+                'decisions': [{'description': 'Escalate to human agent on request'}],
+                'commitments': [{'owner': 'agent', 'task': 'Provide outage ticket reference ABC'}],
+                'follow_up_actions': [{'owner': 'representative', 'task': 'Call the customer back after outage review'}],
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload['suite_id'] == 'call-center-voice-ai'
+    assert payload['scenario_id'] == 'angry-outage-escalation'
+    assert payload['verdict'] == 'pass'
+    assert payload['transcript_preview'].startswith('caller: This outage is frustrating')
+    assert payload['evidence_audit_summary']['input_artifact_types'] == ['groupCall']
+    assert payload['evidence_artifacts']['artifacts'][1]['type'] == 'groupCall'
+
+
 def test_run_endpoint_accepts_action_trace_and_final_state_without_transcript():
     response = client.post(
         '/api/benchmarks/run',

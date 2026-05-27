@@ -49,6 +49,8 @@ class BenchmarkRunRequest(BaseModel):
     observed_actions: list[str] = Field(default_factory=list)
     conversation: str | dict[str, Any] | list[Any] | None = None
     call: str | dict[str, Any] | list[Any] | None = None
+    group_call: str | dict[str, Any] | list[Any] | None = None
+    groupCall: str | dict[str, Any] | list[Any] | None = None
     vcon: dict[str, Any] | None = None
     action_trace: str | dict[str, Any] | list[Any] | None = None
     final_state: dict[str, Any] | str | list[Any] = Field(default_factory=dict)
@@ -67,6 +69,8 @@ class BenchmarkRunRequest(BaseModel):
             _has_text(self.transcript)
             or _has_text(self.conversation)
             or _has_text(self.call)
+            or _has_text(self.group_call)
+            or _has_text(self.groupCall)
             or _has_text(self.vcon)
             or _has_text(self.action_trace)
             or _has_text(self.final_state)
@@ -74,7 +78,7 @@ class BenchmarkRunRequest(BaseModel):
             if isinstance(self.transcript, str):
                 self.transcript = self.transcript.strip()
             return self
-        raise ValueError('Transcript, conversation, call, vcon, action_trace, or final_state evidence is required')
+        raise ValueError('Transcript, conversation, call, group_call, vcon, action_trace, or final_state evidence is required')
 
 
 def _has_text(value: Any) -> bool:
