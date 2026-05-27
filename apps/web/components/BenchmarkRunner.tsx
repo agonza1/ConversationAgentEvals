@@ -134,6 +134,18 @@ interface SavedRun {
   created_at: string;
 }
 
+interface ProjectRegressionSummary {
+  run_count: number;
+  latest_run_id?: string | null;
+  latest_score?: number | null;
+  previous_score?: number | null;
+  latest_delta?: number | null;
+  latest_status: RegressionDelta['status'];
+  best_score?: number | null;
+  worst_score?: number | null;
+  average_score?: number | null;
+}
+
 interface SavedRunExport {
   id: string;
   filename: string;
@@ -350,6 +362,12 @@ async function listSavedRuns(userId: string, projectId: string) {
   );
 }
 
+async function fetchProjectRegressionSummary(userId: string, projectId: string) {
+  return handleJson<ProjectRegressionSummary>(
+    await fetch(`${getApiBase()}/api/product/projects/${encodeURIComponent(projectId)}/regression-summary?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
+  );
+}
+
 async function exportSavedRun(userId: string, runId: string) {
   return handleJson<SavedRunExport>(
     await fetch(`${getApiBase()}/api/product/runs/${encodeURIComponent(runId)}/export?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
@@ -530,6 +548,7 @@ export function BenchmarkRunner() {
   const [projectId, setProjectId] = useState('call-center-demo');
   const [plan, setPlan] = useState<PricingPlan['id']>('free');
   const [savedRuns, setSavedRuns] = useState<SavedRun[]>([]);
+  const [projectRegressionSummary, setProjectRegressionSummary] = useState<ProjectRegressionSummary | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [judgeGate, setJudgeGate] = useState<JudgeGate | null>(null);
@@ -592,16 +611,24 @@ export function BenchmarkRunner() {
   useEffect(() => {
     if (!userId) {
       setSavedRuns([]);
+      setProjectRegressionSummary(null);
       return;
     }
 
     let isMounted = true;
-    listSavedRuns(userId, projectId)
-      .then((runs) => {
-        if (isMounted) setSavedRuns(runs);
+    Promise.all([
+      listSavedRuns(userId, projectId),
+      fetchProjectRegressionSummary(userId, projectId).catch(() => null),
+    ])
+      .then(([runs, summary]) => {
+        if (!isMounted) return;
+        setSavedRuns(runs);
+        setProjectRegressionSummary(summary);
       })
       .catch(() => {
-        if (isMounted) setSavedRuns([]);
+        if (!isMounted) return;
+        setSavedRuns([]);
+        setProjectRegressionSummary(null);
       });
 
     return () => {
@@ -657,6 +684,9 @@ export function BenchmarkRunner() {
     try {
       const saved = await saveBenchmarkRun({ user_id: userId, project_id: projectId, plan, report, transcript });
       setSavedRuns((current) => [saved, ...current.filter((run) => run.id !== saved.id)]);
+      fetchProjectRegressionSummary(userId, projectId)
+        .then(setProjectRegressionSummary)
+        .catch(() => setProjectRegressionSummary(null));
       setSaveMessage(`Saved run ${saved.id} to ${projectId}.`);
     } catch (err) {
       setSaveMessage(err instanceof Error ? err.message : 'Could not save this run.');
@@ -1188,6 +1218,22 @@ export function BenchmarkRunner() {
         <div className="card" style={{ padding: 20, display: 'grid', gap: 12 }}>
           <p className="eyebrow">Saved runs</p>
           <h3 style={{ margin: 0 }}>{userId ? `${savedRuns.length} saved for ${projectId}` : 'Signup required'}</h3>
+          {projectRegressionSummary ? (
+            <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'var(--panel-alt)', display: 'grid', gap: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                <strong style={{ color: regressionDeltaColor(projectRegressionSummary.latest_status) }}>
+                  Project trend: {projectRegressionSummary.latest_status}
+                </strong>
+                <span style={{ color: 'var(--muted)', fontWeight: 800 }}>
+                  Avg {projectRegressionSummary.average_score ?? 'n/a'}
+                </span>
+              </div>
+              <p style={{ margin: 0, color: 'var(--muted)' }}>
+                Latest {projectRegressionSummary.latest_score ?? 'n/a'} vs previous {projectRegressionSummary.previous_score ?? 'n/a'}
+                {' '}({typeof projectRegressionSummary.latest_delta === 'number' && projectRegressionSummary.latest_delta > 0 ? '+' : ''}{projectRegressionSummary.latest_delta ?? 'n/a'}), best {projectRegressionSummary.best_score ?? 'n/a'}.
+              </p>
+            </div>
+          ) : null}
           {savedRuns.length ? (
             <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--muted)', display: 'grid', gap: 8 }}>
               {savedRuns.slice(0, 4).map((run, index) => (
