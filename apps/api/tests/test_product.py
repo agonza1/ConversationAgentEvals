@@ -28,6 +28,193 @@ def test_product_config_exposes_pricing_auth_and_usage_gates():
     assert {rule['id'] for rule in payload['usage_rules']} >= {'deterministic_eval', 'llm_judge', 'voice_webrtc_minute'}
 
 
+def test_workspaces_create_owner_membership_defaults_and_list_by_member():
+    response = client.post(
+        '/api/product/workspaces',
+        json={
+            'owner_user_id': 'owner-user',
+            'workspace_id': 'acme-support',
+            'name': 'Acme Support QA',
+            'plan': 'team',
+            'settings': {'retention_days': 180},
+            'onboarding': {'next_step': 'invite_teammate'},
+        },
+    )
+
+    assert response.status_code == 200
+    workspace = response.json()
+    assert workspace['workspace_id'] == 'acme-support'
+    assert workspace['settings']['default_benchmark_suite'] == 'call-center-support'
+    assert workspace['settings']['retention_days'] == 180
+    assert workspace['onboarding']['next_step'] == 'invite_teammate'
+    assert workspace['members'][0]['user_id'] == 'owner-user'
+    assert workspace['members'][0]['role'] == 'owner'
+
+    list_response = client.get('/api/product/workspaces', params={'user_id': 'owner-user'})
+
+    assert list_response.status_code == 200
+    assert [item['id'] for item in list_response.json()] == [workspace['id']]
+
+
+def test_workspace_admins_can_add_members_and_invite_users():
+    workspace = client.post(
+        '/api/product/workspaces',
+        json={
+            'owner_user_id': 'owner-user',
+            'workspace_id': 'acme-support',
+            'name': 'Acme Support QA',
+            'plan': 'team',
+        },
+    ).json()
+
+    member_response = client.post(
+        f"/api/product/workspaces/{workspace['id']}/members",
+        json={'requester_user_id': 'owner-user', 'user_id': 'qa-lead', 'role': 'admin'},
+    )
+
+    assert member_response.status_code == 200
+    members = {member['user_id']: member['role'] for member in member_response.json()['members']}
+    assert members == {'owner-user': 'owner', 'qa-lead': 'admin'}
+
+    invite_response = client.post(
+        f"/api/product/workspaces/{workspace['id']}/invitations",
+        json={'requester_user_id': 'qa-lead', 'email': 'Reviewer@Example.COM', 'role': 'viewer'},
+    )
+
+    assert invite_response.status_code == 200
+    invitation = invite_response.json()
+    assert invitation['email'] == 'reviewer@example.com'
+    assert invitation['role'] == 'viewer'
+    assert invitation['status'] == 'pending'
+    assert invitation['invited_by_user_id'] == 'qa-lead'
+
+    listed = client.get('/api/product/workspaces', params={'user_id': 'qa-lead'}).json()
+    assert listed[0]['invitations'][0]['email'] == 'reviewer@example.com'
+
+
+def test_workspace_viewers_cannot_manage_members_or_invitations():
+    workspace = client.post(
+        '/api/product/workspaces',
+        json={
+            'owner_user_id': 'owner-user',
+            'workspace_id': 'acme-support',
+            'name': 'Acme Support QA',
+            'plan': 'team',
+        },
+    ).json()
+    add_viewer = client.post(
+        f"/api/product/workspaces/{workspace['id']}/members",
+        json={'requester_user_id': 'owner-user', 'user_id': 'viewer-user', 'role': 'viewer'},
+    )
+    assert add_viewer.status_code == 200
+
+    blocked_member = client.post(
+        f"/api/product/workspaces/{workspace['id']}/members",
+        json={'requester_user_id': 'viewer-user', 'user_id': 'other-user', 'role': 'editor'},
+    )
+    blocked_invite = client.post(
+        f"/api/product/workspaces/{workspace['id']}/invitations",
+        json={'requester_user_id': 'viewer-user', 'email': 'other@example.com', 'role': 'viewer'},
+    )
+
+    assert blocked_member.status_code == 404
+    assert blocked_invite.status_code == 404
+
+
+def test_projects_store_workspace_and_onboarding_settings():
+    workspace = client.post(
+        '/api/product/workspaces',
+        json={
+            'owner_user_id': 'demo-user',
+            'workspace_id': 'acme-support',
+            'name': 'Acme Support QA',
+            'plan': 'starter',
+        },
+    ).json()
+    project_response = client.post(
+        '/api/product/projects',
+        json={
+            'user_id': 'demo-user',
+            'workspace_id': workspace['id'],
+            'project_id': 'call-center',
+            'name': 'Call Center QA',
+            'plan': 'starter',
+            'settings': {'report_visibility': 'private'},
+            'onboarding': {'next_step': 'run_benchmark'},
+        },
+    )
+
+    assert project_response.status_code == 200
+    project = project_response.json()
+    assert project['workspace_id'] == workspace['id']
+    assert project['settings']['report_visibility'] == 'private'
+    assert project['settings']['retention_days'] == 90
+    assert project['onboarding']['sample_project_created'] is True
+
+    patch_response = client.patch(
+        '/api/product/projects/call-center/settings',
+        json={
+            'user_id': 'demo-user',
+            'settings': {'retention_days': 365},
+            'onboarding': {'next_step': 'export_report'},
+        },
+    )
+
+    assert patch_response.status_code == 200
+    patched = patch_response.json()
+    assert patched['settings']['retention_days'] == 365
+    assert patched['settings']['default_benchmark_suite'] == 'call-center-support'
+    assert patched['onboarding']['next_step'] == 'export_report'
+
+    missing = client.patch(
+        '/api/product/projects/call-center/settings',
+        json={'user_id': 'other-user', 'settings': {}, 'onboarding': {}},
+    )
+    assert missing.status_code == 404
+
+
+def test_project_workspace_assignment_requires_membership():
+    workspace = client.post(
+        '/api/product/workspaces',
+        json={
+            'owner_user_id': 'owner-user',
+            'workspace_id': 'acme-support',
+            'name': 'Acme Support QA',
+            'plan': 'team',
+        },
+    ).json()
+
+    blocked = client.post(
+        '/api/product/projects',
+        json={
+            'user_id': 'outsider-user',
+            'workspace_id': workspace['id'],
+            'project_id': 'call-center',
+            'name': 'Call Center QA',
+            'plan': 'starter',
+        },
+    )
+    assert blocked.status_code == 404
+
+    add_member = client.post(
+        f"/api/product/workspaces/{workspace['id']}/members",
+        json={'requester_user_id': 'owner-user', 'user_id': 'member-user', 'role': 'editor'},
+    )
+    assert add_member.status_code == 200
+
+    allowed = client.post(
+        '/api/product/projects',
+        json={
+            'user_id': 'member-user',
+            'workspace_id': workspace['id'],
+            'project_id': 'call-center',
+            'name': 'Call Center QA',
+            'plan': 'starter',
+        },
+    )
+    assert allowed.status_code == 200
+
+
 def test_saved_runs_are_project_scoped_and_require_user_id():
     project_response = client.post(
         '/api/product/projects',

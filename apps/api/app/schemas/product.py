@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 
 PlanId = Literal['free', 'starter', 'team', 'business']
+WorkspaceRole = Literal['owner', 'admin', 'editor', 'viewer']
 
 
 class PricingPlan(BaseModel):
@@ -43,21 +44,85 @@ class ProductConfig(BaseModel):
 
 class ProductProjectRequest(BaseModel):
     user_id: str = Field(min_length=1)
+    workspace_id: str | None = None
     project_id: str = Field(default='default')
     name: str = Field(default='Default Project', min_length=1, max_length=80)
     plan: PlanId = 'free'
+    settings: dict[str, Any] = Field(default_factory=dict)
+    onboarding: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProductProjectResponse(BaseModel):
     id: str
     user_id: str
+    workspace_id: str | None = None
     project_id: str
     name: str
     plan: PlanId
+    settings: dict[str, Any] = Field(default_factory=dict)
+    onboarding: dict[str, Any] = Field(default_factory=dict)
     run_count: int = 0
     created_at: str
     updated_at: str
     last_run_at: str | None = None
+
+
+class ProductWorkspaceRequest(BaseModel):
+    owner_user_id: str = Field(min_length=1)
+    workspace_id: str = Field(default='default')
+    name: str = Field(default='Default Workspace', min_length=1, max_length=80)
+    plan: PlanId = 'free'
+    settings: dict[str, Any] = Field(default_factory=dict)
+    onboarding: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProductWorkspaceMemberResponse(BaseModel):
+    id: str
+    user_id: str
+    role: WorkspaceRole
+    created_at: str
+    updated_at: str
+
+
+class ProductWorkspaceInvitationResponse(BaseModel):
+    id: str
+    email: str
+    role: WorkspaceRole
+    status: Literal['pending', 'accepted', 'revoked']
+    invited_by_user_id: str
+    created_at: str
+
+
+class ProductWorkspaceResponse(BaseModel):
+    id: str
+    owner_user_id: str
+    workspace_id: str
+    name: str
+    plan: PlanId
+    settings: dict[str, Any] = Field(default_factory=dict)
+    onboarding: dict[str, Any] = Field(default_factory=dict)
+    members: list[ProductWorkspaceMemberResponse] = Field(default_factory=list)
+    invitations: list[ProductWorkspaceInvitationResponse] = Field(default_factory=list)
+    created_at: str
+    updated_at: str
+
+
+class ProductWorkspaceMemberRequest(BaseModel):
+    requester_user_id: str = Field(min_length=1)
+    user_id: str = Field(min_length=1)
+    role: WorkspaceRole = 'viewer'
+
+
+class ProductWorkspaceInvitationRequest(BaseModel):
+    requester_user_id: str = Field(min_length=1)
+    email: str = Field(min_length=3)
+    role: WorkspaceRole = 'viewer'
+
+
+class ProductProjectSettingsRequest(BaseModel):
+    user_id: str = Field(min_length=1)
+    settings: dict[str, Any] = Field(default_factory=dict)
+    onboarding: dict[str, Any] = Field(default_factory=dict)
 
 
 class SavedRunRequest(BaseModel):
