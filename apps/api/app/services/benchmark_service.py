@@ -348,6 +348,8 @@ def run_scenario(request: Any) -> dict[str, Any]:
     }
     if agentic_evaluation:
         report.update(_agentic_report_fields(agentic_evaluation, action_trace, final_state))
+    report['vcon_analysis'] = _vcon_analysis(report)
+    report['vcon_export'] = _vcon_export(payload, transcript, report['vcon_analysis'])
     return report
 
 
@@ -537,6 +539,115 @@ def _artifact_summary(artifact_type: str, value: Any) -> dict[str, Any]:
     elif isinstance(value, dict):
         summary['keys'] = sorted(str(key) for key in value.keys())
     return summary
+
+
+SPEAKER_LABEL_PATTERN = re.compile(r'(?:(?<=^)|(?<=\s))([A-Za-z][A-Za-z0-9 _-]{0,30}):\s*')
+
+
+def _vcon_analysis(report: dict[str, Any]) -> dict[str, Any]:
+    body_keys = (
+        'run_id',
+        'suite_id',
+        'suite_name',
+        'scenario_id',
+        'scenario_title',
+        'provider',
+        'run_metadata',
+        'evidence_audit_summary',
+        'overall_score',
+        'verdict',
+        'task_completion_score',
+        'required_action_score',
+        'forbidden_action_score',
+        'final_state_score',
+        'completed_actions',
+        'missing_actions',
+        'forbidden_action_hits',
+        'forbidden_actions_observed',
+        'failure_categories',
+        'suggested_fixes',
+        'recommendations',
+    )
+    return {
+        'type': 'agentic_benchmark_eval',
+        'encoding': 'json',
+        'body': {key: deepcopy(report[key]) for key in body_keys if key in report},
+    }
+
+
+def _vcon_export(payload: dict[str, Any], transcript: str, analysis: dict[str, Any]) -> dict[str, Any]:
+    source_vcon = payload.get('vcon')
+    if isinstance(source_vcon, dict):
+        exported = deepcopy(source_vcon)
+        source_format = 'vcon'
+    else:
+        dialog = _transcript_to_dialog(transcript)
+        exported = {
+            'vcon': '0.0.1',
+            'parties': _parties_from_dialog(dialog),
+            'dialog': dialog or [{'party': 0, 'originator': 'speaker', 'body': transcript}],
+        }
+        source_format = 'transcript'
+
+    existing_analysis = exported.get('analysis')
+    if isinstance(existing_analysis, list):
+        analyses = existing_analysis
+    elif existing_analysis:
+        analyses = [existing_analysis]
+    else:
+        analyses = []
+
+    analyses.append(analysis)
+    exported['analysis'] = analyses
+    exported['appended_analysis_type'] = analysis['type']
+    exported['source_format'] = source_format
+    return exported
+
+
+def _transcript_to_dialog(transcript: str) -> list[dict[str, Any]]:
+    dialog: list[dict[str, Any]] = []
+    party_indexes: dict[str, int] = {}
+
+    for speaker, body in _iter_transcript_turns(transcript):
+        key = speaker.lower()
+        if key not in party_indexes:
+            party_indexes[key] = len(party_indexes)
+        dialog.append({'party': party_indexes[key], 'originator': speaker, 'body': body})
+
+    return dialog
+
+
+def _iter_transcript_turns(transcript: str) -> list[tuple[str, str]]:
+    turns: list[tuple[str, str]] = []
+    for line in transcript.splitlines():
+        cleaned = line.strip()
+        if not cleaned:
+            continue
+
+        matches = list(SPEAKER_LABEL_PATTERN.finditer(cleaned))
+        if not matches:
+            turns.append(('speaker', cleaned))
+            continue
+
+        for index, match in enumerate(matches):
+            next_match = matches[index + 1] if index + 1 < len(matches) else None
+            body = cleaned[match.end() : next_match.start() if next_match else len(cleaned)].strip()
+            if body:
+                turns.append((match.group(1).strip() or 'speaker', body))
+
+    return turns
+
+
+def _parties_from_dialog(dialog: list[dict[str, Any]]) -> list[dict[str, str]]:
+    parties: list[dict[str, str]] = []
+    seen = set()
+    for item in dialog:
+        name = str(item.get('originator') or 'speaker')
+        key = name.lower()
+        if key not in seen:
+            seen.add(key)
+            parties.append({'name': name})
+    return parties or [{'name': 'speaker'}]
 
 
 def _stable_digest(value: Any) -> str:
