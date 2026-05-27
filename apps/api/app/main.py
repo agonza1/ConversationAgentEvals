@@ -65,8 +65,27 @@ def _ensure_product_project_indexes() -> None:
         )
 
 
+def _ensure_product_project_columns() -> None:
+    inspector = inspect(engine)
+    if 'product_projects' not in inspector.get_table_names():
+        return
+
+    columns = {column['name'] for column in inspector.get_columns('product_projects')}
+    migrations = {
+        'workspace_id': 'ALTER TABLE product_projects ADD COLUMN workspace_id VARCHAR',
+        'settings_json': "ALTER TABLE product_projects ADD COLUMN settings_json TEXT NOT NULL DEFAULT '{}'",
+        'onboarding_json': "ALTER TABLE product_projects ADD COLUMN onboarding_json TEXT NOT NULL DEFAULT '{}'",
+    }
+
+    with engine.begin() as connection:
+        for column_name, statement in migrations.items():
+            if column_name not in columns:
+                connection.execute(text(statement))
+
+
 _ensure_session_columns()
 _ensure_deck_columns()
+_ensure_product_project_columns()
 _ensure_product_project_indexes()
 
 app = FastAPI(title='Live Sales AI Presenter API', version='0.1.0')

@@ -4,15 +4,28 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
-from app.schemas.product import JudgeRequest, ProductProjectRequest, SavedRunRequest
+from app.schemas.product import (
+    JudgeRequest,
+    ProductProjectRequest,
+    ProductProjectSettingsRequest,
+    ProductWorkspaceInvitationRequest,
+    ProductWorkspaceMemberRequest,
+    ProductWorkspaceRequest,
+    SavedRunRequest,
+)
 from app.services.product_service import (
+    add_workspace_member,
     export_saved_run,
+    invite_workspace_member,
     judge_gate,
     list_projects,
     list_saved_runs,
+    list_workspaces,
     product_config,
     save_run,
     upsert_project,
+    upsert_workspace,
+    update_project_settings,
 )
 
 router = APIRouter(prefix='/api/product', tags=['product'])
@@ -23,20 +36,88 @@ def get_product_config():
     return product_config()
 
 
+@router.post('/workspaces')
+def create_or_update_workspace(payload: ProductWorkspaceRequest, db: Session = Depends(get_db)):
+    return upsert_workspace(
+        db=db,
+        owner_user_id=payload.owner_user_id,
+        workspace_id=payload.workspace_id,
+        name=payload.name,
+        plan=payload.plan,
+        settings=payload.settings,
+        onboarding=payload.onboarding,
+    )
+
+
+@router.get('/workspaces')
+def get_workspaces(user_id: str = Query(min_length=1), db: Session = Depends(get_db)):
+    return list_workspaces(db=db, user_id=user_id)
+
+
+@router.post('/workspaces/{workspace_id}/members')
+def create_or_update_workspace_member(
+    workspace_id: str,
+    payload: ProductWorkspaceMemberRequest,
+    db: Session = Depends(get_db),
+):
+    workspace = add_workspace_member(
+        db=db,
+        workspace_id=workspace_id,
+        requester_user_id=payload.requester_user_id,
+        user_id=payload.user_id,
+        role=payload.role,
+    )
+    if workspace is None:
+        raise HTTPException(status_code=404, detail='Workspace not found or requester lacks admin access')
+    return workspace
+
+
+@router.post('/workspaces/{workspace_id}/invitations')
+def create_workspace_invitation(
+    workspace_id: str,
+    payload: ProductWorkspaceInvitationRequest,
+    db: Session = Depends(get_db),
+):
+    invitation = invite_workspace_member(
+        db=db,
+        workspace_id=workspace_id,
+        requester_user_id=payload.requester_user_id,
+        email=payload.email,
+        role=payload.role,
+    )
+    if invitation is None:
+        raise HTTPException(status_code=404, detail='Workspace not found or requester lacks admin access')
+    return invitation
+
+
 @router.post('/projects')
 def create_or_update_project(payload: ProductProjectRequest, db: Session = Depends(get_db)):
-    return upsert_project(
+    project = upsert_project(
         db=db,
         user_id=payload.user_id,
+        workspace_id=payload.workspace_id,
         project_id=payload.project_id,
         name=payload.name,
         plan=payload.plan,
+        settings=payload.settings,
+        onboarding=payload.onboarding,
     )
+    if project is None:
+        raise HTTPException(status_code=404, detail='Workspace not found or user is not a member')
+    return project
 
 
 @router.get('/projects')
 def get_projects(user_id: str = Query(min_length=1), db: Session = Depends(get_db)):
     return list_projects(db=db, user_id=user_id)
+
+
+@router.patch('/projects/{project_id}/settings')
+def patch_project_settings(project_id: str, payload: ProductProjectSettingsRequest, db: Session = Depends(get_db)):
+    project = update_project_settings(db=db, project_id=project_id, payload=payload)
+    if project is None:
+        raise HTTPException(status_code=404, detail='Project not found')
+    return project
 
 
 @router.post('/runs')

@@ -92,13 +92,17 @@ class ProductProject(Base):
 
     id = Column(String, primary_key=True, default=lambda: f'proj_{uuid.uuid4().hex[:12]}')
     user_id = Column(String, nullable=False, index=True)
+    workspace_id = Column(String, ForeignKey('product_workspaces.id'), nullable=True, index=True)
     project_key = Column(String, nullable=False, index=True)
     name = Column(String, nullable=False, default='Default Project')
     plan = Column(String, nullable=False, default='free')
+    settings_json = Column(Text, nullable=False, default='{}')
+    onboarding_json = Column(Text, nullable=False, default='{}')
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_run_at = Column(DateTime, nullable=True)
 
+    workspace = relationship('ProductWorkspace', back_populates='projects')
     saved_runs = relationship('ProductSavedRun', back_populates='project', cascade='all, delete-orphan')
 
 
@@ -115,3 +119,50 @@ class ProductSavedRun(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
 
     project = relationship('ProductProject', back_populates='saved_runs')
+
+
+class ProductWorkspace(Base):
+    __tablename__ = 'product_workspaces'
+    __table_args__ = (UniqueConstraint('owner_user_id', 'workspace_key', name='uq_product_workspaces_owner_key'),)
+
+    id = Column(String, primary_key=True, default=lambda: f'ws_{uuid.uuid4().hex[:12]}')
+    owner_user_id = Column(String, nullable=False, index=True)
+    workspace_key = Column(String, nullable=False, index=True)
+    name = Column(String, nullable=False, default='Default Workspace')
+    plan = Column(String, nullable=False, default='free')
+    settings_json = Column(Text, nullable=False, default='{}')
+    onboarding_json = Column(Text, nullable=False, default='{}')
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    projects = relationship('ProductProject', back_populates='workspace')
+    members = relationship('ProductWorkspaceMember', back_populates='workspace', cascade='all, delete-orphan')
+    invitations = relationship('ProductWorkspaceInvitation', back_populates='workspace', cascade='all, delete-orphan')
+
+
+class ProductWorkspaceMember(Base):
+    __tablename__ = 'product_workspace_members'
+    __table_args__ = (UniqueConstraint('workspace_id', 'user_id', name='uq_workspace_members_workspace_user'),)
+
+    id = Column(String, primary_key=True, default=lambda: f'wsm_{uuid.uuid4().hex[:12]}')
+    workspace_id = Column(String, ForeignKey('product_workspaces.id'), nullable=False, index=True)
+    user_id = Column(String, nullable=False, index=True)
+    role = Column(String, nullable=False, default='viewer')
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    workspace = relationship('ProductWorkspace', back_populates='members')
+
+
+class ProductWorkspaceInvitation(Base):
+    __tablename__ = 'product_workspace_invitations'
+
+    id = Column(String, primary_key=True, default=lambda: f'inv_{uuid.uuid4().hex[:12]}')
+    workspace_id = Column(String, ForeignKey('product_workspaces.id'), nullable=False, index=True)
+    email = Column(String, nullable=False, index=True)
+    role = Column(String, nullable=False, default='viewer')
+    status = Column(String, nullable=False, default='pending')
+    invited_by_user_id = Column(String, nullable=False, index=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    workspace = relationship('ProductWorkspace', back_populates='invitations')

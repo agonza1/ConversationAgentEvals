@@ -11,12 +11,22 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.database import SessionLocal
-from app.models.entities import ProductProject, ProductSavedRun
+from app.models.entities import (
+    ProductProject,
+    ProductSavedRun,
+    ProductWorkspace,
+    ProductWorkspaceInvitation,
+    ProductWorkspaceMember,
+)
 from app.schemas.product import (
     FirebaseAuthConfig,
     JudgeResponse,
     PricingPlan,
+    ProductProjectSettingsRequest,
     ProductProjectResponse,
+    ProductWorkspaceInvitationResponse,
+    ProductWorkspaceMemberResponse,
+    ProductWorkspaceResponse,
     ProductConfig,
     SavedRunExportResponse,
     SavedRunResponse,
@@ -103,10 +113,104 @@ def product_config() -> ProductConfig:
     )
 
 
-def upsert_project(db: Session, user_id: str, project_id: str, name: str, plan: str) -> ProductProjectResponse:
-    project = _get_or_create_project(db=db, user_id=user_id, project_id=project_id, plan=plan, name=name)
+DEFAULT_WORKSPACE_SETTINGS = {
+    'default_benchmark_suite': 'call-center-support',
+    'report_visibility': 'workspace',
+    'retention_days': 90,
+}
+
+DEFAULT_ONBOARDING = {
+    'sample_project_created': True,
+    'next_step': 'run_first_benchmark',
+    'checklist': ['create_workspace', 'invite_teammate', 'run_benchmark', 'export_report'],
+}
+
+
+def upsert_workspace(
+    db: Session,
+    owner_user_id: str,
+    workspace_id: str,
+    name: str,
+    plan: str,
+    settings: dict[str, Any] | None = None,
+    onboarding: dict[str, Any] | None = None,
+) -> ProductWorkspaceResponse:
+    workspace = _get_or_create_workspace(db=db, owner_user_id=owner_user_id, workspace_id=workspace_id, plan=plan, name=name)
+    workspace.name = name
+    workspace.plan = plan
+    workspace.settings_json = json.dumps(_merge_defaults(DEFAULT_WORKSPACE_SETTINGS, settings))
+    workspace.onboarding_json = json.dumps(_merge_defaults(DEFAULT_ONBOARDING, onboarding))
+    _upsert_workspace_member(db=db, workspace=workspace, user_id=owner_user_id, role='owner')
+    db.add(workspace)
+    db.commit()
+    db.refresh(workspace)
+    return _serialize_workspace(workspace)
+
+
+def list_workspaces(db: Session, user_id: str) -> list[ProductWorkspaceResponse]:
+    rows = (
+        db.query(ProductWorkspace)
+        .join(ProductWorkspaceMember, ProductWorkspaceMember.workspace_id == ProductWorkspace.id)
+        .filter(ProductWorkspaceMember.user_id == user_id)
+        .order_by(ProductWorkspace.updated_at.desc(), ProductWorkspace.created_at.desc())
+        .all()
+    )
+    return [_serialize_workspace(workspace) for workspace in rows]
+
+
+def add_workspace_member(db: Session, workspace_id: str, requester_user_id: str, user_id: str, role: str) -> ProductWorkspaceResponse | None:
+    workspace = _workspace_for_admin(db=db, workspace_id=workspace_id, requester_user_id=requester_user_id)
+    if workspace is None:
+        return None
+    _upsert_workspace_member(db=db, workspace=workspace, user_id=user_id, role=role)
+    db.commit()
+    db.refresh(workspace)
+    return _serialize_workspace(workspace)
+
+
+def invite_workspace_member(db: Session, workspace_id: str, requester_user_id: str, email: str, role: str) -> ProductWorkspaceInvitationResponse | None:
+    workspace = _workspace_for_admin(db=db, workspace_id=workspace_id, requester_user_id=requester_user_id)
+    if workspace is None:
+        return None
+    invitation = ProductWorkspaceInvitation(
+        workspace_id=workspace.id,
+        email=email.strip().lower(),
+        role=role,
+        invited_by_user_id=requester_user_id,
+    )
+    db.add(invitation)
+    db.commit()
+    db.refresh(invitation)
+    return _serialize_invitation(invitation)
+
+
+def upsert_project(
+    db: Session,
+    user_id: str,
+    project_id: str,
+    name: str,
+    plan: str,
+    workspace_id: str | None = None,
+    settings: dict[str, Any] | None = None,
+    onboarding: dict[str, Any] | None = None,
+) -> ProductProjectResponse | None:
+    if workspace_id and _workspace_for_member(db=db, workspace_id=workspace_id, user_id=user_id) is None:
+        return None
+
+    project = _get_or_create_project(
+        db=db,
+        user_id=user_id,
+        project_id=project_id,
+        plan=plan,
+        name=name,
+        workspace_id=workspace_id,
+    )
     project.name = name
     project.plan = plan
+    if workspace_id:
+        project.workspace_id = workspace_id
+    project.settings_json = json.dumps(_merge_defaults(DEFAULT_WORKSPACE_SETTINGS, settings))
+    project.onboarding_json = json.dumps(_merge_defaults(DEFAULT_ONBOARDING, onboarding))
     db.add(project)
     db.commit()
     db.refresh(project)
@@ -123,6 +227,22 @@ def list_projects(db: Session, user_id: str) -> list[ProductProjectResponse]:
         .all()
     )
     return [_serialize_project(project, run_count=run_count) for project, run_count in rows]
+
+
+def update_project_settings(db: Session, project_id: str, payload: ProductProjectSettingsRequest) -> ProductProjectResponse | None:
+    project = (
+        db.query(ProductProject)
+        .filter(ProductProject.project_key == project_id, ProductProject.user_id == payload.user_id)
+        .first()
+    )
+    if project is None:
+        return None
+    project.settings_json = json.dumps(_merge_defaults(DEFAULT_WORKSPACE_SETTINGS, payload.settings))
+    project.onboarding_json = json.dumps(_merge_defaults(DEFAULT_ONBOARDING, payload.onboarding))
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+    return _serialize_project(project, run_count=_project_run_count(db, project.id))
 
 
 def save_run(db: Session, user_id: str, project_id: str, plan: str, report: dict[str, Any], transcript: str | None) -> SavedRunResponse:
@@ -209,6 +329,9 @@ def reset_saved_runs_for_tests() -> None:
     with SessionLocal() as db:
         db.query(ProductSavedRun).delete()
         db.query(ProductProject).delete()
+        db.query(ProductWorkspaceInvitation).delete()
+        db.query(ProductWorkspaceMember).delete()
+        db.query(ProductWorkspace).delete()
         db.commit()
 
 
@@ -242,6 +365,7 @@ def _get_or_create_project(
     project_id: str,
     plan: str,
     name: str | None = None,
+    workspace_id: str | None = None,
 ) -> ProductProject:
     project = (
         db.query(ProductProject)
@@ -255,9 +379,12 @@ def _get_or_create_project(
 
     project = ProductProject(
         user_id=user_id,
+        workspace_id=workspace_id,
         project_key=project_id,
         name=name or _default_project_name(project_id),
         plan=plan,
+        settings_json=json.dumps(DEFAULT_WORKSPACE_SETTINGS),
+        onboarding_json=json.dumps(DEFAULT_ONBOARDING),
     )
     db.add(project)
     try:
@@ -274,6 +401,73 @@ def _get_or_create_project(
     return project
 
 
+def _get_or_create_workspace(
+    db: Session,
+    owner_user_id: str,
+    workspace_id: str,
+    plan: str,
+    name: str | None = None,
+) -> ProductWorkspace:
+    workspace = (
+        db.query(ProductWorkspace)
+        .filter(ProductWorkspace.owner_user_id == owner_user_id, ProductWorkspace.workspace_key == workspace_id)
+        .first()
+    )
+    if workspace is not None:
+        return workspace
+
+    workspace = ProductWorkspace(
+        owner_user_id=owner_user_id,
+        workspace_key=workspace_id,
+        name=name or _default_project_name(workspace_id),
+        plan=plan,
+        settings_json=json.dumps(DEFAULT_WORKSPACE_SETTINGS),
+        onboarding_json=json.dumps(DEFAULT_ONBOARDING),
+    )
+    db.add(workspace)
+    db.flush()
+    return workspace
+
+
+def _workspace_for_admin(db: Session, workspace_id: str, requester_user_id: str) -> ProductWorkspace | None:
+    row = (
+        db.query(ProductWorkspace, ProductWorkspaceMember)
+        .join(ProductWorkspaceMember, ProductWorkspaceMember.workspace_id == ProductWorkspace.id)
+        .filter(ProductWorkspace.id == workspace_id, ProductWorkspaceMember.user_id == requester_user_id)
+        .first()
+    )
+    if row is None:
+        return None
+    workspace, member = row
+    if member.role not in {'owner', 'admin'}:
+        return None
+    return workspace
+
+
+def _workspace_for_member(db: Session, workspace_id: str, user_id: str) -> ProductWorkspace | None:
+    row = (
+        db.query(ProductWorkspace)
+        .join(ProductWorkspaceMember, ProductWorkspaceMember.workspace_id == ProductWorkspace.id)
+        .filter(ProductWorkspace.id == workspace_id, ProductWorkspaceMember.user_id == user_id)
+        .first()
+    )
+    return row
+
+
+def _upsert_workspace_member(db: Session, workspace: ProductWorkspace, user_id: str, role: str) -> ProductWorkspaceMember:
+    member = (
+        db.query(ProductWorkspaceMember)
+        .filter(ProductWorkspaceMember.workspace_id == workspace.id, ProductWorkspaceMember.user_id == user_id)
+        .first()
+    )
+    if member is None:
+        member = ProductWorkspaceMember(workspace_id=workspace.id, user_id=user_id, role=role)
+    else:
+        member.role = role
+    db.add(member)
+    return member
+
+
 def _project_run_count(db: Session, project_id: str) -> int:
     return (
         db.query(func.count(ProductSavedRun.id))
@@ -287,13 +481,53 @@ def _serialize_project(project: ProductProject, run_count: int) -> ProductProjec
     return ProductProjectResponse(
         id=project.id,
         user_id=project.user_id,
+        workspace_id=project.workspace_id,
         project_id=project.project_key,
         name=project.name,
         plan=project.plan,  # type: ignore[arg-type]
+        settings=_load_json(project.settings_json, {}),
+        onboarding=_load_json(project.onboarding_json, {}),
         run_count=run_count,
         created_at=project.created_at.replace(tzinfo=UTC).isoformat(),
         updated_at=project.updated_at.replace(tzinfo=UTC).isoformat(),
         last_run_at=project.last_run_at.replace(tzinfo=UTC).isoformat() if project.last_run_at else None,
+    )
+
+
+def _serialize_workspace(workspace: ProductWorkspace) -> ProductWorkspaceResponse:
+    return ProductWorkspaceResponse(
+        id=workspace.id,
+        owner_user_id=workspace.owner_user_id,
+        workspace_id=workspace.workspace_key,
+        name=workspace.name,
+        plan=workspace.plan,  # type: ignore[arg-type]
+        settings=_load_json(workspace.settings_json, {}),
+        onboarding=_load_json(workspace.onboarding_json, {}),
+        members=[_serialize_member(member) for member in sorted(workspace.members, key=lambda item: item.created_at)],
+        invitations=[_serialize_invitation(invitation) for invitation in sorted(workspace.invitations, key=lambda item: item.created_at)],
+        created_at=workspace.created_at.replace(tzinfo=UTC).isoformat(),
+        updated_at=workspace.updated_at.replace(tzinfo=UTC).isoformat(),
+    )
+
+
+def _serialize_member(member: ProductWorkspaceMember) -> ProductWorkspaceMemberResponse:
+    return ProductWorkspaceMemberResponse(
+        id=member.id,
+        user_id=member.user_id,
+        role=member.role,  # type: ignore[arg-type]
+        created_at=member.created_at.replace(tzinfo=UTC).isoformat(),
+        updated_at=member.updated_at.replace(tzinfo=UTC).isoformat(),
+    )
+
+
+def _serialize_invitation(invitation: ProductWorkspaceInvitation) -> ProductWorkspaceInvitationResponse:
+    return ProductWorkspaceInvitationResponse(
+        id=invitation.id,
+        email=invitation.email,
+        role=invitation.role,  # type: ignore[arg-type]
+        status=invitation.status,  # type: ignore[arg-type]
+        invited_by_user_id=invitation.invited_by_user_id,
+        created_at=invitation.created_at.replace(tzinfo=UTC).isoformat(),
     )
 
 
@@ -328,6 +562,13 @@ def _load_json(raw: str | None, fallback: dict[str, Any]) -> dict[str, Any]:
     except json.JSONDecodeError:
         return fallback
     return loaded if isinstance(loaded, dict) else fallback
+
+
+def _merge_defaults(defaults: dict[str, Any], values: dict[str, Any] | None) -> dict[str, Any]:
+    merged = {**defaults}
+    if values:
+        merged.update(values)
+    return merged
 
 
 def _default_project_name(project_id: str) -> str:
