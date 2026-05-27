@@ -260,6 +260,57 @@ def test_run_scenario_supports_vcon_payloads_and_rejects_unknown_scenarios():
         run_scenario({'suite_id': 'missing', 'scenario_id': 'missing', 'transcript': 'Agent: hello'})
 
 
+def test_run_scenario_returns_vcon_compatible_benchmark_export():
+    result = run_scenario(
+        {
+            'suite_id': 'fintech-support-agent',
+            'scenario_id': 'suspicious-card-charge',
+            'transcript': (
+                'Customer: I see a suspicious card charge. '
+                'Agent: I will verify your account identity, file a fraud dispute case, '
+                'freeze the card, and explain the review timeline.'
+            ),
+            'agent_version': 'agent-v12',
+        }
+    )
+
+    assert result['vcon_analysis']['type'] == 'agentic_benchmark_eval'
+    assert result['vcon_analysis']['body']['run_id'] == result['run_id']
+    assert result['vcon_analysis']['body']['run_metadata'] == {'agent_version': 'agent-v12'}
+    assert result['vcon_export']['source_format'] == 'transcript'
+    assert result['vcon_export']['appended_analysis_type'] == 'agentic_benchmark_eval'
+    assert result['vcon_export']['analysis'][-1] == result['vcon_analysis']
+    assert result['vcon_export']['parties'] == [{'name': 'Customer'}, {'name': 'Agent'}]
+    assert result['vcon_export']['dialog'][0]['originator'] == 'Customer'
+    assert result['vcon_export']['dialog'][1]['originator'] == 'Agent'
+
+
+def test_run_scenario_appends_analysis_to_existing_vcon_without_mutating_input():
+    source_vcon = {
+        'vcon': '0.0.1',
+        'parties': [{'name': 'Caller'}, {'name': 'Agent'}],
+        'dialog': [
+            {'party': 0, 'body': 'I want a human because the outage is frustrating.'},
+            {'party': 1, 'body': 'I am sorry. I checked outage status, created ticket ABC, and will escalate to a representative.'},
+        ],
+        'analysis': [{'type': 'previous_analysis', 'body': {'score': 70}}],
+    }
+
+    result = run_scenario(
+        {
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'angry-outage-escalation',
+            'vcon': source_vcon,
+        }
+    )
+
+    assert len(source_vcon['analysis']) == 1
+    assert result['vcon_export']['source_format'] == 'vcon'
+    assert result['vcon_export']['analysis'][0]['type'] == 'previous_analysis'
+    assert result['vcon_export']['analysis'][1]['type'] == 'agentic_benchmark_eval'
+    assert result['vcon_export']['parties'] == source_vcon['parties']
+
+
 def test_simulate_scenario_returns_text_trace_final_state_and_report():
     result = simulate_scenario(
         {
@@ -411,6 +462,35 @@ def test_run_endpoint_accepts_vcon_without_duplicate_transcript_field():
     assert payload['scenario_id'] == 'angry-outage-escalation'
     assert payload['verdict'] == 'pass'
     assert payload['transcript_preview'].startswith('This outage is frustrating')
+
+
+def test_run_endpoint_accepts_group_call_artifacts():
+    response = client.post(
+        '/api/benchmarks/run',
+        json={
+            'suiteId': 'call-center-voice-ai',
+            'scenarioId': 'angry-outage-escalation',
+            'groupCall': {
+                'messages': [
+                    {'speaker': 'caller', 'text': 'This outage is frustrating and I want a human.'},
+                    {'speaker': 'agent', 'text': 'I am sorry. I checked outage status and created ticket ABC.'},
+                    {'speaker': 'supervisor', 'text': 'We will escalate to a representative now.'},
+                ],
+                'decisions': [{'description': 'Escalate to human agent on request'}],
+                'commitments': [{'owner': 'agent', 'task': 'Provide outage ticket reference ABC'}],
+                'follow_up_actions': [{'owner': 'representative', 'task': 'Call the customer back after outage review'}],
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload['suite_id'] == 'call-center-voice-ai'
+    assert payload['scenario_id'] == 'angry-outage-escalation'
+    assert payload['verdict'] == 'pass'
+    assert payload['transcript_preview'].startswith('caller: This outage is frustrating')
+    assert payload['evidence_audit_summary']['input_artifact_types'] == ['groupCall']
+    assert payload['evidence_artifacts']['artifacts'][1]['type'] == 'groupCall'
 
 
 def test_run_endpoint_accepts_action_trace_and_final_state_without_transcript():

@@ -38,7 +38,25 @@ class EvalCheck(BaseModel):
     reason: str
 
 
+class EvalArtifact(BaseModel):
+    id: str
+    type: str
+    sha256: str
+    bytes: int
+    source: str
+
+
+class EvalAuditEvent(BaseModel):
+    event_type: str
+    actor: str
+    at: str
+    summary: str
+    artifact_ids: list[str]
+
+
 class EvalRunResponse(BaseModel):
+    run_id: str
+    created_at: str
     title: str
     source_format: str
     overall_score: int
@@ -47,5 +65,7 @@ class EvalRunResponse(BaseModel):
     risk_flags: list[str]
     suggested_fixes: list[str]
     transcript_preview: str
+    artifact_manifest: list[EvalArtifact]
+    audit_events: list[EvalAuditEvent]
     vcon_analysis: dict[str, Any]
     vcon_export: dict[str, Any]

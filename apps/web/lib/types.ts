@@ -261,7 +261,25 @@ export interface EvalCheck {
   reason: string;
 }
 
+export interface EvalArtifact {
+  id: string;
+  type: string;
+  sha256: string;
+  bytes: number;
+  source: string;
+}
+
+export interface EvalAuditEvent {
+  event_type: string;
+  actor: string;
+  at: string;
+  summary: string;
+  artifact_ids: string[];
+}
+
 export interface EvalRunResponse {
+  run_id: string;
+  created_at: string;
   title: string;
   source_format: string;
   overall_score: number;
@@ -270,6 +288,8 @@ export interface EvalRunResponse {
   risk_flags: string[];
   suggested_fixes: string[];
   transcript_preview: string;
+  artifact_manifest: EvalArtifact[];
+  audit_events: EvalAuditEvent[];
   vcon_analysis: Record<string, unknown>;
   vcon_export: Record<string, unknown>;
 }
