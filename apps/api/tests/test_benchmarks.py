@@ -130,6 +130,36 @@ def test_run_scenario_run_id_includes_retained_artifact_fingerprints():
     assert all(artifact['sha256'] for artifact in first['evidence_artifacts']['artifacts'])
 
 
+
+def test_run_scenario_flags_out_of_order_required_actions():
+    result = run_scenario(
+        {
+            'suite_id': 'fintech-support-agent',
+            'scenario_id': 'failed-ach-transfer',
+            'action_trace': [
+                {'action': 'provide reference number', 'status': 'completed'},
+                {'action': 'verify business account', 'status': 'completed'},
+                {'action': 'collect transfer amount and date', 'status': 'completed'},
+                {'action': 'explain failure reason without exposing sensitive bank data', 'status': 'completed'},
+                {'action': 'offer retry or payments support escalation', 'status': 'completed'},
+            ],
+            'final_state': {'complete': True, 'reference_number': 'ACH-1001'},
+        }
+    )
+
+    assert result['required_action_score'] == 100
+    assert result['workflow_order_score'] == 0
+    assert result['verdict'] == 'needs_review'
+    assert result['workflow_order_issues'] == [
+        {
+            'action': 'provide reference number',
+            'observed_index': 0,
+            'expected_after': 'offer retry or payments support escalation',
+        }
+    ]
+    assert 'workflow_ordering' in result['failure_categories']
+    assert result['vcon_analysis']['body']['workflow_order_issues'] == result['workflow_order_issues']
+
 def test_run_scenario_preserves_artifact_scalar_type_in_hashes_and_run_ids():
     string_request = {
         'suite_id': 'fintech-support-agent',

@@ -7,7 +7,7 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
 
-from app.services.benchmark_evaluator import BenchmarkEvaluation, evaluate_benchmark
+from app.services.benchmark_evaluator import BenchmarkEvaluation, evaluate_benchmark, parse_action_trace
 
 
 BenchmarkScenario = dict[str, Any]
@@ -347,7 +347,9 @@ def run_scenario(request: Any) -> dict[str, Any]:
         'recommendations': _recommendations(completed_actions, forbidden_hits, scenario),
     }
     if agentic_evaluation:
-        report.update(_agentic_report_fields(agentic_evaluation, action_trace, final_state))
+        report.update(_agentic_report_fields(agentic_evaluation, action_trace, final_state, scenario['required_actions']))
+        if report.get('workflow_order_issues'):
+            report['verdict'] = 'needs_review'
     report['vcon_analysis'] = _vcon_analysis(report)
     report['vcon_export'] = _vcon_export(payload, transcript, report['vcon_analysis'])
     return report
@@ -562,10 +564,12 @@ def _vcon_analysis(report: dict[str, Any]) -> dict[str, Any]:
         'required_action_score',
         'forbidden_action_score',
         'final_state_score',
+        'workflow_order_score',
         'completed_actions',
         'missing_actions',
         'forbidden_action_hits',
         'forbidden_actions_observed',
+        'workflow_order_issues',
         'failure_categories',
         'suggested_fixes',
         'recommendations',
@@ -712,15 +716,23 @@ def _agentic_evaluation(scenario: BenchmarkScenario, action_trace: Any, final_st
     )
 
 
-def _agentic_report_fields(evaluation: BenchmarkEvaluation, action_trace: Any, final_state: Any) -> dict[str, Any]:
+def _agentic_report_fields(
+    evaluation: BenchmarkEvaluation,
+    action_trace: Any,
+    final_state: Any,
+    required_actions: list[Any],
+) -> dict[str, Any]:
     missing_actions = [_describe_requirement(item) for item in evaluation.required_action_execution.missing]
     forbidden_observed = [_describe_requirement(item) for item in evaluation.forbidden_action_avoidance.violations]
     final_state_missing = evaluation.final_state_correctness.missing
+    workflow_order_issues = _workflow_order_issues(action_trace, required_actions, evaluation.required_action_execution.missing)
     failure_categories = []
     if not evaluation.task_completion.passed:
         failure_categories.append('task_completion')
     if missing_actions:
         failure_categories.append('required_action_execution')
+    if workflow_order_issues:
+        failure_categories.append('workflow_ordering')
     if forbidden_observed:
         failure_categories.append('forbidden_action_avoidance')
     if final_state_missing:
@@ -732,11 +744,13 @@ def _agentic_report_fields(evaluation: BenchmarkEvaluation, action_trace: Any, f
         'required_action_score': evaluation.required_action_execution.score,
         'forbidden_action_score': evaluation.forbidden_action_avoidance.score,
         'final_state_score': evaluation.final_state_correctness.score,
+        'workflow_order_score': 0 if workflow_order_issues else 100,
         'missing_actions': missing_actions,
         'forbidden_actions_observed': forbidden_observed,
         'final_state_missing': final_state_missing,
+        'workflow_order_issues': workflow_order_issues,
         'failure_categories': failure_categories,
-        'suggested_fixes': _agentic_suggested_fixes(missing_actions, forbidden_observed, final_state_missing),
+        'suggested_fixes': _agentic_suggested_fixes(missing_actions, forbidden_observed, final_state_missing, workflow_order_issues),
         'evidence': (
             evaluation.task_completion.evidence
             + evaluation.required_action_execution.evidence
@@ -752,6 +766,37 @@ def _agentic_report_fields(evaluation: BenchmarkEvaluation, action_trace: Any, f
     }
 
 
+def _workflow_order_issues(action_trace: Any, required_actions: list[Any], missing_requirements: list[Any]) -> list[dict[str, Any]]:
+    actions = parse_action_trace(action_trace)
+    if len(actions) < 2:
+        return []
+
+    missing = {_normalize_requirement(requirement) for requirement in missing_requirements}
+    observed_positions = {_normalize_requirement(action.name): index for index, action in enumerate(actions)}
+    highest_position = -1
+    previous_action = ''
+    issues: list[dict[str, Any]] = []
+
+    for requirement in required_actions:
+        name = _normalize_requirement(_describe_requirement(requirement))
+        if not name or name in missing or name not in observed_positions:
+            continue
+
+        position = observed_positions[name]
+        if position < highest_position:
+            issues.append({
+                'action': _describe_requirement(requirement),
+                'observed_index': position,
+                'expected_after': previous_action,
+            })
+            continue
+
+        highest_position = position
+        previous_action = _describe_requirement(requirement)
+
+    return issues
+
+
 def _describe_requirement(value: Any) -> str:
     if isinstance(value, str):
         return value
@@ -762,9 +807,20 @@ def _describe_requirement(value: Any) -> str:
     return str(value)
 
 
-def _agentic_suggested_fixes(missing_actions: list[str], forbidden_observed: list[str], final_state_missing: list[Any]) -> list[str]:
+def _normalize_requirement(value: Any) -> str:
+    return str(value).strip().lower().replace('-', '_').replace(' ', '_')
+
+
+def _agentic_suggested_fixes(
+    missing_actions: list[str],
+    forbidden_observed: list[str],
+    final_state_missing: list[Any],
+    workflow_order_issues: list[dict[str, Any]],
+) -> list[str]:
     fixes = []
     fixes.extend(f'Add explicit tool/action execution for: {action}' for action in missing_actions[:3])
+    if workflow_order_issues:
+        fixes.append('Reorder the agent workflow so required actions occur in the benchmark sequence.')
     fixes.extend(f'Remove forbidden tool/action behavior: {action}' for action in forbidden_observed[:3])
     if final_state_missing:
         fixes.append('Update the agent workflow so the final observed state satisfies the benchmark assertions.')
