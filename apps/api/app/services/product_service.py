@@ -345,7 +345,13 @@ def _previous_comparable_run(
     return None
 
 
-def project_regression_summary(db: Session, user_id: str, project_id: str) -> ProductProjectRegressionSummary | None:
+def project_regression_summary(
+    db: Session,
+    user_id: str,
+    project_id: str,
+    suite_id: str | None = None,
+    scenario_id: str | None = None,
+) -> ProductProjectRegressionSummary | None:
     project = (
         db.query(ProductProject)
         .filter(ProductProject.user_id == user_id, ProductProject.project_key == project_id)
@@ -360,6 +366,7 @@ def project_regression_summary(db: Session, user_id: str, project_id: str) -> Pr
         .order_by(ProductSavedRun.created_at.desc())
         .all()
     )
+    saved_runs = _filter_saved_runs_by_report_labels(saved_runs, suite_id=suite_id, scenario_id=scenario_id)
     scored_runs = [
         (saved_run, _numeric_score(_report_score(_load_json(saved_run.report_json, {}))))
         for saved_run in saved_runs
@@ -389,6 +396,26 @@ def project_regression_summary(db: Session, user_id: str, project_id: str) -> Pr
         pass_rate=round((passing_runs / len(saved_runs)) * 100, 2) if saved_runs else None,
         scenario_summaries=_scenario_regression_summaries(saved_runs),
     )
+
+
+def _filter_saved_runs_by_report_labels(
+    saved_runs: list[ProductSavedRun],
+    *,
+    suite_id: str | None = None,
+    scenario_id: str | None = None,
+) -> list[ProductSavedRun]:
+    if suite_id is None and scenario_id is None:
+        return saved_runs
+
+    filtered = []
+    for saved_run in saved_runs:
+        report = _load_json(saved_run.report_json, {})
+        if suite_id is not None and _report_label(report, 'suite_id') != suite_id:
+            continue
+        if scenario_id is not None and _report_label(report, 'scenario_id') != scenario_id:
+            continue
+        filtered.append(saved_run)
+    return filtered
 
 
 def _scenario_regression_summaries(saved_runs: list[ProductSavedRun]) -> list[ProductScenarioRegressionSummary]:
