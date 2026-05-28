@@ -79,6 +79,9 @@ class ProductProjectRegressionSummary(BaseModel):
     best_score: int | float | None = None
     worst_score: int | float | None = None
     average_score: float | None = None
+    passing_runs: int = 0
+    failing_runs: int = 0
+    pass_rate: float | None = None
 
 
 class ProductWorkspaceRequest(BaseModel):

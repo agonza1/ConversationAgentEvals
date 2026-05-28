@@ -144,6 +144,9 @@ interface ProjectRegressionSummary {
   best_score?: number | null;
   worst_score?: number | null;
   average_score?: number | null;
+  passing_runs?: number;
+  failing_runs?: number;
+  pass_rate?: number | null;
 }
 
 interface SavedRunExport {
@@ -1231,6 +1234,10 @@ export function BenchmarkRunner() {
               <p style={{ margin: 0, color: 'var(--muted)' }}>
                 Latest {projectRegressionSummary.latest_score ?? 'n/a'} vs previous {projectRegressionSummary.previous_score ?? 'n/a'}
                 {' '}({typeof projectRegressionSummary.latest_delta === 'number' && projectRegressionSummary.latest_delta > 0 ? '+' : ''}{projectRegressionSummary.latest_delta ?? 'n/a'}), best {projectRegressionSummary.best_score ?? 'n/a'}.
+              </p>
+              <p style={{ margin: 0, color: 'var(--muted)' }}>
+                Pass rate {projectRegressionSummary.pass_rate ?? 'n/a'}% across {projectRegressionSummary.run_count} runs
+                {' '}({projectRegressionSummary.passing_runs ?? 0} pass, {projectRegressionSummary.failing_runs ?? 0} review).
               </p>
             </div>
           ) : null}

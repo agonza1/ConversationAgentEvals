@@ -329,6 +329,8 @@ def project_regression_summary(db: Session, user_id: str, project_id: str) -> Pr
     latest_score = scored_runs[0][1] if scored_runs else None
     previous_score = next((score for _, score in scored_runs[1:] if score is not None), None)
     latest_delta = latest_score - previous_score if latest_score is not None and previous_score is not None else None
+    passing_runs = sum(1 for saved_run, score in scored_runs if _report_passed(_load_json(saved_run.report_json, {}), score))
+    failing_runs = len(saved_runs) - passing_runs
 
     return ProductProjectRegressionSummary(
         user_id=user_id,
@@ -342,6 +344,9 @@ def project_regression_summary(db: Session, user_id: str, project_id: str) -> Pr
         best_score=max(scores) if scores else None,
         worst_score=min(scores) if scores else None,
         average_score=round(sum(scores) / len(scores), 2) if scores else None,
+        passing_runs=passing_runs,
+        failing_runs=failing_runs,
+        pass_rate=round((passing_runs / len(saved_runs)) * 100, 2) if saved_runs else None,
     )
 
 
@@ -657,6 +662,17 @@ def _delta_status(current_score: int | float | None, previous_score: int | float
     if current_score < previous_score:
         return 'regressed'
     return 'unchanged'
+
+
+def _report_passed(report: dict[str, Any], score: int | float | None) -> bool:
+    verdict = report.get('verdict') or report.get('status') or report.get('overall')
+    if isinstance(verdict, str):
+        normalized = verdict.strip().lower()
+        if normalized in {'pass', 'passed'}:
+            return True
+        if normalized in {'fail', 'failed', 'needs_review', 'blocked'}:
+            return False
+    return score is not None and score >= 75
 
 
 def _numeric_score(value: Any) -> int | float | None:

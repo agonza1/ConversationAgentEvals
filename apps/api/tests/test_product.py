@@ -406,7 +406,36 @@ def test_project_regression_summary_reports_latest_trend():
         'best_score': 94,
         'worst_score': 82,
         'average_score': 88.0,
+        'passing_runs': 3,
+        'failing_runs': 0,
+        'pass_rate': 100.0,
     }
+
+
+def test_project_regression_summary_counts_verdict_failures():
+    for run_id, score, verdict in [('run-1', 82, 'pass'), ('run-2', 94, 'needs_review'), ('run-3', 61, 'needs_review')]:
+        response = client.post(
+            '/api/product/runs',
+            json={
+                'user_id': 'demo-user',
+                'project_id': 'call-center',
+                'plan': 'starter',
+                'report': {'run_id': run_id, 'overall_score': score, 'verdict': verdict},
+                'transcript': 'Agent: completed the benchmark.',
+            },
+        )
+        assert response.status_code == 200
+
+    summary_response = client.get(
+        '/api/product/projects/call-center/regression-summary',
+        params={'user_id': 'demo-user'},
+    )
+
+    assert summary_response.status_code == 200
+    summary = summary_response.json()
+    assert summary['passing_runs'] == 1
+    assert summary['failing_runs'] == 2
+    assert summary['pass_rate'] == 33.33
 
 
 def test_project_regression_summary_rejects_missing_project():
