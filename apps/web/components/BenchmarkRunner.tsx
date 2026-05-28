@@ -174,6 +174,18 @@ interface SavedRunExport {
   created_at: string;
 }
 
+interface ProjectHistoryExport {
+  id: string;
+  filename: string;
+  user_id: string;
+  project_id: string;
+  project_name: string;
+  run_count: number;
+  summary: ProjectRegressionSummary;
+  runs: SavedRunExport[];
+  exported_at: string;
+}
+
 interface JudgeGate {
   status: 'blocked' | 'ready';
   required_plan: PricingPlan['id'];
@@ -390,6 +402,24 @@ async function exportSavedRun(userId: string, runId: string) {
   return handleJson<SavedRunExport>(
     await fetch(`${getApiBase()}/api/product/runs/${encodeURIComponent(runId)}/export?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
   );
+}
+
+async function exportProjectHistory(userId: string, projectId: string) {
+  return handleJson<ProjectHistoryExport>(
+    await fetch(`${getApiBase()}/api/product/projects/${encodeURIComponent(projectId)}/export?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
+  );
+}
+
+function downloadJson(filename: string, payload: unknown) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const href = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = href;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(href);
 }
 
 async function requestJudge(payload: { plan: PricingPlan['id']; report: BenchmarkReport; transcript: string }) {
@@ -740,18 +770,22 @@ export function BenchmarkRunner() {
 
     try {
       const exported = await exportSavedRun(userId, runId);
-      const blob = new Blob([JSON.stringify(exported, null, 2)], { type: 'application/json' });
-      const href = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = href;
-      link.download = exported.filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(href);
+      downloadJson(exported.filename, exported);
       setExportMessage(`Exported ${exported.filename}.`);
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : 'Could not export this saved run.');
+    }
+  }
+
+  async function onExportProjectHistory() {
+    if (!userId) return;
+
+    try {
+      const exported = await exportProjectHistory(userId, projectId);
+      downloadJson(exported.filename, exported);
+      setExportMessage(`Exported ${exported.run_count} runs to ${exported.filename}.`);
+    } catch (err) {
+      setExportMessage(err instanceof Error ? err.message : 'Could not export this project history.');
     }
   }
 
@@ -1244,7 +1278,25 @@ export function BenchmarkRunner() {
       <section className="validation-grid" aria-label="Saved runs and e2e validation">
         <div className="card" style={{ padding: 20, display: 'grid', gap: 12 }}>
           <p className="eyebrow">Saved runs</p>
-          <h3 style={{ margin: 0 }}>{userId ? `${savedRuns.length} saved for ${projectId}` : 'Signup required'}</h3>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <h3 style={{ margin: 0 }}>{userId ? `${savedRuns.length} saved for ${projectId}` : 'Signup required'}</h3>
+            {userId && savedRuns.length ? (
+              <button
+                type="button"
+                onClick={() => void onExportProjectHistory()}
+                style={{
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  background: 'white',
+                  color: 'var(--text)',
+                  padding: '8px 12px',
+                  fontWeight: 800,
+                }}
+              >
+                Export history
+              </button>
+            ) : null}
+          </div>
           {projectRegressionSummary ? (
             <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'var(--panel-alt)', display: 'grid', gap: 8 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
