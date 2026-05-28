@@ -108,12 +108,20 @@ USAGE_RULES = [
 
 def product_config() -> ProductConfig:
     return ProductConfig(
-        pricing=PRICING,
+        pricing=_pricing_with_stripe_ids(),
         usage_rules=USAGE_RULES,
         auth=_firebase_auth_config(),
         voice_status='gated',
         llm_judge_status='gated',
     )
+
+
+def _pricing_with_stripe_ids() -> list[PricingPlan]:
+    price_ids = {
+        'starter': os.getenv('STRIPE_STARTER_PRICE_ID') or None,
+        'team': os.getenv('STRIPE_TEAM_PRICE_ID') or None,
+    }
+    return [plan.model_copy(update={'stripe_price_id': price_ids.get(plan.id)}) for plan in PRICING]
 
 
 DEFAULT_WORKSPACE_SETTINGS = {

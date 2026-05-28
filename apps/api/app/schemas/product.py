@@ -13,6 +13,7 @@ class PricingPlan(BaseModel):
     id: PlanId
     name: str
     price_label: str
+    stripe_price_id: str | None = None
     seats: str
     included_credits: int | None = None
     cta: str

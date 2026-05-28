@@ -28,6 +28,19 @@ def test_product_config_exposes_pricing_auth_and_usage_gates():
     assert {rule['id'] for rule in payload['usage_rules']} >= {'deterministic_eval', 'llm_judge', 'voice_webrtc_minute'}
 
 
+def test_product_config_exposes_configured_stripe_price_ids(monkeypatch):
+    monkeypatch.setenv('STRIPE_STARTER_PRICE_ID', 'price_starter_123')
+    monkeypatch.setenv('STRIPE_TEAM_PRICE_ID', 'price_team_456')
+
+    response = client.get('/api/product/config')
+
+    assert response.status_code == 200
+    plans = {plan['id']: plan for plan in response.json()['pricing']}
+    assert plans['starter']['stripe_price_id'] == 'price_starter_123'
+    assert plans['team']['stripe_price_id'] == 'price_team_456'
+    assert plans['free']['stripe_price_id'] is None
+
+
 def test_workspaces_create_owner_membership_defaults_and_list_by_member():
     response = client.post(
         '/api/product/workspaces',
