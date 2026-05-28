@@ -118,7 +118,7 @@ npm run test:voice-proof
 
 ## Current MVP Boundary
 
-The current product surface is a SaaS homepage plus a focused benchmark runner. The runner can load benchmark suites, simulate a scenario, inspect transcript/action/final-state evidence, produce a scored benchmark report, show pricing gates, request a paid LLM judge gate, and save runs behind a Firebase-ready signup flow.
+The current product surface is a SaaS homepage plus a focused benchmark runner. The runner can load benchmark suites, simulate a scenario, inspect transcript/action/final-state/group-call evidence, produce a scored benchmark report, show pricing gates, request a paid LLM judge gate, and save runs behind a Firebase-ready signup flow.
 
 Near-term next slices:
 
@@ -126,5 +126,4 @@ Near-term next slices:
 - Wire Stripe price IDs for Starter and Team.
 - Execute LLM judge requests through a provider/Vertex abstraction with spend controls.
 - Add voice/WebRTC call artifacts to the same benchmark schema.
-- Add group-call evidence support: speakers, decisions, commitments, and follow-up actions.
 - Export vCon-compatible records for voice workflows.

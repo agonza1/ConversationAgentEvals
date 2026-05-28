@@ -54,8 +54,19 @@ interface BenchmarkReport {
   final_state?: unknown;
   run_metadata?: RunMetadata;
   evidence_audit_summary?: EvidenceAuditSummary;
+  group_call_summary?: GroupCallSummary | null;
   vcon_analysis?: JsonRecord;
   vcon_export?: JsonRecord;
+}
+
+interface GroupCallSummary {
+  speaker_count?: number;
+  speakers?: string[];
+  message_count?: number;
+  decision_count?: number;
+  commitment_count?: number;
+  follow_up_count?: number;
+  action_item_count?: number;
 }
 
 interface RunMetadata {
@@ -340,6 +351,7 @@ async function runBenchmark(payload: {
   transcript: string;
   action_trace: string | JsonRecord | unknown[];
   final_state: string | JsonRecord | unknown[];
+  group_call?: string | JsonRecord | unknown[];
   agent_version?: string;
   prompt_version?: string;
   model_name?: string;
@@ -601,6 +613,7 @@ export function BenchmarkRunner() {
   const [transcript, setTranscript] = useState('');
   const [actionTrace, setActionTrace] = useState('');
   const [finalState, setFinalState] = useState('');
+  const [groupCall, setGroupCall] = useState('');
   const [agentProfile, setAgentProfile] = useState('mock text agent');
   const [agentVersion, setAgentVersion] = useState('');
   const [promptVersion, setPromptVersion] = useState('');
@@ -827,6 +840,7 @@ export function BenchmarkRunner() {
         transcript,
         action_trace: parseMaybeJson(actionTrace),
         final_state: parseMaybeJson(finalState),
+        group_call: groupCall.trim() ? parseMaybeJson(groupCall) : undefined,
         ...runMetadata,
       });
       setReport(nextReport);
@@ -878,6 +892,9 @@ export function BenchmarkRunner() {
   const deterministicRule = productConfig?.usage_rules.find((rule) => rule.id === 'deterministic_eval');
   const judgeRule = productConfig?.usage_rules.find((rule) => rule.id === 'llm_judge');
   const voiceRule = productConfig?.usage_rules.find((rule) => rule.id === 'voice_webrtc_minute');
+  const hasRunnableEvidence = Boolean(
+    transcript.trim() || actionTrace.trim() || finalState.trim() || groupCall.trim(),
+  );
 
   return (
     <section style={{ display: 'grid', gap: 20 }}>
@@ -1108,6 +1125,17 @@ export function BenchmarkRunner() {
                 />
               </label>
             </div>
+
+            <label style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontWeight: 700 }}>Group call evidence</span>
+              <textarea
+                value={groupCall}
+                onChange={(event) => setGroupCall(event.target.value)}
+                rows={7}
+                placeholder='{"messages":[{"speaker":"Patient","text":"I need a refill"}],"decisions":["Route to clinician review"],"commitments":["Send update by 5 PM"],"follow_up_actions":["Confirm pharmacy"]}'
+                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }}
+              />
+            </label>
           </div>
         </details>
 
@@ -1130,7 +1158,7 @@ export function BenchmarkRunner() {
           </button>
           <button
             type="submit"
-            disabled={isRunning || isSimulating || !selectedScenario || !transcript.trim()}
+            disabled={isRunning || isSimulating || !selectedScenario || !hasRunnableEvidence}
             style={{
               border: 0,
               borderRadius: 8,
@@ -1138,7 +1166,7 @@ export function BenchmarkRunner() {
               color: 'white',
               padding: '12px 18px',
               fontWeight: 800,
-              opacity: isRunning || isSimulating || !selectedScenario || !transcript.trim() ? 0.65 : 1,
+              opacity: isRunning || isSimulating || !selectedScenario || !hasRunnableEvidence ? 0.65 : 1,
             }}
           >
             {isRunning ? 'Running benchmark...' : 'Run benchmark'}
@@ -1261,6 +1289,7 @@ export function BenchmarkRunner() {
 
           <RunMetadataPanel metadata={report.run_metadata} />
           <EvidenceAuditPanel summary={report.evidence_audit_summary} />
+          <GroupCallPanel summary={report.group_call_summary} />
 
           {report.vcon_export ? (
             <section style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 12, background: 'var(--panel-alt)' }}>
@@ -1484,6 +1513,29 @@ function RunMetadataPanel({ metadata }: { metadata?: RunMetadata }) {
       ) : (
         <p style={{ margin: 0, color: 'var(--muted)' }}>No prompt, model, or version labels captured.</p>
       )}
+    </div>
+  );
+}
+
+function GroupCallPanel({ summary }: { summary?: GroupCallSummary | null }) {
+  if (!summary) return null;
+
+  const speakers = summary.speakers?.length ? summary.speakers.join(', ') : 'None captured';
+
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14, display: 'grid', gap: 12 }}>
+      <div>
+        <p style={{ margin: '0 0 4px', color: 'var(--muted)', fontSize: 13, fontWeight: 800 }}>Group call evidence</p>
+        <p style={{ margin: 0, fontWeight: 850 }}>{speakers}</p>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+        <AuditFact label="Speakers" value={String(summary.speaker_count ?? 0)} />
+        <AuditFact label="Messages" value={String(summary.message_count ?? 0)} />
+        <AuditFact label="Decisions" value={String(summary.decision_count ?? 0)} />
+        <AuditFact label="Commitments" value={String(summary.commitment_count ?? 0)} />
+        <AuditFact label="Follow-ups" value={String(summary.follow_up_count ?? 0)} />
+        <AuditFact label="Action items" value={String(summary.action_item_count ?? 0)} />
+      </div>
     </div>
   );
 }
