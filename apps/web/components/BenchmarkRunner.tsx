@@ -159,6 +159,9 @@ interface ScenarioRegressionSummary {
   previous_score?: number | null;
   latest_delta?: number | null;
   latest_status: RegressionDelta['status'];
+  passing_runs?: number;
+  failing_runs?: number;
+  pass_rate?: number | null;
 }
 
 interface SavedRunExport {
@@ -1271,7 +1274,7 @@ export function BenchmarkRunner() {
                         </span>
                         {': '}
                         {scenarioSummaryLabel(summary)}
-                        {' '}({summary.latest_score ?? 'n/a'} vs {summary.previous_score ?? 'n/a'}, {formatSignedDelta(summary.latest_delta)})
+                        {' '}({summary.latest_score ?? 'n/a'} vs {summary.previous_score ?? 'n/a'}, {formatSignedDelta(summary.latest_delta)}; pass rate {summary.pass_rate ?? 'n/a'}%)
                       </li>
                     ))}
                   </ul>

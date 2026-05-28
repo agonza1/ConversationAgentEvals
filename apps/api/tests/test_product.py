@@ -496,6 +496,9 @@ def test_project_regression_summary_reports_scenario_level_trends():
             'previous_score': None,
             'latest_delta': None,
             'latest_status': 'baseline',
+            'passing_runs': 0,
+            'failing_runs': 1,
+            'pass_rate': 0.0,
         },
         {
             'suite_id': 'call-center-voice-ai',
@@ -506,6 +509,9 @@ def test_project_regression_summary_reports_scenario_level_trends():
             'previous_score': 82,
             'latest_delta': 12,
             'latest_status': 'improved',
+            'passing_runs': 2,
+            'failing_runs': 0,
+            'pass_rate': 100.0,
         },
     ]
 

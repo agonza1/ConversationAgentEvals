@@ -76,6 +76,9 @@ class ProductScenarioRegressionSummary(BaseModel):
     previous_score: int | float | None = None
     latest_delta: int | float | None = None
     latest_status: Literal['baseline', 'improved', 'regressed', 'unchanged', 'none']
+    passing_runs: int = 0
+    failing_runs: int = 0
+    pass_rate: float | None = None
 
 
 class ProductProjectRegressionSummary(BaseModel):

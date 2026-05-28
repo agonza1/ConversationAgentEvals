@@ -386,6 +386,8 @@ def _scenario_regression_summaries(saved_runs: list[ProductSavedRun]) -> list[Pr
         latest_run, latest_report, latest_score = runs[0]
         previous_score = next((score for _, _, score in runs[1:] if score is not None), None)
         latest_delta = latest_score - previous_score if latest_score is not None and previous_score is not None else None
+        passing_runs = sum(1 for _, report, score in runs if _report_passed(report, score))
+        failing_runs = len(runs) - passing_runs
         summaries.append(
             ProductScenarioRegressionSummary(
                 suite_id=suite_id,
@@ -396,6 +398,9 @@ def _scenario_regression_summaries(saved_runs: list[ProductSavedRun]) -> list[Pr
                 previous_score=previous_score,
                 latest_delta=latest_delta,
                 latest_status=_delta_status(latest_score, previous_score),
+                passing_runs=passing_runs,
+                failing_runs=failing_runs,
+                pass_rate=round((passing_runs / len(runs)) * 100, 2) if runs else None,
             )
         )
     return summaries
