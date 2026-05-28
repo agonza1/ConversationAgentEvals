@@ -127,6 +127,7 @@ interface ProductConfig {
 interface SavedRun {
   id: string;
   project_id: string;
+  firestore_path: string;
   plan: PricingPlan['id'];
   report: BenchmarkReport;
   artifacts?: SavedRunArtifacts;
@@ -168,6 +169,7 @@ interface SavedRunExport {
   id: string;
   filename: string;
   project_id: string;
+  firestore_path: string;
   report: BenchmarkReport;
   artifacts?: SavedRunArtifacts;
   transcript?: string | null;
@@ -180,6 +182,7 @@ interface ProjectHistoryExport {
   user_id: string;
   project_id: string;
   project_name: string;
+  firestore_collection_path: string;
   run_count: number;
   summary: ProjectRegressionSummary;
   runs: SavedRunExport[];
@@ -1346,6 +1349,9 @@ export function BenchmarkRunner() {
                   </div>
                   <div style={{ marginTop: 4, fontSize: 13, color: regressionDeltaColor(run.artifacts?.regression_delta?.status) }}>
                     {regressionDeltaSummary(run.artifacts?.regression_delta)}
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: 12, color: 'var(--muted)' }}>
+                    {run.firestore_path}
                   </div>
                   <button
                     type="button"

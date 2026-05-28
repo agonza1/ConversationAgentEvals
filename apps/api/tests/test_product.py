@@ -257,6 +257,7 @@ def test_saved_runs_are_project_scoped_and_require_user_id():
     assert saved['id']
     assert saved['project_id'] == 'call-center'
     assert saved['project_name'] == 'Call Center QA'
+    assert saved['firestore_path'] == f"users/demo-user/projects/call-center/runs/{saved['id']}"
     assert saved['artifacts']['overall_score'] == 92
 
     list_response = client.get('/api/product/runs', params={'user_id': 'demo-user', 'project_id': 'call-center'})
@@ -653,6 +654,7 @@ def test_saved_run_export_returns_owner_scoped_json_payload():
     assert exported['id'] == saved['id']
     assert exported['filename'] == f"agentbench-call-center-{saved['id']}.json"
     assert exported['project_name'] == 'Call Center'
+    assert exported['firestore_path'] == f"users/demo-user/projects/call-center/runs/{saved['id']}"
     assert exported['report']['overall_score'] == 92
     assert exported['artifacts']['transcript_lines'] == 1
     assert exported['transcript'] == 'Agent: verified and completed the update.'
@@ -682,6 +684,7 @@ def test_project_export_returns_owner_scoped_history_bundle():
     assert exported['filename'] == 'agentbench-call-center-project-export.json'
     assert exported['project_id'] == 'call-center'
     assert exported['project_name'] == 'Call Center'
+    assert exported['firestore_collection_path'] == 'users/demo-user/projects/call-center/runs'
     assert exported['run_count'] == 2
     assert exported['summary']['latest_status'] == 'improved'
     assert exported['summary']['latest_score'] == 94

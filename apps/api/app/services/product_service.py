@@ -431,6 +431,7 @@ def export_saved_run(db: Session, user_id: str, run_id: str) -> SavedRunExportRe
         filename=f'agentbench-{project.project_key}-{saved_run.id}.json',
         project_id=project.project_key,
         project_name=project.name,
+        firestore_path=_firestore_run_path(user_id=saved_run.user_id, project_key=project.project_key, run_id=saved_run.id),
         report=_load_json(saved_run.report_json, {}),
         artifacts=_load_json(saved_run.artifact_json, {}),
         transcript=saved_run.transcript,
@@ -463,6 +464,7 @@ def export_project_runs(db: Session, user_id: str, project_id: str) -> ProductPr
             filename=f'agentbench-{project.project_key}-{saved_run.id}.json',
             project_id=project.project_key,
             project_name=project.name,
+            firestore_path=_firestore_run_path(user_id=saved_run.user_id, project_key=project.project_key, run_id=saved_run.id),
             report=_load_json(saved_run.report_json, {}),
             artifacts=_load_json(saved_run.artifact_json, {}),
             transcript=saved_run.transcript,
@@ -477,6 +479,7 @@ def export_project_runs(db: Session, user_id: str, project_id: str) -> ProductPr
         user_id=user_id,
         project_id=project.project_key,
         project_name=project.name,
+        firestore_collection_path=_firestore_project_runs_path(user_id=user_id, project_key=project.project_key),
         run_count=len(runs),
         summary=summary,
         runs=runs,
@@ -709,12 +712,25 @@ def _serialize_invitation(invitation: ProductWorkspaceInvitation) -> ProductWork
     )
 
 
+
+def _firestore_project_runs_path(user_id: str, project_key: str) -> str:
+    return f'users/{_firestore_segment(user_id)}/projects/{_firestore_segment(project_key)}/runs'
+
+
+def _firestore_run_path(user_id: str, project_key: str, run_id: str) -> str:
+    return f'{_firestore_project_runs_path(user_id=user_id, project_key=project_key)}/{_firestore_segment(run_id)}'
+
+
+def _firestore_segment(value: str) -> str:
+    return value.strip().replace('/', '_') or 'default'
+
 def _serialize_saved_run(saved_run: ProductSavedRun, project: ProductProject) -> SavedRunResponse:
     return SavedRunResponse(
         id=saved_run.id,
         user_id=saved_run.user_id,
         project_id=project.project_key,
         project_name=project.name,
+        firestore_path=_firestore_run_path(user_id=saved_run.user_id, project_key=project.project_key, run_id=saved_run.id),
         plan=saved_run.plan,  # type: ignore[arg-type]
         report=_load_json(saved_run.report_json, {}),
         artifacts=_load_json(saved_run.artifact_json, {}),

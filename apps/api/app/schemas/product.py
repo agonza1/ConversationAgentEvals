@@ -171,6 +171,7 @@ class SavedRunResponse(BaseModel):
     user_id: str
     project_id: str
     project_name: str
+    firestore_path: str
     plan: PlanId
     report: dict[str, Any]
     artifacts: dict[str, Any] = Field(default_factory=dict)
@@ -183,6 +184,7 @@ class SavedRunExportResponse(BaseModel):
     filename: str
     project_id: str
     project_name: str
+    firestore_path: str
     report: dict[str, Any]
     artifacts: dict[str, Any] = Field(default_factory=dict)
     transcript: str | None = None
@@ -195,6 +197,7 @@ class ProductProjectExportResponse(BaseModel):
     user_id: str
     project_id: str
     project_name: str
+    firestore_collection_path: str
     run_count: int
     summary: ProductProjectRegressionSummary
     runs: list[SavedRunExportResponse] = Field(default_factory=list)
