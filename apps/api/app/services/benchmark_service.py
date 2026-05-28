@@ -344,6 +344,7 @@ def run_scenario(request: Any) -> dict[str, Any]:
         'rubric_checks': rubric_checks,
         'expected_final_state': scenario['expected_final_state'],
         'transcript_preview': transcript[:700],
+        'group_call_summary': _group_call_artifact_summary(payload),
         'recommendations': _recommendations(completed_actions, forbidden_hits, scenario),
     }
     if agentic_evaluation:
@@ -469,7 +470,7 @@ def _evidence_audit_summary(
     if not run_id:
         missing_for_export.append('run_id')
 
-    return {
+    summary = {
         'run_started_at': run_started_at,
         'evaluated_at': evaluated_at,
         'input_artifact_types': input_artifact_types,
@@ -484,6 +485,53 @@ def _evidence_audit_summary(
             'missing': missing_for_export,
         },
     }
+    group_call_summary = _group_call_artifact_summary(payload)
+    if group_call_summary:
+        summary['group_call_summary'] = group_call_summary
+    return summary
+
+
+def _group_call_artifact_summary(payload: dict[str, Any]) -> dict[str, Any] | None:
+    value = payload.get('group_call') or payload.get('groupCall')
+    if not isinstance(value, dict) or not value:
+        return None
+
+    speakers = []
+    for item in _group_call_message_items(value):
+        if not isinstance(item, dict):
+            continue
+        speaker = item.get('speaker') or item.get('party') or item.get('role') or item.get('participant')
+        if speaker is not None:
+            normalized = str(speaker).strip()
+            if normalized and normalized not in speakers:
+                speakers.append(normalized)
+
+    return {
+        'speaker_count': len(speakers),
+        'speakers': speakers,
+        'message_count': len(_group_call_message_items(value)),
+        'decision_count': _group_call_item_count(value, 'decisions'),
+        'commitment_count': _group_call_item_count(value, 'commitments'),
+        'follow_up_count': _group_call_item_count(value, 'follow_up_actions', 'followUps'),
+        'action_item_count': _group_call_item_count(value, 'action_items'),
+    }
+
+
+def _group_call_message_items(value: dict[str, Any]) -> list[Any]:
+    for key in ('dialog', 'messages', 'utterances', 'transcript', 'turns'):
+        items = value.get(key)
+        if isinstance(items, list):
+            return items
+    return []
+
+
+def _group_call_item_count(value: dict[str, Any], *keys: str) -> int:
+    total = 0
+    for key in keys:
+        items = value.get(key)
+        if isinstance(items, list):
+            total += len(items)
+    return total
 
 
 def _artifact_present(value: Any) -> bool:
@@ -570,6 +618,7 @@ def _vcon_analysis(report: dict[str, Any]) -> dict[str, Any]:
         'forbidden_action_hits',
         'forbidden_actions_observed',
         'workflow_order_issues',
+        'group_call_summary',
         'failure_categories',
         'suggested_fixes',
         'recommendations',

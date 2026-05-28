@@ -545,6 +545,17 @@ def test_run_endpoint_accepts_group_call_artifacts():
     assert payload['transcript_preview'].startswith('caller: This outage is frustrating')
     assert payload['evidence_audit_summary']['input_artifact_types'] == ['groupCall']
     assert payload['evidence_artifacts']['artifacts'][1]['type'] == 'groupCall'
+    assert payload['group_call_summary'] == {
+        'speaker_count': 3,
+        'speakers': ['caller', 'agent', 'supervisor'],
+        'message_count': 3,
+        'decision_count': 1,
+        'commitment_count': 1,
+        'follow_up_count': 1,
+        'action_item_count': 0,
+    }
+    assert payload['evidence_audit_summary']['group_call_summary'] == payload['group_call_summary']
+    assert payload['vcon_analysis']['body']['group_call_summary'] == payload['group_call_summary']
 
 
 def test_run_endpoint_accepts_action_trace_and_final_state_without_transcript():
