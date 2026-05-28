@@ -188,6 +188,18 @@ class SavedRunExportResponse(BaseModel):
     created_at: str
 
 
+class ProductProjectExportResponse(BaseModel):
+    id: str
+    filename: str
+    user_id: str
+    project_id: str
+    project_name: str
+    run_count: int
+    summary: ProductProjectRegressionSummary
+    runs: list[SavedRunExportResponse] = Field(default_factory=list)
+    exported_at: str
+
+
 class JudgeRequest(BaseModel):
     plan: PlanId = 'free'
     report: dict[str, Any] = Field(default_factory=dict)

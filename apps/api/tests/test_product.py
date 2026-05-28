@@ -648,6 +648,38 @@ def test_saved_run_export_returns_owner_scoped_json_payload():
     assert wrong_owner.status_code == 404
 
 
+def test_project_export_returns_owner_scoped_history_bundle():
+    for run_id, score in [('run-1', 82), ('run-2', 94)]:
+        response = client.post(
+            '/api/product/runs',
+            json={
+                'user_id': 'demo-user',
+                'project_id': 'call-center',
+                'plan': 'starter',
+                'report': {'run_id': run_id, 'overall_score': score},
+                'transcript': f'Agent: completed benchmark {run_id}.',
+            },
+        )
+        assert response.status_code == 200
+
+    export_response = client.get('/api/product/projects/call-center/export', params={'user_id': 'demo-user'})
+
+    assert export_response.status_code == 200
+    exported = export_response.json()
+    assert exported['filename'] == 'agentbench-call-center-project-export.json'
+    assert exported['project_id'] == 'call-center'
+    assert exported['project_name'] == 'Call Center'
+    assert exported['run_count'] == 2
+    assert exported['summary']['latest_status'] == 'improved'
+    assert exported['summary']['latest_score'] == 94
+    assert [run['report']['run_id'] for run in exported['runs']] == ['run-2', 'run-1']
+    assert exported['runs'][0]['artifacts']['regression_delta']['status'] == 'improved'
+    assert exported['exported_at']
+
+    wrong_owner = client.get('/api/product/projects/call-center/export', params={'user_id': 'other-user'})
+    assert wrong_owner.status_code == 404
+
+
 def test_llm_judge_is_gated_for_free_and_ready_for_paid_plans():
     free_response = client.post('/api/product/judge', json={'plan': 'free', 'report': {'overall_score': 82}})
     assert free_response.status_code == 200

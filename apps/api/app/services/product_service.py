@@ -24,6 +24,7 @@ from app.schemas.product import (
     PricingPlan,
     ProductScenarioRegressionSummary,
     ProductProjectRegressionSummary,
+    ProductProjectExportResponse,
     ProductProjectSettingsRequest,
     ProductProjectResponse,
     ProductWorkspaceInvitationResponse,
@@ -426,6 +427,52 @@ def export_saved_run(db: Session, user_id: str, run_id: str) -> SavedRunExportRe
         artifacts=_load_json(saved_run.artifact_json, {}),
         transcript=saved_run.transcript,
         created_at=saved_run.created_at.replace(tzinfo=UTC).isoformat(),
+    )
+
+
+def export_project_runs(db: Session, user_id: str, project_id: str) -> ProductProjectExportResponse | None:
+    project = (
+        db.query(ProductProject)
+        .filter(ProductProject.user_id == user_id, ProductProject.project_key == project_id)
+        .first()
+    )
+    if project is None:
+        return None
+
+    saved_runs = (
+        db.query(ProductSavedRun)
+        .filter(ProductSavedRun.user_id == user_id, ProductSavedRun.project_id == project.id)
+        .order_by(ProductSavedRun.created_at.desc())
+        .all()
+    )
+    summary = project_regression_summary(db=db, user_id=user_id, project_id=project_id)
+    if summary is None:
+        return None
+
+    runs = [
+        SavedRunExportResponse(
+            id=saved_run.id,
+            filename=f'agentbench-{project.project_key}-{saved_run.id}.json',
+            project_id=project.project_key,
+            project_name=project.name,
+            report=_load_json(saved_run.report_json, {}),
+            artifacts=_load_json(saved_run.artifact_json, {}),
+            transcript=saved_run.transcript,
+            created_at=saved_run.created_at.replace(tzinfo=UTC).isoformat(),
+        )
+        for saved_run in saved_runs
+    ]
+
+    return ProductProjectExportResponse(
+        id=project.id,
+        filename=f'agentbench-{project.project_key}-project-export.json',
+        user_id=user_id,
+        project_id=project.project_key,
+        project_name=project.name,
+        run_count=len(runs),
+        summary=summary,
+        runs=runs,
+        exported_at=datetime.now(UTC).isoformat(),
     )
 
 

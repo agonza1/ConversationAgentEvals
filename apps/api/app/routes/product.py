@@ -15,6 +15,7 @@ from app.schemas.product import (
 )
 from app.services.product_service import (
     add_workspace_member,
+    export_project_runs,
     export_saved_run,
     get_saved_run,
     invite_workspace_member,
@@ -128,6 +129,14 @@ def get_project_regression_summary(project_id: str, user_id: str = Query(min_len
     if summary is None:
         raise HTTPException(status_code=404, detail='Project not found')
     return summary
+
+
+@router.get('/projects/{project_id}/export')
+def export_project_history(project_id: str, user_id: str = Query(min_length=1), db: Session = Depends(get_db)):
+    exported = export_project_runs(db=db, user_id=user_id, project_id=project_id)
+    if exported is None:
+        raise HTTPException(status_code=404, detail='Project not found')
+    return exported
 
 
 @router.post('/runs')
