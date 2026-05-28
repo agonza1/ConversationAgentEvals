@@ -125,7 +125,7 @@ def _pricing_with_stripe_ids() -> list[PricingPlan]:
 
 
 DEFAULT_WORKSPACE_SETTINGS = {
-    'default_benchmark_suite': 'call-center-support',
+    'default_benchmark_suite': 'call-center-voice-ai',
     'report_visibility': 'workspace',
     'retention_days': 90,
 }

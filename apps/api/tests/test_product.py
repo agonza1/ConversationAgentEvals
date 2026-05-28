@@ -57,7 +57,7 @@ def test_workspaces_create_owner_membership_defaults_and_list_by_member():
     assert response.status_code == 200
     workspace = response.json()
     assert workspace['workspace_id'] == 'acme-support'
-    assert workspace['settings']['default_benchmark_suite'] == 'call-center-support'
+    assert workspace['settings']['default_benchmark_suite'] == 'call-center-voice-ai'
     assert workspace['settings']['retention_days'] == 180
     assert workspace['onboarding']['next_step'] == 'invite_teammate'
     assert workspace['members'][0]['user_id'] == 'owner-user'
@@ -176,7 +176,7 @@ def test_projects_store_workspace_and_onboarding_settings():
     assert patch_response.status_code == 200
     patched = patch_response.json()
     assert patched['settings']['retention_days'] == 365
-    assert patched['settings']['default_benchmark_suite'] == 'call-center-support'
+    assert patched['settings']['default_benchmark_suite'] == 'call-center-voice-ai'
     assert patched['onboarding']['next_step'] == 'export_report'
 
     missing = client.patch(
