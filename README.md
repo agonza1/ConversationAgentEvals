@@ -89,6 +89,7 @@ The Docker path is intended to mirror a production-style container startup:
 - The web image builds Next.js during `docker build` with compose-provided build args for internal service URLs and browser-facing localhost ports, then starts the prebuilt app at container runtime.
 - Compose uses internal service URLs for server-side traffic (`http://api:8000`, `http://pipecat:8110`) and localhost URLs only for browser-facing `NEXT_PUBLIC_*` values.
 - `npm run docker:check` is a fast static smoke check for compose defaults and Dockerfile parity. It does not build images or require Docker to be running.
+- `npm run test:api` is Docker-first API validation: when Docker is available it builds the checked-in API Dockerfile and runs pytest inside that image, so validation does not depend on host Python virtualenv or ensurepip support. If Docker is unavailable, it falls back to an existing local venv for sandbox-only iteration; use `npm run test:api:docker` to require the hermetic path or `npm run test:api:local` after `npm run setup` for local-only iteration.
 
 Default local endpoints:
 
@@ -101,6 +102,8 @@ Default local endpoints:
 ```bash
 npm run build:web
 npm run test:api
+npm run test:api:docker
+npm run test:api:local
 npm run test:benchmark-smoke
 npm run test:e2e
 ```
