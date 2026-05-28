@@ -210,6 +210,15 @@ interface JudgeGate {
   credits: number;
   message: string;
   evidence_citations: string[];
+  spend_control?: {
+    estimated_credits?: number;
+    daily_credit_limit?: number;
+    reserved_daily_credits?: number;
+    remaining_daily_credits?: number;
+    provider?: string;
+    provider_configured?: boolean;
+    within_budget?: boolean;
+  };
 }
 
 interface BenchmarkSimulationResponse {
@@ -456,6 +465,18 @@ function scoreColor(score: number | undefined) {
   if (score >= 80) return 'var(--success-text)';
   if (score >= 60) return '#b45309';
   return 'var(--danger)';
+}
+
+function formatJudgeSpend(spendControl: JudgeGate['spend_control']) {
+  if (!spendControl) return null;
+
+  const estimated = spendControl.estimated_credits ?? 10;
+  const remaining = spendControl.remaining_daily_credits;
+  const limit = spendControl.daily_credit_limit;
+  const provider = spendControl.provider ?? 'judge provider';
+  const providerStatus = spendControl.provider_configured ? 'configured' : 'not configured';
+
+  return `${estimated} credits estimated; ${remaining ?? 'unknown'} of ${limit ?? 'unknown'} daily credits available; ${provider} ${providerStatus}.`;
 }
 
 function EvidenceItem({ item }: { item: string | JsonRecord }) {
@@ -1218,6 +1239,9 @@ export function BenchmarkRunner() {
             }}
           >
             <strong>{judgeGate.status === 'ready' ? 'Judge gate ready' : 'Upgrade required'}:</strong> {judgeGate.message}
+            {formatJudgeSpend(judgeGate.spend_control) ? (
+              <p style={{ margin: '8px 0 0', color: 'inherit' }}>{formatJudgeSpend(judgeGate.spend_control)}</p>
+            ) : null}
           </div>
         ) : null}
       </form>

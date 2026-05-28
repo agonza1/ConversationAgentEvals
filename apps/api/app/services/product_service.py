@@ -488,12 +488,14 @@ def export_project_runs(db: Session, user_id: str, project_id: str) -> ProductPr
 
 
 def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> JudgeResponse:
+    spend_control = _judge_spend_control()
     if plan == 'free':
         return JudgeResponse(
             status='blocked',
             required_plan='starter',
             credits=10,
             message='LLM judges are available on Starter and above. Free runs still use deterministic evidence checks.',
+            spend_control=spend_control,
         )
 
     citations = _judge_citations(report, transcript)
@@ -503,6 +505,7 @@ def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> Jud
         credits=10,
         message='LLM judge request accepted. Configure a judge provider key to execute model-backed review.',
         evidence_citations=citations,
+        spend_control=spend_control,
     )
 
 
@@ -538,6 +541,33 @@ def _judge_citations(report: dict[str, Any], transcript: str | None) -> list[str
     if transcript and len(citations) < 2:
         citations.extend(line.strip()[:180] for line in transcript.splitlines() if line.strip())
     return citations[:4]
+
+
+def _judge_spend_control() -> dict[str, Any]:
+    daily_limit = _int_env('LLM_JUDGE_DAILY_CREDIT_LIMIT', 200)
+    reserved_credits = _int_env('LLM_JUDGE_RESERVED_DAILY_CREDITS', 0)
+    provider = (os.getenv('LLM_JUDGE_PROVIDER') or 'vertex').strip().lower()
+    provider_configured = bool(
+        os.getenv('LLM_JUDGE_API_KEY')
+        or (provider == 'vertex' and (os.getenv('VERTEX_PROJECT_ID') or os.getenv('GOOGLE_CLOUD_PROJECT')))
+    )
+    remaining = max(daily_limit - reserved_credits, 0)
+    return {
+        'estimated_credits': 10,
+        'daily_credit_limit': daily_limit,
+        'reserved_daily_credits': reserved_credits,
+        'remaining_daily_credits': remaining,
+        'provider': provider,
+        'provider_configured': provider_configured,
+        'within_budget': remaining >= 10,
+    }
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
 
 
 def _get_or_create_project(

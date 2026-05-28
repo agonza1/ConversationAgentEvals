@@ -715,3 +715,32 @@ def test_llm_judge_is_gated_for_free_and_ready_for_paid_plans():
     assert payload['status'] == 'ready'
     assert payload['credits'] == 10
     assert payload['evidence_citations'][:2] == ['Verified customer identity', 'Created support ticket']
+    assert payload['spend_control'] == {
+        'estimated_credits': 10,
+        'daily_credit_limit': 200,
+        'reserved_daily_credits': 0,
+        'remaining_daily_credits': 200,
+        'provider': 'vertex',
+        'provider_configured': False,
+        'within_budget': True,
+    }
+
+
+def test_llm_judge_spend_control_respects_budget_env(monkeypatch):
+    monkeypatch.setenv('LLM_JUDGE_PROVIDER', 'openai')
+    monkeypatch.setenv('LLM_JUDGE_API_KEY', 'test-key')
+    monkeypatch.setenv('LLM_JUDGE_DAILY_CREDIT_LIMIT', '15')
+    monkeypatch.setenv('LLM_JUDGE_RESERVED_DAILY_CREDITS', '8')
+
+    response = client.post('/api/product/judge', json={'plan': 'starter', 'report': {'overall_score': 82}})
+
+    assert response.status_code == 200
+    assert response.json()['spend_control'] == {
+        'estimated_credits': 10,
+        'daily_credit_limit': 15,
+        'reserved_daily_credits': 8,
+        'remaining_daily_credits': 7,
+        'provider': 'openai',
+        'provider_configured': True,
+        'within_budget': False,
+    }

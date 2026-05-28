@@ -18,6 +18,7 @@ test('free-to-paid eval journey works end to end', async ({ page }) => {
   await page.getByRole('button', { name: /Starter/ }).click();
   await page.getByRole('button', { name: 'Request LLM judge' }).click();
   await expect(page.getByText(/Judge gate ready:/)).toContainText('LLM judge request accepted');
+  await expect(page.getByText('10 credits estimated; 200 of 200 daily credits available; vertex not configured.')).toBeVisible();
 
   await page.getByRole('button', { name: 'Save run' }).click();
   await expect(page.getByText('Sign up first to save projects and run history.')).toBeVisible();

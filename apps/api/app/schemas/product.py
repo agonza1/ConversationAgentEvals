@@ -216,3 +216,4 @@ class JudgeResponse(BaseModel):
     credits: int
     message: str
     evidence_citations: list[str] = Field(default_factory=list)
+    spend_control: dict[str, Any] = Field(default_factory=dict)
