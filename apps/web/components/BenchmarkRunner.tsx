@@ -147,6 +147,18 @@ interface ProjectRegressionSummary {
   passing_runs?: number;
   failing_runs?: number;
   pass_rate?: number | null;
+  scenario_summaries?: ScenarioRegressionSummary[];
+}
+
+interface ScenarioRegressionSummary {
+  suite_id?: string | null;
+  scenario_id: string;
+  run_count: number;
+  latest_run_id?: string | null;
+  latest_score?: number | null;
+  previous_score?: number | null;
+  latest_delta?: number | null;
+  latest_status: RegressionDelta['status'];
 }
 
 interface SavedRunExport {
@@ -445,6 +457,15 @@ function regressionDeltaColor(status?: string) {
   if (status === 'regressed') return 'var(--danger)';
   if (status === 'unchanged') return 'var(--muted)';
   return 'var(--text)';
+}
+
+function formatSignedDelta(value?: number | null) {
+  if (typeof value !== 'number') return 'n/a';
+  return value > 0 ? `+${value}` : String(value);
+}
+
+function scenarioSummaryLabel(summary: ScenarioRegressionSummary) {
+  return summary.suite_id ? `${summary.suite_id} / ${summary.scenario_id}` : summary.scenario_id;
 }
 
 function formatAuditTimestamp(value?: string) {
@@ -1233,12 +1254,29 @@ export function BenchmarkRunner() {
               </div>
               <p style={{ margin: 0, color: 'var(--muted)' }}>
                 Latest {projectRegressionSummary.latest_score ?? 'n/a'} vs previous {projectRegressionSummary.previous_score ?? 'n/a'}
-                {' '}({typeof projectRegressionSummary.latest_delta === 'number' && projectRegressionSummary.latest_delta > 0 ? '+' : ''}{projectRegressionSummary.latest_delta ?? 'n/a'}), best {projectRegressionSummary.best_score ?? 'n/a'}.
+                {' '}({formatSignedDelta(projectRegressionSummary.latest_delta)}), best {projectRegressionSummary.best_score ?? 'n/a'}.
               </p>
               <p style={{ margin: 0, color: 'var(--muted)' }}>
                 Pass rate {projectRegressionSummary.pass_rate ?? 'n/a'}% across {projectRegressionSummary.run_count} runs
                 {' '}({projectRegressionSummary.passing_runs ?? 0} pass, {projectRegressionSummary.failing_runs ?? 0} review).
               </p>
+              {projectRegressionSummary.scenario_summaries?.length ? (
+                <div style={{ display: 'grid', gap: 6 }}>
+                  <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13, fontWeight: 800 }}>Scenario trends</p>
+                  <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--muted)', display: 'grid', gap: 4 }}>
+                    {projectRegressionSummary.scenario_summaries.slice(0, 3).map((summary) => (
+                      <li key={`${summary.suite_id ?? 'suite'}:${summary.scenario_id}`}>
+                        <span style={{ color: regressionDeltaColor(summary.latest_status), fontWeight: 800 }}>
+                          {summary.latest_status}
+                        </span>
+                        {': '}
+                        {scenarioSummaryLabel(summary)}
+                        {' '}({summary.latest_score ?? 'n/a'} vs {summary.previous_score ?? 'n/a'}, {formatSignedDelta(summary.latest_delta)})
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </div>
           ) : null}
           {savedRuns.length ? (
