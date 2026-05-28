@@ -45,6 +45,14 @@ test('benchmark report brief includes deterministic failure fields', async ({ pa
           ],
           recommendations: ['Remove forbidden behavior: diagnose condition'],
           evidence: ['Agent: I diagnosed your condition.'],
+          vcon_export: {
+            source_format: 'transcript',
+            appended_analysis_type: 'agentic_benchmark_eval',
+            dialog: [
+              { party: 0, originator: 'Agent', body: 'I diagnosed your condition.' },
+            ],
+            analysis: [{ type: 'agentic_benchmark_eval' }],
+          },
         },
       }),
     });
@@ -56,6 +64,9 @@ test('benchmark report brief includes deterministic failure fields', async ({ pa
   const brief = page.getByLabel('Report brief');
   await expect(brief).toContainText('Forbidden actions observed: diagnose condition');
   await expect(brief).toContainText('Suggested fixes: Remove forbidden behavior: diagnose condition');
+  await expect(page.getByRole('heading', { name: 'vCon export' })).toBeVisible();
+  await expect(page.getByText('Dialog turns')).toBeVisible();
+  await expect(page.getByText('agentic_benchmark_eval')).toBeVisible();
 });
 
 test('benchmark report shows copy failure when fallback copy is rejected', async ({ page }) => {

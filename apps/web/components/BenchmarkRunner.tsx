@@ -30,6 +30,8 @@ interface BenchmarkScenario {
 
 interface BenchmarkReport {
   run_id?: string;
+  suite_id?: string;
+  scenario_id?: string;
   verdict?: string;
   overall?: string;
   scenario_title?: string;
@@ -52,6 +54,8 @@ interface BenchmarkReport {
   final_state?: unknown;
   run_metadata?: RunMetadata;
   evidence_audit_summary?: EvidenceAuditSummary;
+  vcon_analysis?: JsonRecord;
+  vcon_export?: JsonRecord;
 }
 
 interface RunMetadata {
@@ -792,6 +796,15 @@ export function BenchmarkRunner() {
     }
   }
 
+  function onExportCurrentVcon() {
+    if (!report?.vcon_export) return;
+    const filenameParts = ['agentbench', report.suite_id, report.scenario_id, report.run_id, 'vcon']
+      .filter(Boolean)
+      .map((part) => String(part).replace(/[^a-z0-9-]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase());
+    downloadJson(`${filenameParts.join('-') || 'agentbench-vcon'}.json`, report.vcon_export);
+    setExportMessage('Exported vCon-compatible benchmark record.');
+  }
+
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedSuite || !selectedScenario) return;
@@ -1248,6 +1261,36 @@ export function BenchmarkRunner() {
 
           <RunMetadataPanel metadata={report.run_metadata} />
           <EvidenceAuditPanel summary={report.evidence_audit_summary} />
+
+          {report.vcon_export ? (
+            <section style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 12, background: 'var(--panel-alt)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div>
+                  <h3 style={{ margin: 0 }}>vCon export</h3>
+                  <p style={{ margin: '4px 0 0', color: 'var(--muted)' }}>Portable conversation record with the benchmark analysis appended.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={onExportCurrentVcon}
+                  style={{
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    background: 'white',
+                    color: 'var(--text)',
+                    padding: '10px 14px',
+                    fontWeight: 800,
+                  }}
+                >
+                  Download vCon JSON
+                </button>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+                <AuditFact label="Source" value={String(report.vcon_export.source_format ?? 'benchmark')} />
+                <AuditFact label="Dialog turns" value={String(Array.isArray(report.vcon_export.dialog) ? report.vcon_export.dialog.length : 0)} />
+                <AuditFact label="Analysis" value={String(report.vcon_export.appended_analysis_type ?? 'agentic_benchmark_eval')} />
+              </div>
+            </section>
+          ) : null}
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
             <ReportList title="Failure categories" items={report.failure_categories} empty="No failure categories reported." />
