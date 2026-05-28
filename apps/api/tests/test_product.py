@@ -452,7 +452,62 @@ def test_project_regression_summary_reports_latest_trend():
         'passing_runs': 3,
         'failing_runs': 0,
         'pass_rate': 100.0,
+        'scenario_summaries': [],
     }
+
+
+def test_project_regression_summary_reports_scenario_level_trends():
+    runs = [
+        ('run-1', 'billing-address-change', 82),
+        ('run-2', 'angry-outage-escalation', 40),
+        ('run-3', 'billing-address-change', 94),
+    ]
+    for run_id, scenario_id, score in runs:
+        response = client.post(
+            '/api/product/runs',
+            json={
+                'user_id': 'demo-user',
+                'project_id': 'call-center',
+                'plan': 'starter',
+                'report': {
+                    'run_id': run_id,
+                    'suite_id': 'call-center-voice-ai',
+                    'scenario_id': scenario_id,
+                    'overall_score': score,
+                },
+                'transcript': 'Agent: completed the benchmark.',
+            },
+        )
+        assert response.status_code == 200
+
+    summary_response = client.get(
+        '/api/product/projects/call-center/regression-summary',
+        params={'user_id': 'demo-user'},
+    )
+
+    assert summary_response.status_code == 200
+    assert summary_response.json()['scenario_summaries'] == [
+        {
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'angry-outage-escalation',
+            'run_count': 1,
+            'latest_run_id': 'run-2',
+            'latest_score': 40,
+            'previous_score': None,
+            'latest_delta': None,
+            'latest_status': 'baseline',
+        },
+        {
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'billing-address-change',
+            'run_count': 2,
+            'latest_run_id': 'run-3',
+            'latest_score': 94,
+            'previous_score': 82,
+            'latest_delta': 12,
+            'latest_status': 'improved',
+        },
+    ]
 
 
 def test_project_regression_summary_counts_verdict_failures():

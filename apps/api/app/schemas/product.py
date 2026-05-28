@@ -67,6 +67,17 @@ class ProductProjectResponse(BaseModel):
     last_run_at: str | None = None
 
 
+class ProductScenarioRegressionSummary(BaseModel):
+    suite_id: str | None = None
+    scenario_id: str
+    run_count: int
+    latest_run_id: str | None = None
+    latest_score: int | float | None = None
+    previous_score: int | float | None = None
+    latest_delta: int | float | None = None
+    latest_status: Literal['baseline', 'improved', 'regressed', 'unchanged', 'none']
+
+
 class ProductProjectRegressionSummary(BaseModel):
     user_id: str
     project_id: str
@@ -82,6 +93,7 @@ class ProductProjectRegressionSummary(BaseModel):
     passing_runs: int = 0
     failing_runs: int = 0
     pass_rate: float | None = None
+    scenario_summaries: list[ProductScenarioRegressionSummary] = Field(default_factory=list)
 
 
 class ProductWorkspaceRequest(BaseModel):

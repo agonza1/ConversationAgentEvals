@@ -22,6 +22,7 @@ from app.schemas.product import (
     FirebaseAuthConfig,
     JudgeResponse,
     PricingPlan,
+    ProductScenarioRegressionSummary,
     ProductProjectRegressionSummary,
     ProductProjectSettingsRequest,
     ProductProjectResponse,
@@ -366,7 +367,38 @@ def project_regression_summary(db: Session, user_id: str, project_id: str) -> Pr
         passing_runs=passing_runs,
         failing_runs=failing_runs,
         pass_rate=round((passing_runs / len(saved_runs)) * 100, 2) if saved_runs else None,
+        scenario_summaries=_scenario_regression_summaries(saved_runs),
     )
+
+
+def _scenario_regression_summaries(saved_runs: list[ProductSavedRun]) -> list[ProductScenarioRegressionSummary]:
+    grouped: dict[tuple[str | None, str], list[tuple[ProductSavedRun, dict[str, Any], int | float | None]]] = {}
+    for saved_run in saved_runs:
+        report = _load_json(saved_run.report_json, {})
+        scenario_id = _report_label(report, 'scenario_id')
+        if not scenario_id:
+            continue
+        suite_id = _report_label(report, 'suite_id')
+        grouped.setdefault((suite_id, scenario_id), []).append((saved_run, report, _numeric_score(_report_score(report))))
+
+    summaries: list[ProductScenarioRegressionSummary] = []
+    for (suite_id, scenario_id), runs in sorted(grouped.items(), key=lambda item: ((item[0][0] or ''), item[0][1])):
+        latest_run, latest_report, latest_score = runs[0]
+        previous_score = next((score for _, _, score in runs[1:] if score is not None), None)
+        latest_delta = latest_score - previous_score if latest_score is not None and previous_score is not None else None
+        summaries.append(
+            ProductScenarioRegressionSummary(
+                suite_id=suite_id,
+                scenario_id=scenario_id,
+                run_count=len(runs),
+                latest_run_id=str(latest_report.get('run_id')) if latest_report.get('run_id') else latest_run.id,
+                latest_score=latest_score,
+                previous_score=previous_score,
+                latest_delta=latest_delta,
+                latest_status=_delta_status(latest_score, previous_score),
+            )
+        )
+    return summaries
 
 
 def export_saved_run(db: Session, user_id: str, run_id: str) -> SavedRunExportResponse | None:
