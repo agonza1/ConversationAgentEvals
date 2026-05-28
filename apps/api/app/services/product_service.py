@@ -283,7 +283,13 @@ def save_run(db: Session, user_id: str, project_id: str, plan: str, report: dict
     return _serialize_saved_run(saved, project)
 
 
-def list_saved_runs(db: Session, user_id: str, project_id: str | None = None) -> list[SavedRunResponse]:
+def list_saved_runs(
+    db: Session,
+    user_id: str,
+    project_id: str | None = None,
+    suite_id: str | None = None,
+    scenario_id: str | None = None,
+) -> list[SavedRunResponse]:
     query = (
         db.query(ProductSavedRun, ProductProject)
         .join(ProductProject, ProductProject.id == ProductSavedRun.project_id)
@@ -293,7 +299,12 @@ def list_saved_runs(db: Session, user_id: str, project_id: str | None = None) ->
         query = query.filter(ProductProject.project_key == project_id)
 
     rows = query.order_by(ProductSavedRun.created_at.desc()).all()
-    return [_serialize_saved_run(saved_run, project) for saved_run, project in rows]
+    saved_runs = [_serialize_saved_run(saved_run, project) for saved_run, project in rows]
+    if suite_id is not None:
+        saved_runs = [run for run in saved_runs if _report_label(run.report, 'suite_id') == suite_id]
+    if scenario_id is not None:
+        saved_runs = [run for run in saved_runs if _report_label(run.report, 'scenario_id') == scenario_id]
+    return saved_runs
 
 
 def get_saved_run(db: Session, user_id: str, run_id: str) -> SavedRunResponse | None:

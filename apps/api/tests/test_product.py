@@ -345,6 +345,50 @@ def test_project_list_reports_run_counts_per_project():
     assert counts == {'call-center': 2, 'telehealth': 1}
 
 
+def test_saved_runs_can_filter_history_by_suite_and_scenario():
+    runs = [
+        ('run-1', 'call-center-voice-ai', 'billing-address-change', 82),
+        ('run-2', 'call-center-voice-ai', 'angry-outage-escalation', 40),
+        ('run-3', 'telehealth-agent', 'billing-address-change', 91),
+    ]
+    for run_id, suite_id, scenario_id, score in runs:
+        response = client.post(
+            '/api/product/runs',
+            json={
+                'user_id': 'demo-user',
+                'project_id': 'call-center',
+                'plan': 'starter',
+                'report': {
+                    'run_id': run_id,
+                    'suite_id': suite_id,
+                    'scenario_id': scenario_id,
+                    'overall_score': score,
+                },
+                'transcript': 'Agent: completed the benchmark.',
+            },
+        )
+        assert response.status_code == 200
+
+    suite_response = client.get(
+        '/api/product/runs',
+        params={'user_id': 'demo-user', 'project_id': 'call-center', 'suite_id': 'call-center-voice-ai'},
+    )
+    scenario_response = client.get(
+        '/api/product/runs',
+        params={
+            'user_id': 'demo-user',
+            'project_id': 'call-center',
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'billing-address-change',
+        },
+    )
+
+    assert suite_response.status_code == 200
+    assert [run['report']['run_id'] for run in suite_response.json()] == ['run-2', 'run-1']
+    assert scenario_response.status_code == 200
+    assert [run['report']['run_id'] for run in scenario_response.json()] == ['run-1']
+
+
 def test_saved_runs_include_project_regression_delta():
     first = client.post(
         '/api/product/runs',

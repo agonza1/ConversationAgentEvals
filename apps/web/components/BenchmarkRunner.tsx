@@ -414,9 +414,13 @@ async function saveBenchmarkRun(payload: {
   );
 }
 
-async function listSavedRuns(userId: string, projectId: string) {
+async function listSavedRuns(userId: string, projectId: string, suiteId?: string, scenarioId?: string) {
+  const params = new URLSearchParams({ user_id: userId, project_id: projectId });
+  if (suiteId) params.set('suite_id', suiteId);
+  if (scenarioId) params.set('scenario_id', scenarioId);
+
   return handleJson<SavedRun[]>(
-    await fetch(`${getApiBase()}/api/product/runs?user_id=${encodeURIComponent(userId)}&project_id=${encodeURIComponent(projectId)}`, { cache: 'no-store' }),
+    await fetch(`${getApiBase()}/api/product/runs?${params.toString()}`, { cache: 'no-store' }),
   );
 }
 
@@ -715,7 +719,7 @@ export function BenchmarkRunner() {
 
     let isMounted = true;
     Promise.all([
-      listSavedRuns(userId, projectId),
+      listSavedRuns(userId, projectId, selectedSuite?.id, selectedScenario?.id),
       fetchProjectRegressionSummary(userId, projectId).catch(() => null),
     ])
       .then(([runs, summary]) => {
@@ -732,7 +736,7 @@ export function BenchmarkRunner() {
     return () => {
       isMounted = false;
     };
-  }, [projectId, userId]);
+  }, [projectId, selectedScenario?.id, selectedSuite?.id, userId]);
 
   useEffect(() => {
     if (!selectedSuite) return;
@@ -1378,7 +1382,9 @@ export function BenchmarkRunner() {
         <div className="card" style={{ padding: 20, display: 'grid', gap: 12 }}>
           <p className="eyebrow">Saved runs</p>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-            <h3 style={{ margin: 0 }}>{userId ? `${savedRuns.length} saved for ${projectId}` : 'Signup required'}</h3>
+            <h3 style={{ margin: 0 }}>
+              {userId ? `${savedRuns.length} saved for ${selectedScenario?.title ?? projectId}` : 'Signup required'}
+            </h3>
             {userId && savedRuns.length ? (
               <button
                 type="button"
@@ -1468,7 +1474,7 @@ export function BenchmarkRunner() {
               ))}
             </ul>
           ) : (
-            <p style={{ margin: 0, color: 'var(--muted)' }}>Run a benchmark, sign up, then save it to build project history.</p>
+            <p style={{ margin: 0, color: 'var(--muted)' }}>Run this scenario, sign up, then save it to build focused history.</p>
           )}
           {exportMessage ? <p style={{ margin: 0, color: 'var(--muted)' }}>{exportMessage}</p> : null}
         </div>

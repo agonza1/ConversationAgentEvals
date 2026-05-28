@@ -152,8 +152,20 @@ def create_saved_run(payload: SavedRunRequest, db: Session = Depends(get_db)):
 
 
 @router.get('/runs')
-def get_saved_runs(user_id: str = Query(min_length=1), project_id: str | None = None, db: Session = Depends(get_db)):
-    return list_saved_runs(db=db, user_id=user_id, project_id=project_id)
+def get_saved_runs(
+    user_id: str = Query(min_length=1),
+    project_id: str | None = None,
+    suite_id: str | None = None,
+    scenario_id: str | None = None,
+    db: Session = Depends(get_db),
+):
+    return list_saved_runs(
+        db=db,
+        user_id=user_id,
+        project_id=project_id,
+        suite_id=suite_id,
+        scenario_id=scenario_id,
+    )
 
 
 @router.get('/runs/{run_id}')
