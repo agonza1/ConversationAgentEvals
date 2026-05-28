@@ -324,6 +324,7 @@ def run_scenario(request: Any) -> dict[str, Any]:
         'suite_name': suite['name'],
         'scenario_id': scenario_id,
         'scenario_title': scenario['title'],
+        'scenario_contract': _scenario_contract(scenario),
         'provider': suite['provider'],
         'run_metadata': run_metadata,
         'evidence_artifacts': evidence_artifacts,
@@ -517,6 +518,19 @@ def _group_call_artifact_summary(payload: dict[str, Any]) -> dict[str, Any] | No
     }
 
 
+def _scenario_contract(scenario: BenchmarkScenario) -> dict[str, Any]:
+    return {
+        'id': scenario['id'],
+        'title': scenario['title'],
+        'persona': scenario['persona'],
+        'goal': scenario['goal'],
+        'required_actions': deepcopy(scenario['required_actions']),
+        'forbidden_actions': deepcopy(scenario['forbidden_actions']),
+        'expected_final_state': scenario['expected_final_state'],
+        'rubric': deepcopy(scenario['rubric']),
+    }
+
+
 def _group_call_message_items(value: dict[str, Any]) -> list[Any]:
     for key in ('dialog', 'messages', 'utterances', 'transcript', 'turns'):
         items = value.get(key)
@@ -603,6 +617,7 @@ def _vcon_analysis(report: dict[str, Any]) -> dict[str, Any]:
         'suite_name',
         'scenario_id',
         'scenario_title',
+        'scenario_contract',
         'provider',
         'run_metadata',
         'evidence_audit_summary',

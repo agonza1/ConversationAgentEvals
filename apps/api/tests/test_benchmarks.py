@@ -328,8 +328,14 @@ def test_run_scenario_returns_vcon_compatible_benchmark_export():
         }
     )
 
+    assert result['scenario_contract']['id'] == 'suspicious-card-charge'
+    assert result['scenario_contract']['persona']
+    assert result['scenario_contract']['required_actions'] == get_suite('fintech-support-agent')['scenarios'][0]['required_actions']
+    result['scenario_contract']['required_actions'].append('mutated action')
+    assert 'mutated action' not in get_suite('fintech-support-agent')['scenarios'][0]['required_actions']
     assert result['vcon_analysis']['type'] == 'agentic_benchmark_eval'
     assert result['vcon_analysis']['body']['run_id'] == result['run_id']
+    assert result['vcon_analysis']['body']['scenario_contract']['id'] == 'suspicious-card-charge'
     assert result['vcon_analysis']['body']['run_metadata'] == {'agent_version': 'agent-v12'}
     assert result['vcon_export']['source_format'] == 'transcript'
     assert result['vcon_export']['appended_analysis_type'] == 'agentic_benchmark_eval'
