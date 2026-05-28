@@ -10,6 +10,7 @@ COPY apps/api/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 COPY apps/api /workspace/apps/api
+COPY apps/pipecat /workspace/apps/pipecat
 RUN mkdir -p /workspace/storage
 
 ENV PYTHONUNBUFFERED=1
