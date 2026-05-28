@@ -30,9 +30,12 @@ interface BenchmarkScenario {
 
 interface BenchmarkReport {
   run_id?: string;
+  suite_id?: string;
+  scenario_id?: string;
   verdict?: string;
   overall?: string;
   scenario_title?: string;
+  scenario_contract_sha256?: string;
   score?: number;
   overall_score?: number;
   task_completion_score?: number;
@@ -52,6 +55,19 @@ interface BenchmarkReport {
   final_state?: unknown;
   run_metadata?: RunMetadata;
   evidence_audit_summary?: EvidenceAuditSummary;
+  group_call_summary?: GroupCallSummary | null;
+  vcon_analysis?: JsonRecord;
+  vcon_export?: JsonRecord;
+}
+
+interface GroupCallSummary {
+  speaker_count?: number;
+  speakers?: string[];
+  message_count?: number;
+  decision_count?: number;
+  commitment_count?: number;
+  follow_up_count?: number;
+  action_item_count?: number;
 }
 
 interface RunMetadata {
@@ -75,6 +91,22 @@ interface EvidenceAuditSummary {
     format?: string;
     missing?: string[];
   };
+}
+
+interface RegressionDelta {
+  status?: 'baseline' | 'improved' | 'regressed' | 'unchanged' | string;
+  previous_run_id?: string | null;
+  previous_overall_score?: number | null;
+  current_overall_score?: number | null;
+  score_delta?: number | null;
+}
+
+interface SavedRunArtifacts {
+  overall_score?: number;
+  transcript_lines?: number;
+  has_transcript?: boolean;
+  evidence_items?: number;
+  regression_delta?: RegressionDelta;
 }
 
 interface PricingPlan {
@@ -111,19 +143,66 @@ interface ProductConfig {
 interface SavedRun {
   id: string;
   project_id: string;
+  firestore_path: string;
   plan: PricingPlan['id'];
   report: BenchmarkReport;
+  artifacts?: SavedRunArtifacts;
   transcript?: string | null;
   created_at: string;
+}
+
+interface ProjectRegressionSummary {
+  run_count: number;
+  latest_run_id?: string | null;
+  latest_score?: number | null;
+  previous_score?: number | null;
+  latest_delta?: number | null;
+  latest_status: RegressionDelta['status'];
+  best_score?: number | null;
+  worst_score?: number | null;
+  average_score?: number | null;
+  passing_runs?: number;
+  failing_runs?: number;
+  pass_rate?: number | null;
+  scenario_summaries?: ScenarioRegressionSummary[];
+}
+
+interface ScenarioRegressionSummary {
+  suite_id?: string | null;
+  scenario_id: string;
+  run_count: number;
+  latest_run_id?: string | null;
+  latest_score?: number | null;
+  previous_score?: number | null;
+  latest_delta?: number | null;
+  latest_status: RegressionDelta['status'];
+  passing_runs?: number;
+  failing_runs?: number;
+  pass_rate?: number | null;
 }
 
 interface SavedRunExport {
   id: string;
   filename: string;
   project_id: string;
+  firestore_path: string;
   report: BenchmarkReport;
+  artifacts?: SavedRunArtifacts;
   transcript?: string | null;
   created_at: string;
+}
+
+interface ProjectHistoryExport {
+  id: string;
+  filename: string;
+  user_id: string;
+  project_id: string;
+  project_name: string;
+  firestore_collection_path: string;
+  run_count: number;
+  summary: ProjectRegressionSummary;
+  runs: SavedRunExport[];
+  exported_at: string;
 }
 
 interface JudgeGate {
@@ -132,6 +211,15 @@ interface JudgeGate {
   credits: number;
   message: string;
   evidence_citations: string[];
+  spend_control?: {
+    estimated_credits?: number;
+    daily_credit_limit?: number;
+    reserved_daily_credits?: number;
+    remaining_daily_credits?: number;
+    provider?: string;
+    provider_configured?: boolean;
+    within_budget?: boolean;
+  };
 }
 
 interface BenchmarkSimulationResponse {
@@ -273,6 +361,7 @@ async function runBenchmark(payload: {
   transcript: string;
   action_trace: string | JsonRecord | unknown[];
   final_state: string | JsonRecord | unknown[];
+  group_call?: string | JsonRecord | unknown[];
   agent_version?: string;
   prompt_version?: string;
   model_name?: string;
@@ -326,9 +415,23 @@ async function saveBenchmarkRun(payload: {
   );
 }
 
-async function listSavedRuns(userId: string, projectId: string) {
+async function listSavedRuns(userId: string, projectId: string, suiteId?: string, scenarioId?: string) {
+  const params = new URLSearchParams({ user_id: userId, project_id: projectId });
+  if (suiteId) params.set('suite_id', suiteId);
+  if (scenarioId) params.set('scenario_id', scenarioId);
+
   return handleJson<SavedRun[]>(
-    await fetch(`${getApiBase()}/api/product/runs?user_id=${encodeURIComponent(userId)}&project_id=${encodeURIComponent(projectId)}`, { cache: 'no-store' }),
+    await fetch(`${getApiBase()}/api/product/runs?${params.toString()}`, { cache: 'no-store' }),
+  );
+}
+
+async function fetchProjectRegressionSummary(userId: string, projectId: string, suiteId?: string, scenarioId?: string) {
+  const params = new URLSearchParams({ user_id: userId });
+  if (suiteId) params.set('suite_id', suiteId);
+  if (scenarioId) params.set('scenario_id', scenarioId);
+
+  return handleJson<ProjectRegressionSummary>(
+    await fetch(`${getApiBase()}/api/product/projects/${encodeURIComponent(projectId)}/regression-summary?${params.toString()}`, { cache: 'no-store' }),
   );
 }
 
@@ -336,6 +439,24 @@ async function exportSavedRun(userId: string, runId: string) {
   return handleJson<SavedRunExport>(
     await fetch(`${getApiBase()}/api/product/runs/${encodeURIComponent(runId)}/export?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
   );
+}
+
+async function exportProjectHistory(userId: string, projectId: string) {
+  return handleJson<ProjectHistoryExport>(
+    await fetch(`${getApiBase()}/api/product/projects/${encodeURIComponent(projectId)}/export?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
+  );
+}
+
+function downloadJson(filename: string, payload: unknown) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const href = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = href;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(href);
 }
 
 async function requestJudge(payload: { plan: PricingPlan['id']; report: BenchmarkReport; transcript: string }) {
@@ -353,6 +474,18 @@ function scoreColor(score: number | undefined) {
   if (score >= 80) return 'var(--success-text)';
   if (score >= 60) return '#b45309';
   return 'var(--danger)';
+}
+
+function formatJudgeSpend(spendControl: JudgeGate['spend_control']) {
+  if (!spendControl) return null;
+
+  const estimated = spendControl.estimated_credits ?? 10;
+  const remaining = spendControl.remaining_daily_credits;
+  const limit = spendControl.daily_credit_limit;
+  const provider = spendControl.provider ?? 'judge provider';
+  const providerStatus = spendControl.provider_configured ? 'configured' : 'not configured';
+
+  return `${estimated} credits estimated; ${remaining ?? 'unknown'} of ${limit ?? 'unknown'} daily credits available; ${provider} ${providerStatus}.`;
 }
 
 function EvidenceItem({ item }: { item: string | JsonRecord }) {
@@ -391,6 +524,32 @@ function metadataChangeSummary(current?: RunMetadata, previous?: RunMetadata) {
   return changes.length ? changes.join('; ') : entries.length ? 'No version label changes from prior saved run.' : 'No version labels captured.';
 }
 
+function regressionDeltaSummary(delta?: RegressionDelta) {
+  if (!delta) return 'No prior run comparison captured.';
+  if (delta.status === 'baseline') return 'Baseline run for this project.';
+  const currentScore = delta.current_overall_score ?? 'n/a';
+  const previousScore = delta.previous_overall_score ?? 'n/a';
+  const signedDelta = typeof delta.score_delta === 'number' && delta.score_delta > 0 ? `+${delta.score_delta}` : delta.score_delta ?? 'n/a';
+
+  return `${delta.status ?? 'compared'}: ${currentScore} vs ${previousScore} (${signedDelta})`;
+}
+
+function regressionDeltaColor(status?: string) {
+  if (status === 'improved') return 'var(--success-text)';
+  if (status === 'regressed') return 'var(--danger)';
+  if (status === 'unchanged') return 'var(--muted)';
+  return 'var(--text)';
+}
+
+function formatSignedDelta(value?: number | null) {
+  if (typeof value !== 'number') return 'n/a';
+  return value > 0 ? `+${value}` : String(value);
+}
+
+function scenarioSummaryLabel(summary: ScenarioRegressionSummary) {
+  return summary.suite_id ? `${summary.suite_id} / ${summary.scenario_id}` : summary.scenario_id;
+}
+
 function formatAuditTimestamp(value?: string) {
   if (!value) return 'Not captured';
   const date = new Date(value);
@@ -420,6 +579,7 @@ function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: stri
   const verdict = report.verdict ?? report.overall ?? 'complete';
   const score = report.score ?? report.overall_score ?? 'n/a';
   const scenario = report.scenario_title ?? fallbackScenarioTitle ?? 'Selected scenario';
+  const contractFingerprint = report.scenario_contract_sha256 ? report.scenario_contract_sha256.slice(0, 12) : 'Not captured';
   const failureCategories = report.failure_categories?.length ? report.failure_categories.join(', ') : 'None reported';
   const missingActions = report.missing_actions?.length ? report.missing_actions.join('; ') : 'None reported';
   const forbiddenActions = report.forbidden_actions_observed?.length
@@ -437,6 +597,7 @@ function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: stri
     `Scenario: ${scenario}`,
     `Verdict: ${verdict}`,
     `Score: ${score}`,
+    `Scenario contract: ${contractFingerprint}`,
     `Failure categories: ${failureCategories}`,
     `Missing actions: ${missingActions}`,
     `Forbidden actions observed: ${forbiddenActions}`,
@@ -484,6 +645,7 @@ export function BenchmarkRunner() {
   const [transcript, setTranscript] = useState('');
   const [actionTrace, setActionTrace] = useState('');
   const [finalState, setFinalState] = useState('');
+  const [groupCall, setGroupCall] = useState('');
   const [agentProfile, setAgentProfile] = useState('mock text agent');
   const [agentVersion, setAgentVersion] = useState('');
   const [promptVersion, setPromptVersion] = useState('');
@@ -495,6 +657,8 @@ export function BenchmarkRunner() {
   const [projectId, setProjectId] = useState('call-center-demo');
   const [plan, setPlan] = useState<PricingPlan['id']>('free');
   const [savedRuns, setSavedRuns] = useState<SavedRun[]>([]);
+  const [projectRegressionSummary, setProjectRegressionSummary] = useState<ProjectRegressionSummary | null>(null);
+  const [scenarioRegressionSummary, setScenarioRegressionSummary] = useState<ProjectRegressionSummary | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [judgeGate, setJudgeGate] = useState<JudgeGate | null>(null);
@@ -557,22 +721,36 @@ export function BenchmarkRunner() {
   useEffect(() => {
     if (!userId) {
       setSavedRuns([]);
+      setProjectRegressionSummary(null);
+      setScenarioRegressionSummary(null);
       return;
     }
 
     let isMounted = true;
-    listSavedRuns(userId, projectId)
-      .then((runs) => {
-        if (isMounted) setSavedRuns(runs);
+    Promise.all([
+      listSavedRuns(userId, projectId, selectedSuite?.id, selectedScenario?.id),
+      fetchProjectRegressionSummary(userId, projectId).catch(() => null),
+      selectedSuite?.id && selectedScenario?.id
+        ? fetchProjectRegressionSummary(userId, projectId, selectedSuite.id, selectedScenario.id).catch(() => null)
+        : Promise.resolve(null),
+    ])
+      .then(([runs, summary, scenarioSummary]) => {
+        if (!isMounted) return;
+        setSavedRuns(runs);
+        setProjectRegressionSummary(summary);
+        setScenarioRegressionSummary(scenarioSummary);
       })
       .catch(() => {
-        if (isMounted) setSavedRuns([]);
+        if (!isMounted) return;
+        setSavedRuns([]);
+        setProjectRegressionSummary(null);
+        setScenarioRegressionSummary(null);
       });
 
     return () => {
       isMounted = false;
     };
-  }, [projectId, userId]);
+  }, [projectId, selectedScenario?.id, selectedSuite?.id, userId]);
 
   useEffect(() => {
     if (!selectedSuite) return;
@@ -622,6 +800,12 @@ export function BenchmarkRunner() {
     try {
       const saved = await saveBenchmarkRun({ user_id: userId, project_id: projectId, plan, report, transcript });
       setSavedRuns((current) => [saved, ...current.filter((run) => run.id !== saved.id)]);
+      fetchProjectRegressionSummary(userId, projectId)
+        .then(setProjectRegressionSummary)
+        .catch(() => setProjectRegressionSummary(null));
+      fetchProjectRegressionSummary(userId, projectId, saved.report.suite_id, saved.report.scenario_id)
+        .then(setScenarioRegressionSummary)
+        .catch(() => setScenarioRegressionSummary(null));
       setSaveMessage(`Saved run ${saved.id} to ${projectId}.`);
     } catch (err) {
       setSaveMessage(err instanceof Error ? err.message : 'Could not save this run.');
@@ -648,19 +832,32 @@ export function BenchmarkRunner() {
 
     try {
       const exported = await exportSavedRun(userId, runId);
-      const blob = new Blob([JSON.stringify(exported, null, 2)], { type: 'application/json' });
-      const href = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = href;
-      link.download = exported.filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(href);
+      downloadJson(exported.filename, exported);
       setExportMessage(`Exported ${exported.filename}.`);
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : 'Could not export this saved run.');
     }
+  }
+
+  async function onExportProjectHistory() {
+    if (!userId) return;
+
+    try {
+      const exported = await exportProjectHistory(userId, projectId);
+      downloadJson(exported.filename, exported);
+      setExportMessage(`Exported ${exported.run_count} runs to ${exported.filename}.`);
+    } catch (err) {
+      setExportMessage(err instanceof Error ? err.message : 'Could not export this project history.');
+    }
+  }
+
+  function onExportCurrentVcon() {
+    if (!report?.vcon_export) return;
+    const filenameParts = ['agentbench', report.suite_id, report.scenario_id, report.run_id, 'vcon']
+      .filter(Boolean)
+      .map((part) => String(part).replace(/[^a-z0-9-]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase());
+    downloadJson(`${filenameParts.join('-') || 'agentbench-vcon'}.json`, report.vcon_export);
+    setExportMessage('Exported vCon-compatible benchmark record.');
   }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -685,6 +882,7 @@ export function BenchmarkRunner() {
         transcript,
         action_trace: parseMaybeJson(actionTrace),
         final_state: parseMaybeJson(finalState),
+        group_call: groupCall.trim() ? parseMaybeJson(groupCall) : undefined,
         ...runMetadata,
       });
       setReport(nextReport);
@@ -732,10 +930,14 @@ export function BenchmarkRunner() {
   const score = report?.score ?? report?.overall_score;
   const verdict = report?.verdict ?? report?.overall;
   const reportBrief = report ? formatReportBrief(report, selectedScenario?.title) : '';
+  const scenarioContractFingerprint = report?.scenario_contract_sha256 ? report.scenario_contract_sha256.slice(0, 12) : 'Not captured';
   const pricing = productConfig?.pricing ?? [];
   const deterministicRule = productConfig?.usage_rules.find((rule) => rule.id === 'deterministic_eval');
   const judgeRule = productConfig?.usage_rules.find((rule) => rule.id === 'llm_judge');
   const voiceRule = productConfig?.usage_rules.find((rule) => rule.id === 'voice_webrtc_minute');
+  const hasRunnableEvidence = Boolean(
+    transcript.trim() || actionTrace.trim() || finalState.trim() || groupCall.trim(),
+  );
 
   return (
     <section style={{ display: 'grid', gap: 20 }}>
@@ -966,6 +1168,17 @@ export function BenchmarkRunner() {
                 />
               </label>
             </div>
+
+            <label style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontWeight: 700 }}>Group call evidence</span>
+              <textarea
+                value={groupCall}
+                onChange={(event) => setGroupCall(event.target.value)}
+                rows={7}
+                placeholder='{"messages":[{"speaker":"Patient","text":"I need a refill"}],"decisions":["Route to clinician review"],"commitments":["Send update by 5 PM"],"follow_up_actions":["Confirm pharmacy"]}'
+                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }}
+              />
+            </label>
           </div>
         </details>
 
@@ -988,7 +1201,7 @@ export function BenchmarkRunner() {
           </button>
           <button
             type="submit"
-            disabled={isRunning || isSimulating || !selectedScenario || !transcript.trim()}
+            disabled={isRunning || isSimulating || !selectedScenario || !hasRunnableEvidence}
             style={{
               border: 0,
               borderRadius: 8,
@@ -996,7 +1209,7 @@ export function BenchmarkRunner() {
               color: 'white',
               padding: '12px 18px',
               fontWeight: 800,
-              opacity: isRunning || isSimulating || !selectedScenario || !transcript.trim() ? 0.65 : 1,
+              opacity: isRunning || isSimulating || !selectedScenario || !hasRunnableEvidence ? 0.65 : 1,
             }}
           >
             {isRunning ? 'Running benchmark...' : 'Run benchmark'}
@@ -1048,6 +1261,9 @@ export function BenchmarkRunner() {
             }}
           >
             <strong>{judgeGate.status === 'ready' ? 'Judge gate ready' : 'Upgrade required'}:</strong> {judgeGate.message}
+            {formatJudgeSpend(judgeGate.spend_control) ? (
+              <p style={{ margin: '8px 0 0', color: 'inherit' }}>{formatJudgeSpend(judgeGate.spend_control)}</p>
+            ) : null}
           </div>
         ) : null}
       </form>
@@ -1119,6 +1335,38 @@ export function BenchmarkRunner() {
 
           <RunMetadataPanel metadata={report.run_metadata} />
           <EvidenceAuditPanel summary={report.evidence_audit_summary} />
+          <GroupCallPanel summary={report.group_call_summary} />
+
+          {report.vcon_export ? (
+            <section style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 12, background: 'var(--panel-alt)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div>
+                  <h3 style={{ margin: 0 }}>vCon export</h3>
+                  <p style={{ margin: '4px 0 0', color: 'var(--muted)' }}>Portable conversation record with the benchmark analysis appended.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={onExportCurrentVcon}
+                  style={{
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    background: 'white',
+                    color: 'var(--text)',
+                    padding: '10px 14px',
+                    fontWeight: 800,
+                  }}
+                >
+                  Download vCon JSON
+                </button>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+                <AuditFact label="Source" value={String(report.vcon_export.source_format ?? 'benchmark')} />
+                <AuditFact label="Dialog turns" value={String(Array.isArray(report.vcon_export.dialog) ? report.vcon_export.dialog.length : 0)} />
+                <AuditFact label="Contract" value={scenarioContractFingerprint} />
+                <AuditFact label="Analysis" value={String(report.vcon_export.appended_analysis_type ?? 'agentic_benchmark_eval')} />
+              </div>
+            </section>
+          ) : null}
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
             <ReportList title="Failure categories" items={report.failure_categories} empty="No failure categories reported." />
@@ -1152,7 +1400,80 @@ export function BenchmarkRunner() {
       <section className="validation-grid" aria-label="Saved runs and e2e validation">
         <div className="card" style={{ padding: 20, display: 'grid', gap: 12 }}>
           <p className="eyebrow">Saved runs</p>
-          <h3 style={{ margin: 0 }}>{userId ? `${savedRuns.length} saved for ${projectId}` : 'Signup required'}</h3>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <h3 style={{ margin: 0 }}>
+              {userId ? `${savedRuns.length} saved for ${selectedScenario?.title ?? projectId}` : 'Signup required'}
+            </h3>
+            {userId && savedRuns.length ? (
+              <button
+                type="button"
+                onClick={() => void onExportProjectHistory()}
+                style={{
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  background: 'white',
+                  color: 'var(--text)',
+                  padding: '8px 12px',
+                  fontWeight: 800,
+                }}
+              >
+                Export history
+              </button>
+            ) : null}
+          </div>
+          {projectRegressionSummary ? (
+            <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'var(--panel-alt)', display: 'grid', gap: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                <strong style={{ color: regressionDeltaColor(projectRegressionSummary.latest_status) }}>
+                  Project trend: {projectRegressionSummary.latest_status}
+                </strong>
+                <span style={{ color: 'var(--muted)', fontWeight: 800 }}>
+                  Avg {projectRegressionSummary.average_score ?? 'n/a'}
+                </span>
+              </div>
+              <p style={{ margin: 0, color: 'var(--muted)' }}>
+                Latest {projectRegressionSummary.latest_score ?? 'n/a'} vs previous {projectRegressionSummary.previous_score ?? 'n/a'}
+                {' '}({formatSignedDelta(projectRegressionSummary.latest_delta)}), best {projectRegressionSummary.best_score ?? 'n/a'}.
+              </p>
+              <p style={{ margin: 0, color: 'var(--muted)' }}>
+                Pass rate {projectRegressionSummary.pass_rate ?? 'n/a'}% across {projectRegressionSummary.run_count} runs
+                {' '}({projectRegressionSummary.passing_runs ?? 0} pass, {projectRegressionSummary.failing_runs ?? 0} review).
+              </p>
+              {projectRegressionSummary.scenario_summaries?.length ? (
+                <div style={{ display: 'grid', gap: 6 }}>
+                  <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13, fontWeight: 800 }}>Scenario trends</p>
+                  <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--muted)', display: 'grid', gap: 4 }}>
+                    {projectRegressionSummary.scenario_summaries.slice(0, 3).map((summary) => (
+                      <li key={`${summary.suite_id ?? 'suite'}:${summary.scenario_id}`}>
+                        <span style={{ color: regressionDeltaColor(summary.latest_status), fontWeight: 800 }}>
+                          {summary.latest_status}
+                        </span>
+                        {': '}
+                        {scenarioSummaryLabel(summary)}
+                        {' '}({summary.latest_score ?? 'n/a'} vs {summary.previous_score ?? 'n/a'}, {formatSignedDelta(summary.latest_delta)}; pass rate {summary.pass_rate ?? 'n/a'}%)
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {scenarioRegressionSummary ? (
+            <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white', display: 'grid', gap: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                <strong style={{ color: regressionDeltaColor(scenarioRegressionSummary.latest_status) }}>
+                  Selected scenario: {scenarioRegressionSummary.latest_status}
+                </strong>
+                <span style={{ color: 'var(--muted)', fontWeight: 800 }}>
+                  {scenarioRegressionSummary.run_count} focused runs
+                </span>
+              </div>
+              <p style={{ margin: 0, color: 'var(--muted)' }}>
+                Latest {scenarioRegressionSummary.latest_score ?? 'n/a'} vs previous {scenarioRegressionSummary.previous_score ?? 'n/a'}
+                {' '}({formatSignedDelta(scenarioRegressionSummary.latest_delta)}), pass rate {scenarioRegressionSummary.pass_rate ?? 'n/a'}%.
+              </p>
+            </div>
+          ) : null}
           {savedRuns.length ? (
             <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--muted)', display: 'grid', gap: 8 }}>
               {savedRuns.slice(0, 4).map((run, index) => (
@@ -1162,6 +1483,12 @@ export function BenchmarkRunner() {
                   </span>
                   <div style={{ marginTop: 4, fontSize: 13 }}>
                     {metadataChangeSummary(run.report.run_metadata, savedRuns[index + 1]?.report.run_metadata)}
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: 13, color: regressionDeltaColor(run.artifacts?.regression_delta?.status) }}>
+                    {regressionDeltaSummary(run.artifacts?.regression_delta)}
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: 12, color: 'var(--muted)' }}>
+                    {run.firestore_path}
                   </div>
                   <button
                     type="button"
@@ -1182,7 +1509,7 @@ export function BenchmarkRunner() {
               ))}
             </ul>
           ) : (
-            <p style={{ margin: 0, color: 'var(--muted)' }}>Run a benchmark, sign up, then save it to build project history.</p>
+            <p style={{ margin: 0, color: 'var(--muted)' }}>Run this scenario, sign up, then save it to build focused history.</p>
           )}
           {exportMessage ? <p style={{ margin: 0, color: 'var(--muted)' }}>{exportMessage}</p> : null}
         </div>
@@ -1251,6 +1578,29 @@ function RunMetadataPanel({ metadata }: { metadata?: RunMetadata }) {
       ) : (
         <p style={{ margin: 0, color: 'var(--muted)' }}>No prompt, model, or version labels captured.</p>
       )}
+    </div>
+  );
+}
+
+function GroupCallPanel({ summary }: { summary?: GroupCallSummary | null }) {
+  if (!summary) return null;
+
+  const speakers = summary.speakers?.length ? summary.speakers.join(', ') : 'None captured';
+
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14, display: 'grid', gap: 12 }}>
+      <div>
+        <p style={{ margin: '0 0 4px', color: 'var(--muted)', fontSize: 13, fontWeight: 800 }}>Group call evidence</p>
+        <p style={{ margin: 0, fontWeight: 850 }}>{speakers}</p>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+        <AuditFact label="Speakers" value={String(summary.speaker_count ?? 0)} />
+        <AuditFact label="Messages" value={String(summary.message_count ?? 0)} />
+        <AuditFact label="Decisions" value={String(summary.decision_count ?? 0)} />
+        <AuditFact label="Commitments" value={String(summary.commitment_count ?? 0)} />
+        <AuditFact label="Follow-ups" value={String(summary.follow_up_count ?? 0)} />
+        <AuditFact label="Action items" value={String(summary.action_item_count ?? 0)} />
+      </div>
     </div>
   );
 }

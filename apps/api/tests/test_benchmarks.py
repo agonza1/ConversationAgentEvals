@@ -101,6 +101,25 @@ def test_run_scenario_scores_matching_transcript_deterministically():
     assert [check['status'] for check in first['rubric_checks']] == ['pass', 'pass', 'pass', 'pass']
 
 
+def test_scenario_contract_hash_is_stable_across_evidence_changes():
+    base_request = {
+        'suite_id': 'fintech-support-agent',
+        'scenario_id': 'failed-ach-transfer',
+        'transcript': 'Agent: I verified the business account and provided reference ACH-1001.',
+    }
+    retry_request = {
+        **base_request,
+        'transcript': 'Agent: I verified the business account and provided reference ACH-2002.',
+    }
+
+    first = run_scenario(base_request)
+    retry = run_scenario(retry_request)
+
+    assert first['run_id'] != retry['run_id']
+    assert first['scenario_contract_sha256'] == retry['scenario_contract_sha256']
+    assert first['vcon_analysis']['body']['scenario_contract_sha256'] == first['scenario_contract_sha256']
+
+
 def test_run_scenario_run_id_includes_retained_artifact_fingerprints():
     base_request = {
         'suite_id': 'fintech-support-agent',
@@ -129,6 +148,36 @@ def test_run_scenario_run_id_includes_retained_artifact_fingerprints():
     assert [artifact['type'] for artifact in first['evidence_artifacts']['artifacts']] == ['action_trace', 'final_state']
     assert all(artifact['sha256'] for artifact in first['evidence_artifacts']['artifacts'])
 
+
+
+def test_run_scenario_flags_out_of_order_required_actions():
+    result = run_scenario(
+        {
+            'suite_id': 'fintech-support-agent',
+            'scenario_id': 'failed-ach-transfer',
+            'action_trace': [
+                {'action': 'provide reference number', 'status': 'completed'},
+                {'action': 'verify business account', 'status': 'completed'},
+                {'action': 'collect transfer amount and date', 'status': 'completed'},
+                {'action': 'explain failure reason without exposing sensitive bank data', 'status': 'completed'},
+                {'action': 'offer retry or payments support escalation', 'status': 'completed'},
+            ],
+            'final_state': {'complete': True, 'reference_number': 'ACH-1001'},
+        }
+    )
+
+    assert result['required_action_score'] == 100
+    assert result['workflow_order_score'] == 0
+    assert result['verdict'] == 'needs_review'
+    assert result['workflow_order_issues'] == [
+        {
+            'action': 'provide reference number',
+            'observed_index': 0,
+            'expected_after': 'offer retry or payments support escalation',
+        }
+    ]
+    assert 'workflow_ordering' in result['failure_categories']
+    assert result['vcon_analysis']['body']['workflow_order_issues'] == result['workflow_order_issues']
 
 def test_run_scenario_preserves_artifact_scalar_type_in_hashes_and_run_ids():
     string_request = {
@@ -298,8 +347,16 @@ def test_run_scenario_returns_vcon_compatible_benchmark_export():
         }
     )
 
+    assert result['scenario_contract']['id'] == 'suspicious-card-charge'
+    assert result['scenario_contract']['persona']
+    assert len(result['scenario_contract_sha256']) == 64
+    assert result['scenario_contract']['required_actions'] == get_suite('fintech-support-agent')['scenarios'][0]['required_actions']
+    result['scenario_contract']['required_actions'].append('mutated action')
+    assert 'mutated action' not in get_suite('fintech-support-agent')['scenarios'][0]['required_actions']
     assert result['vcon_analysis']['type'] == 'agentic_benchmark_eval'
     assert result['vcon_analysis']['body']['run_id'] == result['run_id']
+    assert result['vcon_analysis']['body']['scenario_contract']['id'] == 'suspicious-card-charge'
+    assert result['vcon_analysis']['body']['scenario_contract_sha256'] == result['scenario_contract_sha256']
     assert result['vcon_analysis']['body']['run_metadata'] == {'agent_version': 'agent-v12'}
     assert result['vcon_export']['source_format'] == 'transcript'
     assert result['vcon_export']['appended_analysis_type'] == 'agentic_benchmark_eval'
@@ -515,6 +572,17 @@ def test_run_endpoint_accepts_group_call_artifacts():
     assert payload['transcript_preview'].startswith('caller: This outage is frustrating')
     assert payload['evidence_audit_summary']['input_artifact_types'] == ['groupCall']
     assert payload['evidence_artifacts']['artifacts'][1]['type'] == 'groupCall'
+    assert payload['group_call_summary'] == {
+        'speaker_count': 3,
+        'speakers': ['caller', 'agent', 'supervisor'],
+        'message_count': 3,
+        'decision_count': 1,
+        'commitment_count': 1,
+        'follow_up_count': 1,
+        'action_item_count': 0,
+    }
+    assert payload['evidence_audit_summary']['group_call_summary'] == payload['group_call_summary']
+    assert payload['vcon_analysis']['body']['group_call_summary'] == payload['group_call_summary']
 
 
 def test_run_endpoint_accepts_action_trace_and_final_state_without_transcript():

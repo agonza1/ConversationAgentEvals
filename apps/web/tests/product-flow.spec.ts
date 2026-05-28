@@ -18,6 +18,7 @@ test('free-to-paid eval journey works end to end', async ({ page }) => {
   await page.getByRole('button', { name: /Starter/ }).click();
   await page.getByRole('button', { name: 'Request LLM judge' }).click();
   await expect(page.getByText(/Judge gate ready:/)).toContainText('LLM judge request accepted');
+  await expect(page.getByText('10 credits estimated; 200 of 200 daily credits available; vertex not configured.')).toBeVisible();
 
   await page.getByRole('button', { name: 'Save run' }).click();
   await expect(page.getByText('Sign up first to save projects and run history.')).toBeVisible();
@@ -28,6 +29,9 @@ test('free-to-paid eval journey works end to end', async ({ page }) => {
   await page.getByRole('button', { name: 'Save run' }).click();
   await expect(page.getByText(/Saved run/)).toBeVisible();
   await expect(page.getByRole('heading', { name: /1 saved for call-center-demo/ })).toBeVisible();
+  await expect(page.getByText('Baseline run for this project.')).toBeVisible();
+  await expect(page.getByText('Selected scenario: baseline')).toBeVisible();
+  await expect(page.getByText('1 focused runs')).toBeVisible();
 
   await expect(page.getByRole('heading', { name: 'Team-gated WebRTC evals' })).toBeVisible();
 });

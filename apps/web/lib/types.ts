@@ -368,6 +368,7 @@ export interface BenchmarkRunResponse {
   suite_name?: string;
   scenario_id: string;
   scenario_title?: string;
+  scenario_contract_sha256?: string;
   provider?: string;
   status?: 'completed' | 'failed' | 'needs_review' | string;
   overall_score: number;

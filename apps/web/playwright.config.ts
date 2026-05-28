@@ -15,7 +15,7 @@ export default defineConfig({
     {
       command: [
         'test -x apps/api/.venv/bin/python ||',
-        '(python3 -m venv apps/api/.venv && apps/api/.venv/bin/pip install -q -r apps/api/requirements.txt);',
+        '(./scripts/ensure-venv.sh apps/api/.venv apps/api/requirements.txt);',
         `apps/api/.venv/bin/python -m uvicorn app.main:app --app-dir apps/api --host 127.0.0.1 --port ${apiPort}`,
       ].join(' '),
       cwd: '../..',

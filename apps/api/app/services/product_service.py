@@ -22,6 +22,9 @@ from app.schemas.product import (
     FirebaseAuthConfig,
     JudgeResponse,
     PricingPlan,
+    ProductScenarioRegressionSummary,
+    ProductProjectRegressionSummary,
+    ProductProjectExportResponse,
     ProductProjectSettingsRequest,
     ProductProjectResponse,
     ProductWorkspaceInvitationResponse,
@@ -105,7 +108,7 @@ USAGE_RULES = [
 
 def product_config() -> ProductConfig:
     return ProductConfig(
-        pricing=PRICING,
+        pricing=_pricing_with_stripe_ids(),
         usage_rules=USAGE_RULES,
         auth=_firebase_auth_config(),
         voice_status='gated',
@@ -113,8 +116,16 @@ def product_config() -> ProductConfig:
     )
 
 
+def _pricing_with_stripe_ids() -> list[PricingPlan]:
+    price_ids = {
+        'starter': os.getenv('STRIPE_STARTER_PRICE_ID') or None,
+        'team': os.getenv('STRIPE_TEAM_PRICE_ID') or None,
+    }
+    return [plan.model_copy(update={'stripe_price_id': price_ids.get(plan.id)}) for plan in PRICING]
+
+
 DEFAULT_WORKSPACE_SETTINGS = {
-    'default_benchmark_suite': 'call-center-support',
+    'default_benchmark_suite': 'call-center-voice-ai',
     'report_visibility': 'workspace',
     'retention_days': 90,
 }
@@ -249,7 +260,9 @@ def save_run(db: Session, user_id: str, project_id: str, plan: str, report: dict
     project = _get_or_create_project(db=db, user_id=user_id, project_id=project_id, plan=plan)
     created_at = datetime.now(UTC)
     seed = f'{user_id}:{project_id}:{created_at.isoformat()}:{report.get("run_id", "")}'
-    artifact_payload = _build_artifacts(report=report, transcript=transcript)
+    previous_run = _previous_comparable_run(db=db, project=project, user_id=user_id, report=report)
+    previous_report = _load_json(previous_run.report_json, {}) if previous_run else None
+    artifact_payload = _build_artifacts(report=report, transcript=transcript, previous_report=previous_report)
     saved = ProductSavedRun(
         id=hashlib.sha256(seed.encode('utf-8')).hexdigest()[:16],
         user_id=user_id,
@@ -270,7 +283,13 @@ def save_run(db: Session, user_id: str, project_id: str, plan: str, report: dict
     return _serialize_saved_run(saved, project)
 
 
-def list_saved_runs(db: Session, user_id: str, project_id: str | None = None) -> list[SavedRunResponse]:
+def list_saved_runs(
+    db: Session,
+    user_id: str,
+    project_id: str | None = None,
+    suite_id: str | None = None,
+    scenario_id: str | None = None,
+) -> list[SavedRunResponse]:
     query = (
         db.query(ProductSavedRun, ProductProject)
         .join(ProductProject, ProductProject.id == ProductSavedRun.project_id)
@@ -280,7 +299,158 @@ def list_saved_runs(db: Session, user_id: str, project_id: str | None = None) ->
         query = query.filter(ProductProject.project_key == project_id)
 
     rows = query.order_by(ProductSavedRun.created_at.desc()).all()
-    return [_serialize_saved_run(saved_run, project) for saved_run, project in rows]
+    saved_runs = [_serialize_saved_run(saved_run, project) for saved_run, project in rows]
+    if suite_id is not None:
+        saved_runs = [run for run in saved_runs if _report_label(run.report, 'suite_id') == suite_id]
+    if scenario_id is not None:
+        saved_runs = [run for run in saved_runs if _report_label(run.report, 'scenario_id') == scenario_id]
+    return saved_runs
+
+
+def get_saved_run(db: Session, user_id: str, run_id: str) -> SavedRunResponse | None:
+    row = (
+        db.query(ProductSavedRun, ProductProject)
+        .join(ProductProject, ProductProject.id == ProductSavedRun.project_id)
+        .filter(ProductSavedRun.id == run_id, ProductSavedRun.user_id == user_id)
+        .first()
+    )
+    if row is None:
+        return None
+
+    saved_run, project = row
+    return _serialize_saved_run(saved_run, project)
+
+
+def _previous_comparable_run(
+    db: Session,
+    project: ProductProject,
+    user_id: str,
+    report: dict[str, Any],
+) -> ProductSavedRun | None:
+    suite_id = _report_label(report, 'suite_id')
+    scenario_id = _report_label(report, 'scenario_id')
+    candidates = (
+        db.query(ProductSavedRun)
+        .filter(ProductSavedRun.project_id == project.id, ProductSavedRun.user_id == user_id)
+        .order_by(ProductSavedRun.created_at.desc())
+        .all()
+    )
+    if not suite_id or not scenario_id:
+        return candidates[0] if candidates else None
+
+    for candidate in candidates:
+        candidate_report = _load_json(candidate.report_json, {})
+        if _report_label(candidate_report, 'suite_id') == suite_id and _report_label(candidate_report, 'scenario_id') == scenario_id:
+            return candidate
+    return None
+
+
+def project_regression_summary(
+    db: Session,
+    user_id: str,
+    project_id: str,
+    suite_id: str | None = None,
+    scenario_id: str | None = None,
+) -> ProductProjectRegressionSummary | None:
+    project = (
+        db.query(ProductProject)
+        .filter(ProductProject.user_id == user_id, ProductProject.project_key == project_id)
+        .first()
+    )
+    if project is None:
+        return None
+
+    saved_runs = (
+        db.query(ProductSavedRun)
+        .filter(ProductSavedRun.user_id == user_id, ProductSavedRun.project_id == project.id)
+        .order_by(ProductSavedRun.created_at.desc())
+        .all()
+    )
+    saved_runs = _filter_saved_runs_by_report_labels(saved_runs, suite_id=suite_id, scenario_id=scenario_id)
+    scored_runs = [
+        (saved_run, _numeric_score(_report_score(_load_json(saved_run.report_json, {}))))
+        for saved_run in saved_runs
+    ]
+    scores = [score for _, score in scored_runs if score is not None]
+    latest_report = _load_json(saved_runs[0].report_json, {}) if saved_runs else {}
+    latest_score = scored_runs[0][1] if scored_runs else None
+    previous_score = next((score for _, score in scored_runs[1:] if score is not None), None)
+    latest_delta = latest_score - previous_score if latest_score is not None and previous_score is not None else None
+    passing_runs = sum(1 for saved_run, score in scored_runs if _report_passed(_load_json(saved_run.report_json, {}), score))
+    failing_runs = len(saved_runs) - passing_runs
+
+    return ProductProjectRegressionSummary(
+        user_id=user_id,
+        project_id=project.project_key,
+        run_count=len(saved_runs),
+        latest_run_id=str(latest_report.get('run_id')) if latest_report.get('run_id') else None,
+        latest_score=latest_score,
+        previous_score=previous_score,
+        latest_delta=latest_delta,
+        latest_status=_delta_status(latest_score, previous_score),
+        best_score=max(scores) if scores else None,
+        worst_score=min(scores) if scores else None,
+        average_score=round(sum(scores) / len(scores), 2) if scores else None,
+        passing_runs=passing_runs,
+        failing_runs=failing_runs,
+        pass_rate=round((passing_runs / len(saved_runs)) * 100, 2) if saved_runs else None,
+        scenario_summaries=_scenario_regression_summaries(saved_runs),
+    )
+
+
+def _filter_saved_runs_by_report_labels(
+    saved_runs: list[ProductSavedRun],
+    *,
+    suite_id: str | None = None,
+    scenario_id: str | None = None,
+) -> list[ProductSavedRun]:
+    if suite_id is None and scenario_id is None:
+        return saved_runs
+
+    filtered = []
+    for saved_run in saved_runs:
+        report = _load_json(saved_run.report_json, {})
+        if suite_id is not None and _report_label(report, 'suite_id') != suite_id:
+            continue
+        if scenario_id is not None and _report_label(report, 'scenario_id') != scenario_id:
+            continue
+        filtered.append(saved_run)
+    return filtered
+
+
+def _scenario_regression_summaries(saved_runs: list[ProductSavedRun]) -> list[ProductScenarioRegressionSummary]:
+    grouped: dict[tuple[str | None, str], list[tuple[ProductSavedRun, dict[str, Any], int | float | None]]] = {}
+    for saved_run in saved_runs:
+        report = _load_json(saved_run.report_json, {})
+        scenario_id = _report_label(report, 'scenario_id')
+        if not scenario_id:
+            continue
+        suite_id = _report_label(report, 'suite_id')
+        grouped.setdefault((suite_id, scenario_id), []).append((saved_run, report, _numeric_score(_report_score(report))))
+
+    summaries: list[ProductScenarioRegressionSummary] = []
+    for (suite_id, scenario_id), runs in sorted(grouped.items(), key=lambda item: ((item[0][0] or ''), item[0][1])):
+        latest_run, latest_report, latest_score = runs[0]
+        previous_score = next((score for _, _, score in runs[1:] if score is not None), None)
+        latest_delta = latest_score - previous_score if latest_score is not None and previous_score is not None else None
+        passing_runs = sum(1 for _, report, score in runs if _report_passed(report, score))
+        failing_runs = len(runs) - passing_runs
+        summaries.append(
+            ProductScenarioRegressionSummary(
+                suite_id=suite_id,
+                scenario_id=scenario_id,
+                run_count=len(runs),
+                latest_run_id=str(latest_report.get('run_id')) if latest_report.get('run_id') else latest_run.id,
+                latest_score=latest_score,
+                previous_score=previous_score,
+                latest_delta=latest_delta,
+                latest_status=_delta_status(latest_score, previous_score),
+                passing_runs=passing_runs,
+                failing_runs=failing_runs,
+                pass_rate=round((passing_runs / len(runs)) * 100, 2) if runs else None,
+            )
+        )
+    return summaries
 
 
 def export_saved_run(db: Session, user_id: str, run_id: str) -> SavedRunExportResponse | None:
@@ -299,6 +469,7 @@ def export_saved_run(db: Session, user_id: str, run_id: str) -> SavedRunExportRe
         filename=f'agentbench-{project.project_key}-{saved_run.id}.json',
         project_id=project.project_key,
         project_name=project.name,
+        firestore_path=_firestore_run_path(user_id=saved_run.user_id, project_key=project.project_key, run_id=saved_run.id),
         report=_load_json(saved_run.report_json, {}),
         artifacts=_load_json(saved_run.artifact_json, {}),
         transcript=saved_run.transcript,
@@ -306,13 +477,63 @@ def export_saved_run(db: Session, user_id: str, run_id: str) -> SavedRunExportRe
     )
 
 
+def export_project_runs(db: Session, user_id: str, project_id: str) -> ProductProjectExportResponse | None:
+    project = (
+        db.query(ProductProject)
+        .filter(ProductProject.user_id == user_id, ProductProject.project_key == project_id)
+        .first()
+    )
+    if project is None:
+        return None
+
+    saved_runs = (
+        db.query(ProductSavedRun)
+        .filter(ProductSavedRun.user_id == user_id, ProductSavedRun.project_id == project.id)
+        .order_by(ProductSavedRun.created_at.desc())
+        .all()
+    )
+    summary = project_regression_summary(db=db, user_id=user_id, project_id=project_id)
+    if summary is None:
+        return None
+
+    runs = [
+        SavedRunExportResponse(
+            id=saved_run.id,
+            filename=f'agentbench-{project.project_key}-{saved_run.id}.json',
+            project_id=project.project_key,
+            project_name=project.name,
+            firestore_path=_firestore_run_path(user_id=saved_run.user_id, project_key=project.project_key, run_id=saved_run.id),
+            report=_load_json(saved_run.report_json, {}),
+            artifacts=_load_json(saved_run.artifact_json, {}),
+            transcript=saved_run.transcript,
+            created_at=saved_run.created_at.replace(tzinfo=UTC).isoformat(),
+        )
+        for saved_run in saved_runs
+    ]
+
+    return ProductProjectExportResponse(
+        id=project.id,
+        filename=f'agentbench-{project.project_key}-project-export.json',
+        user_id=user_id,
+        project_id=project.project_key,
+        project_name=project.name,
+        firestore_collection_path=_firestore_project_runs_path(user_id=user_id, project_key=project.project_key),
+        run_count=len(runs),
+        summary=summary,
+        runs=runs,
+        exported_at=datetime.now(UTC).isoformat(),
+    )
+
+
 def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> JudgeResponse:
+    spend_control = _judge_spend_control()
     if plan == 'free':
         return JudgeResponse(
             status='blocked',
             required_plan='starter',
             credits=10,
             message='LLM judges are available on Starter and above. Free runs still use deterministic evidence checks.',
+            spend_control=spend_control,
         )
 
     citations = _judge_citations(report, transcript)
@@ -322,6 +543,7 @@ def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> Jud
         credits=10,
         message='LLM judge request accepted. Configure a judge provider key to execute model-backed review.',
         evidence_citations=citations,
+        spend_control=spend_control,
     )
 
 
@@ -357,6 +579,33 @@ def _judge_citations(report: dict[str, Any], transcript: str | None) -> list[str
     if transcript and len(citations) < 2:
         citations.extend(line.strip()[:180] for line in transcript.splitlines() if line.strip())
     return citations[:4]
+
+
+def _judge_spend_control() -> dict[str, Any]:
+    daily_limit = _int_env('LLM_JUDGE_DAILY_CREDIT_LIMIT', 200)
+    reserved_credits = _int_env('LLM_JUDGE_RESERVED_DAILY_CREDITS', 0)
+    provider = (os.getenv('LLM_JUDGE_PROVIDER') or 'vertex').strip().lower()
+    provider_configured = bool(
+        os.getenv('LLM_JUDGE_API_KEY')
+        or (provider == 'vertex' and (os.getenv('VERTEX_PROJECT_ID') or os.getenv('GOOGLE_CLOUD_PROJECT')))
+    )
+    remaining = max(daily_limit - reserved_credits, 0)
+    return {
+        'estimated_credits': 10,
+        'daily_credit_limit': daily_limit,
+        'reserved_daily_credits': reserved_credits,
+        'remaining_daily_credits': remaining,
+        'provider': provider,
+        'provider_configured': provider_configured,
+        'within_budget': remaining >= 10,
+    }
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
 
 
 def _get_or_create_project(
@@ -531,12 +780,25 @@ def _serialize_invitation(invitation: ProductWorkspaceInvitation) -> ProductWork
     )
 
 
+
+def _firestore_project_runs_path(user_id: str, project_key: str) -> str:
+    return f'users/{_firestore_segment(user_id)}/projects/{_firestore_segment(project_key)}/runs'
+
+
+def _firestore_run_path(user_id: str, project_key: str, run_id: str) -> str:
+    return f'{_firestore_project_runs_path(user_id=user_id, project_key=project_key)}/{_firestore_segment(run_id)}'
+
+
+def _firestore_segment(value: str) -> str:
+    return value.strip().replace('/', '_') or 'default'
+
 def _serialize_saved_run(saved_run: ProductSavedRun, project: ProductProject) -> SavedRunResponse:
     return SavedRunResponse(
         id=saved_run.id,
         user_id=saved_run.user_id,
         project_id=project.project_key,
         project_name=project.name,
+        firestore_path=_firestore_run_path(user_id=saved_run.user_id, project_key=project.project_key, run_id=saved_run.id),
         plan=saved_run.plan,  # type: ignore[arg-type]
         report=_load_json(saved_run.report_json, {}),
         artifacts=_load_json(saved_run.artifact_json, {}),
@@ -545,13 +807,80 @@ def _serialize_saved_run(saved_run: ProductSavedRun, project: ProductProject) ->
     )
 
 
-def _build_artifacts(report: dict[str, Any], transcript: str | None) -> dict[str, Any]:
+def _build_artifacts(report: dict[str, Any], transcript: str | None, previous_report: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         'run_id': report.get('run_id'),
         'overall_score': report.get('overall_score'),
+        'regression_delta': _regression_delta(report, previous_report),
         'evidence_spans': report.get('evidence_spans') or report.get('evidence') or [],
         'transcript_lines': len([line for line in (transcript or '').splitlines() if line.strip()]),
     }
+
+
+def _regression_delta(report: dict[str, Any], previous_report: dict[str, Any] | None) -> dict[str, Any]:
+    current_score = _numeric_score(_report_score(report))
+    previous_score = _numeric_score(_report_score(previous_report)) if previous_report else None
+
+    if previous_report is None or previous_score is None or current_score is None:
+        return {
+            'status': 'baseline',
+            'previous_run_id': previous_report.get('run_id') if previous_report else None,
+            'previous_overall_score': previous_score,
+            'current_overall_score': current_score,
+            'score_delta': None,
+        }
+
+    score_delta = current_score - previous_score
+    if score_delta > 0:
+        status = 'improved'
+    elif score_delta < 0:
+        status = 'regressed'
+    else:
+        status = 'unchanged'
+
+    return {
+        'status': status,
+        'previous_run_id': previous_report.get('run_id'),
+        'previous_overall_score': previous_score,
+        'current_overall_score': current_score,
+        'score_delta': score_delta,
+    }
+
+
+def _delta_status(current_score: int | float | None, previous_score: int | float | None) -> str:
+    if current_score is None:
+        return 'none'
+    if previous_score is None:
+        return 'baseline'
+    if current_score > previous_score:
+        return 'improved'
+    if current_score < previous_score:
+        return 'regressed'
+    return 'unchanged'
+
+
+def _report_label(report: dict[str, Any], key: str) -> str | None:
+    value = report.get(key)
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _report_passed(report: dict[str, Any], score: int | float | None) -> bool:
+    verdict = report.get('verdict') or report.get('status') or report.get('overall')
+    if isinstance(verdict, str):
+        normalized = verdict.strip().lower()
+        if normalized in {'pass', 'passed'}:
+            return True
+        if normalized in {'fail', 'failed', 'needs_review', 'blocked'}:
+            return False
+    return score is not None and score >= 75
+
+
+def _numeric_score(value: Any) -> int | float | None:
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _report_score(report: dict[str, Any]) -> Any:
+    return report.get('overall_score') if 'overall_score' in report else report.get('score')
 
 
 def _load_json(raw: str | None, fallback: dict[str, Any]) -> dict[str, Any]:

@@ -7,7 +7,7 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
 
-from app.services.benchmark_evaluator import BenchmarkEvaluation, evaluate_benchmark
+from app.services.benchmark_evaluator import BenchmarkEvaluation, evaluate_benchmark, parse_action_trace
 
 
 BenchmarkScenario = dict[str, Any]
@@ -318,12 +318,15 @@ def run_scenario(request: Any) -> dict[str, Any]:
         overall_score = agentic_evaluation.overall_score
         verdict = 'pass' if overall_score >= 75 and agentic_evaluation.forbidden_action_avoidance.passed else 'needs_review'
 
+    scenario_contract = _scenario_contract(scenario)
     report = {
         'run_id': run_id,
         'suite_id': suite_id,
         'suite_name': suite['name'],
         'scenario_id': scenario_id,
         'scenario_title': scenario['title'],
+        'scenario_contract': scenario_contract,
+        'scenario_contract_sha256': _stable_digest(scenario_contract),
         'provider': suite['provider'],
         'run_metadata': run_metadata,
         'evidence_artifacts': evidence_artifacts,
@@ -344,10 +347,13 @@ def run_scenario(request: Any) -> dict[str, Any]:
         'rubric_checks': rubric_checks,
         'expected_final_state': scenario['expected_final_state'],
         'transcript_preview': transcript[:700],
+        'group_call_summary': _group_call_artifact_summary(payload),
         'recommendations': _recommendations(completed_actions, forbidden_hits, scenario),
     }
     if agentic_evaluation:
-        report.update(_agentic_report_fields(agentic_evaluation, action_trace, final_state))
+        report.update(_agentic_report_fields(agentic_evaluation, action_trace, final_state, scenario['required_actions']))
+        if report.get('workflow_order_issues'):
+            report['verdict'] = 'needs_review'
     report['vcon_analysis'] = _vcon_analysis(report)
     report['vcon_export'] = _vcon_export(payload, transcript, report['vcon_analysis'])
     return report
@@ -467,7 +473,7 @@ def _evidence_audit_summary(
     if not run_id:
         missing_for_export.append('run_id')
 
-    return {
+    summary = {
         'run_started_at': run_started_at,
         'evaluated_at': evaluated_at,
         'input_artifact_types': input_artifact_types,
@@ -482,6 +488,66 @@ def _evidence_audit_summary(
             'missing': missing_for_export,
         },
     }
+    group_call_summary = _group_call_artifact_summary(payload)
+    if group_call_summary:
+        summary['group_call_summary'] = group_call_summary
+    return summary
+
+
+def _group_call_artifact_summary(payload: dict[str, Any]) -> dict[str, Any] | None:
+    value = payload.get('group_call') or payload.get('groupCall')
+    if not isinstance(value, dict) or not value:
+        return None
+
+    speakers = []
+    for item in _group_call_message_items(value):
+        if not isinstance(item, dict):
+            continue
+        speaker = item.get('speaker') or item.get('party') or item.get('role') or item.get('participant')
+        if speaker is not None:
+            normalized = str(speaker).strip()
+            if normalized and normalized not in speakers:
+                speakers.append(normalized)
+
+    return {
+        'speaker_count': len(speakers),
+        'speakers': speakers,
+        'message_count': len(_group_call_message_items(value)),
+        'decision_count': _group_call_item_count(value, 'decisions'),
+        'commitment_count': _group_call_item_count(value, 'commitments'),
+        'follow_up_count': _group_call_item_count(value, 'follow_up_actions', 'followUps'),
+        'action_item_count': _group_call_item_count(value, 'action_items'),
+    }
+
+
+def _scenario_contract(scenario: BenchmarkScenario) -> dict[str, Any]:
+    return {
+        'id': scenario['id'],
+        'title': scenario['title'],
+        'persona': scenario['persona'],
+        'goal': scenario['goal'],
+        'required_actions': deepcopy(scenario['required_actions']),
+        'forbidden_actions': deepcopy(scenario['forbidden_actions']),
+        'expected_final_state': scenario['expected_final_state'],
+        'rubric': deepcopy(scenario['rubric']),
+    }
+
+
+def _group_call_message_items(value: dict[str, Any]) -> list[Any]:
+    for key in ('dialog', 'messages', 'utterances', 'transcript', 'turns'):
+        items = value.get(key)
+        if isinstance(items, list):
+            return items
+    return []
+
+
+def _group_call_item_count(value: dict[str, Any], *keys: str) -> int:
+    total = 0
+    for key in keys:
+        items = value.get(key)
+        if isinstance(items, list):
+            total += len(items)
+    return total
 
 
 def _artifact_present(value: Any) -> bool:
@@ -553,6 +619,8 @@ def _vcon_analysis(report: dict[str, Any]) -> dict[str, Any]:
         'suite_name',
         'scenario_id',
         'scenario_title',
+        'scenario_contract',
+        'scenario_contract_sha256',
         'provider',
         'run_metadata',
         'evidence_audit_summary',
@@ -562,10 +630,13 @@ def _vcon_analysis(report: dict[str, Any]) -> dict[str, Any]:
         'required_action_score',
         'forbidden_action_score',
         'final_state_score',
+        'workflow_order_score',
         'completed_actions',
         'missing_actions',
         'forbidden_action_hits',
         'forbidden_actions_observed',
+        'workflow_order_issues',
+        'group_call_summary',
         'failure_categories',
         'suggested_fixes',
         'recommendations',
@@ -712,15 +783,23 @@ def _agentic_evaluation(scenario: BenchmarkScenario, action_trace: Any, final_st
     )
 
 
-def _agentic_report_fields(evaluation: BenchmarkEvaluation, action_trace: Any, final_state: Any) -> dict[str, Any]:
+def _agentic_report_fields(
+    evaluation: BenchmarkEvaluation,
+    action_trace: Any,
+    final_state: Any,
+    required_actions: list[Any],
+) -> dict[str, Any]:
     missing_actions = [_describe_requirement(item) for item in evaluation.required_action_execution.missing]
     forbidden_observed = [_describe_requirement(item) for item in evaluation.forbidden_action_avoidance.violations]
     final_state_missing = evaluation.final_state_correctness.missing
+    workflow_order_issues = _workflow_order_issues(action_trace, required_actions, evaluation.required_action_execution.missing)
     failure_categories = []
     if not evaluation.task_completion.passed:
         failure_categories.append('task_completion')
     if missing_actions:
         failure_categories.append('required_action_execution')
+    if workflow_order_issues:
+        failure_categories.append('workflow_ordering')
     if forbidden_observed:
         failure_categories.append('forbidden_action_avoidance')
     if final_state_missing:
@@ -732,11 +811,13 @@ def _agentic_report_fields(evaluation: BenchmarkEvaluation, action_trace: Any, f
         'required_action_score': evaluation.required_action_execution.score,
         'forbidden_action_score': evaluation.forbidden_action_avoidance.score,
         'final_state_score': evaluation.final_state_correctness.score,
+        'workflow_order_score': 0 if workflow_order_issues else 100,
         'missing_actions': missing_actions,
         'forbidden_actions_observed': forbidden_observed,
         'final_state_missing': final_state_missing,
+        'workflow_order_issues': workflow_order_issues,
         'failure_categories': failure_categories,
-        'suggested_fixes': _agentic_suggested_fixes(missing_actions, forbidden_observed, final_state_missing),
+        'suggested_fixes': _agentic_suggested_fixes(missing_actions, forbidden_observed, final_state_missing, workflow_order_issues),
         'evidence': (
             evaluation.task_completion.evidence
             + evaluation.required_action_execution.evidence
@@ -752,6 +833,37 @@ def _agentic_report_fields(evaluation: BenchmarkEvaluation, action_trace: Any, f
     }
 
 
+def _workflow_order_issues(action_trace: Any, required_actions: list[Any], missing_requirements: list[Any]) -> list[dict[str, Any]]:
+    actions = parse_action_trace(action_trace)
+    if len(actions) < 2:
+        return []
+
+    missing = {_normalize_requirement(requirement) for requirement in missing_requirements}
+    observed_positions = {_normalize_requirement(action.name): index for index, action in enumerate(actions)}
+    highest_position = -1
+    previous_action = ''
+    issues: list[dict[str, Any]] = []
+
+    for requirement in required_actions:
+        name = _normalize_requirement(_describe_requirement(requirement))
+        if not name or name in missing or name not in observed_positions:
+            continue
+
+        position = observed_positions[name]
+        if position < highest_position:
+            issues.append({
+                'action': _describe_requirement(requirement),
+                'observed_index': position,
+                'expected_after': previous_action,
+            })
+            continue
+
+        highest_position = position
+        previous_action = _describe_requirement(requirement)
+
+    return issues
+
+
 def _describe_requirement(value: Any) -> str:
     if isinstance(value, str):
         return value
@@ -762,9 +874,20 @@ def _describe_requirement(value: Any) -> str:
     return str(value)
 
 
-def _agentic_suggested_fixes(missing_actions: list[str], forbidden_observed: list[str], final_state_missing: list[Any]) -> list[str]:
+def _normalize_requirement(value: Any) -> str:
+    return str(value).strip().lower().replace('-', '_').replace(' ', '_')
+
+
+def _agentic_suggested_fixes(
+    missing_actions: list[str],
+    forbidden_observed: list[str],
+    final_state_missing: list[Any],
+    workflow_order_issues: list[dict[str, Any]],
+) -> list[str]:
     fixes = []
     fixes.extend(f'Add explicit tool/action execution for: {action}' for action in missing_actions[:3])
+    if workflow_order_issues:
+        fixes.append('Reorder the agent workflow so required actions occur in the benchmark sequence.')
     fixes.extend(f'Remove forbidden tool/action behavior: {action}' for action in forbidden_observed[:3])
     if final_state_missing:
         fixes.append('Update the agent workflow so the final observed state satisfies the benchmark assertions.')

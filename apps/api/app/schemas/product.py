@@ -13,6 +13,7 @@ class PricingPlan(BaseModel):
     id: PlanId
     name: str
     price_label: str
+    stripe_price_id: str | None = None
     seats: str
     included_credits: int | None = None
     cta: str
@@ -65,6 +66,38 @@ class ProductProjectResponse(BaseModel):
     created_at: str
     updated_at: str
     last_run_at: str | None = None
+
+
+class ProductScenarioRegressionSummary(BaseModel):
+    suite_id: str | None = None
+    scenario_id: str
+    run_count: int
+    latest_run_id: str | None = None
+    latest_score: int | float | None = None
+    previous_score: int | float | None = None
+    latest_delta: int | float | None = None
+    latest_status: Literal['baseline', 'improved', 'regressed', 'unchanged', 'none']
+    passing_runs: int = 0
+    failing_runs: int = 0
+    pass_rate: float | None = None
+
+
+class ProductProjectRegressionSummary(BaseModel):
+    user_id: str
+    project_id: str
+    run_count: int
+    latest_run_id: str | None = None
+    latest_score: int | float | None = None
+    previous_score: int | float | None = None
+    latest_delta: int | float | None = None
+    latest_status: Literal['baseline', 'improved', 'regressed', 'unchanged', 'none']
+    best_score: int | float | None = None
+    worst_score: int | float | None = None
+    average_score: float | None = None
+    passing_runs: int = 0
+    failing_runs: int = 0
+    pass_rate: float | None = None
+    scenario_summaries: list[ProductScenarioRegressionSummary] = Field(default_factory=list)
 
 
 class ProductWorkspaceRequest(BaseModel):
@@ -138,6 +171,7 @@ class SavedRunResponse(BaseModel):
     user_id: str
     project_id: str
     project_name: str
+    firestore_path: str
     plan: PlanId
     report: dict[str, Any]
     artifacts: dict[str, Any] = Field(default_factory=dict)
@@ -150,10 +184,24 @@ class SavedRunExportResponse(BaseModel):
     filename: str
     project_id: str
     project_name: str
+    firestore_path: str
     report: dict[str, Any]
     artifacts: dict[str, Any] = Field(default_factory=dict)
     transcript: str | None = None
     created_at: str
+
+
+class ProductProjectExportResponse(BaseModel):
+    id: str
+    filename: str
+    user_id: str
+    project_id: str
+    project_name: str
+    firestore_collection_path: str
+    run_count: int
+    summary: ProductProjectRegressionSummary
+    runs: list[SavedRunExportResponse] = Field(default_factory=list)
+    exported_at: str
 
 
 class JudgeRequest(BaseModel):
@@ -168,3 +216,4 @@ class JudgeResponse(BaseModel):
     credits: int
     message: str
     evidence_citations: list[str] = Field(default_factory=list)
+    spend_control: dict[str, Any] = Field(default_factory=dict)
