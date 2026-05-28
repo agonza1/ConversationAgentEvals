@@ -424,9 +424,13 @@ async function listSavedRuns(userId: string, projectId: string, suiteId?: string
   );
 }
 
-async function fetchProjectRegressionSummary(userId: string, projectId: string) {
+async function fetchProjectRegressionSummary(userId: string, projectId: string, suiteId?: string, scenarioId?: string) {
+  const params = new URLSearchParams({ user_id: userId });
+  if (suiteId) params.set('suite_id', suiteId);
+  if (scenarioId) params.set('scenario_id', scenarioId);
+
   return handleJson<ProjectRegressionSummary>(
-    await fetch(`${getApiBase()}/api/product/projects/${encodeURIComponent(projectId)}/regression-summary?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
+    await fetch(`${getApiBase()}/api/product/projects/${encodeURIComponent(projectId)}/regression-summary?${params.toString()}`, { cache: 'no-store' }),
   );
 }
 
@@ -651,6 +655,7 @@ export function BenchmarkRunner() {
   const [plan, setPlan] = useState<PricingPlan['id']>('free');
   const [savedRuns, setSavedRuns] = useState<SavedRun[]>([]);
   const [projectRegressionSummary, setProjectRegressionSummary] = useState<ProjectRegressionSummary | null>(null);
+  const [scenarioRegressionSummary, setScenarioRegressionSummary] = useState<ProjectRegressionSummary | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [judgeGate, setJudgeGate] = useState<JudgeGate | null>(null);
@@ -714,6 +719,7 @@ export function BenchmarkRunner() {
     if (!userId) {
       setSavedRuns([]);
       setProjectRegressionSummary(null);
+      setScenarioRegressionSummary(null);
       return;
     }
 
@@ -721,16 +727,21 @@ export function BenchmarkRunner() {
     Promise.all([
       listSavedRuns(userId, projectId, selectedSuite?.id, selectedScenario?.id),
       fetchProjectRegressionSummary(userId, projectId).catch(() => null),
+      selectedSuite?.id && selectedScenario?.id
+        ? fetchProjectRegressionSummary(userId, projectId, selectedSuite.id, selectedScenario.id).catch(() => null)
+        : Promise.resolve(null),
     ])
-      .then(([runs, summary]) => {
+      .then(([runs, summary, scenarioSummary]) => {
         if (!isMounted) return;
         setSavedRuns(runs);
         setProjectRegressionSummary(summary);
+        setScenarioRegressionSummary(scenarioSummary);
       })
       .catch(() => {
         if (!isMounted) return;
         setSavedRuns([]);
         setProjectRegressionSummary(null);
+        setScenarioRegressionSummary(null);
       });
 
     return () => {
@@ -789,6 +800,9 @@ export function BenchmarkRunner() {
       fetchProjectRegressionSummary(userId, projectId)
         .then(setProjectRegressionSummary)
         .catch(() => setProjectRegressionSummary(null));
+      fetchProjectRegressionSummary(userId, projectId, saved.report.suite_id, saved.report.scenario_id)
+        .then(setScenarioRegressionSummary)
+        .catch(() => setScenarioRegressionSummary(null));
       setSaveMessage(`Saved run ${saved.id} to ${projectId}.`);
     } catch (err) {
       setSaveMessage(err instanceof Error ? err.message : 'Could not save this run.');
@@ -1437,6 +1451,22 @@ export function BenchmarkRunner() {
                   </ul>
                 </div>
               ) : null}
+            </div>
+          ) : null}
+          {scenarioRegressionSummary ? (
+            <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white', display: 'grid', gap: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                <strong style={{ color: regressionDeltaColor(scenarioRegressionSummary.latest_status) }}>
+                  Selected scenario: {scenarioRegressionSummary.latest_status}
+                </strong>
+                <span style={{ color: 'var(--muted)', fontWeight: 800 }}>
+                  {scenarioRegressionSummary.run_count} focused runs
+                </span>
+              </div>
+              <p style={{ margin: 0, color: 'var(--muted)' }}>
+                Latest {scenarioRegressionSummary.latest_score ?? 'n/a'} vs previous {scenarioRegressionSummary.previous_score ?? 'n/a'}
+                {' '}({formatSignedDelta(scenarioRegressionSummary.latest_delta)}), pass rate {scenarioRegressionSummary.pass_rate ?? 'n/a'}%.
+              </p>
             </div>
           ) : null}
           {savedRuns.length ? (
