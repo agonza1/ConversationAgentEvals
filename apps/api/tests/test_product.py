@@ -374,6 +374,49 @@ def test_saved_runs_include_project_regression_delta():
     assert list_response.json()[0]['artifacts']['regression_delta']['status'] == 'improved'
 
 
+def test_saved_run_regression_delta_compares_same_scenario_when_labeled():
+    runs = [
+        ('run-1', 'billing-address-change', 82),
+        ('run-2', 'angry-outage-escalation', 40),
+        ('run-3', 'billing-address-change', 94),
+    ]
+    responses = []
+    for run_id, scenario_id, score in runs:
+        responses.append(
+            client.post(
+                '/api/product/runs',
+                json={
+                    'user_id': 'demo-user',
+                    'project_id': 'call-center',
+                    'plan': 'starter',
+                    'report': {
+                        'run_id': run_id,
+                        'suite_id': 'call-center-voice-ai',
+                        'scenario_id': scenario_id,
+                        'overall_score': score,
+                    },
+                    'transcript': 'Agent: completed the benchmark.',
+                },
+            )
+        )
+
+    assert all(response.status_code == 200 for response in responses)
+    assert responses[1].json()['artifacts']['regression_delta'] == {
+        'status': 'baseline',
+        'previous_run_id': None,
+        'previous_overall_score': None,
+        'current_overall_score': 40,
+        'score_delta': None,
+    }
+    assert responses[2].json()['artifacts']['regression_delta'] == {
+        'status': 'improved',
+        'previous_run_id': 'run-1',
+        'previous_overall_score': 82,
+        'current_overall_score': 94,
+        'score_delta': 12,
+    }
+
+
 def test_project_regression_summary_reports_latest_trend():
     for run_id, score in [('run-1', 82), ('run-2', 94), ('run-3', 88)]:
         response = client.post(

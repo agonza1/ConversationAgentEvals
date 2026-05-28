@@ -250,12 +250,7 @@ def save_run(db: Session, user_id: str, project_id: str, plan: str, report: dict
     project = _get_or_create_project(db=db, user_id=user_id, project_id=project_id, plan=plan)
     created_at = datetime.now(UTC)
     seed = f'{user_id}:{project_id}:{created_at.isoformat()}:{report.get("run_id", "")}'
-    previous_run = (
-        db.query(ProductSavedRun)
-        .filter(ProductSavedRun.project_id == project.id, ProductSavedRun.user_id == user_id)
-        .order_by(ProductSavedRun.created_at.desc())
-        .first()
-    )
+    previous_run = _previous_comparable_run(db=db, project=project, user_id=user_id, report=report)
     previous_report = _load_json(previous_run.report_json, {}) if previous_run else None
     artifact_payload = _build_artifacts(report=report, transcript=transcript, previous_report=previous_report)
     saved = ProductSavedRun(
@@ -303,6 +298,30 @@ def get_saved_run(db: Session, user_id: str, run_id: str) -> SavedRunResponse | 
 
     saved_run, project = row
     return _serialize_saved_run(saved_run, project)
+
+
+def _previous_comparable_run(
+    db: Session,
+    project: ProductProject,
+    user_id: str,
+    report: dict[str, Any],
+) -> ProductSavedRun | None:
+    suite_id = _report_label(report, 'suite_id')
+    scenario_id = _report_label(report, 'scenario_id')
+    candidates = (
+        db.query(ProductSavedRun)
+        .filter(ProductSavedRun.project_id == project.id, ProductSavedRun.user_id == user_id)
+        .order_by(ProductSavedRun.created_at.desc())
+        .all()
+    )
+    if not suite_id or not scenario_id:
+        return candidates[0] if candidates else None
+
+    for candidate in candidates:
+        candidate_report = _load_json(candidate.report_json, {})
+        if _report_label(candidate_report, 'suite_id') == suite_id and _report_label(candidate_report, 'scenario_id') == scenario_id:
+            return candidate
+    return None
 
 
 def project_regression_summary(db: Session, user_id: str, project_id: str) -> ProductProjectRegressionSummary | None:
@@ -662,6 +681,11 @@ def _delta_status(current_score: int | float | None, previous_score: int | float
     if current_score < previous_score:
         return 'regressed'
     return 'unchanged'
+
+
+def _report_label(report: dict[str, Any], key: str) -> str | None:
+    value = report.get(key)
+    return value if isinstance(value, str) and value.strip() else None
 
 
 def _report_passed(report: dict[str, Any], score: int | float | None) -> bool:
