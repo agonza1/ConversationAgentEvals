@@ -35,6 +35,7 @@ interface BenchmarkReport {
   verdict?: string;
   overall?: string;
   scenario_title?: string;
+  scenario_contract_sha256?: string;
   score?: number;
   overall_score?: number;
   task_completion_score?: number;
@@ -578,6 +579,7 @@ function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: stri
   const verdict = report.verdict ?? report.overall ?? 'complete';
   const score = report.score ?? report.overall_score ?? 'n/a';
   const scenario = report.scenario_title ?? fallbackScenarioTitle ?? 'Selected scenario';
+  const contractFingerprint = report.scenario_contract_sha256 ? report.scenario_contract_sha256.slice(0, 12) : 'Not captured';
   const failureCategories = report.failure_categories?.length ? report.failure_categories.join(', ') : 'None reported';
   const missingActions = report.missing_actions?.length ? report.missing_actions.join('; ') : 'None reported';
   const forbiddenActions = report.forbidden_actions_observed?.length
@@ -595,6 +597,7 @@ function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: stri
     `Scenario: ${scenario}`,
     `Verdict: ${verdict}`,
     `Score: ${score}`,
+    `Scenario contract: ${contractFingerprint}`,
     `Failure categories: ${failureCategories}`,
     `Missing actions: ${missingActions}`,
     `Forbidden actions observed: ${forbiddenActions}`,
@@ -927,6 +930,7 @@ export function BenchmarkRunner() {
   const score = report?.score ?? report?.overall_score;
   const verdict = report?.verdict ?? report?.overall;
   const reportBrief = report ? formatReportBrief(report, selectedScenario?.title) : '';
+  const scenarioContractFingerprint = report?.scenario_contract_sha256 ? report.scenario_contract_sha256.slice(0, 12) : 'Not captured';
   const pricing = productConfig?.pricing ?? [];
   const deterministicRule = productConfig?.usage_rules.find((rule) => rule.id === 'deterministic_eval');
   const judgeRule = productConfig?.usage_rules.find((rule) => rule.id === 'llm_judge');
@@ -1358,6 +1362,7 @@ export function BenchmarkRunner() {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
                 <AuditFact label="Source" value={String(report.vcon_export.source_format ?? 'benchmark')} />
                 <AuditFact label="Dialog turns" value={String(Array.isArray(report.vcon_export.dialog) ? report.vcon_export.dialog.length : 0)} />
+                <AuditFact label="Contract" value={scenarioContractFingerprint} />
                 <AuditFact label="Analysis" value={String(report.vcon_export.appended_analysis_type ?? 'agentic_benchmark_eval')} />
               </div>
             </section>

@@ -318,13 +318,15 @@ def run_scenario(request: Any) -> dict[str, Any]:
         overall_score = agentic_evaluation.overall_score
         verdict = 'pass' if overall_score >= 75 and agentic_evaluation.forbidden_action_avoidance.passed else 'needs_review'
 
+    scenario_contract = _scenario_contract(scenario)
     report = {
         'run_id': run_id,
         'suite_id': suite_id,
         'suite_name': suite['name'],
         'scenario_id': scenario_id,
         'scenario_title': scenario['title'],
-        'scenario_contract': _scenario_contract(scenario),
+        'scenario_contract': scenario_contract,
+        'scenario_contract_sha256': _stable_digest(scenario_contract),
         'provider': suite['provider'],
         'run_metadata': run_metadata,
         'evidence_artifacts': evidence_artifacts,
@@ -618,6 +620,7 @@ def _vcon_analysis(report: dict[str, Any]) -> dict[str, Any]:
         'scenario_id',
         'scenario_title',
         'scenario_contract',
+        'scenario_contract_sha256',
         'provider',
         'run_metadata',
         'evidence_audit_summary',

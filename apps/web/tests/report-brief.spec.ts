@@ -39,6 +39,7 @@ test('benchmark report brief includes deterministic failure fields', async ({ pa
           scenario_title: 'Deterministic failure',
           verdict: 'needs_review',
           overall_score: 55,
+          scenario_contract_sha256: 'abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
           missing_actions: ['confirm identity'],
           forbidden_action_hits: [
             { action: 'diagnose condition', evidence: 'Agent: I diagnosed your condition.' },
@@ -63,9 +64,12 @@ test('benchmark report brief includes deterministic failure fields', async ({ pa
 
   const brief = page.getByLabel('Report brief');
   await expect(brief).toContainText('Forbidden actions observed: diagnose condition');
+  await expect(brief).toContainText('Scenario contract: abcdef123456');
   await expect(brief).toContainText('Suggested fixes: Remove forbidden behavior: diagnose condition');
   await expect(page.getByRole('heading', { name: 'vCon export' })).toBeVisible();
   await expect(page.getByText('Dialog turns')).toBeVisible();
+  await expect(page.getByText('Contract')).toBeVisible();
+  await expect(page.getByText('abcdef123456')).toBeVisible();
   await expect(page.getByText('agentic_benchmark_eval')).toBeVisible();
 });
 
