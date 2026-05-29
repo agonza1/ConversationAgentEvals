@@ -62,6 +62,13 @@ class BenchmarkRunRequest(BaseModel):
     modelName: str | None = None
     notes: str | None = None
     metadata: dict[str, Any] | None = None
+    attempt: int | None = None
+    max_attempts: int | None = None
+    maxAttempts: int | None = None
+    retry_of_run_id: str | None = None
+    retryOfRunId: str | None = None
+    resume_from_run_id: str | None = None
+    resumeFromRunId: str | None = None
 
     @model_validator(mode='after')
     def evidence_must_not_be_blank(self) -> 'BenchmarkRunRequest':
@@ -112,6 +119,13 @@ class BenchmarkSimulationRequest(BaseModel):
     modelName: str | None = None
     notes: str | None = None
     metadata: dict[str, Any] | None = None
+    attempt: int | None = None
+    max_attempts: int | None = None
+    maxAttempts: int | None = None
+    retry_of_run_id: str | None = None
+    retryOfRunId: str | None = None
+    resume_from_run_id: str | None = None
+    resumeFromRunId: str | None = None
 
 
 class BenchmarkSimulationResponse(BaseModel):

@@ -308,6 +308,92 @@ def get_suite(suite_id: str) -> BenchmarkSuite | None:
     return deepcopy(suite) if suite else None
 
 
+def _run_lifecycle_context(payload: dict[str, Any]) -> dict[str, Any]:
+    attempt = _positive_int(payload.get('attempt'), default=1, field_name='attempt')
+    max_attempts = _positive_int(
+        payload.get('max_attempts') if payload.get('max_attempts') is not None else payload.get('maxAttempts'),
+        default=3,
+        field_name='max_attempts',
+    )
+    if max_attempts < attempt:
+        raise ValueError('max_attempts must be greater than or equal to attempt')
+
+    retry_of_run_id = _first_string(payload, 'retry_of_run_id', 'retryOfRunId')
+    resume_from_run_id = _first_string(payload, 'resume_from_run_id', 'resumeFromRunId')
+    if retry_of_run_id and resume_from_run_id:
+        raise ValueError('retry_of_run_id and resume_from_run_id cannot both be set')
+
+    context: dict[str, Any] = {
+        'attempt': attempt,
+        'max_attempts': max_attempts,
+    }
+    if retry_of_run_id:
+        context['retry_of_run_id'] = retry_of_run_id
+    if resume_from_run_id:
+        context['resume_from_run_id'] = resume_from_run_id
+    return context
+
+
+def _positive_int(value: Any, *, default: int, field_name: str) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ValueError(f'{field_name} must be a positive integer')
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f'{field_name} must be a positive integer') from exc
+    if parsed < 1:
+        raise ValueError(f'{field_name} must be a positive integer')
+    return parsed
+
+
+def _run_lifecycle(
+    *,
+    lifecycle_context: dict[str, Any],
+    logical_run_id: str,
+    run_started_at: str,
+    evaluated_at: str,
+    verdict: str,
+    failure_categories: list[str] | None = None,
+) -> dict[str, Any]:
+    terminal_status = 'completed' if verdict == 'pass' else 'needs_review'
+    attempt = int(lifecycle_context['attempt'])
+    max_attempts = int(lifecycle_context['max_attempts'])
+    retryable = terminal_status != 'completed' and attempt < max_attempts
+    resumable = terminal_status != 'completed'
+    reason = 'benchmark passed' if terminal_status == 'completed' else 'benchmark requires review'
+
+    transitions = [
+        {'from': None, 'to': 'queued', 'at': run_started_at, 'reason': 'run accepted'},
+        {'from': 'queued', 'to': 'running', 'at': run_started_at, 'reason': 'evidence normalization started'},
+        {'from': 'running', 'to': 'evaluating', 'at': run_started_at, 'reason': 'deterministic evaluator started'},
+        {'from': 'evaluating', 'to': terminal_status, 'at': evaluated_at, 'reason': reason},
+    ]
+
+    lifecycle = {
+        'logical_run_id': logical_run_id,
+        'status': terminal_status,
+        'terminal': True,
+        'attempt': attempt,
+        'max_attempts': max_attempts,
+        'retryable': retryable,
+        'resumable': resumable,
+        'started_at': run_started_at,
+        'updated_at': evaluated_at,
+        'completed_at': evaluated_at if terminal_status == 'completed' else None,
+        'needs_review_at': evaluated_at if terminal_status == 'needs_review' else None,
+        'failure_categories': failure_categories or [],
+        'transitions': transitions,
+    }
+    for key in ('retry_of_run_id', 'resume_from_run_id'):
+        if key in lifecycle_context:
+            lifecycle[key] = lifecycle_context[key]
+    if retryable:
+        lifecycle['next_attempt'] = attempt + 1
+    return lifecycle
+
+
 def run_scenario(request: Any) -> dict[str, Any]:
     run_started_at = datetime.now(UTC).isoformat()
     payload = _payload_to_dict(request)
@@ -333,8 +419,10 @@ def run_scenario(request: Any) -> dict[str, Any]:
     overall_score = max(0, round((required_score * 0.45) + (rubric_score * 0.55) - penalty))
     verdict = 'pass' if overall_score >= 75 and not forbidden_hits else 'needs_review'
     run_metadata = _run_metadata(payload)
+    lifecycle_context = _run_lifecycle_context(payload)
     evidence_artifacts = _evidence_artifacts(payload, transcript)
-    run_id = _run_id(suite_id, scenario_id, evidence_artifacts, run_metadata)
+    logical_run_id = _logical_run_id(suite_id, scenario_id, evidence_artifacts, run_metadata)
+    run_id = _run_id(suite_id, scenario_id, evidence_artifacts, run_metadata, lifecycle_context)
     action_trace = payload.get('action_trace')
     final_state = payload.get('final_state')
     agentic_evaluation = _agentic_evaluation(scenario, action_trace, final_state) if _has_agentic_evidence(payload) else None
@@ -344,8 +432,10 @@ def run_scenario(request: Any) -> dict[str, Any]:
         verdict = 'pass' if overall_score >= 75 and agentic_evaluation.forbidden_action_avoidance.passed else 'needs_review'
 
     scenario_contract = _scenario_contract(scenario)
+    evaluated_at = datetime.now(UTC).isoformat()
     report = {
         'run_id': run_id,
+        'logical_run_id': logical_run_id,
         'suite_id': suite_id,
         'suite_name': suite['name'],
         'scenario_id': scenario_id,
@@ -360,7 +450,7 @@ def run_scenario(request: Any) -> dict[str, Any]:
             run_metadata=run_metadata,
             run_id=run_id,
             run_started_at=run_started_at,
-            evaluated_at=datetime.now(UTC).isoformat(),
+            evaluated_at=evaluated_at,
         ),
         'overall_score': overall_score,
         'verdict': verdict,
@@ -380,6 +470,15 @@ def run_scenario(request: Any) -> dict[str, Any]:
         report.update(_agentic_report_fields(agentic_evaluation, action_trace, final_state, scenario['required_actions']))
         if report.get('workflow_order_issues'):
             report['verdict'] = 'needs_review'
+    report['run_lifecycle'] = _run_lifecycle(
+        lifecycle_context=lifecycle_context,
+        logical_run_id=logical_run_id,
+        run_started_at=run_started_at,
+        evaluated_at=evaluated_at,
+        verdict=report['verdict'],
+        failure_categories=report.get('failure_categories'),
+    )
+    report['run_status'] = report['run_lifecycle']['status']
     report['vcon_analysis'] = _vcon_analysis(report)
     report['vcon_export'] = _vcon_export(payload, transcript, report['vcon_analysis'])
     return report
@@ -410,6 +509,7 @@ def simulate_scenario(request: Any) -> dict[str, Any]:
             'action_trace': action_trace,
             'final_state': final_state,
             **_run_metadata_payload(payload),
+            **_run_lifecycle_payload(payload),
         }
     )
 
@@ -460,6 +560,13 @@ def _payload_to_dict(request: Any) -> dict[str, Any]:
             'modelName',
             'notes',
             'metadata',
+            'attempt',
+            'max_attempts',
+            'maxAttempts',
+            'retry_of_run_id',
+            'retryOfRunId',
+            'resume_from_run_id',
+            'resumeFromRunId',
         )
         if hasattr(request, name)
     }
@@ -615,7 +722,7 @@ def _artifact_present(value: Any) -> bool:
     return value is not None
 
 
-def _run_id(
+def _logical_run_id(
     suite_id: str,
     scenario_id: str,
     evidence_artifacts: dict[str, Any],
@@ -626,6 +733,24 @@ def _run_id(
         'scenario_id': scenario_id,
         'evidence_fingerprint': evidence_artifacts.get('evidence_fingerprint') or '',
         'run_metadata': run_metadata,
+    }
+    return _stable_digest(seed)[:16]
+
+
+def _run_id(
+    suite_id: str,
+    scenario_id: str,
+    evidence_artifacts: dict[str, Any],
+    run_metadata: dict[str, str],
+    lifecycle_context: dict[str, Any],
+) -> str:
+    logical_run_id = _logical_run_id(suite_id, scenario_id, evidence_artifacts, run_metadata)
+    if lifecycle_context == {'attempt': 1, 'max_attempts': 3}:
+        return logical_run_id
+
+    seed = {
+        'logical_run_id': logical_run_id,
+        'lifecycle_context': lifecycle_context,
     }
     return _stable_digest(seed)[:16]
 
@@ -670,6 +795,9 @@ SPEAKER_LABEL_PATTERN = re.compile(r'(?:(?<=^)|(?<=\s))([A-Za-z][A-Za-z0-9 _-]{0
 def _vcon_analysis(report: dict[str, Any]) -> dict[str, Any]:
     body_keys = (
         'run_id',
+        'logical_run_id',
+        'run_status',
+        'run_lifecycle',
         'suite_id',
         'suite_name',
         'scenario_id',
@@ -812,6 +940,22 @@ def _stable_json_key(key: Any) -> dict[str, Any]:
 
 def _run_metadata_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {'metadata': _run_metadata(payload)}
+
+
+def _run_lifecycle_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: payload[key]
+        for key in (
+            'attempt',
+            'max_attempts',
+            'maxAttempts',
+            'retry_of_run_id',
+            'retryOfRunId',
+            'resume_from_run_id',
+            'resumeFromRunId',
+        )
+        if key in payload and payload[key] is not None
+    }
 
 
 def _string_from_metadata(metadata: dict[str, Any], *keys: str) -> str | None:
