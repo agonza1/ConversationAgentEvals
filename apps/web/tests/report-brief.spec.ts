@@ -140,6 +140,12 @@ test('benchmark runner shows suite simulation summary', async ({ page }) => {
         needs_review_count: 1,
         average_score: 78,
         verdict: 'needs_review',
+        vcon_export: {
+          source_format: 'benchmark_suite',
+          appended_analysis_type: 'agentic_benchmark_suite_eval',
+          dialog: [],
+          analysis: [{ type: 'agentic_benchmark_suite_eval', suite_run_id: 'suite-run-1' }],
+        },
         scenario_runs: [
           {
             suite_id: 'call-center-voice-ai',
@@ -216,7 +222,7 @@ test('benchmark runner shows suite simulation summary', async ({ page }) => {
   await page.getByRole('button', { name: 'Export suite vCon bundle' }).click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe('agentbench-call-center-voice-ai-suite-run-1-vcon-bundle.json');
-  await expect(page.getByText('Exported 2 vCon-compatible suite records.')).toBeVisible();
+  await expect(page.getByText('Exported 3 vCon-compatible suite records.')).toBeVisible();
 
   await page.getByRole('button', { name: 'Copy suite brief' }).click();
   await expect(page.getByText('Copied suite brief.')).toBeVisible();
@@ -264,6 +270,25 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
     });
   });
 
+  await page.route('**/api/benchmarks/suite-runs/suite-history-1/vcon-bundle?*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'suite-history-1',
+        suite_run_id: 'suite-history-1',
+        suite_id: 'call-center-voice-ai',
+        suite_name: 'Call Center Voice AI',
+        user_id: 'demo-user',
+        project_id: 'qa-project',
+        filename: 'agentbench-call-center-voice-ai-suite-history-1-vcon-bundle.json',
+        record_count: 3,
+        records: [{ source_format: 'benchmark_suite' }, { source_format: 'transcript' }, { source_format: 'transcript' }],
+        exported_at: '2026-05-29T15:00:00+00:00',
+      }),
+    });
+  });
+
   await page.goto('/benchmarks');
 
   const suiteHistory = page.getByLabel('Suite run history');
@@ -273,4 +298,10 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   await expect(suiteHistory.getByText('completed')).toBeVisible();
   await expect(suiteHistory.getByText('4 dialog turns, 1 analysis records')).toBeVisible();
   await expect(suiteHistory.getByText(/billing-escalation: needs_review \/ 73/)).toBeVisible();
+
+  const downloadPromise = page.waitForEvent('download');
+  await suiteHistory.getByRole('button', { name: 'Export retained vCon bundle' }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe('agentbench-call-center-voice-ai-suite-history-1-vcon-bundle.json');
+  await expect(page.getByText('Exported 3 retained suite vCon records')).toBeVisible();
 });
