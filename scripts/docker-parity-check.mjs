@@ -44,12 +44,15 @@ function requireNotIncludes(label, source, unexpected) {
 }
 
 for (const [name, dockerfile] of [
+  ['seed', 'apps/api/Dockerfile'],
   ['api', 'apps/api/Dockerfile'],
+  ['worker', 'apps/api/Dockerfile'],
   ['pipecat', 'apps/pipecat/Dockerfile'],
   ['web', 'apps/web/Dockerfile'],
 ]) {
   const block = serviceBlock(name);
-  requireIncludes(`${name} service`, block, `image: conversation-agent-evals-${name}:latest`);
+  const imageName = ['seed', 'worker'].includes(name) ? 'api' : name;
+  requireIncludes(`${name} service`, block, `image: conversation-agent-evals-${imageName}:latest`);
   requireIncludes(`${name} service`, block, 'build:');
   requireIncludes(`${name} service`, block, 'context: .');
   requireIncludes(`${name} service`, block, `dockerfile: ${dockerfile}`);
@@ -57,11 +60,36 @@ for (const [name, dockerfile] of [
   requireIncludes(`${name} service`, block, '- .env');
 }
 
+const db = serviceBlock('db');
+requireIncludes('db service', db, 'image: postgres:16-alpine');
+requireIncludes('db service', db, 'POSTGRES_DB: ${POSTGRES_DB:-conversation_agent_evals}');
+requireIncludes('db service', db, '"${POSTGRES_PORT:-54329}:5432"');
+requireIncludes('db service', db, 'postgres_data:/var/lib/postgresql/data');
+requireIncludes('db service', db, 'pg_isready');
+
+const seed = serviceBlock('seed');
+requireIncludes('seed service', seed, 'DATABASE_URL: postgresql://${POSTGRES_USER:-cae}:${POSTGRES_PASSWORD:-cae_local_password}@db:5432/${POSTGRES_DB:-conversation_agent_evals}');
+requireIncludes('seed service', seed, 'condition: service_healthy');
+requireIncludes('seed service', seed, 'command: ["python", "-m", "app.seed"]');
+requireIncludes('seed service', seed, 'restart: "no"');
+
 const api = serviceBlock('api');
 requireIncludes('api service', api, '"${API_PORT:-8025}:8000"');
+requireIncludes('api service', api, 'PORT: 8000');
+requireIncludes('api service', api, 'DATABASE_URL: postgresql://${POSTGRES_USER:-cae}:${POSTGRES_PASSWORD:-cae_local_password}@db:5432/${POSTGRES_DB:-conversation_agent_evals}');
 requireIncludes('api service', api, 'PIPECAT_SERVICE_URL: http://pipecat:8110');
+requireIncludes('api service', api, 'condition: service_completed_successfully');
 requireIncludes('api service', api, 'http://localhost:8000/health');
 requireNotIncludes('api service', api, './apps/api:/workspace/apps/api');
+requireNotIncludes('api service', api, './apps/api/sales_presenter.db:/workspace/apps/api/sales_presenter.db');
+
+const worker = serviceBlock('worker');
+requireIncludes('worker service', worker, 'DATABASE_URL: postgresql://${POSTGRES_USER:-cae}:${POSTGRES_PASSWORD:-cae_local_password}@db:5432/${POSTGRES_DB:-conversation_agent_evals}');
+requireIncludes('worker service', worker, 'WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-30}');
+requireIncludes('worker service', worker, 'command: ["python", "-m", "app.worker"]');
+requireIncludes('worker service', worker, 'condition: service_completed_successfully');
+requireIncludes('worker service', worker, 'conversation-agent-evals-worker-health');
+requireNotIncludes('worker service', worker, './apps/api:/workspace/apps/api');
 
 const pipecat = serviceBlock('pipecat');
 requireIncludes('pipecat service', pipecat, '"${PIPECAT_PORT:-8110}:8110"');
@@ -78,6 +106,8 @@ requireIncludes('web service', web, 'NEXT_PUBLIC_API_BASE_URL: http://localhost:
 requireIncludes('web service', web, 'NEXT_PUBLIC_PIPECAT_SERVICE_URL: http://localhost:${PIPECAT_PORT:-8110}');
 requireIncludes('web service', web, 'APP_ENV: ${APP_ENV:-development}');
 requireIncludes('web service', web, 'PRODUCTION: ${PRODUCTION:-false}');
+requireIncludes('web service', web, 'worker:');
+requireIncludes('web service', web, 'condition: service_healthy');
 requireNotIncludes('web service', web, './apps/web:/app/apps/web');
 
 for (const envName of [
@@ -88,15 +118,25 @@ for (const envName of [
   'PIPECAT_SERVICE_URL=http://localhost:8110',
   'NEXT_PUBLIC_API_BASE_URL=http://localhost:8025',
   'NEXT_PUBLIC_PIPECAT_SERVICE_URL=http://localhost:8110',
+  'POSTGRES_DB=conversation_agent_evals',
+  'POSTGRES_USER=cae',
+  'POSTGRES_PASSWORD=cae_local_password',
+  'POSTGRES_PORT=54329',
+  'DATABASE_URL=postgresql://cae:cae_local_password@localhost:54329/conversation_agent_evals',
+  'WORKER_POLL_INTERVAL_SECONDS=30',
 ]) {
   requireIncludes('.env.example', envExample, envName);
 }
+
+requireIncludes('api Dockerfile', readFileSync(join(root, 'apps/api/Dockerfile'), 'utf8'), 'ENV PYTHONPATH=/workspace/apps/api');
 
 requireIncludes('web Dockerfile', webDockerfile, 'RUN cd /app/apps/web && npm run build');
 requireIncludes('web Dockerfile', webDockerfile, 'ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:8025');
 requireIncludes('web Dockerfile', webDockerfile, 'ENV NEXT_PUBLIC_API_BASE_URL=$NEXT_PUBLIC_API_BASE_URL');
 requireIncludes('web Dockerfile', webDockerfile, 'npm run start -- --hostname 0.0.0.0 --port 3000');
 requireNotIncludes('web Dockerfile', webDockerfile, 'rm -rf .next && npm run build && npm run start');
+
+requireIncludes('compose volumes', compose, 'postgres_data:');
 
 if (failures.length > 0) {
   console.error('Docker parity check failed:');

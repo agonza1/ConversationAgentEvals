@@ -14,6 +14,7 @@ COPY apps/pipecat /workspace/apps/pipecat
 RUN mkdir -p /workspace/storage
 
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/workspace/apps/api
 ENV APP_ENV=development
 
 EXPOSE 8000
