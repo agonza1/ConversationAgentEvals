@@ -338,6 +338,10 @@ export interface BenchmarkRunPayload {
   target_agent_url?: string;
   transcript?: string;
   conversation?: string | Record<string, unknown> | unknown[];
+  call?: string | Record<string, unknown> | unknown[];
+  group_call?: string | Record<string, unknown> | unknown[];
+  groupCall?: string | Record<string, unknown> | unknown[];
+  vcon?: Record<string, unknown>;
   action_trace?: string | Array<Record<string, unknown>> | Record<string, unknown>;
   final_state?: Record<string, unknown> | string | unknown[] | null;
   agent_version?: string;

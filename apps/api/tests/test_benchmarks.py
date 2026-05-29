@@ -6,12 +6,14 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.services.benchmark_service import get_suite, list_suites, run_scenario, run_suite, simulate_scenario, simulate_suite
 from app.services.benchmark_run_store import reset_benchmark_run_records_for_tests
+from app.services.benchmark_suite_run_store import reset_benchmark_suite_run_records_for_tests
 
 client = TestClient(app)
 
 
 def setup_function():
     reset_benchmark_run_records_for_tests()
+    reset_benchmark_suite_run_records_for_tests()
 
 
 EXPECTED_SUITE_IDS = {
@@ -167,6 +169,33 @@ def test_run_endpoint_persists_lifecycle_report_history():
     assert wrong_owner.status_code == 404
 
 
+def test_run_endpoint_accepts_vcon_record_evidence():
+    response = client.post(
+        '/api/benchmarks/run',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'qa-project',
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'angry-outage-escalation',
+            'vcon': {
+                'vcon': '0.0.1',
+                'parties': [{'name': 'Caller'}, {'name': 'Agent'}],
+                'dialog': [
+                    {'party': 0, 'body': 'This outage is frustrating and I want a human.'},
+                    {'party': 1, 'body': 'I am sorry. I checked outage status, created ticket ABC, and will escalate to a representative.'},
+                ],
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    run = response.json()
+    assert run['verdict'] == 'pass'
+    assert run['evidence_audit_summary']['input_artifact_types'] == ['vcon']
+    assert run['vcon_export']['source_format'] == 'vcon'
+    assert run['vcon_export']['analysis'][-1]['type'] == 'agentic_benchmark_eval'
+
+
 def test_simulate_endpoint_upserts_stable_run_record():
     payload = {
         'user_id': 'demo-user',
@@ -190,6 +219,63 @@ def test_simulate_endpoint_upserts_stable_run_record():
     assert len(records) == 1
     assert records[0]['status'] == 'completed'
     assert records[0]['report']['run_lifecycle']['status'] == 'completed'
+
+
+def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports():
+    payload = {
+        'user_id': 'demo-user',
+        'project_id': 'qa-project',
+        'suite_id': 'call-center-voice-ai',
+        'agent_profile': 'deterministic qa agent',
+        'metadata': {'retention_days': '45'},
+    }
+
+    first = client.post('/api/benchmarks/suites/call-center-voice-ai/simulate', json=payload)
+    second = client.post('/api/benchmarks/suites/call-center-voice-ai/simulate', json=payload)
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    simulation = first.json()
+    assert simulation['suite_run_id'] == second.json()['suite_run_id']
+
+    list_response = client.get(
+        '/api/benchmarks/suite-runs',
+        params={'user_id': 'demo-user', 'project_id': 'qa-project', 'suite_id': 'call-center-voice-ai'},
+    )
+
+    assert list_response.status_code == 200
+    suite_records = list_response.json()
+    assert len(suite_records) == 1
+    suite_record = suite_records[0]
+    assert suite_record['suite_run_id'] == simulation['suite_run_id']
+    assert suite_record['status'] == 'completed'
+    assert suite_record['suite_report']['verdict'] == simulation['verdict']
+    assert suite_record['scenario_count'] == simulation['scenario_count']
+    assert suite_record['retention']['retention_days'] == 45
+    assert suite_record['suite_report']['vcon_export']['analysis'][0]['type'] == 'agentic_benchmark_suite_eval'
+
+    detail_response = client.get(
+        f"/api/benchmarks/suite-runs/{simulation['suite_run_id']}",
+        params={'user_id': 'demo-user'},
+    )
+
+    assert detail_response.status_code == 200
+    assert detail_response.json()['suite_report']['suite_id'] == 'call-center-voice-ai'
+
+    child_response = client.get(
+        '/api/benchmarks/runs',
+        params={'user_id': 'demo-user', 'project_id': 'qa-project', 'suite_id': 'call-center-voice-ai'},
+    )
+
+    assert child_response.status_code == 200
+    child_records = child_response.json()
+    assert len(child_records) == simulation['scenario_count']
+    assert {record['run_id'] for record in child_records} == {
+        run['benchmark_report']['run_id'] for run in simulation['scenario_runs']
+    }
+
+    wrong_owner = client.get(f"/api/benchmarks/suite-runs/{simulation['suite_run_id']}", params={'user_id': 'other-user'})
+    assert wrong_owner.status_code == 404
 
 
 def test_scenarios_endpoint_rejects_unknown_suite():

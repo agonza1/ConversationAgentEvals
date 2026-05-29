@@ -84,6 +84,8 @@ interface RunMetadata {
   prompt_version?: string;
   model_name?: string;
   notes?: string;
+  user_id?: string;
+  project_id?: string;
 }
 
 interface EvidenceAuditSummary {
@@ -408,10 +410,13 @@ async function runBenchmark(payload: {
   action_trace: string | JsonRecord | unknown[];
   final_state: string | JsonRecord | unknown[];
   group_call?: string | JsonRecord | unknown[];
+  vcon?: JsonRecord;
   agent_version?: string;
   prompt_version?: string;
   model_name?: string;
   notes?: string;
+  user_id?: string;
+  project_id?: string;
 }) {
   return handleJson<BenchmarkReport>(
     await fetch(`${getApiBase()}/api/benchmarks/run`, {
@@ -431,6 +436,8 @@ async function simulateBenchmark(payload: {
   prompt_version?: string;
   model_name?: string;
   notes?: string;
+  user_id?: string;
+  project_id?: string;
 }) {
   return handleJson<BenchmarkSimulationResponse>(
     await fetch(`${getApiBase()}/api/benchmarks/simulate`, {
@@ -449,6 +456,8 @@ async function simulateBenchmarkSuite(payload: {
   prompt_version?: string;
   model_name?: string;
   notes?: string;
+  user_id?: string;
+  project_id?: string;
 }) {
   return handleJson<BenchmarkSuiteSimulationResponse>(
     await fetch(`${getApiBase()}/api/benchmarks/suites/${encodeURIComponent(payload.suite_id)}/simulate`, {
@@ -572,6 +581,8 @@ function metadataEntries(metadata?: RunMetadata) {
     prompt_version: 'Prompt',
     model_name: 'Model',
     notes: 'Notes',
+    user_id: 'User',
+    project_id: 'Project',
   };
 
   return (Object.keys(labels) as Array<keyof RunMetadata>)
@@ -745,6 +756,7 @@ export function BenchmarkRunner() {
   const [actionTrace, setActionTrace] = useState('');
   const [finalState, setFinalState] = useState('');
   const [groupCall, setGroupCall] = useState('');
+  const [vconEvidence, setVconEvidence] = useState('');
   const [agentProfile, setAgentProfile] = useState('mock text agent');
   const [agentVersion, setAgentVersion] = useState('');
   const [promptVersion, setPromptVersion] = useState('');
@@ -1036,14 +1048,17 @@ export function BenchmarkRunner() {
         prompt_version: promptVersion,
         model_name: modelName,
         notes: runNotes,
+        user_id: userId || undefined,
+        project_id: projectId || undefined,
       });
       const nextReport = await runBenchmark({
         suite_id: selectedSuite.id,
         scenario_id: selectedScenario.id,
         transcript,
-        action_trace: parseMaybeJson(actionTrace),
         final_state: parseMaybeJson(finalState),
+        action_trace: parseMaybeJson(actionTrace),
         group_call: groupCall.trim() ? parseMaybeJson(groupCall) : undefined,
+        vcon: vconEvidence.trim() ? parseMaybeJson(vconEvidence) as JsonRecord : undefined,
         ...runMetadata,
       });
       setReport(nextReport);
@@ -1069,6 +1084,8 @@ export function BenchmarkRunner() {
         prompt_version: promptVersion,
         model_name: modelName,
         notes: runNotes,
+        user_id: userId || undefined,
+        project_id: projectId || undefined,
       });
       const simulation = await simulateBenchmark({
         suite_id: selectedSuite.id,
@@ -1104,6 +1121,8 @@ export function BenchmarkRunner() {
         prompt_version: promptVersion,
         model_name: modelName,
         notes: runNotes,
+        user_id: userId || undefined,
+        project_id: projectId || undefined,
       });
       const simulation = await simulateBenchmarkSuite({
         suite_id: selectedSuite.id,
@@ -1140,7 +1159,7 @@ export function BenchmarkRunner() {
   const judgeRule = productConfig?.usage_rules.find((rule) => rule.id === 'llm_judge');
   const voiceRule = productConfig?.usage_rules.find((rule) => rule.id === 'voice_webrtc_minute');
   const hasRunnableEvidence = Boolean(
-    transcript.trim() || actionTrace.trim() || finalState.trim() || groupCall.trim(),
+    transcript.trim() || actionTrace.trim() || finalState.trim() || groupCall.trim() || vconEvidence.trim(),
   );
   const hasSavedCurrentScenario = Boolean(
     selectedScenario?.id && savedRuns.some((run) => run.report.scenario_id === selectedScenario.id),
@@ -1429,6 +1448,17 @@ export function BenchmarkRunner() {
                 onChange={(event) => setGroupCall(event.target.value)}
                 rows={7}
                 placeholder='{"messages":[{"speaker":"Patient","text":"I need a refill"}],"decisions":["Route to clinician review"],"commitments":["Send update by 5 PM"],"follow_up_actions":["Confirm pharmacy"]}'
+                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }}
+              />
+            </label>
+
+            <label style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontWeight: 700 }}>vCon record</span>
+              <textarea
+                value={vconEvidence}
+                onChange={(event) => setVconEvidence(event.target.value)}
+                rows={7}
+                placeholder='{"vcon":"0.0.1","parties":[{"name":"Caller"},{"name":"Agent"}],"dialog":[{"party":0,"body":"I need a human."},{"party":1,"body":"I created a ticket and escalated you."}]}'
                 style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }}
               />
             </label>

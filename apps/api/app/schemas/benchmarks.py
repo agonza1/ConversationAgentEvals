@@ -147,6 +147,8 @@ class BenchmarkSuiteRunRequest(BaseModel):
     modelName: str | None = None
     notes: str | None = None
     metadata: dict[str, Any] | None = None
+    user_id: str | None = None
+    project_id: str | None = None
 
 
 class BenchmarkSimulationResponse(BaseModel):
