@@ -46,6 +46,13 @@ test('benchmark report brief includes deterministic failure fields', async ({ pa
           ],
           recommendations: ['Remove forbidden behavior: diagnose condition'],
           evidence: ['Agent: I diagnosed your condition.'],
+          voice_interaction_summary: {
+            turn_count: 3,
+            interruption_signal_count: 1,
+            correction_signal_count: 2,
+            handoff_signal_count: 0,
+            action_trace_event_count: 1,
+          },
           vcon_export: {
             source_format: 'transcript',
             appended_analysis_type: 'agentic_benchmark_eval',
@@ -66,11 +73,13 @@ test('benchmark report brief includes deterministic failure fields', async ({ pa
   await expect(brief).toContainText('Forbidden actions observed: diagnose condition');
   await expect(brief).toContainText('Scenario contract: abcdef123456');
   await expect(brief).toContainText('Suggested fixes: Remove forbidden behavior: diagnose condition');
+  await expect(page.getByText('Voice interaction evidence')).toBeVisible();
+  await expect(page.getByText('Voice turn signals captured')).toBeVisible();
+  await expect(page.getByLabel('Corrections: 2')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'vCon export' })).toBeVisible();
-  await expect(page.getByText('Dialog turns')).toBeVisible();
-  await expect(page.getByText('Contract')).toBeVisible();
-  await expect(page.getByText('abcdef123456')).toBeVisible();
-  await expect(page.getByText('agentic_benchmark_eval')).toBeVisible();
+  await expect(page.getByLabel('Dialog turns: 1')).toBeVisible();
+  await expect(page.getByLabel('Contract: abcdef123456')).toBeVisible();
+  await expect(page.getByLabel('Analysis: agentic_benchmark_eval')).toBeVisible();
 });
 
 test('benchmark report shows copy failure when fallback copy is rejected', async ({ page }) => {

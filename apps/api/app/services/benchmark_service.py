@@ -72,6 +72,31 @@ _SUITES: tuple[BenchmarkSuite, ...] = (
                     {'name': 'human_escalation', 'weight': 30, 'keywords': ['human', 'agent', 'representative', 'escalate']},
                 ],
             },
+            {
+                'id': 'interruption-correction-handling',
+                'title': 'Interruption and Correction Handling',
+                'persona': 'A caller who starts booking a morning appointment, interrupts the agent, and corrects the request to an afternoon reschedule.',
+                'goal': 'Let the caller interrupt, acknowledge the correction, update the appointment details, and confirm the corrected booking without losing context.',
+                'required_actions': [
+                    'acknowledge caller interruption',
+                    'restate corrected intent',
+                    'update appointment details',
+                    'confirm corrected booking',
+                    'summarize next steps',
+                ],
+                'forbidden_actions': [
+                    'talk over caller interruption',
+                    'ignore caller correction',
+                    'book original appointment after correction',
+                ],
+                'expected_final_state': 'The corrected afternoon appointment is confirmed, the original morning request is not booked, and the caller knows the next steps.',
+                'rubric': [
+                    {'name': 'interruption_handling', 'weight': 25, 'keywords': ['interrupt', 'pause', 'sorry', 'go ahead']},
+                    {'name': 'correction_capture', 'weight': 25, 'keywords': ['correction', 'corrected', 'afternoon', 'instead']},
+                    {'name': 'booking_update', 'weight': 25, 'keywords': ['updated', 'rescheduled', 'appointment', 'booking']},
+                    {'name': 'next_steps', 'weight': 25, 'keywords': ['confirmation', 'next steps', 'email', 'text']},
+                ],
+            },
         ],
     },
     {
@@ -348,6 +373,7 @@ def run_scenario(request: Any) -> dict[str, Any]:
         'expected_final_state': scenario['expected_final_state'],
         'transcript_preview': transcript[:700],
         'group_call_summary': _group_call_artifact_summary(payload),
+        'voice_interaction_summary': _voice_interaction_summary(payload, transcript),
         'recommendations': _recommendations(completed_actions, forbidden_hits, scenario),
     }
     if agentic_evaluation:
@@ -520,6 +546,35 @@ def _group_call_artifact_summary(payload: dict[str, Any]) -> dict[str, Any] | No
     }
 
 
+
+def _voice_interaction_summary(payload: dict[str, Any], transcript: str) -> dict[str, Any]:
+    normalized = _normalize(transcript)
+    interruption_phrases = (
+        'interrupt',
+        'sorry to interrupt',
+        'let me stop you',
+        'hold on',
+        'go ahead',
+        'pause',
+    )
+    correction_phrases = (
+        'actually',
+        'correction',
+        'corrected',
+        'instead',
+        'i meant',
+        'not the',
+    )
+    handoff_phrases = ('human', 'representative', 'escalate', 'transfer')
+
+    return {
+        'turn_count': len(_iter_transcript_turns(transcript)),
+        'interruption_signal_count': sum(1 for phrase in interruption_phrases if _contains(normalized, phrase)),
+        'correction_signal_count': sum(1 for phrase in correction_phrases if _contains(normalized, phrase)),
+        'handoff_signal_count': sum(1 for phrase in handoff_phrases if _contains(normalized, phrase)),
+        'action_trace_event_count': len(_action_trace_events(payload.get('action_trace'))),
+    }
+
 def _scenario_contract(scenario: BenchmarkScenario) -> dict[str, Any]:
     return {
         'id': scenario['id'],
@@ -637,6 +692,7 @@ def _vcon_analysis(report: dict[str, Any]) -> dict[str, Any]:
         'forbidden_actions_observed',
         'workflow_order_issues',
         'group_call_summary',
+        'voice_interaction_summary',
         'failure_categories',
         'suggested_fixes',
         'recommendations',
@@ -1074,6 +1130,9 @@ def _matches_forbidden_action(normalized_transcript: str, action: str) -> bool:
         'expose full bank account number': ['full bank account number', 'entire bank account'],
         'guarantee same-day settlement': ['guarantee same-day settlement', 'same-day settlement guaranteed'],
         'advise bypassing compliance checks': ['bypass compliance', 'skip compliance'],
+        'talk over caller interruption': ['talk over caller', 'talked over caller', 'kept talking over'],
+        'ignore caller correction': ['ignore caller correction', 'ignored the correction', 'without using your correction'],
+        'book original appointment after correction': ['booked the original appointment', 'morning appointment is booked'],
     }
     return any(_contains(normalized_transcript, phrase) for phrase in checks.get(action, [action]))
 

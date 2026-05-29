@@ -56,6 +56,7 @@ interface BenchmarkReport {
   run_metadata?: RunMetadata;
   evidence_audit_summary?: EvidenceAuditSummary;
   group_call_summary?: GroupCallSummary | null;
+  voice_interaction_summary?: VoiceInteractionSummary | null;
   vcon_analysis?: JsonRecord;
   vcon_export?: JsonRecord;
 }
@@ -68,6 +69,14 @@ interface GroupCallSummary {
   commitment_count?: number;
   follow_up_count?: number;
   action_item_count?: number;
+}
+
+interface VoiceInteractionSummary {
+  turn_count?: number;
+  interruption_signal_count?: number;
+  correction_signal_count?: number;
+  handoff_signal_count?: number;
+  action_trace_event_count?: number;
 }
 
 interface RunMetadata {
@@ -1335,6 +1344,7 @@ export function BenchmarkRunner() {
 
           <RunMetadataPanel metadata={report.run_metadata} />
           <EvidenceAuditPanel summary={report.evidence_audit_summary} />
+          <VoiceInteractionPanel summary={report.voice_interaction_summary} />
           <GroupCallPanel summary={report.group_call_summary} />
 
           {report.vcon_export ? (
@@ -1605,6 +1615,29 @@ function GroupCallPanel({ summary }: { summary?: GroupCallSummary | null }) {
   );
 }
 
+function VoiceInteractionPanel({ summary }: { summary?: VoiceInteractionSummary | null }) {
+  if (!summary) return null;
+
+  const signalCount = (summary.interruption_signal_count ?? 0) + (summary.correction_signal_count ?? 0);
+  const status = signalCount > 0 ? 'Voice turn signals captured' : 'No interruption or correction signals captured';
+
+  return (
+    <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14, display: 'grid', gap: 12 }}>
+      <div>
+        <p style={{ margin: '0 0 4px', color: 'var(--muted)', fontSize: 13, fontWeight: 800 }}>Voice interaction evidence</p>
+        <p style={{ margin: 0, fontWeight: 850 }}>{status}</p>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+        <AuditFact label="Turns" value={String(summary.turn_count ?? 0)} />
+        <AuditFact label="Interruptions" value={String(summary.interruption_signal_count ?? 0)} />
+        <AuditFact label="Corrections" value={String(summary.correction_signal_count ?? 0)} />
+        <AuditFact label="Handoffs" value={String(summary.handoff_signal_count ?? 0)} />
+        <AuditFact label="Action events" value={String(summary.action_trace_event_count ?? 0)} />
+      </div>
+    </div>
+  );
+}
+
 function EvidenceAuditPanel({ summary }: { summary?: EvidenceAuditSummary }) {
   const artifactTypes = summary?.input_artifact_types ?? [];
   const metadataLabels = summary?.metadata_labels ?? [];
@@ -1656,7 +1689,10 @@ function EvidenceAuditPanel({ summary }: { summary?: EvidenceAuditSummary }) {
 
 function AuditFact({ label, value }: { label: string; value: string }) {
   return (
-    <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 10, background: 'var(--panel-alt)' }}>
+    <div
+      aria-label={`${label}: ${value}`}
+      style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 10, background: 'var(--panel-alt)' }}
+    >
       <p style={{ margin: '0 0 4px', color: 'var(--muted)', fontSize: 12, fontWeight: 800 }}>{label}</p>
       <p style={{ margin: 0, fontWeight: 800 }}>{value}</p>
     </div>

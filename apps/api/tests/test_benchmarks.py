@@ -27,6 +27,57 @@ def test_list_suites_returns_seeded_webrtc_ventures_catalog():
     assert all('goal' in scenario for suite in suites for scenario in suite['scenarios'])
 
 
+def test_call_center_catalog_includes_interruption_correction_scenario():
+    suite = get_suite('call-center-voice-ai')
+
+    assert suite is not None
+    scenario = next(item for item in suite['scenarios'] if item['id'] == 'interruption-correction-handling')
+    assert 'acknowledge caller interruption' in scenario['required_actions']
+    assert 'ignore caller correction' in scenario['forbidden_actions']
+
+    simulation = simulate_scenario(
+        {
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'interruption-correction-handling',
+            'agent_profile': 'correction-aware mock agent',
+        }
+    )
+
+    assert simulation['benchmark_report']['verdict'] == 'pass'
+    assert simulation['benchmark_report']['overall_score'] >= 75
+    assert simulation['final_state']['complete'] is True
+
+
+def test_run_scenario_summarizes_interruption_and_correction_signals():
+    result = run_scenario(
+        {
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'interruption-correction-handling',
+            'transcript': (
+                'Agent: I can book the morning appointment.\n'
+                'Customer: Sorry to interrupt, actually I meant afternoon instead.\n'
+                'Agent: Go ahead, I captured the correction and updated the appointment booking.\n'
+                'Agent: I will send a confirmation text with next steps.'
+            ),
+            'action_trace': [
+                {'action': 'acknowledge caller interruption', 'status': 'completed'},
+                {'action': 'restate corrected intent', 'status': 'completed'},
+                {'action': 'update appointment details', 'status': 'completed'},
+                {'action': 'confirm corrected booking', 'status': 'completed'},
+                {'action': 'summarize next steps', 'status': 'completed'},
+            ],
+            'final_state': {'complete': True, 'time': 'afternoon'},
+        }
+    )
+
+    summary = result['voice_interaction_summary']
+    assert summary['turn_count'] == 4
+    assert summary['interruption_signal_count'] >= 2
+    assert summary['correction_signal_count'] >= 3
+    assert summary['action_trace_event_count'] == 5
+    assert result['vcon_analysis']['body']['voice_interaction_summary'] == summary
+
+
 def test_get_suite_includes_full_scenario_contract_and_returns_copy():
     suite = get_suite('telehealth-agent')
 
