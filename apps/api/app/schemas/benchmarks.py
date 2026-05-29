@@ -137,8 +137,10 @@ class BenchmarkSuiteRunRequest(BaseModel):
 
     suite_id: str | None = None
     suiteId: str | None = None
-    scenario_evidence: dict[str, dict[str, Any]] = Field(default_factory=dict)
-    scenarioEvidence: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    scenario_evidence: dict[str, Any] = Field(default_factory=dict)
+    scenarioEvidence: dict[str, Any] = Field(default_factory=dict)
+    scenario_attempts: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    scenarioAttempts: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     agent_version: str | None = None
     agentVersion: str | None = None
     prompt_version: str | None = None
