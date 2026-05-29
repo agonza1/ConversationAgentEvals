@@ -614,6 +614,12 @@ function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: stri
   ].join('\n');
 }
 
+function onboardingStatusLabel(done: boolean, ready: boolean) {
+  if (done) return 'Done';
+  if (ready) return 'Ready';
+  return 'Next';
+}
+
 async function copyText(text: string) {
   if (navigator.clipboard?.writeText) {
     try {
@@ -947,6 +953,33 @@ export function BenchmarkRunner() {
   const hasRunnableEvidence = Boolean(
     transcript.trim() || actionTrace.trim() || finalState.trim() || groupCall.trim(),
   );
+  const hasSavedCurrentScenario = Boolean(
+    selectedScenario?.id && savedRuns.some((run) => run.report.scenario_id === selectedScenario.id),
+  );
+  const onboardingSteps = [
+    {
+      title: 'Pick a scenario',
+      detail: selectedScenario ? selectedScenario.title : 'Choose the benchmark suite and scenario to test.',
+      done: Boolean(selectedScenario),
+      ready: Boolean(selectedScenario),
+    },
+    {
+      title: 'Run evidence check',
+      detail: report ? `Latest verdict: ${verdict ?? 'complete'}${score !== undefined ? ` at ${score}` : ''}.` : 'Simulate the scenario or run the benchmark against pasted evidence.',
+      done: Boolean(report),
+      ready: hasRunnableEvidence && !isRunning && !isSimulating,
+    },
+    {
+      title: 'Save repeatable history',
+      detail: hasSavedCurrentScenario
+        ? `Focused history is tracking ${selectedScenario?.title ?? 'this scenario'}.`
+        : userId
+          ? 'Save the result to compare future prompt, model, and agent changes.'
+          : 'Sign up with the demo identity, then save the run for regression history.',
+      done: hasSavedCurrentScenario,
+      ready: Boolean(report && userId),
+    },
+  ];
 
   return (
     <section style={{ display: 'grid', gap: 20 }}>
@@ -992,6 +1025,28 @@ export function BenchmarkRunner() {
           </div>
         </section>
       ) : null}
+
+      <section className="first-run-panel" aria-label="First run checklist">
+        <div>
+          <p className="eyebrow">First run checklist</p>
+          <h2>Get from sample scenario to saved QA history.</h2>
+        </div>
+        <ol className="onboarding-steps">
+          {onboardingSteps.map((step, index) => {
+            const status = onboardingStatusLabel(step.done, step.ready);
+            return (
+              <li key={step.title} data-state={step.done ? 'done' : step.ready ? 'ready' : 'next'}>
+                <span aria-hidden="true">{index + 1}</span>
+                <div>
+                  <strong>{step.title}</strong>
+                  <p>{step.detail}</p>
+                </div>
+                <em aria-label={`${step.title}: ${status}`}>{status}</em>
+              </li>
+            );
+          })}
+        </ol>
+      </section>
 
       {pricing.length ? (
         <section className="pricing-grid" aria-label="Pricing and upgrade gates">
