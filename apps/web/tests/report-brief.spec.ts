@@ -201,10 +201,11 @@ test('benchmark runner shows suite simulation summary', async ({ page }) => {
   await page.goto('/benchmarks');
   await page.getByRole('button', { name: 'Simulate suite' }).click();
 
-  await expect(page.getByLabel('Suite simulation summary')).toBeVisible();
-  await expect(page.getByText('Call Center Voice AI')).toBeVisible();
-  await expect(page.getByText('Membership renewal save')).toBeVisible();
-  await expect(page.getByText('Billing escalation')).toBeVisible();
+  const suiteSummary = page.getByLabel('Suite simulation summary');
+  await expect(suiteSummary).toBeVisible();
+  await expect(suiteSummary.getByRole('heading', { name: 'Call Center Voice AI' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Membership renewal save pass/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Billing escalation needs_review/ })).toBeVisible();
 
   const suiteBrief = page.getByLabel('Suite brief');
   await expect(suiteBrief).toContainText('Suite: Call Center Voice AI');
