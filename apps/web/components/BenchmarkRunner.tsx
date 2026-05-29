@@ -284,6 +284,21 @@ interface BenchmarkSuiteScenarioSummary {
   failure_categories?: string[];
 }
 
+interface SuiteReliabilityMetrics {
+  framework?: string;
+  scenario_count?: number;
+  attempt_count?: number;
+  pass_at_1?: number;
+  pass_at_k?: number;
+  pass_all_k?: number;
+  accuracy_score?: number;
+  experience_signal_coverage?: number;
+  average_turn_count?: number;
+  interruption_signal_count?: number;
+  correction_signal_count?: number;
+  handoff_signal_count?: number;
+}
+
 interface BenchmarkSuiteRunRecord {
   suite_run_id: string;
   suite_id: string;
@@ -295,8 +310,9 @@ interface BenchmarkSuiteRunRecord {
   created_at?: string | null;
   updated_at?: string | null;
   completed_at?: string | null;
-  suite_report?: { suite_name?: string; verdict?: string; run_metadata?: RunMetadata };
+  suite_report?: { suite_name?: string; verdict?: string; run_metadata?: RunMetadata; reliability_metrics?: SuiteReliabilityMetrics };
   run_lifecycle?: { status?: string; terminal?: boolean; transitions?: Array<{ to?: string; at?: string; reason?: string }> };
+  reliability_metrics?: SuiteReliabilityMetrics;
   retention?: { retained_until?: string | null; retention_days?: number; policy?: string };
   artifacts?: {
     scenario_summaries?: BenchmarkSuiteScenarioSummary[];
@@ -315,6 +331,7 @@ interface BenchmarkSuiteSimulationResponse {
   average_score: number;
   verdict: string;
   run_metadata?: RunMetadata;
+  reliability_metrics?: SuiteReliabilityMetrics;
   scenario_runs: BenchmarkSimulationResponse[];
   vcon_export?: JsonRecord;
 }
@@ -503,6 +520,26 @@ async function simulateBenchmarkSuite(payload: {
 }) {
   return handleJson<BenchmarkSuiteSimulationResponse>(
     await fetch(`${getApiBase()}/api/benchmarks/suites/${encodeURIComponent(payload.suite_id)}/simulate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+async function enqueueBenchmarkSuiteSimulation(payload: {
+  suite_id: string;
+  agent_profile?: string;
+  include_failure?: boolean;
+  agent_version?: string;
+  prompt_version?: string;
+  model_name?: string;
+  notes?: string;
+  user_id?: string;
+  project_id?: string;
+}) {
+  return handleJson<BenchmarkSuiteRunRecord>(
+    await fetch(`${getApiBase()}/api/benchmarks/suites/${encodeURIComponent(payload.suite_id)}/simulate-async`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -719,6 +756,15 @@ function suiteRunVconSummary(run: BenchmarkSuiteRunRecord) {
   return `${summary.dialog_turns ?? 0} dialog turns, ${summary.analysis_count ?? 0} analysis records (${summary.source_format ?? 'suite'}).`;
 }
 
+function suiteReliabilityMetrics(run: BenchmarkSuiteRunRecord) {
+  return run.reliability_metrics ?? run.suite_report?.reliability_metrics ?? {};
+}
+
+function formatMetricPercent(value?: number) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return 'n/a';
+  return `${Math.round(value * 100)}%`;
+}
+
 function formatAuditTimestamp(value?: string) {
   if (!value) return 'Not captured';
   const date = new Date(value);
@@ -863,6 +909,7 @@ export function BenchmarkRunner() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRunning, setIsRunning] = useState(false);
   const [isSimulating, setIsSimulating] = useState(false);
+  const [isEnqueueingSuite, setIsEnqueueingSuite] = useState(false);
 
   const selectedSuite = useMemo(
     () => suites.find((suite) => suite.id === selectedSuiteId) ?? suites[0] ?? null,
@@ -971,6 +1018,20 @@ export function BenchmarkRunner() {
     setCopyMessage(null);
     setRunError(null);
   }, [selectedScenario]);
+
+  useEffect(() => {
+    if (!userId || !projectId || !selectedSuite?.id) return;
+    const hasActiveSuiteRun = suiteRuns.some((run) => run.status === 'queued' || run.status === 'running');
+    if (!hasActiveSuiteRun) return;
+
+    const interval = window.setInterval(() => {
+      listBenchmarkSuiteRuns(userId, projectId, selectedSuite.id)
+        .then(setSuiteRuns)
+        .catch(() => undefined);
+    }, 4000);
+
+    return () => window.clearInterval(interval);
+  }, [projectId, selectedSuite?.id, suiteRuns, userId]);
 
   function signInDemo() {
     const nextUser = `demo-user-${Math.random().toString(36).slice(2, 8)}`;
@@ -1252,6 +1313,41 @@ export function BenchmarkRunner() {
       setRunError(err instanceof Error ? err.message : 'Suite simulation failed');
     } finally {
       setIsSimulating(false);
+    }
+  }
+
+  async function onEnqueueSuiteSimulation() {
+    if (!selectedSuite) return;
+    if (!userId) {
+      setSaveMessage('Sign up first to queue retained suite runs.');
+      return;
+    }
+
+    setIsEnqueueingSuite(true);
+    setRunError(null);
+    setCopyMessage(null);
+
+    try {
+      const runMetadata = cleanRunMetadata({
+        agent_version: agentVersion,
+        prompt_version: promptVersion,
+        model_name: modelName,
+        notes: runNotes,
+        user_id: userId,
+        project_id: projectId || undefined,
+      });
+      const queued = await enqueueBenchmarkSuiteSimulation({
+        suite_id: selectedSuite.id,
+        agent_profile: agentProfile,
+        include_failure: includeFailure,
+        ...runMetadata,
+      });
+      setSuiteRuns((current) => [queued, ...current.filter((run) => run.suite_run_id !== queued.suite_run_id)]);
+      setSaveMessage(`Queued suite run ${queued.suite_run_id} for ${projectId}.`);
+    } catch (err) {
+      setRunError(err instanceof Error ? err.message : 'Could not queue suite simulation.');
+    } finally {
+      setIsEnqueueingSuite(false);
     }
   }
 
@@ -1591,7 +1687,7 @@ export function BenchmarkRunner() {
           </button>
           <button
             type="button"
-            disabled={isSimulating || isRunning || !selectedSuite?.scenarios.length}
+            disabled={isSimulating || isRunning || isEnqueueingSuite || !selectedSuite?.scenarios.length}
             onClick={onSimulateSuite}
             style={{
               border: '1px solid var(--border)',
@@ -1600,14 +1696,30 @@ export function BenchmarkRunner() {
               color: 'var(--text)',
               padding: '12px 18px',
               fontWeight: 800,
-              opacity: isSimulating || isRunning || !selectedSuite?.scenarios.length ? 0.65 : 1,
+              opacity: isSimulating || isRunning || isEnqueueingSuite || !selectedSuite?.scenarios.length ? 0.65 : 1,
             }}
           >
             {isSimulating ? 'Simulating suite...' : 'Simulate suite'}
           </button>
           <button
+            type="button"
+            disabled={isSimulating || isRunning || isEnqueueingSuite || !selectedSuite?.scenarios.length}
+            onClick={onEnqueueSuiteSimulation}
+            style={{
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              background: 'white',
+              color: 'var(--text)',
+              padding: '12px 18px',
+              fontWeight: 800,
+              opacity: isSimulating || isRunning || isEnqueueingSuite || !selectedSuite?.scenarios.length ? 0.65 : 1,
+            }}
+          >
+            {isEnqueueingSuite ? 'Queueing suite...' : 'Queue suite run'}
+          </button>
+          <button
             type="submit"
-            disabled={isRunning || isSimulating || !selectedScenario || !hasRunnableEvidence}
+            disabled={isRunning || isSimulating || isEnqueueingSuite || !selectedScenario || !hasRunnableEvidence}
             style={{
               border: 0,
               borderRadius: 8,
@@ -1615,7 +1727,7 @@ export function BenchmarkRunner() {
               color: 'white',
               padding: '12px 18px',
               fontWeight: 800,
-              opacity: isRunning || isSimulating || !selectedScenario || !hasRunnableEvidence ? 0.65 : 1,
+              opacity: isRunning || isSimulating || isEnqueueingSuite || !selectedScenario || !hasRunnableEvidence ? 0.65 : 1,
             }}
           >
             {isRunning ? 'Running benchmark...' : 'Run benchmark'}
@@ -2066,6 +2178,7 @@ export function BenchmarkRunner() {
             <div style={{ display: 'grid', gap: 10 }}>
               {suiteRuns.slice(0, 4).map((run) => {
                 const scenarioSummaries = run.artifacts?.scenario_summaries ?? [];
+                const reliability = suiteReliabilityMetrics(run);
                 return (
                   <article
                     key={run.suite_run_id}
@@ -2082,6 +2195,9 @@ export function BenchmarkRunner() {
                       <AuditFact label="Passing" value={String(run.pass_count)} />
                       <AuditFact label="Review" value={String(run.needs_review_count)} />
                       <AuditFact label="Average" value={String(run.average_score ?? 'n/a')} />
+                      <AuditFact label="Pass@1" value={formatMetricPercent(reliability.pass_at_1)} />
+                      <AuditFact label="Pass@k" value={formatMetricPercent(reliability.pass_at_k)} />
+                      <AuditFact label="Pass^k" value={formatMetricPercent(reliability.pass_all_k)} />
                     </div>
                     <p style={{ margin: 0, color: 'var(--muted)' }}>
                       Retained until {formatHistoryDate(run.retention?.retained_until)}. Updated {formatHistoryDate(run.updated_at)}.
@@ -2089,6 +2205,11 @@ export function BenchmarkRunner() {
                     <p style={{ margin: 0, color: run.artifacts?.vcon_export?.available ? 'var(--success-text)' : 'var(--muted)' }}>
                       {suiteRunVconSummary(run)}
                     </p>
+                    {reliability.framework ? (
+                      <p style={{ margin: 0, color: 'var(--muted)' }}>
+                        EVA-style reliability: {formatMetricPercent(reliability.accuracy_score)} accuracy, {formatMetricPercent(reliability.experience_signal_coverage)} experience coverage, {reliability.average_turn_count ?? 0} avg turns.
+                      </p>
+                    ) : null}
                     <div>
                       <button
                         type="button"

@@ -569,6 +569,7 @@ def run_suite(request: Any) -> dict[str, Any]:
     )[:16]
 
     verdict = 'pass' if scenario_reports and len(passing_reports) == len(scenario_reports) else 'needs_review'
+    reliability_metrics = _suite_reliability_metrics(scenario_reports)
 
     return {
         'suite_run_id': suite_run_id,
@@ -581,6 +582,7 @@ def run_suite(request: Any) -> dict[str, Any]:
         'needs_review_count': len(scenario_reports) - len(passing_reports),
         'average_score': average_score,
         'verdict': verdict,
+        'reliability_metrics': reliability_metrics,
         'scenario_reports': scenario_reports,
         'vcon_export': _suite_vcon_export(
             suite=suite,
@@ -588,6 +590,7 @@ def run_suite(request: Any) -> dict[str, Any]:
             run_metadata=run_metadata,
             average_score=average_score,
             verdict=verdict,
+            reliability_metrics=reliability_metrics,
             scenario_reports=scenario_reports,
         ),
     }
@@ -620,6 +623,7 @@ def simulate_suite(request: Any) -> dict[str, Any]:
     )[:16]
 
     verdict = 'pass' if reports and len(passing_reports) == len(reports) else 'needs_review'
+    reliability_metrics = _suite_reliability_metrics(reports)
 
     return {
         'suite_run_id': suite_run_id,
@@ -632,6 +636,7 @@ def simulate_suite(request: Any) -> dict[str, Any]:
         'needs_review_count': len(reports) - len(passing_reports),
         'average_score': average_score,
         'verdict': verdict,
+        'reliability_metrics': reliability_metrics,
         'scenario_runs': scenario_runs,
         'vcon_export': _suite_vcon_export(
             suite=suite,
@@ -639,9 +644,78 @@ def simulate_suite(request: Any) -> dict[str, Any]:
             run_metadata=run_metadata,
             average_score=average_score,
             verdict=verdict,
+            reliability_metrics=reliability_metrics,
             scenario_reports=reports,
         ),
     }
+
+
+def _suite_reliability_metrics(scenario_reports: list[dict[str, Any]]) -> dict[str, Any]:
+    scenario_groups: dict[str, list[dict[str, Any]]] = {}
+    for report in scenario_reports:
+        scenario_id = str(report.get('scenario_id') or report.get('run_id') or len(scenario_groups))
+        scenario_groups.setdefault(scenario_id, []).append(report)
+
+    scenario_count = len(scenario_groups)
+    if scenario_count == 0:
+        return {
+            'framework': 'eva_bench_inspired_v1',
+            'scenario_count': 0,
+            'attempt_count': 0,
+            'pass_at_1': 0.0,
+            'pass_at_k': 0.0,
+            'pass_all_k': 0.0,
+            'accuracy_score': 0.0,
+            'experience_signal_coverage': 0.0,
+            'average_turn_count': 0.0,
+        }
+
+    first_attempt_passes = 0
+    any_attempt_passes = 0
+    all_attempt_passes = 0
+    voice_summaries = []
+    for attempts in scenario_groups.values():
+        first_attempt = attempts[0]
+        if first_attempt.get('verdict') == 'pass':
+            first_attempt_passes += 1
+        if any(report.get('verdict') == 'pass' for report in attempts):
+            any_attempt_passes += 1
+        if attempts and all(report.get('verdict') == 'pass' for report in attempts):
+            all_attempt_passes += 1
+        voice_summary = first_attempt.get('voice_interaction_summary')
+        if isinstance(voice_summary, dict):
+            voice_summaries.append(voice_summary)
+
+    total_turns = sum(_number(summary.get('turn_count')) for summary in voice_summaries)
+    return {
+        'framework': 'eva_bench_inspired_v1',
+        'scenario_count': scenario_count,
+        'attempt_count': len(scenario_reports),
+        'pass_at_1': _ratio(first_attempt_passes, scenario_count),
+        'pass_at_k': _ratio(any_attempt_passes, scenario_count),
+        'pass_all_k': _ratio(all_attempt_passes, scenario_count),
+        'accuracy_score': _ratio(sum(_number(report.get('overall_score')) for report in scenario_reports), len(scenario_reports) * 100),
+        'experience_signal_coverage': _ratio(len(voice_summaries), scenario_count),
+        'average_turn_count': round(total_turns / len(voice_summaries), 2) if voice_summaries else 0.0,
+        'interruption_signal_count': sum(_number(summary.get('interruption_signal_count')) for summary in voice_summaries),
+        'correction_signal_count': sum(_number(summary.get('correction_signal_count')) for summary in voice_summaries),
+        'handoff_signal_count': sum(_number(summary.get('handoff_signal_count')) for summary in voice_summaries),
+    }
+
+
+def _ratio(numerator: int | float, denominator: int | float) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round(float(numerator) / float(denominator), 3)
+
+
+def _number(value: Any) -> int:
+    if isinstance(value, bool) or value is None:
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _payload_to_dict(request: Any) -> dict[str, Any]:
@@ -963,6 +1037,7 @@ def _suite_vcon_export(
     run_metadata: dict[str, str],
     average_score: int,
     verdict: str,
+    reliability_metrics: dict[str, Any],
     scenario_reports: list[dict[str, Any]],
 ) -> dict[str, Any]:
     analysis = {
@@ -979,6 +1054,7 @@ def _suite_vcon_export(
             'needs_review_count': sum(1 for report in scenario_reports if report.get('verdict') != 'pass'),
             'average_score': average_score,
             'verdict': verdict,
+            'reliability_metrics': deepcopy(reliability_metrics),
             'scenario_results': [
                 {
                     'run_id': report.get('run_id'),
