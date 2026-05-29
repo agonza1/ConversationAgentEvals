@@ -67,6 +67,8 @@ class BenchmarkRunRequest(BaseModel):
     maxAttempts: int | None = None
     retry_of_run_id: str | None = None
     retryOfRunId: str | None = None
+    user_id: str | None = None
+    project_id: str | None = None
     resume_from_run_id: str | None = None
     resumeFromRunId: str | None = None
 
@@ -124,6 +126,8 @@ class BenchmarkSimulationRequest(BaseModel):
     maxAttempts: int | None = None
     retry_of_run_id: str | None = None
     retryOfRunId: str | None = None
+    user_id: str | None = None
+    project_id: str | None = None
     resume_from_run_id: str | None = None
     resumeFromRunId: str | None = None
 

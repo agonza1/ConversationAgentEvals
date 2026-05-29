@@ -565,6 +565,8 @@ def _payload_to_dict(request: Any) -> dict[str, Any]:
             'maxAttempts',
             'retry_of_run_id',
             'retryOfRunId',
+            'user_id',
+            'project_id',
             'resume_from_run_id',
             'resumeFromRunId',
         )
@@ -580,6 +582,9 @@ def _run_metadata(payload: dict[str, Any]) -> dict[str, str]:
         'prompt_version': _first_string(payload, 'prompt_version', 'promptVersion') or _string_from_metadata(metadata, 'prompt_version', 'promptVersion'),
         'model_name': _first_string(payload, 'model_name', 'modelName') or _string_from_metadata(metadata, 'model_name', 'modelName'),
         'notes': _first_string(payload, 'notes') or _string_from_metadata(metadata, 'notes'),
+        'user_id': _first_string(payload, 'user_id') or _string_from_metadata(metadata, 'user_id', 'owner_user_id'),
+        'project_id': _first_string(payload, 'project_id') or _string_from_metadata(metadata, 'project_id', 'project_key'),
+        'retention_days': _string_from_metadata(metadata, 'retention_days'),
     }
     return {key: value for key, value in normalized.items() if value}
 

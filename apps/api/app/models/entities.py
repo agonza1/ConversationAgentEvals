@@ -121,6 +121,25 @@ class ProductSavedRun(Base):
     project = relationship('ProductProject', back_populates='saved_runs')
 
 
+class BenchmarkRunRecord(Base):
+    __tablename__ = 'benchmark_run_records'
+
+    id = Column(String, primary_key=True)
+    user_id = Column(String, nullable=False, index=True)
+    project_key = Column(String, nullable=False, index=True)
+    suite_id = Column(String, nullable=False, index=True)
+    scenario_id = Column(String, nullable=False, index=True)
+    logical_run_id = Column(String, nullable=False, index=True)
+    status = Column(String, nullable=False, index=True)
+    attempt = Column(Integer, nullable=False, default=1)
+    report_json = Column(Text, nullable=False, default='{}')
+    transcript = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+    retained_until = Column(DateTime, nullable=True, index=True)
+
+
 class ProductWorkspace(Base):
     __tablename__ = 'product_workspaces'
     __table_args__ = (UniqueConstraint('owner_user_id', 'workspace_key', name='uq_product_workspaces_owner_key'),)
