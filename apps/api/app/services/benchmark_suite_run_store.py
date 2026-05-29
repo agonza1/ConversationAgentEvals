@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.db.database import SessionLocal
 from app.models.entities import BenchmarkSuiteRunRecord
-from app.services.benchmark_service import DETERMINISTIC_EVALUATOR_VERSION
+from app.services.benchmark_service import DETERMINISTIC_EVALUATOR_VERSION, get_suite
 from app.services.benchmark_run_store import DEFAULT_PROJECT_ID, DEFAULT_RETENTION_DAYS, DEFAULT_USER_ID
 
 TERMINAL_SUITE_STATUSES = {'completed', 'needs_review', 'failed'}
@@ -34,7 +34,7 @@ def create_benchmark_suite_run_record(
     record.project_key = project_key
     record.suite_id = _required_str(suite_id, 'suite_id')
     record.status = 'queued'
-    record.scenario_count = 0
+    record.scenario_count = _queued_scenario_count(suite_id)
     record.pass_count = 0
     record.needs_review_count = 0
     record.average_score = 0
@@ -193,6 +193,12 @@ def serialize_benchmark_suite_run(record: BenchmarkSuiteRunRecord) -> dict[str, 
         'updated_at': _isoformat(record.updated_at),
         'completed_at': _isoformat(record.completed_at),
     }
+
+
+def _queued_scenario_count(suite_id: str) -> int:
+    suite = get_suite(suite_id)
+    scenarios = suite.get('scenarios') if isinstance(suite, dict) else None
+    return len(scenarios) if isinstance(scenarios, list) else 0
 
 
 def _retention_envelope(*, suite_report: dict[str, Any], retained_until: datetime, now: datetime) -> dict[str, Any]:

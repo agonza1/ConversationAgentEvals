@@ -327,6 +327,7 @@ def test_suite_simulate_async_endpoint_tracks_queued_to_terminal_lifecycle():
     assert response.status_code == 200, response.text
     queued = response.json()
     assert queued['status'] == 'queued'
+    assert queued['scenario_count'] == len(get_suite('call-center-voice-ai')['scenarios'])
     assert queued['run_lifecycle']['status'] == 'queued'
     assert queued['run_lifecycle']['terminal'] is False
     assert queued['retention']['retention_days'] == 45
