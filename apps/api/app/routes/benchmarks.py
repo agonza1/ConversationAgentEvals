@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
-from app.schemas.benchmarks import BenchmarkRunRequest, BenchmarkSimulationRequest
-from app.services.benchmark_service import get_suite, list_suites, run_scenario, simulate_scenario, simulate_suite
+from app.schemas.benchmarks import BenchmarkRunRequest, BenchmarkSimulationRequest, BenchmarkSuiteRunRequest
+from app.services.benchmark_service import get_suite, list_suites, run_scenario, run_suite, simulate_scenario, simulate_suite
 from app.services.benchmark_run_store import get_benchmark_run, list_benchmark_runs, persist_benchmark_run
 
 router = APIRouter(prefix='/api/benchmarks', tags=['benchmarks'])
@@ -68,6 +68,17 @@ def run_benchmark(payload: BenchmarkRunRequest, db: Session = Depends(get_db)):
         report = run_scenario(payload)
         persist_benchmark_run(db=db, report=report, transcript=payload.transcript)
         return report
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post('/{suite_id}/run')
+@router.post('/suites/{suite_id}/run')
+def run_benchmark_suite(suite_id: str, payload: BenchmarkSuiteRunRequest):
+    merged_payload = payload.model_dump()
+    merged_payload['suite_id'] = suite_id
+    try:
+        return run_suite(merged_payload)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

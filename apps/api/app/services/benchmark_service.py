@@ -527,6 +527,62 @@ def simulate_scenario(request: Any) -> dict[str, Any]:
 
 
 
+def run_suite(request: Any) -> dict[str, Any]:
+    payload = _payload_to_dict(request)
+    suite_id = _first_string(payload, 'suite_id', 'suiteId')
+    if not suite_id:
+        raise ValueError('suite_id is required')
+
+    suite = _SUITES_BY_ID.get(suite_id)
+    if not suite:
+        raise ValueError(f'Unknown benchmark suite: {suite_id}')
+
+    evidence_by_scenario = payload.get('scenario_evidence') or payload.get('scenarioEvidence') or {}
+    if not isinstance(evidence_by_scenario, dict) or not evidence_by_scenario:
+        raise ValueError('scenario_evidence is required for suite runs')
+
+    missing_scenarios = [scenario['id'] for scenario in suite['scenarios'] if scenario['id'] not in evidence_by_scenario]
+    if missing_scenarios:
+        raise ValueError(f"Missing evidence for scenarios: {', '.join(missing_scenarios)}")
+
+    scenario_reports = []
+    for scenario in suite['scenarios']:
+        scenario_payload = evidence_by_scenario.get(scenario['id'])
+        if not isinstance(scenario_payload, dict):
+            raise ValueError(f"Evidence for scenario {scenario['id']} must be an object")
+        scenario_reports.append(run_scenario({
+            **scenario_payload,
+            'suite_id': suite_id,
+            'scenario_id': scenario['id'],
+            **_run_metadata_payload(payload),
+        }))
+
+    passing_reports = [report for report in scenario_reports if report.get('verdict') == 'pass']
+    average_score = round(sum(int(report.get('overall_score', 0)) for report in scenario_reports) / len(scenario_reports)) if scenario_reports else 0
+    run_metadata = _run_metadata(payload)
+    suite_run_id = _stable_digest(
+        {
+            'suite_id': suite_id,
+            'scenario_run_ids': [report.get('run_id') for report in scenario_reports],
+            'run_metadata': run_metadata,
+        }
+    )[:16]
+
+    return {
+        'suite_run_id': suite_run_id,
+        'suite_id': suite_id,
+        'suite_name': suite['name'],
+        'provider': suite['provider'],
+        'run_metadata': run_metadata,
+        'scenario_count': len(scenario_reports),
+        'pass_count': len(passing_reports),
+        'needs_review_count': len(scenario_reports) - len(passing_reports),
+        'average_score': average_score,
+        'verdict': 'pass' if scenario_reports and len(passing_reports) == len(scenario_reports) else 'needs_review',
+        'scenario_reports': scenario_reports,
+    }
+
+
 def simulate_suite(request: Any) -> dict[str, Any]:
     payload = _payload_to_dict(request)
     suite_id = _first_string(payload, 'suite_id', 'suiteId')
