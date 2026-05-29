@@ -821,6 +821,58 @@ def test_run_suite_scores_all_scenario_evidence_payloads():
     assert suite_analysis['body']['scenario_results'][0]['perturbation_tags'] == ['noise', 'accent']
 
 
+def test_run_suite_accepts_attempt_arrays_for_retry_level_reliability():
+    suite = get_suite('telehealth-agent')
+    assert suite is not None
+    scenario_attempts = {}
+    for scenario in suite['scenarios']:
+        passing = simulate_scenario(
+            {
+                'suite_id': 'telehealth-agent',
+                'scenario_id': scenario['id'],
+                'agent_version': 'agent-retry-v1',
+            }
+        )
+        scenario_attempts[scenario['id']] = [
+            {
+                'transcript': 'Agent: I skipped required validation.',
+                'action_trace': [],
+                'final_state': {'complete': False},
+                'perturbation_tags': ['noise'],
+            },
+            {
+                'transcript': passing['transcript'],
+                'action_trace': passing['action_trace'],
+                'final_state': passing['final_state'],
+                'perturbation_tags': ['noise'],
+            },
+        ]
+
+    result = run_suite(
+        {
+            'suite_id': 'telehealth-agent',
+            'scenario_attempts': scenario_attempts,
+            'agent_version': 'agent-retry-v1',
+        }
+    )
+
+    assert result['scenario_count'] == len(suite['scenarios']) * 2
+    assert result['reliability_metrics']['scenario_count'] == len(suite['scenarios'])
+    assert result['reliability_metrics']['attempt_count'] == len(suite['scenarios']) * 2
+    assert result['reliability_metrics']['pass_at_1'] == 0.0
+    assert result['reliability_metrics']['pass_at_k'] == 1.0
+    assert result['reliability_metrics']['pass_all_k'] == 0.0
+    assert result['reliability_metrics']['perturbation_coverage'] == [
+        {'tag': 'noise', 'scenario_count': 4, 'pass_count': 2, 'pass_rate': 0.5},
+    ]
+    first_attempt = result['scenario_reports'][0]
+    retry_attempt = result['scenario_reports'][1]
+    assert first_attempt['run_lifecycle']['attempt'] == 1
+    assert first_attempt['run_lifecycle']['max_attempts'] == 2
+    assert retry_attempt['run_lifecycle']['attempt'] == 2
+    assert retry_attempt['run_lifecycle']['retry_of_run_id'] == first_attempt['run_id']
+
+
 def test_run_suite_endpoint_rejects_missing_scenario_evidence():
     response = client.post(
         '/api/benchmarks/suites/telehealth-agent/run',

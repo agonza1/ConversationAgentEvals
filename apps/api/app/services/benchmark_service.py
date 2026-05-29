@@ -540,7 +540,13 @@ def run_suite(request: Any) -> dict[str, Any]:
     if not suite:
         raise ValueError(f'Unknown benchmark suite: {suite_id}')
 
-    evidence_by_scenario = payload.get('scenario_evidence') or payload.get('scenarioEvidence') or {}
+    evidence_by_scenario = (
+        payload.get('scenario_attempts')
+        or payload.get('scenarioAttempts')
+        or payload.get('scenario_evidence')
+        or payload.get('scenarioEvidence')
+        or {}
+    )
     if not isinstance(evidence_by_scenario, dict) or not evidence_by_scenario:
         raise ValueError('scenario_evidence is required for suite runs')
 
@@ -550,17 +556,24 @@ def run_suite(request: Any) -> dict[str, Any]:
 
     scenario_reports = []
     for scenario in suite['scenarios']:
-        scenario_payload = evidence_by_scenario.get(scenario['id'])
-        if not isinstance(scenario_payload, dict):
-            raise ValueError(f"Evidence for scenario {scenario['id']} must be an object")
-        inherited_perturbation_payload = {} if _has_perturbation_payload(scenario_payload) else _perturbation_payload(payload)
-        scenario_reports.append(run_scenario({
-            **scenario_payload,
-            'suite_id': suite_id,
-            'scenario_id': scenario['id'],
-            **inherited_perturbation_payload,
-            **_run_metadata_payload(payload),
-        }))
+        scenario_payloads = _suite_scenario_attempt_payloads(evidence_by_scenario.get(scenario['id']), scenario['id'])
+        max_attempts = len(scenario_payloads)
+        retry_of_run_id = None
+        for index, scenario_payload in enumerate(scenario_payloads, start=1):
+            inherited_perturbation_payload = {} if _has_perturbation_payload(scenario_payload) else _perturbation_payload(payload)
+            attempt_payload = {
+                **scenario_payload,
+                'suite_id': suite_id,
+                'scenario_id': scenario['id'],
+                'attempt': scenario_payload.get('attempt') or index,
+                'max_attempts': scenario_payload.get('max_attempts') or scenario_payload.get('maxAttempts') or max_attempts,
+                **({'retry_of_run_id': retry_of_run_id} if retry_of_run_id else {}),
+                **inherited_perturbation_payload,
+                **_run_metadata_payload(payload),
+            }
+            report = run_scenario(attempt_payload)
+            retry_of_run_id = retry_of_run_id or report.get('run_id')
+            scenario_reports.append(report)
 
     passing_reports = [report for report in scenario_reports if report.get('verdict') == 'pass']
     average_score = round(sum(int(report.get('overall_score', 0)) for report in scenario_reports) / len(scenario_reports)) if scenario_reports else 0
@@ -599,6 +612,16 @@ def run_suite(request: Any) -> dict[str, Any]:
             scenario_reports=scenario_reports,
         ),
     }
+
+
+def _suite_scenario_attempt_payloads(raw_payload: Any, scenario_id: str) -> list[dict[str, Any]]:
+    if isinstance(raw_payload, dict):
+        return [raw_payload]
+    if isinstance(raw_payload, list) and raw_payload and all(isinstance(item, dict) for item in raw_payload):
+        return raw_payload
+    if isinstance(raw_payload, list):
+        raise ValueError(f"Evidence attempts for scenario {scenario_id} must be objects")
+    raise ValueError(f"Evidence for scenario {scenario_id} must be an object or non-empty attempt list")
 
 
 def simulate_suite(request: Any) -> dict[str, Any]:
