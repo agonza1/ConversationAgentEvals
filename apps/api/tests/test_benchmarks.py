@@ -250,6 +250,8 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
     assert suite_record['suite_run_id'] == simulation['suite_run_id']
     assert suite_record['status'] == 'completed'
     assert suite_record['suite_report']['verdict'] == simulation['verdict']
+    assert suite_record['reliability_metrics']['pass_at_1'] == 1.0
+    assert suite_record['suite_report']['reliability_metrics']['framework'] == 'eva_bench_inspired_v1'
     assert suite_record['scenario_count'] == simulation['scenario_count']
     assert suite_record['retention']['retention_days'] == 45
     assert suite_record['artifacts']['vcon_export'] == {
@@ -792,6 +794,11 @@ def test_run_suite_scores_all_scenario_evidence_payloads():
     assert result['needs_review_count'] == 0
     assert result['average_score'] >= 75
     assert result['verdict'] == 'pass'
+    assert result['reliability_metrics']['framework'] == 'eva_bench_inspired_v1'
+    assert result['reliability_metrics']['pass_at_1'] == 1.0
+    assert result['reliability_metrics']['pass_at_k'] == 1.0
+    assert result['reliability_metrics']['pass_all_k'] == 1.0
+    assert result['reliability_metrics']['experience_signal_coverage'] == 1.0
     assert result['run_metadata'] == {'agent_version': 'agent-v7'}
     assert [report['scenario_id'] for report in result['scenario_reports']] == [scenario['id'] for scenario in suite['scenarios']]
     suite_export = result['vcon_export']
@@ -801,6 +808,7 @@ def test_run_suite_scores_all_scenario_evidence_payloads():
     assert suite_analysis['type'] == 'agentic_benchmark_suite_eval'
     assert suite_analysis['body']['suite_run_id'] == result['suite_run_id']
     assert suite_analysis['body']['scenario_count'] == result['scenario_count']
+    assert suite_analysis['body']['reliability_metrics']['pass_at_1'] == 1.0
     assert suite_analysis['body']['scenario_results'][0]['scenario_contract_sha256'] == result['scenario_reports'][0]['scenario_contract_sha256']
 
 
@@ -1090,10 +1098,13 @@ def test_simulate_suite_endpoint_returns_full_suite_regression_run():
     assert payload['suite_id'] == 'call-center-voice-ai'
     assert payload['scenario_count'] == len(get_suite('call-center-voice-ai')['scenarios'])
     assert payload['pass_count'] == payload['scenario_count']
+    assert payload['reliability_metrics']['pass_at_1'] == 1.0
+    assert payload['reliability_metrics']['accuracy_score'] >= 0.75
     assert payload['run_metadata'] == {'agent_version': 'agent-v1'}
     assert payload['scenario_runs'][0]['benchmark_report']['suite_id'] == 'call-center-voice-ai'
     assert payload['vcon_export']['source_format'] == 'benchmark_suite'
     assert payload['vcon_export']['analysis'][0]['body']['suite_run_id'] == payload['suite_run_id']
+    assert payload['vcon_export']['analysis'][0]['body']['reliability_metrics']['framework'] == 'eva_bench_inspired_v1'
     assert payload['vcon_export']['analysis'][0]['body']['scenario_results'][0]['run_id'] == payload['scenario_runs'][0]['benchmark_report']['run_id']
 
 

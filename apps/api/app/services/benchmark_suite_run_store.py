@@ -178,6 +178,7 @@ def serialize_benchmark_suite_run(record: BenchmarkSuiteRunRecord) -> dict[str, 
         'average_score': record.average_score,
         'suite_report': suite_report,
         'run_lifecycle': suite_report.get('run_lifecycle') if isinstance(suite_report.get('run_lifecycle'), dict) else {},
+        'reliability_metrics': suite_report.get('reliability_metrics') if isinstance(suite_report.get('reliability_metrics'), dict) else {},
         'artifacts': {
             'scenario_summaries': scenario_summaries,
             'vcon_export': _vcon_export_summary(suite_report),

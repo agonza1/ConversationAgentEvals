@@ -236,6 +236,58 @@ test('benchmark runner shows suite simulation summary', async ({ page }) => {
   await expect(page.getByRole('heading', { name: /pass|needs_review/i })).toBeVisible();
 });
 
+test('benchmark runner queues retained suite runs in the background', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    window.localStorage.setItem('conversation-evals-demo-project', 'qa-project');
+  });
+
+  await page.route('**/api/benchmarks/suite-runs?*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([]),
+    });
+  });
+
+  await page.route('**/api/benchmarks/suites/*/simulate-async', async (route) => {
+    const request = route.request();
+    expect(request.method()).toBe('POST');
+    expect(request.postDataJSON()).toEqual(expect.objectContaining({
+      user_id: 'demo-user',
+      project_id: 'qa-project',
+      agent_profile: 'mock text agent',
+    }));
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        suite_run_id: 'suite-queued-1',
+        suite_id: 'call-center-voice-ai',
+        status: 'queued',
+        scenario_count: 2,
+        pass_count: 0,
+        needs_review_count: 0,
+        average_score: 0,
+        updated_at: '2026-05-29T16:00:00+00:00',
+        suite_report: { suite_name: 'Call Center Voice AI' },
+        retention: { retained_until: '2026-08-27T16:00:00+00:00' },
+        artifacts: { scenario_summaries: [], vcon_export: { available: false } },
+      }),
+    });
+  });
+
+  await page.goto('/benchmarks');
+  await page.getByRole('button', { name: 'Queue suite run' }).click();
+
+  await expect(page.getByText('Queued suite run suite-queued-1 for qa-project.')).toBeVisible();
+  const suiteHistory = page.getByLabel('Suite run history');
+  await expect(suiteHistory.getByRole('heading', { name: /1 suite runs/ })).toBeVisible();
+  await expect(suiteHistory.getByText('queued')).toBeVisible();
+  await expect(suiteHistory.getByText('Scenario artifacts appear when the suite run completes.')).toBeVisible();
+});
+
 test('benchmark runner shows retained suite run history', async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
@@ -255,6 +307,15 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
           pass_count: 1,
           needs_review_count: 1,
           average_score: 82,
+          reliability_metrics: {
+            framework: 'eva_bench_inspired_v1',
+            pass_at_1: 0.5,
+            pass_at_k: 0.5,
+            pass_all_k: 0.5,
+            accuracy_score: 0.82,
+            experience_signal_coverage: 1,
+            average_turn_count: 4,
+          },
           updated_at: '2026-05-29T15:00:00+00:00',
           suite_report: { suite_name: 'Call Center Voice AI' },
           retention: { retained_until: '2026-08-27T15:00:00+00:00' },
@@ -294,9 +355,10 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   const suiteHistory = page.getByLabel('Suite run history');
   await expect(suiteHistory).toBeVisible();
   await expect(suiteHistory.getByRole('heading', { name: /1 suite runs/ })).toBeVisible();
-  await expect(suiteHistory.getByText('Call Center Voice AI')).toBeVisible();
+  await expect(suiteHistory.locator('strong').filter({ hasText: 'Call Center Voice AI' })).toBeVisible();
   await expect(suiteHistory.getByText('completed')).toBeVisible();
   await expect(suiteHistory.getByText('4 dialog turns, 1 analysis records')).toBeVisible();
+  await expect(suiteHistory.getByText('EVA-style reliability: 82% accuracy, 100% experience coverage, 4 avg turns.')).toBeVisible();
   await expect(suiteHistory.getByText(/billing-escalation: needs_review \/ 73/)).toBeVisible();
 
   const downloadPromise = page.waitForEvent('download');
