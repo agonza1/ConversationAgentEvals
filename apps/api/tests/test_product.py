@@ -280,6 +280,79 @@ def test_saved_runs_are_project_scoped_and_require_user_id():
     assert missing_user.status_code == 422
 
 
+def test_workspace_members_can_read_shared_project_history_and_exports():
+    workspace = client.post(
+        '/api/product/workspaces',
+        json={
+            'owner_user_id': 'owner-user',
+            'workspace_id': 'acme-support',
+            'name': 'Acme Support QA',
+            'plan': 'team',
+        },
+    ).json()
+    add_member = client.post(
+        f"/api/product/workspaces/{workspace['id']}/members",
+        json={'requester_user_id': 'owner-user', 'user_id': 'reviewer-user', 'role': 'viewer'},
+    )
+    assert add_member.status_code == 200
+
+    project = client.post(
+        '/api/product/projects',
+        json={
+            'user_id': 'owner-user',
+            'workspace_id': workspace['id'],
+            'project_id': 'call-center',
+            'name': 'Call Center QA',
+            'plan': 'team',
+        },
+    ).json()
+    saved = client.post(
+        '/api/product/runs',
+        json={
+            'user_id': 'owner-user',
+            'project_id': 'call-center',
+            'plan': 'team',
+            'report': {
+                'run_id': 'abc',
+                'suite_id': 'call-center-voice-ai',
+                'scenario_id': 'billing-address-change',
+                'overall_score': 88,
+                'verdict': 'pass',
+            },
+            'transcript': 'Agent: verified the caller and confirmed the billing address update.',
+        },
+    ).json()
+
+    projects = client.get('/api/product/projects', params={'user_id': 'reviewer-user'}).json()
+    assert [(item['project_id'], item['run_count']) for item in projects] == [('call-center', 1)]
+    assert projects[0]['id'] == project['id']
+
+    runs_response = client.get('/api/product/runs', params={'user_id': 'reviewer-user', 'project_id': 'call-center'})
+    assert runs_response.status_code == 200
+    assert [run['id'] for run in runs_response.json()] == [saved['id']]
+
+    detail_response = client.get(f"/api/product/runs/{saved['id']}", params={'user_id': 'reviewer-user'})
+    assert detail_response.status_code == 200
+    assert detail_response.json()['firestore_path'] == f"users/owner-user/projects/call-center/runs/{saved['id']}"
+
+    summary_response = client.get(
+        '/api/product/projects/call-center/regression-summary',
+        params={'user_id': 'reviewer-user', 'suite_id': 'call-center-voice-ai'},
+    )
+    assert summary_response.status_code == 200
+    assert summary_response.json()['run_count'] == 1
+    assert summary_response.json()['latest_score'] == 88
+
+    export_response = client.get('/api/product/projects/call-center/export', params={'user_id': 'reviewer-user'})
+    assert export_response.status_code == 200
+    assert export_response.json()['run_count'] == 1
+    assert export_response.json()['runs'][0]['id'] == saved['id']
+
+    outsider_response = client.get('/api/product/runs', params={'user_id': 'outsider-user', 'project_id': 'call-center'})
+    assert outsider_response.status_code == 200
+    assert outsider_response.json() == []
+
+
 def test_product_projects_are_unique_per_user_and_project_key():
     first = client.post(
         '/api/product/projects',
