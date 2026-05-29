@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.services.benchmark_service import get_suite, list_suites, run_scenario, simulate_scenario
+from app.services.benchmark_service import get_suite, list_suites, run_scenario, simulate_scenario, simulate_suite
 from app.services.benchmark_run_store import reset_benchmark_run_records_for_tests
 
 client = TestClient(app)
@@ -821,3 +821,58 @@ def test_run_endpoint_rejects_blank_evidence_payload():
     )
 
     assert response.status_code == 422
+
+
+def test_simulate_suite_runs_every_scenario_with_stable_summary():
+    result = simulate_suite(
+        {
+            'suite_id': 'telehealth-agent',
+            'agent_profile': 'suite regression mock agent',
+            'metadata': {'prompt_version': 'telehealth-prompt-v1'},
+        }
+    )
+    retry = simulate_suite(
+        {
+            'suite_id': 'telehealth-agent',
+            'agent_profile': 'suite regression mock agent',
+            'metadata': {'prompt_version': 'telehealth-prompt-v1'},
+        }
+    )
+
+    assert result['suite_run_id'] == retry['suite_run_id']
+    assert result['suite_id'] == 'telehealth-agent'
+    assert result['scenario_count'] == len(get_suite('telehealth-agent')['scenarios'])
+    assert result['pass_count'] == result['scenario_count']
+    assert result['needs_review_count'] == 0
+    assert result['average_score'] >= 75
+    assert result['verdict'] == 'pass'
+    assert result['run_metadata'] == {'prompt_version': 'telehealth-prompt-v1'}
+    assert [run['scenario_id'] for run in result['scenario_runs']] == [
+        scenario['id'] for scenario in get_suite('telehealth-agent')['scenarios']
+    ]
+    assert all(run['benchmark_report']['run_metadata'] == result['run_metadata'] for run in result['scenario_runs'])
+
+
+def test_simulate_suite_endpoint_returns_full_suite_regression_run():
+    response = client.post(
+        '/api/benchmarks/suites/call-center-voice-ai/simulate',
+        json={
+            'agent_profile': 'endpoint suite mock agent',
+            'agent_version': 'agent-v1',
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload['suite_id'] == 'call-center-voice-ai'
+    assert payload['scenario_count'] == len(get_suite('call-center-voice-ai')['scenarios'])
+    assert payload['pass_count'] == payload['scenario_count']
+    assert payload['run_metadata'] == {'agent_version': 'agent-v1'}
+    assert payload['scenario_runs'][0]['benchmark_report']['suite_id'] == 'call-center-voice-ai'
+
+
+def test_simulate_suite_endpoint_rejects_unknown_suite():
+    response = client.post('/api/benchmarks/suites/missing/simulate', json={})
+
+    assert response.status_code == 404
+    assert response.json()['detail'] == 'Unknown benchmark suite: missing'

@@ -250,10 +250,29 @@ interface JudgeGate {
 }
 
 interface BenchmarkSimulationResponse {
+  suite_id?: string;
+  suite_name?: string;
+  scenario_id?: string;
+  scenario_title?: string;
   transcript: string;
   action_trace: unknown;
   final_state: unknown;
+  run_metadata?: RunMetadata;
   benchmark_report: BenchmarkReport;
+}
+
+interface BenchmarkSuiteSimulationResponse {
+  suite_run_id: string;
+  suite_id: string;
+  suite_name?: string;
+  provider?: string;
+  scenario_count: number;
+  pass_count: number;
+  needs_review_count: number;
+  average_score: number;
+  verdict: string;
+  run_metadata?: RunMetadata;
+  scenario_runs: BenchmarkSimulationResponse[];
 }
 
 function normalizeApiBase(value: string) {
@@ -415,6 +434,24 @@ async function simulateBenchmark(payload: {
 }) {
   return handleJson<BenchmarkSimulationResponse>(
     await fetch(`${getApiBase()}/api/benchmarks/simulate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+async function simulateBenchmarkSuite(payload: {
+  suite_id: string;
+  agent_profile?: string;
+  include_failure?: boolean;
+  agent_version?: string;
+  prompt_version?: string;
+  model_name?: string;
+  notes?: string;
+}) {
+  return handleJson<BenchmarkSuiteSimulationResponse>(
+    await fetch(`${getApiBase()}/api/benchmarks/suites/${encodeURIComponent(payload.suite_id)}/simulate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -644,6 +681,23 @@ function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: stri
   ].join('\n');
 }
 
+function formatSuiteBrief(simulation: BenchmarkSuiteSimulationResponse) {
+  const needsReview = simulation.scenario_runs
+    .filter((run) => run.benchmark_report.verdict !== 'pass')
+    .map((run) => run.scenario_title ?? run.benchmark_report.scenario_title ?? run.scenario_id ?? run.benchmark_report.scenario_id ?? 'Unnamed scenario');
+
+  return [
+    `Suite: ${simulation.suite_name ?? simulation.suite_id}`,
+    `Verdict: ${simulation.verdict}`,
+    `Average score: ${simulation.average_score}`,
+    `Scenarios: ${simulation.scenario_count}`,
+    `Passing: ${simulation.pass_count}`,
+    `Needs review: ${simulation.needs_review_count}`,
+    `Review scenarios: ${needsReview.length ? needsReview.join('; ') : 'None reported'}`,
+    `Suite run: ${simulation.suite_run_id}`,
+  ].join('\n');
+}
+
 function onboardingStatusLabel(done: boolean, ready: boolean) {
   if (done) return 'Done';
   if (ready) return 'Ready';
@@ -698,6 +752,7 @@ export function BenchmarkRunner() {
   const [runNotes, setRunNotes] = useState('');
   const [includeFailure, setIncludeFailure] = useState(false);
   const [report, setReport] = useState<BenchmarkReport | null>(null);
+  const [suiteSimulation, setSuiteSimulation] = useState<BenchmarkSuiteSimulationResponse | null>(null);
   const [userId, setUserId] = useState('');
   const [projectId, setProjectId] = useState('call-center-demo');
   const [plan, setPlan] = useState<PricingPlan['id']>('free');
@@ -811,6 +866,7 @@ export function BenchmarkRunner() {
     setActionTrace(stringifyEditable(selectedScenario.sample_action_trace, '[]'));
     setFinalState(stringifyEditable(selectedScenario.sample_final_state ?? selectedScenario.expected_final_state, '{}'));
     setReport(null);
+    setSuiteSimulation(null);
     setSaveMessage(null);
     setJudgeGate(null);
     setCopyMessage(null);
@@ -854,6 +910,41 @@ export function BenchmarkRunner() {
       setSaveMessage(`Saved run ${saved.id} to ${projectId}.`);
     } catch (err) {
       setSaveMessage(err instanceof Error ? err.message : 'Could not save this run.');
+    }
+  }
+
+  async function onSaveSuiteRuns() {
+    if (!suiteSimulation) return;
+    if (!userId) {
+      setSaveMessage('Sign up first to save suite runs and project history.');
+      return;
+    }
+
+    try {
+      const saved = await Promise.all(
+        suiteSimulation.scenario_runs.map((run) => saveBenchmarkRun({
+          user_id: userId,
+          project_id: projectId,
+          plan,
+          report: run.benchmark_report,
+          transcript: run.transcript,
+        })),
+      );
+      setSavedRuns((current) => [
+        ...saved,
+        ...current.filter((run) => !saved.some((savedRun) => savedRun.id === run.id)),
+      ]);
+      fetchProjectRegressionSummary(userId, projectId)
+        .then(setProjectRegressionSummary)
+        .catch(() => setProjectRegressionSummary(null));
+      if (report?.suite_id && report.scenario_id) {
+        fetchProjectRegressionSummary(userId, projectId, report.suite_id, report.scenario_id)
+          .then(setScenarioRegressionSummary)
+          .catch(() => setScenarioRegressionSummary(null));
+      }
+      setSaveMessage(`Saved ${saved.length} suite runs to ${projectId}.`);
+    } catch (err) {
+      setSaveMessage(err instanceof Error ? err.message : 'Could not save this suite.');
     }
   }
 
@@ -905,6 +996,30 @@ export function BenchmarkRunner() {
     setExportMessage('Exported vCon-compatible benchmark record.');
   }
 
+  function onExportSuiteVconBundle() {
+    if (!suiteSimulation) return;
+    const records = suiteSimulation.scenario_runs
+      .map((run) => run.benchmark_report.vcon_export)
+      .filter((record): record is JsonRecord => Boolean(record));
+    if (!records.length) {
+      setExportMessage('No vCon-compatible records are available for this suite run.');
+      return;
+    }
+
+    const filenameParts = ['agentbench', suiteSimulation.suite_id, suiteSimulation.suite_run_id, 'vcon-bundle']
+      .filter(Boolean)
+      .map((part) => String(part).replace(/[^a-z0-9-]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase());
+    downloadJson(`${filenameParts.join('-') || 'agentbench-suite-vcon-bundle'}.json`, {
+      suite_run_id: suiteSimulation.suite_run_id,
+      suite_id: suiteSimulation.suite_id,
+      suite_name: suiteSimulation.suite_name,
+      exported_at: new Date().toISOString(),
+      record_count: records.length,
+      records,
+    });
+    setExportMessage(`Exported ${records.length} vCon-compatible suite records.`);
+  }
+
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedSuite || !selectedScenario) return;
@@ -912,6 +1027,7 @@ export function BenchmarkRunner() {
     setIsRunning(true);
     setRunError(null);
     setReport(null);
+    setSuiteSimulation(null);
     setCopyMessage(null);
 
     try {
@@ -931,6 +1047,7 @@ export function BenchmarkRunner() {
         ...runMetadata,
       });
       setReport(nextReport);
+      setSuiteSimulation(null);
     } catch (err) {
       setRunError(err instanceof Error ? err.message : 'Benchmark run failed');
     } finally {
@@ -964,8 +1081,49 @@ export function BenchmarkRunner() {
       setActionTrace(stringifyEditable(simulation.action_trace, '[]'));
       setFinalState(stringifyEditable(simulation.final_state, '{}'));
       setReport(simulation.benchmark_report);
+      setSuiteSimulation(null);
     } catch (err) {
       setRunError(err instanceof Error ? err.message : 'Scenario simulation failed');
+    } finally {
+      setIsSimulating(false);
+    }
+  }
+
+  async function onSimulateSuite() {
+    if (!selectedSuite) return;
+
+    setIsSimulating(true);
+    setRunError(null);
+    setReport(null);
+    setSuiteSimulation(null);
+    setCopyMessage(null);
+
+    try {
+      const runMetadata = cleanRunMetadata({
+        agent_version: agentVersion,
+        prompt_version: promptVersion,
+        model_name: modelName,
+        notes: runNotes,
+      });
+      const simulation = await simulateBenchmarkSuite({
+        suite_id: selectedSuite.id,
+        agent_profile: agentProfile,
+        include_failure: includeFailure,
+        ...runMetadata,
+      });
+      const focusedRun = simulation.scenario_runs.find((run) => (run.scenario_id ?? run.benchmark_report.scenario_id) === selectedScenario?.id)
+        ?? simulation.scenario_runs[0]
+        ?? null;
+      setSuiteSimulation(simulation);
+      if (focusedRun) {
+        setSelectedScenarioId(focusedRun.scenario_id ?? focusedRun.benchmark_report.scenario_id ?? '');
+        setTranscript(focusedRun.transcript);
+        setActionTrace(stringifyEditable(focusedRun.action_trace, '[]'));
+        setFinalState(stringifyEditable(focusedRun.final_state, '{}'));
+        setReport(focusedRun.benchmark_report);
+      }
+    } catch (err) {
+      setRunError(err instanceof Error ? err.message : 'Suite simulation failed');
     } finally {
       setIsSimulating(false);
     }
@@ -975,6 +1133,7 @@ export function BenchmarkRunner() {
   const score = report?.score ?? report?.overall_score;
   const verdict = report?.verdict ?? report?.overall;
   const reportBrief = report ? formatReportBrief(report, selectedScenario?.title) : '';
+  const suiteBrief = suiteSimulation ? formatSuiteBrief(suiteSimulation) : '';
   const scenarioContractFingerprint = report?.scenario_contract_sha256 ? report.scenario_contract_sha256.slice(0, 12) : 'Not captured';
   const pricing = productConfig?.pricing ?? [];
   const deterministicRule = productConfig?.usage_rules.find((rule) => rule.id === 'deterministic_eval');
@@ -1294,6 +1453,22 @@ export function BenchmarkRunner() {
             {isSimulating ? 'Simulating scenario...' : 'Simulate scenario'}
           </button>
           <button
+            type="button"
+            disabled={isSimulating || isRunning || !selectedSuite?.scenarios.length}
+            onClick={onSimulateSuite}
+            style={{
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              background: 'white',
+              color: 'var(--text)',
+              padding: '12px 18px',
+              fontWeight: 800,
+              opacity: isSimulating || isRunning || !selectedSuite?.scenarios.length ? 0.65 : 1,
+            }}
+          >
+            {isSimulating ? 'Simulating suite...' : 'Simulate suite'}
+          </button>
+          <button
             type="submit"
             disabled={isRunning || isSimulating || !selectedScenario || !hasRunnableEvidence}
             style={{
@@ -1361,6 +1536,134 @@ export function BenchmarkRunner() {
           </div>
         ) : null}
       </form>
+
+      {suiteSimulation ? (
+        <section className="card" style={{ padding: 24, display: 'grid', gap: 16 }} aria-label="Suite simulation summary">
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div>
+              <p style={{ margin: '0 0 6px', color: 'var(--muted)' }}>Suite simulation</p>
+              <h2 style={{ margin: 0, fontSize: 26 }}>{suiteSimulation.suite_name ?? selectedSuite?.title ?? suiteSimulation.suite_id}</h2>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <strong style={{ display: 'block', fontSize: 28, color: scoreColor(suiteSimulation.average_score) }}>{suiteSimulation.average_score}</strong>
+              <span style={{ color: 'var(--muted)', textTransform: 'capitalize' }}>{suiteSimulation.verdict}</span>
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
+            <ScoreTile label="Scenarios" score={suiteSimulation.scenario_count} />
+            <ScoreTile label="Passing" score={suiteSimulation.pass_count} />
+            <ScoreTile label="Needs review" score={suiteSimulation.needs_review_count} />
+          </div>
+          <section style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 12, background: 'var(--panel-alt)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div>
+                <h3 style={{ margin: 0 }}>Suite brief</h3>
+                <p style={{ margin: '4px 0 0', color: 'var(--muted)' }}>Aggregate summary for regression handoff and release notes.</p>
+              </div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={onSaveSuiteRuns}
+                  style={{
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    background: userId ? 'white' : 'var(--panel-alt)',
+                    color: 'var(--text)',
+                    padding: '10px 14px',
+                    fontWeight: 800,
+                  }}
+                >
+                  Save suite runs
+                </button>
+                <button
+                  type="button"
+                  onClick={onExportSuiteVconBundle}
+                  style={{
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    background: 'white',
+                    color: 'var(--text)',
+                    padding: '10px 14px',
+                    fontWeight: 800,
+                  }}
+                >
+                  Export suite vCon bundle
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await copyText(suiteBrief);
+                      setCopyMessage('Copied suite brief.');
+                    } catch {
+                      setCopyMessage('Could not copy suite brief.');
+                    }
+                  }}
+                  style={{
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    background: 'white',
+                    color: 'var(--text)',
+                    padding: '10px 14px',
+                    fontWeight: 800,
+                  }}
+                >
+                  Copy suite brief
+                </button>
+              </div>
+            </div>
+            <pre
+              aria-label="Suite brief"
+              style={{
+                margin: 0,
+                whiteSpace: 'pre-wrap',
+                overflowWrap: 'anywhere',
+                background: 'white',
+                border: '1px solid var(--border)',
+                borderRadius: 8,
+                padding: 14,
+                lineHeight: 1.5,
+              }}
+            >
+              {suiteBrief}
+            </pre>
+          </section>
+          <div style={{ display: 'grid', gap: 8 }}>
+            {suiteSimulation.scenario_runs.map((run) => {
+              const scenarioId = run.scenario_id ?? run.benchmark_report.scenario_id ?? '';
+              return (
+                <button
+                  type="button"
+                  key={run.benchmark_report.run_id ?? scenarioId}
+                  onClick={() => {
+                    setSelectedScenarioId(scenarioId);
+                    setTranscript(run.transcript);
+                    setActionTrace(stringifyEditable(run.action_trace, '[]'));
+                    setFinalState(stringifyEditable(run.final_state, '{}'));
+                    setReport(run.benchmark_report);
+                  }}
+                  style={{
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    background: scenarioId === report?.scenario_id ? 'var(--panel-alt)' : 'white',
+                    color: 'var(--text)',
+                    padding: 12,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                    textAlign: 'left',
+                    fontWeight: 760,
+                  }}
+                >
+                  <span>{run.scenario_title ?? run.benchmark_report.scenario_title ?? scenarioId}</span>
+                  <span>{run.benchmark_report.verdict} / {run.benchmark_report.overall_score}</span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
 
       {report ? (
         <section className="card" style={{ padding: 24, display: 'grid', gap: 18 }}>
