@@ -419,6 +419,7 @@ def run_scenario(request: Any) -> dict[str, Any]:
     overall_score = max(0, round((required_score * 0.45) + (rubric_score * 0.55) - penalty))
     verdict = 'pass' if overall_score >= 75 and not forbidden_hits else 'needs_review'
     run_metadata = _run_metadata(payload)
+    perturbation_tags = _perturbation_tags(payload)
     lifecycle_context = _run_lifecycle_context(payload)
     evidence_artifacts = _evidence_artifacts(payload, transcript)
     logical_run_id = _logical_run_id(suite_id, scenario_id, evidence_artifacts, run_metadata)
@@ -444,6 +445,7 @@ def run_scenario(request: Any) -> dict[str, Any]:
         'scenario_contract_sha256': _stable_digest(scenario_contract),
         'provider': suite['provider'],
         'run_metadata': run_metadata,
+        'perturbation_tags': perturbation_tags,
         'evidence_artifacts': evidence_artifacts,
         'evidence_audit_summary': _evidence_audit_summary(
             payload=payload,
@@ -508,6 +510,7 @@ def simulate_scenario(request: Any) -> dict[str, Any]:
             'transcript': transcript,
             'action_trace': action_trace,
             'final_state': final_state,
+            **_perturbation_payload(payload),
             **_run_metadata_payload(payload),
             **_run_lifecycle_payload(payload),
         }
@@ -550,10 +553,12 @@ def run_suite(request: Any) -> dict[str, Any]:
         scenario_payload = evidence_by_scenario.get(scenario['id'])
         if not isinstance(scenario_payload, dict):
             raise ValueError(f"Evidence for scenario {scenario['id']} must be an object")
+        inherited_perturbation_payload = {} if _has_perturbation_payload(scenario_payload) else _perturbation_payload(payload)
         scenario_reports.append(run_scenario({
             **scenario_payload,
             'suite_id': suite_id,
             'scenario_id': scenario['id'],
+            **inherited_perturbation_payload,
             **_run_metadata_payload(payload),
         }))
 
@@ -687,6 +692,7 @@ def _suite_reliability_metrics(scenario_reports: list[dict[str, Any]]) -> dict[s
             voice_summaries.append(voice_summary)
 
     total_turns = sum(_number(summary.get('turn_count')) for summary in voice_summaries)
+    perturbation_coverage = _perturbation_coverage(scenario_reports)
     return {
         'framework': 'eva_bench_inspired_v1',
         'scenario_count': scenario_count,
@@ -700,7 +706,65 @@ def _suite_reliability_metrics(scenario_reports: list[dict[str, Any]]) -> dict[s
         'interruption_signal_count': sum(_number(summary.get('interruption_signal_count')) for summary in voice_summaries),
         'correction_signal_count': sum(_number(summary.get('correction_signal_count')) for summary in voice_summaries),
         'handoff_signal_count': sum(_number(summary.get('handoff_signal_count')) for summary in voice_summaries),
+        'perturbation_tags': sorted({item['tag'] for item in perturbation_coverage}),
+        'perturbation_coverage': perturbation_coverage,
     }
+
+
+def _perturbation_coverage(scenario_reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    coverage: dict[str, dict[str, int]] = {}
+    for report in scenario_reports:
+        tags = report.get('perturbation_tags') if isinstance(report.get('perturbation_tags'), list) else []
+        for tag in tags:
+            bucket = coverage.setdefault(str(tag), {'scenario_count': 0, 'pass_count': 0})
+            bucket['scenario_count'] += 1
+            if report.get('verdict') == 'pass':
+                bucket['pass_count'] += 1
+    return [
+        {
+            'tag': tag,
+            'scenario_count': counts['scenario_count'],
+            'pass_count': counts['pass_count'],
+            'pass_rate': _ratio(counts['pass_count'], counts['scenario_count']),
+        }
+        for tag, counts in sorted(coverage.items())
+    ]
+
+
+def _has_perturbation_payload(payload: dict[str, Any]) -> bool:
+    return any(key in payload for key in ('perturbation_tags', 'perturbationTags', 'perturbations', 'robustness_tags', 'robustnessTags'))
+
+
+def _perturbation_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    tags = _perturbation_tags(payload)
+    return {'perturbation_tags': tags} if tags else {}
+
+
+def _perturbation_tags(payload: dict[str, Any]) -> list[str]:
+    raw = None
+    for key in ('perturbation_tags', 'perturbationTags', 'perturbations', 'robustness_tags', 'robustnessTags'):
+        if key in payload:
+            raw = payload.get(key)
+            break
+    if raw is None:
+        metadata = payload.get('run_metadata') if isinstance(payload.get('run_metadata'), dict) else {}
+        raw = metadata.get('perturbation_tags') or metadata.get('robustness_tags')
+    if isinstance(raw, str):
+        items = raw.split(',')
+    elif isinstance(raw, (list, tuple, set)):
+        items = list(raw)
+    else:
+        return []
+
+    tags = []
+    seen = set()
+    for item in items:
+        tag = str(item).strip().lower().replace('_', '-')
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        tags.append(tag)
+    return tags
 
 
 def _ratio(numerator: int | float, denominator: int | float) -> float:
@@ -1063,6 +1127,7 @@ def _suite_vcon_export(
                     'scenario_contract_sha256': report.get('scenario_contract_sha256'),
                     'overall_score': report.get('overall_score'),
                     'verdict': report.get('verdict'),
+                    'perturbation_tags': deepcopy(report.get('perturbation_tags', [])),
                     'missing_actions': deepcopy(report.get('missing_actions', [])),
                     'forbidden_action_hits': deepcopy(report.get('forbidden_action_hits', [])),
                     'failure_categories': deepcopy(report.get('failure_categories', [])),

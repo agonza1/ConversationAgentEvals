@@ -785,6 +785,7 @@ def test_run_suite_scores_all_scenario_evidence_payloads():
             'suite_id': 'telehealth-agent',
             'scenario_evidence': scenario_evidence,
             'agent_version': 'agent-v7',
+            'perturbation_tags': ['Noise', 'accent'],
         }
     )
 
@@ -799,6 +800,12 @@ def test_run_suite_scores_all_scenario_evidence_payloads():
     assert result['reliability_metrics']['pass_at_k'] == 1.0
     assert result['reliability_metrics']['pass_all_k'] == 1.0
     assert result['reliability_metrics']['experience_signal_coverage'] == 1.0
+    assert result['reliability_metrics']['perturbation_tags'] == ['accent', 'noise']
+    assert result['reliability_metrics']['perturbation_coverage'] == [
+        {'tag': 'accent', 'scenario_count': 2, 'pass_count': 2, 'pass_rate': 1.0},
+        {'tag': 'noise', 'scenario_count': 2, 'pass_count': 2, 'pass_rate': 1.0},
+    ]
+    assert result['scenario_reports'][0]['perturbation_tags'] == ['noise', 'accent']
     assert result['run_metadata'] == {'agent_version': 'agent-v7'}
     assert [report['scenario_id'] for report in result['scenario_reports']] == [scenario['id'] for scenario in suite['scenarios']]
     suite_export = result['vcon_export']
@@ -809,7 +816,9 @@ def test_run_suite_scores_all_scenario_evidence_payloads():
     assert suite_analysis['body']['suite_run_id'] == result['suite_run_id']
     assert suite_analysis['body']['scenario_count'] == result['scenario_count']
     assert suite_analysis['body']['reliability_metrics']['pass_at_1'] == 1.0
+    assert suite_analysis['body']['reliability_metrics']['perturbation_tags'] == ['accent', 'noise']
     assert suite_analysis['body']['scenario_results'][0]['scenario_contract_sha256'] == result['scenario_reports'][0]['scenario_contract_sha256']
+    assert suite_analysis['body']['scenario_results'][0]['perturbation_tags'] == ['noise', 'accent']
 
 
 def test_run_suite_endpoint_rejects_missing_scenario_evidence():
