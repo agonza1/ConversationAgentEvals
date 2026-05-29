@@ -116,6 +116,15 @@ interface SavedRunArtifacts {
   has_transcript?: boolean;
   evidence_items?: number;
   regression_delta?: RegressionDelta;
+  vcon_export?: SavedRunVconExportSummary;
+}
+
+interface SavedRunVconExportSummary {
+  available?: boolean;
+  dialog_turns?: number;
+  analysis_count?: number;
+  source_format?: string | null;
+  appended_analysis_type?: string | null;
 }
 
 interface PricingPlan {
@@ -190,6 +199,14 @@ interface ScenarioRegressionSummary {
   pass_rate?: number | null;
 }
 
+interface ProjectVconExportSummary {
+  available_records: number;
+  missing_records: number;
+  total_runs: number;
+  dialog_turns: number;
+  analysis_records: number;
+}
+
 interface SavedRunExport {
   id: string;
   filename: string;
@@ -210,6 +227,7 @@ interface ProjectHistoryExport {
   firestore_collection_path: string;
   run_count: number;
   summary: ProjectRegressionSummary;
+  vcon_export_summary: ProjectVconExportSummary;
   runs: SavedRunExport[];
   exported_at: string;
 }
@@ -550,6 +568,18 @@ function regressionDeltaColor(status?: string) {
   return 'var(--text)';
 }
 
+function savedRunVconSummary(summary?: SavedRunVconExportSummary) {
+  if (!summary?.available) return 'vCon export not captured.';
+  const source = summary.source_format ?? 'benchmark';
+  const analysis = summary.appended_analysis_type ?? 'agentic_benchmark_eval';
+  return `vCon ready: ${summary.dialog_turns ?? 0} dialog turns, ${summary.analysis_count ?? 0} analysis records (${source}, ${analysis}).`;
+}
+
+function projectVconExportSummary(summary?: ProjectVconExportSummary) {
+  if (!summary?.available_records) return 'No vCon-ready saved runs captured.';
+  return `${summary.available_records}/${summary.total_runs} vCon-ready runs with ${summary.dialog_turns} dialog turns and ${summary.analysis_records} analysis records.`;
+}
+
 function formatSignedDelta(value?: number | null) {
   if (typeof value !== 'number') return 'n/a';
   return value > 0 ? `+${value}` : String(value);
@@ -860,7 +890,7 @@ export function BenchmarkRunner() {
     try {
       const exported = await exportProjectHistory(userId, projectId);
       downloadJson(exported.filename, exported);
-      setExportMessage(`Exported ${exported.run_count} runs to ${exported.filename}.`);
+      setExportMessage(`Exported ${exported.run_count} runs to ${exported.filename}. ${projectVconExportSummary(exported.vcon_export_summary)}`);
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : 'Could not export this project history.');
     }
@@ -1551,6 +1581,9 @@ export function BenchmarkRunner() {
                   </div>
                   <div style={{ marginTop: 4, fontSize: 13, color: regressionDeltaColor(run.artifacts?.regression_delta?.status) }}>
                     {regressionDeltaSummary(run.artifacts?.regression_delta)}
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: 13, color: run.artifacts?.vcon_export?.available ? 'var(--success-text)' : 'var(--muted)' }}>
+                    {savedRunVconSummary(run.artifacts?.vcon_export)}
                   </div>
                   <div style={{ marginTop: 4, fontSize: 12, color: 'var(--muted)' }}>
                     {run.firestore_path}

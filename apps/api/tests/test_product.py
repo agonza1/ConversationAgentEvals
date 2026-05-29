@@ -750,6 +750,42 @@ def test_saved_runs_preserve_evidence_audit_summary_in_history_and_export():
     assert export_response.json()['report']['evidence_audit_summary'] == audit_summary
 
 
+def test_saved_runs_include_vcon_export_summary_in_artifacts():
+    response = client.post(
+        '/api/product/runs',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'call-center',
+            'plan': 'starter',
+            'report': {
+                'run_id': 'abc',
+                'overall_score': 92,
+                'vcon_export': {
+                    'vcon': '0.0.1',
+                    'dialog': [{'type': 'text', 'body': 'Agent: verified caller.'}],
+                    'analysis': [{'type': 'agentic_benchmark_eval'}],
+                    'source_format': 'benchmark',
+                    'appended_analysis_type': 'agentic_benchmark_eval',
+                },
+            },
+            'transcript': 'Agent: verified caller.',
+        },
+    )
+
+    assert response.status_code == 200
+    saved = response.json()
+    assert saved['artifacts']['vcon_export'] == {
+        'available': True,
+        'dialog_turns': 1,
+        'analysis_count': 1,
+        'source_format': 'benchmark',
+        'appended_analysis_type': 'agentic_benchmark_eval',
+    }
+
+    export_response = client.get(f"/api/product/runs/{saved['id']}/export", params={'user_id': 'demo-user'})
+    assert export_response.json()['artifacts']['vcon_export']['available'] is True
+
+
 def test_saved_run_export_returns_owner_scoped_json_payload():
     create_response = client.post(
         '/api/product/runs',
@@ -781,13 +817,20 @@ def test_saved_run_export_returns_owner_scoped_json_payload():
 
 def test_project_export_returns_owner_scoped_history_bundle():
     for run_id, score in [('run-1', 82), ('run-2', 94)]:
+        report = {'run_id': run_id, 'overall_score': score}
+        if run_id == 'run-2':
+            report['vcon_export'] = {
+                'dialog': [{'type': 'text'}, {'type': 'text'}],
+                'analysis': [{'type': 'agentic_benchmark_eval'}],
+            }
+
         response = client.post(
             '/api/product/runs',
             json={
                 'user_id': 'demo-user',
                 'project_id': 'call-center',
                 'plan': 'starter',
-                'report': {'run_id': run_id, 'overall_score': score},
+                'report': report,
                 'transcript': f'Agent: completed benchmark {run_id}.',
             },
         )
@@ -804,6 +847,13 @@ def test_project_export_returns_owner_scoped_history_bundle():
     assert exported['run_count'] == 2
     assert exported['summary']['latest_status'] == 'improved'
     assert exported['summary']['latest_score'] == 94
+    assert exported['vcon_export_summary'] == {
+        'available_records': 1,
+        'missing_records': 1,
+        'total_runs': 2,
+        'dialog_turns': 2,
+        'analysis_records': 1,
+    }
     assert [run['report']['run_id'] for run in exported['runs']] == ['run-2', 'run-1']
     assert exported['runs'][0]['artifacts']['regression_delta']['status'] == 'improved'
     assert exported['exported_at']
