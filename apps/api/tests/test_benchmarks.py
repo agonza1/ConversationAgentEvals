@@ -625,6 +625,14 @@ def test_run_suite_scores_all_scenario_evidence_payloads():
     assert result['verdict'] == 'pass'
     assert result['run_metadata'] == {'agent_version': 'agent-v7'}
     assert [report['scenario_id'] for report in result['scenario_reports']] == [scenario['id'] for scenario in suite['scenarios']]
+    suite_export = result['vcon_export']
+    suite_analysis = suite_export['analysis'][0]
+    assert suite_export['source_format'] == 'benchmark_suite'
+    assert suite_export['appended_analysis_type'] == 'agentic_benchmark_suite_eval'
+    assert suite_analysis['type'] == 'agentic_benchmark_suite_eval'
+    assert suite_analysis['body']['suite_run_id'] == result['suite_run_id']
+    assert suite_analysis['body']['scenario_count'] == result['scenario_count']
+    assert suite_analysis['body']['scenario_results'][0]['scenario_contract_sha256'] == result['scenario_reports'][0]['scenario_contract_sha256']
 
 
 def test_run_suite_endpoint_rejects_missing_scenario_evidence():
@@ -915,6 +923,9 @@ def test_simulate_suite_endpoint_returns_full_suite_regression_run():
     assert payload['pass_count'] == payload['scenario_count']
     assert payload['run_metadata'] == {'agent_version': 'agent-v1'}
     assert payload['scenario_runs'][0]['benchmark_report']['suite_id'] == 'call-center-voice-ai'
+    assert payload['vcon_export']['source_format'] == 'benchmark_suite'
+    assert payload['vcon_export']['analysis'][0]['body']['suite_run_id'] == payload['suite_run_id']
+    assert payload['vcon_export']['analysis'][0]['body']['scenario_results'][0]['run_id'] == payload['scenario_runs'][0]['benchmark_report']['run_id']
 
 
 def test_simulate_suite_endpoint_rejects_unknown_suite():

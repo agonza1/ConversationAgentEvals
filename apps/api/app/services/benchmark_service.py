@@ -568,6 +568,8 @@ def run_suite(request: Any) -> dict[str, Any]:
         }
     )[:16]
 
+    verdict = 'pass' if scenario_reports and len(passing_reports) == len(scenario_reports) else 'needs_review'
+
     return {
         'suite_run_id': suite_run_id,
         'suite_id': suite_id,
@@ -578,8 +580,16 @@ def run_suite(request: Any) -> dict[str, Any]:
         'pass_count': len(passing_reports),
         'needs_review_count': len(scenario_reports) - len(passing_reports),
         'average_score': average_score,
-        'verdict': 'pass' if scenario_reports and len(passing_reports) == len(scenario_reports) else 'needs_review',
+        'verdict': verdict,
         'scenario_reports': scenario_reports,
+        'vcon_export': _suite_vcon_export(
+            suite=suite,
+            suite_run_id=suite_run_id,
+            run_metadata=run_metadata,
+            average_score=average_score,
+            verdict=verdict,
+            scenario_reports=scenario_reports,
+        ),
     }
 
 
@@ -609,6 +619,8 @@ def simulate_suite(request: Any) -> dict[str, Any]:
         }
     )[:16]
 
+    verdict = 'pass' if reports and len(passing_reports) == len(reports) else 'needs_review'
+
     return {
         'suite_run_id': suite_run_id,
         'suite_id': suite_id,
@@ -619,8 +631,16 @@ def simulate_suite(request: Any) -> dict[str, Any]:
         'pass_count': len(passing_reports),
         'needs_review_count': len(reports) - len(passing_reports),
         'average_score': average_score,
-        'verdict': 'pass' if reports and len(passing_reports) == len(reports) else 'needs_review',
+        'verdict': verdict,
         'scenario_runs': scenario_runs,
+        'vcon_export': _suite_vcon_export(
+            suite=suite,
+            suite_run_id=suite_run_id,
+            run_metadata=run_metadata,
+            average_score=average_score,
+            verdict=verdict,
+            scenario_reports=reports,
+        ),
     }
 
 
@@ -932,6 +952,56 @@ def _vcon_analysis(report: dict[str, Any]) -> dict[str, Any]:
         'type': 'agentic_benchmark_eval',
         'encoding': 'json',
         'body': {key: deepcopy(report[key]) for key in body_keys if key in report},
+    }
+
+
+
+def _suite_vcon_export(
+    *,
+    suite: BenchmarkSuite,
+    suite_run_id: str,
+    run_metadata: dict[str, str],
+    average_score: int,
+    verdict: str,
+    scenario_reports: list[dict[str, Any]],
+) -> dict[str, Any]:
+    analysis = {
+        'type': 'agentic_benchmark_suite_eval',
+        'encoding': 'json',
+        'body': {
+            'suite_run_id': suite_run_id,
+            'suite_id': suite['id'],
+            'suite_name': suite['name'],
+            'provider': suite['provider'],
+            'run_metadata': deepcopy(run_metadata),
+            'scenario_count': len(scenario_reports),
+            'pass_count': sum(1 for report in scenario_reports if report.get('verdict') == 'pass'),
+            'needs_review_count': sum(1 for report in scenario_reports if report.get('verdict') != 'pass'),
+            'average_score': average_score,
+            'verdict': verdict,
+            'scenario_results': [
+                {
+                    'run_id': report.get('run_id'),
+                    'scenario_id': report.get('scenario_id'),
+                    'scenario_title': report.get('scenario_title'),
+                    'scenario_contract_sha256': report.get('scenario_contract_sha256'),
+                    'overall_score': report.get('overall_score'),
+                    'verdict': report.get('verdict'),
+                    'missing_actions': deepcopy(report.get('missing_actions', [])),
+                    'forbidden_action_hits': deepcopy(report.get('forbidden_action_hits', [])),
+                    'failure_categories': deepcopy(report.get('failure_categories', [])),
+                }
+                for report in scenario_reports
+            ],
+        },
+    }
+    return {
+        'vcon': '0.0.1',
+        'parties': [{'name': 'Benchmark suite'}],
+        'dialog': [],
+        'analysis': [analysis],
+        'appended_analysis_type': analysis['type'],
+        'source_format': 'benchmark_suite',
     }
 
 
