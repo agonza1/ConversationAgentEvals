@@ -26,6 +26,7 @@ from app.schemas.product import (
     ProductProjectRegressionSummary,
     ProductProjectExportResponse,
     ProductProjectSettingsRequest,
+    ProductProjectVconExportSummary,
     ProductProjectResponse,
     ProductWorkspaceInvitationResponse,
     ProductWorkspaceMemberResponse,
@@ -520,9 +521,35 @@ def export_project_runs(db: Session, user_id: str, project_id: str) -> ProductPr
         firestore_collection_path=_firestore_project_runs_path(user_id=user_id, project_key=project.project_key),
         run_count=len(runs),
         summary=summary,
+        vcon_export_summary=_project_vcon_export_summary(runs),
         runs=runs,
         exported_at=datetime.now(UTC).isoformat(),
     )
+
+
+def _project_vcon_export_summary(runs: list[SavedRunExportResponse]) -> ProductProjectVconExportSummary:
+    available_records = 0
+    dialog_turns = 0
+    analysis_records = 0
+    for run in runs:
+        summary = run.artifacts.get('vcon_export') if isinstance(run.artifacts, dict) else None
+        if not isinstance(summary, dict) or not summary.get('available'):
+            continue
+        available_records += 1
+        dialog_turns += _int_count(summary.get('dialog_turns'))
+        analysis_records += _int_count(summary.get('analysis_count'))
+
+    return ProductProjectVconExportSummary(
+        available_records=available_records,
+        missing_records=max(len(runs) - available_records, 0),
+        total_runs=len(runs),
+        dialog_turns=dialog_turns,
+        analysis_records=analysis_records,
+    )
+
+
+def _int_count(value: Any) -> int:
+    return value if isinstance(value, int) and value > 0 else 0
 
 
 def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> JudgeResponse:
@@ -813,7 +840,23 @@ def _build_artifacts(report: dict[str, Any], transcript: str | None, previous_re
         'overall_score': report.get('overall_score'),
         'regression_delta': _regression_delta(report, previous_report),
         'evidence_spans': report.get('evidence_spans') or report.get('evidence') or [],
+        'vcon_export': _vcon_export_summary(report.get('vcon_export')),
         'transcript_lines': len([line for line in (transcript or '').splitlines() if line.strip()]),
+    }
+
+
+def _vcon_export_summary(vcon_export: Any) -> dict[str, Any]:
+    if not isinstance(vcon_export, dict):
+        return {'available': False, 'dialog_turns': 0, 'analysis_count': 0, 'source_format': None}
+
+    dialog = vcon_export.get('dialog')
+    analysis = vcon_export.get('analysis')
+    return {
+        'available': True,
+        'dialog_turns': len(dialog) if isinstance(dialog, list) else 0,
+        'analysis_count': len(analysis) if isinstance(analysis, list) else 0,
+        'source_format': vcon_export.get('source_format'),
+        'appended_analysis_type': vcon_export.get('appended_analysis_type'),
     }
 
 

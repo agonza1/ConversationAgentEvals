@@ -100,6 +100,14 @@ class ProductProjectRegressionSummary(BaseModel):
     scenario_summaries: list[ProductScenarioRegressionSummary] = Field(default_factory=list)
 
 
+class ProductProjectVconExportSummary(BaseModel):
+    available_records: int = 0
+    missing_records: int = 0
+    total_runs: int = 0
+    dialog_turns: int = 0
+    analysis_records: int = 0
+
+
 class ProductWorkspaceRequest(BaseModel):
     owner_user_id: str = Field(min_length=1)
     workspace_id: str = Field(default='default')
@@ -200,6 +208,7 @@ class ProductProjectExportResponse(BaseModel):
     firestore_collection_path: str
     run_count: int
     summary: ProductProjectRegressionSummary
+    vcon_export_summary: ProductProjectVconExportSummary = Field(default_factory=ProductProjectVconExportSummary)
     runs: list[SavedRunExportResponse] = Field(default_factory=list)
     exported_at: str
 
