@@ -8,12 +8,14 @@ from app.schemas.product import (
     JudgeRequest,
     ProductProjectRequest,
     ProductProjectSettingsRequest,
+    ProductWorkspaceInvitationAcceptRequest,
     ProductWorkspaceInvitationRequest,
     ProductWorkspaceMemberRequest,
     ProductWorkspaceRequest,
     SavedRunRequest,
 )
 from app.services.product_service import (
+    accept_workspace_invitation,
     add_workspace_member,
     export_project_runs,
     export_saved_run,
@@ -91,6 +93,25 @@ def create_workspace_invitation(
     if invitation is None:
         raise HTTPException(status_code=404, detail='Workspace not found or requester lacks admin access')
     return invitation
+
+
+@router.post('/workspaces/{workspace_id}/invitations/{invitation_id}/accept')
+def accept_invitation(
+    workspace_id: str,
+    invitation_id: str,
+    payload: ProductWorkspaceInvitationAcceptRequest,
+    db: Session = Depends(get_db),
+):
+    workspace = accept_workspace_invitation(
+        db=db,
+        workspace_id=workspace_id,
+        invitation_id=invitation_id,
+        user_id=payload.user_id,
+        email=payload.email,
+    )
+    if workspace is None:
+        raise HTTPException(status_code=404, detail='Pending invitation not found for this email')
+    return workspace
 
 
 @router.post('/projects')

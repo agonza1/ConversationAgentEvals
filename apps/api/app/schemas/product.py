@@ -160,6 +160,11 @@ class ProductWorkspaceInvitationRequest(BaseModel):
     role: WorkspaceRole = 'viewer'
 
 
+class ProductWorkspaceInvitationAcceptRequest(BaseModel):
+    user_id: str = Field(min_length=1)
+    email: str = Field(min_length=3)
+
+
 class ProductProjectSettingsRequest(BaseModel):
     user_id: str = Field(min_length=1)
     settings: dict[str, Any] = Field(default_factory=dict)

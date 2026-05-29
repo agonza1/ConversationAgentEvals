@@ -196,6 +196,35 @@ def invite_workspace_member(db: Session, workspace_id: str, requester_user_id: s
     return _serialize_invitation(invitation)
 
 
+def accept_workspace_invitation(
+    db: Session,
+    workspace_id: str,
+    invitation_id: str,
+    user_id: str,
+    email: str,
+) -> ProductWorkspaceResponse | None:
+    invitation = (
+        db.query(ProductWorkspaceInvitation)
+        .filter(
+            ProductWorkspaceInvitation.id == invitation_id,
+            ProductWorkspaceInvitation.workspace_id == workspace_id,
+            ProductWorkspaceInvitation.status == 'pending',
+            ProductWorkspaceInvitation.email == email.strip().lower(),
+        )
+        .first()
+    )
+    if invitation is None:
+        return None
+
+    invitation.status = 'accepted'
+    workspace = invitation.workspace
+    _upsert_workspace_member(db=db, workspace=workspace, user_id=user_id, role=invitation.role)
+    db.add(invitation)
+    db.commit()
+    db.refresh(workspace)
+    return _serialize_workspace(workspace)
+
+
 def upsert_project(
     db: Session,
     user_id: str,
