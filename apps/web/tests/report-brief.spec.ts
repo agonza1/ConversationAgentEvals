@@ -229,3 +229,48 @@ test('benchmark runner shows suite simulation summary', async ({ page }) => {
 
   await expect(page.getByRole('heading', { name: /pass|needs_review/i })).toBeVisible();
 });
+
+test('benchmark runner shows retained suite run history', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    window.localStorage.setItem('conversation-evals-demo-project', 'qa-project');
+  });
+
+  await page.route('**/api/benchmarks/suite-runs?*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          suite_run_id: 'suite-history-1',
+          suite_id: 'call-center-voice-ai',
+          status: 'completed',
+          scenario_count: 2,
+          pass_count: 1,
+          needs_review_count: 1,
+          average_score: 82,
+          updated_at: '2026-05-29T15:00:00+00:00',
+          suite_report: { suite_name: 'Call Center Voice AI' },
+          retention: { retained_until: '2026-08-27T15:00:00+00:00' },
+          artifacts: {
+            vcon_export: { available: true, dialog_turns: 4, analysis_count: 1, source_format: 'benchmark_suite' },
+            scenario_summaries: [
+              { scenario_id: 'membership-renewal-save', run_id: 'scenario-run-1', status: 'pass', overall_score: 91 },
+              { scenario_id: 'billing-escalation', run_id: 'scenario-run-2', status: 'needs_review', overall_score: 73 },
+            ],
+          },
+        },
+      ]),
+    });
+  });
+
+  await page.goto('/benchmarks');
+
+  const suiteHistory = page.getByLabel('Suite run history');
+  await expect(suiteHistory).toBeVisible();
+  await expect(suiteHistory.getByRole('heading', { name: /1 suite runs/ })).toBeVisible();
+  await expect(suiteHistory.getByText('Call Center Voice AI')).toBeVisible();
+  await expect(suiteHistory.getByText('completed')).toBeVisible();
+  await expect(suiteHistory.getByText('4 dialog turns, 1 analysis records')).toBeVisible();
+  await expect(suiteHistory.getByText(/billing-escalation: needs_review \/ 73/)).toBeVisible();
+});

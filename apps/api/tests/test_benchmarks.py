@@ -252,6 +252,16 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
     assert suite_record['suite_report']['verdict'] == simulation['verdict']
     assert suite_record['scenario_count'] == simulation['scenario_count']
     assert suite_record['retention']['retention_days'] == 45
+    assert suite_record['artifacts']['vcon_export'] == {
+        'available': True,
+        'dialog_turns': 0,
+        'analysis_count': 1,
+        'source_format': 'benchmark_suite',
+        'appended_analysis_type': 'agentic_benchmark_suite_eval',
+    }
+    assert [item['scenario_id'] for item in suite_record['artifacts']['scenario_summaries']] == [
+        run['benchmark_report']['scenario_id'] for run in simulation['scenario_runs']
+    ]
     assert suite_record['suite_report']['vcon_export']['analysis'][0]['type'] == 'agentic_benchmark_suite_eval'
 
     detail_response = client.get(
@@ -260,7 +270,9 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
     )
 
     assert detail_response.status_code == 200
-    assert detail_response.json()['suite_report']['suite_id'] == 'call-center-voice-ai'
+    detail_payload = detail_response.json()
+    assert detail_payload['suite_report']['suite_id'] == 'call-center-voice-ai'
+    assert detail_payload['artifacts']['scenario_summaries'][0]['run_id'] == simulation['scenario_runs'][0]['benchmark_report']['run_id']
 
     child_response = client.get(
         '/api/benchmarks/runs',
@@ -276,6 +288,56 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
 
     wrong_owner = client.get(f"/api/benchmarks/suite-runs/{simulation['suite_run_id']}", params={'user_id': 'other-user'})
     assert wrong_owner.status_code == 404
+
+
+def test_suite_simulate_async_endpoint_tracks_queued_to_terminal_lifecycle():
+    response = client.post(
+        '/api/benchmarks/suites/call-center-voice-ai/simulate-async',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'qa-project',
+            'agent_profile': 'deterministic qa agent',
+            'metadata': {'retention_days': '45'},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    queued = response.json()
+    assert queued['status'] == 'queued'
+    assert queued['run_lifecycle']['status'] == 'queued'
+    assert queued['run_lifecycle']['terminal'] is False
+    assert queued['retention']['retention_days'] == 45
+
+    detail_response = client.get(f"/api/benchmarks/suite-runs/{queued['suite_run_id']}", params={'user_id': 'demo-user'})
+
+    assert detail_response.status_code == 200
+    completed = detail_response.json()
+    assert completed['suite_run_id'] == queued['suite_run_id']
+    assert completed['status'] == 'completed'
+    assert completed['suite_report']['suite_run_id'] == queued['suite_run_id']
+    assert completed['run_lifecycle']['status'] == 'completed'
+    assert completed['run_lifecycle']['terminal'] is True
+    assert [transition['to'] for transition in completed['run_lifecycle']['transitions']] == ['queued', 'running', 'completed']
+    assert completed['scenario_count'] == len(get_suite('call-center-voice-ai')['scenarios'])
+
+
+def test_suite_async_endpoint_retains_background_failures():
+    response = client.post(
+        '/api/benchmarks/suites/missing/simulate-async',
+        json={'user_id': 'demo-user', 'project_id': 'qa-project'},
+    )
+
+    assert response.status_code == 200, response.text
+    queued = response.json()
+
+    detail_response = client.get(f"/api/benchmarks/suite-runs/{queued['suite_run_id']}", params={'user_id': 'demo-user'})
+
+    assert detail_response.status_code == 200
+    failed = detail_response.json()
+    assert failed['status'] == 'failed'
+    assert failed['completed_at'] is not None
+    assert failed['suite_report']['error'] == 'Unknown benchmark suite: missing'
+    assert [transition['to'] for transition in failed['run_lifecycle']['transitions']] == ['queued', 'running', 'failed']
 
 
 def test_scenarios_endpoint_rejects_unknown_suite():

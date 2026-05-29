@@ -263,6 +263,34 @@ interface BenchmarkSimulationResponse {
   benchmark_report: BenchmarkReport;
 }
 
+interface BenchmarkSuiteScenarioSummary {
+  scenario_id?: string;
+  run_id?: string;
+  status?: string;
+  overall_score?: number;
+  failure_categories?: string[];
+}
+
+interface BenchmarkSuiteRunRecord {
+  suite_run_id: string;
+  suite_id: string;
+  status: string;
+  scenario_count: number;
+  pass_count: number;
+  needs_review_count: number;
+  average_score: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+  completed_at?: string | null;
+  suite_report?: { suite_name?: string; verdict?: string; run_metadata?: RunMetadata };
+  run_lifecycle?: { status?: string; terminal?: boolean; transitions?: Array<{ to?: string; at?: string; reason?: string }> };
+  retention?: { retained_until?: string | null; retention_days?: number; policy?: string };
+  artifacts?: {
+    scenario_summaries?: BenchmarkSuiteScenarioSummary[];
+    vcon_export?: { available?: boolean; dialog_turns?: number; analysis_count?: number; source_format?: string; appended_analysis_type?: string | null };
+  };
+}
+
 interface BenchmarkSuiteSimulationResponse {
   suite_run_id: string;
   suite_id: string;
@@ -488,6 +516,15 @@ async function saveBenchmarkRun(payload: {
   );
 }
 
+async function listBenchmarkSuiteRuns(userId: string, projectId: string, suiteId?: string) {
+  const params = new URLSearchParams({ user_id: userId, project_id: projectId });
+  if (suiteId) params.set('suite_id', suiteId);
+
+  return handleJson<BenchmarkSuiteRunRecord[]>(
+    await fetch(`${getApiBase()}/api/benchmarks/suite-runs?${params.toString()}`, { cache: 'no-store' }),
+  );
+}
+
 async function listSavedRuns(userId: string, projectId: string, suiteId?: string, scenarioId?: string) {
   const params = new URLSearchParams({ user_id: userId, project_id: projectId });
   if (suiteId) params.set('suite_id', suiteId);
@@ -637,6 +674,31 @@ function scenarioSummaryLabel(summary: ScenarioRegressionSummary) {
   return summary.suite_id ? `${summary.suite_id} / ${summary.scenario_id}` : summary.scenario_id;
 }
 
+function suiteRunStatusColor(status?: string) {
+  if (status === 'completed') return 'var(--success-text)';
+  if (status === 'failed') return 'var(--danger)';
+  if (status === 'needs_review') return '#b45309';
+  if (status === 'queued' || status === 'running') return 'var(--accent)';
+  return 'var(--muted)';
+}
+
+function formatHistoryDate(value?: string | null) {
+  if (!value) return 'n/a';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function suiteRunTitle(run: BenchmarkSuiteRunRecord) {
+  return run.suite_report?.suite_name ?? run.suite_id;
+}
+
+function suiteRunVconSummary(run: BenchmarkSuiteRunRecord) {
+  const summary = run.artifacts?.vcon_export;
+  if (!summary?.available) return 'vCon bundle not captured yet.';
+  return `${summary.dialog_turns ?? 0} dialog turns, ${summary.analysis_count ?? 0} analysis records (${summary.source_format ?? 'suite'}).`;
+}
+
 function formatAuditTimestamp(value?: string) {
   if (!value) return 'Not captured';
   const date = new Date(value);
@@ -769,6 +831,7 @@ export function BenchmarkRunner() {
   const [projectId, setProjectId] = useState('call-center-demo');
   const [plan, setPlan] = useState<PricingPlan['id']>('free');
   const [savedRuns, setSavedRuns] = useState<SavedRun[]>([]);
+  const [suiteRuns, setSuiteRuns] = useState<BenchmarkSuiteRunRecord[]>([]);
   const [projectRegressionSummary, setProjectRegressionSummary] = useState<ProjectRegressionSummary | null>(null);
   const [scenarioRegressionSummary, setScenarioRegressionSummary] = useState<ProjectRegressionSummary | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
@@ -833,6 +896,7 @@ export function BenchmarkRunner() {
   useEffect(() => {
     if (!userId) {
       setSavedRuns([]);
+      setSuiteRuns([]);
       setProjectRegressionSummary(null);
       setScenarioRegressionSummary(null);
       return;
@@ -841,20 +905,23 @@ export function BenchmarkRunner() {
     let isMounted = true;
     Promise.all([
       listSavedRuns(userId, projectId, selectedSuite?.id, selectedScenario?.id),
+      listBenchmarkSuiteRuns(userId, projectId, selectedSuite?.id).catch(() => []),
       fetchProjectRegressionSummary(userId, projectId).catch(() => null),
       selectedSuite?.id && selectedScenario?.id
         ? fetchProjectRegressionSummary(userId, projectId, selectedSuite.id, selectedScenario.id).catch(() => null)
         : Promise.resolve(null),
     ])
-      .then(([runs, summary, scenarioSummary]) => {
+      .then(([runs, nextSuiteRuns, summary, scenarioSummary]) => {
         if (!isMounted) return;
         setSavedRuns(runs);
+        setSuiteRuns(nextSuiteRuns);
         setProjectRegressionSummary(summary);
         setScenarioRegressionSummary(scenarioSummary);
       })
       .catch(() => {
         if (!isMounted) return;
         setSavedRuns([]);
+        setSuiteRuns([]);
         setProjectRegressionSummary(null);
         setScenarioRegressionSummary(null);
       });
@@ -954,6 +1021,9 @@ export function BenchmarkRunner() {
           .then(setScenarioRegressionSummary)
           .catch(() => setScenarioRegressionSummary(null));
       }
+      listBenchmarkSuiteRuns(userId, projectId, suiteSimulation.suite_id)
+        .then(setSuiteRuns)
+        .catch(() => setSuiteRuns([]));
       setSaveMessage(`Saved ${saved.length} suite runs to ${projectId}.`);
     } catch (err) {
       setSaveMessage(err instanceof Error ? err.message : 'Could not save this suite.');
@@ -1134,6 +1204,11 @@ export function BenchmarkRunner() {
         ?? simulation.scenario_runs[0]
         ?? null;
       setSuiteSimulation(simulation);
+      if (userId) {
+        listBenchmarkSuiteRuns(userId, projectId, selectedSuite.id)
+          .then(setSuiteRuns)
+          .catch(() => setSuiteRuns([]));
+      }
       if (focusedRun) {
         setSelectedScenarioId(focusedRun.scenario_id ?? focusedRun.benchmark_report.scenario_id ?? '');
         setTranscript(focusedRun.transcript);
@@ -1943,6 +2018,64 @@ export function BenchmarkRunner() {
             <p style={{ margin: 0, color: 'var(--muted)' }}>Run this scenario, sign up, then save it to build focused history.</p>
           )}
           {exportMessage ? <p style={{ margin: 0, color: 'var(--muted)' }}>{exportMessage}</p> : null}
+        </div>
+
+        <div className="card" style={{ padding: 20, display: 'grid', gap: 12 }} aria-label="Suite run history">
+          <p className="eyebrow">Suite runs</p>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <h3 style={{ margin: 0 }}>
+              {userId ? `${suiteRuns.length} suite runs for ${selectedSuite?.title ?? projectId}` : 'Signup required'}
+            </h3>
+            <span style={{ color: 'var(--muted)', fontWeight: 800 }}>
+              {suiteRuns.filter((run) => run.status === 'running' || run.status === 'queued').length} active
+            </span>
+          </div>
+          {suiteRuns.length ? (
+            <div style={{ display: 'grid', gap: 10 }}>
+              {suiteRuns.slice(0, 4).map((run) => {
+                const scenarioSummaries = run.artifacts?.scenario_summaries ?? [];
+                return (
+                  <article
+                    key={run.suite_run_id}
+                    style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white', display: 'grid', gap: 8 }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                      <strong>{suiteRunTitle(run)}</strong>
+                      <span style={{ color: suiteRunStatusColor(run.status), fontWeight: 900, textTransform: 'capitalize' }}>
+                        {run.status.replace(/_/g, ' ')}
+                      </span>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8 }}>
+                      <AuditFact label="Scenarios" value={String(run.scenario_count)} />
+                      <AuditFact label="Passing" value={String(run.pass_count)} />
+                      <AuditFact label="Review" value={String(run.needs_review_count)} />
+                      <AuditFact label="Average" value={String(run.average_score ?? 'n/a')} />
+                    </div>
+                    <p style={{ margin: 0, color: 'var(--muted)' }}>
+                      Retained until {formatHistoryDate(run.retention?.retained_until)}. Updated {formatHistoryDate(run.updated_at)}.
+                    </p>
+                    <p style={{ margin: 0, color: run.artifacts?.vcon_export?.available ? 'var(--success-text)' : 'var(--muted)' }}>
+                      {suiteRunVconSummary(run)}
+                    </p>
+                    {scenarioSummaries.length ? (
+                      <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--muted)', display: 'grid', gap: 4 }}>
+                        {scenarioSummaries.slice(0, 3).map((scenario) => (
+                          <li key={`${run.suite_run_id}:${scenario.run_id ?? scenario.scenario_id}`}>
+                            {scenario.scenario_id ?? 'scenario'}: {scenario.status ?? 'unknown'} / {scenario.overall_score ?? 'n/a'}
+                            {scenario.run_id ? ` (${scenario.run_id})` : ''}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p style={{ margin: 0, color: 'var(--muted)' }}>Scenario artifacts appear when the suite run completes.</p>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <p style={{ margin: 0, color: 'var(--muted)' }}>Run a suite while signed in to retain suite-level history and child report links.</p>
+          )}
         </div>
 
         <div className="card" style={{ padding: 20, display: 'grid', gap: 12 }}>

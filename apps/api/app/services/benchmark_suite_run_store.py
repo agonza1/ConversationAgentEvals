@@ -11,6 +11,61 @@ from app.models.entities import BenchmarkSuiteRunRecord
 from app.services.benchmark_service import DETERMINISTIC_EVALUATOR_VERSION
 from app.services.benchmark_run_store import DEFAULT_PROJECT_ID, DEFAULT_RETENTION_DAYS, DEFAULT_USER_ID
 
+TERMINAL_SUITE_STATUSES = {'completed', 'needs_review', 'failed'}
+
+
+def create_benchmark_suite_run_record(
+    db: Session,
+    *,
+    suite_run_id: str,
+    suite_id: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    now = datetime.now(UTC)
+    clean_metadata = metadata if isinstance(metadata, dict) else {}
+    user_id = _first_text(clean_metadata.get('user_id'), clean_metadata.get('owner_user_id')) or DEFAULT_USER_ID
+    project_key = _first_text(clean_metadata.get('project_id'), clean_metadata.get('project_key')) or DEFAULT_PROJECT_ID
+    retained_until = _retained_until(clean_metadata, now)
+
+    record = db.get(BenchmarkSuiteRunRecord, suite_run_id)
+    if record is None:
+        record = BenchmarkSuiteRunRecord(id=suite_run_id, created_at=now)
+    record.user_id = user_id
+    record.project_key = project_key
+    record.suite_id = _required_str(suite_id, 'suite_id')
+    record.status = 'queued'
+    record.scenario_count = 0
+    record.pass_count = 0
+    record.needs_review_count = 0
+    record.average_score = 0
+    record.report_json = json.dumps(
+        _retention_envelope(
+            suite_report={
+                'suite_run_id': suite_run_id,
+                'suite_id': suite_id,
+                'run_metadata': clean_metadata,
+                'run_lifecycle': _suite_lifecycle(status='queued', now=now, reason='suite run accepted'),
+            },
+            retained_until=retained_until,
+            now=now,
+        )
+    )
+    record.updated_at = now
+    record.completed_at = None
+    record.retained_until = retained_until
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return serialize_benchmark_suite_run(record)
+
+
+def mark_benchmark_suite_run_running(db: Session, *, suite_run_id: str) -> dict[str, Any] | None:
+    return _transition_benchmark_suite_run(db, suite_run_id=suite_run_id, status='running', reason='suite execution started')
+
+
+def mark_benchmark_suite_run_failed(db: Session, *, suite_run_id: str, error: str) -> dict[str, Any] | None:
+    return _transition_benchmark_suite_run(db, suite_run_id=suite_run_id, status='failed', reason=error)
+
 
 def persist_benchmark_suite_run(db: Session, suite_report: dict[str, Any]) -> dict[str, Any]:
     suite_run_id = _required_str(suite_report.get('suite_run_id'), 'suite_run_id')
@@ -27,12 +82,20 @@ def persist_benchmark_suite_run(db: Session, suite_report: dict[str, Any]) -> di
     record.project_key = project_key
     record.suite_id = _required_str(suite_report.get('suite_id'), 'suite_id')
     verdict = _required_str(suite_report.get('verdict'), 'verdict')
-    record.status = 'completed' if verdict == 'pass' else 'needs_review'
+    terminal_status = 'completed' if verdict == 'pass' else 'needs_review'
+    record.status = terminal_status
     record.scenario_count = _non_negative_int(suite_report.get('scenario_count'))
     record.pass_count = _non_negative_int(suite_report.get('pass_count'))
     record.needs_review_count = _non_negative_int(suite_report.get('needs_review_count'))
     record.average_score = _non_negative_int(suite_report.get('average_score'))
-    record.report_json = json.dumps(_retention_envelope(suite_report=suite_report, retained_until=retained_until, now=now))
+    report_with_lifecycle = dict(suite_report)
+    report_with_lifecycle['run_lifecycle'] = _merged_terminal_lifecycle(
+        existing_report=_load_json(record.report_json),
+        terminal_status=terminal_status,
+        now=now,
+        reason='suite evaluation completed',
+    )
+    record.report_json = json.dumps(_retention_envelope(suite_report=report_with_lifecycle, retained_until=retained_until, now=now))
     record.updated_at = now
     record.completed_at = now
     record.retained_until = retained_until
@@ -80,6 +143,7 @@ def serialize_benchmark_suite_run(record: BenchmarkSuiteRunRecord) -> dict[str, 
     retained_report = _load_json(record.report_json)
     suite_report = retained_report.get('suite_report') if isinstance(retained_report.get('suite_report'), dict) else retained_report
     retention = retained_report.get('retention') if isinstance(retained_report.get('retention'), dict) else {}
+    scenario_summaries = _scenario_summaries(suite_report)
     return {
         'id': record.id,
         'suite_run_id': record.id,
@@ -92,6 +156,11 @@ def serialize_benchmark_suite_run(record: BenchmarkSuiteRunRecord) -> dict[str, 
         'needs_review_count': record.needs_review_count,
         'average_score': record.average_score,
         'suite_report': suite_report,
+        'run_lifecycle': suite_report.get('run_lifecycle') if isinstance(suite_report.get('run_lifecycle'), dict) else {},
+        'artifacts': {
+            'scenario_summaries': scenario_summaries,
+            'vcon_export': _vcon_export_summary(suite_report),
+        },
         'retention': {
             'retention_days': retention.get('retention_days', DEFAULT_RETENTION_DAYS),
             'retained_until': _isoformat(record.retained_until),
@@ -114,6 +183,90 @@ def _retention_envelope(*, suite_report: dict[str, Any], retained_until: datetim
             'evaluator_version': DETERMINISTIC_EVALUATOR_VERSION,
         },
     }
+
+
+def _transition_benchmark_suite_run(db: Session, *, suite_run_id: str, status: str, reason: str) -> dict[str, Any] | None:
+    record = db.get(BenchmarkSuiteRunRecord, suite_run_id)
+    if record is None:
+        return None
+    now = datetime.now(UTC)
+    retained_report = _load_json(record.report_json)
+    suite_report = retained_report.get('suite_report') if isinstance(retained_report.get('suite_report'), dict) else retained_report
+    retention = retained_report.get('retention') if isinstance(retained_report.get('retention'), dict) else {}
+    retained_until = record.retained_until or _retained_until({}, now)
+    record.status = status
+    record.updated_at = now
+    if status in TERMINAL_SUITE_STATUSES:
+        record.completed_at = now
+    updated_report = dict(suite_report)
+    updated_report['run_lifecycle'] = _append_lifecycle_transition(
+        lifecycle=suite_report.get('run_lifecycle') if isinstance(suite_report.get('run_lifecycle'), dict) else {},
+        status=status,
+        now=now,
+        reason=reason,
+    )
+    if status == 'failed':
+        updated_report['error'] = reason
+    record.report_json = json.dumps(
+        {
+            'suite_report': updated_report,
+            'retention': {
+                'policy': retention.get('policy', 'benchmark_suite_run_report_v1'),
+                'retention_days': retention.get('retention_days', DEFAULT_RETENTION_DAYS),
+                'retained_until': _isoformat(retained_until),
+                'evaluator_version': retention.get('evaluator_version', DETERMINISTIC_EVALUATOR_VERSION),
+            },
+        }
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return serialize_benchmark_suite_run(record)
+
+
+def _merged_terminal_lifecycle(
+    *,
+    existing_report: dict[str, Any],
+    terminal_status: str,
+    now: datetime,
+    reason: str,
+) -> dict[str, Any]:
+    suite_report = existing_report.get('suite_report') if isinstance(existing_report.get('suite_report'), dict) else existing_report
+    lifecycle = suite_report.get('run_lifecycle') if isinstance(suite_report.get('run_lifecycle'), dict) else {}
+    if not lifecycle:
+        lifecycle = _suite_lifecycle(status='queued', now=now, reason='suite run accepted')
+        lifecycle = _append_lifecycle_transition(lifecycle=lifecycle, status='running', now=now, reason='suite execution started')
+    return _append_lifecycle_transition(lifecycle=lifecycle, status=terminal_status, now=now, reason=reason)
+
+
+def _suite_lifecycle(*, status: str, now: datetime, reason: str) -> dict[str, Any]:
+    return {
+        'status': status,
+        'terminal': status in TERMINAL_SUITE_STATUSES,
+        'queued_at': _isoformat(now) if status == 'queued' else None,
+        'started_at': _isoformat(now) if status == 'running' else None,
+        'completed_at': _isoformat(now) if status in TERMINAL_SUITE_STATUSES else None,
+        'transitions': [{'from': None, 'to': status, 'at': _isoformat(now), 'reason': reason}],
+    }
+
+
+def _append_lifecycle_transition(*, lifecycle: dict[str, Any], status: str, now: datetime, reason: str) -> dict[str, Any]:
+    previous_status = lifecycle.get('status') if isinstance(lifecycle.get('status'), str) else None
+    transitions = lifecycle.get('transitions') if isinstance(lifecycle.get('transitions'), list) else []
+    updated = dict(lifecycle)
+    if previous_status != status:
+        updated['transitions'] = [*transitions, {'from': previous_status, 'to': status, 'at': _isoformat(now), 'reason': reason}]
+    else:
+        updated['transitions'] = transitions
+    updated['status'] = status
+    updated['terminal'] = status in TERMINAL_SUITE_STATUSES
+    if status == 'queued' and not updated.get('queued_at'):
+        updated['queued_at'] = _isoformat(now)
+    if status == 'running' and not updated.get('started_at'):
+        updated['started_at'] = _isoformat(now)
+    if status in TERMINAL_SUITE_STATUSES:
+        updated['completed_at'] = _isoformat(now)
+    return updated
 
 
 def _retained_until(metadata: dict[str, Any], now: datetime) -> datetime:
@@ -170,3 +323,41 @@ def _load_json(raw: str | None) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+def _scenario_summaries(suite_report: dict[str, Any]) -> list[dict[str, Any]]:
+    runs = suite_report.get('scenario_runs') if isinstance(suite_report.get('scenario_runs'), list) else None
+    if runs is None:
+        runs = suite_report.get('scenario_reports') if isinstance(suite_report.get('scenario_reports'), list) else []
+
+    summaries: list[dict[str, Any]] = []
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        report = run.get('benchmark_report') if isinstance(run.get('benchmark_report'), dict) else run
+        if not isinstance(report, dict):
+            continue
+        summaries.append(
+            {
+                'suite_id': report.get('suite_id'),
+                'scenario_id': report.get('scenario_id'),
+                'run_id': report.get('run_id'),
+                'status': report.get('run_status') or report.get('verdict'),
+                'overall_score': report.get('overall_score'),
+                'failure_categories': report.get('failure_categories') if isinstance(report.get('failure_categories'), list) else [],
+            }
+        )
+    return summaries
+
+
+def _vcon_export_summary(suite_report: dict[str, Any]) -> dict[str, Any]:
+    vcon_export = suite_report.get('vcon_export') if isinstance(suite_report.get('vcon_export'), dict) else {}
+    analysis = vcon_export.get('analysis') if isinstance(vcon_export.get('analysis'), list) else []
+    dialog = vcon_export.get('dialog') if isinstance(vcon_export.get('dialog'), list) else []
+    return {
+        'available': bool(vcon_export),
+        'dialog_turns': len(dialog),
+        'analysis_count': len(analysis),
+        'source_format': vcon_export.get('source_format'),
+        'appended_analysis_type': analysis[-1].get('type') if analysis and isinstance(analysis[-1], dict) else None,
+    }
