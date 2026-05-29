@@ -6,7 +6,7 @@ import os
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -230,10 +230,11 @@ def upsert_project(
 
 
 def list_projects(db: Session, user_id: str) -> list[ProductProjectResponse]:
+    workspace_ids = _member_workspace_ids(db=db, user_id=user_id)
     rows = (
         db.query(ProductProject, func.count(ProductSavedRun.id))
         .outerjoin(ProductSavedRun, ProductSavedRun.project_id == ProductProject.id)
-        .filter(ProductProject.user_id == user_id)
+        .filter(_visible_project_clause(user_id=user_id, workspace_ids=workspace_ids))
         .group_by(ProductProject.id)
         .order_by(ProductProject.updated_at.desc(), ProductProject.created_at.desc())
         .all()
@@ -291,10 +292,11 @@ def list_saved_runs(
     suite_id: str | None = None,
     scenario_id: str | None = None,
 ) -> list[SavedRunResponse]:
+    workspace_ids = _member_workspace_ids(db=db, user_id=user_id)
     query = (
         db.query(ProductSavedRun, ProductProject)
         .join(ProductProject, ProductProject.id == ProductSavedRun.project_id)
-        .filter(ProductSavedRun.user_id == user_id)
+        .filter(_visible_project_clause(user_id=user_id, workspace_ids=workspace_ids))
     )
     if project_id is not None:
         query = query.filter(ProductProject.project_key == project_id)
@@ -309,10 +311,12 @@ def list_saved_runs(
 
 
 def get_saved_run(db: Session, user_id: str, run_id: str) -> SavedRunResponse | None:
+    workspace_ids = _member_workspace_ids(db=db, user_id=user_id)
     row = (
         db.query(ProductSavedRun, ProductProject)
         .join(ProductProject, ProductProject.id == ProductSavedRun.project_id)
-        .filter(ProductSavedRun.id == run_id, ProductSavedRun.user_id == user_id)
+        .filter(ProductSavedRun.id == run_id)
+        .filter(_visible_project_clause(user_id=user_id, workspace_ids=workspace_ids))
         .first()
     )
     if row is None:
@@ -353,9 +357,11 @@ def project_regression_summary(
     suite_id: str | None = None,
     scenario_id: str | None = None,
 ) -> ProductProjectRegressionSummary | None:
+    workspace_ids = _member_workspace_ids(db=db, user_id=user_id)
     project = (
         db.query(ProductProject)
-        .filter(ProductProject.user_id == user_id, ProductProject.project_key == project_id)
+        .filter(ProductProject.project_key == project_id)
+        .filter(_visible_project_clause(user_id=user_id, workspace_ids=workspace_ids))
         .first()
     )
     if project is None:
@@ -363,7 +369,7 @@ def project_regression_summary(
 
     saved_runs = (
         db.query(ProductSavedRun)
-        .filter(ProductSavedRun.user_id == user_id, ProductSavedRun.project_id == project.id)
+        .filter(ProductSavedRun.project_id == project.id)
         .order_by(ProductSavedRun.created_at.desc())
         .all()
     )
@@ -455,10 +461,12 @@ def _scenario_regression_summaries(saved_runs: list[ProductSavedRun]) -> list[Pr
 
 
 def export_saved_run(db: Session, user_id: str, run_id: str) -> SavedRunExportResponse | None:
+    workspace_ids = _member_workspace_ids(db=db, user_id=user_id)
     row = (
         db.query(ProductSavedRun, ProductProject)
         .join(ProductProject, ProductProject.id == ProductSavedRun.project_id)
-        .filter(ProductSavedRun.id == run_id, ProductSavedRun.user_id == user_id)
+        .filter(ProductSavedRun.id == run_id)
+        .filter(_visible_project_clause(user_id=user_id, workspace_ids=workspace_ids))
         .first()
     )
     if row is None:
@@ -479,9 +487,11 @@ def export_saved_run(db: Session, user_id: str, run_id: str) -> SavedRunExportRe
 
 
 def export_project_runs(db: Session, user_id: str, project_id: str) -> ProductProjectExportResponse | None:
+    workspace_ids = _member_workspace_ids(db=db, user_id=user_id)
     project = (
         db.query(ProductProject)
-        .filter(ProductProject.user_id == user_id, ProductProject.project_key == project_id)
+        .filter(ProductProject.project_key == project_id)
+        .filter(_visible_project_clause(user_id=user_id, workspace_ids=workspace_ids))
         .first()
     )
     if project is None:
@@ -489,7 +499,7 @@ def export_project_runs(db: Session, user_id: str, project_id: str) -> ProductPr
 
     saved_runs = (
         db.query(ProductSavedRun)
-        .filter(ProductSavedRun.user_id == user_id, ProductSavedRun.project_id == project.id)
+        .filter(ProductSavedRun.project_id == project.id)
         .order_by(ProductSavedRun.created_at.desc())
         .all()
     )
@@ -728,6 +738,21 @@ def _workspace_for_member(db: Session, workspace_id: str, user_id: str) -> Produ
         .first()
     )
     return row
+
+
+def _member_workspace_ids(db: Session, user_id: str) -> list[str]:
+    return [
+        str(workspace_id)
+        for (workspace_id,) in db.query(ProductWorkspaceMember.workspace_id)
+        .filter(ProductWorkspaceMember.user_id == user_id)
+        .all()
+    ]
+
+
+def _visible_project_clause(user_id: str, workspace_ids: list[str]):
+    if not workspace_ids:
+        return ProductProject.user_id == user_id
+    return or_(ProductProject.user_id == user_id, ProductProject.workspace_id.in_(workspace_ids))
 
 
 def _upsert_workspace_member(db: Session, workspace: ProductWorkspace, user_id: str, role: str) -> ProductWorkspaceMember:

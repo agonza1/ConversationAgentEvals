@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.services.benchmark_service import get_suite, list_suites, run_scenario, simulate_scenario
+from app.services.benchmark_service import get_suite, list_suites, run_scenario, run_suite, simulate_scenario, simulate_suite
 from app.services.benchmark_run_store import reset_benchmark_run_records_for_tests
 
 client = TestClient(app)
@@ -591,6 +591,60 @@ def test_run_scenario_appends_analysis_to_existing_vcon_without_mutating_input()
     assert result['vcon_export']['parties'] == source_vcon['parties']
 
 
+def test_run_suite_scores_all_scenario_evidence_payloads():
+    suite = get_suite('telehealth-agent')
+    assert suite is not None
+    scenario_evidence = {}
+    for scenario in suite['scenarios']:
+        simulation = simulate_scenario(
+            {
+                'suite_id': 'telehealth-agent',
+                'scenario_id': scenario['id'],
+                'agent_version': 'agent-v7',
+            }
+        )
+        scenario_evidence[scenario['id']] = {
+            'transcript': simulation['transcript'],
+            'action_trace': simulation['action_trace'],
+            'final_state': simulation['final_state'],
+        }
+
+    result = run_suite(
+        {
+            'suite_id': 'telehealth-agent',
+            'scenario_evidence': scenario_evidence,
+            'agent_version': 'agent-v7',
+        }
+    )
+
+    assert result['suite_id'] == 'telehealth-agent'
+    assert result['scenario_count'] == len(suite['scenarios'])
+    assert result['pass_count'] == len(suite['scenarios'])
+    assert result['needs_review_count'] == 0
+    assert result['average_score'] >= 75
+    assert result['verdict'] == 'pass'
+    assert result['run_metadata'] == {'agent_version': 'agent-v7'}
+    assert [report['scenario_id'] for report in result['scenario_reports']] == [scenario['id'] for scenario in suite['scenarios']]
+    suite_export = result['vcon_export']
+    suite_analysis = suite_export['analysis'][0]
+    assert suite_export['source_format'] == 'benchmark_suite'
+    assert suite_export['appended_analysis_type'] == 'agentic_benchmark_suite_eval'
+    assert suite_analysis['type'] == 'agentic_benchmark_suite_eval'
+    assert suite_analysis['body']['suite_run_id'] == result['suite_run_id']
+    assert suite_analysis['body']['scenario_count'] == result['scenario_count']
+    assert suite_analysis['body']['scenario_results'][0]['scenario_contract_sha256'] == result['scenario_reports'][0]['scenario_contract_sha256']
+
+
+def test_run_suite_endpoint_rejects_missing_scenario_evidence():
+    response = client.post(
+        '/api/benchmarks/suites/telehealth-agent/run',
+        json={'scenario_evidence': {'new-patient-triage': {'transcript': 'Agent: scheduled appointment'}}},
+    )
+
+    assert response.status_code == 404
+    assert 'Missing evidence for scenarios: medication-refill-routing' in response.json()['detail']
+
+
 def test_simulate_scenario_returns_text_trace_final_state_and_report():
     result = simulate_scenario(
         {
@@ -821,3 +875,61 @@ def test_run_endpoint_rejects_blank_evidence_payload():
     )
 
     assert response.status_code == 422
+
+
+def test_simulate_suite_runs_every_scenario_with_stable_summary():
+    result = simulate_suite(
+        {
+            'suite_id': 'telehealth-agent',
+            'agent_profile': 'suite regression mock agent',
+            'metadata': {'prompt_version': 'telehealth-prompt-v1'},
+        }
+    )
+    retry = simulate_suite(
+        {
+            'suite_id': 'telehealth-agent',
+            'agent_profile': 'suite regression mock agent',
+            'metadata': {'prompt_version': 'telehealth-prompt-v1'},
+        }
+    )
+
+    assert result['suite_run_id'] == retry['suite_run_id']
+    assert result['suite_id'] == 'telehealth-agent'
+    assert result['scenario_count'] == len(get_suite('telehealth-agent')['scenarios'])
+    assert result['pass_count'] == result['scenario_count']
+    assert result['needs_review_count'] == 0
+    assert result['average_score'] >= 75
+    assert result['verdict'] == 'pass'
+    assert result['run_metadata'] == {'prompt_version': 'telehealth-prompt-v1'}
+    assert [run['scenario_id'] for run in result['scenario_runs']] == [
+        scenario['id'] for scenario in get_suite('telehealth-agent')['scenarios']
+    ]
+    assert all(run['benchmark_report']['run_metadata'] == result['run_metadata'] for run in result['scenario_runs'])
+
+
+def test_simulate_suite_endpoint_returns_full_suite_regression_run():
+    response = client.post(
+        '/api/benchmarks/suites/call-center-voice-ai/simulate',
+        json={
+            'agent_profile': 'endpoint suite mock agent',
+            'agent_version': 'agent-v1',
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload['suite_id'] == 'call-center-voice-ai'
+    assert payload['scenario_count'] == len(get_suite('call-center-voice-ai')['scenarios'])
+    assert payload['pass_count'] == payload['scenario_count']
+    assert payload['run_metadata'] == {'agent_version': 'agent-v1'}
+    assert payload['scenario_runs'][0]['benchmark_report']['suite_id'] == 'call-center-voice-ai'
+    assert payload['vcon_export']['source_format'] == 'benchmark_suite'
+    assert payload['vcon_export']['analysis'][0]['body']['suite_run_id'] == payload['suite_run_id']
+    assert payload['vcon_export']['analysis'][0]['body']['scenario_results'][0]['run_id'] == payload['scenario_runs'][0]['benchmark_report']['run_id']
+
+
+def test_simulate_suite_endpoint_rejects_unknown_suite():
+    response = client.post('/api/benchmarks/suites/missing/simulate', json={})
+
+    assert response.status_code == 404
+    assert response.json()['detail'] == 'Unknown benchmark suite: missing'

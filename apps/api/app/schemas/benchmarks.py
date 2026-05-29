@@ -132,6 +132,23 @@ class BenchmarkSimulationRequest(BaseModel):
     resumeFromRunId: str | None = None
 
 
+class BenchmarkSuiteRunRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    suite_id: str | None = None
+    suiteId: str | None = None
+    scenario_evidence: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    scenarioEvidence: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    agent_version: str | None = None
+    agentVersion: str | None = None
+    prompt_version: str | None = None
+    promptVersion: str | None = None
+    model_name: str | None = None
+    modelName: str | None = None
+    notes: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
 class BenchmarkSimulationResponse(BaseModel):
     suite_id: str
     scenario_id: str

@@ -125,3 +125,107 @@ test('benchmark report falls back when async clipboard copy is rejected', async 
   await page.getByRole('button', { name: 'Copy brief' }).click();
   await expect(page.getByText('Copied report brief.')).toBeVisible();
 });
+
+test('benchmark runner shows suite simulation summary', async ({ page }) => {
+  await page.route('**/api/benchmarks/suites/*/simulate', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        suite_run_id: 'suite-run-1',
+        suite_id: 'call-center-voice-ai',
+        suite_name: 'Call Center Voice AI',
+        scenario_count: 2,
+        pass_count: 1,
+        needs_review_count: 1,
+        average_score: 78,
+        verdict: 'needs_review',
+        scenario_runs: [
+          {
+            suite_id: 'call-center-voice-ai',
+            scenario_id: 'membership-renewal-save',
+            scenario_title: 'Membership renewal save',
+            transcript: 'Agent: I can help review your renewal.',
+            action_trace: [{ action: 'lookup_account' }],
+            final_state: { retained: true },
+            benchmark_report: {
+              run_id: 'suite-scenario-1',
+              suite_id: 'call-center-voice-ai',
+              scenario_id: 'membership-renewal-save',
+              scenario_title: 'Membership renewal save',
+              verdict: 'pass',
+              overall_score: 88,
+              task_completion_score: 90,
+              required_action_score: 90,
+              forbidden_action_score: 100,
+              final_state_score: 80,
+              evidence: ['Agent: I can help review your renewal.'],
+              recommendations: [],
+              vcon_export: {
+                source_format: 'transcript',
+                appended_analysis_type: 'agentic_benchmark_eval',
+                dialog: [{ party: 0, originator: 'Agent', body: 'I can help review your renewal.' }],
+                analysis: [{ type: 'agentic_benchmark_eval', run_id: 'suite-scenario-1' }],
+              },
+            },
+          },
+          {
+            suite_id: 'call-center-voice-ai',
+            scenario_id: 'billing-escalation',
+            scenario_title: 'Billing escalation',
+            transcript: 'Agent: I skipped the identity check.',
+            action_trace: [],
+            final_state: {},
+            benchmark_report: {
+              run_id: 'suite-scenario-2',
+              suite_id: 'call-center-voice-ai',
+              scenario_id: 'billing-escalation',
+              scenario_title: 'Billing escalation',
+              verdict: 'needs_review',
+              overall_score: 68,
+              evidence: ['Agent: I skipped the identity check.'],
+              missing_actions: ['confirm identity'],
+              vcon_export: {
+                source_format: 'transcript',
+                appended_analysis_type: 'agentic_benchmark_eval',
+                dialog: [{ party: 0, originator: 'Agent', body: 'I skipped the identity check.' }],
+                analysis: [{ type: 'agentic_benchmark_eval', run_id: 'suite-scenario-2' }],
+              },
+            },
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.goto('/benchmarks');
+  await page.getByRole('button', { name: 'Simulate suite' }).click();
+
+  const suiteSummary = page.getByLabel('Suite simulation summary');
+  await expect(suiteSummary).toBeVisible();
+  await expect(suiteSummary.getByRole('heading', { name: 'Call Center Voice AI' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Membership renewal save pass/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Billing escalation needs_review/ })).toBeVisible();
+
+  const suiteBrief = page.getByLabel('Suite brief');
+  await expect(suiteBrief).toContainText('Suite: Call Center Voice AI');
+  await expect(suiteBrief).toContainText('Needs review: 1');
+  await expect(suiteBrief).toContainText('Review scenarios: Billing escalation');
+
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export suite vCon bundle' }).click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe('agentbench-call-center-voice-ai-suite-run-1-vcon-bundle.json');
+  await expect(page.getByText('Exported 2 vCon-compatible suite records.')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Copy suite brief' }).click();
+  await expect(page.getByText('Copied suite brief.')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Save suite runs' }).click();
+  await expect(page.getByText('Sign up first to save suite runs and project history.')).toBeVisible();
+  await page.getByRole('button', { name: 'Sign up to save' }).click();
+  await page.getByRole('button', { name: 'Save suite runs' }).click();
+  await expect(page.getByText('Saved 2 suite runs to call-center-demo.')).toBeVisible();
+
+  await expect(page.getByRole('heading', { name: /pass|needs_review/i })).toBeVisible();
+});

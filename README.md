@@ -124,7 +124,7 @@ npm run test:voice-proof
 
 ## Current MVP Boundary
 
-The current product surface is a SaaS homepage plus a focused benchmark runner. The runner can load benchmark suites, simulate a scenario, inspect transcript/action/final-state/group-call evidence, produce a scored benchmark report, show pricing gates, request a paid LLM judge gate, and save runs behind a Firebase-ready signup flow.
+The current product surface is a SaaS homepage plus a focused benchmark runner. The runner can load benchmark suites, simulate a scenario or full suite, inspect transcript/action/final-state/group-call evidence, produce scored benchmark reports, export vCon-compatible records, show pricing gates, request a paid LLM judge gate, and save runs behind a Firebase-ready signup flow.
 
 Near-term next slices:
 
