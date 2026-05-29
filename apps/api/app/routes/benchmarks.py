@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
 
+from app.db.database import get_db
 from app.schemas.benchmarks import BenchmarkRunRequest, BenchmarkSimulationRequest
 from app.services.benchmark_service import get_suite, list_suites, run_scenario, simulate_scenario
+from app.services.benchmark_run_store import get_benchmark_run, list_benchmark_runs, persist_benchmark_run
 
 router = APIRouter(prefix='/api/benchmarks', tags=['benchmarks'])
 
@@ -12,6 +15,33 @@ router = APIRouter(prefix='/api/benchmarks', tags=['benchmarks'])
 @router.get('/suites')
 def list_benchmark_suites():
     return [get_suite(suite['id']) for suite in list_suites()]
+
+
+@router.get('/runs')
+def get_benchmark_runs(
+    user_id: str = Query(min_length=1),
+    project_id: str | None = None,
+    suite_id: str | None = None,
+    scenario_id: str | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+):
+    return list_benchmark_runs(
+        db=db,
+        user_id=user_id,
+        project_id=project_id,
+        suite_id=suite_id,
+        scenario_id=scenario_id,
+        status=status,
+    )
+
+
+@router.get('/runs/{run_id}')
+def get_benchmark_run_record(run_id: str, user_id: str = Query(min_length=1), db: Session = Depends(get_db)):
+    record = get_benchmark_run(db=db, user_id=user_id, run_id=run_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail='Benchmark run not found')
+    return record
 
 
 @router.get('/{suite_id}')
@@ -33,38 +63,46 @@ def list_benchmark_scenarios(suite_id: str):
 
 
 @router.post('/run')
-def run_benchmark(payload: BenchmarkRunRequest):
+def run_benchmark(payload: BenchmarkRunRequest, db: Session = Depends(get_db)):
     try:
-        return run_scenario(payload)
+        report = run_scenario(payload)
+        persist_benchmark_run(db=db, report=report, transcript=payload.transcript)
+        return report
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post('/simulate')
-def simulate_benchmark(payload: BenchmarkSimulationRequest):
+def simulate_benchmark(payload: BenchmarkSimulationRequest, db: Session = Depends(get_db)):
     try:
-        return simulate_scenario(payload)
+        simulation = simulate_scenario(payload)
+        persist_benchmark_run(db=db, report=simulation['benchmark_report'], transcript=simulation['transcript'])
+        return simulation
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post('/{suite_id}/scenarios/{scenario_id}/run')
-def run_benchmark_scenario(suite_id: str, scenario_id: str, payload: BenchmarkRunRequest):
+def run_benchmark_scenario(suite_id: str, scenario_id: str, payload: BenchmarkRunRequest, db: Session = Depends(get_db)):
     merged_payload = payload.model_dump()
     merged_payload['suite_id'] = suite_id
     merged_payload['scenario_id'] = scenario_id
     try:
-        return run_scenario(merged_payload)
+        report = run_scenario(merged_payload)
+        persist_benchmark_run(db=db, report=report, transcript=payload.transcript)
+        return report
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post('/{suite_id}/scenarios/{scenario_id}/simulate')
-def simulate_benchmark_scenario(suite_id: str, scenario_id: str, payload: BenchmarkSimulationRequest):
+def simulate_benchmark_scenario(suite_id: str, scenario_id: str, payload: BenchmarkSimulationRequest, db: Session = Depends(get_db)):
     merged_payload = payload.model_dump()
     merged_payload['suite_id'] = suite_id
     merged_payload['scenario_id'] = scenario_id
     try:
-        return simulate_scenario(merged_payload)
+        simulation = simulate_scenario(merged_payload)
+        persist_benchmark_run(db=db, report=simulation['benchmark_report'], transcript=simulation['transcript'])
+        return simulation
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

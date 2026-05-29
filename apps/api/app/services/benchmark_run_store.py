@@ -1,0 +1,175 @@
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from app.db.database import SessionLocal
+from app.models.entities import BenchmarkRunRecord
+from app.services.benchmark_service import DETERMINISTIC_EVALUATOR_VERSION
+
+
+DEFAULT_RETENTION_DAYS = 90
+DEFAULT_USER_ID = 'anonymous'
+DEFAULT_PROJECT_ID = 'default'
+
+
+def persist_benchmark_run(db: Session, report: dict[str, Any], transcript: str | None = None) -> dict[str, Any]:
+    run_id = _required_str(report.get('run_id'), 'run_id')
+    now = datetime.now(UTC)
+    lifecycle = report.get('run_lifecycle') if isinstance(report.get('run_lifecycle'), dict) else {}
+    metadata = report.get('run_metadata') if isinstance(report.get('run_metadata'), dict) else {}
+    user_id = _first_text(metadata.get('user_id'), metadata.get('owner_user_id'), report.get('user_id')) or DEFAULT_USER_ID
+    project_key = _first_text(metadata.get('project_id'), metadata.get('project_key'), report.get('project_id')) or DEFAULT_PROJECT_ID
+    retained_until = _retained_until(metadata, now)
+    completed_at = _parse_datetime(lifecycle.get('completed_at') or lifecycle.get('needs_review_at'))
+
+    record = db.get(BenchmarkRunRecord, run_id)
+    if record is None:
+        record = BenchmarkRunRecord(id=run_id, created_at=_parse_datetime(lifecycle.get('started_at')) or now)
+    record.user_id = user_id
+    record.project_key = project_key
+    record.suite_id = _required_str(report.get('suite_id'), 'suite_id')
+    record.scenario_id = _required_str(report.get('scenario_id'), 'scenario_id')
+    record.logical_run_id = _required_str(report.get('logical_run_id'), 'logical_run_id')
+    record.status = _required_str(report.get('run_status') or lifecycle.get('status') or report.get('verdict'), 'run_status')
+    record.attempt = _positive_int(lifecycle.get('attempt'), default=1)
+    record.report_json = json.dumps(_retention_envelope(report=report, retained_until=retained_until, now=now))
+    record.transcript = transcript if transcript is not None else report.get('transcript_preview')
+    record.updated_at = now
+    record.completed_at = completed_at
+    record.retained_until = retained_until
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return serialize_benchmark_run(record)
+
+
+def list_benchmark_runs(
+    db: Session,
+    *,
+    user_id: str,
+    project_id: str | None = None,
+    suite_id: str | None = None,
+    scenario_id: str | None = None,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    query = db.query(BenchmarkRunRecord).filter(BenchmarkRunRecord.user_id == user_id)
+    if project_id is not None:
+        query = query.filter(BenchmarkRunRecord.project_key == project_id)
+    if suite_id is not None:
+        query = query.filter(BenchmarkRunRecord.suite_id == suite_id)
+    if scenario_id is not None:
+        query = query.filter(BenchmarkRunRecord.scenario_id == scenario_id)
+    if status is not None:
+        query = query.filter(BenchmarkRunRecord.status == status)
+    records = query.order_by(BenchmarkRunRecord.updated_at.desc(), BenchmarkRunRecord.created_at.desc()).all()
+    return [serialize_benchmark_run(record) for record in records]
+
+
+def get_benchmark_run(db: Session, *, user_id: str, run_id: str) -> dict[str, Any] | None:
+    record = db.query(BenchmarkRunRecord).filter(BenchmarkRunRecord.id == run_id, BenchmarkRunRecord.user_id == user_id).first()
+    return serialize_benchmark_run(record) if record is not None else None
+
+
+def reset_benchmark_run_records_for_tests() -> None:
+    with SessionLocal() as db:
+        db.query(BenchmarkRunRecord).delete()
+        db.commit()
+
+
+def serialize_benchmark_run(record: BenchmarkRunRecord) -> dict[str, Any]:
+    retained_report = _load_json(record.report_json)
+    report = retained_report.get('report') if isinstance(retained_report.get('report'), dict) else retained_report
+    retention = retained_report.get('retention') if isinstance(retained_report.get('retention'), dict) else {}
+    return {
+        'id': record.id,
+        'run_id': record.id,
+        'logical_run_id': record.logical_run_id,
+        'user_id': record.user_id,
+        'project_id': record.project_key,
+        'suite_id': record.suite_id,
+        'scenario_id': record.scenario_id,
+        'status': record.status,
+        'attempt': record.attempt,
+        'report': report,
+        'transcript': record.transcript,
+        'retention': {
+            'retention_days': retention.get('retention_days', DEFAULT_RETENTION_DAYS),
+            'retained_until': _isoformat(record.retained_until),
+            'policy': retention.get('policy', 'benchmark_run_report_v1'),
+            'evaluator_version': retention.get('evaluator_version', DETERMINISTIC_EVALUATOR_VERSION),
+        },
+        'created_at': _isoformat(record.created_at),
+        'updated_at': _isoformat(record.updated_at),
+        'completed_at': _isoformat(record.completed_at),
+    }
+
+
+def _retention_envelope(*, report: dict[str, Any], retained_until: datetime, now: datetime) -> dict[str, Any]:
+    return {
+        'report': report,
+        'retention': {
+            'policy': 'benchmark_run_report_v1',
+            'retention_days': max((retained_until - now).days, 0),
+            'retained_until': _isoformat(retained_until),
+            'evaluator_version': DETERMINISTIC_EVALUATOR_VERSION,
+        },
+    }
+
+
+def _retained_until(metadata: dict[str, Any], now: datetime) -> datetime:
+    retention_days = _positive_int(metadata.get('retention_days'), default=DEFAULT_RETENTION_DAYS)
+    return now + timedelta(days=retention_days)
+
+
+def _positive_int(value: Any, *, default: int) -> int:
+    if value is None or isinstance(value, bool):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _first_text(*values: Any) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _required_str(value: Any, field_name: str) -> str:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    raise ValueError(f'benchmark report missing {field_name}')
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError:
+        return None
+
+
+def _isoformat(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.isoformat()
+
+
+def _load_json(raw: str | None) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        loaded = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}

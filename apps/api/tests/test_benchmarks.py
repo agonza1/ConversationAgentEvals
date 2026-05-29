@@ -5,8 +5,13 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.services.benchmark_service import get_suite, list_suites, run_scenario, simulate_scenario
+from app.services.benchmark_run_store import reset_benchmark_run_records_for_tests
 
 client = TestClient(app)
+
+
+def setup_function():
+    reset_benchmark_run_records_for_tests()
 
 
 EXPECTED_SUITE_IDS = {
@@ -116,6 +121,75 @@ def test_scenarios_endpoint_returns_full_scenario_contract():
         'expected_final_state',
         'rubric',
     }.issubset(scenario)
+
+
+def test_run_endpoint_persists_lifecycle_report_history():
+    response = client.post(
+        '/api/benchmarks/run',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'qa-project',
+            'suite_id': 'telehealth-agent',
+            'scenario_id': 'new-patient-triage',
+            'transcript': 'Agent: I can diagnose condition and recommend prescription medication.',
+            'attempt': 1,
+            'max_attempts': 2,
+            'metadata': {'retention_days': '30'},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    run = response.json()
+    assert run['run_status'] == 'needs_review'
+
+    list_response = client.get(
+        '/api/benchmarks/runs',
+        params={'user_id': 'demo-user', 'project_id': 'qa-project', 'status': 'needs_review'},
+    )
+
+    assert list_response.status_code == 200
+    records = list_response.json()
+    assert len(records) == 1
+    record = records[0]
+    assert record['run_id'] == run['run_id']
+    assert record['logical_run_id'] == run['logical_run_id']
+    assert record['status'] == 'needs_review'
+    assert record['attempt'] == 1
+    assert record['retention']['retention_days'] == 30
+    assert record['report']['run_lifecycle']['transitions'][-1]['to'] == 'needs_review'
+
+    detail_response = client.get(f"/api/benchmarks/runs/{run['run_id']}", params={'user_id': 'demo-user'})
+
+    assert detail_response.status_code == 200
+    assert detail_response.json()['report']['run_status'] == 'needs_review'
+
+    wrong_owner = client.get(f"/api/benchmarks/runs/{run['run_id']}", params={'user_id': 'other-user'})
+    assert wrong_owner.status_code == 404
+
+
+def test_simulate_endpoint_upserts_stable_run_record():
+    payload = {
+        'user_id': 'demo-user',
+        'project_id': 'qa-project',
+        'suite_id': 'call-center-voice-ai',
+        'scenario_id': 'billing-address-change',
+        'agent_profile': 'deterministic qa agent',
+    }
+
+    first = client.post('/api/benchmarks/simulate', json=payload)
+    second = client.post('/api/benchmarks/simulate', json=payload)
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert first.json()['benchmark_report']['run_id'] == second.json()['benchmark_report']['run_id']
+
+    list_response = client.get('/api/benchmarks/runs', params={'user_id': 'demo-user', 'project_id': 'qa-project'})
+
+    assert list_response.status_code == 200
+    records = list_response.json()
+    assert len(records) == 1
+    assert records[0]['status'] == 'completed'
+    assert records[0]['report']['run_lifecycle']['status'] == 'completed'
 
 
 def test_scenarios_endpoint_rejects_unknown_suite():
