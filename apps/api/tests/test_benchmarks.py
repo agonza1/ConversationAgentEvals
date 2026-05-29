@@ -171,6 +171,36 @@ def test_scenario_contract_hash_is_stable_across_evidence_changes():
     assert first['vcon_analysis']['body']['scenario_contract_sha256'] == first['scenario_contract_sha256']
 
 
+def test_run_scenario_includes_terminal_lifecycle_for_retryable_review_runs():
+    result = run_scenario(
+        {
+            'suite_id': 'telehealth-agent',
+            'scenario_id': 'new-patient-triage',
+            'transcript': 'Agent: I can diagnose condition and recommend prescription medication.',
+            'attempt': 1,
+            'max_attempts': 2,
+        }
+    )
+
+    lifecycle = result['run_lifecycle']
+    assert result['run_status'] == 'needs_review'
+    assert lifecycle['status'] == 'needs_review'
+    assert lifecycle['terminal'] is True
+    assert lifecycle['attempt'] == 1
+    assert lifecycle['max_attempts'] == 2
+    assert lifecycle['retryable'] is True
+    assert lifecycle['resumable'] is True
+    assert lifecycle['next_attempt'] == 2
+    assert [transition['to'] for transition in lifecycle['transitions']] == [
+        'queued',
+        'running',
+        'evaluating',
+        'needs_review',
+    ]
+    assert result['vcon_analysis']['body']['run_status'] == 'needs_review'
+    assert result['vcon_analysis']['body']['run_lifecycle']['logical_run_id'] == result['logical_run_id']
+
+
 def test_run_scenario_run_id_includes_retained_artifact_fingerprints():
     base_request = {
         'suite_id': 'fintech-support-agent',
@@ -194,11 +224,55 @@ def test_run_scenario_run_id_includes_retained_artifact_fingerprints():
     retry = run_scenario(retry_request)
 
     assert first['run_id'] == second['run_id']
+    assert first['run_id'] == first['logical_run_id']
     assert retry['run_id'] != first['run_id']
     assert retry['evidence_artifacts']['evidence_fingerprint'] != first['evidence_artifacts']['evidence_fingerprint']
     assert [artifact['type'] for artifact in first['evidence_artifacts']['artifacts']] == ['action_trace', 'final_state']
     assert all(artifact['sha256'] for artifact in first['evidence_artifacts']['artifacts'])
 
+
+
+def test_retry_attempt_preserves_logical_run_id_and_records_parent_run():
+    request = {
+        'suite_id': 'telehealth-agent',
+        'scenario_id': 'new-patient-triage',
+        'transcript': 'Agent: I can diagnose condition and recommend prescription medication.',
+        'max_attempts': 2,
+    }
+
+    first = run_scenario({**request, 'attempt': 1})
+    retry = run_scenario({**request, 'attempt': 2, 'retry_of_run_id': first['run_id']})
+
+    assert retry['logical_run_id'] == first['logical_run_id']
+    assert retry['run_id'] != first['run_id']
+    assert retry['run_lifecycle']['attempt'] == 2
+    assert retry['run_lifecycle']['retry_of_run_id'] == first['run_id']
+    assert retry['run_lifecycle']['retryable'] is False
+    assert 'next_attempt' not in retry['run_lifecycle']
+
+
+def test_resume_run_records_source_run_and_rejects_conflicting_retry_controls():
+    result = run_scenario(
+        {
+            'suite_id': 'fintech-support-agent',
+            'scenario_id': 'failed-ach-transfer',
+            'transcript': 'Agent: I verified the business account and provided reference ACH-1001.',
+            'resumeFromRunId': 'run_previous',
+        }
+    )
+
+    assert result['run_lifecycle']['resume_from_run_id'] == 'run_previous'
+
+    with pytest.raises(ValueError, match='cannot both be set'):
+        run_scenario(
+            {
+                'suite_id': 'fintech-support-agent',
+                'scenario_id': 'failed-ach-transfer',
+                'transcript': 'Agent: I verified the business account and provided reference ACH-1001.',
+                'retry_of_run_id': 'run_previous',
+                'resume_from_run_id': 'run_previous',
+            }
+        )
 
 
 def test_run_scenario_flags_out_of_order_required_actions():
