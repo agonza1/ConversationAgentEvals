@@ -315,6 +315,11 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
             accuracy_score: 0.82,
             experience_signal_coverage: 1,
             average_turn_count: 4,
+            perturbation_tags: ['accent', 'noise'],
+            perturbation_coverage: [
+              { tag: 'accent', scenario_count: 2, pass_count: 1, pass_rate: 0.5 },
+              { tag: 'noise', scenario_count: 2, pass_count: 1, pass_rate: 0.5 },
+            ],
           },
           updated_at: '2026-05-29T15:00:00+00:00',
           suite_report: { suite_name: 'Call Center Voice AI' },
@@ -359,6 +364,7 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   await expect(suiteHistory.getByText('completed')).toBeVisible();
   await expect(suiteHistory.getByText('4 dialog turns, 1 analysis records')).toBeVisible();
   await expect(suiteHistory.getByText('EVA-style reliability: 82% accuracy, 100% experience coverage, 4 avg turns.')).toBeVisible();
+  await expect(suiteHistory.getByText('Robustness tags: accent, noise.')).toBeVisible();
   await expect(suiteHistory.getByText(/billing-escalation: needs_review \/ 73/)).toBeVisible();
 
   const downloadPromise = page.waitForEvent('download');

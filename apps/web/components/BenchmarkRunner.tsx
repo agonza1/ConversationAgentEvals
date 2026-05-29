@@ -297,6 +297,8 @@ interface SuiteReliabilityMetrics {
   interruption_signal_count?: number;
   correction_signal_count?: number;
   handoff_signal_count?: number;
+  perturbation_tags?: string[];
+  perturbation_coverage?: Array<{ tag?: string; scenario_count?: number; pass_count?: number; pass_rate?: number }>;
 }
 
 interface BenchmarkSuiteRunRecord {
@@ -2208,6 +2210,11 @@ export function BenchmarkRunner() {
                     {reliability.framework ? (
                       <p style={{ margin: 0, color: 'var(--muted)' }}>
                         EVA-style reliability: {formatMetricPercent(reliability.accuracy_score)} accuracy, {formatMetricPercent(reliability.experience_signal_coverage)} experience coverage, {reliability.average_turn_count ?? 0} avg turns.
+                      </p>
+                    ) : null}
+                    {reliability.perturbation_tags?.length ? (
+                      <p style={{ margin: 0, color: 'var(--muted)' }}>
+                        Robustness tags: {reliability.perturbation_tags.join(', ')}.
                       </p>
                     ) : null}
                     <div>
