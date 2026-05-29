@@ -133,6 +133,27 @@ def get_benchmark_suite_run(db: Session, *, user_id: str, suite_run_id: str) -> 
     return serialize_benchmark_suite_run(record) if record is not None else None
 
 
+def export_benchmark_suite_run_vcon_bundle(db: Session, *, user_id: str, suite_run_id: str) -> dict[str, Any] | None:
+    record = get_benchmark_suite_run(db=db, user_id=user_id, suite_run_id=suite_run_id)
+    if record is None:
+        return None
+
+    suite_report = record.get('suite_report') if isinstance(record.get('suite_report'), dict) else {}
+    records = _suite_vcon_records(suite_report)
+    return {
+        'id': suite_run_id,
+        'suite_run_id': suite_run_id,
+        'suite_id': record.get('suite_id'),
+        'suite_name': suite_report.get('suite_name'),
+        'user_id': record.get('user_id'),
+        'project_id': record.get('project_id'),
+        'filename': _suite_vcon_bundle_filename(record),
+        'record_count': len(records),
+        'records': records,
+        'exported_at': _isoformat(datetime.now(UTC)),
+    }
+
+
 def reset_benchmark_suite_run_records_for_tests() -> None:
     with SessionLocal() as db:
         db.query(BenchmarkSuiteRunRecord).delete()
@@ -183,6 +204,39 @@ def _retention_envelope(*, suite_report: dict[str, Any], retained_until: datetim
             'evaluator_version': DETERMINISTIC_EVALUATOR_VERSION,
         },
     }
+
+
+def _suite_vcon_records(suite_report: dict[str, Any]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    suite_vcon = suite_report.get('vcon_export')
+    if isinstance(suite_vcon, dict):
+        records.append(suite_vcon)
+
+    scenario_containers = suite_report.get('scenario_runs') or suite_report.get('scenario_reports') or []
+    if not isinstance(scenario_containers, list):
+        return records
+
+    for item in scenario_containers:
+        if not isinstance(item, dict):
+            continue
+        report = item.get('benchmark_report') if isinstance(item.get('benchmark_report'), dict) else item
+        vcon_export = report.get('vcon_export') if isinstance(report, dict) else None
+        if isinstance(vcon_export, dict):
+            records.append(vcon_export)
+    return records
+
+
+def _suite_vcon_bundle_filename(record: dict[str, Any]) -> str:
+    parts = ['agentbench', record.get('suite_id'), record.get('suite_run_id'), 'vcon-bundle']
+    slug = '-'.join(part for part in (_slug_part(part) for part in parts) if part)
+    return f'{slug or "agentbench-suite-vcon-bundle"}.json'
+
+
+def _slug_part(value: Any) -> str:
+    import re
+
+    cleaned = re.sub(r'[^a-z0-9-]+', '-', str(value).lower()).strip('-') if value is not None else ''
+    return cleaned
 
 
 def _transition_benchmark_suite_run(db: Session, *, suite_run_id: str, status: str, reason: str) -> dict[str, Any] | None:

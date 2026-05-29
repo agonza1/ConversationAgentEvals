@@ -12,6 +12,7 @@ from app.services.benchmark_service import get_suite, list_suites, run_scenario,
 from app.services.benchmark_run_store import get_benchmark_run, list_benchmark_runs, persist_benchmark_run
 from app.services.benchmark_suite_run_store import (
     create_benchmark_suite_run_record,
+    export_benchmark_suite_run_vcon_bundle,
     get_benchmark_suite_run,
     list_benchmark_suite_runs,
     mark_benchmark_suite_run_failed,
@@ -70,6 +71,18 @@ def get_benchmark_suite_run_record(suite_run_id: str, user_id: str = Query(min_l
     if record is None:
         raise HTTPException(status_code=404, detail='Benchmark suite run not found')
     return record
+
+
+@router.get('/suite-runs/{suite_run_id}/vcon-bundle')
+def export_benchmark_suite_run_vcon_record_bundle(
+    suite_run_id: str,
+    user_id: str = Query(min_length=1),
+    db: Session = Depends(get_db),
+):
+    exported = export_benchmark_suite_run_vcon_bundle(db=db, user_id=user_id, suite_run_id=suite_run_id)
+    if exported is None:
+        raise HTTPException(status_code=404, detail='Benchmark suite run not found')
+    return exported
 
 
 @router.get('/runs/{run_id}')

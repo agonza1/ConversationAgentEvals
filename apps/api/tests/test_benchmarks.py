@@ -274,6 +274,27 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
     assert detail_payload['suite_report']['suite_id'] == 'call-center-voice-ai'
     assert detail_payload['artifacts']['scenario_summaries'][0]['run_id'] == simulation['scenario_runs'][0]['benchmark_report']['run_id']
 
+    export_response = client.get(
+        f"/api/benchmarks/suite-runs/{simulation['suite_run_id']}/vcon-bundle",
+        params={'user_id': 'demo-user'},
+    )
+
+    assert export_response.status_code == 200
+    export_payload = export_response.json()
+    assert export_payload['filename'] == f"agentbench-call-center-voice-ai-{simulation['suite_run_id']}-vcon-bundle.json"
+    assert export_payload['record_count'] == simulation['scenario_count'] + 1
+    assert export_payload['records'][0]['source_format'] == 'benchmark_suite'
+    assert {record['appended_analysis_type'] for record in export_payload['records']} == {
+        'agentic_benchmark_suite_eval',
+        'agentic_benchmark_eval',
+    }
+
+    missing_export = client.get(
+        f"/api/benchmarks/suite-runs/{simulation['suite_run_id']}/vcon-bundle",
+        params={'user_id': 'other-user'},
+    )
+    assert missing_export.status_code == 404
+
     child_response = client.get(
         '/api/benchmarks/runs',
         params={'user_id': 'demo-user', 'project_id': 'qa-project', 'suite_id': 'call-center-voice-ai'},

@@ -234,6 +234,19 @@ interface ProjectHistoryExport {
   exported_at: string;
 }
 
+interface BenchmarkSuiteVconBundleExport {
+  id: string;
+  suite_run_id: string;
+  suite_id?: string | null;
+  suite_name?: string | null;
+  user_id?: string | null;
+  project_id?: string | null;
+  filename: string;
+  record_count: number;
+  records: JsonRecord[];
+  exported_at: string;
+}
+
 interface JudgeGate {
   status: 'blocked' | 'ready';
   required_plan: PricingPlan['id'];
@@ -303,6 +316,7 @@ interface BenchmarkSuiteSimulationResponse {
   verdict: string;
   run_metadata?: RunMetadata;
   scenario_runs: BenchmarkSimulationResponse[];
+  vcon_export?: JsonRecord;
 }
 
 function normalizeApiBase(value: string) {
@@ -554,6 +568,12 @@ async function exportSavedRun(userId: string, runId: string) {
 async function exportProjectHistory(userId: string, projectId: string) {
   return handleJson<ProjectHistoryExport>(
     await fetch(`${getApiBase()}/api/product/projects/${encodeURIComponent(projectId)}/export?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
+  );
+}
+
+async function exportBenchmarkSuiteRunVconBundle(userId: string, suiteRunId: string) {
+  return handleJson<BenchmarkSuiteVconBundleExport>(
+    await fetch(`${getApiBase()}/api/benchmarks/suite-runs/${encodeURIComponent(suiteRunId)}/vcon-bundle?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
   );
 }
 
@@ -1069,6 +1089,18 @@ export function BenchmarkRunner() {
     }
   }
 
+  async function onExportRetainedSuiteVconBundle(suiteRunId: string) {
+    if (!userId) return;
+
+    try {
+      const exported = await exportBenchmarkSuiteRunVconBundle(userId, suiteRunId);
+      downloadJson(exported.filename, exported);
+      setExportMessage(`Exported ${exported.record_count} retained suite vCon records to ${exported.filename}.`);
+    } catch (err) {
+      setExportMessage(err instanceof Error ? err.message : 'Could not export this suite vCon bundle.');
+    }
+  }
+
   function onExportCurrentVcon() {
     if (!report?.vcon_export) return;
     const filenameParts = ['agentbench', report.suite_id, report.scenario_id, report.run_id, 'vcon']
@@ -1080,9 +1112,9 @@ export function BenchmarkRunner() {
 
   function onExportSuiteVconBundle() {
     if (!suiteSimulation) return;
-    const records = suiteSimulation.scenario_runs
+    const records = [suiteSimulation.vcon_export, ...suiteSimulation.scenario_runs
       .map((run) => run.benchmark_report.vcon_export)
-      .filter((record): record is JsonRecord => Boolean(record));
+    ].filter((record): record is JsonRecord => Boolean(record));
     if (!records.length) {
       setExportMessage('No vCon-compatible records are available for this suite run.');
       return;
@@ -2057,6 +2089,24 @@ export function BenchmarkRunner() {
                     <p style={{ margin: 0, color: run.artifacts?.vcon_export?.available ? 'var(--success-text)' : 'var(--muted)' }}>
                       {suiteRunVconSummary(run)}
                     </p>
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => void onExportRetainedSuiteVconBundle(run.suite_run_id)}
+                        disabled={!run.artifacts?.vcon_export?.available}
+                        style={{
+                          border: '1px solid var(--border)',
+                          borderRadius: 8,
+                          background: run.artifacts?.vcon_export?.available ? 'white' : 'var(--panel)',
+                          color: run.artifacts?.vcon_export?.available ? 'var(--text)' : 'var(--muted)',
+                          padding: '6px 10px',
+                          fontWeight: 800,
+                          cursor: run.artifacts?.vcon_export?.available ? 'pointer' : 'not-allowed',
+                        }}
+                      >
+                        Export retained vCon bundle
+                      </button>
+                    </div>
                     {scenarioSummaries.length ? (
                       <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--muted)', display: 'grid', gap: 4 }}>
                         {scenarioSummaries.slice(0, 3).map((scenario) => (
