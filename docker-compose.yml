@@ -1,4 +1,36 @@
 services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-conversation_agent_evals}
+      POSTGRES_USER: ${POSTGRES_USER:-cae}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cae_local_password}
+    ports:
+      - "${POSTGRES_PORT:-54329}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-cae} -d $${POSTGRES_DB:-conversation_agent_evals}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  seed:
+    image: conversation-agent-evals-api:latest
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cae}:${POSTGRES_PASSWORD:-cae_local_password}@db:5432/${POSTGRES_DB:-conversation_agent_evals}
+      APP_ENV: ${APP_ENV:-development}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["python", "-m", "app.seed"]
+    restart: "no"
+
   api:
     image: conversation-agent-evals-api:latest
     build:
@@ -7,18 +39,50 @@ services:
     env_file:
       - .env
     environment:
+      PORT: 8000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cae}:${POSTGRES_PASSWORD:-cae_local_password}@db:5432/${POSTGRES_DB:-conversation_agent_evals}
       API_BASE_URL: http://api:8000
       PIPECAT_SERVICE_URL: http://pipecat:8110
+      APP_ENV: ${APP_ENV:-development}
     ports:
       - "${API_PORT:-8025}:8000"
     volumes:
       - ./storage:/workspace/storage
-      - ./apps/api/sales_presenter.db:/workspace/apps/api/sales_presenter.db
+    depends_on:
+      db:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 15s
       timeout: 5s
       retries: 5
+
+  worker:
+    image: conversation-agent-evals-api:latest
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-cae}:${POSTGRES_PASSWORD:-cae_local_password}@db:5432/${POSTGRES_DB:-conversation_agent_evals}
+      API_BASE_URL: http://api:8000
+      PIPECAT_SERVICE_URL: http://pipecat:8110
+      APP_ENV: ${APP_ENV:-development}
+      WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-30}
+    depends_on:
+      db:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    command: ["python", "-m", "app.worker"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "from pathlib import Path; import time; p=Path('/tmp/conversation-agent-evals-worker-health'); raise SystemExit(0 if p.exists() and time.time() - p.stat().st_mtime < 90 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
   pipecat:
     image: conversation-agent-evals-pipecat:latest
@@ -66,5 +130,10 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      worker:
+        condition: service_healthy
       pipecat:
         condition: service_healthy
+
+volumes:
+  postgres_data:
