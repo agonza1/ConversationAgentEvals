@@ -720,11 +720,14 @@ def run_suite(request: Any) -> dict[str, Any]:
 
     verdict = 'pass' if scenario_reports and len(passing_reports) == len(scenario_reports) else 'needs_review'
     reliability_metrics = _suite_reliability_metrics(scenario_reports)
+    suite_contract_manifest = get_suite_contract_manifest(suite_id)
+    suite_contract_manifest_sha256 = str(suite_contract_manifest['suite_contract_manifest_sha256']) if suite_contract_manifest else ''
 
     return {
         'suite_run_id': suite_run_id,
         'suite_id': suite_id,
         'suite_name': suite['name'],
+        'suite_contract_manifest_sha256': suite_contract_manifest_sha256,
         'provider': suite['provider'],
         'run_metadata': run_metadata,
         'scenario_count': len(scenario_reports),
@@ -737,6 +740,7 @@ def run_suite(request: Any) -> dict[str, Any]:
         'vcon_export': _suite_vcon_export(
             suite=suite,
             suite_run_id=suite_run_id,
+            suite_contract_manifest_sha256=suite_contract_manifest_sha256,
             run_metadata=run_metadata,
             average_score=average_score,
             verdict=verdict,
@@ -784,11 +788,14 @@ def simulate_suite(request: Any) -> dict[str, Any]:
 
     verdict = 'pass' if reports and len(passing_reports) == len(reports) else 'needs_review'
     reliability_metrics = _suite_reliability_metrics(reports)
+    suite_contract_manifest = get_suite_contract_manifest(suite_id)
+    suite_contract_manifest_sha256 = str(suite_contract_manifest['suite_contract_manifest_sha256']) if suite_contract_manifest else ''
 
     return {
         'suite_run_id': suite_run_id,
         'suite_id': suite_id,
         'suite_name': suite['name'],
+        'suite_contract_manifest_sha256': suite_contract_manifest_sha256,
         'provider': suite['provider'],
         'run_metadata': run_metadata,
         'scenario_count': len(reports),
@@ -801,6 +808,7 @@ def simulate_suite(request: Any) -> dict[str, Any]:
         'vcon_export': _suite_vcon_export(
             suite=suite,
             suite_run_id=suite_run_id,
+            suite_contract_manifest_sha256=suite_contract_manifest_sha256,
             run_metadata=run_metadata,
             average_score=average_score,
             verdict=verdict,
@@ -1326,6 +1334,7 @@ def _suite_vcon_export(
     *,
     suite: BenchmarkSuite,
     suite_run_id: str,
+    suite_contract_manifest_sha256: str,
     run_metadata: dict[str, str],
     average_score: int,
     verdict: str,
@@ -1339,6 +1348,7 @@ def _suite_vcon_export(
             'suite_run_id': suite_run_id,
             'suite_id': suite['id'],
             'suite_name': suite['name'],
+            'suite_contract_manifest_sha256': suite_contract_manifest_sha256,
             'provider': suite['provider'],
             'run_metadata': deepcopy(run_metadata),
             'scenario_count': len(scenario_reports),
