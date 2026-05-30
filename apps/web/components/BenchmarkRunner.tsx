@@ -54,6 +54,7 @@ interface BenchmarkReport {
   action_trace?: unknown;
   final_state?: unknown;
   run_metadata?: RunMetadata;
+  run_lifecycle?: RunLifecycle;
   evidence_audit_summary?: EvidenceAuditSummary;
   group_call_summary?: GroupCallSummary | null;
   voice_interaction_summary?: VoiceInteractionSummary | null;
@@ -77,6 +78,13 @@ interface VoiceInteractionSummary {
   correction_signal_count?: number;
   handoff_signal_count?: number;
   action_trace_event_count?: number;
+}
+
+interface RunLifecycle {
+  attempt?: number;
+  retry_of_run_id?: string | null;
+  retryable?: boolean;
+  next_attempt?: number;
 }
 
 interface RunMetadata {
@@ -477,8 +485,8 @@ async function runBenchmark(payload: {
   suite_id: string;
   scenario_id: string;
   transcript: string;
-  action_trace: string | JsonRecord | unknown[];
-  final_state: string | JsonRecord | unknown[];
+  action_trace: unknown;
+  final_state: unknown;
   group_call?: string | JsonRecord | unknown[];
   vcon?: JsonRecord;
   agent_version?: string;
@@ -487,6 +495,9 @@ async function runBenchmark(payload: {
   notes?: string;
   user_id?: string;
   project_id?: string;
+  attempt?: number;
+  max_attempts?: number;
+  retry_of_run_id?: string;
 }) {
   return handleJson<BenchmarkReport>(
     await fetch(`${getApiBase()}/api/benchmarks/run`, {
@@ -1196,6 +1207,59 @@ export function BenchmarkRunner() {
     setCopyMessage(null);
     setRunError(null);
     setSaveMessage(`Loaded saved run ${run.id} for review.`);
+  }
+
+  async function onRetrySavedRun(run: SavedRun) {
+    const sourceReport = run.report;
+    const suiteId = sourceReport.suite_id || selectedSuiteId;
+    const scenarioId = sourceReport.scenario_id || selectedScenarioId;
+    if (!suiteId || !scenarioId) {
+      setRunError('Saved run is missing suite or scenario metadata.');
+      return;
+    }
+
+    setIsRunning(true);
+    setRunError(null);
+    setCopyMessage(null);
+    setSaveMessage(null);
+
+    try {
+      const nextAttempt = (sourceReport.run_lifecycle?.attempt ?? run.report.run_lifecycle?.next_attempt ?? 1) + 1;
+      const nextReport = await runBenchmark({
+        suite_id: suiteId,
+        scenario_id: scenarioId,
+        transcript: run.transcript ?? sourceReport.transcript ?? transcript,
+        action_trace: sourceReport.action_trace ?? parseMaybeJson(actionTrace),
+        final_state: sourceReport.final_state ?? parseMaybeJson(finalState),
+        agent_version: sourceReport.run_metadata?.agent_version || agentVersion || undefined,
+        prompt_version: sourceReport.run_metadata?.prompt_version || promptVersion || undefined,
+        model_name: sourceReport.run_metadata?.model_name || modelName || undefined,
+        notes: sourceReport.run_metadata?.notes || runNotes || undefined,
+        user_id: userId || sourceReport.run_metadata?.user_id,
+        project_id: projectId || sourceReport.run_metadata?.project_id,
+        attempt: nextAttempt,
+        max_attempts: Math.max(nextAttempt, 2),
+        retry_of_run_id: sourceReport.run_id || run.id,
+      });
+      setSelectedSuiteId(suiteId);
+      setSelectedScenarioId(scenarioId);
+      setTranscript(run.transcript ?? sourceReport.transcript ?? transcript);
+      setActionTrace(stringifyEditable(sourceReport.action_trace, actionTrace || '[]'));
+      setFinalState(stringifyEditable(sourceReport.final_state, finalState || '{}'));
+      setReport(nextReport);
+      setSuiteSimulation(null);
+      setJudgeGate(null);
+      setSaveMessage(`Retried saved run ${run.id} as attempt ${nextAttempt}.`);
+      if (userId) {
+        listSavedRuns(userId, projectId, suiteId, scenarioId)
+          .then(setSavedRuns)
+          .catch(() => undefined);
+      }
+    } catch (err) {
+      setRunError(err instanceof Error ? err.message : 'Retry run failed');
+    } finally {
+      setIsRunning(false);
+    }
   }
 
   async function onExportRetainedSuiteVconBundle(suiteRunId: string) {
@@ -2202,6 +2266,21 @@ export function BenchmarkRunner() {
                       }}
                     >
                       Load run
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void onRetrySavedRun(run)}
+                      disabled={isRunning}
+                      style={{
+                        border: '1px solid var(--border)',
+                        borderRadius: 8,
+                        background: 'white',
+                        color: 'var(--text)',
+                        padding: '6px 10px',
+                        fontWeight: 800,
+                      }}
+                    >
+                      Retry run
                     </button>
                     <button
                       type="button"
