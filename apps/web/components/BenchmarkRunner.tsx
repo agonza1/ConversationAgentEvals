@@ -128,6 +128,7 @@ interface RunLifecycle {
   retry_of_run_id?: string | null;
   retryable?: boolean;
   next_attempt?: number;
+  transitions?: Array<{ to?: string; at?: string; reason?: string }>;
 }
 
 interface RunMetadata {
@@ -910,6 +911,23 @@ function suiteRunVconSummary(run: BenchmarkSuiteRunRecord) {
   const summary = run.artifacts?.vcon_export;
   if (!summary?.available) return 'vCon bundle not captured yet.';
   return `${summary.dialog_turns ?? 0} dialog turns, ${summary.analysis_count ?? 0} analysis records (${summary.source_format ?? 'suite'}).`;
+}
+
+function suiteRunLifecycleSummary(lifecycle?: BenchmarkSuiteRunRecord['run_lifecycle']) {
+  if (!lifecycle?.transitions?.length) return null;
+
+  const path = lifecycle.transitions
+    .map((transition) => transition.to ?? 'unknown')
+    .filter(Boolean)
+    .join(' -> ');
+
+  if (!path) return null;
+
+  return `Lifecycle: ${path}`;
+}
+
+function suiteRunLifecycleTimeline(lifecycle?: BenchmarkSuiteRunRecord['run_lifecycle']) {
+  return lifecycle?.transitions?.filter((transition) => transition.to || transition.reason || transition.at) ?? [];
 }
 
 function suiteReliabilityMetrics(run: BenchmarkSuiteRunRecord) {
@@ -2676,6 +2694,8 @@ export function BenchmarkRunner() {
               {suiteRuns.slice(0, 4).map((run) => {
                 const scenarioSummaries = run.artifacts?.scenario_summaries ?? [];
                 const reliability = suiteReliabilityMetrics(run);
+                const lifecycleSummary = suiteRunLifecycleSummary(run.run_lifecycle);
+                const lifecycleTimeline = suiteRunLifecycleTimeline(run.run_lifecycle);
                 return (
                   <article
                     key={run.suite_run_id}
@@ -2700,6 +2720,24 @@ export function BenchmarkRunner() {
                     <p style={{ margin: 0, color: 'var(--muted)' }}>
                       Retained until {formatHistoryDate(run.retention?.retained_until)}. Updated {formatHistoryDate(run.updated_at)}.
                     </p>
+                    {lifecycleSummary ? (
+                      <div style={{ display: 'grid', gap: 6 }}>
+                        <p style={{ margin: 0, color: 'var(--muted)' }}>
+                          {lifecycleSummary}
+                        </p>
+                        {lifecycleTimeline.length ? (
+                          <ol aria-label={`Audit timeline for ${suiteRunTitle(run)}`} style={{ margin: 0, paddingLeft: 18, color: 'var(--muted)', display: 'grid', gap: 4 }}>
+                            {lifecycleTimeline.map((transition, index) => (
+                              <li key={`${transition.to ?? 'status'}-${transition.at ?? index}`}>
+                                <strong style={{ color: 'var(--ink)', textTransform: 'capitalize' }}>{(transition.to ?? 'unknown').replace(/_/g, ' ')}</strong>
+                                {transition.at ? ` at ${formatHistoryDate(transition.at)}` : ''}
+                                {transition.reason ? ` - ${transition.reason}` : ''}
+                              </li>
+                            ))}
+                          </ol>
+                        ) : null}
+                      </div>
+                    ) : null}
                     <p style={{ margin: 0, color: run.artifacts?.vcon_export?.available ? 'var(--success-text)' : 'var(--muted)' }}>
                       {suiteRunVconSummary(run)}
                     </p>
