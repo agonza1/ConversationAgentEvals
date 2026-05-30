@@ -397,6 +397,39 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
     });
   });
 
+  await page.route('**/api/benchmarks/suite-runs/export?*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'suite-history-demo-user-qa-project-call-center-voice-ai',
+        user_id: 'demo-user',
+        project_id: 'qa-project',
+        suite_id: 'call-center-voice-ai',
+        filename: 'agentbench-qa-project-call-center-voice-ai-suite-run-history.json',
+        suite_run_count: 1,
+        summary: {
+          latest_suite_run_id: 'suite-history-1',
+          latest_status: 'completed',
+          latest_average_score: 82,
+          status_counts: { completed: 1 },
+          total_scenarios: 2,
+          total_passes: 1,
+          total_needs_review: 1,
+        },
+        vcon_export_summary: {
+          available_records: 3,
+          missing_records: 0,
+          total_runs: 1,
+          dialog_turns: 4,
+          analysis_records: 1,
+        },
+        suite_runs: [{ suite_run_id: 'suite-history-1', status: 'completed' }],
+        exported_at: '2026-05-29T15:00:00+00:00',
+      }),
+    });
+  });
+
   await page.goto('/benchmarks');
 
   const suiteHistory = page.getByLabel('Suite run history');
@@ -408,6 +441,12 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   await expect(suiteHistory.getByText('EVA-style reliability: 82% accuracy, 100% experience coverage, 4 avg turns.')).toBeVisible();
   await expect(suiteHistory.getByText('Robustness tags: accent, noise.')).toBeVisible();
   await expect(suiteHistory.getByText(/billing-escalation: needs_review \/ 73/)).toBeVisible();
+
+  const historyDownloadPromise = page.waitForEvent('download');
+  await suiteHistory.getByRole('button', { name: 'Export suite history' }).click();
+  const historyDownload = await historyDownloadPromise;
+  expect(historyDownload.suggestedFilename()).toBe('agentbench-qa-project-call-center-voice-ai-suite-run-history.json');
+  await expect(page.getByText('Exported 1 suite runs to agentbench-qa-project-call-center-voice-ai-suite-run-history.json. 3/1 vCon-ready runs with 4 dialog turns and 1 analysis records.')).toBeVisible();
 
   await suiteHistory.getByRole('button', { name: 'Load suite run' }).click();
   await expect(page.getByText('Loaded retained suite run suite-history-1.')).toBeVisible();

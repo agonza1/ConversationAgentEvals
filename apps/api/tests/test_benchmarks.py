@@ -351,6 +351,21 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
         'agentic_benchmark_eval',
     }
 
+    history_export_response = client.get(
+        '/api/benchmarks/suite-runs/export',
+        params={'user_id': 'demo-user', 'project_id': 'qa-project', 'suite_id': 'call-center-voice-ai'},
+    )
+
+    assert history_export_response.status_code == 200
+    history_export = history_export_response.json()
+    assert history_export['filename'] == 'agentbench-qa-project-call-center-voice-ai-suite-run-history.json'
+    assert history_export['suite_run_count'] == 1
+    assert history_export['summary']['latest_suite_run_id'] == simulation['suite_run_id']
+    assert history_export['summary']['status_counts'] == {'completed': 1}
+    assert history_export['summary']['total_scenarios'] == simulation['scenario_count']
+    assert history_export['vcon_export_summary']['available_records'] == simulation['scenario_count'] + 1
+    assert history_export['suite_runs'][0]['suite_run_id'] == simulation['suite_run_id']
+
     missing_export = client.get(
         f"/api/benchmarks/suite-runs/{simulation['suite_run_id']}/vcon-bundle",
         params={'user_id': 'other-user'},

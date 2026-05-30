@@ -154,6 +154,36 @@ def export_benchmark_suite_run_vcon_bundle(db: Session, *, user_id: str, suite_r
     }
 
 
+def export_benchmark_suite_run_history(
+    db: Session,
+    *,
+    user_id: str,
+    project_id: str | None = None,
+    suite_id: str | None = None,
+    status: str | None = None,
+) -> dict[str, Any]:
+    records = list_benchmark_suite_runs(
+        db=db,
+        user_id=user_id,
+        project_id=project_id,
+        suite_id=suite_id,
+        status=status,
+    )
+    return {
+        'id': _suite_history_export_id(user_id=user_id, project_id=project_id, suite_id=suite_id, status=status),
+        'user_id': user_id,
+        'project_id': project_id,
+        'suite_id': suite_id,
+        'status': status,
+        'filename': _suite_history_export_filename(project_id=project_id, suite_id=suite_id, status=status),
+        'suite_run_count': len(records),
+        'summary': _suite_history_summary(records),
+        'vcon_export_summary': _suite_history_vcon_summary(records),
+        'suite_runs': records,
+        'exported_at': _isoformat(datetime.now(UTC)),
+    }
+
+
 def reset_benchmark_suite_run_records_for_tests() -> None:
     with SessionLocal() as db:
         db.query(BenchmarkSuiteRunRecord).delete()
@@ -243,6 +273,71 @@ def _suite_vcon_bundle_filename(record: dict[str, Any]) -> str:
     parts = ['agentbench', record.get('suite_id'), record.get('suite_run_id'), 'vcon-bundle']
     slug = '-'.join(part for part in (_slug_part(part) for part in parts) if part)
     return f'{slug or "agentbench-suite-vcon-bundle"}.json'
+
+
+def _suite_history_export_id(*, user_id: str, project_id: str | None, suite_id: str | None, status: str | None) -> str:
+    parts = ['suite-history', user_id, project_id, suite_id, status]
+    return '-'.join(part for part in (_slug_part(part) for part in parts) if part)
+
+
+def _suite_history_export_filename(*, project_id: str | None, suite_id: str | None, status: str | None) -> str:
+    parts = ['agentbench', project_id, suite_id, status, 'suite-run-history']
+    slug = '-'.join(part for part in (_slug_part(part) for part in parts) if part)
+    return f'{slug or "agentbench-suite-run-history"}.json'
+
+
+def _suite_history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    scores = [_suite_score_from_record(record) for record in records]
+    numeric_scores = [score for score in scores if score is not None]
+    status_counts: dict[str, int] = {}
+    total_scenarios = 0
+    total_passes = 0
+    total_needs_review = 0
+    for record in records:
+        status = str(record.get('status') or 'unknown')
+        status_counts[status] = status_counts.get(status, 0) + 1
+        total_scenarios += _non_negative_int(record.get('scenario_count'))
+        total_passes += _non_negative_int(record.get('pass_count'))
+        total_needs_review += _non_negative_int(record.get('needs_review_count'))
+
+    return {
+        'latest_suite_run_id': records[0].get('suite_run_id') if records else None,
+        'latest_status': records[0].get('status') if records else None,
+        'latest_average_score': scores[0] if scores else None,
+        'best_average_score': max(numeric_scores) if numeric_scores else None,
+        'worst_average_score': min(numeric_scores) if numeric_scores else None,
+        'average_score': round(sum(numeric_scores) / len(numeric_scores), 2) if numeric_scores else None,
+        'status_counts': status_counts,
+        'total_scenarios': total_scenarios,
+        'total_passes': total_passes,
+        'total_needs_review': total_needs_review,
+    }
+
+
+def _suite_history_vcon_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    available_records = 0
+    dialog_turns = 0
+    analysis_records = 0
+    for record in records:
+        suite_report = record.get('suite_report') if isinstance(record.get('suite_report'), dict) else {}
+        for vcon_export in _suite_vcon_records(suite_report):
+            available_records += 1
+            dialog = vcon_export.get('dialog') if isinstance(vcon_export.get('dialog'), list) else []
+            analysis = vcon_export.get('analysis') if isinstance(vcon_export.get('analysis'), list) else []
+            dialog_turns += len(dialog)
+            analysis_records += len(analysis)
+    return {
+        'available_records': available_records,
+        'missing_records': max(len(records) - available_records, 0),
+        'total_runs': len(records),
+        'dialog_turns': dialog_turns,
+        'analysis_records': analysis_records,
+    }
+
+
+def _suite_score_from_record(record: dict[str, Any]) -> int | float | None:
+    score = record.get('average_score')
+    return score if isinstance(score, (int, float)) and not isinstance(score, bool) else None
 
 
 def _slug_part(value: Any) -> str:
