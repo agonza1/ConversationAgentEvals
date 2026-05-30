@@ -354,6 +354,10 @@ def test_runs_export_returns_owner_scoped_history_bundle_with_vcon_summary():
     assert exported['run_count'] == 2
     assert exported['summary']['status_counts'] == {'completed': 2}
     assert exported['summary']['latest_run_id'] == second.json()['run_id']
+    assert exported['summary']['latest_score'] == second.json()['overall_score']
+    assert exported['summary']['previous_score'] == first.json()['overall_score']
+    assert exported['summary']['latest_delta'] == second.json()['overall_score'] - first.json()['overall_score']
+    assert exported['summary']['latest_trend'] in {'improved', 'regressed', 'unchanged'}
     assert exported['vcon_export_summary']['available_records'] == 2
     assert exported['vcon_export_summary']['analysis_records'] == 2
     assert {run['run_id'] for run in exported['runs']} == {first.json()['run_id'], second.json()['run_id']}
