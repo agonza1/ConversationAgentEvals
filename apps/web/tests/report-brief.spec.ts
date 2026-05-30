@@ -284,7 +284,7 @@ test('benchmark runner queues retained suite runs in the background', async ({ p
   await expect(page.getByText('Queued suite run suite-queued-1 for qa-project.')).toBeVisible();
   const suiteHistory = page.getByLabel('Suite run history');
   await expect(suiteHistory.getByRole('heading', { name: /1 suite runs/ })).toBeVisible();
-  await expect(suiteHistory.getByText('queued')).toBeVisible();
+  await expect(suiteHistory.locator('article').getByText('queued')).toBeVisible();
   await expect(suiteHistory.getByText('Scenario artifacts appear when the suite run completes.')).toBeVisible();
 });
 
@@ -398,6 +398,7 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   });
 
   await page.route('**/api/benchmarks/suite-runs/export?*', async (route) => {
+    expect(new URL(route.request().url()).searchParams.get('status')).toBe('completed');
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -436,11 +437,12 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   await expect(suiteHistory).toBeVisible();
   await expect(suiteHistory.getByRole('heading', { name: /1 suite runs/ })).toBeVisible();
   await expect(suiteHistory.locator('strong').filter({ hasText: 'Call Center Voice AI' })).toBeVisible();
-  await expect(suiteHistory.getByText('completed')).toBeVisible();
+  await expect(suiteHistory.locator('article').getByText('completed')).toBeVisible();
   await expect(suiteHistory.getByText('4 dialog turns, 1 analysis records')).toBeVisible();
   await expect(suiteHistory.getByText('EVA-style reliability: 82% accuracy, 100% experience coverage, 4 avg turns.')).toBeVisible();
   await expect(suiteHistory.getByText('Robustness tags: accent, noise.')).toBeVisible();
   await expect(suiteHistory.getByText(/billing-escalation: needs_review \/ 73/)).toBeVisible();
+  await suiteHistory.getByLabel('Filter suite runs by status').selectOption('completed');
 
   const historyDownloadPromise = page.waitForEvent('download');
   await suiteHistory.getByRole('button', { name: 'Export suite history' }).click();
