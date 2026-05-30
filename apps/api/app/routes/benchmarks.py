@@ -8,7 +8,16 @@ from sqlalchemy.orm import Session
 
 from app.db.database import SessionLocal, get_db
 from app.schemas.benchmarks import BenchmarkRunRequest, BenchmarkSimulationRequest, BenchmarkSuiteRunRequest
-from app.services.benchmark_service import get_scenario_contract, get_suite, list_suites, run_scenario, run_suite, simulate_scenario, simulate_suite
+from app.services.benchmark_service import (
+    get_scenario_contract,
+    get_suite,
+    get_suite_contract_manifest,
+    list_suites,
+    run_scenario,
+    run_suite,
+    simulate_scenario,
+    simulate_suite,
+)
 from app.services.benchmark_run_store import (
     export_benchmark_run_history,
     export_benchmark_run_vcon,
@@ -151,6 +160,15 @@ def get_benchmark_suite(suite_id: str):
     if suite is None:
         raise HTTPException(status_code=404, detail='Benchmark suite not found.')
     return suite
+
+
+@router.get('/{suite_id}/contract-manifest')
+@router.get('/suites/{suite_id}/contract-manifest')
+def get_benchmark_suite_contract_manifest(suite_id: str):
+    manifest = get_suite_contract_manifest(suite_id)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail='Benchmark suite not found.')
+    return manifest
 
 
 @router.get('/{suite_id}/scenarios')

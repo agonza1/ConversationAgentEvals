@@ -191,6 +191,9 @@ def _history_export_filename(*, project_id: str | None, suite_id: str | None, sc
 def _history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     scores = [_score_from_record(record) for record in records]
     numeric_scores = [score for score in scores if score is not None]
+    latest_score = scores[0] if scores else None
+    previous_score = next((score for score in scores[1:] if score is not None), None)
+    latest_delta = latest_score - previous_score if latest_score is not None and previous_score is not None else None
     status_counts: dict[str, int] = {}
     for record in records:
         status = str(record.get('status') or 'unknown')
@@ -199,7 +202,10 @@ def _history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         'latest_run_id': records[0].get('run_id') if records else None,
         'latest_status': records[0].get('status') if records else None,
-        'latest_score': scores[0] if scores else None,
+        'latest_score': latest_score,
+        'previous_score': previous_score,
+        'latest_delta': latest_delta,
+        'latest_trend': _score_trend(latest_score, previous_score),
         'best_score': max(numeric_scores) if numeric_scores else None,
         'worst_score': min(numeric_scores) if numeric_scores else None,
         'average_score': round(sum(numeric_scores) / len(numeric_scores), 2) if numeric_scores else None,
@@ -234,6 +240,18 @@ def _score_from_record(record: dict[str, Any]) -> int | float | None:
     report = record.get('report') if isinstance(record.get('report'), dict) else {}
     score = report.get('overall_score', report.get('score'))
     return score if isinstance(score, (int, float)) and not isinstance(score, bool) else None
+
+
+def _score_trend(latest_score: int | float | None, previous_score: int | float | None) -> str:
+    if latest_score is None:
+        return 'unscored'
+    if previous_score is None:
+        return 'baseline'
+    if latest_score > previous_score:
+        return 'improved'
+    if latest_score < previous_score:
+        return 'regressed'
+    return 'unchanged'
 
 
 def _retention_envelope(*, report: dict[str, Any], retained_until: datetime, now: datetime) -> dict[str, Any]:

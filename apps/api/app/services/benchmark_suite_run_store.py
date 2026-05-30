@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.db.database import SessionLocal
 from app.models.entities import BenchmarkSuiteRunRecord
-from app.services.benchmark_service import DETERMINISTIC_EVALUATOR_VERSION, get_suite
+from app.services.benchmark_service import DETERMINISTIC_EVALUATOR_VERSION, get_suite, get_suite_contract_manifest
 from app.services.benchmark_run_store import DEFAULT_PROJECT_ID, DEFAULT_RETENTION_DAYS, DEFAULT_USER_ID
 
 TERMINAL_SUITE_STATUSES = {'completed', 'needs_review', 'failed'}
@@ -38,11 +38,13 @@ def create_benchmark_suite_run_record(
     record.pass_count = 0
     record.needs_review_count = 0
     record.average_score = 0
+    suite_contract_manifest_sha256 = _suite_contract_manifest_sha256(suite_id)
     record.report_json = json.dumps(
         _retention_envelope(
             suite_report={
                 'suite_run_id': suite_run_id,
                 'suite_id': suite_id,
+                'suite_contract_manifest_sha256': suite_contract_manifest_sha256,
                 'run_metadata': clean_metadata,
                 'run_lifecycle': _suite_lifecycle(status='queued', now=now, reason='suite run accepted'),
             },
@@ -211,6 +213,7 @@ def serialize_benchmark_suite_run(record: BenchmarkSuiteRunRecord) -> dict[str, 
         'pass_count': record.pass_count,
         'needs_review_count': record.needs_review_count,
         'average_score': record.average_score,
+        'suite_contract_manifest_sha256': suite_report.get('suite_contract_manifest_sha256') or _suite_contract_manifest_sha256(record.suite_id),
         'suite_report': suite_report,
         'run_lifecycle': suite_report.get('run_lifecycle') if isinstance(suite_report.get('run_lifecycle'), dict) else {},
         'progress': progress,
@@ -218,6 +221,7 @@ def serialize_benchmark_suite_run(record: BenchmarkSuiteRunRecord) -> dict[str, 
         'artifacts': {
             'scenario_summaries': scenario_summaries,
             'vcon_export': _vcon_export_summary(suite_report),
+            'suite_contract_manifest_sha256': suite_report.get('suite_contract_manifest_sha256') or _suite_contract_manifest_sha256(record.suite_id),
         },
         'retention': {
             'retention_days': retention.get('retention_days', DEFAULT_RETENTION_DAYS),
@@ -235,6 +239,14 @@ def _queued_scenario_count(suite_id: str) -> int:
     suite = get_suite(suite_id)
     scenarios = suite.get('scenarios') if isinstance(suite, dict) else None
     return len(scenarios) if isinstance(scenarios, list) else 0
+
+
+def _suite_contract_manifest_sha256(suite_id: str) -> str:
+    manifest = get_suite_contract_manifest(suite_id)
+    if not isinstance(manifest, dict):
+        return ''
+    value = manifest.get('suite_contract_manifest_sha256')
+    return value if isinstance(value, str) else ''
 
 
 def _retention_envelope(*, suite_report: dict[str, Any], retained_until: datetime, now: datetime) -> dict[str, Any]:

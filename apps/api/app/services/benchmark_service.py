@@ -333,6 +333,35 @@ def get_suite(suite_id: str) -> BenchmarkSuite | None:
     return deepcopy(suite) if suite else None
 
 
+def get_suite_contract_manifest(suite_id: str) -> dict[str, Any] | None:
+    suite = _SUITES_BY_ID.get(suite_id)
+    if not suite:
+        return None
+
+    scenario_contracts = []
+    for scenario in suite['scenarios']:
+        contract = _scenario_contract(scenario)
+        scenario_contracts.append(
+            {
+                'scenario_id': scenario['id'],
+                'scenario_title': scenario['title'],
+                'scenario_contract': contract,
+                'scenario_contract_sha256': _stable_digest(contract),
+            }
+        )
+
+    manifest = {
+        'suite_id': suite_id,
+        'suite_name': suite['name'],
+        'provider': suite['provider'],
+        'scenario_count': len(suite['scenarios']),
+        'scenario_contracts': scenario_contracts,
+        'evidence_requirements': _benchmark_evidence_requirements(),
+    }
+    manifest['suite_contract_manifest_sha256'] = _stable_digest(manifest)
+    return manifest
+
+
 def get_scenario_contract(suite_id: str, scenario_id: str) -> dict[str, Any] | None:
     suite = _SUITES_BY_ID.get(suite_id)
     scenario = _SCENARIOS_BY_ID.get((suite_id, scenario_id))
@@ -347,16 +376,20 @@ def get_scenario_contract(suite_id: str, scenario_id: str) -> dict[str, Any] | N
         'scenario_title': scenario['title'],
         'scenario_contract': contract,
         'scenario_contract_sha256': _stable_digest(contract),
-        'evidence_requirements': {
-            'required_artifacts': ['transcript', 'action_trace', 'final_state'],
-            'optional_artifacts': ['call', 'group_call', 'vcon'],
-            'scoring_dimensions': [
-                'task_completion',
-                'required_action_execution',
-                'forbidden_action_avoidance',
-                'final_state_match',
-            ],
-        },
+        'evidence_requirements': _benchmark_evidence_requirements(),
+    }
+
+
+def _benchmark_evidence_requirements() -> dict[str, list[str]]:
+    return {
+        'required_artifacts': ['transcript', 'action_trace', 'final_state'],
+        'optional_artifacts': ['call', 'group_call', 'vcon'],
+        'scoring_dimensions': [
+            'task_completion',
+            'required_action_execution',
+            'forbidden_action_avoidance',
+            'final_state_match',
+        ],
     }
 
 
@@ -687,11 +720,14 @@ def run_suite(request: Any) -> dict[str, Any]:
 
     verdict = 'pass' if scenario_reports and len(passing_reports) == len(scenario_reports) else 'needs_review'
     reliability_metrics = _suite_reliability_metrics(scenario_reports)
+    suite_contract_manifest = get_suite_contract_manifest(suite_id)
+    suite_contract_manifest_sha256 = str(suite_contract_manifest['suite_contract_manifest_sha256']) if suite_contract_manifest else ''
 
     return {
         'suite_run_id': suite_run_id,
         'suite_id': suite_id,
         'suite_name': suite['name'],
+        'suite_contract_manifest_sha256': suite_contract_manifest_sha256,
         'provider': suite['provider'],
         'run_metadata': run_metadata,
         'scenario_count': len(scenario_reports),
@@ -704,6 +740,7 @@ def run_suite(request: Any) -> dict[str, Any]:
         'vcon_export': _suite_vcon_export(
             suite=suite,
             suite_run_id=suite_run_id,
+            suite_contract_manifest_sha256=suite_contract_manifest_sha256,
             run_metadata=run_metadata,
             average_score=average_score,
             verdict=verdict,
@@ -751,11 +788,14 @@ def simulate_suite(request: Any) -> dict[str, Any]:
 
     verdict = 'pass' if reports and len(passing_reports) == len(reports) else 'needs_review'
     reliability_metrics = _suite_reliability_metrics(reports)
+    suite_contract_manifest = get_suite_contract_manifest(suite_id)
+    suite_contract_manifest_sha256 = str(suite_contract_manifest['suite_contract_manifest_sha256']) if suite_contract_manifest else ''
 
     return {
         'suite_run_id': suite_run_id,
         'suite_id': suite_id,
         'suite_name': suite['name'],
+        'suite_contract_manifest_sha256': suite_contract_manifest_sha256,
         'provider': suite['provider'],
         'run_metadata': run_metadata,
         'scenario_count': len(reports),
@@ -768,6 +808,7 @@ def simulate_suite(request: Any) -> dict[str, Any]:
         'vcon_export': _suite_vcon_export(
             suite=suite,
             suite_run_id=suite_run_id,
+            suite_contract_manifest_sha256=suite_contract_manifest_sha256,
             run_metadata=run_metadata,
             average_score=average_score,
             verdict=verdict,
@@ -1293,6 +1334,7 @@ def _suite_vcon_export(
     *,
     suite: BenchmarkSuite,
     suite_run_id: str,
+    suite_contract_manifest_sha256: str,
     run_metadata: dict[str, str],
     average_score: int,
     verdict: str,
@@ -1306,6 +1348,7 @@ def _suite_vcon_export(
             'suite_run_id': suite_run_id,
             'suite_id': suite['id'],
             'suite_name': suite['name'],
+            'suite_contract_manifest_sha256': suite_contract_manifest_sha256,
             'provider': suite['provider'],
             'run_metadata': deepcopy(run_metadata),
             'scenario_count': len(scenario_reports),

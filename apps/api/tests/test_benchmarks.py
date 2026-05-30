@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.services.benchmark_service import get_suite, list_suites, run_scenario, run_suite, simulate_scenario, simulate_suite
+from app.services.benchmark_service import get_suite, get_suite_contract_manifest, list_suites, run_scenario, run_suite, simulate_scenario, simulate_suite
 from app.services.benchmark_run_store import reset_benchmark_run_records_for_tests
 from app.services.benchmark_suite_run_store import reset_benchmark_suite_run_records_for_tests
 
@@ -209,6 +209,33 @@ def test_scenarios_endpoint_returns_full_scenario_contract():
     }.issubset(scenario)
 
 
+def test_suite_contract_manifest_returns_all_scenario_fingerprints():
+    manifest = get_suite_contract_manifest('call-center-voice-ai')
+
+    assert manifest is not None
+    assert manifest['suite_id'] == 'call-center-voice-ai'
+    assert manifest['scenario_count'] == len(get_suite('call-center-voice-ai')['scenarios'])
+    assert manifest['evidence_requirements']['required_artifacts'] == ['transcript', 'action_trace', 'final_state']
+    assert len(manifest['suite_contract_manifest_sha256']) == 64
+    assert [item['scenario_id'] for item in manifest['scenario_contracts']] == [
+        scenario['id'] for scenario in get_suite('call-center-voice-ai')['scenarios']
+    ]
+    assert all(len(item['scenario_contract_sha256']) == 64 for item in manifest['scenario_contracts'])
+
+    response = client.get('/api/benchmarks/suites/call-center-voice-ai/contract-manifest')
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload == manifest
+
+
+def test_suite_contract_manifest_endpoint_rejects_unknown_suite():
+    response = client.get('/api/benchmarks/suites/missing/contract-manifest')
+
+    assert response.status_code == 404
+    assert response.json()['detail'] == 'Benchmark suite not found.'
+
+
 def test_scenario_contract_endpoint_returns_stable_hash_and_evidence_requirements():
     response = client.get('/api/benchmarks/suites/telehealth-agent/scenarios/medication-refill-routing/contract')
 
@@ -327,6 +354,10 @@ def test_runs_export_returns_owner_scoped_history_bundle_with_vcon_summary():
     assert exported['run_count'] == 2
     assert exported['summary']['status_counts'] == {'completed': 2}
     assert exported['summary']['latest_run_id'] == second.json()['run_id']
+    assert exported['summary']['latest_score'] == second.json()['overall_score']
+    assert exported['summary']['previous_score'] == first.json()['overall_score']
+    assert exported['summary']['latest_delta'] == second.json()['overall_score'] - first.json()['overall_score']
+    assert exported['summary']['latest_trend'] in {'improved', 'regressed', 'unchanged'}
     assert exported['vcon_export_summary']['available_records'] == 2
     assert exported['vcon_export_summary']['analysis_records'] == 2
     assert {run['run_id'] for run in exported['runs']} == {first.json()['run_id'], second.json()['run_id']}
@@ -423,6 +454,10 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
     assert suite_record['suite_report']['verdict'] == simulation['verdict']
     assert suite_record['reliability_metrics']['pass_at_1'] == 1.0
     assert suite_record['suite_report']['reliability_metrics']['framework'] == 'eva_bench_inspired_v1'
+    expected_suite_manifest_sha = get_suite_contract_manifest('call-center-voice-ai')['suite_contract_manifest_sha256']
+    assert suite_record['suite_contract_manifest_sha256'] == expected_suite_manifest_sha
+    assert suite_record['suite_report']['suite_contract_manifest_sha256'] == expected_suite_manifest_sha
+    assert suite_record['artifacts']['suite_contract_manifest_sha256'] == expected_suite_manifest_sha
     assert suite_record['scenario_count'] == simulation['scenario_count']
     assert suite_record['progress'] == {
         'phase': 'finished',
@@ -539,6 +574,8 @@ def test_suite_simulate_async_endpoint_tracks_queued_to_terminal_lifecycle():
     queued = response.json()
     assert queued['status'] == 'queued'
     assert queued['scenario_count'] == len(get_suite('call-center-voice-ai')['scenarios'])
+    assert queued['suite_contract_manifest_sha256'] == get_suite_contract_manifest('call-center-voice-ai')['suite_contract_manifest_sha256']
+    assert queued['suite_report']['suite_contract_manifest_sha256'] == queued['suite_contract_manifest_sha256']
     assert queued['run_lifecycle']['status'] == 'queued'
     assert queued['run_lifecycle']['terminal'] is False
     assert queued['progress'] == {
@@ -1014,6 +1051,7 @@ def test_run_suite_scores_all_scenario_evidence_payloads():
     )
 
     assert result['suite_id'] == 'telehealth-agent'
+    assert result['suite_contract_manifest_sha256'] == get_suite_contract_manifest('telehealth-agent')['suite_contract_manifest_sha256']
     assert result['scenario_count'] == len(suite['scenarios'])
     assert result['pass_count'] == len(suite['scenarios'])
     assert result['needs_review_count'] == 0
@@ -1038,6 +1076,7 @@ def test_run_suite_scores_all_scenario_evidence_payloads():
     assert suite_export['appended_analysis_type'] == 'agentic_benchmark_suite_eval'
     assert suite_analysis['type'] == 'agentic_benchmark_suite_eval'
     assert suite_analysis['body']['suite_run_id'] == result['suite_run_id']
+    assert suite_analysis['body']['suite_contract_manifest_sha256'] == result['suite_contract_manifest_sha256']
     assert suite_analysis['body']['scenario_count'] == result['scenario_count']
     assert suite_analysis['body']['reliability_metrics']['pass_at_1'] == 1.0
     assert suite_analysis['body']['reliability_metrics']['perturbation_tags'] == ['accent', 'noise']

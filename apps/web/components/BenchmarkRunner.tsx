@@ -11,6 +11,24 @@ interface BenchmarkSuite {
   scenarios: BenchmarkScenario[];
 }
 
+interface BenchmarkSuiteContractManifest {
+  suite_id: string;
+  suite_name?: string;
+  provider?: string;
+  scenario_count?: number;
+  suite_contract_manifest_sha256?: string;
+  scenario_contracts?: Array<{
+    scenario_id?: string;
+    scenario_title?: string;
+    scenario_contract_sha256?: string;
+  }>;
+  evidence_requirements?: {
+    required_artifacts?: string[];
+    optional_artifacts?: string[];
+    scoring_dimensions?: string[];
+  };
+}
+
 interface BenchmarkScenario {
   id: string;
   suite_id?: string;
@@ -569,6 +587,12 @@ async function fetchBenchmarkSuites(): Promise<BenchmarkSuite[]> {
   );
 }
 
+async function fetchBenchmarkSuiteContractManifest(suiteId: string) {
+  return handleJson<BenchmarkSuiteContractManifest>(
+    await fetch(`${getApiBase()}/api/benchmarks/suites/${encodeURIComponent(suiteId)}/contract-manifest`, { cache: 'no-store' }),
+  );
+}
+
 async function runBenchmark(payload: {
   suite_id: string;
   scenario_id: string;
@@ -1035,6 +1059,8 @@ export function BenchmarkRunner() {
   const [includeFailure, setIncludeFailure] = useState(false);
   const [report, setReport] = useState<BenchmarkReport | null>(null);
   const [suiteSimulation, setSuiteSimulation] = useState<BenchmarkSuiteSimulationResponse | null>(null);
+  const [contractManifest, setContractManifest] = useState<BenchmarkSuiteContractManifest | null>(null);
+  const [contractManifestError, setContractManifestError] = useState<string | null>(null);
   const [userId, setUserId] = useState('');
   const [projectId, setProjectId] = useState('call-center-demo');
   const [plan, setPlan] = useState<PricingPlan['id']>('free');
@@ -1147,6 +1173,31 @@ export function BenchmarkRunner() {
       selectedSuite.scenarios.some((scenario) => scenario.id === current) ? current : selectedSuite.scenarios[0]?.id ?? ''
     ));
   }, [selectedSuite]);
+
+  useEffect(() => {
+    if (!selectedSuite?.id) {
+      setContractManifest(null);
+      setContractManifestError(null);
+      return;
+    }
+
+    let isMounted = true;
+    setContractManifest(null);
+    setContractManifestError(null);
+
+    fetchBenchmarkSuiteContractManifest(selectedSuite.id)
+      .then((manifest) => {
+        if (isMounted) setContractManifest(manifest);
+      })
+      .catch((err) => {
+        if (!isMounted) return;
+        setContractManifestError(err instanceof Error ? err.message : 'Could not load suite contract manifest.');
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedSuite?.id]);
 
   useEffect(() => {
     if (!selectedScenario) return;
@@ -1661,7 +1712,14 @@ export function BenchmarkRunner() {
   const verdict = report?.verdict ?? report?.overall;
   const reportBrief = report ? formatReportBrief(report, selectedScenario?.title) : '';
   const suiteBrief = suiteSimulation ? formatSuiteBrief(suiteSimulation) : '';
-  const scenarioContractFingerprint = report?.scenario_contract_sha256 ? report.scenario_contract_sha256.slice(0, 12) : 'Not captured';
+  const selectedScenarioContract = contractManifest?.scenario_contracts?.find((item) => item.scenario_id === selectedScenario?.id) ?? null;
+  const selectedScenarioManifestFingerprint = selectedScenarioContract?.scenario_contract_sha256
+    ? selectedScenarioContract.scenario_contract_sha256.slice(0, 12)
+    : null;
+  const suiteManifestFingerprint = contractManifest?.suite_contract_manifest_sha256
+    ? contractManifest.suite_contract_manifest_sha256.slice(0, 12)
+    : null;
+  const scenarioContractFingerprint = report?.scenario_contract_sha256 ? report.scenario_contract_sha256.slice(0, 12) : selectedScenarioManifestFingerprint ?? 'Not captured';
   const pricing = productConfig?.pricing ?? [];
   const deterministicRule = productConfig?.usage_rules.find((rule) => rule.id === 'deterministic_eval');
   const judgeRule = productConfig?.usage_rules.find((rule) => rule.id === 'llm_judge');
@@ -1838,6 +1896,30 @@ export function BenchmarkRunner() {
                 <ScenarioList title="Constraints" items={toStringList(selectedScenario.constraints)} />
               </div>
             </details>
+            <div aria-label="Suite contract manifest" style={{ borderTop: '1px solid var(--border)', paddingTop: 12, display: 'grid', gap: 8 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                <strong>Contract manifest</strong>
+                <span aria-label={`Scenario contract: ${selectedScenarioManifestFingerprint ?? 'loading'}`} style={{ color: 'var(--muted)', fontSize: 13 }}>
+                  {selectedScenarioManifestFingerprint ? `Scenario ${selectedScenarioManifestFingerprint}` : 'Scenario hash loading'}
+                </span>
+                <span aria-label={`Suite scenarios: ${contractManifest?.scenario_count ?? selectedSuite?.scenarios.length ?? 0}`} style={{ color: 'var(--muted)', fontSize: 13 }}>
+                  {contractManifest?.scenario_count ?? selectedSuite?.scenarios.length ?? 0} scenarios
+                </span>
+                <span aria-label={`Suite manifest: ${suiteManifestFingerprint ?? 'loading'}`} style={{ color: 'var(--muted)', fontSize: 13 }}>
+                  {suiteManifestFingerprint ? `Suite ${suiteManifestFingerprint}` : 'Suite hash loading'}
+                </span>
+              </div>
+              {contractManifest?.evidence_requirements ? (
+                <p style={{ margin: 0, color: 'var(--muted)', lineHeight: 1.5 }}>
+                  Required evidence: {(contractManifest.evidence_requirements.required_artifacts ?? []).join(', ') || 'not declared'}.
+                  {' '}Scoring: {(contractManifest.evidence_requirements.scoring_dimensions ?? []).join(', ') || 'not declared'}.
+                </p>
+              ) : contractManifestError ? (
+                <p style={{ margin: 0, color: 'var(--danger)' }}>{contractManifestError}</p>
+              ) : (
+                <p style={{ margin: 0, color: 'var(--muted)' }}>Loading suite fingerprints and evidence requirements...</p>
+              )}
+            </div>
           </div>
         ) : !isLoading ? (
           <p style={{ margin: 0, color: 'var(--muted)' }}>No benchmark scenarios are available yet.</p>
