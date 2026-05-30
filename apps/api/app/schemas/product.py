@@ -43,6 +43,24 @@ class ProductConfig(BaseModel):
     llm_judge_status: Literal['planned', 'gated', 'enabled']
 
 
+class CheckoutRequest(BaseModel):
+    plan: Literal['starter', 'team']
+    user_id: str = Field(min_length=1)
+    project_id: str = Field(default='default')
+    success_url: str | None = None
+    cancel_url: str | None = None
+
+
+class CheckoutResponse(BaseModel):
+    status: Literal['ready', 'blocked']
+    plan: Literal['starter', 'team']
+    stripe_price_id: str | None = None
+    checkout_url: str | None = None
+    mode: Literal['subscription'] = 'subscription'
+    message: str
+    metadata: dict[str, str] = Field(default_factory=dict)
+
+
 class ProductProjectRequest(BaseModel):
     user_id: str = Field(min_length=1)
     workspace_id: str | None = None

@@ -41,6 +41,59 @@ def test_product_config_exposes_configured_stripe_price_ids(monkeypatch):
     assert plans['free']['stripe_price_id'] is None
 
 
+def test_checkout_gate_blocks_until_plan_price_is_configured(monkeypatch):
+    monkeypatch.delenv('STRIPE_STARTER_PRICE_ID', raising=False)
+
+    response = client.post(
+        '/api/product/checkout',
+        json={'plan': 'starter', 'user_id': 'demo-user', 'project_id': 'call-center'},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        'status': 'blocked',
+        'plan': 'starter',
+        'stripe_price_id': None,
+        'checkout_url': None,
+        'mode': 'subscription',
+        'message': 'Stripe checkout is not configured for this plan yet.',
+        'metadata': {'user_id': 'demo-user', 'project_id': 'call-center', 'plan': 'starter'},
+    }
+
+
+def test_checkout_gate_reports_ready_when_plan_price_is_configured(monkeypatch):
+    monkeypatch.setenv('STRIPE_TEAM_PRICE_ID', 'price_team_456')
+    monkeypatch.setenv('STRIPE_CHECKOUT_BASE_URL', 'https://billing.example.com/checkout')
+
+    response = client.post(
+        '/api/product/checkout',
+        json={
+            'plan': 'team',
+            'user_id': 'demo-user',
+            'project_id': 'call-center',
+            'success_url': 'https://app.example.com/success',
+            'cancel_url': 'https://app.example.com/cancel',
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        'status': 'ready',
+        'plan': 'team',
+        'stripe_price_id': 'price_team_456',
+        'checkout_url': 'https://billing.example.com/checkout?price_id=price_team_456&client_reference_id=demo-user:call-center',
+        'mode': 'subscription',
+        'message': 'Stripe price is configured and ready for checkout session creation.',
+        'metadata': {
+            'user_id': 'demo-user',
+            'project_id': 'call-center',
+            'plan': 'team',
+            'success_url': 'https://app.example.com/success',
+            'cancel_url': 'https://app.example.com/cancel',
+        },
+    }
+
+
 def test_workspaces_create_owner_membership_defaults_and_list_by_member():
     response = client.post(
         '/api/product/workspaces',
