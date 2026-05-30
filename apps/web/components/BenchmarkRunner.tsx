@@ -256,6 +256,29 @@ interface ProjectHistoryExport {
   exported_at: string;
 }
 
+interface BenchmarkRunHistoryExport {
+  id: string;
+  filename: string;
+  user_id: string;
+  project_id?: string | null;
+  suite_id?: string | null;
+  scenario_id?: string | null;
+  status?: string | null;
+  run_count: number;
+  summary: {
+    latest_run_id?: string | null;
+    latest_status?: string | null;
+    latest_score?: number | null;
+    best_score?: number | null;
+    worst_score?: number | null;
+    average_score?: number | null;
+    status_counts?: Record<string, number>;
+  };
+  vcon_export_summary: ProjectVconExportSummary;
+  runs: JsonRecord[];
+  exported_at: string;
+}
+
 interface BenchmarkSuiteVconBundleExport {
   id: string;
   suite_run_id: string;
@@ -656,6 +679,16 @@ async function exportSavedRun(userId: string, runId: string) {
 async function exportProjectHistory(userId: string, projectId: string) {
   return handleJson<ProjectHistoryExport>(
     await fetch(`${getApiBase()}/api/product/projects/${encodeURIComponent(projectId)}/export?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
+  );
+}
+
+async function exportBenchmarkRunHistory(userId: string, projectId: string, suiteId?: string, scenarioId?: string) {
+  const params = new URLSearchParams({ user_id: userId, project_id: projectId });
+  if (suiteId) params.set('suite_id', suiteId);
+  if (scenarioId) params.set('scenario_id', scenarioId);
+
+  return handleJson<BenchmarkRunHistoryExport>(
+    await fetch(`${getApiBase()}/api/benchmarks/runs/export?${params.toString()}`, { cache: 'no-store' }),
   );
 }
 
@@ -1212,6 +1245,18 @@ export function BenchmarkRunner() {
       setExportMessage(`Exported ${exported.run_count} runs to ${exported.filename}. ${projectVconExportSummary(exported.vcon_export_summary)}`);
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : 'Could not export this project history.');
+    }
+  }
+
+  async function onExportBenchmarkRunHistory() {
+    if (!userId) return;
+
+    try {
+      const exported = await exportBenchmarkRunHistory(userId, projectId, selectedSuite?.id, selectedScenario?.id);
+      downloadJson(exported.filename, exported);
+      setExportMessage(`Exported ${exported.run_count} benchmark runs to ${exported.filename}. ${projectVconExportSummary(exported.vcon_export_summary)}`);
+    } catch (err) {
+      setExportMessage(err instanceof Error ? err.message : 'Could not export benchmark run history.');
     }
   }
 
@@ -2233,21 +2278,39 @@ export function BenchmarkRunner() {
             <h3 style={{ margin: 0 }}>
               {userId ? `${savedRuns.length} saved for ${selectedScenario?.title ?? projectId}` : 'Signup required'}
             </h3>
-            {userId && savedRuns.length ? (
-              <button
-                type="button"
-                onClick={() => void onExportProjectHistory()}
-                style={{
-                  border: '1px solid var(--border)',
-                  borderRadius: 8,
-                  background: 'white',
-                  color: 'var(--text)',
-                  padding: '8px 12px',
-                  fontWeight: 800,
-                }}
-              >
-                Export history
-              </button>
+            {userId ? (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {savedRuns.length ? (
+                  <button
+                    type="button"
+                    onClick={() => void onExportProjectHistory()}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'white',
+                      color: 'var(--text)',
+                      padding: '8px 12px',
+                      fontWeight: 800,
+                    }}
+                  >
+                    Export history
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => void onExportBenchmarkRunHistory()}
+                  style={{
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    background: 'white',
+                    color: 'var(--text)',
+                    padding: '8px 12px',
+                    fontWeight: 800,
+                  }}
+                >
+                  Export benchmark history
+                </button>
+              </div>
             ) : null}
           </div>
           {projectRegressionSummary ? (

@@ -97,6 +97,39 @@ def export_benchmark_run_vcon(db: Session, *, user_id: str, run_id: str) -> dict
     }
 
 
+def export_benchmark_run_history(
+    db: Session,
+    *,
+    user_id: str,
+    project_id: str | None = None,
+    suite_id: str | None = None,
+    scenario_id: str | None = None,
+    status: str | None = None,
+) -> dict[str, Any]:
+    records = list_benchmark_runs(
+        db=db,
+        user_id=user_id,
+        project_id=project_id,
+        suite_id=suite_id,
+        scenario_id=scenario_id,
+        status=status,
+    )
+    return {
+        'id': _history_export_id(user_id=user_id, project_id=project_id, suite_id=suite_id, scenario_id=scenario_id),
+        'user_id': user_id,
+        'project_id': project_id,
+        'suite_id': suite_id,
+        'scenario_id': scenario_id,
+        'status': status,
+        'filename': _history_export_filename(project_id=project_id, suite_id=suite_id, scenario_id=scenario_id),
+        'run_count': len(records),
+        'summary': _history_summary(records),
+        'vcon_export_summary': _history_vcon_summary(records),
+        'runs': records,
+        'exported_at': _isoformat(datetime.now(UTC)),
+    }
+
+
 def reset_benchmark_run_records_for_tests() -> None:
     with SessionLocal() as db:
         db.query(BenchmarkRunRecord).delete()
@@ -142,6 +175,65 @@ def _slug_part(value: Any) -> str:
 
     cleaned = re.sub(r'[^a-z0-9-]+', '-', str(value).lower()).strip('-') if value is not None else ''
     return cleaned
+
+
+def _history_export_id(*, user_id: str, project_id: str | None, suite_id: str | None, scenario_id: str | None) -> str:
+    parts = ['benchmark-history', user_id, project_id, suite_id, scenario_id]
+    return '-'.join(part for part in (_slug_part(part) for part in parts) if part)
+
+
+def _history_export_filename(*, project_id: str | None, suite_id: str | None, scenario_id: str | None) -> str:
+    parts = ['agentbench', project_id, suite_id, scenario_id, 'benchmark-history']
+    slug = '-'.join(part for part in (_slug_part(part) for part in parts) if part)
+    return f'{slug or "agentbench-benchmark-history"}.json'
+
+
+def _history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    scores = [_score_from_record(record) for record in records]
+    numeric_scores = [score for score in scores if score is not None]
+    status_counts: dict[str, int] = {}
+    for record in records:
+        status = str(record.get('status') or 'unknown')
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+    return {
+        'latest_run_id': records[0].get('run_id') if records else None,
+        'latest_status': records[0].get('status') if records else None,
+        'latest_score': scores[0] if scores else None,
+        'best_score': max(numeric_scores) if numeric_scores else None,
+        'worst_score': min(numeric_scores) if numeric_scores else None,
+        'average_score': round(sum(numeric_scores) / len(numeric_scores), 2) if numeric_scores else None,
+        'status_counts': status_counts,
+    }
+
+
+def _history_vcon_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    available_records = 0
+    dialog_turns = 0
+    analysis_records = 0
+    for record in records:
+        report = record.get('report') if isinstance(record.get('report'), dict) else {}
+        vcon_export = report.get('vcon_export') if isinstance(report.get('vcon_export'), dict) else None
+        if not vcon_export:
+            continue
+        available_records += 1
+        dialog = vcon_export.get('dialog') if isinstance(vcon_export.get('dialog'), list) else []
+        analysis = vcon_export.get('analysis') if isinstance(vcon_export.get('analysis'), list) else []
+        dialog_turns += len(dialog)
+        analysis_records += len(analysis)
+    return {
+        'available_records': available_records,
+        'missing_records': max(len(records) - available_records, 0),
+        'total_runs': len(records),
+        'dialog_turns': dialog_turns,
+        'analysis_records': analysis_records,
+    }
+
+
+def _score_from_record(record: dict[str, Any]) -> int | float | None:
+    report = record.get('report') if isinstance(record.get('report'), dict) else {}
+    score = report.get('overall_score', report.get('score'))
+    return score if isinstance(score, (int, float)) and not isinstance(score, bool) else None
 
 
 def _retention_envelope(*, report: dict[str, Any], retained_until: datetime, now: datetime) -> dict[str, Any]:

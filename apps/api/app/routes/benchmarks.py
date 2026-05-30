@@ -9,7 +9,13 @@ from sqlalchemy.orm import Session
 from app.db.database import SessionLocal, get_db
 from app.schemas.benchmarks import BenchmarkRunRequest, BenchmarkSimulationRequest, BenchmarkSuiteRunRequest
 from app.services.benchmark_service import get_suite, list_suites, run_scenario, run_suite, simulate_scenario, simulate_suite
-from app.services.benchmark_run_store import export_benchmark_run_vcon, get_benchmark_run, list_benchmark_runs, persist_benchmark_run
+from app.services.benchmark_run_store import (
+    export_benchmark_run_history,
+    export_benchmark_run_vcon,
+    get_benchmark_run,
+    list_benchmark_runs,
+    persist_benchmark_run,
+)
 from app.services.benchmark_suite_run_store import (
     create_benchmark_suite_run_record,
     export_benchmark_suite_run_vcon_bundle,
@@ -39,6 +45,25 @@ def get_benchmark_runs(
     db: Session = Depends(get_db),
 ):
     return list_benchmark_runs(
+        db=db,
+        user_id=user_id,
+        project_id=project_id,
+        suite_id=suite_id,
+        scenario_id=scenario_id,
+        status=status,
+    )
+
+
+@router.get('/runs/export')
+def export_benchmark_runs(
+    user_id: str = Query(min_length=1),
+    project_id: str | None = None,
+    suite_id: str | None = None,
+    scenario_id: str | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+):
+    return export_benchmark_run_history(
         db=db,
         user_id=user_id,
         project_id=project_id,

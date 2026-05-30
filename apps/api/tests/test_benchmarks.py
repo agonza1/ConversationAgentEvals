@@ -169,6 +169,59 @@ def test_run_endpoint_persists_lifecycle_report_history():
     assert wrong_owner.status_code == 404
 
 
+def test_runs_export_returns_owner_scoped_history_bundle_with_vcon_summary():
+    first = client.post(
+        '/api/benchmarks/run',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'qa-project',
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'billing-address-change',
+            'transcript': 'Customer: Update my address. Agent: verified identity and updated billing address.',
+            'action_trace': [{'action': 'verify identity', 'status': 'completed'}, {'action': 'update billing address', 'status': 'completed'}],
+            'final_state': {'complete': True, 'billing_address_updated': True},
+        },
+    )
+    second = client.post(
+        '/api/benchmarks/run',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'qa-project',
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'angry-outage-escalation',
+            'transcript': 'Agent: I am sorry. I checked outage status, created ticket ABC, and escalated to a representative.',
+            'action_trace': [{'action': 'check outage status', 'status': 'completed'}, {'action': 'escalate to representative', 'status': 'completed'}],
+            'final_state': {'complete': True, 'escalated': True},
+        },
+    )
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+
+    export_response = client.get(
+        '/api/benchmarks/runs/export',
+        params={'user_id': 'demo-user', 'project_id': 'qa-project', 'suite_id': 'call-center-voice-ai'},
+    )
+
+    assert export_response.status_code == 200
+    exported = export_response.json()
+    assert exported['filename'] == 'agentbench-qa-project-call-center-voice-ai-benchmark-history.json'
+    assert exported['run_count'] == 2
+    assert exported['summary']['status_counts'] == {'completed': 2}
+    assert exported['summary']['latest_run_id'] == second.json()['run_id']
+    assert exported['vcon_export_summary']['available_records'] == 2
+    assert exported['vcon_export_summary']['analysis_records'] == 2
+    assert {run['run_id'] for run in exported['runs']} == {first.json()['run_id'], second.json()['run_id']}
+
+    wrong_owner = client.get(
+        '/api/benchmarks/runs/export',
+        params={'user_id': 'other-user', 'project_id': 'qa-project', 'suite_id': 'call-center-voice-ai'},
+    )
+
+    assert wrong_owner.status_code == 200
+    assert wrong_owner.json()['run_count'] == 0
+
+
 def test_run_endpoint_accepts_vcon_record_evidence():
     response = client.post(
         '/api/benchmarks/run',
