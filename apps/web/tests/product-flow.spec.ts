@@ -40,6 +40,10 @@ test('free-to-paid eval journey works end to end', async ({ page }) => {
   await expect(page.getByText('Selected scenario: baseline')).toBeVisible();
   await expect(page.getByText('1 focused runs')).toBeVisible();
 
+  await page.getByRole('button', { name: 'Load run' }).click();
+  await expect(page.getByText(/Loaded saved run/)).toBeVisible();
+  await expect(page.getByRole('heading', { name: /pass|needs_review/i })).toBeVisible();
+
   await expect(page.getByRole('heading', { name: 'Team-gated WebRTC evals' })).toBeVisible();
 });
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -895,6 +895,7 @@ async function copyText(text: string) {
 }
 
 export function BenchmarkRunner() {
+  const loadingSavedRunRef = useRef(false);
   const [suites, setSuites] = useState<BenchmarkSuite[]>([]);
   const [productConfig, setProductConfig] = useState<ProductConfig | null>(null);
   const [selectedSuiteId, setSelectedSuiteId] = useState('');
@@ -1026,6 +1027,11 @@ export function BenchmarkRunner() {
 
   useEffect(() => {
     if (!selectedScenario) return;
+
+    if (loadingSavedRunRef.current) {
+      loadingSavedRunRef.current = false;
+      return;
+    }
 
     setTranscript(selectedScenario.sample_transcript ?? '');
     setActionTrace(stringifyEditable(selectedScenario.sample_action_trace, '[]'));
@@ -1167,6 +1173,29 @@ export function BenchmarkRunner() {
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : 'Could not export this project history.');
     }
+  }
+
+  function onLoadSavedRun(run: SavedRun) {
+    const willSwitchSelection = Boolean(
+      (run.report.suite_id && run.report.suite_id !== selectedSuiteId)
+      || (run.report.scenario_id && run.report.scenario_id !== selectedScenarioId),
+    );
+    loadingSavedRunRef.current = willSwitchSelection;
+    if (run.report.suite_id) setSelectedSuiteId(run.report.suite_id);
+    if (run.report.scenario_id) setSelectedScenarioId(run.report.scenario_id);
+    setTranscript(run.transcript ?? run.report.transcript ?? '');
+    setActionTrace(stringifyEditable(run.report.action_trace, '[]'));
+    setFinalState(stringifyEditable(run.report.final_state, '{}'));
+    setAgentVersion(run.report.run_metadata?.agent_version ?? '');
+    setPromptVersion(run.report.run_metadata?.prompt_version ?? '');
+    setModelName(run.report.run_metadata?.model_name ?? '');
+    setRunNotes(run.report.run_metadata?.notes ?? '');
+    setReport(run.report);
+    setSuiteSimulation(null);
+    setJudgeGate(null);
+    setCopyMessage(null);
+    setRunError(null);
+    setSaveMessage(`Loaded saved run ${run.id} for review.`);
   }
 
   async function onExportRetainedSuiteVconBundle(suiteRunId: string) {
@@ -2159,21 +2188,36 @@ export function BenchmarkRunner() {
                   <div style={{ marginTop: 4, fontSize: 12, color: 'var(--muted)' }}>
                     {run.firestore_path}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => void onExportRun(run.id)}
-                    style={{
-                      marginLeft: 8,
-                      border: '1px solid var(--border)',
-                      borderRadius: 8,
-                      background: 'white',
-                      color: 'var(--text)',
-                      padding: '6px 10px',
-                      fontWeight: 800,
-                    }}
-                  >
-                    Export JSON
-                  </button>
+                  <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => onLoadSavedRun(run)}
+                      style={{
+                        border: '1px solid var(--border)',
+                        borderRadius: 8,
+                        background: 'white',
+                        color: 'var(--text)',
+                        padding: '6px 10px',
+                        fontWeight: 800,
+                      }}
+                    >
+                      Load run
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void onExportRun(run.id)}
+                      style={{
+                        border: '1px solid var(--border)',
+                        borderRadius: 8,
+                        background: 'white',
+                        color: 'var(--text)',
+                        padding: '6px 10px',
+                        fontWeight: 800,
+                      }}
+                    >
+                      Export JSON
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>
