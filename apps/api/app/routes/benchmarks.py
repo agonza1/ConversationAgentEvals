@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.db.database import SessionLocal, get_db
 from app.schemas.benchmarks import BenchmarkRunRequest, BenchmarkSimulationRequest, BenchmarkSuiteRunRequest
 from app.services.benchmark_service import get_suite, list_suites, run_scenario, run_suite, simulate_scenario, simulate_suite
-from app.services.benchmark_run_store import get_benchmark_run, list_benchmark_runs, persist_benchmark_run
+from app.services.benchmark_run_store import export_benchmark_run_vcon, get_benchmark_run, list_benchmark_runs, persist_benchmark_run
 from app.services.benchmark_suite_run_store import (
     create_benchmark_suite_run_record,
     export_benchmark_suite_run_vcon_bundle,
@@ -91,6 +91,14 @@ def get_benchmark_run_record(run_id: str, user_id: str = Query(min_length=1), db
     if record is None:
         raise HTTPException(status_code=404, detail='Benchmark run not found')
     return record
+
+
+@router.get('/runs/{run_id}/vcon')
+def export_benchmark_run_vcon_record(run_id: str, user_id: str = Query(min_length=1), db: Session = Depends(get_db)):
+    exported = export_benchmark_run_vcon(db=db, user_id=user_id, run_id=run_id)
+    if exported is None:
+        raise HTTPException(status_code=404, detail='Benchmark run not found')
+    return exported
 
 
 @router.get('/{suite_id}')
