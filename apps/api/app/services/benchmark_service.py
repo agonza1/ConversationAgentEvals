@@ -616,7 +616,7 @@ def run_suite(request: Any) -> dict[str, Any]:
                 'max_attempts': scenario_payload.get('max_attempts') or scenario_payload.get('maxAttempts') or max_attempts,
                 **({'retry_of_run_id': retry_of_run_id} if retry_of_run_id else {}),
                 **inherited_perturbation_payload,
-                **_run_metadata_payload(payload),
+                **_inherited_run_metadata_payload(payload, scenario_payload),
             }
             report = run_scenario(attempt_payload)
             retry_of_run_id = retry_of_run_id or report.get('run_id')
@@ -1364,6 +1364,12 @@ def _stable_json_key(key: Any) -> dict[str, Any]:
 
 def _run_metadata_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {'metadata': _run_metadata(payload)}
+
+
+def _inherited_run_metadata_payload(parent_payload: dict[str, Any], child_payload: dict[str, Any]) -> dict[str, Any]:
+    parent_metadata = _run_metadata(parent_payload)
+    child_metadata = _run_metadata(child_payload)
+    return {'metadata': {**parent_metadata, **child_metadata}}
 
 
 def _run_lifecycle_payload(payload: dict[str, Any]) -> dict[str, Any]:

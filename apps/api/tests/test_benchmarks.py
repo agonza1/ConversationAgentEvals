@@ -927,6 +927,40 @@ def test_run_suite_scores_all_scenario_evidence_payloads():
     assert suite_analysis['body']['scenario_results'][0]['perturbation_tags'] == ['noise', 'accent']
 
 
+def test_run_suite_preserves_scenario_metadata_over_suite_defaults():
+    suite = get_suite('telehealth-agent')
+    assert suite is not None
+    scenario_evidence = {}
+    for index, scenario in enumerate(suite['scenarios'], start=1):
+        simulation = simulate_scenario(
+            {
+                'suite_id': 'telehealth-agent',
+                'scenario_id': scenario['id'],
+                'agent_version': f'scenario-agent-v{index}',
+            }
+        )
+        scenario_evidence[scenario['id']] = {
+            'transcript': simulation['transcript'],
+            'action_trace': simulation['action_trace'],
+            'final_state': simulation['final_state'],
+            'metadata': {'agent_version': f'scenario-agent-v{index}'},
+        }
+
+    result = run_suite(
+        {
+            'suite_id': 'telehealth-agent',
+            'scenario_evidence': scenario_evidence,
+            'metadata': {'agent_version': 'suite-agent-default', 'model_name': 'gpt-4.1-mini'},
+        }
+    )
+
+    assert result['run_metadata'] == {'agent_version': 'suite-agent-default', 'model_name': 'gpt-4.1-mini'}
+    assert [report['run_metadata'] for report in result['scenario_reports']] == [
+        {'agent_version': 'scenario-agent-v1', 'model_name': 'gpt-4.1-mini'},
+        {'agent_version': 'scenario-agent-v2', 'model_name': 'gpt-4.1-mini'},
+    ]
+
+
 def test_run_suite_accepts_attempt_arrays_for_retry_level_reliability():
     suite = get_suite('telehealth-agent')
     assert suite is not None
