@@ -46,6 +46,12 @@ test('free-to-paid eval journey works end to end', async ({ page }) => {
   await expect(page.getByText('Selected scenario: baseline')).toBeVisible();
   await expect(page.getByText('1 focused runs')).toBeVisible();
 
+  const auditDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export audit artifacts' }).click();
+  const auditDownloadFile = await auditDownload;
+  expect(auditDownloadFile.suggestedFilename()).toMatch(/agentbench-.*-audit-artifacts\.json/);
+  await expect(page.getByText(/Exported audit artifacts to agentbench-.*-audit-artifacts\.json/)).toBeVisible();
+
   await page.getByRole('button', { name: 'Load run' }).click();
   await expect(page.getByText(/Loaded saved run/)).toBeVisible();
   await expect(page.getByRole('heading', { name: /pass|needs_review/i })).toBeVisible();

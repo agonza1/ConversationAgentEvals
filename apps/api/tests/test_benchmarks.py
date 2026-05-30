@@ -398,6 +398,58 @@ def test_run_endpoint_accepts_vcon_record_evidence():
     assert run['vcon_export']['analysis'][-1]['type'] == 'agentic_benchmark_eval'
 
 
+def test_run_audit_artifact_view_endpoint_returns_operator_evidence_bundle():
+    response = client.post(
+        '/api/benchmarks/run',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'qa-project',
+            'suite_id': 'fintech-support-agent',
+            'scenario_id': 'suspicious-card-charge',
+            'transcript': 'Agent: I will verify your account identity and file a fraud dispute case.',
+            'action_trace': [{'action': 'verify account identity', 'status': 'completed'}],
+            'final_state': {'complete': True, 'case_id': 'FRD-1001'},
+            'agent_version': 'agent-v12',
+            'prompt_version': 'prompt-2026-05-25',
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    run = response.json()
+
+    artifact_response = client.get(
+        f"/api/benchmarks/runs/{run['run_id']}/audit-artifacts",
+        params={'user_id': 'demo-user'},
+    )
+
+    assert artifact_response.status_code == 200, artifact_response.text
+    payload = artifact_response.json()
+    assert payload['filename'] == f"agentbench-fintech-support-agent-suspicious-card-charge-{run['run_id']}-audit-artifacts.json"
+    assert payload['operator_summary'] == {
+        'verdict': run['verdict'],
+        'overall_score': run['overall_score'],
+        'ready_for_export': True,
+        'missing_export_artifacts': [],
+        'artifact_count': 3,
+        'evaluator_version': 'deterministic-agentic-v1',
+    }
+    assert payload['evidence_fingerprint'] == run['evidence_artifacts']['evidence_fingerprint']
+    assert [artifact['type'] for artifact in payload['evidence_artifacts']] == ['transcript_text', 'action_trace', 'final_state']
+    assert payload['audit_summary']['input_artifact_types'] == ['transcript', 'action_trace', 'final_state']
+    assert payload['run_lifecycle']['status'] == run['run_status']
+    assert payload['contract_artifact']['sha256'] == run['scenario_contract_sha256']
+    assert payload['report_artifact']['type'] == 'deterministic_report'
+    assert len(payload['report_artifact']['sha256']) == 64
+    assert payload['report_artifact']['size_bytes'] > 0
+
+    wrong_owner = client.get(
+        f"/api/benchmarks/runs/{run['run_id']}/audit-artifacts",
+        params={'user_id': 'other-user'},
+    )
+
+    assert wrong_owner.status_code == 404
+
+
 def test_simulate_endpoint_upserts_stable_run_record():
     payload = {
         'user_id': 'demo-user',
@@ -735,7 +787,6 @@ def test_run_scenario_run_id_includes_retained_artifact_fingerprints():
     assert retry['evidence_artifacts']['evidence_fingerprint'] != first['evidence_artifacts']['evidence_fingerprint']
     assert [artifact['type'] for artifact in first['evidence_artifacts']['artifacts']] == ['action_trace', 'final_state']
     assert all(artifact['sha256'] for artifact in first['evidence_artifacts']['artifacts'])
-
 
 
 def test_retry_attempt_preserves_logical_run_id_and_records_parent_run():

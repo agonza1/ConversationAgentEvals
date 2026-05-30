@@ -272,6 +272,12 @@ interface SavedRunExport {
   created_at: string;
 }
 
+interface BenchmarkRunAuditArtifactExport {
+  filename: string;
+  run_id: string;
+  [key: string]: unknown;
+}
+
 interface ProjectHistoryExport {
   id: string;
   filename: string;
@@ -736,6 +742,12 @@ async function fetchProjectRegressionSummary(userId: string, projectId: string, 
 async function exportSavedRun(userId: string, runId: string) {
   return handleJson<SavedRunExport>(
     await fetch(`${getApiBase()}/api/product/runs/${encodeURIComponent(runId)}/export?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
+  );
+}
+
+async function exportBenchmarkRunAuditArtifacts(userId: string, runId: string) {
+  return handleJson<BenchmarkRunAuditArtifactExport>(
+    await fetch(`${getApiBase()}/api/benchmarks/runs/${encodeURIComponent(runId)}/audit-artifacts?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
   );
 }
 
@@ -1352,6 +1364,24 @@ export function BenchmarkRunner() {
       setExportMessage(`Exported ${exported.filename}.`);
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : 'Could not export this saved run.');
+    }
+  }
+
+  async function onExportRunAuditArtifacts(run: SavedRun) {
+    if (!userId) return;
+
+    const benchmarkRunId = run.report.run_id;
+    if (!benchmarkRunId) {
+      setExportMessage('Saved run is missing a benchmark run id.');
+      return;
+    }
+
+    try {
+      const exported = await exportBenchmarkRunAuditArtifacts(userId, benchmarkRunId);
+      downloadJson(exported.filename, exported);
+      setExportMessage(`Exported audit artifacts to ${exported.filename}.`);
+    } catch (err) {
+      setExportMessage(err instanceof Error ? err.message : 'Could not export audit artifacts for this run.');
     }
   }
 
@@ -2634,6 +2664,20 @@ export function BenchmarkRunner() {
                       }}
                     >
                       Export JSON
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void onExportRunAuditArtifacts(run)}
+                      style={{
+                        border: '1px solid var(--border)',
+                        borderRadius: 8,
+                        background: 'white',
+                        color: 'var(--text)',
+                        padding: '6px 10px',
+                        fontWeight: 800,
+                      }}
+                    >
+                      Export audit artifacts
                     </button>
                   </div>
                 </li>

@@ -22,6 +22,7 @@ from app.services.benchmark_run_store import (
     export_benchmark_run_history,
     export_benchmark_run_vcon,
     get_benchmark_run,
+    get_benchmark_run_audit_artifacts,
     list_benchmark_runs,
     persist_benchmark_run,
 )
@@ -143,6 +144,14 @@ def get_benchmark_run_record(run_id: str, user_id: str = Query(min_length=1), db
     if record is None:
         raise HTTPException(status_code=404, detail='Benchmark run not found')
     return record
+
+
+@router.get('/runs/{run_id}/audit-artifacts')
+def get_benchmark_run_audit_artifact_view(run_id: str, user_id: str = Query(min_length=1), db: Session = Depends(get_db)):
+    view = get_benchmark_run_audit_artifacts(db=db, user_id=user_id, run_id=run_id)
+    if view is None:
+        raise HTTPException(status_code=404, detail='Benchmark run not found')
+    return view
 
 
 @router.get('/runs/{run_id}/vcon')
