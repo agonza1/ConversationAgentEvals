@@ -301,6 +301,14 @@ interface SuiteReliabilityMetrics {
   perturbation_coverage?: Array<{ tag?: string; scenario_count?: number; pass_count?: number; pass_rate?: number }>;
 }
 
+interface BenchmarkSuiteRunProgress {
+  phase?: string;
+  active?: boolean;
+  completed_scenarios?: number;
+  total_scenarios?: number;
+  percent?: number;
+}
+
 interface BenchmarkSuiteRunRecord {
   suite_run_id: string;
   suite_id: string;
@@ -314,6 +322,7 @@ interface BenchmarkSuiteRunRecord {
   completed_at?: string | null;
   suite_report?: { suite_name?: string; verdict?: string; run_metadata?: RunMetadata; reliability_metrics?: SuiteReliabilityMetrics };
   run_lifecycle?: { status?: string; terminal?: boolean; transitions?: Array<{ to?: string; at?: string; reason?: string }> };
+  progress?: BenchmarkSuiteRunProgress;
   reliability_metrics?: SuiteReliabilityMetrics;
   retention?: { retained_until?: string | null; retention_days?: number; policy?: string };
   artifacts?: {
@@ -760,6 +769,14 @@ function suiteRunVconSummary(run: BenchmarkSuiteRunRecord) {
 
 function suiteReliabilityMetrics(run: BenchmarkSuiteRunRecord) {
   return run.reliability_metrics ?? run.suite_report?.reliability_metrics ?? {};
+}
+
+function formatSuiteRunProgress(progress?: BenchmarkSuiteRunProgress) {
+  if (!progress) return 'n/a';
+  const completed = progress.completed_scenarios ?? 0;
+  const total = progress.total_scenarios ?? 0;
+  const percent = typeof progress.percent === 'number' ? `${progress.percent}%` : 'n/a';
+  return `${completed}/${total} (${percent})`;
 }
 
 function formatMetricPercent(value?: number) {
@@ -2197,6 +2214,7 @@ export function BenchmarkRunner() {
                       <AuditFact label="Passing" value={String(run.pass_count)} />
                       <AuditFact label="Review" value={String(run.needs_review_count)} />
                       <AuditFact label="Average" value={String(run.average_score ?? 'n/a')} />
+                      <AuditFact label="Progress" value={formatSuiteRunProgress(run.progress)} />
                       <AuditFact label="Pass@1" value={formatMetricPercent(reliability.pass_at_1)} />
                       <AuditFact label="Pass@k" value={formatMetricPercent(reliability.pass_at_k)} />
                       <AuditFact label="Pass^k" value={formatMetricPercent(reliability.pass_all_k)} />

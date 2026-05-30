@@ -105,6 +105,49 @@ def test_workspace_admins_can_add_members_and_invite_users():
     assert listed[0]['invitations'][0]['email'] == 'reviewer@example.com'
 
 
+def test_invited_users_can_accept_workspace_invitation_once():
+    workspace = client.post(
+        '/api/product/workspaces',
+        json={
+            'owner_user_id': 'owner-user',
+            'workspace_id': 'acme-support',
+            'name': 'Acme Support QA',
+            'plan': 'team',
+        },
+    ).json()
+    invitation = client.post(
+        f"/api/product/workspaces/{workspace['id']}/invitations",
+        json={'requester_user_id': 'owner-user', 'email': 'Reviewer@Example.COM', 'role': 'editor'},
+    ).json()
+
+    accepted = client.post(
+        f"/api/product/workspaces/{workspace['id']}/invitations/{invitation['id']}/accept",
+        json={'user_id': 'reviewer-user', 'email': 'reviewer@example.com'},
+    )
+
+    assert accepted.status_code == 200
+    payload = accepted.json()
+    members = {member['user_id']: member['role'] for member in payload['members']}
+    assert members == {'owner-user': 'owner', 'reviewer-user': 'editor'}
+    assert payload['invitations'][0]['status'] == 'accepted'
+
+    listed = client.get('/api/product/workspaces', params={'user_id': 'reviewer-user'})
+    assert listed.status_code == 200
+    assert listed.json()[0]['id'] == workspace['id']
+
+    repeated = client.post(
+        f"/api/product/workspaces/{workspace['id']}/invitations/{invitation['id']}/accept",
+        json={'user_id': 'another-user', 'email': 'reviewer@example.com'},
+    )
+    wrong_email = client.post(
+        f"/api/product/workspaces/{workspace['id']}/invitations/{invitation['id']}/accept",
+        json={'user_id': 'another-user', 'email': 'other@example.com'},
+    )
+
+    assert repeated.status_code == 404
+    assert wrong_email.status_code == 404
+
+
 def test_workspace_viewers_cannot_manage_members_or_invitations():
     workspace = client.post(
         '/api/product/workspaces',

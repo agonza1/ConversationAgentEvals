@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.db.database import SessionLocal
 from app.models.entities import BenchmarkSuiteRunRecord
-from app.services.benchmark_service import DETERMINISTIC_EVALUATOR_VERSION
+from app.services.benchmark_service import DETERMINISTIC_EVALUATOR_VERSION, get_suite
 from app.services.benchmark_run_store import DEFAULT_PROJECT_ID, DEFAULT_RETENTION_DAYS, DEFAULT_USER_ID
 
 TERMINAL_SUITE_STATUSES = {'completed', 'needs_review', 'failed'}
@@ -34,7 +34,7 @@ def create_benchmark_suite_run_record(
     record.project_key = project_key
     record.suite_id = _required_str(suite_id, 'suite_id')
     record.status = 'queued'
-    record.scenario_count = 0
+    record.scenario_count = _queued_scenario_count(suite_id)
     record.pass_count = 0
     record.needs_review_count = 0
     record.average_score = 0
@@ -165,6 +165,11 @@ def serialize_benchmark_suite_run(record: BenchmarkSuiteRunRecord) -> dict[str, 
     suite_report = retained_report.get('suite_report') if isinstance(retained_report.get('suite_report'), dict) else retained_report
     retention = retained_report.get('retention') if isinstance(retained_report.get('retention'), dict) else {}
     scenario_summaries = _scenario_summaries(suite_report)
+    progress = _suite_run_progress(
+        status=record.status,
+        scenario_count=record.scenario_count,
+        scenario_summaries=scenario_summaries,
+    )
     return {
         'id': record.id,
         'suite_run_id': record.id,
@@ -178,6 +183,7 @@ def serialize_benchmark_suite_run(record: BenchmarkSuiteRunRecord) -> dict[str, 
         'average_score': record.average_score,
         'suite_report': suite_report,
         'run_lifecycle': suite_report.get('run_lifecycle') if isinstance(suite_report.get('run_lifecycle'), dict) else {},
+        'progress': progress,
         'reliability_metrics': suite_report.get('reliability_metrics') if isinstance(suite_report.get('reliability_metrics'), dict) else {},
         'artifacts': {
             'scenario_summaries': scenario_summaries,
@@ -193,6 +199,12 @@ def serialize_benchmark_suite_run(record: BenchmarkSuiteRunRecord) -> dict[str, 
         'updated_at': _isoformat(record.updated_at),
         'completed_at': _isoformat(record.completed_at),
     }
+
+
+def _queued_scenario_count(suite_id: str) -> int:
+    suite = get_suite(suite_id)
+    scenarios = suite.get('scenarios') if isinstance(suite, dict) else None
+    return len(scenarios) if isinstance(scenarios, list) else 0
 
 
 def _retention_envelope(*, suite_report: dict[str, Any], retained_until: datetime, now: datetime) -> dict[str, Any]:
@@ -403,6 +415,31 @@ def _scenario_summaries(suite_report: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return summaries
+
+
+def _suite_run_progress(*, status: str, scenario_count: int, scenario_summaries: list[dict[str, Any]]) -> dict[str, Any]:
+    total = max(scenario_count, len(scenario_summaries), 0)
+    completed = len(scenario_summaries)
+    if status in TERMINAL_SUITE_STATUSES:
+        completed = total
+    if status == 'queued':
+        completed = 0
+    percent = 100 if total == 0 and status in TERMINAL_SUITE_STATUSES else round((completed / total) * 100) if total else 0
+    if status == 'queued':
+        phase = 'waiting'
+    elif status == 'running':
+        phase = 'executing'
+    elif status in TERMINAL_SUITE_STATUSES:
+        phase = 'finished'
+    else:
+        phase = 'unknown'
+    return {
+        'phase': phase,
+        'active': status in {'queued', 'running'},
+        'completed_scenarios': completed,
+        'total_scenarios': total,
+        'percent': percent,
+    }
 
 
 def _vcon_export_summary(suite_report: dict[str, Any]) -> dict[str, Any]:

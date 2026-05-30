@@ -253,6 +253,13 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
     assert suite_record['reliability_metrics']['pass_at_1'] == 1.0
     assert suite_record['suite_report']['reliability_metrics']['framework'] == 'eva_bench_inspired_v1'
     assert suite_record['scenario_count'] == simulation['scenario_count']
+    assert suite_record['progress'] == {
+        'phase': 'finished',
+        'active': False,
+        'completed_scenarios': simulation['scenario_count'],
+        'total_scenarios': simulation['scenario_count'],
+        'percent': 100,
+    }
     assert suite_record['retention']['retention_days'] == 45
     assert suite_record['artifacts']['vcon_export'] == {
         'available': True,
@@ -327,8 +334,16 @@ def test_suite_simulate_async_endpoint_tracks_queued_to_terminal_lifecycle():
     assert response.status_code == 200, response.text
     queued = response.json()
     assert queued['status'] == 'queued'
+    assert queued['scenario_count'] == len(get_suite('call-center-voice-ai')['scenarios'])
     assert queued['run_lifecycle']['status'] == 'queued'
     assert queued['run_lifecycle']['terminal'] is False
+    assert queued['progress'] == {
+        'phase': 'waiting',
+        'active': True,
+        'completed_scenarios': 0,
+        'total_scenarios': len(get_suite('call-center-voice-ai')['scenarios']),
+        'percent': 0,
+    }
     assert queued['retention']['retention_days'] == 45
 
     detail_response = client.get(f"/api/benchmarks/suite-runs/{queued['suite_run_id']}", params={'user_id': 'demo-user'})
@@ -340,6 +355,9 @@ def test_suite_simulate_async_endpoint_tracks_queued_to_terminal_lifecycle():
     assert completed['suite_report']['suite_run_id'] == queued['suite_run_id']
     assert completed['run_lifecycle']['status'] == 'completed'
     assert completed['run_lifecycle']['terminal'] is True
+    assert completed['progress']['phase'] == 'finished'
+    assert completed['progress']['percent'] == 100
+    assert completed['progress']['active'] is False
     assert [transition['to'] for transition in completed['run_lifecycle']['transitions']] == ['queued', 'running', 'completed']
     assert completed['scenario_count'] == len(get_suite('call-center-voice-ai')['scenarios'])
 
@@ -359,6 +377,8 @@ def test_suite_async_endpoint_retains_background_failures():
     failed = detail_response.json()
     assert failed['status'] == 'failed'
     assert failed['completed_at'] is not None
+    assert failed['progress']['phase'] == 'finished'
+    assert failed['progress']['percent'] == 100
     assert failed['suite_report']['error'] == 'Unknown benchmark suite: missing'
     assert [transition['to'] for transition in failed['run_lifecycle']['transitions']] == ['queued', 'running', 'failed']
 
