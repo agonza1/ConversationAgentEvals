@@ -386,6 +386,15 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
             ],
           },
           updated_at: '2026-05-29T15:00:00+00:00',
+          run_lifecycle: {
+            status: 'completed',
+            terminal: true,
+            transitions: [
+              { to: 'queued', at: '2026-05-29T14:45:00+00:00', reason: 'Queued after sign-in.' },
+              { to: 'running', at: '2026-05-29T14:46:00+00:00', reason: 'Scenario evaluation started.' },
+              { to: 'completed', at: '2026-05-29T15:00:00+00:00', reason: 'Suite report retained.' },
+            ],
+          },
           suite_report: {
             suite_run_id: 'suite-history-1',
             suite_id: 'call-center-voice-ai',
@@ -504,6 +513,9 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   await expect(suiteHistory.locator('article').getByText('completed')).toBeVisible();
   await expect(suiteHistory.getByText('4 dialog turns, 1 analysis records')).toBeVisible();
   await expect(suiteHistory.getByText('EVA-style reliability: 82% accuracy, 100% experience coverage, 4 avg turns.')).toBeVisible();
+  await expect(suiteHistory.getByText('Lifecycle: queued -> running -> completed')).toBeVisible();
+  await expect(suiteHistory.getByLabel('Audit timeline for Call Center Voice AI').getByText('Queued after sign-in.')).toBeVisible();
+  await expect(suiteHistory.getByLabel('Audit timeline for Call Center Voice AI').getByText('Suite report retained.')).toBeVisible();
   await expect(suiteHistory.getByText('Robustness tags: accent, noise.')).toBeVisible();
   await expect(suiteHistory.getByText(/billing-escalation: needs_review \/ 73/)).toBeVisible();
   await suiteHistory.getByLabel('Filter suite runs by status').selectOption('completed');
