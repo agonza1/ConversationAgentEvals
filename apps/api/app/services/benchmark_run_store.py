@@ -74,6 +74,29 @@ def get_benchmark_run(db: Session, *, user_id: str, run_id: str) -> dict[str, An
     return serialize_benchmark_run(record) if record is not None else None
 
 
+def export_benchmark_run_vcon(db: Session, *, user_id: str, run_id: str) -> dict[str, Any] | None:
+    record = get_benchmark_run(db=db, user_id=user_id, run_id=run_id)
+    if record is None:
+        return None
+
+    report = record.get('report') if isinstance(record.get('report'), dict) else {}
+    vcon_export = report.get('vcon_export') if isinstance(report.get('vcon_export'), dict) else None
+    if vcon_export is None:
+        return None
+
+    return {
+        'id': run_id,
+        'run_id': run_id,
+        'suite_id': record.get('suite_id'),
+        'scenario_id': record.get('scenario_id'),
+        'user_id': record.get('user_id'),
+        'project_id': record.get('project_id'),
+        'filename': _run_vcon_filename(record),
+        'record': vcon_export,
+        'exported_at': _isoformat(datetime.now(UTC)),
+    }
+
+
 def reset_benchmark_run_records_for_tests() -> None:
     with SessionLocal() as db:
         db.query(BenchmarkRunRecord).delete()
@@ -106,6 +129,19 @@ def serialize_benchmark_run(record: BenchmarkRunRecord) -> dict[str, Any]:
         'updated_at': _isoformat(record.updated_at),
         'completed_at': _isoformat(record.completed_at),
     }
+
+
+def _run_vcon_filename(record: dict[str, Any]) -> str:
+    parts = ['agentbench', record.get('suite_id'), record.get('scenario_id'), record.get('run_id'), 'vcon']
+    slug = '-'.join(part for part in (_slug_part(part) for part in parts) if part)
+    return f'{slug or "agentbench-run-vcon"}.json'
+
+
+def _slug_part(value: Any) -> str:
+    import re
+
+    cleaned = re.sub(r'[^a-z0-9-]+', '-', str(value).lower()).strip('-') if value is not None else ''
+    return cleaned
 
 
 def _retention_envelope(*, report: dict[str, Any], retained_until: datetime, now: datetime) -> dict[str, Any]:

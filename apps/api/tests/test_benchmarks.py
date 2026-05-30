@@ -316,6 +316,24 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
         run['benchmark_report']['run_id'] for run in simulation['scenario_runs']
     }
 
+    saved_run_id = simulation['scenario_runs'][0]['benchmark_report']['run_id']
+    run_export_response = client.get(
+        f'/api/benchmarks/runs/{saved_run_id}/vcon',
+        params={'user_id': 'demo-user'},
+    )
+
+    assert run_export_response.status_code == 200
+    run_export = run_export_response.json()
+    assert run_export['filename'] == f'agentbench-call-center-voice-ai-billing-address-change-{saved_run_id}-vcon.json'
+    assert run_export['record']['appended_analysis_type'] == 'agentic_benchmark_eval'
+    assert run_export['record']['analysis'][-1]['body']['run_id'] == saved_run_id
+
+    missing_run_export = client.get(
+        f'/api/benchmarks/runs/{saved_run_id}/vcon',
+        params={'user_id': 'other-user'},
+    )
+    assert missing_run_export.status_code == 404
+
     wrong_owner = client.get(f"/api/benchmarks/suite-runs/{simulation['suite_run_id']}", params={'user_id': 'other-user'})
     assert wrong_owner.status_code == 404
 
