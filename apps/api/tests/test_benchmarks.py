@@ -935,8 +935,38 @@ def test_simulate_scenario_returns_text_trace_final_state_and_report():
     assert 'deterministic mock agent' in result['transcript']
     assert result['action_trace']
     assert result['final_state']['complete'] is True
+    assert result['simulation_validation'] == {
+        'status': 'ready_for_scoring',
+        'ready_for_scoring': True,
+        'artifact_presence': {'transcript': True, 'action_trace': True, 'final_state': True},
+        'required_action_count': 5,
+        'completed_required_action_count': 5,
+        'missing_required_actions': [],
+        'final_state_complete': True,
+    }
+    assert result['benchmark_report']['simulation_validation'] == result['simulation_validation']
+    assert result['benchmark_report']['vcon_analysis']['body']['simulation_validation'] == result['simulation_validation']
     assert result['benchmark_report']['verdict'] == 'pass'
     assert result['benchmark_report']['overall_score'] >= 75
+
+
+def test_simulate_scenario_flags_incomplete_generated_artifacts_for_regeneration():
+    result = simulate_scenario(
+        {
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'billing-address-change',
+            'include_failure': True,
+        }
+    )
+
+    validation = result['simulation_validation']
+    assert validation['status'] == 'needs_regeneration'
+    assert validation['ready_for_scoring'] is False
+    assert validation['artifact_presence'] == {'transcript': True, 'action_trace': True, 'final_state': True}
+    assert validation['missing_required_actions'] == ['explain next invoice impact']
+    assert validation['completed_required_action_count'] == 4
+    assert validation['final_state_complete'] is False
+    assert result['benchmark_report']['simulation_validation'] == validation
 
 
 def test_run_scenario_scores_action_trace_and_final_state_when_provided():

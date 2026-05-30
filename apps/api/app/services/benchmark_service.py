@@ -503,6 +503,12 @@ def simulate_scenario(request: Any) -> dict[str, Any]:
     transcript = _simulated_transcript(scenario, agent_profile, include_failure)
     action_trace = _simulated_action_trace(scenario, include_failure)
     final_state = _simulated_final_state(scenario, include_failure)
+    simulation_validation = _simulation_validation(
+        scenario=scenario,
+        transcript=transcript,
+        action_trace=action_trace,
+        final_state=final_state,
+    )
     benchmark_report = run_scenario(
         {
             'suite_id': suite_id,
@@ -515,6 +521,19 @@ def simulate_scenario(request: Any) -> dict[str, Any]:
             **_run_lifecycle_payload(payload),
         }
     )
+    benchmark_report['simulation_validation'] = simulation_validation
+    benchmark_report['vcon_analysis'] = _vcon_analysis(benchmark_report)
+    benchmark_report['vcon_export'] = _vcon_export(
+        {
+            'suite_id': suite_id,
+            'scenario_id': scenario_id,
+            'transcript': transcript,
+            'action_trace': action_trace,
+            'final_state': final_state,
+        },
+        transcript,
+        benchmark_report['vcon_analysis'],
+    )
 
     return {
         'suite_id': suite_id,
@@ -524,10 +543,38 @@ def simulate_scenario(request: Any) -> dict[str, Any]:
         'transcript': transcript,
         'action_trace': action_trace,
         'final_state': final_state,
+        'simulation_validation': simulation_validation,
         'run_metadata': benchmark_report['run_metadata'],
         'benchmark_report': benchmark_report,
     }
 
+
+def _simulation_validation(
+    *,
+    scenario: BenchmarkScenario,
+    transcript: str,
+    action_trace: list[dict[str, Any]],
+    final_state: dict[str, Any],
+) -> dict[str, Any]:
+    completed_actions = {event.name for event in parse_action_trace(action_trace)}
+    missing_actions = [action for action in scenario['required_actions'] if action not in completed_actions]
+    artifact_presence = {
+        'transcript': bool(transcript.strip()),
+        'action_trace': bool(action_trace),
+        'final_state': bool(final_state),
+    }
+    final_state_complete = final_state.get('complete') is True
+    ready_for_scoring = all(artifact_presence.values()) and not missing_actions and final_state_complete
+
+    return {
+        'status': 'ready_for_scoring' if ready_for_scoring else 'needs_regeneration',
+        'ready_for_scoring': ready_for_scoring,
+        'artifact_presence': artifact_presence,
+        'required_action_count': len(scenario['required_actions']),
+        'completed_required_action_count': len(scenario['required_actions']) - len(missing_actions),
+        'missing_required_actions': missing_actions,
+        'final_state_complete': final_state_complete,
+    }
 
 
 def run_suite(request: Any) -> dict[str, Any]:
@@ -1091,6 +1138,7 @@ def _vcon_analysis(report: dict[str, Any]) -> dict[str, Any]:
         'provider',
         'run_metadata',
         'evidence_audit_summary',
+        'simulation_validation',
         'overall_score',
         'verdict',
         'task_completion_score',
