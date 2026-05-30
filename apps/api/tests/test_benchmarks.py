@@ -107,6 +107,48 @@ def test_run_scenario_summarizes_interruption_and_correction_signals():
     assert result['vcon_analysis']['body']['voice_interaction_summary'] == summary
 
 
+def test_run_scenario_preserves_voice_call_metrics_in_report_and_vcon():
+    result = run_scenario(
+        {
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'angry-outage-escalation',
+            'call': {
+                'turns': [
+                    {'speaker': 'Customer', 'body': 'The outage is frustrating and I want a human.'},
+                    {'speaker': 'Agent', 'body': 'I am sorry. I checked outage status and will escalate to a representative.'},
+                ],
+                'metrics': {
+                    'durationMs': 92000,
+                    'avgLatencyMs': '340.5',
+                    'p95LatencyMs': 780,
+                },
+                'quality': {
+                    'packetLossPercent': 1.2,
+                    'jitterMs': '18',
+                },
+            },
+            'action_trace': [
+                {'action': 'acknowledge caller frustration', 'status': 'completed'},
+                {'action': 'check outage status', 'status': 'completed'},
+                {'action': 'create support ticket', 'status': 'completed'},
+                {'action': 'offer troubleshooting only if no area outage is active', 'status': 'completed'},
+                {'action': 'escalate to human agent on request', 'status': 'completed'},
+            ],
+            'final_state': {'complete': True, 'ticket_number': 'OUT-1001'},
+        }
+    )
+
+    summary = result['voice_interaction_summary']
+    assert summary['turn_count'] == 2
+    assert summary['duration_ms'] == 92000
+    assert summary['average_latency_ms'] == 340.5
+    assert summary['max_latency_ms'] == 780
+    assert summary['packet_loss_percent'] == 1.2
+    assert summary['jitter_ms'] == 18
+    assert result['vcon_analysis']['body']['voice_interaction_summary'] == summary
+    assert result['vcon_export']['source_format'] == 'call'
+
+
 def test_get_suite_includes_full_scenario_contract_and_returns_copy():
     suite = get_suite('telehealth-agent')
 

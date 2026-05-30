@@ -1030,13 +1030,56 @@ def _voice_interaction_summary(payload: dict[str, Any], transcript: str) -> dict
     )
     handoff_phrases = ('human', 'representative', 'escalate', 'transfer')
 
-    return {
+    summary = {
         'turn_count': len(_iter_transcript_turns(transcript)),
         'interruption_signal_count': sum(1 for phrase in interruption_phrases if _contains(normalized, phrase)),
         'correction_signal_count': sum(1 for phrase in correction_phrases if _contains(normalized, phrase)),
         'handoff_signal_count': sum(1 for phrase in handoff_phrases if _contains(normalized, phrase)),
         'action_trace_event_count': len(_action_trace_events(payload.get('action_trace'))),
     }
+    summary.update(_voice_call_metric_summary(payload))
+    return summary
+
+
+def _voice_call_metric_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    call = payload.get('call')
+    if not isinstance(call, dict):
+        return {}
+
+    metrics = call.get('metrics') if isinstance(call.get('metrics'), dict) else {}
+    quality = call.get('quality') if isinstance(call.get('quality'), dict) else {}
+    source = {**quality, **metrics, **call}
+    metric_fields = {
+        'duration_ms': ('duration_ms', 'durationMs', 'call_duration_ms', 'callDurationMs'),
+        'average_latency_ms': ('average_latency_ms', 'averageLatencyMs', 'avg_latency_ms', 'avgLatencyMs', 'latency_ms', 'latencyMs'),
+        'max_latency_ms': ('max_latency_ms', 'maxLatencyMs', 'p95_latency_ms', 'p95LatencyMs'),
+        'packet_loss_percent': ('packet_loss_percent', 'packetLossPercent'),
+        'jitter_ms': ('jitter_ms', 'jitterMs'),
+    }
+
+    summary: dict[str, Any] = {}
+    for output_key, input_keys in metric_fields.items():
+        value = _first_number(source, *input_keys)
+        if value is not None:
+            summary[output_key] = value
+    return summary
+
+
+def _first_number(mapping: dict[str, Any], *keys: str) -> int | float | None:
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str) and value.strip():
+            try:
+                parsed = float(value.strip())
+            except ValueError:
+                continue
+            return int(parsed) if parsed.is_integer() else parsed
+    return None
+
 
 def _scenario_contract(scenario: BenchmarkScenario) -> dict[str, Any]:
     return {

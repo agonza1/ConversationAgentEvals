@@ -92,6 +92,11 @@ interface VoiceInteractionSummary {
   correction_signal_count?: number;
   handoff_signal_count?: number;
   action_trace_event_count?: number;
+  duration_ms?: number;
+  average_latency_ms?: number;
+  max_latency_ms?: number;
+  packet_loss_percent?: number;
+  jitter_ms?: number;
 }
 
 interface RunLifecycle {
@@ -2803,9 +2808,18 @@ function VoiceInteractionPanel({ summary }: { summary?: VoiceInteractionSummary 
         <AuditFact label="Corrections" value={String(summary.correction_signal_count ?? 0)} />
         <AuditFact label="Handoffs" value={String(summary.handoff_signal_count ?? 0)} />
         <AuditFact label="Action events" value={String(summary.action_trace_event_count ?? 0)} />
+        {typeof summary.duration_ms === 'number' ? <AuditFact label="Duration" value={formatMilliseconds(summary.duration_ms)} /> : null}
+        {typeof summary.average_latency_ms === 'number' ? <AuditFact label="Avg latency" value={formatMilliseconds(summary.average_latency_ms)} /> : null}
+        {typeof summary.max_latency_ms === 'number' ? <AuditFact label="Max latency" value={formatMilliseconds(summary.max_latency_ms)} /> : null}
+        {typeof summary.packet_loss_percent === 'number' ? <AuditFact label="Packet loss" value={`${summary.packet_loss_percent}%`} /> : null}
+        {typeof summary.jitter_ms === 'number' ? <AuditFact label="Jitter" value={formatMilliseconds(summary.jitter_ms)} /> : null}
       </div>
     </div>
   );
+}
+
+function formatMilliseconds(value: number) {
+  return `${Number.isInteger(value) ? value : value.toFixed(1)} ms`;
 }
 
 function EvidenceAuditPanel({ summary }: { summary?: EvidenceAuditSummary }) {
