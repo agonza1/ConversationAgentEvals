@@ -60,6 +60,20 @@ interface BenchmarkReport {
   voice_interaction_summary?: VoiceInteractionSummary | null;
   vcon_analysis?: JsonRecord;
   vcon_export?: JsonRecord;
+  simulation_validation?: SimulationValidation;
+}
+
+interface SimulationValidation {
+  status?: 'ready_for_scoring' | 'needs_regeneration' | string;
+  ready_for_scoring?: boolean;
+  artifact_presence?: {
+    transcript?: boolean;
+    action_trace?: boolean;
+    final_state?: boolean;
+  };
+  missing_required_actions?: string[];
+  completed_required_action_count?: number;
+  final_state_complete?: boolean;
 }
 
 interface GroupCallSummary {
@@ -281,6 +295,7 @@ interface BenchmarkSimulationResponse {
   action_trace: unknown;
   final_state: unknown;
   run_metadata?: RunMetadata;
+  simulation_validation?: SimulationValidation;
   benchmark_report: BenchmarkReport;
 }
 
@@ -2147,6 +2162,7 @@ export function BenchmarkRunner() {
 
           <RunMetadataPanel metadata={report.run_metadata} />
           <EvidenceAuditPanel summary={report.evidence_audit_summary} />
+          <SimulationValidationPanel validation={report.simulation_validation} onRegenerate={onSimulate} isRegenerating={isSimulating} />
           <VoiceInteractionPanel summary={report.voice_interaction_summary} />
           <GroupCallPanel summary={report.group_call_summary} />
 
@@ -2531,6 +2547,39 @@ function RunMetadataPanel({ metadata }: { metadata?: RunMetadata }) {
       ) : (
         <p style={{ margin: 0, color: 'var(--muted)' }}>No prompt, model, or version labels captured.</p>
       )}
+    </div>
+  );
+}
+
+
+function SimulationValidationPanel({ validation, onRegenerate, isRegenerating }: { validation?: SimulationValidation; onRegenerate: () => void; isRegenerating: boolean }) {
+  if (!validation) return null;
+
+  const ready = validation.ready_for_scoring ?? validation.status === 'ready_for_scoring';
+  const missing = validation.missing_required_actions ?? [];
+  const artifacts = validation.artifact_presence ?? {};
+
+  return (
+    <div style={{ border: `1px solid ${ready ? 'var(--success-border)' : 'var(--error-border)'}`, borderRadius: 8, padding: 14, display: 'grid', gap: 12, background: ready ? 'var(--success-bg)' : 'var(--error-bg)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div>
+          <p style={{ margin: '0 0 4px', color: ready ? 'var(--success-text)' : 'var(--error-text)', fontSize: 13, fontWeight: 800 }}>Simulation validation</p>
+          <p style={{ margin: 0, fontWeight: 850 }}>{ready ? 'Ready for scoring' : 'Needs regeneration before scoring'}</p>
+        </div>
+        {!ready ? (
+          <button type="button" onClick={onRegenerate} disabled={isRegenerating} style={{ border: '1px solid var(--border)', borderRadius: 8, background: 'white', color: 'var(--text)', padding: '8px 12px', fontWeight: 800 }}>
+            {isRegenerating ? 'Regenerating...' : 'Regenerate scenario'}
+          </button>
+        ) : null}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+        <AuditFact label="Transcript" value={formatBoolean(artifacts.transcript)} />
+        <AuditFact label="Action trace" value={formatBoolean(artifacts.action_trace)} />
+        <AuditFact label="Final state" value={formatBoolean(artifacts.final_state)} />
+        <AuditFact label="Final complete" value={formatBoolean(validation.final_state_complete)} />
+        <AuditFact label="Completed actions" value={String(validation.completed_required_action_count ?? 'n/a')} />
+      </div>
+      {missing.length ? <p style={{ margin: 0, color: 'var(--error-text)' }}>Missing required actions: {missing.join('; ')}</p> : null}
     </div>
   );
 }
