@@ -1446,6 +1446,22 @@ export function BenchmarkRunner() {
     setExportMessage('Exported vCon-compatible benchmark record.');
   }
 
+  function onExportCurrentReport() {
+    if (!report) return;
+    const filenameParts = ['agentbench', report.suite_id, report.scenario_id, report.run_id, 'report']
+      .filter(Boolean)
+      .map((part) => String(part).replace(/[^a-z0-9-]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase());
+
+    downloadJson(`${filenameParts.join('-') || 'agentbench-report'}.json`, {
+      report,
+      transcript: report.transcript ?? transcript,
+      action_trace: report.action_trace ?? parseMaybeJson(actionTrace),
+      final_state: report.final_state ?? parseMaybeJson(finalState),
+      exported_at: new Date().toISOString(),
+    });
+    setExportMessage('Exported current benchmark report JSON.');
+  }
+
   function onExportSuiteVconBundle() {
     if (!suiteSimulation) return;
     const records = [suiteSimulation.vcon_export, ...suiteSimulation.scenario_runs
@@ -2196,9 +2212,25 @@ export function BenchmarkRunner() {
               <p style={{ margin: '0 0 6px', color: 'var(--muted)' }}>Benchmark report</p>
               <h2 style={{ margin: 0, fontSize: 28, textTransform: 'capitalize' }}>{verdict ?? 'Complete'}</h2>
             </div>
-            {score !== undefined ? (
-              <div style={{ fontSize: 40, fontWeight: 900, color: scoreColor(score) }}>{score}</div>
-            ) : null}
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={onExportCurrentReport}
+                style={{
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  background: 'white',
+                  color: 'var(--text)',
+                  padding: '10px 14px',
+                  fontWeight: 800,
+                }}
+              >
+                Download report JSON
+              </button>
+              {score !== undefined ? (
+                <div style={{ fontSize: 40, fontWeight: 900, color: scoreColor(score) }}>{score}</div>
+              ) : null}
+            </div>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
