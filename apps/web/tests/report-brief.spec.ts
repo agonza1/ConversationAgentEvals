@@ -322,7 +322,49 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
             ],
           },
           updated_at: '2026-05-29T15:00:00+00:00',
-          suite_report: { suite_name: 'Call Center Voice AI' },
+          suite_report: {
+            suite_run_id: 'suite-history-1',
+            suite_id: 'call-center-voice-ai',
+            suite_name: 'Call Center Voice AI',
+            provider: 'simulated',
+            scenario_count: 2,
+            pass_count: 1,
+            needs_review_count: 1,
+            average_score: 82,
+            verdict: 'completed',
+            run_metadata: {
+              agent_version: 'suite-v2',
+              prompt_version: 'prompt-v5',
+              model_name: 'voice-agent-sim',
+              notes: 'Loaded from retained suite history.',
+            },
+            scenario_runs: [
+              {
+                scenario_id: 'membership-renewal-save',
+                provider: 'simulated',
+                transcript: 'Agent retained the renewing member after validating intent.',
+                action_trace: [{ name: 'apply_retention_offer', result: 'success' }],
+                final_state: { retained: true },
+                benchmark_report: {
+                  run_id: 'scenario-run-1',
+                  scenario_id: 'membership-renewal-save',
+                  scenario_title: 'Membership Renewal Save',
+                  status: 'pass',
+                  verdict: 'pass',
+                  overall_score: 91,
+                  transcript: 'Agent retained the renewing member after validating intent.',
+                  action_trace: [{ name: 'apply_retention_offer', result: 'success' }],
+                  final_state: { retained: true },
+                  run_metadata: {
+                    agent_version: 'suite-v2',
+                    prompt_version: 'prompt-v5',
+                    model_name: 'voice-agent-sim',
+                    notes: 'Loaded from retained suite history.',
+                  },
+                },
+              },
+            ],
+          },
           retention: { retained_until: '2026-08-27T15:00:00+00:00' },
           artifacts: {
             vcon_export: { available: true, dialog_turns: 4, analysis_count: 1, source_format: 'benchmark_suite' },
@@ -366,6 +408,13 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   await expect(suiteHistory.getByText('EVA-style reliability: 82% accuracy, 100% experience coverage, 4 avg turns.')).toBeVisible();
   await expect(suiteHistory.getByText('Robustness tags: accent, noise.')).toBeVisible();
   await expect(suiteHistory.getByText(/billing-escalation: needs_review \/ 73/)).toBeVisible();
+
+  await suiteHistory.getByRole('button', { name: 'Load suite run' }).click();
+  await expect(page.getByText('Loaded retained suite run suite-history-1.')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'pass' })).toBeVisible();
+  await expect(page.locator('textarea').first()).toHaveValue('Agent retained the renewing member after validating intent.');
+  await expect(page.getByLabel('Suite simulation summary')).toBeVisible();
+  await expect(page.getByPlaceholder('tightened escalation policy')).toHaveValue('Loaded from retained suite history.');
 
   const downloadPromise = page.waitForEvent('download');
   await suiteHistory.getByRole('button', { name: 'Export retained vCon bundle' }).click();

@@ -328,7 +328,21 @@ interface BenchmarkSuiteRunRecord {
   created_at?: string | null;
   updated_at?: string | null;
   completed_at?: string | null;
-  suite_report?: { suite_name?: string; verdict?: string; run_metadata?: RunMetadata; reliability_metrics?: SuiteReliabilityMetrics };
+  suite_report?: {
+    suite_run_id?: string;
+    suite_id?: string;
+    suite_name?: string;
+    provider?: string;
+    scenario_count?: number;
+    pass_count?: number;
+    needs_review_count?: number;
+    average_score?: number;
+    verdict?: string;
+    run_metadata?: RunMetadata;
+    reliability_metrics?: SuiteReliabilityMetrics;
+    scenario_runs?: BenchmarkSimulationResponse[];
+    vcon_export?: JsonRecord;
+  };
   run_lifecycle?: { status?: string; terminal?: boolean; transitions?: Array<{ to?: string; at?: string; reason?: string }> };
   progress?: BenchmarkSuiteRunProgress;
   reliability_metrics?: SuiteReliabilityMetrics;
@@ -1260,6 +1274,46 @@ export function BenchmarkRunner() {
     } finally {
       setIsRunning(false);
     }
+  }
+
+  function onLoadSuiteRun(run: BenchmarkSuiteRunRecord) {
+    const suiteReport = run.suite_report;
+    if (!suiteReport?.scenario_runs?.length) {
+      setSaveMessage('Suite run artifacts are available after the retained run completes.');
+      return;
+    }
+
+    const focusedRun = suiteReport.scenario_runs[0];
+    const focusedReport = focusedRun.benchmark_report;
+    setSelectedSuiteId(suiteReport.suite_id ?? run.suite_id);
+    setSelectedScenarioId(focusedRun.scenario_id ?? focusedReport.scenario_id ?? '');
+    setTranscript(focusedRun.transcript ?? focusedReport.transcript ?? '');
+    setActionTrace(stringifyEditable(focusedRun.action_trace ?? focusedReport.action_trace, '[]'));
+    setFinalState(stringifyEditable(focusedRun.final_state ?? focusedReport.final_state, '{}'));
+    setAgentVersion(suiteReport.run_metadata?.agent_version ?? focusedReport.run_metadata?.agent_version ?? '');
+    setPromptVersion(suiteReport.run_metadata?.prompt_version ?? focusedReport.run_metadata?.prompt_version ?? '');
+    setModelName(suiteReport.run_metadata?.model_name ?? focusedReport.run_metadata?.model_name ?? '');
+    setRunNotes(suiteReport.run_metadata?.notes ?? focusedReport.run_metadata?.notes ?? '');
+    setSuiteSimulation({
+      suite_run_id: suiteReport.suite_run_id ?? run.suite_run_id,
+      suite_id: suiteReport.suite_id ?? run.suite_id,
+      suite_name: suiteReport.suite_name,
+      provider: suiteReport.provider,
+      scenario_count: suiteReport.scenario_count ?? run.scenario_count,
+      pass_count: suiteReport.pass_count ?? run.pass_count,
+      needs_review_count: suiteReport.needs_review_count ?? run.needs_review_count,
+      average_score: suiteReport.average_score ?? run.average_score,
+      verdict: suiteReport.verdict ?? run.status,
+      run_metadata: suiteReport.run_metadata,
+      reliability_metrics: suiteReport.reliability_metrics ?? run.reliability_metrics,
+      scenario_runs: suiteReport.scenario_runs,
+      vcon_export: suiteReport.vcon_export,
+    });
+    setReport(focusedReport);
+    setJudgeGate(null);
+    setCopyMessage(null);
+    setRunError(null);
+    setSaveMessage(`Loaded retained suite run ${run.suite_run_id}.`);
   }
 
   async function onExportRetainedSuiteVconBundle(suiteRunId: string) {
@@ -2358,7 +2412,23 @@ export function BenchmarkRunner() {
                         Robustness tags: {reliability.perturbation_tags.join(', ')}.
                       </p>
                     ) : null}
-                    <div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        onClick={() => onLoadSuiteRun(run)}
+                        disabled={!run.suite_report?.scenario_runs?.length}
+                        style={{
+                          border: '1px solid var(--border)',
+                          borderRadius: 8,
+                          background: run.suite_report?.scenario_runs?.length ? 'white' : 'var(--panel)',
+                          color: run.suite_report?.scenario_runs?.length ? 'var(--text)' : 'var(--muted)',
+                          padding: '6px 10px',
+                          fontWeight: 800,
+                          cursor: run.suite_report?.scenario_runs?.length ? 'pointer' : 'not-allowed',
+                        }}
+                      >
+                        Load suite run
+                      </button>
                       <button
                         type="button"
                         onClick={() => void onExportRetainedSuiteVconBundle(run.suite_run_id)}
