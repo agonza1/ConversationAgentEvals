@@ -333,6 +333,33 @@ def get_suite(suite_id: str) -> BenchmarkSuite | None:
     return deepcopy(suite) if suite else None
 
 
+def get_scenario_contract(suite_id: str, scenario_id: str) -> dict[str, Any] | None:
+    suite = _SUITES_BY_ID.get(suite_id)
+    scenario = _SCENARIOS_BY_ID.get((suite_id, scenario_id))
+    if not suite or not scenario:
+        return None
+
+    contract = _scenario_contract(scenario)
+    return {
+        'suite_id': suite_id,
+        'suite_name': suite['name'],
+        'scenario_id': scenario_id,
+        'scenario_title': scenario['title'],
+        'scenario_contract': contract,
+        'scenario_contract_sha256': _stable_digest(contract),
+        'evidence_requirements': {
+            'required_artifacts': ['transcript', 'action_trace', 'final_state'],
+            'optional_artifacts': ['call', 'group_call', 'vcon'],
+            'scoring_dimensions': [
+                'task_completion',
+                'required_action_execution',
+                'forbidden_action_avoidance',
+                'final_state_match',
+            ],
+        },
+    }
+
+
 def _run_lifecycle_context(payload: dict[str, Any]) -> dict[str, Any]:
     attempt = _positive_int(payload.get('attempt'), default=1, field_name='attempt')
     max_attempts = _positive_int(

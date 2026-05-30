@@ -209,6 +209,40 @@ def test_scenarios_endpoint_returns_full_scenario_contract():
     }.issubset(scenario)
 
 
+def test_scenario_contract_endpoint_returns_stable_hash_and_evidence_requirements():
+    response = client.get('/api/benchmarks/suites/telehealth-agent/scenarios/medication-refill-routing/contract')
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload['suite_id'] == 'telehealth-agent'
+    assert payload['scenario_id'] == 'medication-refill-routing'
+    assert payload['scenario_contract']['id'] == 'medication-refill-routing'
+    assert len(payload['scenario_contract_sha256']) == 64
+    assert payload['evidence_requirements']['required_artifacts'] == ['transcript', 'action_trace', 'final_state']
+    assert payload['evidence_requirements']['optional_artifacts'] == ['call', 'group_call', 'vcon']
+    assert 'forbidden_action_avoidance' in payload['evidence_requirements']['scoring_dimensions']
+
+    run_response = client.post(
+        '/api/benchmarks/run',
+        json={
+            'suite_id': 'telehealth-agent',
+            'scenario_id': 'medication-refill-routing',
+            'transcript': 'Agent: I can route this refill request to your care team.',
+            'action_trace': [{'action': 'route to clinician'}],
+            'final_state': {'routed': True},
+        },
+    )
+    assert run_response.status_code == 200, run_response.text
+    assert run_response.json()['scenario_contract_sha256'] == payload['scenario_contract_sha256']
+
+
+def test_scenario_contract_endpoint_returns_404_for_unknown_scenario():
+    response = client.get('/api/benchmarks/suites/telehealth-agent/scenarios/not-real/contract')
+
+    assert response.status_code == 404
+    assert response.json()['detail'] == 'Benchmark scenario not found.'
+
+
 def test_run_endpoint_persists_lifecycle_report_history():
     response = client.post(
         '/api/benchmarks/run',

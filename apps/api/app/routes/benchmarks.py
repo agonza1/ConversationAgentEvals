@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.db.database import SessionLocal, get_db
 from app.schemas.benchmarks import BenchmarkRunRequest, BenchmarkSimulationRequest, BenchmarkSuiteRunRequest
-from app.services.benchmark_service import get_suite, list_suites, run_scenario, run_suite, simulate_scenario, simulate_suite
+from app.services.benchmark_service import get_scenario_contract, get_suite, list_suites, run_scenario, run_suite, simulate_scenario, simulate_suite
 from app.services.benchmark_run_store import (
     export_benchmark_run_history,
     export_benchmark_run_vcon,
@@ -160,6 +160,15 @@ def list_benchmark_scenarios(suite_id: str):
     if suite is None:
         raise HTTPException(status_code=404, detail='Benchmark suite not found.')
     return {'suite_id': suite_id, 'scenarios': suite['scenarios']}
+
+
+@router.get('/{suite_id}/scenarios/{scenario_id}/contract')
+@router.get('/suites/{suite_id}/scenarios/{scenario_id}/contract')
+def get_benchmark_scenario_contract(suite_id: str, scenario_id: str):
+    contract = get_scenario_contract(suite_id, scenario_id)
+    if contract is None:
+        raise HTTPException(status_code=404, detail='Benchmark scenario not found.')
+    return contract
 
 
 @router.post('/{suite_id}/run-async')
