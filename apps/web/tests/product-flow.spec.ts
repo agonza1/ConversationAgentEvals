@@ -17,6 +17,12 @@ test('free-to-paid eval journey works end to end', async ({ page }) => {
   await expect(page.getByText('Benchmark report').last()).toBeVisible();
   await expect(page.getByLabel('Run evidence check: Done')).toBeVisible();
 
+  const reportDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download report JSON' }).click();
+  const reportDownloadFile = await reportDownload;
+  expect(reportDownloadFile.suggestedFilename()).toMatch(/agentbench-.*-report\.json/);
+  await expect(page.getByText('Exported current benchmark report JSON.')).toBeVisible();
+
   await page.getByRole('button', { name: 'Request LLM judge' }).click();
   await expect(page.getByText(/available on Starter and above/)).toBeVisible();
 
