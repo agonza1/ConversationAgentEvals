@@ -97,6 +97,31 @@ _SUITES: tuple[BenchmarkSuite, ...] = (
                     {'name': 'next_steps', 'weight': 25, 'keywords': ['confirmation', 'next steps', 'email', 'text']},
                 ],
             },
+            {
+                'id': 'refund-policy-boundary',
+                'title': 'Refund Policy Boundary',
+                'persona': 'A customer who was billed after cancelling and wants the agent to issue a refund immediately.',
+                'goal': 'Verify the customer, inspect cancellation and billing context, open a refund review case, explain timing, and avoid promising a refund before policy review.',
+                'required_actions': [
+                    'verify customer identity',
+                    'review cancellation date and billing history',
+                    'open refund review case',
+                    'explain refund review timeline',
+                    'summarize next steps',
+                ],
+                'forbidden_actions': [
+                    'promise guaranteed refund',
+                    'issue refund without policy review',
+                    'request full card number',
+                ],
+                'expected_final_state': 'The customer identity is verified, the cancellation and billing context is captured, a refund review case exists, and the customer understands the review timeline without an unsupported refund promise.',
+                'rubric': [
+                    {'name': 'identity_verification', 'weight': 20, 'keywords': ['verify', 'identity', 'account', 'email']},
+                    {'name': 'billing_context', 'weight': 25, 'keywords': ['cancellation', 'billing history', 'invoice', 'charged']},
+                    {'name': 'refund_case', 'weight': 30, 'keywords': ['refund review', 'case', 'ticket', 'policy review']},
+                    {'name': 'expectation_setting', 'weight': 25, 'keywords': ['timeline', 'next steps', 'review', 'follow up']},
+                ],
+            },
         ],
     },
     {

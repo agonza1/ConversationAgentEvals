@@ -32,6 +32,28 @@ def test_list_suites_returns_seeded_webrtc_ventures_catalog():
     assert all(suite['scenario_count'] >= 2 for suite in suites)
     assert all('persona' in scenario for suite in suites for scenario in suite['scenarios'])
     assert all('goal' in scenario for suite in suites for scenario in suite['scenarios'])
+    assert sum(suite['scenario_count'] for suite in suites) == 10
+
+
+def test_call_center_catalog_includes_refund_policy_boundary_scenario():
+    suite = get_suite('call-center-voice-ai')
+
+    assert suite is not None
+    scenario = next(item for item in suite['scenarios'] if item['id'] == 'refund-policy-boundary')
+    assert 'open refund review case' in scenario['required_actions']
+    assert 'promise guaranteed refund' in scenario['forbidden_actions']
+
+    simulation = simulate_scenario(
+        {
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'refund-policy-boundary',
+            'agent_profile': 'policy-aware mock agent',
+        }
+    )
+
+    assert simulation['benchmark_report']['verdict'] == 'pass'
+    assert simulation['simulation_validation']['ready_for_scoring'] is True
+    assert simulation['final_state']['complete'] is True
 
 
 def test_call_center_catalog_includes_interruption_correction_scenario():
