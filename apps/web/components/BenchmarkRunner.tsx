@@ -279,6 +279,31 @@ interface BenchmarkRunHistoryExport {
   exported_at: string;
 }
 
+interface BenchmarkSuiteRunHistoryExport {
+  id: string;
+  filename: string;
+  user_id: string;
+  project_id?: string | null;
+  suite_id?: string | null;
+  status?: string | null;
+  suite_run_count: number;
+  summary: {
+    latest_suite_run_id?: string | null;
+    latest_status?: string | null;
+    latest_average_score?: number | null;
+    best_average_score?: number | null;
+    worst_average_score?: number | null;
+    average_score?: number | null;
+    status_counts?: Record<string, number>;
+    total_scenarios?: number;
+    total_passes?: number;
+    total_needs_review?: number;
+  };
+  vcon_export_summary: ProjectVconExportSummary;
+  suite_runs: BenchmarkSuiteRunRecord[];
+  exported_at: string;
+}
+
 interface BenchmarkSuiteVconBundleExport {
   id: string;
   suite_run_id: string;
@@ -689,6 +714,15 @@ async function exportBenchmarkRunHistory(userId: string, projectId: string, suit
 
   return handleJson<BenchmarkRunHistoryExport>(
     await fetch(`${getApiBase()}/api/benchmarks/runs/export?${params.toString()}`, { cache: 'no-store' }),
+  );
+}
+
+async function exportBenchmarkSuiteRunHistory(userId: string, projectId: string, suiteId?: string) {
+  const params = new URLSearchParams({ user_id: userId, project_id: projectId });
+  if (suiteId) params.set('suite_id', suiteId);
+
+  return handleJson<BenchmarkSuiteRunHistoryExport>(
+    await fetch(`${getApiBase()}/api/benchmarks/suite-runs/export?${params.toString()}`, { cache: 'no-store' }),
   );
 }
 
@@ -1374,6 +1408,18 @@ export function BenchmarkRunner() {
     setCopyMessage(null);
     setRunError(null);
     setSaveMessage(`Loaded retained suite run ${run.suite_run_id}.`);
+  }
+
+  async function onExportBenchmarkSuiteRunHistory() {
+    if (!userId) return;
+
+    try {
+      const exported = await exportBenchmarkSuiteRunHistory(userId, projectId, selectedSuite?.id);
+      downloadJson(exported.filename, exported);
+      setExportMessage(`Exported ${exported.suite_run_count} suite runs to ${exported.filename}. ${projectVconExportSummary(exported.vcon_export_summary)}`);
+    } catch (err) {
+      setExportMessage(err instanceof Error ? err.message : 'Could not export suite run history.');
+    }
   }
 
   async function onExportRetainedSuiteVconBundle(suiteRunId: string) {
@@ -2445,9 +2491,27 @@ export function BenchmarkRunner() {
             <h3 style={{ margin: 0 }}>
               {userId ? `${suiteRuns.length} suite runs for ${selectedSuite?.title ?? projectId}` : 'Signup required'}
             </h3>
-            <span style={{ color: 'var(--muted)', fontWeight: 800 }}>
-              {suiteRuns.filter((run) => run.status === 'running' || run.status === 'queued').length} active
-            </span>
+            {userId ? (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <span style={{ color: 'var(--muted)', fontWeight: 800 }}>
+                  {suiteRuns.filter((run) => run.status === 'running' || run.status === 'queued').length} active
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void onExportBenchmarkSuiteRunHistory()}
+                  style={{
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    background: 'white',
+                    color: 'var(--text)',
+                    padding: '8px 12px',
+                    fontWeight: 800,
+                  }}
+                >
+                  Export suite history
+                </button>
+              </div>
+            ) : null}
           </div>
           {suiteRuns.length ? (
             <div style={{ display: 'grid', gap: 10 }}>

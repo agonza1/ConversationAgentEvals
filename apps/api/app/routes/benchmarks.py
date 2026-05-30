@@ -19,6 +19,7 @@ from app.services.benchmark_run_store import (
 from app.services.benchmark_suite_run_store import (
     create_benchmark_suite_run_record,
     export_benchmark_suite_run_vcon_bundle,
+    export_benchmark_suite_run_history,
     get_benchmark_suite_run,
     list_benchmark_suite_runs,
     mark_benchmark_suite_run_failed,
@@ -82,6 +83,23 @@ def get_benchmark_suite_runs(
     db: Session = Depends(get_db),
 ):
     return list_benchmark_suite_runs(
+        db=db,
+        user_id=user_id,
+        project_id=project_id,
+        suite_id=suite_id,
+        status=status,
+    )
+
+
+@router.get('/suite-runs/export')
+def export_benchmark_suite_runs(
+    user_id: str = Query(min_length=1),
+    project_id: str | None = None,
+    suite_id: str | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+):
+    return export_benchmark_suite_run_history(
         db=db,
         user_id=user_id,
         project_id=project_id,
