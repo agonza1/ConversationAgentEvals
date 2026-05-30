@@ -666,9 +666,10 @@ async function saveBenchmarkRun(payload: {
   );
 }
 
-async function listBenchmarkSuiteRuns(userId: string, projectId: string, suiteId?: string) {
+async function listBenchmarkSuiteRuns(userId: string, projectId: string, suiteId?: string, status?: string) {
   const params = new URLSearchParams({ user_id: userId, project_id: projectId });
   if (suiteId) params.set('suite_id', suiteId);
+  if (status) params.set('status', status);
 
   return handleJson<BenchmarkSuiteRunRecord[]>(
     await fetch(`${getApiBase()}/api/benchmarks/suite-runs?${params.toString()}`, { cache: 'no-store' }),
@@ -717,9 +718,10 @@ async function exportBenchmarkRunHistory(userId: string, projectId: string, suit
   );
 }
 
-async function exportBenchmarkSuiteRunHistory(userId: string, projectId: string, suiteId?: string) {
+async function exportBenchmarkSuiteRunHistory(userId: string, projectId: string, suiteId?: string, status?: string) {
   const params = new URLSearchParams({ user_id: userId, project_id: projectId });
   if (suiteId) params.set('suite_id', suiteId);
+  if (status) params.set('status', status);
 
   return handleJson<BenchmarkSuiteRunHistoryExport>(
     await fetch(`${getApiBase()}/api/benchmarks/suite-runs/export?${params.toString()}`, { cache: 'no-store' }),
@@ -1025,6 +1027,7 @@ export function BenchmarkRunner() {
   const [plan, setPlan] = useState<PricingPlan['id']>('free');
   const [savedRuns, setSavedRuns] = useState<SavedRun[]>([]);
   const [suiteRuns, setSuiteRuns] = useState<BenchmarkSuiteRunRecord[]>([]);
+  const [suiteRunStatusFilter, setSuiteRunStatusFilter] = useState('');
   const [projectRegressionSummary, setProjectRegressionSummary] = useState<ProjectRegressionSummary | null>(null);
   const [scenarioRegressionSummary, setScenarioRegressionSummary] = useState<ProjectRegressionSummary | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
@@ -1099,7 +1102,7 @@ export function BenchmarkRunner() {
     let isMounted = true;
     Promise.all([
       listSavedRuns(userId, projectId, selectedSuite?.id, selectedScenario?.id),
-      listBenchmarkSuiteRuns(userId, projectId, selectedSuite?.id).catch(() => []),
+      listBenchmarkSuiteRuns(userId, projectId, selectedSuite?.id, suiteRunStatusFilter).catch(() => []),
       fetchProjectRegressionSummary(userId, projectId).catch(() => null),
       selectedSuite?.id && selectedScenario?.id
         ? fetchProjectRegressionSummary(userId, projectId, selectedSuite.id, selectedScenario.id).catch(() => null)
@@ -1123,7 +1126,7 @@ export function BenchmarkRunner() {
     return () => {
       isMounted = false;
     };
-  }, [projectId, selectedScenario?.id, selectedSuite?.id, userId]);
+  }, [projectId, selectedScenario?.id, selectedSuite?.id, suiteRunStatusFilter, userId]);
 
   useEffect(() => {
     if (!selectedSuite) return;
@@ -1157,13 +1160,13 @@ export function BenchmarkRunner() {
     if (!hasActiveSuiteRun) return;
 
     const interval = window.setInterval(() => {
-      listBenchmarkSuiteRuns(userId, projectId, selectedSuite.id)
+      listBenchmarkSuiteRuns(userId, projectId, selectedSuite.id, suiteRunStatusFilter)
         .then(setSuiteRuns)
         .catch(() => undefined);
     }, 4000);
 
     return () => window.clearInterval(interval);
-  }, [projectId, selectedSuite?.id, suiteRuns, userId]);
+  }, [projectId, selectedSuite?.id, suiteRunStatusFilter, suiteRuns, userId]);
 
   function signInDemo() {
     const nextUser = `demo-user-${Math.random().toString(36).slice(2, 8)}`;
@@ -1414,7 +1417,7 @@ export function BenchmarkRunner() {
     if (!userId) return;
 
     try {
-      const exported = await exportBenchmarkSuiteRunHistory(userId, projectId, selectedSuite?.id);
+      const exported = await exportBenchmarkSuiteRunHistory(userId, projectId, selectedSuite?.id, suiteRunStatusFilter);
       downloadJson(exported.filename, exported);
       setExportMessage(`Exported ${exported.suite_run_count} suite runs to ${exported.filename}. ${projectVconExportSummary(exported.vcon_export_summary)}`);
     } catch (err) {
@@ -1570,7 +1573,7 @@ export function BenchmarkRunner() {
         ?? null;
       setSuiteSimulation(simulation);
       if (userId) {
-        listBenchmarkSuiteRuns(userId, projectId, selectedSuite.id)
+        listBenchmarkSuiteRuns(userId, projectId, selectedSuite.id, suiteRunStatusFilter)
           .then(setSuiteRuns)
           .catch(() => setSuiteRuns([]));
       }
@@ -2496,6 +2499,22 @@ export function BenchmarkRunner() {
                 <span style={{ color: 'var(--muted)', fontWeight: 800 }}>
                   {suiteRuns.filter((run) => run.status === 'running' || run.status === 'queued').length} active
                 </span>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--muted)', fontWeight: 800 }}>
+                  Status
+                  <select
+                    value={suiteRunStatusFilter}
+                    onChange={(event) => setSuiteRunStatusFilter(event.target.value)}
+                    aria-label="Filter suite runs by status"
+                    style={{ border: '1px solid var(--border)', borderRadius: 8, background: 'white', color: 'var(--text)', padding: '8px 10px', fontWeight: 800 }}
+                  >
+                    <option value="">All</option>
+                    <option value="queued">Queued</option>
+                    <option value="running">Running</option>
+                    <option value="completed">Completed</option>
+                    <option value="needs_review">Needs review</option>
+                    <option value="failed">Failed</option>
+                  </select>
+                </label>
                 <button
                   type="button"
                   onClick={() => void onExportBenchmarkSuiteRunHistory()}
