@@ -1210,6 +1210,10 @@ def test_run_endpoint_accepts_group_call_artifacts():
     }
     assert payload['evidence_audit_summary']['group_call_summary'] == payload['group_call_summary']
     assert payload['vcon_analysis']['body']['group_call_summary'] == payload['group_call_summary']
+    assert payload['vcon_export']['source_format'] == 'groupCall'
+    assert payload['vcon_export']['parties'] == [{'name': 'caller'}, {'name': 'agent'}, {'name': 'supervisor'}]
+    assert [turn['originator'] for turn in payload['vcon_export']['dialog']] == ['caller', 'agent', 'supervisor']
+    assert payload['vcon_export']['analysis'][-1] == payload['vcon_analysis']
 
 
 def test_run_endpoint_accepts_action_trace_and_final_state_without_transcript():

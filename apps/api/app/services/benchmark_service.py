@@ -1223,13 +1223,15 @@ def _vcon_export(payload: dict[str, Any], transcript: str, analysis: dict[str, A
         exported = deepcopy(source_vcon)
         source_format = 'vcon'
     else:
-        dialog = _transcript_to_dialog(transcript)
+        source_format, dialog = _structured_dialog_from_payload(payload)
+        if not dialog:
+            dialog = _transcript_to_dialog(transcript)
+            source_format = 'transcript'
         exported = {
             'vcon': '0.0.1',
             'parties': _parties_from_dialog(dialog),
             'dialog': dialog or [{'party': 0, 'originator': 'speaker', 'body': transcript}],
         }
-        source_format = 'transcript'
 
     existing_analysis = exported.get('analysis')
     if isinstance(existing_analysis, list):
@@ -1244,6 +1246,43 @@ def _vcon_export(payload: dict[str, Any], transcript: str, analysis: dict[str, A
     exported['appended_analysis_type'] = analysis['type']
     exported['source_format'] = source_format
     return exported
+
+
+def _structured_dialog_from_payload(payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+    for key in ('group_call', 'groupCall', 'call', 'conversation'):
+        value = payload.get(key)
+        if isinstance(value, dict):
+            dialog = _structured_value_to_dialog(value)
+        elif isinstance(value, list):
+            dialog = _structured_value_to_dialog({'dialog': value})
+        else:
+            dialog = []
+        if dialog:
+            return key, dialog
+    return 'transcript', []
+
+
+def _structured_value_to_dialog(value: dict[str, Any]) -> list[dict[str, Any]]:
+    dialog: list[dict[str, Any]] = []
+    party_indexes: dict[str, int] = {}
+    for item in _group_call_message_items(value):
+        if isinstance(item, str):
+            speaker = 'speaker'
+            body = item.strip()
+        elif isinstance(item, dict):
+            raw_speaker = item.get('speaker') or item.get('party') or item.get('role') or item.get('participant') or 'speaker'
+            speaker = str(raw_speaker).strip() or 'speaker'
+            raw_body = item.get('body') or item.get('text') or item.get('transcript') or item.get('content') or item.get('message')
+            body = str(raw_body).strip() if raw_body is not None else ''
+        else:
+            continue
+        if not body:
+            continue
+        party_key = speaker.lower()
+        if party_key not in party_indexes:
+            party_indexes[party_key] = len(party_indexes)
+        dialog.append({'party': party_indexes[party_key], 'originator': speaker, 'body': body})
+    return dialog
 
 
 def _transcript_to_dialog(transcript: str) -> list[dict[str, Any]]:
