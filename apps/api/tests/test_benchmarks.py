@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.services.benchmark_service import get_suite, list_suites, run_scenario, run_suite, simulate_scenario, simulate_suite
+from app.services.benchmark_service import get_suite, get_suite_contract_manifest, list_suites, run_scenario, run_suite, simulate_scenario, simulate_suite
 from app.services.benchmark_run_store import reset_benchmark_run_records_for_tests
 from app.services.benchmark_suite_run_store import reset_benchmark_suite_run_records_for_tests
 
@@ -207,6 +207,33 @@ def test_scenarios_endpoint_returns_full_scenario_contract():
         'expected_final_state',
         'rubric',
     }.issubset(scenario)
+
+
+def test_suite_contract_manifest_returns_all_scenario_fingerprints():
+    manifest = get_suite_contract_manifest('call-center-voice-ai')
+
+    assert manifest is not None
+    assert manifest['suite_id'] == 'call-center-voice-ai'
+    assert manifest['scenario_count'] == len(get_suite('call-center-voice-ai')['scenarios'])
+    assert manifest['evidence_requirements']['required_artifacts'] == ['transcript', 'action_trace', 'final_state']
+    assert len(manifest['suite_contract_manifest_sha256']) == 64
+    assert [item['scenario_id'] for item in manifest['scenario_contracts']] == [
+        scenario['id'] for scenario in get_suite('call-center-voice-ai')['scenarios']
+    ]
+    assert all(len(item['scenario_contract_sha256']) == 64 for item in manifest['scenario_contracts'])
+
+    response = client.get('/api/benchmarks/suites/call-center-voice-ai/contract-manifest')
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload == manifest
+
+
+def test_suite_contract_manifest_endpoint_rejects_unknown_suite():
+    response = client.get('/api/benchmarks/suites/missing/contract-manifest')
+
+    assert response.status_code == 404
+    assert response.json()['detail'] == 'Benchmark suite not found.'
 
 
 def test_scenario_contract_endpoint_returns_stable_hash_and_evidence_requirements():

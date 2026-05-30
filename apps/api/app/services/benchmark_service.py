@@ -333,6 +333,35 @@ def get_suite(suite_id: str) -> BenchmarkSuite | None:
     return deepcopy(suite) if suite else None
 
 
+def get_suite_contract_manifest(suite_id: str) -> dict[str, Any] | None:
+    suite = _SUITES_BY_ID.get(suite_id)
+    if not suite:
+        return None
+
+    scenario_contracts = []
+    for scenario in suite['scenarios']:
+        contract = _scenario_contract(scenario)
+        scenario_contracts.append(
+            {
+                'scenario_id': scenario['id'],
+                'scenario_title': scenario['title'],
+                'scenario_contract': contract,
+                'scenario_contract_sha256': _stable_digest(contract),
+            }
+        )
+
+    manifest = {
+        'suite_id': suite_id,
+        'suite_name': suite['name'],
+        'provider': suite['provider'],
+        'scenario_count': len(suite['scenarios']),
+        'scenario_contracts': scenario_contracts,
+        'evidence_requirements': _benchmark_evidence_requirements(),
+    }
+    manifest['suite_contract_manifest_sha256'] = _stable_digest(manifest)
+    return manifest
+
+
 def get_scenario_contract(suite_id: str, scenario_id: str) -> dict[str, Any] | None:
     suite = _SUITES_BY_ID.get(suite_id)
     scenario = _SCENARIOS_BY_ID.get((suite_id, scenario_id))
@@ -347,16 +376,20 @@ def get_scenario_contract(suite_id: str, scenario_id: str) -> dict[str, Any] | N
         'scenario_title': scenario['title'],
         'scenario_contract': contract,
         'scenario_contract_sha256': _stable_digest(contract),
-        'evidence_requirements': {
-            'required_artifacts': ['transcript', 'action_trace', 'final_state'],
-            'optional_artifacts': ['call', 'group_call', 'vcon'],
-            'scoring_dimensions': [
-                'task_completion',
-                'required_action_execution',
-                'forbidden_action_avoidance',
-                'final_state_match',
-            ],
-        },
+        'evidence_requirements': _benchmark_evidence_requirements(),
+    }
+
+
+def _benchmark_evidence_requirements() -> dict[str, list[str]]:
+    return {
+        'required_artifacts': ['transcript', 'action_trace', 'final_state'],
+        'optional_artifacts': ['call', 'group_call', 'vcon'],
+        'scoring_dimensions': [
+            'task_completion',
+            'required_action_execution',
+            'forbidden_action_avoidance',
+            'final_state_match',
+        ],
     }
 
 
