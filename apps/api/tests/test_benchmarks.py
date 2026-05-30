@@ -126,6 +126,11 @@ def test_run_scenario_preserves_voice_call_metrics_in_report_and_vcon():
                     'packetLossPercent': 1.2,
                     'jitterMs': '18',
                 },
+                'media': {
+                    'recordingUrl': 'https://storage.example.test/calls/OUT-1001.wav',
+                    'recordingSha256': 'abc123',
+                    'mimeType': 'audio/wav',
+                },
             },
             'action_trace': [
                 {'action': 'acknowledge caller frustration', 'status': 'completed'},
@@ -145,8 +150,23 @@ def test_run_scenario_preserves_voice_call_metrics_in_report_and_vcon():
     assert summary['max_latency_ms'] == 780
     assert summary['packet_loss_percent'] == 1.2
     assert summary['jitter_ms'] == 18
+    assert summary['media'] == {
+        'recording_url': 'https://storage.example.test/calls/OUT-1001.wav',
+        'recording_sha256': 'abc123',
+        'mime_type': 'audio/wav',
+        'duration_ms': 92000,
+    }
     assert result['vcon_analysis']['body']['voice_interaction_summary'] == summary
     assert result['vcon_export']['source_format'] == 'call'
+    assert result['vcon_export']['attachments'] == [
+        {
+            'type': 'recording',
+            'url': 'https://storage.example.test/calls/OUT-1001.wav',
+            'mime_type': 'audio/wav',
+            'sha256': 'abc123',
+            'duration_ms': 92000,
+        }
+    ]
 
 
 def test_get_suite_includes_full_scenario_contract_and_returns_copy():
