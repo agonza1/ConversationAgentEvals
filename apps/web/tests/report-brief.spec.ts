@@ -21,6 +21,67 @@ test('benchmark report includes a share-ready brief', async ({ page }) => {
   await expect(page.getByText('Copied report brief.')).toBeVisible();
 });
 
+test('benchmark runner submits structured voice call evidence', async ({ page }) => {
+  await page.route('**/api/benchmarks/run', async (route) => {
+    const payload = route.request().postDataJSON();
+    expect(payload.call).toEqual(expect.objectContaining({
+      metrics: expect.objectContaining({ durationMs: 92000 }),
+      media: expect.objectContaining({ recordingUrl: 'https://storage.example.test/calls/demo.wav' }),
+    }));
+
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        run_id: 'voice-call-run',
+        suite_id: payload.suite_id,
+        scenario_id: payload.scenario_id,
+        scenario_title: 'Voice call evidence',
+        verdict: 'pass',
+        overall_score: 88,
+        evidence: ['Agent escalated to a representative.'],
+        recommendations: [],
+        voice_interaction_summary: {
+          turn_count: 2,
+          interruption_signal_count: 0,
+          correction_signal_count: 0,
+          handoff_signal_count: 1,
+          action_trace_event_count: 0,
+          duration_ms: 92000,
+          media: {
+            recording_url: 'https://storage.example.test/calls/demo.wav',
+            mime_type: 'audio/wav',
+          },
+        },
+        vcon_export: {
+          source_format: 'call',
+          appended_analysis_type: 'agentic_benchmark_eval',
+          dialog: [{ party: 0, originator: 'Caller', body: 'I need a human.' }],
+          analysis: [{ type: 'agentic_benchmark_eval' }],
+        },
+      }),
+    });
+  });
+
+  await page.goto('/benchmarks');
+  await page.getByText('Evidence payload').click();
+  await page.getByLabel('Transcript').fill('Caller: I need a human. Agent: I escalated to a representative.');
+  await page.getByLabel('Voice call evidence').fill(JSON.stringify({
+    turns: [
+      { speaker: 'Caller', body: 'I need a human.' },
+      { speaker: 'Agent', body: 'I escalated to a representative.' },
+    ],
+    metrics: { durationMs: 92000 },
+    media: { recordingUrl: 'https://storage.example.test/calls/demo.wav', mimeType: 'audio/wav' },
+  }));
+  await page.getByRole('button', { name: 'Run benchmark' }).click();
+
+  await expect(page.getByText('Voice interaction evidence')).toBeVisible();
+  await expect(page.getByLabel('Duration: 92000 ms')).toBeVisible();
+  await expect(page.getByLabel('Recording: https://storage.example.test/calls/demo.wav')).toBeVisible();
+  await expect(page.getByLabel('Source: call')).toBeVisible();
+});
+
 test('benchmark report brief includes deterministic failure fields', async ({ page }) => {
   await page.route('**/api/benchmarks/simulate', async (route) => {
     await route.fulfill({

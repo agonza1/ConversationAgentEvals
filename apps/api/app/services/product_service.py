@@ -19,6 +19,7 @@ from app.models.entities import (
     ProductWorkspaceMember,
 )
 from app.schemas.product import (
+    CheckoutResponse,
     FirebaseAuthConfig,
     JudgeResponse,
     PricingPlan,
@@ -589,6 +590,59 @@ def _project_vcon_export_summary(runs: list[SavedRunExportResponse]) -> ProductP
 
 def _int_count(value: Any) -> int:
     return value if isinstance(value, int) and value > 0 else 0
+
+
+def checkout_gate(
+    *,
+    plan: str,
+    user_id: str,
+    project_id: str,
+    success_url: str | None = None,
+    cancel_url: str | None = None,
+) -> CheckoutResponse:
+    price_id = _stripe_price_id(plan)
+    metadata = {
+        'user_id': user_id,
+        'project_id': project_id,
+        'plan': plan,
+    }
+    if not price_id:
+        return CheckoutResponse(
+            status='blocked',
+            plan=plan,  # type: ignore[arg-type]
+            message='Stripe checkout is not configured for this plan yet.',
+            metadata=metadata,
+        )
+
+    base_url = (os.getenv('STRIPE_CHECKOUT_BASE_URL') or '').rstrip('/')
+    checkout_url = None
+    if base_url:
+        checkout_url = (
+            f'{base_url}?price_id={price_id}'
+            f'&client_reference_id={user_id}:{project_id}'
+        )
+
+    if success_url:
+        metadata['success_url'] = success_url
+    if cancel_url:
+        metadata['cancel_url'] = cancel_url
+
+    return CheckoutResponse(
+        status='ready',
+        plan=plan,  # type: ignore[arg-type]
+        stripe_price_id=price_id,
+        checkout_url=checkout_url,
+        message='Stripe price is configured and ready for checkout session creation.',
+        metadata=metadata,
+    )
+
+
+def _stripe_price_id(plan: str) -> str | None:
+    if plan == 'starter':
+        return os.getenv('STRIPE_STARTER_PRICE_ID') or None
+    if plan == 'team':
+        return os.getenv('STRIPE_TEAM_PRICE_ID') or None
+    return None
 
 
 def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> JudgeResponse:

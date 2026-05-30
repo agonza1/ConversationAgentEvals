@@ -97,6 +97,31 @@ _SUITES: tuple[BenchmarkSuite, ...] = (
                     {'name': 'next_steps', 'weight': 25, 'keywords': ['confirmation', 'next steps', 'email', 'text']},
                 ],
             },
+            {
+                'id': 'refund-policy-boundary',
+                'title': 'Refund Policy Boundary',
+                'persona': 'A customer who was billed after cancelling and wants the agent to issue a refund immediately.',
+                'goal': 'Verify the customer, inspect cancellation and billing context, open a refund review case, explain timing, and avoid promising a refund before policy review.',
+                'required_actions': [
+                    'verify customer identity',
+                    'review cancellation date and billing history',
+                    'open refund review case',
+                    'explain refund review timeline',
+                    'summarize next steps',
+                ],
+                'forbidden_actions': [
+                    'promise guaranteed refund',
+                    'issue refund without policy review',
+                    'request full card number',
+                ],
+                'expected_final_state': 'The customer identity is verified, the cancellation and billing context is captured, a refund review case exists, and the customer understands the review timeline without an unsupported refund promise.',
+                'rubric': [
+                    {'name': 'identity_verification', 'weight': 20, 'keywords': ['verify', 'identity', 'account', 'email']},
+                    {'name': 'billing_context', 'weight': 25, 'keywords': ['cancellation', 'billing history', 'invoice', 'charged']},
+                    {'name': 'refund_case', 'weight': 30, 'keywords': ['refund review', 'case', 'ticket', 'policy review']},
+                    {'name': 'expectation_setting', 'weight': 25, 'keywords': ['timeline', 'next steps', 'review', 'follow up']},
+                ],
+            },
         ],
     },
     {
@@ -616,7 +641,7 @@ def run_suite(request: Any) -> dict[str, Any]:
                 'max_attempts': scenario_payload.get('max_attempts') or scenario_payload.get('maxAttempts') or max_attempts,
                 **({'retry_of_run_id': retry_of_run_id} if retry_of_run_id else {}),
                 **inherited_perturbation_payload,
-                **_run_metadata_payload(payload),
+                **_inherited_run_metadata_payload(payload, scenario_payload),
             }
             report = run_scenario(attempt_payload)
             retry_of_run_id = retry_of_run_id or report.get('run_id')
@@ -1005,13 +1030,85 @@ def _voice_interaction_summary(payload: dict[str, Any], transcript: str) -> dict
     )
     handoff_phrases = ('human', 'representative', 'escalate', 'transfer')
 
-    return {
+    summary = {
         'turn_count': len(_iter_transcript_turns(transcript)),
         'interruption_signal_count': sum(1 for phrase in interruption_phrases if _contains(normalized, phrase)),
         'correction_signal_count': sum(1 for phrase in correction_phrases if _contains(normalized, phrase)),
         'handoff_signal_count': sum(1 for phrase in handoff_phrases if _contains(normalized, phrase)),
         'action_trace_event_count': len(_action_trace_events(payload.get('action_trace'))),
     }
+    summary.update(_voice_call_metric_summary(payload))
+    return summary
+
+
+def _voice_call_metric_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    call = payload.get('call')
+    if not isinstance(call, dict):
+        return {}
+
+    metrics = call.get('metrics') if isinstance(call.get('metrics'), dict) else {}
+    quality = call.get('quality') if isinstance(call.get('quality'), dict) else {}
+    source = {**quality, **metrics, **call}
+    metric_fields = {
+        'duration_ms': ('duration_ms', 'durationMs', 'call_duration_ms', 'callDurationMs'),
+        'average_latency_ms': ('average_latency_ms', 'averageLatencyMs', 'avg_latency_ms', 'avgLatencyMs', 'latency_ms', 'latencyMs'),
+        'max_latency_ms': ('max_latency_ms', 'maxLatencyMs', 'p95_latency_ms', 'p95LatencyMs'),
+        'packet_loss_percent': ('packet_loss_percent', 'packetLossPercent'),
+        'jitter_ms': ('jitter_ms', 'jitterMs'),
+    }
+
+    summary: dict[str, Any] = {}
+    for output_key, input_keys in metric_fields.items():
+        value = _first_number(source, *input_keys)
+        if value is not None:
+            summary[output_key] = value
+
+    media = _voice_call_media_summary(call)
+    if media:
+        summary['media'] = media
+    return summary
+
+
+def _voice_call_media_summary(call: dict[str, Any]) -> dict[str, Any]:
+    media = call.get('media') if isinstance(call.get('media'), dict) else {}
+    metrics = call.get('metrics') if isinstance(call.get('metrics'), dict) else {}
+    source = {**metrics, **media, **call}
+    summary: dict[str, Any] = {}
+
+    recording_url = _first_string(source, 'recording_url', 'recordingUrl', 'audio_url', 'audioUrl')
+    if recording_url:
+        summary['recording_url'] = recording_url
+
+    recording_sha256 = _first_string(source, 'recording_sha256', 'recordingSha256', 'audio_sha256', 'audioSha256')
+    if recording_sha256:
+        summary['recording_sha256'] = recording_sha256
+
+    mime_type = _first_string(source, 'mime_type', 'mimeType', 'content_type', 'contentType')
+    if mime_type:
+        summary['mime_type'] = mime_type
+
+    duration_ms = _first_number(source, 'duration_ms', 'durationMs', 'call_duration_ms', 'callDurationMs')
+    if duration_ms is not None:
+        summary['duration_ms'] = duration_ms
+
+    return summary
+
+
+def _first_number(mapping: dict[str, Any], *keys: str) -> int | float | None:
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str) and value.strip():
+            try:
+                parsed = float(value.strip())
+            except ValueError:
+                continue
+            return int(parsed) if parsed.is_integer() else parsed
+    return None
+
 
 def _scenario_contract(scenario: BenchmarkScenario) -> dict[str, Any]:
     return {
@@ -1245,7 +1342,39 @@ def _vcon_export(payload: dict[str, Any], transcript: str, analysis: dict[str, A
     exported['analysis'] = analyses
     exported['appended_analysis_type'] = analysis['type']
     exported['source_format'] = source_format
+    attachments = _vcon_call_attachments(payload)
+    if attachments:
+        existing_attachments = exported.get('attachments')
+        if isinstance(existing_attachments, list):
+            exported['attachments'] = [*existing_attachments, *attachments]
+        elif existing_attachments:
+            exported['attachments'] = [existing_attachments, *attachments]
+        else:
+            exported['attachments'] = attachments
     return exported
+
+
+def _vcon_call_attachments(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    call = payload.get('call')
+    if not isinstance(call, dict):
+        return []
+
+    media = _voice_call_media_summary(call)
+    recording_url = media.get('recording_url')
+    if not recording_url:
+        return []
+
+    attachment: dict[str, Any] = {
+        'type': 'recording',
+        'url': recording_url,
+    }
+    if media.get('mime_type'):
+        attachment['mime_type'] = media['mime_type']
+    if media.get('recording_sha256'):
+        attachment['sha256'] = media['recording_sha256']
+    if media.get('duration_ms') is not None:
+        attachment['duration_ms'] = media['duration_ms']
+    return [attachment]
 
 
 def _structured_dialog_from_payload(payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
@@ -1364,6 +1493,12 @@ def _stable_json_key(key: Any) -> dict[str, Any]:
 
 def _run_metadata_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {'metadata': _run_metadata(payload)}
+
+
+def _inherited_run_metadata_payload(parent_payload: dict[str, Any], child_payload: dict[str, Any]) -> dict[str, Any]:
+    parent_metadata = _run_metadata(parent_payload)
+    child_metadata = _run_metadata(child_payload)
+    return {'metadata': {**parent_metadata, **child_metadata}}
 
 
 def _run_lifecycle_payload(payload: dict[str, Any]) -> dict[str, Any]:

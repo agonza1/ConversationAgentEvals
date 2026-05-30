@@ -92,6 +92,17 @@ interface VoiceInteractionSummary {
   correction_signal_count?: number;
   handoff_signal_count?: number;
   action_trace_event_count?: number;
+  duration_ms?: number;
+  average_latency_ms?: number;
+  max_latency_ms?: number;
+  packet_loss_percent?: number;
+  jitter_ms?: number;
+  media?: {
+    recording_url?: string;
+    recording_sha256?: string;
+    mime_type?: string;
+    duration_ms?: number;
+  };
 }
 
 interface RunLifecycle {
@@ -564,6 +575,7 @@ async function runBenchmark(payload: {
   transcript: string;
   action_trace: unknown;
   final_state: unknown;
+  call?: string | JsonRecord | unknown[];
   group_call?: string | JsonRecord | unknown[];
   vcon?: JsonRecord;
   agent_version?: string;
@@ -1012,6 +1024,7 @@ export function BenchmarkRunner() {
   const [transcript, setTranscript] = useState('');
   const [actionTrace, setActionTrace] = useState('');
   const [finalState, setFinalState] = useState('');
+  const [callEvidence, setCallEvidence] = useState('');
   const [groupCall, setGroupCall] = useState('');
   const [vconEvidence, setVconEvidence] = useState('');
   const [agentProfile, setAgentProfile] = useState('mock text agent');
@@ -1511,6 +1524,7 @@ export function BenchmarkRunner() {
         transcript,
         final_state: parseMaybeJson(finalState),
         action_trace: parseMaybeJson(actionTrace),
+        call: callEvidence.trim() ? parseMaybeJson(callEvidence) : undefined,
         group_call: groupCall.trim() ? parseMaybeJson(groupCall) : undefined,
         vcon: vconEvidence.trim() ? parseMaybeJson(vconEvidence) as JsonRecord : undefined,
         ...runMetadata,
@@ -1653,7 +1667,7 @@ export function BenchmarkRunner() {
   const judgeRule = productConfig?.usage_rules.find((rule) => rule.id === 'llm_judge');
   const voiceRule = productConfig?.usage_rules.find((rule) => rule.id === 'voice_webrtc_minute');
   const hasRunnableEvidence = Boolean(
-    transcript.trim() || actionTrace.trim() || finalState.trim() || groupCall.trim() || vconEvidence.trim(),
+    transcript.trim() || actionTrace.trim() || finalState.trim() || callEvidence.trim() || groupCall.trim() || vconEvidence.trim(),
   );
   const hasSavedCurrentScenario = Boolean(
     selectedScenario?.id && savedRuns.some((run) => run.report.scenario_id === selectedScenario.id),
@@ -1934,6 +1948,17 @@ export function BenchmarkRunner() {
                 />
               </label>
             </div>
+
+            <label style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontWeight: 700 }}>Voice call evidence</span>
+              <textarea
+                value={callEvidence}
+                onChange={(event) => setCallEvidence(event.target.value)}
+                rows={7}
+                placeholder='{"turns":[{"speaker":"Caller","body":"I need a human."},{"speaker":"Agent","body":"I created a ticket and escalated you."}],"metrics":{"durationMs":92000,"avgLatencyMs":340},"media":{"recordingUrl":"https://storage.example.test/calls/demo.wav","mimeType":"audio/wav"}}'
+                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }}
+              />
+            </label>
 
             <label style={{ display: 'grid', gap: 8 }}>
               <span style={{ fontWeight: 700 }}>Group call evidence</span>
@@ -2803,9 +2828,20 @@ function VoiceInteractionPanel({ summary }: { summary?: VoiceInteractionSummary 
         <AuditFact label="Corrections" value={String(summary.correction_signal_count ?? 0)} />
         <AuditFact label="Handoffs" value={String(summary.handoff_signal_count ?? 0)} />
         <AuditFact label="Action events" value={String(summary.action_trace_event_count ?? 0)} />
+        {typeof summary.duration_ms === 'number' ? <AuditFact label="Duration" value={formatMilliseconds(summary.duration_ms)} /> : null}
+        {typeof summary.average_latency_ms === 'number' ? <AuditFact label="Avg latency" value={formatMilliseconds(summary.average_latency_ms)} /> : null}
+        {typeof summary.max_latency_ms === 'number' ? <AuditFact label="Max latency" value={formatMilliseconds(summary.max_latency_ms)} /> : null}
+        {typeof summary.packet_loss_percent === 'number' ? <AuditFact label="Packet loss" value={`${summary.packet_loss_percent}%`} /> : null}
+        {typeof summary.jitter_ms === 'number' ? <AuditFact label="Jitter" value={formatMilliseconds(summary.jitter_ms)} /> : null}
+        {summary.media?.recording_url ? <AuditFact label="Recording" value={summary.media.recording_url} /> : null}
+        {summary.media?.mime_type ? <AuditFact label="Media type" value={summary.media.mime_type} /> : null}
       </div>
     </div>
   );
+}
+
+function formatMilliseconds(value: number) {
+  return `${Number.isInteger(value) ? value : value.toFixed(1)} ms`;
 }
 
 function EvidenceAuditPanel({ summary }: { summary?: EvidenceAuditSummary }) {

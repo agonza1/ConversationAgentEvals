@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.db.database import get_db
 from app.schemas.product import (
+    CheckoutRequest,
     JudgeRequest,
     ProductProjectRequest,
     ProductProjectSettingsRequest,
@@ -16,6 +17,7 @@ from app.schemas.product import (
 )
 from app.services.product_service import (
     accept_workspace_invitation,
+    checkout_gate,
     add_workspace_member,
     export_project_runs,
     export_saved_run,
@@ -39,6 +41,17 @@ router = APIRouter(prefix='/api/product', tags=['product'])
 @router.get('/config')
 def get_product_config():
     return product_config()
+
+
+@router.post('/checkout')
+def create_checkout_gate(payload: CheckoutRequest):
+    return checkout_gate(
+        plan=payload.plan,
+        user_id=payload.user_id,
+        project_id=payload.project_id,
+        success_url=payload.success_url,
+        cancel_url=payload.cancel_url,
+    )
 
 
 @router.post('/workspaces')

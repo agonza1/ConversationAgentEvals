@@ -32,6 +32,28 @@ def test_list_suites_returns_seeded_webrtc_ventures_catalog():
     assert all(suite['scenario_count'] >= 2 for suite in suites)
     assert all('persona' in scenario for suite in suites for scenario in suite['scenarios'])
     assert all('goal' in scenario for suite in suites for scenario in suite['scenarios'])
+    assert sum(suite['scenario_count'] for suite in suites) == 10
+
+
+def test_call_center_catalog_includes_refund_policy_boundary_scenario():
+    suite = get_suite('call-center-voice-ai')
+
+    assert suite is not None
+    scenario = next(item for item in suite['scenarios'] if item['id'] == 'refund-policy-boundary')
+    assert 'open refund review case' in scenario['required_actions']
+    assert 'promise guaranteed refund' in scenario['forbidden_actions']
+
+    simulation = simulate_scenario(
+        {
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'refund-policy-boundary',
+            'agent_profile': 'policy-aware mock agent',
+        }
+    )
+
+    assert simulation['benchmark_report']['verdict'] == 'pass'
+    assert simulation['simulation_validation']['ready_for_scoring'] is True
+    assert simulation['final_state']['complete'] is True
 
 
 def test_call_center_catalog_includes_interruption_correction_scenario():
@@ -83,6 +105,68 @@ def test_run_scenario_summarizes_interruption_and_correction_signals():
     assert summary['correction_signal_count'] >= 3
     assert summary['action_trace_event_count'] == 5
     assert result['vcon_analysis']['body']['voice_interaction_summary'] == summary
+
+
+def test_run_scenario_preserves_voice_call_metrics_in_report_and_vcon():
+    result = run_scenario(
+        {
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'angry-outage-escalation',
+            'call': {
+                'turns': [
+                    {'speaker': 'Customer', 'body': 'The outage is frustrating and I want a human.'},
+                    {'speaker': 'Agent', 'body': 'I am sorry. I checked outage status and will escalate to a representative.'},
+                ],
+                'metrics': {
+                    'durationMs': 92000,
+                    'avgLatencyMs': '340.5',
+                    'p95LatencyMs': 780,
+                },
+                'quality': {
+                    'packetLossPercent': 1.2,
+                    'jitterMs': '18',
+                },
+                'media': {
+                    'recordingUrl': 'https://storage.example.test/calls/OUT-1001.wav',
+                    'recordingSha256': 'abc123',
+                    'mimeType': 'audio/wav',
+                },
+            },
+            'action_trace': [
+                {'action': 'acknowledge caller frustration', 'status': 'completed'},
+                {'action': 'check outage status', 'status': 'completed'},
+                {'action': 'create support ticket', 'status': 'completed'},
+                {'action': 'offer troubleshooting only if no area outage is active', 'status': 'completed'},
+                {'action': 'escalate to human agent on request', 'status': 'completed'},
+            ],
+            'final_state': {'complete': True, 'ticket_number': 'OUT-1001'},
+        }
+    )
+
+    summary = result['voice_interaction_summary']
+    assert summary['turn_count'] == 2
+    assert summary['duration_ms'] == 92000
+    assert summary['average_latency_ms'] == 340.5
+    assert summary['max_latency_ms'] == 780
+    assert summary['packet_loss_percent'] == 1.2
+    assert summary['jitter_ms'] == 18
+    assert summary['media'] == {
+        'recording_url': 'https://storage.example.test/calls/OUT-1001.wav',
+        'recording_sha256': 'abc123',
+        'mime_type': 'audio/wav',
+        'duration_ms': 92000,
+    }
+    assert result['vcon_analysis']['body']['voice_interaction_summary'] == summary
+    assert result['vcon_export']['source_format'] == 'call'
+    assert result['vcon_export']['attachments'] == [
+        {
+            'type': 'recording',
+            'url': 'https://storage.example.test/calls/OUT-1001.wav',
+            'mime_type': 'audio/wav',
+            'sha256': 'abc123',
+            'duration_ms': 92000,
+        }
+    ]
 
 
 def test_get_suite_includes_full_scenario_contract_and_returns_copy():
@@ -925,6 +1009,40 @@ def test_run_suite_scores_all_scenario_evidence_payloads():
     assert suite_analysis['body']['reliability_metrics']['perturbation_tags'] == ['accent', 'noise']
     assert suite_analysis['body']['scenario_results'][0]['scenario_contract_sha256'] == result['scenario_reports'][0]['scenario_contract_sha256']
     assert suite_analysis['body']['scenario_results'][0]['perturbation_tags'] == ['noise', 'accent']
+
+
+def test_run_suite_preserves_scenario_metadata_over_suite_defaults():
+    suite = get_suite('telehealth-agent')
+    assert suite is not None
+    scenario_evidence = {}
+    for index, scenario in enumerate(suite['scenarios'], start=1):
+        simulation = simulate_scenario(
+            {
+                'suite_id': 'telehealth-agent',
+                'scenario_id': scenario['id'],
+                'agent_version': f'scenario-agent-v{index}',
+            }
+        )
+        scenario_evidence[scenario['id']] = {
+            'transcript': simulation['transcript'],
+            'action_trace': simulation['action_trace'],
+            'final_state': simulation['final_state'],
+            'metadata': {'agent_version': f'scenario-agent-v{index}'},
+        }
+
+    result = run_suite(
+        {
+            'suite_id': 'telehealth-agent',
+            'scenario_evidence': scenario_evidence,
+            'metadata': {'agent_version': 'suite-agent-default', 'model_name': 'gpt-4.1-mini'},
+        }
+    )
+
+    assert result['run_metadata'] == {'agent_version': 'suite-agent-default', 'model_name': 'gpt-4.1-mini'}
+    assert [report['run_metadata'] for report in result['scenario_reports']] == [
+        {'agent_version': 'scenario-agent-v1', 'model_name': 'gpt-4.1-mini'},
+        {'agent_version': 'scenario-agent-v2', 'model_name': 'gpt-4.1-mini'},
+    ]
 
 
 def test_run_suite_accepts_attempt_arrays_for_retry_level_reliability():
