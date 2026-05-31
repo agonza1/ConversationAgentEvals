@@ -142,7 +142,7 @@ test('benchmark report brief includes deterministic failure fields', async ({ pa
   await expect(page.getByLabel('Corrections: 2')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'vCon export' })).toBeVisible();
   await expect(page.getByLabel('Dialog turns: 1')).toBeVisible();
-  await expect(page.getByLabel('Contract: abcdef123456')).toBeVisible();
+  await expect(page.getByLabel('Contract: abcdef123456', { exact: true })).toBeVisible();
   await expect(page.getByLabel('Analysis: agentic_benchmark_eval')).toBeVisible();
 });
 
@@ -566,15 +566,16 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   await page.goto('/benchmarks');
 
   const suiteHistory = page.getByLabel('Suite run history');
+  const latestSuiteRun = suiteHistory.locator('article').first();
   await expect(suiteHistory).toBeVisible();
   await expect(suiteHistory.getByRole('heading', { name: /2 suite runs/ })).toBeVisible();
-  await expect(suiteHistory.locator('strong').filter({ hasText: 'Call Center Voice AI' })).toBeVisible();
-  await expect(suiteHistory.locator('article > div').first().getByText('completed')).toBeVisible();
+  await expect(latestSuiteRun.locator('strong').filter({ hasText: 'Call Center Voice AI' })).toBeVisible();
+  await expect(latestSuiteRun.locator('div').first().getByText('completed')).toBeVisible();
   await expect(suiteHistory.getByText('4 dialog turns, 1 analysis records')).toBeVisible();
   await expect(suiteHistory.getByText('EVA-style reliability: 82% accuracy, 100% experience coverage, 4 avg turns.')).toBeVisible();
   await expect(suiteHistory.getByText('Lifecycle: queued -> running -> completed')).toBeVisible();
-  await expect(suiteHistory.getByLabel('Audit timeline for Call Center Voice AI').getByText('Queued after sign-in.')).toBeVisible();
-  await expect(suiteHistory.getByLabel('Audit timeline for Call Center Voice AI').getByText('Suite report retained.')).toBeVisible();
+  await expect(latestSuiteRun.getByLabel('Audit timeline for Call Center Voice AI').getByText('Queued after sign-in.')).toBeVisible();
+  await expect(latestSuiteRun.getByLabel('Audit timeline for Call Center Voice AI').getByText('Suite report retained.')).toBeVisible();
   await expect(suiteHistory.getByText('Robustness tags: accent, noise.')).toBeVisible();
   await expect(suiteHistory.getByText('Failure mix: required action execution (1), task completion (1).')).toBeVisible();
   await expect(suiteHistory.getByText('Visible Suite trend improved: 82 vs 76 (+6), 75% pass rate. Top issue: required action execution (1).')).toBeVisible();
@@ -585,10 +586,10 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   await suiteHistory.getByRole('button', { name: 'Export suite history' }).click();
   const historyDownload = await historyDownloadPromise;
   expect(historyDownload.suggestedFilename()).toBe('agentbench-qa-project-call-center-voice-ai-suite-run-history.json');
-  await expect(page.getByText('Suite trend improved: 82 vs 76 (+6), 75% pass rate. Top issue: required action execution (1).')).toBeVisible();
+  await expect(page.getByText(/^Exported 2 suite runs to .* Suite trend improved: 82 vs 76 \(\+6\), 75% pass rate\. Top issue: required action execution \(1\)\./)).toBeVisible();
   await expect(page.getByText('3/2 vCon-ready runs with 4 dialog turns and 1 analysis records.')).toBeVisible();
 
-  await suiteHistory.getByRole('button', { name: 'Load suite run' }).click();
+  await latestSuiteRun.getByRole('button', { name: 'Load suite run' }).click();
   await expect(page.getByText('Loaded retained suite run suite-history-1.')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'pass' })).toBeVisible();
   await expect(page.locator('textarea').first()).toHaveValue('Agent retained the renewing member after validating intent.');
@@ -596,13 +597,13 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   await expect(page.getByPlaceholder('tightened escalation policy')).toHaveValue('Loaded from retained suite history.');
 
   const auditDownloadPromise = page.waitForEvent('download');
-  await suiteHistory.getByRole('button', { name: 'Export suite audit artifacts' }).click();
+  await latestSuiteRun.getByRole('button', { name: 'Export suite audit artifacts' }).click();
   const auditDownload = await auditDownloadPromise;
   expect(auditDownload.suggestedFilename()).toBe('agentbench-call-center-voice-ai-suite-history-1-suite-audit-artifacts.json');
   await expect(page.getByText('Exported suite audit artifacts for 2 ready scenarios')).toBeVisible();
 
   const downloadPromise = page.waitForEvent('download');
-  await suiteHistory.getByRole('button', { name: 'Export retained vCon bundle' }).click();
+  await latestSuiteRun.getByRole('button', { name: 'Export retained vCon bundle' }).click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe('agentbench-call-center-voice-ai-suite-history-1-vcon-bundle.json');
   await expect(page.getByText('Exported 3 retained suite vCon records')).toBeVisible();

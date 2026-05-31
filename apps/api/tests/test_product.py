@@ -732,6 +732,7 @@ def test_project_regression_summary_reports_latest_trend():
         'failing_runs': 0,
         'pass_rate': 100.0,
         'scenario_summaries': [],
+        'failure_category_summary': [],
     }
 
 
@@ -765,7 +766,8 @@ def test_project_regression_summary_reports_scenario_level_trends():
     )
 
     assert summary_response.status_code == 200
-    assert summary_response.json()['scenario_summaries'] == [
+    payload = summary_response.json()
+    assert payload['scenario_summaries'] == [
         {
             'suite_id': 'call-center-voice-ai',
             'scenario_id': 'angry-outage-escalation',
@@ -793,6 +795,7 @@ def test_project_regression_summary_reports_scenario_level_trends():
             'pass_rate': 100.0,
         },
     ]
+    assert payload['failure_category_summary'] == []
 
 
 
@@ -891,6 +894,45 @@ def test_project_regression_summary_counts_verdict_failures():
     assert summary['passing_runs'] == 1
     assert summary['failing_runs'] == 2
     assert summary['pass_rate'] == 33.33
+    assert summary['failure_category_summary'] == []
+
+
+def test_project_regression_summary_reports_failure_category_mix():
+    runs = [
+        ('run-1', 82, ['tool_error', 'policy_miss']),
+        ('run-2', 64, ['tool_error']),
+        ('run-3', 91, ['handoff_miss']),
+    ]
+    for run_id, score, failure_categories in runs:
+        response = client.post(
+            '/api/product/runs',
+            json={
+                'user_id': 'demo-user',
+                'project_id': 'call-center',
+                'plan': 'starter',
+                'report': {
+                    'run_id': run_id,
+                    'suite_id': 'call-center-voice-ai',
+                    'scenario_id': 'angry-outage-escalation',
+                    'overall_score': score,
+                    'failure_categories': failure_categories,
+                },
+                'transcript': 'Agent: completed the benchmark.',
+            },
+        )
+        assert response.status_code == 200
+
+    summary_response = client.get(
+        '/api/product/projects/call-center/regression-summary',
+        params={'user_id': 'demo-user', 'suite_id': 'call-center-voice-ai'},
+    )
+
+    assert summary_response.status_code == 200
+    assert summary_response.json()['failure_category_summary'] == [
+        {'category': 'tool_error', 'count': 2, 'latest_run_id': 'run-2'},
+        {'category': 'handoff_miss', 'count': 1, 'latest_run_id': 'run-3'},
+        {'category': 'policy_miss', 'count': 1, 'latest_run_id': 'run-1'},
+    ]
 
 
 def test_project_regression_summary_rejects_missing_project():
