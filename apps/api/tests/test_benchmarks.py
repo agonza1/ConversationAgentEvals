@@ -571,6 +571,32 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
     assert history_export['vcon_export_summary']['available_records'] == simulation['scenario_count'] + 1
     assert history_export['suite_runs'][0]['suite_run_id'] == simulation['suite_run_id']
 
+    audit_export_response = client.get(
+        f"/api/benchmarks/suite-runs/{simulation['suite_run_id']}/audit-artifacts",
+        params={'user_id': 'demo-user'},
+    )
+
+    assert audit_export_response.status_code == 200
+    audit_export = audit_export_response.json()
+    assert audit_export['filename'] == f"agentbench-call-center-voice-ai-{simulation['suite_run_id']}-suite-audit-artifacts.json"
+    assert audit_export['operator_summary']['ready_for_export'] is True
+    assert audit_export['operator_summary']['ready_scenarios'] == simulation['scenario_count']
+    assert audit_export['operator_summary']['missing_scenarios'] == 0
+    assert audit_export['suite_contract_artifact']['sha256'] == expected_suite_manifest_sha
+    assert audit_export['report_artifact']['type'] == 'deterministic_suite_report'
+    assert len(audit_export['report_artifact']['sha256']) == 64
+    assert len(audit_export['scenario_artifacts']) == simulation['scenario_count']
+    assert {artifact['scenario_id'] for artifact in audit_export['scenario_artifacts']} == {
+        run['benchmark_report']['scenario_id'] for run in simulation['scenario_runs']
+    }
+    assert all(artifact['ready_for_export'] for artifact in audit_export['scenario_artifacts'])
+
+    missing_audit_export = client.get(
+        f"/api/benchmarks/suite-runs/{simulation['suite_run_id']}/audit-artifacts",
+        params={'user_id': 'other-user'},
+    )
+    assert missing_audit_export.status_code == 404
+
     missing_export = client.get(
         f"/api/benchmarks/suite-runs/{simulation['suite_run_id']}/vcon-bundle",
         params={'user_id': 'other-user'},

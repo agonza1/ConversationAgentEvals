@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -156,6 +157,54 @@ def export_benchmark_suite_run_vcon_bundle(db: Session, *, user_id: str, suite_r
     }
 
 
+def get_benchmark_suite_run_audit_artifacts(db: Session, *, user_id: str, suite_run_id: str) -> dict[str, Any] | None:
+    record = get_benchmark_suite_run(db=db, user_id=user_id, suite_run_id=suite_run_id)
+    if record is None:
+        return None
+
+    suite_report = record.get('suite_report') if isinstance(record.get('suite_report'), dict) else {}
+    scenario_artifacts = _suite_scenario_audit_artifacts(suite_report)
+    ready_scenarios = [artifact for artifact in scenario_artifacts if artifact.get('ready_for_export')]
+    missing_scenarios = [artifact for artifact in scenario_artifacts if not artifact.get('ready_for_export')]
+    report_json = _stable_json(suite_report)
+    lifecycle = record.get('run_lifecycle') if isinstance(record.get('run_lifecycle'), dict) else {}
+    retention = record.get('retention') if isinstance(record.get('retention'), dict) else {}
+
+    return {
+        'id': suite_run_id,
+        'suite_run_id': suite_run_id,
+        'suite_id': record.get('suite_id'),
+        'suite_name': suite_report.get('suite_name'),
+        'user_id': record.get('user_id'),
+        'project_id': record.get('project_id'),
+        'status': record.get('status'),
+        'filename': _suite_audit_artifacts_filename(record),
+        'operator_summary': {
+            'verdict': suite_report.get('verdict'),
+            'average_score': record.get('average_score'),
+            'scenario_count': record.get('scenario_count'),
+            'ready_scenarios': len(ready_scenarios),
+            'missing_scenarios': len(missing_scenarios),
+            'ready_for_export': len(scenario_artifacts) > 0 and len(missing_scenarios) == 0,
+            'evaluator_version': retention.get('evaluator_version', DETERMINISTIC_EVALUATOR_VERSION),
+        },
+        'suite_contract_artifact': {
+            'type': 'suite_contract_manifest',
+            'suite_id': record.get('suite_id'),
+            'sha256': record.get('suite_contract_manifest_sha256'),
+        },
+        'scenario_artifacts': scenario_artifacts,
+        'report_artifact': {
+            'type': 'deterministic_suite_report',
+            'sha256': hashlib.sha256(report_json.encode('utf-8')).hexdigest(),
+            'size_bytes': len(report_json.encode('utf-8')),
+        },
+        'run_lifecycle': lifecycle,
+        'retention': retention,
+        'generated_at': _isoformat(datetime.now(UTC)),
+    }
+
+
 def export_benchmark_suite_run_history(
     db: Session,
     *,
@@ -285,6 +334,52 @@ def _suite_vcon_bundle_filename(record: dict[str, Any]) -> str:
     parts = ['agentbench', record.get('suite_id'), record.get('suite_run_id'), 'vcon-bundle']
     slug = '-'.join(part for part in (_slug_part(part) for part in parts) if part)
     return f'{slug or "agentbench-suite-vcon-bundle"}.json'
+
+
+def _suite_audit_artifacts_filename(record: dict[str, Any]) -> str:
+    parts = ['agentbench', record.get('suite_id'), record.get('suite_run_id'), 'suite-audit-artifacts']
+    slug = '-'.join(part for part in (_slug_part(part) for part in parts) if part)
+    return f'{slug or "agentbench-suite-audit-artifacts"}.json'
+
+
+def _suite_scenario_audit_artifacts(suite_report: dict[str, Any]) -> list[dict[str, Any]]:
+    scenario_containers = suite_report.get('scenario_runs') or suite_report.get('scenario_reports') or []
+    if not isinstance(scenario_containers, list):
+        return []
+
+    artifacts: list[dict[str, Any]] = []
+    for item in scenario_containers:
+        if not isinstance(item, dict):
+            continue
+        report = item.get('benchmark_report') if isinstance(item.get('benchmark_report'), dict) else item
+        if not isinstance(report, dict):
+            continue
+        audit_summary = report.get('evidence_audit_summary') if isinstance(report.get('evidence_audit_summary'), dict) else {}
+        export_readiness = audit_summary.get('export_readiness') if isinstance(audit_summary.get('export_readiness'), dict) else {}
+        evidence_artifacts = report.get('evidence_artifacts') if isinstance(report.get('evidence_artifacts'), dict) else {}
+        report_json = _stable_json(report)
+        artifacts.append(
+            {
+                'run_id': report.get('run_id'),
+                'logical_run_id': report.get('logical_run_id'),
+                'suite_id': report.get('suite_id') or suite_report.get('suite_id'),
+                'scenario_id': report.get('scenario_id'),
+                'status': report.get('run_status') or report.get('verdict'),
+                'verdict': report.get('verdict'),
+                'overall_score': report.get('overall_score', report.get('score')),
+                'ready_for_export': bool(export_readiness.get('ready')),
+                'missing_export_artifacts': export_readiness.get('missing') if isinstance(export_readiness.get('missing'), list) else [],
+                'input_artifact_types': audit_summary.get('input_artifact_types') if isinstance(audit_summary.get('input_artifact_types'), list) else [],
+                'evidence_fingerprint': evidence_artifacts.get('evidence_fingerprint'),
+                'scenario_contract_sha256': report.get('scenario_contract_sha256'),
+                'report_sha256': hashlib.sha256(report_json.encode('utf-8')).hexdigest(),
+            }
+        )
+    return artifacts
+
+
+def _stable_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(',', ':'), default=str)
 
 
 def _suite_history_export_id(*, user_id: str, project_id: str | None, suite_id: str | None, status: str | None) -> str:

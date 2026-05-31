@@ -349,6 +349,20 @@ interface BenchmarkSuiteRunHistoryExport {
   exported_at: string;
 }
 
+interface BenchmarkSuiteAuditArtifactExport {
+  id: string;
+  suite_run_id: string;
+  suite_id?: string | null;
+  filename: string;
+  operator_summary?: {
+    ready_for_export?: boolean;
+    ready_scenarios?: number;
+    missing_scenarios?: number;
+  };
+  scenario_artifacts?: JsonRecord[];
+  [key: string]: unknown;
+}
+
 interface BenchmarkSuiteVconBundleExport {
   id: string;
   suite_run_id: string;
@@ -783,6 +797,12 @@ async function exportBenchmarkSuiteRunHistory(userId: string, projectId: string,
 
   return handleJson<BenchmarkSuiteRunHistoryExport>(
     await fetch(`${getApiBase()}/api/benchmarks/suite-runs/export?${params.toString()}`, { cache: 'no-store' }),
+  );
+}
+
+async function exportBenchmarkSuiteRunAuditArtifacts(userId: string, suiteRunId: string) {
+  return handleJson<BenchmarkSuiteAuditArtifactExport>(
+    await fetch(`${getApiBase()}/api/benchmarks/suite-runs/${encodeURIComponent(suiteRunId)}/audit-artifacts?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
   );
 }
 
@@ -1553,6 +1573,19 @@ export function BenchmarkRunner() {
       setExportMessage(`Exported ${exported.suite_run_count} suite runs to ${exported.filename}. ${projectVconExportSummary(exported.vcon_export_summary)}`);
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : 'Could not export suite run history.');
+    }
+  }
+
+  async function onExportRetainedSuiteAuditArtifacts(suiteRunId: string) {
+    if (!userId) return;
+
+    try {
+      const exported = await exportBenchmarkSuiteRunAuditArtifacts(userId, suiteRunId);
+      downloadJson(exported.filename, exported);
+      const summary = exported.operator_summary;
+      setExportMessage(`Exported suite audit artifacts for ${summary?.ready_scenarios ?? 0} ready scenarios to ${exported.filename}.`);
+    } catch (err) {
+      setExportMessage(err instanceof Error ? err.message : 'Could not export this suite audit artifact bundle.');
     }
   }
 
@@ -2833,6 +2866,22 @@ export function BenchmarkRunner() {
                         }}
                       >
                         Load suite run
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void onExportRetainedSuiteAuditArtifacts(run.suite_run_id)}
+                        disabled={!run.suite_report?.scenario_runs?.length}
+                        style={{
+                          border: '1px solid var(--border)',
+                          borderRadius: 8,
+                          background: run.suite_report?.scenario_runs?.length ? 'white' : 'var(--panel)',
+                          color: run.suite_report?.scenario_runs?.length ? 'var(--text)' : 'var(--muted)',
+                          padding: '6px 10px',
+                          fontWeight: 800,
+                          cursor: run.suite_report?.scenario_runs?.length ? 'pointer' : 'not-allowed',
+                        }}
+                      >
+                        Export suite audit artifacts
                       </button>
                       <button
                         type="button"
