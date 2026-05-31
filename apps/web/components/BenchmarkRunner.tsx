@@ -53,6 +53,7 @@ interface BenchmarkReport {
   verdict?: string;
   overall?: string;
   scenario_title?: string;
+  suite_contract_manifest_sha256?: string;
   scenario_contract_sha256?: string;
   score?: number;
   overall_score?: number;
@@ -171,6 +172,7 @@ interface SavedRunArtifacts {
   evidence_items?: number;
   regression_delta?: RegressionDelta;
   audit_artifacts?: SavedRunAuditArtifactSummary;
+  contract_artifacts?: SavedRunContractArtifactSummary;
   vcon_export?: SavedRunVconExportSummary;
 }
 
@@ -182,12 +184,26 @@ interface SavedRunAuditArtifactSummary {
   evaluator_version?: string | null;
 }
 
+interface SavedRunContractArtifactSummary {
+  available?: boolean;
+  suite_contract_manifest_sha256?: string | null;
+  scenario_contract_sha256?: string | null;
+}
+
 interface SavedRunVconExportSummary {
   available?: boolean;
   dialog_turns?: number;
   analysis_count?: number;
   source_format?: string | null;
   appended_analysis_type?: string | null;
+}
+
+interface ProjectContractArtifactSummary {
+  available_records?: number;
+  missing_records?: number;
+  total_runs?: number;
+  suite_contract_manifest_sha256s?: string[];
+  scenario_contract_sha256s?: string[];
 }
 
 interface PricingPlan {
@@ -293,10 +309,13 @@ interface ProjectHistoryExport {
   user_id: string;
   project_id: string;
   project_name: string;
+  suite_id?: string | null;
+  scenario_id?: string | null;
   firestore_collection_path: string;
   run_count: number;
   summary: ProjectRegressionSummary;
   vcon_export_summary: ProjectVconExportSummary;
+  contract_artifact_summary?: ProjectContractArtifactSummary;
   runs: SavedRunExport[];
   exported_at: string;
 }
@@ -320,6 +339,7 @@ interface BenchmarkRunHistoryExport {
     status_counts?: Record<string, number>;
   };
   vcon_export_summary: ProjectVconExportSummary;
+  contract_artifact_summary?: ProjectContractArtifactSummary;
   runs: JsonRecord[];
   exported_at: string;
 }
@@ -345,6 +365,7 @@ interface BenchmarkSuiteRunHistoryExport {
     total_needs_review?: number;
   };
   vcon_export_summary: ProjectVconExportSummary;
+  suite_contract_artifact_summary?: ProjectContractArtifactSummary;
   suite_runs: BenchmarkSuiteRunRecord[];
   exported_at: string;
 }
@@ -774,9 +795,13 @@ async function exportBenchmarkRunAuditArtifacts(userId: string, runId: string) {
   );
 }
 
-async function exportProjectHistory(userId: string, projectId: string) {
+async function exportProjectHistory(userId: string, projectId: string, suiteId?: string, scenarioId?: string) {
+  const params = new URLSearchParams({ user_id: userId });
+  if (suiteId) params.set('suite_id', suiteId);
+  if (scenarioId) params.set('scenario_id', scenarioId);
+
   return handleJson<ProjectHistoryExport>(
-    await fetch(`${getApiBase()}/api/product/projects/${encodeURIComponent(projectId)}/export?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
+    await fetch(`${getApiBase()}/api/product/projects/${encodeURIComponent(projectId)}/export?${params.toString()}`, { cache: 'no-store' }),
   );
 }
 
@@ -810,6 +835,56 @@ async function exportBenchmarkSuiteRunVconBundle(userId: string, suiteRunId: str
   return handleJson<BenchmarkSuiteVconBundleExport>(
     await fetch(`${getApiBase()}/api/benchmarks/suite-runs/${encodeURIComponent(suiteRunId)}/vcon-bundle?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
   );
+}
+
+function slugFilenamePart(value: unknown) {
+  return String(value).replace(/[^a-z0-9-]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase();
+}
+
+function buildSavedRunAuditArtifactExport(userId: string, run: SavedRun): BenchmarkRunAuditArtifactExport {
+  const report = run.report as BenchmarkReport & {
+    logical_run_id?: string;
+    run_status?: string;
+    evidence_artifacts?: JsonRecord;
+  };
+  const evidenceArtifacts = report.evidence_artifacts && typeof report.evidence_artifacts === 'object' ? report.evidence_artifacts : {};
+  const artifacts = Array.isArray(evidenceArtifacts.artifacts) ? evidenceArtifacts.artifacts : [];
+  const exportReadiness = report.evidence_audit_summary?.export_readiness;
+  const runId = report.run_id ?? run.id;
+  const filenameParts = ['agentbench', report.suite_id, report.scenario_id, runId, 'audit-artifacts']
+    .filter(Boolean)
+    .map(slugFilenamePart);
+
+  return {
+    id: runId,
+    run_id: runId,
+    logical_run_id: report.logical_run_id,
+    suite_id: report.suite_id,
+    scenario_id: report.scenario_id,
+    user_id: userId,
+    project_id: run.project_id,
+    status: report.run_status ?? report.verdict ?? report.overall,
+    filename: `${filenameParts.join('-') || 'agentbench-run-audit-artifacts'}.json`,
+    operator_summary: {
+      verdict: report.verdict ?? report.overall,
+      overall_score: report.overall_score ?? report.score,
+      ready_for_export: Boolean(exportReadiness?.ready ?? run.artifacts?.audit_artifacts?.ready_for_export),
+      missing_export_artifacts: exportReadiness?.missing ?? run.artifacts?.audit_artifacts?.missing ?? [],
+      artifact_count: artifacts.length || run.artifacts?.audit_artifacts?.artifact_types?.length || 0,
+      evaluator_version: report.evidence_audit_summary?.evaluator_version ?? run.artifacts?.audit_artifacts?.evaluator_version,
+    },
+    evidence_fingerprint: evidenceArtifacts.evidence_fingerprint,
+    evidence_artifacts: artifacts,
+    audit_summary: report.evidence_audit_summary ?? run.artifacts?.audit_artifacts ?? {},
+    run_lifecycle: report.run_lifecycle ?? {},
+    contract_artifact: {
+      type: 'scenario_contract',
+      suite_id: report.suite_id,
+      scenario_id: report.scenario_id,
+      sha256: report.scenario_contract_sha256,
+    },
+    generated_at: new Date().toISOString(),
+  };
 }
 
 function downloadJson(filename: string, payload: unknown) {
@@ -925,9 +1000,23 @@ function savedRunAuditArtifactSummary(summary?: SavedRunAuditArtifactSummary) {
   return `Audit export incomplete: missing ${missing}.`;
 }
 
+function savedRunContractArtifactSummary(summary?: SavedRunContractArtifactSummary) {
+  if (!summary?.available) return 'Contract artifacts not captured.';
+  const suiteHash = summary.suite_contract_manifest_sha256 ? summary.suite_contract_manifest_sha256.slice(0, 12) : 'n/a';
+  const scenarioHash = summary.scenario_contract_sha256 ? summary.scenario_contract_sha256.slice(0, 12) : 'n/a';
+  return `Contract artifacts ready: suite ${suiteHash}, scenario ${scenarioHash}.`;
+}
+
 function projectVconExportSummary(summary?: ProjectVconExportSummary) {
   if (!summary?.available_records) return 'No vCon-ready saved runs captured.';
   return `${summary.available_records}/${summary.total_runs} vCon-ready runs with ${summary.dialog_turns} dialog turns and ${summary.analysis_records} analysis records.`;
+}
+
+function projectContractArtifactSummary(summary?: ProjectContractArtifactSummary) {
+  if (!summary?.available_records) return 'No contract fingerprints captured.';
+  const suiteCount = summary.suite_contract_manifest_sha256s?.length ?? 0;
+  const scenarioCount = summary.scenario_contract_sha256s?.length ?? 0;
+  return `${summary.available_records}/${summary.total_runs} runs include contract fingerprints (${suiteCount} suite, ${scenarioCount} scenario).`;
 }
 
 function formatSignedDelta(value?: number | null) {
@@ -1027,6 +1116,7 @@ function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: stri
   const verdict = report.verdict ?? report.overall ?? 'complete';
   const score = report.score ?? report.overall_score ?? 'n/a';
   const scenario = report.scenario_title ?? fallbackScenarioTitle ?? 'Selected scenario';
+  const suiteFingerprint = report.suite_contract_manifest_sha256 ? report.suite_contract_manifest_sha256.slice(0, 12) : 'Not captured';
   const contractFingerprint = report.scenario_contract_sha256 ? report.scenario_contract_sha256.slice(0, 12) : 'Not captured';
   const failureCategories = report.failure_categories?.length ? report.failure_categories.join(', ') : 'None reported';
   const missingActions = report.missing_actions?.length ? report.missing_actions.join('; ') : 'None reported';
@@ -1045,6 +1135,7 @@ function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: stri
     `Scenario: ${scenario}`,
     `Verdict: ${verdict}`,
     `Score: ${score}`,
+    `Suite contract manifest: ${suiteFingerprint}`,
     `Scenario contract: ${contractFingerprint}`,
     `Failure categories: ${failureCategories}`,
     `Missing actions: ${missingActions}`,
@@ -1410,13 +1501,21 @@ export function BenchmarkRunner() {
     if (!userId) return;
 
     const benchmarkRunId = run.report.run_id;
-    if (!benchmarkRunId) {
+    if (!benchmarkRunId && !run.artifacts?.audit_artifacts?.available) {
       setExportMessage('Saved run is missing a benchmark run id.');
       return;
     }
 
     try {
-      const exported = await exportBenchmarkRunAuditArtifacts(userId, benchmarkRunId);
+      let exported: BenchmarkRunAuditArtifactExport;
+      try {
+        exported = benchmarkRunId
+          ? await exportBenchmarkRunAuditArtifacts(userId, benchmarkRunId)
+          : buildSavedRunAuditArtifactExport(userId, run);
+      } catch (err) {
+        if (!run.artifacts?.audit_artifacts?.available) throw err;
+        exported = buildSavedRunAuditArtifactExport(userId, run);
+      }
       downloadJson(exported.filename, exported);
       setExportMessage(`Exported audit artifacts to ${exported.filename}.`);
     } catch (err) {
@@ -1428,9 +1527,9 @@ export function BenchmarkRunner() {
     if (!userId) return;
 
     try {
-      const exported = await exportProjectHistory(userId, projectId);
+      const exported = await exportProjectHistory(userId, projectId, selectedSuite?.id, selectedScenario?.id);
       downloadJson(exported.filename, exported);
-      setExportMessage(`Exported ${exported.run_count} runs to ${exported.filename}. ${projectVconExportSummary(exported.vcon_export_summary)}`);
+      setExportMessage(`Exported ${exported.run_count} runs to ${exported.filename}. ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.contract_artifact_summary)}`);
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : 'Could not export this project history.');
     }
@@ -1442,7 +1541,7 @@ export function BenchmarkRunner() {
     try {
       const exported = await exportBenchmarkRunHistory(userId, projectId, selectedSuite?.id, selectedScenario?.id);
       downloadJson(exported.filename, exported);
-      setExportMessage(`Exported ${exported.run_count} benchmark runs to ${exported.filename}. ${projectVconExportSummary(exported.vcon_export_summary)}`);
+      setExportMessage(`Exported ${exported.run_count} benchmark runs to ${exported.filename}. ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.contract_artifact_summary)}`);
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : 'Could not export benchmark run history.');
     }
@@ -1570,7 +1669,7 @@ export function BenchmarkRunner() {
     try {
       const exported = await exportBenchmarkSuiteRunHistory(userId, projectId, selectedSuite?.id, suiteRunStatusFilter);
       downloadJson(exported.filename, exported);
-      setExportMessage(`Exported ${exported.suite_run_count} suite runs to ${exported.filename}. ${projectVconExportSummary(exported.vcon_export_summary)}`);
+      setExportMessage(`Exported ${exported.suite_run_count} suite runs to ${exported.filename}. ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.suite_contract_artifact_summary)}`);
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : 'Could not export suite run history.');
     }
@@ -1605,7 +1704,7 @@ export function BenchmarkRunner() {
     if (!report?.vcon_export) return;
     const filenameParts = ['agentbench', report.suite_id, report.scenario_id, report.run_id, 'vcon']
       .filter(Boolean)
-      .map((part) => String(part).replace(/[^a-z0-9-]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase());
+      .map(slugFilenamePart);
     downloadJson(`${filenameParts.join('-') || 'agentbench-vcon'}.json`, report.vcon_export);
     setExportMessage('Exported vCon-compatible benchmark record.');
   }
@@ -1614,7 +1713,7 @@ export function BenchmarkRunner() {
     if (!report) return;
     const filenameParts = ['agentbench', report.suite_id, report.scenario_id, report.run_id, 'report']
       .filter(Boolean)
-      .map((part) => String(part).replace(/[^a-z0-9-]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase());
+      .map(slugFilenamePart);
 
     downloadJson(`${filenameParts.join('-') || 'agentbench-report'}.json`, {
       report,
@@ -1819,6 +1918,9 @@ export function BenchmarkRunner() {
   const suiteManifestFingerprint = contractManifest?.suite_contract_manifest_sha256
     ? contractManifest.suite_contract_manifest_sha256.slice(0, 12)
     : null;
+  const reportSuiteManifestFingerprint = report?.suite_contract_manifest_sha256
+    ? report.suite_contract_manifest_sha256.slice(0, 12)
+    : suiteManifestFingerprint ?? 'Not captured';
   const scenarioContractFingerprint = report?.scenario_contract_sha256 ? report.scenario_contract_sha256.slice(0, 12) : selectedScenarioManifestFingerprint ?? 'Not captured';
   const pricing = productConfig?.pricing ?? [];
   const deterministicRule = productConfig?.usage_rules.find((rule) => rule.id === 'deterministic_eval');
@@ -2495,6 +2597,18 @@ export function BenchmarkRunner() {
 
           <RunMetadataPanel metadata={report.run_metadata} />
           <EvidenceAuditPanel summary={report.evidence_audit_summary} />
+          <section style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 12, background: 'var(--panel-alt)' }}>
+            <div>
+              <h3 style={{ margin: 0 }}>Contract evidence</h3>
+              <p style={{ margin: '4px 0 0', color: 'var(--muted)' }}>Immutable suite and scenario fingerprints attached to this result.</p>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+              <AuditFact label="Suite manifest" value={reportSuiteManifestFingerprint} />
+              <AuditFact label="Scenario contract" value={scenarioContractFingerprint} />
+              <AuditFact label="Required artifacts" value={(contractManifest?.evidence_requirements?.required_artifacts ?? []).join(', ') || 'Not declared'} />
+              <AuditFact label="Optional artifacts" value={(contractManifest?.evidence_requirements?.optional_artifacts ?? []).join(', ') || 'None'} />
+            </div>
+          </section>
           <SimulationValidationPanel validation={report.simulation_validation} onRegenerate={onSimulate} isRegenerating={isSimulating} />
           <VoiceInteractionPanel summary={report.voice_interaction_summary} />
           <GroupCallPanel summary={report.group_call_summary} />
@@ -2672,6 +2786,9 @@ export function BenchmarkRunner() {
                   </div>
                   <div style={{ marginTop: 4, fontSize: 13, color: run.artifacts?.audit_artifacts?.ready_for_export ? 'var(--success-text)' : 'var(--muted)' }}>
                     {savedRunAuditArtifactSummary(run.artifacts?.audit_artifacts)}
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: 13, color: run.artifacts?.contract_artifacts?.available ? 'var(--success-text)' : 'var(--muted)' }}>
+                    {savedRunContractArtifactSummary(run.artifacts?.contract_artifacts)}
                   </div>
                   <div style={{ marginTop: 4, fontSize: 12, color: 'var(--muted)' }}>
                     {run.firestore_path}

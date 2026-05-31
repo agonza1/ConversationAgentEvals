@@ -126,6 +126,14 @@ class ProductProjectVconExportSummary(BaseModel):
     analysis_records: int = 0
 
 
+class ProductProjectContractArtifactSummary(BaseModel):
+    available_records: int = 0
+    missing_records: int = 0
+    total_runs: int = 0
+    suite_contract_manifest_sha256s: list[str] = Field(default_factory=list)
+    scenario_contract_sha256s: list[str] = Field(default_factory=list)
+
+
 class ProductWorkspaceRequest(BaseModel):
     owner_user_id: str = Field(min_length=1)
     workspace_id: str = Field(default='default')
@@ -228,10 +236,13 @@ class ProductProjectExportResponse(BaseModel):
     user_id: str
     project_id: str
     project_name: str
+    suite_id: str | None = None
+    scenario_id: str | None = None
     firestore_collection_path: str
     run_count: int
     summary: ProductProjectRegressionSummary
     vcon_export_summary: ProductProjectVconExportSummary = Field(default_factory=ProductProjectVconExportSummary)
+    contract_artifact_summary: ProductProjectContractArtifactSummary = Field(default_factory=ProductProjectContractArtifactSummary)
     runs: list[SavedRunExportResponse] = Field(default_factory=list)
     exported_at: str
 

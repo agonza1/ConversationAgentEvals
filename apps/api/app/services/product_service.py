@@ -25,6 +25,7 @@ from app.schemas.product import (
     PricingPlan,
     ProductScenarioRegressionSummary,
     ProductProjectRegressionSummary,
+    ProductProjectContractArtifactSummary,
     ProductProjectExportResponse,
     ProductProjectSettingsRequest,
     ProductProjectVconExportSummary,
@@ -516,7 +517,13 @@ def export_saved_run(db: Session, user_id: str, run_id: str) -> SavedRunExportRe
     )
 
 
-def export_project_runs(db: Session, user_id: str, project_id: str) -> ProductProjectExportResponse | None:
+def export_project_runs(
+    db: Session,
+    user_id: str,
+    project_id: str,
+    suite_id: str | None = None,
+    scenario_id: str | None = None,
+) -> ProductProjectExportResponse | None:
     workspace_ids = _member_workspace_ids(db=db, user_id=user_id)
     project = (
         db.query(ProductProject)
@@ -533,7 +540,14 @@ def export_project_runs(db: Session, user_id: str, project_id: str) -> ProductPr
         .order_by(ProductSavedRun.created_at.desc())
         .all()
     )
-    summary = project_regression_summary(db=db, user_id=user_id, project_id=project_id)
+    saved_runs = _filter_saved_runs_by_report_labels(saved_runs, suite_id=suite_id, scenario_id=scenario_id)
+    summary = project_regression_summary(
+        db=db,
+        user_id=user_id,
+        project_id=project_id,
+        suite_id=suite_id,
+        scenario_id=scenario_id,
+    )
     if summary is None:
         return None
 
@@ -552,18 +566,53 @@ def export_project_runs(db: Session, user_id: str, project_id: str) -> ProductPr
         for saved_run in saved_runs
     ]
 
+    filename_parts = ['agentbench', project.project_key]
+    if suite_id:
+        filename_parts.append(suite_id)
+    if scenario_id:
+        filename_parts.append(scenario_id)
+    filename_parts.append('project-export')
+
     return ProductProjectExportResponse(
         id=project.id,
-        filename=f'agentbench-{project.project_key}-project-export.json',
+        filename=f"{'-'.join(filename_parts)}.json",
         user_id=user_id,
         project_id=project.project_key,
         project_name=project.name,
+        suite_id=suite_id,
+        scenario_id=scenario_id,
         firestore_collection_path=_firestore_project_runs_path(user_id=user_id, project_key=project.project_key),
         run_count=len(runs),
         summary=summary,
         vcon_export_summary=_project_vcon_export_summary(runs),
+        contract_artifact_summary=_project_contract_artifact_summary(runs),
         runs=runs,
         exported_at=datetime.now(UTC).isoformat(),
+    )
+
+
+def _project_contract_artifact_summary(runs: list[SavedRunExportResponse]) -> ProductProjectContractArtifactSummary:
+    available_records = 0
+    suite_hashes: set[str] = set()
+    scenario_hashes: set[str] = set()
+    for run in runs:
+        summary = run.artifacts.get('contract_artifacts') if isinstance(run.artifacts, dict) else None
+        if not isinstance(summary, dict) or not summary.get('available'):
+            continue
+        available_records += 1
+        suite_hash = summary.get('suite_contract_manifest_sha256')
+        scenario_hash = summary.get('scenario_contract_sha256')
+        if isinstance(suite_hash, str) and suite_hash:
+            suite_hashes.add(suite_hash)
+        if isinstance(scenario_hash, str) and scenario_hash:
+            scenario_hashes.add(scenario_hash)
+
+    return ProductProjectContractArtifactSummary(
+        available_records=available_records,
+        missing_records=max(len(runs) - available_records, 0),
+        total_runs=len(runs),
+        suite_contract_manifest_sha256s=sorted(suite_hashes),
+        scenario_contract_sha256s=sorted(scenario_hashes),
     )
 
 
@@ -949,6 +998,7 @@ def _build_artifacts(report: dict[str, Any], transcript: str | None, previous_re
         'regression_delta': _regression_delta(report, previous_report),
         'evidence_spans': report.get('evidence_spans') or report.get('evidence') or [],
         'audit_artifacts': _audit_artifact_summary(report.get('evidence_audit_summary')),
+        'contract_artifacts': _contract_artifact_summary(report),
         'vcon_export': _vcon_export_summary(report.get('vcon_export')),
         'transcript_lines': len([line for line in (transcript or '').splitlines() if line.strip()]),
     }
@@ -976,6 +1026,16 @@ def _audit_artifact_summary(evidence_audit_summary: Any) -> dict[str, Any]:
         'artifact_types': artifact_types if isinstance(artifact_types, list) else [],
         'missing': missing if isinstance(missing, list) else [],
         'evaluator_version': evidence_audit_summary.get('evaluator_version'),
+    }
+
+
+def _contract_artifact_summary(report: dict[str, Any]) -> dict[str, Any]:
+    suite_contract_manifest_sha256 = report.get('suite_contract_manifest_sha256')
+    scenario_contract_sha256 = report.get('scenario_contract_sha256')
+    return {
+        'available': bool(suite_contract_manifest_sha256 or scenario_contract_sha256),
+        'suite_contract_manifest_sha256': suite_contract_manifest_sha256 if isinstance(suite_contract_manifest_sha256, str) else None,
+        'scenario_contract_sha256': scenario_contract_sha256 if isinstance(scenario_contract_sha256, str) else None,
     }
 
 

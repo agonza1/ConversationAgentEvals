@@ -31,3 +31,4 @@ storage/
 storage/decks/*
 !storage/decks/.gitkeep
 .DS_Store
+.compounds/

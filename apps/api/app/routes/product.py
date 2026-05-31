@@ -178,8 +178,20 @@ def get_project_regression_summary(
 
 
 @router.get('/projects/{project_id}/export')
-def export_project_history(project_id: str, user_id: str = Query(min_length=1), db: Session = Depends(get_db)):
-    exported = export_project_runs(db=db, user_id=user_id, project_id=project_id)
+def export_project_history(
+    project_id: str,
+    user_id: str = Query(min_length=1),
+    suite_id: str | None = None,
+    scenario_id: str | None = None,
+    db: Session = Depends(get_db),
+):
+    exported = export_project_runs(
+        db=db,
+        user_id=user_id,
+        project_id=project_id,
+        suite_id=suite_id,
+        scenario_id=scenario_id,
+    )
     if exported is None:
         raise HTTPException(status_code=404, detail='Project not found')
     return exported
