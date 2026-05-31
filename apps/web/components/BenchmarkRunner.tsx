@@ -170,7 +170,16 @@ interface SavedRunArtifacts {
   has_transcript?: boolean;
   evidence_items?: number;
   regression_delta?: RegressionDelta;
+  audit_artifacts?: SavedRunAuditArtifactSummary;
   vcon_export?: SavedRunVconExportSummary;
+}
+
+interface SavedRunAuditArtifactSummary {
+  available?: boolean;
+  ready_for_export?: boolean;
+  artifact_types?: string[];
+  missing?: string[];
+  evaluator_version?: string | null;
 }
 
 interface SavedRunVconExportSummary {
@@ -272,6 +281,12 @@ interface SavedRunExport {
   created_at: string;
 }
 
+interface BenchmarkRunAuditArtifactExport {
+  filename: string;
+  run_id: string;
+  [key: string]: unknown;
+}
+
 interface ProjectHistoryExport {
   id: string;
   filename: string;
@@ -332,6 +347,20 @@ interface BenchmarkSuiteRunHistoryExport {
   vcon_export_summary: ProjectVconExportSummary;
   suite_runs: BenchmarkSuiteRunRecord[];
   exported_at: string;
+}
+
+interface BenchmarkSuiteAuditArtifactExport {
+  id: string;
+  suite_run_id: string;
+  suite_id?: string | null;
+  filename: string;
+  operator_summary?: {
+    ready_for_export?: boolean;
+    ready_scenarios?: number;
+    missing_scenarios?: number;
+  };
+  scenario_artifacts?: JsonRecord[];
+  [key: string]: unknown;
 }
 
 interface BenchmarkSuiteVconBundleExport {
@@ -739,6 +768,12 @@ async function exportSavedRun(userId: string, runId: string) {
   );
 }
 
+async function exportBenchmarkRunAuditArtifacts(userId: string, runId: string) {
+  return handleJson<BenchmarkRunAuditArtifactExport>(
+    await fetch(`${getApiBase()}/api/benchmarks/runs/${encodeURIComponent(runId)}/audit-artifacts?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
+  );
+}
+
 async function exportProjectHistory(userId: string, projectId: string) {
   return handleJson<ProjectHistoryExport>(
     await fetch(`${getApiBase()}/api/product/projects/${encodeURIComponent(projectId)}/export?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
@@ -762,6 +797,12 @@ async function exportBenchmarkSuiteRunHistory(userId: string, projectId: string,
 
   return handleJson<BenchmarkSuiteRunHistoryExport>(
     await fetch(`${getApiBase()}/api/benchmarks/suite-runs/export?${params.toString()}`, { cache: 'no-store' }),
+  );
+}
+
+async function exportBenchmarkSuiteRunAuditArtifacts(userId: string, suiteRunId: string) {
+  return handleJson<BenchmarkSuiteAuditArtifactExport>(
+    await fetch(`${getApiBase()}/api/benchmarks/suite-runs/${encodeURIComponent(suiteRunId)}/audit-artifacts?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
   );
 }
 
@@ -872,6 +913,16 @@ function savedRunVconSummary(summary?: SavedRunVconExportSummary) {
   const source = summary.source_format ?? 'benchmark';
   const analysis = summary.appended_analysis_type ?? 'agentic_benchmark_eval';
   return `vCon ready: ${summary.dialog_turns ?? 0} dialog turns, ${summary.analysis_count ?? 0} analysis records (${source}, ${analysis}).`;
+}
+
+function savedRunAuditArtifactSummary(summary?: SavedRunAuditArtifactSummary) {
+  if (!summary?.available) return 'Audit artifacts not captured.';
+  const artifactTypes = summary.artifact_types?.length ? summary.artifact_types.map(artifactLabel).join(', ') : 'none';
+  if (summary.ready_for_export) {
+    return `Audit export ready: ${artifactTypes} (${summary.evaluator_version ?? 'unknown evaluator'}).`;
+  }
+  const missing = summary.missing?.length ? summary.missing.map(artifactLabel).join(', ') : 'not specified';
+  return `Audit export incomplete: missing ${missing}.`;
 }
 
 function projectVconExportSummary(summary?: ProjectVconExportSummary) {
@@ -1355,6 +1406,24 @@ export function BenchmarkRunner() {
     }
   }
 
+  async function onExportRunAuditArtifacts(run: SavedRun) {
+    if (!userId) return;
+
+    const benchmarkRunId = run.report.run_id;
+    if (!benchmarkRunId) {
+      setExportMessage('Saved run is missing a benchmark run id.');
+      return;
+    }
+
+    try {
+      const exported = await exportBenchmarkRunAuditArtifacts(userId, benchmarkRunId);
+      downloadJson(exported.filename, exported);
+      setExportMessage(`Exported audit artifacts to ${exported.filename}.`);
+    } catch (err) {
+      setExportMessage(err instanceof Error ? err.message : 'Could not export audit artifacts for this run.');
+    }
+  }
+
   async function onExportProjectHistory() {
     if (!userId) return;
 
@@ -1504,6 +1573,19 @@ export function BenchmarkRunner() {
       setExportMessage(`Exported ${exported.suite_run_count} suite runs to ${exported.filename}. ${projectVconExportSummary(exported.vcon_export_summary)}`);
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : 'Could not export suite run history.');
+    }
+  }
+
+  async function onExportRetainedSuiteAuditArtifacts(suiteRunId: string) {
+    if (!userId) return;
+
+    try {
+      const exported = await exportBenchmarkSuiteRunAuditArtifacts(userId, suiteRunId);
+      downloadJson(exported.filename, exported);
+      const summary = exported.operator_summary;
+      setExportMessage(`Exported suite audit artifacts for ${summary?.ready_scenarios ?? 0} ready scenarios to ${exported.filename}.`);
+    } catch (err) {
+      setExportMessage(err instanceof Error ? err.message : 'Could not export this suite audit artifact bundle.');
     }
   }
 
@@ -2588,6 +2670,9 @@ export function BenchmarkRunner() {
                   <div style={{ marginTop: 4, fontSize: 13, color: run.artifacts?.vcon_export?.available ? 'var(--success-text)' : 'var(--muted)' }}>
                     {savedRunVconSummary(run.artifacts?.vcon_export)}
                   </div>
+                  <div style={{ marginTop: 4, fontSize: 13, color: run.artifacts?.audit_artifacts?.ready_for_export ? 'var(--success-text)' : 'var(--muted)' }}>
+                    {savedRunAuditArtifactSummary(run.artifacts?.audit_artifacts)}
+                  </div>
                   <div style={{ marginTop: 4, fontSize: 12, color: 'var(--muted)' }}>
                     {run.firestore_path}
                   </div>
@@ -2634,6 +2719,20 @@ export function BenchmarkRunner() {
                       }}
                     >
                       Export JSON
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void onExportRunAuditArtifacts(run)}
+                      style={{
+                        border: '1px solid var(--border)',
+                        borderRadius: 8,
+                        background: 'white',
+                        color: 'var(--text)',
+                        padding: '6px 10px',
+                        fontWeight: 800,
+                      }}
+                    >
+                      Export audit artifacts
                     </button>
                   </div>
                 </li>
@@ -2767,6 +2866,22 @@ export function BenchmarkRunner() {
                         }}
                       >
                         Load suite run
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void onExportRetainedSuiteAuditArtifacts(run.suite_run_id)}
+                        disabled={!run.suite_report?.scenario_runs?.length}
+                        style={{
+                          border: '1px solid var(--border)',
+                          borderRadius: 8,
+                          background: run.suite_report?.scenario_runs?.length ? 'white' : 'var(--panel)',
+                          color: run.suite_report?.scenario_runs?.length ? 'var(--text)' : 'var(--muted)',
+                          padding: '6px 10px',
+                          fontWeight: 800,
+                          cursor: run.suite_report?.scenario_runs?.length ? 'pointer' : 'not-allowed',
+                        }}
+                      >
+                        Export suite audit artifacts
                       </button>
                       <button
                         type="button"

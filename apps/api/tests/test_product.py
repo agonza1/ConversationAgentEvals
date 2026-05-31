@@ -914,9 +914,17 @@ def test_saved_runs_preserve_evidence_audit_summary_in_history_and_export():
 
     list_response = client.get('/api/product/runs', params={'user_id': 'demo-user', 'project_id': 'call-center'})
     assert list_response.json()[0]['report']['evidence_audit_summary'] == audit_summary
+    assert list_response.json()[0]['artifacts']['audit_artifacts'] == {
+        'available': True,
+        'ready_for_export': True,
+        'artifact_types': ['transcript', 'action_trace', 'final_state'],
+        'missing': [],
+        'evaluator_version': 'deterministic-agentic-v1',
+    }
 
     export_response = client.get(f"/api/product/runs/{saved['id']}/export", params={'user_id': 'demo-user'})
     assert export_response.json()['report']['evidence_audit_summary'] == audit_summary
+    assert export_response.json()['artifacts']['audit_artifacts']['ready_for_export'] is True
 
 
 def test_saved_runs_include_vcon_export_summary_in_artifacts():

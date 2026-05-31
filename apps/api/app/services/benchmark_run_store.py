@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -97,6 +98,59 @@ def export_benchmark_run_vcon(db: Session, *, user_id: str, run_id: str) -> dict
     }
 
 
+def get_benchmark_run_audit_artifacts(db: Session, *, user_id: str, run_id: str) -> dict[str, Any] | None:
+    record = get_benchmark_run(db=db, user_id=user_id, run_id=run_id)
+    if record is None:
+        return None
+
+    report = record.get('report') if isinstance(record.get('report'), dict) else {}
+    evidence_artifacts = report.get('evidence_artifacts') if isinstance(report.get('evidence_artifacts'), dict) else {}
+    audit_summary = report.get('evidence_audit_summary') if isinstance(report.get('evidence_audit_summary'), dict) else {}
+    lifecycle = report.get('run_lifecycle') if isinstance(report.get('run_lifecycle'), dict) else {}
+    retention = record.get('retention') if isinstance(record.get('retention'), dict) else {}
+    report_json = _stable_json(report)
+    export_readiness = audit_summary.get('export_readiness') if isinstance(audit_summary.get('export_readiness'), dict) else {}
+    artifacts = evidence_artifacts.get('artifacts') if isinstance(evidence_artifacts.get('artifacts'), list) else []
+
+    return {
+        'id': run_id,
+        'run_id': run_id,
+        'logical_run_id': record.get('logical_run_id'),
+        'suite_id': record.get('suite_id'),
+        'scenario_id': record.get('scenario_id'),
+        'user_id': record.get('user_id'),
+        'project_id': record.get('project_id'),
+        'status': record.get('status'),
+        'attempt': record.get('attempt'),
+        'filename': _run_audit_artifacts_filename(record),
+        'operator_summary': {
+            'verdict': report.get('verdict'),
+            'overall_score': report.get('overall_score', report.get('score')),
+            'ready_for_export': bool(export_readiness.get('ready')),
+            'missing_export_artifacts': export_readiness.get('missing') if isinstance(export_readiness.get('missing'), list) else [],
+            'artifact_count': len(artifacts),
+            'evaluator_version': audit_summary.get('evaluator_version') or retention.get('evaluator_version'),
+        },
+        'evidence_fingerprint': evidence_artifacts.get('evidence_fingerprint'),
+        'evidence_artifacts': artifacts,
+        'audit_summary': audit_summary,
+        'run_lifecycle': lifecycle,
+        'contract_artifact': {
+            'type': 'scenario_contract',
+            'suite_id': record.get('suite_id'),
+            'scenario_id': record.get('scenario_id'),
+            'sha256': report.get('scenario_contract_sha256'),
+        },
+        'report_artifact': {
+            'type': 'deterministic_report',
+            'sha256': hashlib.sha256(report_json.encode('utf-8')).hexdigest(),
+            'size_bytes': len(report_json.encode('utf-8')),
+        },
+        'retention': retention,
+        'generated_at': _isoformat(datetime.now(UTC)),
+    }
+
+
 def export_benchmark_run_history(
     db: Session,
     *,
@@ -168,6 +222,16 @@ def _run_vcon_filename(record: dict[str, Any]) -> str:
     parts = ['agentbench', record.get('suite_id'), record.get('scenario_id'), record.get('run_id'), 'vcon']
     slug = '-'.join(part for part in (_slug_part(part) for part in parts) if part)
     return f'{slug or "agentbench-run-vcon"}.json'
+
+
+def _run_audit_artifacts_filename(record: dict[str, Any]) -> str:
+    parts = ['agentbench', record.get('suite_id'), record.get('scenario_id'), record.get('run_id'), 'audit-artifacts']
+    slug = '-'.join(part for part in (_slug_part(part) for part in parts) if part)
+    return f'{slug or "agentbench-run-audit-artifacts"}.json'
+
+
+def _stable_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(',', ':'), default=str)
 
 
 def _slug_part(value: Any) -> str:

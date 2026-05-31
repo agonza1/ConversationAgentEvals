@@ -948,8 +948,34 @@ def _build_artifacts(report: dict[str, Any], transcript: str | None, previous_re
         'overall_score': report.get('overall_score'),
         'regression_delta': _regression_delta(report, previous_report),
         'evidence_spans': report.get('evidence_spans') or report.get('evidence') or [],
+        'audit_artifacts': _audit_artifact_summary(report.get('evidence_audit_summary')),
         'vcon_export': _vcon_export_summary(report.get('vcon_export')),
         'transcript_lines': len([line for line in (transcript or '').splitlines() if line.strip()]),
+    }
+
+
+def _audit_artifact_summary(evidence_audit_summary: Any) -> dict[str, Any]:
+    if not isinstance(evidence_audit_summary, dict):
+        return {
+            'available': False,
+            'ready_for_export': False,
+            'artifact_types': [],
+            'missing': [],
+            'evaluator_version': None,
+        }
+
+    export_readiness = evidence_audit_summary.get('export_readiness')
+    if not isinstance(export_readiness, dict):
+        export_readiness = {}
+    artifact_types = evidence_audit_summary.get('input_artifact_types')
+    missing = export_readiness.get('missing')
+
+    return {
+        'available': True,
+        'ready_for_export': bool(export_readiness.get('ready')),
+        'artifact_types': artifact_types if isinstance(artifact_types, list) else [],
+        'missing': missing if isinstance(missing, list) else [],
+        'evaluator_version': evidence_audit_summary.get('evaluator_version'),
     }
 
 
