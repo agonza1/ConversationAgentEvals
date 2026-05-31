@@ -333,10 +333,15 @@ interface BenchmarkRunHistoryExport {
     latest_run_id?: string | null;
     latest_status?: string | null;
     latest_score?: number | null;
+    previous_score?: number | null;
+    latest_delta?: number | null;
+    latest_trend?: string | null;
     best_score?: number | null;
     worst_score?: number | null;
     average_score?: number | null;
     status_counts?: Record<string, number>;
+    failure_category_counts?: Record<string, number>;
+    top_failure_categories?: Array<{ category: string; count: number }>;
   };
   vcon_export_summary: ProjectVconExportSummary;
   contract_artifact_summary?: ProjectContractArtifactSummary;
@@ -1025,6 +1030,16 @@ function projectContractArtifactSummary(summary?: ProjectContractArtifactSummary
   return `${summary.available_records}/${summary.total_runs} runs include contract fingerprints (${suiteCount} suite, ${scenarioCount} scenario).`;
 }
 
+function benchmarkRunHistoryExportSummary(summary?: BenchmarkRunHistoryExport['summary']) {
+  if (!summary) return 'Benchmark trend not available.';
+  const trend = summary.latest_trend ? summary.latest_trend.replace(/_/g, ' ') : 'unavailable';
+  const top = summary.top_failure_categories?.[0];
+  const topIssue = top?.category && top.count > 0
+    ? `Top issue: ${top.category.replace(/_/g, ' ')} (${top.count}).`
+    : 'No recurring failure category.';
+  return `Benchmark trend ${trend}: ${summary.latest_score ?? 'n/a'} vs ${summary.previous_score ?? 'n/a'} (${formatSignedDelta(summary.latest_delta)}). ${topIssue}`;
+}
+
 function suiteHistoryExportSummary(summary?: BenchmarkSuiteRunHistoryExport['summary']) {
   if (!summary) return 'Suite trend not available.';
   const trend = summary.latest_trend ? summary.latest_trend.replace(/_/g, ' ') : 'unavailable';
@@ -1633,7 +1648,7 @@ export function BenchmarkRunner() {
     try {
       const exported = await exportBenchmarkRunHistory(userId, projectId, selectedSuite?.id, selectedScenario?.id);
       downloadJson(exported.filename, exported);
-      setExportMessage(`Exported ${exported.run_count} benchmark runs to ${exported.filename}. ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.contract_artifact_summary)}`);
+      setExportMessage(`Exported ${exported.run_count} benchmark runs to ${exported.filename}. ${benchmarkRunHistoryExportSummary(exported.summary)} ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.contract_artifact_summary)}`);
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : 'Could not export benchmark run history.');
     }

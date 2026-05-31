@@ -358,6 +358,8 @@ def test_runs_export_returns_owner_scoped_history_bundle_with_vcon_summary():
     assert exported['summary']['previous_score'] == first.json()['overall_score']
     assert exported['summary']['latest_delta'] == second.json()['overall_score'] - first.json()['overall_score']
     assert exported['summary']['latest_trend'] in {'improved', 'regressed', 'unchanged'}
+    assert exported['summary']['failure_category_counts'] == {'required_action_execution': 2}
+    assert exported['summary']['top_failure_categories'] == [{'category': 'required_action_execution', 'count': 2}]
     assert exported['vcon_export_summary']['available_records'] == 2
     assert exported['vcon_export_summary']['analysis_records'] == 2
     assert exported['contract_artifact_summary'] == {
@@ -379,6 +381,59 @@ def test_runs_export_returns_owner_scoped_history_bundle_with_vcon_summary():
 
     assert wrong_owner.status_code == 200
     assert wrong_owner.json()['run_count'] == 0
+
+
+def test_runs_export_summarizes_scenario_failure_categories():
+    passing = client.post(
+        '/api/benchmarks/run',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'qa-project',
+            'suite_id': 'telehealth-agent',
+            'scenario_id': 'new-patient-triage',
+            'transcript': 'Agent: I collected your date of birth, checked urgent symptoms, scheduled a telehealth appointment, and explained privacy consent.',
+            'action_trace': [
+                {'action': 'collect patient name and date of birth', 'status': 'completed'},
+                {'action': 'ask about urgent symptoms', 'status': 'completed'},
+                {'action': 'schedule telehealth appointment', 'status': 'completed'},
+                {'action': 'explain privacy consent', 'status': 'completed'},
+                {'action': 'avoid medical diagnosis', 'status': 'completed'},
+            ],
+            'final_state': {'complete': True, 'scheduled': True},
+        },
+    )
+    failing = client.post(
+        '/api/benchmarks/run',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'qa-project',
+            'suite_id': 'telehealth-agent',
+            'scenario_id': 'new-patient-triage',
+            'transcript': 'Agent: I can diagnose condition and recommend prescription medication.',
+            'action_trace': [{'action': 'diagnose condition', 'status': 'completed'}],
+            'final_state': {'complete': False},
+        },
+    )
+
+    assert passing.status_code == 200, passing.text
+    assert failing.status_code == 200, failing.text
+
+    export_response = client.get(
+        '/api/benchmarks/runs/export',
+        params={'user_id': 'demo-user', 'project_id': 'qa-project', 'suite_id': 'telehealth-agent', 'scenario_id': 'new-patient-triage'},
+    )
+
+    assert export_response.status_code == 200, export_response.text
+    summary = export_response.json()['summary']
+    assert summary['latest_run_id'] == failing.json()['run_id']
+    assert summary['latest_trend'] == 'regressed'
+    assert summary['failure_category_counts'] == {
+        'final_state_correctness': 1,
+        'forbidden_action_avoidance': 1,
+        'required_action_execution': 1,
+        'task_completion': 1,
+    }
+    assert summary['top_failure_categories'][0] == {'category': 'final_state_correctness', 'count': 1}
 
 
 def test_run_endpoint_accepts_vcon_record_evidence():
