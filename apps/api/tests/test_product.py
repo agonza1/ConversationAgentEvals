@@ -282,6 +282,58 @@ def test_projects_store_workspace_and_onboarding_settings():
     assert missing.status_code == 404
 
 
+def test_workspace_editors_can_update_shared_project_settings_but_viewers_cannot():
+    workspace = client.post(
+        '/api/product/workspaces',
+        json={
+            'owner_user_id': 'owner-user',
+            'workspace_id': 'acme-support',
+            'name': 'Acme Support QA',
+            'plan': 'team',
+        },
+    ).json()
+    project = client.post(
+        '/api/product/projects',
+        json={
+            'user_id': 'owner-user',
+            'workspace_id': workspace['id'],
+            'project_id': 'call-center',
+            'name': 'Call Center QA',
+            'plan': 'team',
+        },
+    ).json()
+    assert project['settings']['retention_days'] == 90
+
+    editor = client.post(
+        f"/api/product/workspaces/{workspace['id']}/members",
+        json={'requester_user_id': 'owner-user', 'user_id': 'editor-user', 'role': 'editor'},
+    )
+    viewer = client.post(
+        f"/api/product/workspaces/{workspace['id']}/members",
+        json={'requester_user_id': 'owner-user', 'user_id': 'viewer-user', 'role': 'viewer'},
+    )
+    assert editor.status_code == 200
+    assert viewer.status_code == 200
+
+    updated = client.patch(
+        '/api/product/projects/call-center/settings',
+        json={
+            'user_id': 'editor-user',
+            'settings': {'retention_days': 30, 'report_visibility': 'workspace'},
+            'onboarding': {'next_step': 'export_report'},
+        },
+    )
+    assert updated.status_code == 200
+    assert updated.json()['settings']['retention_days'] == 30
+    assert updated.json()['onboarding']['next_step'] == 'export_report'
+
+    blocked = client.patch(
+        '/api/product/projects/call-center/settings',
+        json={'user_id': 'viewer-user', 'settings': {'retention_days': 365}, 'onboarding': {}},
+    )
+    assert blocked.status_code == 404
+
+
 def test_project_workspace_assignment_requires_membership():
     workspace = client.post(
         '/api/product/workspaces',
@@ -1139,7 +1191,10 @@ def test_llm_judge_spend_control_respects_budget_env(monkeypatch):
     response = client.post('/api/product/judge', json={'plan': 'starter', 'report': {'overall_score': 82}})
 
     assert response.status_code == 200
-    assert response.json()['spend_control'] == {
+    payload = response.json()
+    assert payload['status'] == 'blocked'
+    assert payload['message'] == 'LLM judge daily credit budget is exhausted. Increase the limit or wait for the next budget window.'
+    assert payload['spend_control'] == {
         'estimated_credits': 10,
         'daily_credit_limit': 15,
         'reserved_daily_credits': 8,
