@@ -170,7 +170,16 @@ interface SavedRunArtifacts {
   has_transcript?: boolean;
   evidence_items?: number;
   regression_delta?: RegressionDelta;
+  audit_artifacts?: SavedRunAuditArtifactSummary;
   vcon_export?: SavedRunVconExportSummary;
+}
+
+interface SavedRunAuditArtifactSummary {
+  available?: boolean;
+  ready_for_export?: boolean;
+  artifact_types?: string[];
+  missing?: string[];
+  evaluator_version?: string | null;
 }
 
 interface SavedRunVconExportSummary {
@@ -884,6 +893,16 @@ function savedRunVconSummary(summary?: SavedRunVconExportSummary) {
   const source = summary.source_format ?? 'benchmark';
   const analysis = summary.appended_analysis_type ?? 'agentic_benchmark_eval';
   return `vCon ready: ${summary.dialog_turns ?? 0} dialog turns, ${summary.analysis_count ?? 0} analysis records (${source}, ${analysis}).`;
+}
+
+function savedRunAuditArtifactSummary(summary?: SavedRunAuditArtifactSummary) {
+  if (!summary?.available) return 'Audit artifacts not captured.';
+  const artifactTypes = summary.artifact_types?.length ? summary.artifact_types.map(artifactLabel).join(', ') : 'none';
+  if (summary.ready_for_export) {
+    return `Audit export ready: ${artifactTypes} (${summary.evaluator_version ?? 'unknown evaluator'}).`;
+  }
+  const missing = summary.missing?.length ? summary.missing.map(artifactLabel).join(', ') : 'not specified';
+  return `Audit export incomplete: missing ${missing}.`;
 }
 
 function projectVconExportSummary(summary?: ProjectVconExportSummary) {
@@ -2617,6 +2636,9 @@ export function BenchmarkRunner() {
                   </div>
                   <div style={{ marginTop: 4, fontSize: 13, color: run.artifacts?.vcon_export?.available ? 'var(--success-text)' : 'var(--muted)' }}>
                     {savedRunVconSummary(run.artifacts?.vcon_export)}
+                  </div>
+                  <div style={{ marginTop: 4, fontSize: 13, color: run.artifacts?.audit_artifacts?.ready_for_export ? 'var(--success-text)' : 'var(--muted)' }}>
+                    {savedRunAuditArtifactSummary(run.artifacts?.audit_artifacts)}
                   </div>
                   <div style={{ marginTop: 4, fontSize: 12, color: 'var(--muted)' }}>
                     {run.firestore_path}

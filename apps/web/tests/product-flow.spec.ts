@@ -42,6 +42,7 @@ test('free-to-paid eval journey works end to end', async ({ page }) => {
   await expect(page.getByRole('heading', { name: /1 saved for Billing Address Change/ })).toBeVisible();
   await expect(page.getByText('Baseline run for this project.')).toBeVisible();
   await expect(page.getByText(/vCon ready: \d+ dialog turns, \d+ analysis records/)).toBeVisible();
+  await expect(page.getByText(/Audit export ready: transcript, action trace, final state/)).toBeVisible();
   await expect(page.getByLabel('Save repeatable history: Done')).toBeVisible();
   await expect(page.getByText('Selected scenario: baseline')).toBeVisible();
   await expect(page.getByText('1 focused runs')).toBeVisible();
