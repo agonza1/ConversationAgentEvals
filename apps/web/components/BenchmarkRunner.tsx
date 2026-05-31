@@ -356,6 +356,9 @@ interface BenchmarkSuiteRunHistoryExport {
     latest_suite_run_id?: string | null;
     latest_status?: string | null;
     latest_average_score?: number | null;
+    previous_average_score?: number | null;
+    latest_delta?: number | null;
+    latest_trend?: string | null;
     best_average_score?: number | null;
     worst_average_score?: number | null;
     average_score?: number | null;
@@ -363,6 +366,7 @@ interface BenchmarkSuiteRunHistoryExport {
     total_scenarios?: number;
     total_passes?: number;
     total_needs_review?: number;
+    pass_rate?: number | null;
   };
   vcon_export_summary: ProjectVconExportSummary;
   suite_contract_artifact_summary?: ProjectContractArtifactSummary;
@@ -1019,6 +1023,43 @@ function projectContractArtifactSummary(summary?: ProjectContractArtifactSummary
   return `${summary.available_records}/${summary.total_runs} runs include contract fingerprints (${suiteCount} suite, ${scenarioCount} scenario).`;
 }
 
+function suiteHistoryExportSummary(summary?: BenchmarkSuiteRunHistoryExport['summary']) {
+  if (!summary) return 'Suite trend not available.';
+  const trend = summary.latest_trend ? summary.latest_trend.replace(/_/g, ' ') : 'unavailable';
+  const passRate = typeof summary.pass_rate === 'number' ? `${summary.pass_rate}% pass rate` : 'pass rate unavailable';
+  return `Suite trend ${trend}: ${summary.latest_average_score ?? 'n/a'} vs ${summary.previous_average_score ?? 'n/a'} (${formatSignedDelta(summary.latest_delta)}), ${passRate}.`;
+}
+
+function suiteHistorySummaryFromRuns(runs: BenchmarkSuiteRunRecord[]): BenchmarkSuiteRunHistoryExport['summary'] | null {
+  if (!runs.length) return null;
+  const latest = runs[0];
+  const previous = runs.slice(1).find((run) => typeof run.average_score === 'number');
+  const latestScore = typeof latest.average_score === 'number' ? latest.average_score : null;
+  const previousScore = typeof previous?.average_score === 'number' ? previous.average_score : null;
+  const totalScenarios = runs.reduce((total, run) => total + Math.max(run.scenario_count ?? 0, 0), 0);
+  const totalPasses = runs.reduce((total, run) => total + Math.max(run.pass_count ?? 0, 0), 0);
+  return {
+    latest_suite_run_id: latest.suite_run_id,
+    latest_status: latest.status,
+    latest_average_score: latestScore,
+    previous_average_score: previousScore,
+    latest_delta: latestScore !== null && previousScore !== null ? latestScore - previousScore : null,
+    latest_trend: scoreTrend(latestScore, previousScore),
+    total_scenarios: totalScenarios,
+    total_passes: totalPasses,
+    total_needs_review: runs.reduce((total, run) => total + Math.max(run.needs_review_count ?? 0, 0), 0),
+    pass_rate: totalScenarios ? Math.round((totalPasses / totalScenarios) * 10000) / 100 : null,
+  };
+}
+
+function scoreTrend(latestScore: number | null, previousScore: number | null) {
+  if (latestScore === null) return 'unscored';
+  if (previousScore === null) return 'baseline';
+  if (latestScore > previousScore) return 'improved';
+  if (latestScore < previousScore) return 'regressed';
+  return 'unchanged';
+}
+
 function formatSignedDelta(value?: number | null) {
   if (typeof value !== 'number') return 'n/a';
   return value > 0 ? `+${value}` : String(value);
@@ -1226,6 +1267,7 @@ export function BenchmarkRunner() {
   const [plan, setPlan] = useState<PricingPlan['id']>('free');
   const [savedRuns, setSavedRuns] = useState<SavedRun[]>([]);
   const [suiteRuns, setSuiteRuns] = useState<BenchmarkSuiteRunRecord[]>([]);
+  const visibleSuiteHistorySummary = useMemo(() => suiteHistorySummaryFromRuns(suiteRuns), [suiteRuns]);
   const [suiteRunStatusFilter, setSuiteRunStatusFilter] = useState('');
   const [projectRegressionSummary, setProjectRegressionSummary] = useState<ProjectRegressionSummary | null>(null);
   const [scenarioRegressionSummary, setScenarioRegressionSummary] = useState<ProjectRegressionSummary | null>(null);
@@ -1669,7 +1711,7 @@ export function BenchmarkRunner() {
     try {
       const exported = await exportBenchmarkSuiteRunHistory(userId, projectId, selectedSuite?.id, suiteRunStatusFilter);
       downloadJson(exported.filename, exported);
-      setExportMessage(`Exported ${exported.suite_run_count} suite runs to ${exported.filename}. ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.suite_contract_artifact_summary)}`);
+      setExportMessage(`Exported ${exported.suite_run_count} suite runs to ${exported.filename}. ${suiteHistoryExportSummary(exported.summary)} ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.suite_contract_artifact_summary)}`);
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : 'Could not export suite run history.');
     }
@@ -2905,6 +2947,11 @@ export function BenchmarkRunner() {
               </div>
             ) : null}
           </div>
+          {visibleSuiteHistorySummary ? (
+            <p style={{ margin: 0, color: regressionDeltaColor(visibleSuiteHistorySummary.latest_trend ?? undefined), fontWeight: 800 }}>
+              Visible {suiteHistoryExportSummary(visibleSuiteHistorySummary)}
+            </p>
+          ) : null}
           {suiteRuns.length ? (
             <div style={{ display: 'grid', gap: 10 }}>
               {suiteRuns.slice(0, 4).map((run) => {

@@ -447,6 +447,24 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
             ],
           },
         },
+        {
+          suite_run_id: 'suite-history-0',
+          suite_id: 'call-center-voice-ai',
+          status: 'completed',
+          scenario_count: 2,
+          pass_count: 2,
+          needs_review_count: 0,
+          average_score: 76,
+          updated_at: '2026-05-28T15:00:00+00:00',
+          suite_report: { suite_name: 'Call Center Voice AI' },
+          retention: { retained_until: '2026-08-26T15:00:00+00:00' },
+          artifacts: {
+            vcon_export: { available: false },
+            scenario_summaries: [
+              { scenario_id: 'membership-renewal-save', run_id: 'scenario-run-0', status: 'pass', overall_score: 76 },
+            ],
+          },
+        },
       ]),
     });
   });
@@ -507,24 +525,28 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
         project_id: 'qa-project',
         suite_id: 'call-center-voice-ai',
         filename: 'agentbench-qa-project-call-center-voice-ai-suite-run-history.json',
-        suite_run_count: 1,
+        suite_run_count: 2,
         summary: {
           latest_suite_run_id: 'suite-history-1',
           latest_status: 'completed',
           latest_average_score: 82,
-          status_counts: { completed: 1 },
-          total_scenarios: 2,
-          total_passes: 1,
+          previous_average_score: 76,
+          latest_delta: 6,
+          latest_trend: 'improved',
+          status_counts: { completed: 2 },
+          total_scenarios: 4,
+          total_passes: 3,
           total_needs_review: 1,
+          pass_rate: 75,
         },
         vcon_export_summary: {
           available_records: 3,
           missing_records: 0,
-          total_runs: 1,
+          total_runs: 2,
           dialog_turns: 4,
           analysis_records: 1,
         },
-        suite_runs: [{ suite_run_id: 'suite-history-1', status: 'completed' }],
+        suite_runs: [{ suite_run_id: 'suite-history-1', status: 'completed' }, { suite_run_id: 'suite-history-0', status: 'completed' }],
         exported_at: '2026-05-29T15:00:00+00:00',
       }),
     });
@@ -534,7 +556,7 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
 
   const suiteHistory = page.getByLabel('Suite run history');
   await expect(suiteHistory).toBeVisible();
-  await expect(suiteHistory.getByRole('heading', { name: /1 suite runs/ })).toBeVisible();
+  await expect(suiteHistory.getByRole('heading', { name: /2 suite runs/ })).toBeVisible();
   await expect(suiteHistory.locator('strong').filter({ hasText: 'Call Center Voice AI' })).toBeVisible();
   await expect(suiteHistory.locator('article > div').first().getByText('completed')).toBeVisible();
   await expect(suiteHistory.getByText('4 dialog turns, 1 analysis records')).toBeVisible();
@@ -543,6 +565,7 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   await expect(suiteHistory.getByLabel('Audit timeline for Call Center Voice AI').getByText('Queued after sign-in.')).toBeVisible();
   await expect(suiteHistory.getByLabel('Audit timeline for Call Center Voice AI').getByText('Suite report retained.')).toBeVisible();
   await expect(suiteHistory.getByText('Robustness tags: accent, noise.')).toBeVisible();
+  await expect(suiteHistory.getByText('Visible Suite trend improved: 82 vs 76 (+6), 75% pass rate.')).toBeVisible();
   await expect(suiteHistory.getByText(/billing-escalation: needs_review \/ 73/)).toBeVisible();
   await suiteHistory.getByLabel('Filter suite runs by status').selectOption('completed');
 
@@ -550,7 +573,8 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   await suiteHistory.getByRole('button', { name: 'Export suite history' }).click();
   const historyDownload = await historyDownloadPromise;
   expect(historyDownload.suggestedFilename()).toBe('agentbench-qa-project-call-center-voice-ai-suite-run-history.json');
-  await expect(page.getByText('Exported 1 suite runs to agentbench-qa-project-call-center-voice-ai-suite-run-history.json. 3/1 vCon-ready runs with 4 dialog turns and 1 analysis records.')).toBeVisible();
+  await expect(page.getByText('Suite trend improved: 82 vs 76 (+6), 75% pass rate.')).toBeVisible();
+  await expect(page.getByText('3/2 vCon-ready runs with 4 dialog turns and 1 analysis records.')).toBeVisible();
 
   await suiteHistory.getByRole('button', { name: 'Load suite run' }).click();
   await expect(page.getByText('Loaded retained suite run suite-history-1.')).toBeVisible();
