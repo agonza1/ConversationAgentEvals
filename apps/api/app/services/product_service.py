@@ -274,11 +274,7 @@ def list_projects(db: Session, user_id: str) -> list[ProductProjectResponse]:
 
 
 def update_project_settings(db: Session, project_id: str, payload: ProductProjectSettingsRequest) -> ProductProjectResponse | None:
-    project = (
-        db.query(ProductProject)
-        .filter(ProductProject.project_key == project_id, ProductProject.user_id == payload.user_id)
-        .first()
-    )
+    project = _project_for_settings_editor(db=db, project_id=project_id, user_id=payload.user_id)
     if project is None:
         return None
     project.settings_json = json.dumps(_merge_defaults(DEFAULT_WORKSPACE_SETTINGS, payload.settings))
@@ -705,6 +701,15 @@ def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> Jud
             spend_control=spend_control,
         )
 
+    if not spend_control['within_budget']:
+        return JudgeResponse(
+            status='blocked',
+            required_plan='starter',
+            credits=10,
+            message='LLM judge daily credit budget is exhausted. Increase the limit or wait for the next budget window.',
+            spend_control=spend_control,
+        )
+
     citations = _judge_citations(report, transcript)
     return JudgeResponse(
         status='ready',
@@ -816,6 +821,25 @@ def _get_or_create_project(
         )
         if name:
             project.name = name
+    return project
+
+
+def _project_for_settings_editor(db: Session, project_id: str, user_id: str) -> ProductProject | None:
+    project = db.query(ProductProject).filter(ProductProject.project_key == project_id).first()
+    if project is None:
+        return None
+    if project.user_id == user_id:
+        return project
+    if not project.workspace_id:
+        return None
+
+    member = (
+        db.query(ProductWorkspaceMember)
+        .filter(ProductWorkspaceMember.workspace_id == project.workspace_id, ProductWorkspaceMember.user_id == user_id)
+        .first()
+    )
+    if member is None or member.role not in {'owner', 'admin', 'editor'}:
+        return None
     return project
 
 

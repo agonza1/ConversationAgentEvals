@@ -397,7 +397,11 @@ def _suite_history_export_filename(*, project_id: str | None, suite_id: str | No
 def _suite_history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     scores = [_suite_score_from_record(record) for record in records]
     numeric_scores = [score for score in scores if score is not None]
+    latest_score = scores[0] if scores else None
+    previous_score = next((score for score in scores[1:] if score is not None), None)
+    latest_delta = latest_score - previous_score if latest_score is not None and previous_score is not None else None
     status_counts: dict[str, int] = {}
+    failure_category_counts: dict[str, int] = {}
     total_scenarios = 0
     total_passes = 0
     total_needs_review = 0
@@ -407,11 +411,16 @@ def _suite_history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         total_scenarios += _non_negative_int(record.get('scenario_count'))
         total_passes += _non_negative_int(record.get('pass_count'))
         total_needs_review += _non_negative_int(record.get('needs_review_count'))
+        for category in _suite_failure_categories(record):
+            failure_category_counts[category] = failure_category_counts.get(category, 0) + 1
 
     return {
         'latest_suite_run_id': records[0].get('suite_run_id') if records else None,
         'latest_status': records[0].get('status') if records else None,
-        'latest_average_score': scores[0] if scores else None,
+        'latest_average_score': latest_score,
+        'previous_average_score': previous_score,
+        'latest_delta': latest_delta,
+        'latest_trend': _score_trend(latest_score, previous_score),
         'best_average_score': max(numeric_scores) if numeric_scores else None,
         'worst_average_score': min(numeric_scores) if numeric_scores else None,
         'average_score': round(sum(numeric_scores) / len(numeric_scores), 2) if numeric_scores else None,
@@ -419,7 +428,28 @@ def _suite_history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         'total_scenarios': total_scenarios,
         'total_passes': total_passes,
         'total_needs_review': total_needs_review,
+        'pass_rate': round((total_passes / total_scenarios) * 100, 2) if total_scenarios else None,
+        'failure_category_counts': dict(sorted(failure_category_counts.items())),
+        'top_failure_categories': _top_failure_categories(failure_category_counts),
     }
+
+
+def _suite_failure_categories(record: dict[str, Any]) -> list[str]:
+    suite_report = record.get('suite_report') if isinstance(record.get('suite_report'), dict) else {}
+    categories: list[str] = []
+    for summary in _scenario_summaries(suite_report):
+        raw_categories = summary.get('failure_categories')
+        if not isinstance(raw_categories, list):
+            continue
+        for category in raw_categories:
+            if isinstance(category, str) and category.strip():
+                categories.append(category.strip())
+    return categories
+
+
+def _top_failure_categories(category_counts: dict[str, int]) -> list[dict[str, Any]]:
+    ranked = sorted(category_counts.items(), key=lambda item: (-item[1], item[0]))
+    return [{'category': category, 'count': count} for category, count in ranked[:5]]
 
 
 def _suite_history_vcon_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -446,6 +476,18 @@ def _suite_history_vcon_summary(records: list[dict[str, Any]]) -> dict[str, Any]
 def _suite_score_from_record(record: dict[str, Any]) -> int | float | None:
     score = record.get('average_score')
     return score if isinstance(score, (int, float)) and not isinstance(score, bool) else None
+
+
+def _score_trend(latest_score: int | float | None, previous_score: int | float | None) -> str:
+    if latest_score is None:
+        return 'unscored'
+    if previous_score is None:
+        return 'baseline'
+    if latest_score > previous_score:
+        return 'improved'
+    if latest_score < previous_score:
+        return 'regressed'
+    return 'unchanged'
 
 
 def _slug_part(value: Any) -> str:

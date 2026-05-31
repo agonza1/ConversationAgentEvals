@@ -656,6 +656,53 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
     assert wrong_owner.status_code == 404
 
 
+
+def test_suite_run_history_export_includes_regression_trend_and_pass_rate():
+    passing = client.post(
+        '/api/benchmarks/suites/call-center-voice-ai/simulate',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'qa-project',
+            'agent_profile': 'deterministic qa agent',
+            'prompt_version': 'prompt-pass',
+        },
+    )
+    failing = client.post(
+        '/api/benchmarks/suites/call-center-voice-ai/simulate',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'qa-project',
+            'agent_profile': 'deterministic qa agent',
+            'prompt_version': 'prompt-regression',
+            'include_failure': True,
+        },
+    )
+
+    assert passing.status_code == 200, passing.text
+    assert failing.status_code == 200, failing.text
+
+    export_response = client.get(
+        '/api/benchmarks/suite-runs/export',
+        params={'user_id': 'demo-user', 'project_id': 'qa-project', 'suite_id': 'call-center-voice-ai'},
+    )
+
+    assert export_response.status_code == 200, export_response.text
+    summary = export_response.json()['summary']
+    assert summary['latest_suite_run_id'] == failing.json()['suite_run_id']
+    assert summary['latest_average_score'] == failing.json()['average_score']
+    assert summary['previous_average_score'] == passing.json()['average_score']
+    assert summary['latest_delta'] == failing.json()['average_score'] - passing.json()['average_score']
+    assert summary['latest_trend'] == 'regressed'
+    assert summary['pass_rate'] == round((summary['total_passes'] / summary['total_scenarios']) * 100, 2)
+    assert summary['failure_category_counts'] == {
+        'final_state_correctness': failing.json()['scenario_count'],
+        'forbidden_action_avoidance': failing.json()['scenario_count'],
+        'required_action_execution': failing.json()['scenario_count'],
+        'task_completion': failing.json()['scenario_count'],
+    }
+    assert summary['top_failure_categories'][0] == {'category': 'final_state_correctness', 'count': failing.json()['scenario_count']}
+
+
 def test_suite_simulate_async_endpoint_tracks_queued_to_terminal_lifecycle():
     response = client.post(
         '/api/benchmarks/suites/call-center-voice-ai/simulate-async',
