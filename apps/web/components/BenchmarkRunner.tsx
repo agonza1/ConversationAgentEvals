@@ -367,6 +367,8 @@ interface BenchmarkSuiteRunHistoryExport {
     total_passes?: number;
     total_needs_review?: number;
     pass_rate?: number | null;
+    failure_category_counts?: Record<string, number>;
+    top_failure_categories?: Array<{ category: string; count: number }>;
   };
   vcon_export_summary: ProjectVconExportSummary;
   suite_contract_artifact_summary?: ProjectContractArtifactSummary;
@@ -1027,7 +1029,33 @@ function suiteHistoryExportSummary(summary?: BenchmarkSuiteRunHistoryExport['sum
   if (!summary) return 'Suite trend not available.';
   const trend = summary.latest_trend ? summary.latest_trend.replace(/_/g, ' ') : 'unavailable';
   const passRate = typeof summary.pass_rate === 'number' ? `${summary.pass_rate}% pass rate` : 'pass rate unavailable';
-  return `Suite trend ${trend}: ${summary.latest_average_score ?? 'n/a'} vs ${summary.previous_average_score ?? 'n/a'} (${formatSignedDelta(summary.latest_delta)}), ${passRate}.`;
+  const topFailure = suiteHistoryFailureSummary(summary);
+  return `Suite trend ${trend}: ${summary.latest_average_score ?? 'n/a'} vs ${summary.previous_average_score ?? 'n/a'} (${formatSignedDelta(summary.latest_delta)}), ${passRate}. ${topFailure}`;
+}
+
+function suiteHistoryFailureSummary(summary?: BenchmarkSuiteRunHistoryExport['summary']) {
+  const top = summary?.top_failure_categories?.[0];
+  if (top?.category && top.count > 0) {
+    return `Top issue: ${top.category.replace(/_/g, ' ')} (${top.count}).`;
+  }
+  return 'No recurring failure category.';
+}
+
+function scenarioFailureCategorySummary(categories?: string[]) {
+  const cleaned = (categories ?? []).filter(Boolean).map((category) => category.replace(/_/g, ' '));
+  return cleaned.length ? ` - ${cleaned.join(', ')}` : '';
+}
+
+function suiteRunFailureCategorySummary(scenarios: BenchmarkSuiteScenarioSummary[]) {
+  const counts = scenarios.reduce<Record<string, number>>((accumulator, scenario) => {
+    for (const category of scenario.failure_categories ?? []) {
+      if (!category) continue;
+      accumulator[category] = (accumulator[category] ?? 0) + 1;
+    }
+    return accumulator;
+  }, {});
+  const topCategories = topFailureCategories(counts).map(({ category, count }) => `${category.replace(/_/g, ' ')} (${count})`);
+  return topCategories.length ? `Failure mix: ${topCategories.join(', ')}.` : '';
 }
 
 function suiteHistorySummaryFromRuns(runs: BenchmarkSuiteRunRecord[]): BenchmarkSuiteRunHistoryExport['summary'] | null {
@@ -1038,6 +1066,7 @@ function suiteHistorySummaryFromRuns(runs: BenchmarkSuiteRunRecord[]): Benchmark
   const previousScore = typeof previous?.average_score === 'number' ? previous.average_score : null;
   const totalScenarios = runs.reduce((total, run) => total + Math.max(run.scenario_count ?? 0, 0), 0);
   const totalPasses = runs.reduce((total, run) => total + Math.max(run.pass_count ?? 0, 0), 0);
+  const failureCategoryCounts = suiteFailureCategoryCounts(runs);
   return {
     latest_suite_run_id: latest.suite_run_id,
     latest_status: latest.status,
@@ -1049,7 +1078,28 @@ function suiteHistorySummaryFromRuns(runs: BenchmarkSuiteRunRecord[]): Benchmark
     total_passes: totalPasses,
     total_needs_review: runs.reduce((total, run) => total + Math.max(run.needs_review_count ?? 0, 0), 0),
     pass_rate: totalScenarios ? Math.round((totalPasses / totalScenarios) * 10000) / 100 : null,
+    failure_category_counts: failureCategoryCounts,
+    top_failure_categories: topFailureCategories(failureCategoryCounts),
   };
+}
+
+function suiteFailureCategoryCounts(runs: BenchmarkSuiteRunRecord[]) {
+  return runs.reduce<Record<string, number>>((counts, run) => {
+    for (const scenario of run.artifacts?.scenario_summaries ?? []) {
+      for (const category of scenario.failure_categories ?? []) {
+        if (!category) continue;
+        counts[category] = (counts[category] ?? 0) + 1;
+      }
+    }
+    return counts;
+  }, {});
+}
+
+function topFailureCategories(counts: Record<string, number>) {
+  return Object.entries(counts)
+    .sort(([leftCategory, leftCount], [rightCategory, rightCount]) => rightCount - leftCount || leftCategory.localeCompare(rightCategory))
+    .slice(0, 5)
+    .map(([category, count]) => ({ category, count }));
 }
 
 function scoreTrend(latestScore: number | null, previousScore: number | null) {
@@ -2959,6 +3009,7 @@ export function BenchmarkRunner() {
                 const reliability = suiteReliabilityMetrics(run);
                 const lifecycleSummary = suiteRunLifecycleSummary(run.run_lifecycle);
                 const lifecycleTimeline = suiteRunLifecycleTimeline(run.run_lifecycle);
+                const failureCategorySummary = suiteRunFailureCategorySummary(scenarioSummaries);
                 return (
                   <article
                     key={run.suite_run_id}
@@ -3012,6 +3063,11 @@ export function BenchmarkRunner() {
                     {reliability.perturbation_tags?.length ? (
                       <p style={{ margin: 0, color: 'var(--muted)' }}>
                         Robustness tags: {reliability.perturbation_tags.join(', ')}.
+                      </p>
+                    ) : null}
+                    {failureCategorySummary ? (
+                      <p style={{ margin: 0, color: 'var(--muted)' }}>
+                        {failureCategorySummary}
                       </p>
                     ) : null}
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -3070,6 +3126,7 @@ export function BenchmarkRunner() {
                           <li key={`${run.suite_run_id}:${scenario.run_id ?? scenario.scenario_id}`}>
                             {scenario.scenario_id ?? 'scenario'}: {scenario.status ?? 'unknown'} / {scenario.overall_score ?? 'n/a'}
                             {scenario.run_id ? ` (${scenario.run_id})` : ''}
+                            {scenarioFailureCategorySummary(scenario.failure_categories)}
                           </li>
                         ))}
                       </ul>

@@ -401,6 +401,7 @@ def _suite_history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     previous_score = next((score for score in scores[1:] if score is not None), None)
     latest_delta = latest_score - previous_score if latest_score is not None and previous_score is not None else None
     status_counts: dict[str, int] = {}
+    failure_category_counts: dict[str, int] = {}
     total_scenarios = 0
     total_passes = 0
     total_needs_review = 0
@@ -410,6 +411,8 @@ def _suite_history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         total_scenarios += _non_negative_int(record.get('scenario_count'))
         total_passes += _non_negative_int(record.get('pass_count'))
         total_needs_review += _non_negative_int(record.get('needs_review_count'))
+        for category in _suite_failure_categories(record):
+            failure_category_counts[category] = failure_category_counts.get(category, 0) + 1
 
     return {
         'latest_suite_run_id': records[0].get('suite_run_id') if records else None,
@@ -426,7 +429,27 @@ def _suite_history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         'total_passes': total_passes,
         'total_needs_review': total_needs_review,
         'pass_rate': round((total_passes / total_scenarios) * 100, 2) if total_scenarios else None,
+        'failure_category_counts': dict(sorted(failure_category_counts.items())),
+        'top_failure_categories': _top_failure_categories(failure_category_counts),
     }
+
+
+def _suite_failure_categories(record: dict[str, Any]) -> list[str]:
+    suite_report = record.get('suite_report') if isinstance(record.get('suite_report'), dict) else {}
+    categories: list[str] = []
+    for summary in _scenario_summaries(suite_report):
+        raw_categories = summary.get('failure_categories')
+        if not isinstance(raw_categories, list):
+            continue
+        for category in raw_categories:
+            if isinstance(category, str) and category.strip():
+                categories.append(category.strip())
+    return categories
+
+
+def _top_failure_categories(category_counts: dict[str, int]) -> list[dict[str, Any]]:
+    ranked = sorted(category_counts.items(), key=lambda item: (-item[1], item[0]))
+    return [{'category': category, 'count': count} for category, count in ranked[:5]]
 
 
 def _suite_history_vcon_summary(records: list[dict[str, Any]]) -> dict[str, Any]:

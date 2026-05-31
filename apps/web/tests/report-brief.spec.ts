@@ -443,7 +443,13 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
             vcon_export: { available: true, dialog_turns: 4, analysis_count: 1, source_format: 'benchmark_suite' },
             scenario_summaries: [
               { scenario_id: 'membership-renewal-save', run_id: 'scenario-run-1', status: 'pass', overall_score: 91 },
-              { scenario_id: 'billing-escalation', run_id: 'scenario-run-2', status: 'needs_review', overall_score: 73 },
+              {
+                scenario_id: 'billing-escalation',
+                run_id: 'scenario-run-2',
+                status: 'needs_review',
+                overall_score: 73,
+                failure_categories: ['required_action_execution', 'task_completion'],
+              },
             ],
           },
         },
@@ -538,6 +544,11 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
           total_passes: 3,
           total_needs_review: 1,
           pass_rate: 75,
+          failure_category_counts: { required_action_execution: 1, task_completion: 1 },
+          top_failure_categories: [
+            { category: 'required_action_execution', count: 1 },
+            { category: 'task_completion', count: 1 },
+          ],
         },
         vcon_export_summary: {
           available_records: 3,
@@ -565,15 +576,16 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   await expect(suiteHistory.getByLabel('Audit timeline for Call Center Voice AI').getByText('Queued after sign-in.')).toBeVisible();
   await expect(suiteHistory.getByLabel('Audit timeline for Call Center Voice AI').getByText('Suite report retained.')).toBeVisible();
   await expect(suiteHistory.getByText('Robustness tags: accent, noise.')).toBeVisible();
-  await expect(suiteHistory.getByText('Visible Suite trend improved: 82 vs 76 (+6), 75% pass rate.')).toBeVisible();
-  await expect(suiteHistory.getByText(/billing-escalation: needs_review \/ 73/)).toBeVisible();
+  await expect(suiteHistory.getByText('Failure mix: required action execution (1), task completion (1).')).toBeVisible();
+  await expect(suiteHistory.getByText('Visible Suite trend improved: 82 vs 76 (+6), 75% pass rate. Top issue: required action execution (1).')).toBeVisible();
+  await expect(suiteHistory.getByText(/billing-escalation: needs_review \/ 73 .*required action execution, task completion/)).toBeVisible();
   await suiteHistory.getByLabel('Filter suite runs by status').selectOption('completed');
 
   const historyDownloadPromise = page.waitForEvent('download');
   await suiteHistory.getByRole('button', { name: 'Export suite history' }).click();
   const historyDownload = await historyDownloadPromise;
   expect(historyDownload.suggestedFilename()).toBe('agentbench-qa-project-call-center-voice-ai-suite-run-history.json');
-  await expect(page.getByText('Suite trend improved: 82 vs 76 (+6), 75% pass rate.')).toBeVisible();
+  await expect(page.getByText('Suite trend improved: 82 vs 76 (+6), 75% pass rate. Top issue: required action execution (1).')).toBeVisible();
   await expect(page.getByText('3/2 vCon-ready runs with 4 dialog turns and 1 analysis records.')).toBeVisible();
 
   await suiteHistory.getByRole('button', { name: 'Load suite run' }).click();

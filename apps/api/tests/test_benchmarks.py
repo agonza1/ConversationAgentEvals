@@ -694,6 +694,13 @@ def test_suite_run_history_export_includes_regression_trend_and_pass_rate():
     assert summary['latest_delta'] == failing.json()['average_score'] - passing.json()['average_score']
     assert summary['latest_trend'] == 'regressed'
     assert summary['pass_rate'] == round((summary['total_passes'] / summary['total_scenarios']) * 100, 2)
+    assert summary['failure_category_counts'] == {
+        'final_state_correctness': failing.json()['scenario_count'],
+        'forbidden_action_avoidance': failing.json()['scenario_count'],
+        'required_action_execution': failing.json()['scenario_count'],
+        'task_completion': failing.json()['scenario_count'],
+    }
+    assert summary['top_failure_categories'][0] == {'category': 'final_state_correctness', 'count': failing.json()['scenario_count']}
 
 
 def test_suite_simulate_async_endpoint_tracks_queued_to_terminal_lifecycle():
