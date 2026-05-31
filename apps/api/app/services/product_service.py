@@ -23,6 +23,7 @@ from app.schemas.product import (
     FirebaseAuthConfig,
     JudgeResponse,
     PricingPlan,
+    ProductFailureCategorySummary,
     ProductScenarioRegressionSummary,
     ProductProjectRegressionSummary,
     ProductProjectContractArtifactSummary,
@@ -429,7 +430,36 @@ def project_regression_summary(
         failing_runs=failing_runs,
         pass_rate=round((passing_runs / len(saved_runs)) * 100, 2) if saved_runs else None,
         scenario_summaries=_scenario_regression_summaries(saved_runs),
+        failure_category_summary=_failure_category_summary(saved_runs),
     )
+
+
+def _failure_category_summary(saved_runs: list[ProductSavedRun]) -> list[ProductFailureCategorySummary]:
+    categories: dict[str, dict[str, Any]] = {}
+    for saved_run in saved_runs:
+        report = _load_json(saved_run.report_json, {})
+        run_id = str(report.get('run_id')) if report.get('run_id') else saved_run.id
+        for category in _report_failure_categories(report):
+            bucket = categories.setdefault(category, {'count': 0, 'latest_run_id': run_id})
+            bucket['count'] += 1
+
+    return [
+        ProductFailureCategorySummary(category=category, count=summary['count'], latest_run_id=summary['latest_run_id'])
+        for category, summary in sorted(categories.items(), key=lambda item: (-item[1]['count'], item[0]))
+    ]
+
+
+def _report_failure_categories(report: dict[str, Any]) -> list[str]:
+    raw_categories = report.get('failure_categories')
+    categories: list[str] = []
+    if isinstance(raw_categories, list):
+        categories.extend(str(item).strip() for item in raw_categories if str(item).strip())
+
+    root_cause = report.get('root_cause_tag')
+    if isinstance(root_cause, str) and root_cause.strip():
+        categories.append(root_cause.strip())
+
+    return sorted(set(categories))
 
 
 def _filter_saved_runs_by_report_labels(

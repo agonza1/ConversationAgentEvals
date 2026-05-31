@@ -100,6 +100,12 @@ class ProductScenarioRegressionSummary(BaseModel):
     pass_rate: float | None = None
 
 
+class ProductFailureCategorySummary(BaseModel):
+    category: str
+    count: int
+    latest_run_id: str | None = None
+
+
 class ProductProjectRegressionSummary(BaseModel):
     user_id: str
     project_id: str
@@ -116,6 +122,7 @@ class ProductProjectRegressionSummary(BaseModel):
     failing_runs: int = 0
     pass_rate: float | None = None
     scenario_summaries: list[ProductScenarioRegressionSummary] = Field(default_factory=list)
+    failure_category_summary: list[ProductFailureCategorySummary] = Field(default_factory=list)
 
 
 class ProductProjectVconExportSummary(BaseModel):
