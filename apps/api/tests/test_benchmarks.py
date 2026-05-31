@@ -360,6 +360,16 @@ def test_runs_export_returns_owner_scoped_history_bundle_with_vcon_summary():
     assert exported['summary']['latest_trend'] in {'improved', 'regressed', 'unchanged'}
     assert exported['vcon_export_summary']['available_records'] == 2
     assert exported['vcon_export_summary']['analysis_records'] == 2
+    assert exported['contract_artifact_summary'] == {
+        'available_records': 2,
+        'missing_records': 0,
+        'total_runs': 2,
+        'suite_contract_manifest_sha256s': [first.json()['suite_contract_manifest_sha256']],
+        'scenario_contract_sha256s': sorted([
+            first.json()['scenario_contract_sha256'],
+            second.json()['scenario_contract_sha256'],
+        ]),
+    }
     assert {run['run_id'] for run in exported['runs']} == {first.json()['run_id'], second.json()['run_id']}
 
     wrong_owner = client.get(
@@ -569,6 +579,15 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
     assert history_export['summary']['status_counts'] == {'completed': 1}
     assert history_export['summary']['total_scenarios'] == simulation['scenario_count']
     assert history_export['vcon_export_summary']['available_records'] == simulation['scenario_count'] + 1
+    assert history_export['suite_contract_artifact_summary'] == {
+        'available_records': 1,
+        'missing_records': 0,
+        'total_runs': 1,
+        'suite_contract_manifest_sha256s': [expected_suite_manifest_sha],
+        'scenario_contract_sha256s': sorted([
+            run['benchmark_report']['scenario_contract_sha256'] for run in simulation['scenario_runs']
+        ]),
+    }
     assert history_export['suite_runs'][0]['suite_run_id'] == simulation['suite_run_id']
 
     audit_export_response = client.get(
@@ -1057,6 +1076,8 @@ def test_run_scenario_returns_vcon_compatible_benchmark_export():
 
     assert result['scenario_contract']['id'] == 'suspicious-card-charge'
     assert result['scenario_contract']['persona']
+    assert len(result['suite_contract_manifest_sha256']) == 64
+    assert result['suite_contract_manifest_sha256'] == get_suite_contract_manifest('fintech-support-agent')['suite_contract_manifest_sha256']
     assert len(result['scenario_contract_sha256']) == 64
     assert result['scenario_contract']['required_actions'] == get_suite('fintech-support-agent')['scenarios'][0]['required_actions']
     result['scenario_contract']['required_actions'].append('mutated action')

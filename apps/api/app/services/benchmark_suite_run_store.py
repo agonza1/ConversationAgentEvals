@@ -230,6 +230,7 @@ def export_benchmark_suite_run_history(
         'suite_run_count': len(records),
         'summary': _suite_history_summary(records),
         'vcon_export_summary': _suite_history_vcon_summary(records),
+        'suite_contract_artifact_summary': _suite_history_contract_artifact_summary(records),
         'suite_runs': records,
         'exported_at': _isoformat(datetime.now(UTC)),
     }
@@ -617,6 +618,38 @@ def _scenario_summaries(suite_report: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return summaries
+
+
+
+def _suite_history_contract_artifact_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    suite_hashes: set[str] = set()
+    scenario_hashes: set[str] = set()
+    missing_records = 0
+
+    for record in records:
+        suite_hash = record.get('suite_contract_manifest_sha256')
+        if isinstance(suite_hash, str) and suite_hash:
+            suite_hashes.add(suite_hash)
+        else:
+            missing_records += 1
+
+        suite_report = record.get('suite_report') if isinstance(record.get('suite_report'), dict) else {}
+        scenario_runs = suite_report.get('scenario_runs') if isinstance(suite_report.get('scenario_runs'), list) else []
+        for item in scenario_runs:
+            report = item.get('benchmark_report') if isinstance(item, dict) and isinstance(item.get('benchmark_report'), dict) else item
+            if not isinstance(report, dict):
+                continue
+            scenario_hash = report.get('scenario_contract_sha256')
+            if isinstance(scenario_hash, str) and scenario_hash:
+                scenario_hashes.add(scenario_hash)
+
+    return {
+        'available_records': len(records) - missing_records,
+        'missing_records': missing_records,
+        'total_runs': len(records),
+        'suite_contract_manifest_sha256s': sorted(suite_hashes),
+        'scenario_contract_sha256s': sorted(scenario_hashes),
+    }
 
 
 def _suite_run_progress(*, status: str, scenario_count: int, scenario_summaries: list[dict[str, Any]]) -> dict[str, Any]:

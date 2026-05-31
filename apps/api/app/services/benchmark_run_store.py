@@ -179,6 +179,7 @@ def export_benchmark_run_history(
         'run_count': len(records),
         'summary': _history_summary(records),
         'vcon_export_summary': _history_vcon_summary(records),
+        'contract_artifact_summary': _history_contract_artifact_summary(records),
         'runs': records,
         'exported_at': _isoformat(datetime.now(UTC)),
     }
@@ -297,6 +298,30 @@ def _history_vcon_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         'total_runs': len(records),
         'dialog_turns': dialog_turns,
         'analysis_records': analysis_records,
+    }
+
+
+def _history_contract_artifact_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    available_records = 0
+    suite_hashes: set[str] = set()
+    scenario_hashes: set[str] = set()
+    for record in records:
+        report = record.get('report') if isinstance(record.get('report'), dict) else {}
+        suite_hash = report.get('suite_contract_manifest_sha256')
+        scenario_hash = report.get('scenario_contract_sha256')
+        has_contract_artifact = isinstance(suite_hash, str) and bool(suite_hash) and isinstance(scenario_hash, str) and bool(scenario_hash)
+        if not has_contract_artifact:
+            continue
+        available_records += 1
+        suite_hashes.add(suite_hash)
+        scenario_hashes.add(scenario_hash)
+
+    return {
+        'available_records': available_records,
+        'missing_records': max(len(records) - available_records, 0),
+        'total_runs': len(records),
+        'suite_contract_manifest_sha256s': sorted(suite_hashes),
+        'scenario_contract_sha256s': sorted(scenario_hashes),
     }
 
 

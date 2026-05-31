@@ -80,6 +80,11 @@ test('product eval API journey works end to end', async ({ request, baseURL }) =
     source_format: 'transcript',
     appended_analysis_type: 'agentic_benchmark_eval',
   }));
+  expect(saved.artifacts.contract_artifacts).toEqual(expect.objectContaining({
+    available: true,
+    suite_contract_manifest_sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+    scenario_contract_sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+  }));
 
   const listResponse = await request.get(`/api/product/runs?user_id=${userId}&project_id=call-center-demo`);
   expect(listResponse.ok()).toBeTruthy();
@@ -94,6 +99,7 @@ test('product eval API journey works end to end', async ({ request, baseURL }) =
     report: expect.objectContaining({ verdict: 'pass' }),
     artifacts: expect.objectContaining({
       vcon_export: expect.objectContaining({ available: true }),
+      contract_artifacts: expect.objectContaining({ available: true }),
     }),
   }));
 
@@ -107,6 +113,31 @@ test('product eval API journey works end to end', async ({ request, baseURL }) =
     vcon_export_summary: expect.objectContaining({
       available_records: 1,
       total_runs: 1,
+    }),
+    contract_artifact_summary: expect.objectContaining({
+      available_records: 1,
+      total_runs: 1,
+      suite_contract_manifest_sha256s: expect.arrayContaining([saved.artifacts.contract_artifacts.suite_contract_manifest_sha256]),
+      scenario_contract_sha256s: expect.arrayContaining([saved.artifacts.contract_artifacts.scenario_contract_sha256]),
+    }),
+    runs: expect.arrayContaining([expect.objectContaining({ id: saved.id })]),
+  }));
+
+  const filteredProjectExportResponse = await request.get(
+    `/api/product/projects/call-center-demo/export?user_id=${userId}&suite_id=${suiteId}&scenario_id=${scenarioId}`,
+  );
+  expect(filteredProjectExportResponse.ok()).toBeTruthy();
+  await expect(filteredProjectExportResponse.json()).resolves.toEqual(expect.objectContaining({
+    filename: `agentbench-call-center-demo-${suiteId}-${scenarioId}-project-export.json`,
+    suite_id: suiteId,
+    scenario_id: scenarioId,
+    run_count: 1,
+    summary: expect.objectContaining({ run_count: 1, latest_status: 'baseline' }),
+    contract_artifact_summary: expect.objectContaining({
+      available_records: 1,
+      total_runs: 1,
+      suite_contract_manifest_sha256s: expect.arrayContaining([saved.artifacts.contract_artifacts.suite_contract_manifest_sha256]),
+      scenario_contract_sha256s: expect.arrayContaining([saved.artifacts.contract_artifacts.scenario_contract_sha256]),
     }),
     runs: expect.arrayContaining([expect.objectContaining({ id: saved.id })]),
   }));

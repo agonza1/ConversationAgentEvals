@@ -15,6 +15,9 @@ test('free-to-paid eval journey works end to end', async ({ page }) => {
   await page.getByRole('button', { name: 'Simulate scenario' }).click();
   await expect(page.getByRole('heading', { name: /pass|needs_review/i })).toBeVisible();
   await expect(page.getByText('Benchmark report').last()).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Contract evidence' })).toBeVisible();
+  await expect(page.getByText('Suite manifest')).toBeVisible();
+  await expect(page.getByText('Scenario contract', { exact: true })).toBeVisible();
   await expect(page.getByLabel('Run evidence check: Done')).toBeVisible();
 
   const reportDownload = page.waitForEvent('download');

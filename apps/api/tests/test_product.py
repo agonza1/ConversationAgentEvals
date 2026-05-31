@@ -894,6 +894,10 @@ def test_saved_runs_preserve_evidence_audit_summary_in_history_and_export():
         'evaluator_version': 'deterministic-agentic-v1',
         'export_readiness': {'ready': True, 'format': 'saved_run_json', 'missing': []},
     }
+    report_contracts = {
+        'suite_contract_manifest_sha256': 'a' * 64,
+        'scenario_contract_sha256': 'b' * 64,
+    }
     response = client.post(
         '/api/product/runs',
         json={
@@ -903,6 +907,7 @@ def test_saved_runs_preserve_evidence_audit_summary_in_history_and_export():
             'report': {
                 'run_id': 'abc',
                 'overall_score': 92,
+                **report_contracts,
                 'evidence_audit_summary': audit_summary,
             },
             'transcript': 'Agent: verified and completed the update.',
@@ -921,10 +926,20 @@ def test_saved_runs_preserve_evidence_audit_summary_in_history_and_export():
         'missing': [],
         'evaluator_version': 'deterministic-agentic-v1',
     }
+    assert list_response.json()[0]['artifacts']['contract_artifacts'] == {
+        'available': True,
+        'suite_contract_manifest_sha256': 'a' * 64,
+        'scenario_contract_sha256': 'b' * 64,
+    }
 
     export_response = client.get(f"/api/product/runs/{saved['id']}/export", params={'user_id': 'demo-user'})
     assert export_response.json()['report']['evidence_audit_summary'] == audit_summary
     assert export_response.json()['artifacts']['audit_artifacts']['ready_for_export'] is True
+    assert export_response.json()['artifacts']['contract_artifacts'] == {
+        'available': True,
+        'suite_contract_manifest_sha256': 'a' * 64,
+        'scenario_contract_sha256': 'b' * 64,
+    }
 
 
 def test_saved_runs_include_vcon_export_summary_in_artifacts():
@@ -993,13 +1008,26 @@ def test_saved_run_export_returns_owner_scoped_json_payload():
 
 
 def test_project_export_returns_owner_scoped_history_bundle():
-    for run_id, score in [('run-1', 82), ('run-2', 94)]:
-        report = {'run_id': run_id, 'overall_score': score}
+    for run_id, score, scenario_id in [
+        ('run-0', 70, 'billing-address-change'),
+        ('run-1', 82, 'angry-outage-escalation'),
+        ('run-2', 94, 'angry-outage-escalation'),
+    ]:
+        report = {
+            'run_id': run_id,
+            'overall_score': score,
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': scenario_id,
+        }
         if run_id == 'run-2':
-            report['vcon_export'] = {
-                'dialog': [{'type': 'text'}, {'type': 'text'}],
-                'analysis': [{'type': 'agentic_benchmark_eval'}],
-            }
+            report.update({
+                'suite_contract_manifest_sha256': 'c' * 64,
+                'scenario_contract_sha256': 'd' * 64,
+                'vcon_export': {
+                    'dialog': [{'type': 'text'}, {'type': 'text'}],
+                    'analysis': [{'type': 'agentic_benchmark_eval'}],
+                },
+            })
 
         response = client.post(
             '/api/product/runs',
@@ -1021,19 +1049,52 @@ def test_project_export_returns_owner_scoped_history_bundle():
     assert exported['project_id'] == 'call-center'
     assert exported['project_name'] == 'Call Center'
     assert exported['firestore_collection_path'] == 'users/demo-user/projects/call-center/runs'
-    assert exported['run_count'] == 2
+    assert exported['run_count'] == 3
     assert exported['summary']['latest_status'] == 'improved'
     assert exported['summary']['latest_score'] == 94
     assert exported['vcon_export_summary'] == {
         'available_records': 1,
-        'missing_records': 1,
-        'total_runs': 2,
+        'missing_records': 2,
+        'total_runs': 3,
         'dialog_turns': 2,
         'analysis_records': 1,
     }
-    assert [run['report']['run_id'] for run in exported['runs']] == ['run-2', 'run-1']
+    assert exported['contract_artifact_summary'] == {
+        'available_records': 1,
+        'missing_records': 2,
+        'total_runs': 3,
+        'suite_contract_manifest_sha256s': ['c' * 64],
+        'scenario_contract_sha256s': ['d' * 64],
+    }
+    assert [run['report']['run_id'] for run in exported['runs']] == ['run-2', 'run-1', 'run-0']
     assert exported['runs'][0]['artifacts']['regression_delta']['status'] == 'improved'
     assert exported['exported_at']
+
+    filtered_response = client.get(
+        '/api/product/projects/call-center/export',
+        params={
+            'user_id': 'demo-user',
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'angry-outage-escalation',
+        },
+    )
+    assert filtered_response.status_code == 200
+    filtered = filtered_response.json()
+    assert filtered['filename'] == 'agentbench-call-center-call-center-voice-ai-angry-outage-escalation-project-export.json'
+    assert filtered['suite_id'] == 'call-center-voice-ai'
+    assert filtered['scenario_id'] == 'angry-outage-escalation'
+    assert filtered['run_count'] == 2
+    assert filtered['summary']['run_count'] == 2
+    assert filtered['summary']['latest_status'] == 'improved'
+    assert filtered['vcon_export_summary']['total_runs'] == 2
+    assert filtered['contract_artifact_summary'] == {
+        'available_records': 1,
+        'missing_records': 1,
+        'total_runs': 2,
+        'suite_contract_manifest_sha256s': ['c' * 64],
+        'scenario_contract_sha256s': ['d' * 64],
+    }
+    assert [run['report']['run_id'] for run in filtered['runs']] == ['run-2', 'run-1']
 
     wrong_owner = client.get('/api/product/projects/call-center/export', params={'user_id': 'other-user'})
     assert wrong_owner.status_code == 404
