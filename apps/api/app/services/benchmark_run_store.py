@@ -260,9 +260,12 @@ def _history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     previous_score = next((score for score in scores[1:] if score is not None), None)
     latest_delta = latest_score - previous_score if latest_score is not None and previous_score is not None else None
     status_counts: dict[str, int] = {}
+    failure_category_counts: dict[str, int] = {}
     for record in records:
         status = str(record.get('status') or 'unknown')
         status_counts[status] = status_counts.get(status, 0) + 1
+        for category in _failure_categories(record):
+            failure_category_counts[category] = failure_category_counts.get(category, 0) + 1
 
     return {
         'latest_run_id': records[0].get('run_id') if records else None,
@@ -275,7 +278,22 @@ def _history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         'worst_score': min(numeric_scores) if numeric_scores else None,
         'average_score': round(sum(numeric_scores) / len(numeric_scores), 2) if numeric_scores else None,
         'status_counts': status_counts,
+        'failure_category_counts': dict(sorted(failure_category_counts.items())),
+        'top_failure_categories': _top_failure_categories(failure_category_counts),
     }
+
+
+def _failure_categories(record: dict[str, Any]) -> list[str]:
+    report = record.get('report') if isinstance(record.get('report'), dict) else {}
+    categories = report.get('failure_categories')
+    if not isinstance(categories, list):
+        return []
+    return sorted({category for category in categories if isinstance(category, str) and category.strip()})
+
+
+def _top_failure_categories(counts: dict[str, int]) -> list[dict[str, Any]]:
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    return [{'category': category, 'count': count} for category, count in ranked[:5]]
 
 
 def _history_vcon_summary(records: list[dict[str, Any]]) -> dict[str, Any]:

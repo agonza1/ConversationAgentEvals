@@ -520,6 +520,51 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
     });
   });
 
+  await page.route('**/api/benchmarks/runs/export?*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'benchmark-history-demo-user-qa-project-call-center-voice-ai',
+        user_id: 'demo-user',
+        project_id: 'qa-project',
+        suite_id: 'call-center-voice-ai',
+        scenario_id: 'membership-renewal-save',
+        filename: 'agentbench-qa-project-call-center-voice-ai-run-history.json',
+        run_count: 2,
+        summary: {
+          latest_run_id: 'scenario-run-2',
+          latest_status: 'fail',
+          latest_score: 73,
+          previous_score: 91,
+          latest_delta: -18,
+          latest_trend: 'regressed',
+          status_counts: { pass: 1, fail: 1 },
+          failure_category_counts: { required_action_execution: 1, task_completion: 1 },
+          top_failure_categories: [
+            { category: 'required_action_execution', count: 1 },
+            { category: 'task_completion', count: 1 },
+          ],
+        },
+        vcon_export_summary: {
+          available_records: 2,
+          missing_records: 0,
+          total_runs: 2,
+          dialog_turns: 6,
+          analysis_records: 2,
+        },
+        contract_artifact_summary: {
+          available_records: 2,
+          total_runs: 2,
+          suite_contract_manifest_sha256s: ['abcdef1234567890'],
+          scenario_contract_sha256s: ['123456abcdef7890'],
+        },
+        runs: [{ run_id: 'scenario-run-2' }, { run_id: 'scenario-run-1' }],
+        exported_at: '2026-05-29T15:00:00+00:00',
+      }),
+    });
+  });
+
   await page.route('**/api/benchmarks/suite-runs/export?*', async (route) => {
     expect(new URL(route.request().url()).searchParams.get('status')).toBe('completed');
     await route.fulfill({
@@ -580,6 +625,13 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   await expect(suiteHistory.getByText('Failure mix: required action execution (1), task completion (1).')).toBeVisible();
   await expect(suiteHistory.getByText('Visible Suite trend improved: 82 vs 76 (+6), 75% pass rate. Top issue: required action execution (1).')).toBeVisible();
   await expect(suiteHistory.getByText(/billing-escalation: needs_review \/ 73 .*required action execution, task completion/)).toBeVisible();
+
+  const benchmarkHistoryDownloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export benchmark history' }).click();
+  const benchmarkHistoryDownload = await benchmarkHistoryDownloadPromise;
+  expect(benchmarkHistoryDownload.suggestedFilename()).toBe('agentbench-qa-project-call-center-voice-ai-run-history.json');
+  await expect(page.getByText(/^Exported 2 benchmark runs to .* Benchmark trend regressed: 73 vs 91 \(-18\)\. Top issue: required action execution \(1\)\./)).toBeVisible();
+
   await suiteHistory.getByLabel('Filter suite runs by status').selectOption('completed');
 
   const historyDownloadPromise = page.waitForEvent('download');
