@@ -603,6 +603,10 @@ function parseMaybeJson(value: string): string | JsonRecord | unknown[] {
   }
 }
 
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function normalizeScenario(value: unknown, suiteId?: string): BenchmarkScenario {
   const record = asRecord(value);
   return {
@@ -785,6 +789,12 @@ async function listBenchmarkSuiteRuns(userId: string, projectId: string, suiteId
 
   return handleJson<BenchmarkSuiteRunRecord[]>(
     await fetch(`${getApiBase()}/api/benchmarks/suite-runs?${params.toString()}`, { cache: 'no-store' }),
+  );
+}
+
+async function fetchBenchmarkSuiteRun(userId: string, suiteRunId: string) {
+  return handleJson<BenchmarkSuiteRunRecord>(
+    await fetch(`${getApiBase()}/api/benchmarks/suite-runs/${encodeURIComponent(suiteRunId)}?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
   );
 }
 
@@ -1202,6 +1212,10 @@ function suiteRunStatusColor(status?: string) {
   return 'var(--muted)';
 }
 
+function isActiveSuiteRunStatus(status?: string) {
+  return status === 'queued' || status === 'running';
+}
+
 function formatHistoryDate(value?: string | null) {
   if (!value) return 'n/a';
   const parsed = new Date(value);
@@ -1584,7 +1598,7 @@ export function BenchmarkRunner() {
 
   useEffect(() => {
     if (!userId || !projectId || !selectedSuite?.id) return;
-    const hasActiveSuiteRun = suiteRuns.some((run) => run.status === 'queued' || run.status === 'running');
+    const hasActiveSuiteRun = suiteRuns.some((run) => isActiveSuiteRunStatus(run.status));
     if (!hasActiveSuiteRun) return;
 
     const interval = window.setInterval(() => {
@@ -2131,7 +2145,22 @@ export function BenchmarkRunner() {
         ...runMetadata,
       });
       setSuiteRuns((current) => [queued, ...current.filter((run) => run.suite_run_id !== queued.suite_run_id)]);
-      setSaveMessage(`Queued suite run ${queued.suite_run_id} for ${projectId}.`);
+      if (suiteRunStatusFilter) setSuiteRunStatusFilter('');
+      let latest = queued;
+      for (let attempt = 0; attempt < 8 && isActiveSuiteRunStatus(latest.status); attempt += 1) {
+        await delay(750);
+        try {
+          latest = await fetchBenchmarkSuiteRun(userId, queued.suite_run_id);
+          setSuiteRuns((current) => [latest, ...current.filter((run) => run.suite_run_id !== latest.suite_run_id)]);
+        } catch {
+          break;
+        }
+      }
+      setSaveMessage(
+        isActiveSuiteRunStatus(latest.status)
+          ? `Queued suite run ${queued.suite_run_id} for ${projectId}; it is ${latest.status}.`
+          : `Suite run ${queued.suite_run_id} finished as ${latest.status}.`,
+      );
     } catch (err) {
       setRunError(err instanceof Error ? err.message : 'Could not queue suite simulation.');
     } finally {
