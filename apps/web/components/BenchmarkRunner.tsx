@@ -248,6 +248,15 @@ interface ProductConfig {
   llm_judge_status: 'planned' | 'gated' | 'enabled';
 }
 
+interface CheckoutGate {
+  status: 'ready' | 'blocked';
+  plan: 'starter' | 'team';
+  stripe_price_id?: string | null;
+  checkout_url?: string | null;
+  message: string;
+  metadata?: Record<string, string>;
+}
+
 interface SavedRun {
   id: string;
   project_id: string;
@@ -777,6 +786,22 @@ async function enqueueBenchmarkSuiteSimulation(payload: {
 
 async function fetchProductConfig(): Promise<ProductConfig> {
   return handleJson<ProductConfig>(await fetch(`${getApiBase()}/api/product/config`, { cache: 'no-store' }));
+}
+
+async function requestCheckoutGate(payload: {
+  plan: 'starter' | 'team';
+  user_id: string;
+  project_id: string;
+  success_url?: string;
+  cancel_url?: string;
+}) {
+  return handleJson<CheckoutGate>(
+    await fetch(`${getApiBase()}/api/product/checkout`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  );
 }
 
 async function saveBenchmarkRun(payload: {
@@ -1478,6 +1503,7 @@ export function BenchmarkRunner() {
   const [scenarioRegressionSummary, setScenarioRegressionSummary] = useState<ProjectRegressionSummary | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
+  const [checkoutMessage, setCheckoutMessage] = useState<string | null>(null);
   const [judgeGate, setJudgeGate] = useState<JudgeGate | null>(null);
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -1658,6 +1684,33 @@ export function BenchmarkRunner() {
     setPlan(nextPlan);
     if (typeof window !== 'undefined') {
       window.localStorage.setItem('conversation-evals-demo-plan', nextPlan);
+    }
+  }
+
+  async function onSelectPlan(nextPlan: PricingPlan['id']) {
+    updatePlan(nextPlan);
+    setCheckoutMessage(null);
+
+    if (nextPlan !== 'starter' && nextPlan !== 'team') return;
+
+    const checkoutUserId = userId || 'anonymous-upgrade-preview';
+    try {
+      const origin = typeof window !== 'undefined' ? window.location.origin : undefined;
+      const gate = await requestCheckoutGate({
+        plan: nextPlan,
+        user_id: checkoutUserId,
+        project_id: projectId,
+        success_url: origin ? `${origin}/benchmarks?checkout=success` : undefined,
+        cancel_url: origin ? `${origin}/benchmarks?checkout=cancelled` : undefined,
+      });
+      const planName = nextPlan === 'starter' ? 'Starter' : 'Team';
+      if (gate.status === 'ready') {
+        setCheckoutMessage(`${planName} checkout ready${gate.checkout_url ? `: ${gate.checkout_url}` : '.'}`);
+      } else {
+        setCheckoutMessage(gate.message);
+      }
+    } catch (err) {
+      setCheckoutMessage(err instanceof Error ? err.message : 'Could not check billing readiness.');
     }
   }
 
@@ -2327,7 +2380,7 @@ export function BenchmarkRunner() {
               type="button"
               className={`pricing-card ${plan === item.id ? 'selected' : ''}`}
               key={item.id}
-              onClick={() => updatePlan(item.id)}
+              onClick={() => void onSelectPlan(item.id)}
             >
               <span>{item.name}</span>
               <strong>{item.price_label}</strong>
@@ -2338,6 +2391,10 @@ export function BenchmarkRunner() {
             </button>
           ))}
         </section>
+      ) : null}
+
+      {checkoutMessage ? (
+        <p aria-live="polite" style={{ margin: 0, color: 'var(--muted)' }}>{checkoutMessage}</p>
       ) : null}
 
       <form onSubmit={onSubmit} className="card" style={{ padding: 24, display: 'grid', gap: 18 }}>
