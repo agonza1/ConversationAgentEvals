@@ -15,6 +15,11 @@ test('free-to-paid eval journey works end to end', async ({ page }) => {
   await page.getByRole('button', { name: 'Simulate scenario' }).click();
   await expect(page.getByRole('heading', { name: /pass|needs_review/i })).toBeVisible();
   await expect(page.getByText('Benchmark report').last()).toBeVisible();
+  const actionPlan = page.getByLabel('Operator action plan');
+  await expect(actionPlan).toBeVisible();
+  await expect(actionPlan.getByRole('heading', { name: 'Ready for release review' })).toBeVisible();
+  await expect(actionPlan.getByText('No blocking failure category was reported for this scenario.')).toBeVisible();
+  await expect(actionPlan.getByText('Baseline run for this project.')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Contract evidence' })).toBeVisible();
   await expect(page.getByText('Suite manifest')).toBeVisible();
   await expect(page.getByText('Scenario contract', { exact: true })).toBeVisible();
@@ -43,7 +48,7 @@ test('free-to-paid eval journey works end to end', async ({ page }) => {
   await page.getByRole('button', { name: 'Save run' }).click();
   await expect(page.getByText(/Saved run/)).toBeVisible();
   await expect(page.getByRole('heading', { name: /1 saved for Billing Address Change/ })).toBeVisible();
-  await expect(page.getByText('Baseline run for this project.')).toBeVisible();
+  await expect(page.getByLabel('Saved runs and e2e validation').getByText('Baseline run for this project.')).toBeVisible();
   await expect(page.getByText(/vCon ready: \d+ dialog turns, \d+ analysis records/)).toBeVisible();
   await expect(page.getByText(/Audit export ready: transcript, action trace, final state/)).toBeVisible();
   await expect(page.getByText('Project audit trail')).toBeVisible();
@@ -79,6 +84,11 @@ test('failure baseline surfaces actionable benchmark report issues', async ({ pa
 
   await expect(page.getByRole('heading', { name: 'needs_review' })).toBeVisible();
   await expect(page.getByText('Benchmark report').last()).toBeVisible();
+  const actionPlan = page.getByLabel('Operator action plan');
+  await expect(actionPlan).toBeVisible();
+  await expect(actionPlan.getByRole('heading', { name: 'Needs operator review' })).toBeVisible();
+  await expect(actionPlan.getByText('task completion')).toBeVisible();
+  await expect(actionPlan.getByText('Add explicit tool/action execution for: explain next invoice impact')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Failure categories' })).toBeVisible();
   await expect(page.getByText('required_action_execution', { exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Missing actions' })).toBeVisible();
@@ -88,5 +98,5 @@ test('failure baseline surfaces actionable benchmark report issues', async ({ pa
   await page.getByRole('button', { name: 'Sign up to save' }).click();
   await page.getByRole('button', { name: 'Save run' }).click();
   await expect(page.getByText('Failure mix')).toBeVisible();
-  await expect(page.getByText('required_action_execution')).toBeVisible();
+  await expect(page.getByLabel('Saved runs and e2e validation').getByText('required_action_execution')).toBeVisible();
 });
