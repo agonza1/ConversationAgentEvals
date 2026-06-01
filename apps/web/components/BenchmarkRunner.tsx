@@ -262,6 +262,13 @@ interface ProjectRegressionSummary {
   failing_runs?: number;
   pass_rate?: number | null;
   scenario_summaries?: ScenarioRegressionSummary[];
+  failure_category_summary?: FailureCategorySummary[];
+}
+
+interface FailureCategorySummary {
+  category: string;
+  count: number;
+  latest_run_id?: string | null;
 }
 
 interface ScenarioRegressionSummary {
@@ -2900,6 +2907,20 @@ export function BenchmarkRunner() {
                         {': '}
                         {scenarioSummaryLabel(summary)}
                         {' '}({summary.latest_score ?? 'n/a'} vs {summary.previous_score ?? 'n/a'}, {formatSignedDelta(summary.latest_delta)}; pass rate {summary.pass_rate ?? 'n/a'}%)
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {projectRegressionSummary.failure_category_summary?.length ? (
+                <div style={{ display: 'grid', gap: 6 }}>
+                  <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13, fontWeight: 800 }}>Failure mix</p>
+                  <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--muted)', display: 'grid', gap: 4 }}>
+                    {projectRegressionSummary.failure_category_summary.slice(0, 3).map((summary) => (
+                      <li key={summary.category}>
+                        <strong style={{ color: 'var(--danger)' }}>{summary.category}</strong>
+                        {': '}{summary.count} run{summary.count === 1 ? '' : 's'}
+                        {summary.latest_run_id ? `, latest ${summary.latest_run_id}` : ''}
                       </li>
                     ))}
                   </ul>

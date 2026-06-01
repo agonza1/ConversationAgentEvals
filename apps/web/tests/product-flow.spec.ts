@@ -84,4 +84,9 @@ test('failure baseline surfaces actionable benchmark report issues', async ({ pa
   await expect(page.getByRole('heading', { name: 'Missing actions' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Forbidden actions observed' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Suggested fixes' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Sign up to save' }).click();
+  await page.getByRole('button', { name: 'Save run' }).click();
+  await expect(page.getByText('Failure mix')).toBeVisible();
+  await expect(page.getByText('required_action_execution')).toBeVisible();
 });
