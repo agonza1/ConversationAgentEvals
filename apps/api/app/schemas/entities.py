@@ -149,4 +149,4 @@ class SessionLiveState(BaseModel):
     transcript: list[TranscriptEventRead]
     recent_events: list[PresentationEventRead]
     upcoming_slides: list[SlideRead]
-    progress: dict[str, int | bool]
+    progress: dict[str, int | str | bool | None]

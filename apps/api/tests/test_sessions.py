@@ -89,6 +89,13 @@ def test_deck_upload_session_and_qna(tmp_path: Path):
     assert autoplay_response.json()['autoplay_enabled'] is True
     assert autoplay_response.json()['autoplay_interval_seconds'] == 6
 
+    live_autoplay_response = client.get(f"/api/sessions/{session_payload['session_id']}/live")
+    assert live_autoplay_response.status_code == 200
+    live_autoplay_payload = live_autoplay_response.json()
+    assert live_autoplay_payload['progress']['autoplay_active'] is True
+    assert 0 <= live_autoplay_payload['progress']['autoplay_seconds_remaining'] <= 6
+    assert live_autoplay_payload['progress']['current_slide_title'] == 'Problem'
+
     next_response = client.post(f"/api/sessions/{session_payload['session_id']}/advance-autoplay")
     assert next_response.status_code == 200
     assert next_response.json()['current_slide_index'] == 1

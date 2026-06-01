@@ -134,9 +134,12 @@ export interface SessionLiveState {
   upcoming_slides: Slide[];
   progress: {
     current_slide_number: number;
+    current_slide_title: string | null;
     slide_count: number;
     remaining_slides: number;
     has_started: boolean;
+    autoplay_active: boolean;
+    autoplay_seconds_remaining: number | null;
   };
 }
 

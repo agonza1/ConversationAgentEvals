@@ -1160,6 +1160,19 @@ def test_project_export_returns_owner_scoped_history_bundle():
         'suite_contract_manifest_sha256s': ['c' * 64],
         'scenario_contract_sha256s': ['d' * 64],
     }
+    assert exported['scenario_coverage_summary'] == {
+        'suite_id': None,
+        'scenario_count': None,
+        'covered_scenario_count': 2,
+        'coverage_percent': None,
+        'covered_scenario_ids': ['angry-outage-escalation', 'billing-address-change'],
+        'missing_scenario_ids': [],
+        'covered_scenarios': [
+            {'id': 'angry-outage-escalation', 'title': 'angry-outage-escalation'},
+            {'id': 'billing-address-change', 'title': 'billing-address-change'},
+        ],
+        'missing_scenarios': [],
+    }
     assert [run['report']['run_id'] for run in exported['runs']] == ['run-2', 'run-1', 'run-0']
     assert exported['runs'][0]['artifacts']['regression_delta']['status'] == 'improved'
     assert exported['exported_at']
@@ -1187,6 +1200,20 @@ def test_project_export_returns_owner_scoped_history_bundle():
         'total_runs': 2,
         'suite_contract_manifest_sha256s': ['c' * 64],
         'scenario_contract_sha256s': ['d' * 64],
+    }
+    assert filtered['scenario_coverage_summary'] == {
+        'suite_id': 'call-center-voice-ai',
+        'scenario_count': 4,
+        'covered_scenario_count': 1,
+        'coverage_percent': 25.0,
+        'covered_scenario_ids': ['angry-outage-escalation'],
+        'missing_scenario_ids': ['billing-address-change', 'interruption-correction-handling', 'refund-policy-boundary'],
+        'covered_scenarios': [{'id': 'angry-outage-escalation', 'title': 'Angry Outage Escalation'}],
+        'missing_scenarios': [
+            {'id': 'billing-address-change', 'title': 'Billing Address Change'},
+            {'id': 'interruption-correction-handling', 'title': 'Interruption and Correction Handling'},
+            {'id': 'refund-policy-boundary', 'title': 'Refund Policy Boundary'},
+        ],
     }
     assert [run['report']['run_id'] for run in filtered['runs']] == ['run-2', 'run-1']
 
