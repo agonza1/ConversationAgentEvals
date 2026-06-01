@@ -740,3 +740,44 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   expect(download.suggestedFilename()).toBe('agentbench-call-center-voice-ai-suite-history-1-vcon-bundle.json');
   await expect(page.getByText('Exported 3 retained suite vCon records')).toBeVisible();
 });
+
+
+test('suite run history can be refreshed on demand', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    window.localStorage.setItem('conversation-evals-demo-project', 'qa-project');
+  });
+
+  let requestCount = 0;
+  await page.route('**/api/benchmarks/suite-runs?*', async (route) => {
+    requestCount += 1;
+    const runs = requestCount === 1 ? [] : [
+      {
+        suite_run_id: 'suite-refresh-1',
+        suite_id: 'call-center-voice-ai',
+        status: 'queued',
+        scenario_count: 4,
+        pass_count: 0,
+        needs_review_count: 0,
+        average_score: 0,
+        updated_at: '2026-06-01T09:00:00Z',
+        retention: { retained_until: '2026-07-16T09:00:00Z', retention_days: 45 },
+        progress: { phase: 'queued', active: true, completed_scenarios: 0, total_scenarios: 4, percent: 0 },
+        artifacts: { scenario_summaries: [], vcon_export: { available: false } },
+        run_lifecycle: { status: 'queued', terminal: false, transitions: [{ to: 'queued', at: '2026-06-01T09:00:00Z', reason: 'queued for background execution' }] },
+      },
+    ];
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(runs) });
+  });
+
+  await page.goto('/benchmarks');
+  await expect(page.getByRole('heading', { name: /0 suite runs for Call Center Voice AI/ })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Refresh suite runs' }).click();
+
+  await expect(page.getByText('Refreshed 1 suite runs for Call Center Voice AI.')).toBeVisible();
+  await expect(page.getByRole('heading', { name: /1 suite runs for Call Center Voice AI/ })).toBeVisible();
+  await expect(page.getByText('suite-refresh-1')).toBeVisible();
+  await expect(page.getByLabel('Latest suite run update')).toContainText('Jun 1, 2026');
+  await expect(page.getByLabel('Progress: 0/4 (0%)')).toBeVisible();
+});

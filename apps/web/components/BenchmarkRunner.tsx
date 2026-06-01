@@ -1209,6 +1209,21 @@ function formatHistoryDate(value?: string | null) {
   return parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+function latestSuiteRunUpdatedAt(runs: BenchmarkSuiteRunRecord[]) {
+  let latestTime = 0;
+  let latestValue: string | null = null;
+  for (const run of runs) {
+    if (!run.updated_at) continue;
+    const parsedTime = new Date(run.updated_at).getTime();
+    if (Number.isNaN(parsedTime)) continue;
+    if (parsedTime > latestTime) {
+      latestTime = parsedTime;
+      latestValue = run.updated_at;
+    }
+  }
+  return latestValue;
+}
+
 function auditEventSummary(event: ProductAuditEvent) {
   const payload = event.payload ?? {};
   if (event.event_type === 'run.saved') {
@@ -1409,7 +1424,9 @@ export function BenchmarkRunner() {
   const [auditEvents, setAuditEvents] = useState<ProductAuditEvent[]>([]);
   const [suiteRuns, setSuiteRuns] = useState<BenchmarkSuiteRunRecord[]>([]);
   const visibleSuiteHistorySummary = useMemo(() => suiteHistorySummaryFromRuns(suiteRuns), [suiteRuns]);
+  const latestSuiteRunUpdate = useMemo(() => latestSuiteRunUpdatedAt(suiteRuns), [suiteRuns]);
   const [suiteRunStatusFilter, setSuiteRunStatusFilter] = useState('');
+  const [isRefreshingSuiteRuns, setIsRefreshingSuiteRuns] = useState(false);
   const [projectRegressionSummary, setProjectRegressionSummary] = useState<ProjectRegressionSummary | null>(null);
   const [scenarioRegressionSummary, setScenarioRegressionSummary] = useState<ProjectRegressionSummary | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
@@ -1873,6 +1890,21 @@ export function BenchmarkRunner() {
       setExportMessage(`Exported ${exported.suite_run_count} suite runs to ${exported.filename}. ${suiteHistoryExportSummary(exported.summary)} ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.suite_contract_artifact_summary)}`);
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : 'Could not export suite run history.');
+    }
+  }
+
+  async function onRefreshSuiteRuns() {
+    if (!userId || !selectedSuite?.id) return;
+
+    setIsRefreshingSuiteRuns(true);
+    try {
+      const refreshed = await listBenchmarkSuiteRuns(userId, projectId, selectedSuite.id, suiteRunStatusFilter);
+      setSuiteRuns(refreshed);
+      setSaveMessage(`Refreshed ${refreshed.length} suite runs for ${selectedSuite.title}.`);
+    } catch (err) {
+      setSaveMessage(err instanceof Error ? err.message : 'Could not refresh suite runs.');
+    } finally {
+      setIsRefreshingSuiteRuns(false);
     }
   }
 
@@ -3145,6 +3177,22 @@ export function BenchmarkRunner() {
                 </label>
                 <button
                   type="button"
+                  onClick={() => void onRefreshSuiteRuns()}
+                  disabled={isRefreshingSuiteRuns}
+                  style={{
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    background: isRefreshingSuiteRuns ? 'var(--panel)' : 'white',
+                    color: isRefreshingSuiteRuns ? 'var(--muted)' : 'var(--text)',
+                    padding: '8px 12px',
+                    fontWeight: 800,
+                    cursor: isRefreshingSuiteRuns ? 'wait' : 'pointer',
+                  }}
+                >
+                  {isRefreshingSuiteRuns ? 'Refreshing...' : 'Refresh suite runs'}
+                </button>
+                <button
+                  type="button"
                   onClick={() => void onExportBenchmarkSuiteRunHistory()}
                   style={{
                     border: '1px solid var(--border)',
@@ -3163,6 +3211,11 @@ export function BenchmarkRunner() {
           {visibleSuiteHistorySummary ? (
             <p style={{ margin: 0, color: regressionDeltaColor(visibleSuiteHistorySummary.latest_trend ?? undefined), fontWeight: 800 }}>
               Visible {suiteHistoryExportSummary(visibleSuiteHistorySummary)}
+            </p>
+          ) : null}
+          {latestSuiteRunUpdate ? (
+            <p style={{ margin: 0, color: 'var(--muted)' }} aria-label="Latest suite run update">
+              Latest suite run update {formatHistoryDate(latestSuiteRunUpdate)}
             </p>
           ) : null}
           {suiteRuns.length ? (
