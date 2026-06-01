@@ -22,6 +22,7 @@ from app.services.product_service import (
     export_project_runs,
     export_saved_run,
     get_saved_run,
+    list_audit_events,
     invite_workspace_member,
     judge_gate,
     list_projects,
@@ -29,6 +30,7 @@ from app.services.product_service import (
     list_workspaces,
     product_config,
     project_regression_summary,
+    record_judge_request,
     save_run,
     upsert_project,
     upsert_workspace,
@@ -149,6 +151,23 @@ def get_projects(user_id: str = Query(min_length=1), db: Session = Depends(get_d
     return list_projects(db=db, user_id=user_id)
 
 
+@router.get('/audit-events')
+def get_audit_events(
+    user_id: str = Query(min_length=1),
+    project_id: str | None = None,
+    event_type: str | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    return list_audit_events(
+        db=db,
+        user_id=user_id,
+        project_id=project_id,
+        event_type=event_type,
+        limit=limit,
+    )
+
+
 @router.patch('/projects/{project_id}/settings')
 def patch_project_settings(project_id: str, payload: ProductProjectSettingsRequest, db: Session = Depends(get_db)):
     project = update_project_settings(db=db, project_id=project_id, payload=payload)
@@ -243,5 +262,15 @@ def export_run_report(run_id: str, user_id: str = Query(min_length=1), db: Sessi
 
 
 @router.post('/judge')
-def request_llm_judge(payload: JudgeRequest):
-    return judge_gate(plan=payload.plan, report=payload.report, transcript=payload.transcript)
+def request_llm_judge(payload: JudgeRequest, db: Session = Depends(get_db)):
+    response = judge_gate(plan=payload.plan, report=payload.report, transcript=payload.transcript)
+    if payload.user_id:
+        record_judge_request(
+            db=db,
+            user_id=payload.user_id,
+            project_id=payload.project_id,
+            plan=payload.plan,
+            status=response.status,
+            credits=response.credits,
+        )
+    return response
