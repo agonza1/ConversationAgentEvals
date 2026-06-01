@@ -5,8 +5,9 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.services.benchmark_service import get_suite, get_suite_contract_manifest, list_suites, run_scenario, run_suite, simulate_scenario, simulate_suite
+from app.db.database import SessionLocal
 from app.services.benchmark_run_store import reset_benchmark_run_records_for_tests
-from app.services.benchmark_suite_run_store import reset_benchmark_suite_run_records_for_tests
+from app.services.benchmark_suite_run_store import create_benchmark_suite_run_record, reset_benchmark_suite_run_records_for_tests
 
 client = TestClient(app)
 
@@ -371,6 +372,14 @@ def test_runs_export_returns_owner_scoped_history_bundle_with_vcon_summary():
             first.json()['scenario_contract_sha256'],
             second.json()['scenario_contract_sha256'],
         ]),
+    }
+    assert exported['scenario_coverage_summary'] == {
+        'suite_id': 'call-center-voice-ai',
+        'scenario_count': 4,
+        'covered_scenario_count': 2,
+        'coverage_percent': 50.0,
+        'covered_scenario_ids': ['billing-address-change', 'angry-outage-escalation'],
+        'missing_scenario_ids': ['interruption-correction-handling', 'refund-policy-boundary'],
     }
     assert {run['run_id'] for run in exported['runs']} == {first.json()['run_id'], second.json()['run_id']}
 
@@ -748,6 +757,8 @@ def test_suite_run_history_export_includes_regression_trend_and_pass_rate():
     assert summary['previous_average_score'] == passing.json()['average_score']
     assert summary['latest_delta'] == failing.json()['average_score'] - passing.json()['average_score']
     assert summary['latest_trend'] == 'regressed'
+    assert summary['active_suite_runs'] == 0
+    assert summary['terminal_suite_runs'] == 2
     assert summary['pass_rate'] == round((summary['total_passes'] / summary['total_scenarios']) * 100, 2)
     assert summary['failure_category_counts'] == {
         'final_state_correctness': failing.json()['scenario_count'],
@@ -756,6 +767,23 @@ def test_suite_run_history_export_includes_regression_trend_and_pass_rate():
         'task_completion': failing.json()['scenario_count'],
     }
     assert summary['top_failure_categories'][0] == {'category': 'final_state_correctness', 'count': failing.json()['scenario_count']}
+
+    with SessionLocal() as db:
+        create_benchmark_suite_run_record(
+            db,
+            suite_run_id='suite-active-export-1',
+            suite_id='call-center-voice-ai',
+            metadata={'user_id': 'demo-user', 'project_id': 'qa-project'},
+        )
+
+    running_export_response = client.get(
+        '/api/benchmarks/suite-runs/export',
+        params={'user_id': 'demo-user', 'project_id': 'qa-project', 'suite_id': 'call-center-voice-ai', 'status': 'queued'},
+    )
+    assert running_export_response.status_code == 200, running_export_response.text
+    running_summary = running_export_response.json()['summary']
+    assert running_summary['active_suite_runs'] == 1
+    assert running_summary['terminal_suite_runs'] == 0
 
 
 def test_suite_simulate_async_endpoint_tracks_queued_to_terminal_lifecycle():

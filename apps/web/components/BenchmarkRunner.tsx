@@ -206,6 +206,15 @@ interface ProjectContractArtifactSummary {
   scenario_contract_sha256s?: string[];
 }
 
+interface ScenarioCoverageSummary {
+  suite_id?: string | null;
+  scenario_count?: number | null;
+  covered_scenario_count?: number;
+  coverage_percent?: number | null;
+  covered_scenario_ids?: string[];
+  missing_scenario_ids?: string[];
+}
+
 interface PricingPlan {
   id: 'free' | 'starter' | 'team' | 'business';
   name: string;
@@ -350,6 +359,7 @@ interface BenchmarkRunHistoryExport {
     failure_category_counts?: Record<string, number>;
     top_failure_categories?: Array<{ category: string; count: number }>;
   };
+  scenario_coverage_summary?: ScenarioCoverageSummary;
   vcon_export_summary: ProjectVconExportSummary;
   contract_artifact_summary?: ProjectContractArtifactSummary;
   runs: JsonRecord[];
@@ -603,6 +613,10 @@ function parseMaybeJson(value: string): string | JsonRecord | unknown[] {
   }
 }
 
+function delay(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function normalizeScenario(value: unknown, suiteId?: string): BenchmarkScenario {
   const record = asRecord(value);
   return {
@@ -785,6 +799,12 @@ async function listBenchmarkSuiteRuns(userId: string, projectId: string, suiteId
 
   return handleJson<BenchmarkSuiteRunRecord[]>(
     await fetch(`${getApiBase()}/api/benchmarks/suite-runs?${params.toString()}`, { cache: 'no-store' }),
+  );
+}
+
+async function fetchBenchmarkSuiteRun(userId: string, suiteRunId: string) {
+  return handleJson<BenchmarkSuiteRunRecord>(
+    await fetch(`${getApiBase()}/api/benchmarks/suite-runs/${encodeURIComponent(suiteRunId)}?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
   );
 }
 
@@ -1016,6 +1036,44 @@ function regressionDeltaColor(status?: string) {
   return 'var(--text)';
 }
 
+function reportScore(report?: BenchmarkReport | null) {
+  const score = report?.overall_score ?? report?.score;
+  return typeof score === 'number' && !Number.isNaN(score) ? score : null;
+}
+
+function currentReportRegressionDelta(report: BenchmarkReport | null, savedRuns: SavedRun[]): RegressionDelta | null {
+  const currentScore = reportScore(report);
+  if (!report || currentScore === null) return null;
+
+  const priorRun = [...savedRuns]
+    .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime())
+    .find((run) => {
+      if (report.scenario_id && run.report.scenario_id !== report.scenario_id) return false;
+      if (report.suite_id && run.report.suite_id !== report.suite_id) return false;
+      return run.report.run_id !== report.run_id;
+    });
+  const previousScore = reportScore(priorRun?.report);
+
+  if (!priorRun || previousScore === null) {
+    return {
+      status: 'baseline',
+      previous_run_id: null,
+      previous_overall_score: null,
+      current_overall_score: currentScore,
+      score_delta: null,
+    };
+  }
+
+  const scoreDelta = currentScore - previousScore;
+  return {
+    status: scoreDelta > 0 ? 'improved' : scoreDelta < 0 ? 'regressed' : 'unchanged',
+    previous_run_id: priorRun.report.run_id ?? priorRun.id,
+    previous_overall_score: previousScore,
+    current_overall_score: currentScore,
+    score_delta: scoreDelta,
+  };
+}
+
 function savedRunVconSummary(summary?: SavedRunVconExportSummary) {
   if (!summary?.available) return 'vCon export not captured.';
   const source = summary.source_format ?? 'benchmark';
@@ -1050,6 +1108,17 @@ function projectContractArtifactSummary(summary?: ProjectContractArtifactSummary
   const suiteCount = summary.suite_contract_manifest_sha256s?.length ?? 0;
   const scenarioCount = summary.scenario_contract_sha256s?.length ?? 0;
   return `${summary.available_records}/${summary.total_runs} runs include contract fingerprints (${suiteCount} suite, ${scenarioCount} scenario).`;
+}
+
+function scenarioCoverageExportSummary(summary?: ScenarioCoverageSummary) {
+  if (!summary) return 'Scenario coverage unavailable.';
+  if (typeof summary.scenario_count !== 'number') {
+    return `${summary.covered_scenario_count ?? 0} distinct scenarios covered.`;
+  }
+
+  const coverage = typeof summary.coverage_percent === 'number' ? `${summary.coverage_percent}%` : 'n/a';
+  const missingCount = summary.missing_scenario_ids?.length ?? 0;
+  return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); ${missingCount} missing.`;
 }
 
 function benchmarkRunHistoryExportSummary(summary?: BenchmarkRunHistoryExport['summary']) {
@@ -1164,11 +1233,30 @@ function suiteRunStatusColor(status?: string) {
   return 'var(--muted)';
 }
 
+function isActiveSuiteRunStatus(status?: string) {
+  return status === 'queued' || status === 'running';
+}
+
 function formatHistoryDate(value?: string | null) {
   if (!value) return 'n/a';
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+function latestSuiteRunUpdatedAt(runs: BenchmarkSuiteRunRecord[]) {
+  let latestTime = 0;
+  let latestValue: string | null = null;
+  for (const run of runs) {
+    if (!run.updated_at) continue;
+    const parsedTime = new Date(run.updated_at).getTime();
+    if (Number.isNaN(parsedTime)) continue;
+    if (parsedTime > latestTime) {
+      latestTime = parsedTime;
+      latestValue = run.updated_at;
+    }
+  }
+  return latestValue;
 }
 
 function auditEventSummary(event: ProductAuditEvent) {
@@ -1254,7 +1342,7 @@ function formatForbiddenActionHit(hit: string | JsonRecord) {
   return JSON.stringify(hit);
 }
 
-function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: string) {
+function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: string, regressionDelta?: RegressionDelta | null) {
   const verdict = report.verdict ?? report.overall ?? 'complete';
   const score = report.score ?? report.overall_score ?? 'n/a';
   const scenario = report.scenario_title ?? fallbackScenarioTitle ?? 'Selected scenario';
@@ -1280,6 +1368,7 @@ function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: stri
     `Suite contract manifest: ${suiteFingerprint}`,
     `Scenario contract: ${contractFingerprint}`,
     `Failure categories: ${failureCategories}`,
+    `Regression: ${regressionDelta ? regressionDeltaSummary(regressionDelta) : 'Not compared'}`,
     `Missing actions: ${missingActions}`,
     `Forbidden actions observed: ${forbiddenActions}`,
     `Suggested fixes: ${suggestedFixes}`,
@@ -1370,7 +1459,9 @@ export function BenchmarkRunner() {
   const [auditEvents, setAuditEvents] = useState<ProductAuditEvent[]>([]);
   const [suiteRuns, setSuiteRuns] = useState<BenchmarkSuiteRunRecord[]>([]);
   const visibleSuiteHistorySummary = useMemo(() => suiteHistorySummaryFromRuns(suiteRuns), [suiteRuns]);
+  const latestSuiteRunUpdate = useMemo(() => latestSuiteRunUpdatedAt(suiteRuns), [suiteRuns]);
   const [suiteRunStatusFilter, setSuiteRunStatusFilter] = useState('');
+  const [isRefreshingSuiteRuns, setIsRefreshingSuiteRuns] = useState(false);
   const [projectRegressionSummary, setProjectRegressionSummary] = useState<ProjectRegressionSummary | null>(null);
   const [scenarioRegressionSummary, setScenarioRegressionSummary] = useState<ProjectRegressionSummary | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
@@ -1528,7 +1619,7 @@ export function BenchmarkRunner() {
 
   useEffect(() => {
     if (!userId || !projectId || !selectedSuite?.id) return;
-    const hasActiveSuiteRun = suiteRuns.some((run) => run.status === 'queued' || run.status === 'running');
+    const hasActiveSuiteRun = suiteRuns.some((run) => isActiveSuiteRunStatus(run.status));
     if (!hasActiveSuiteRun) return;
 
     const interval = window.setInterval(() => {
@@ -1703,7 +1794,7 @@ export function BenchmarkRunner() {
     try {
       const exported = await exportBenchmarkRunHistory(userId, projectId, selectedSuite?.id, selectedScenario?.id);
       downloadJson(exported.filename, exported);
-      setExportMessage(`Exported ${exported.run_count} benchmark runs to ${exported.filename}. ${benchmarkRunHistoryExportSummary(exported.summary)} ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.contract_artifact_summary)}`);
+      setExportMessage(`Exported ${exported.run_count} benchmark runs to ${exported.filename}. ${benchmarkRunHistoryExportSummary(exported.summary)} ${scenarioCoverageExportSummary(exported.scenario_coverage_summary)} ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.contract_artifact_summary)}`);
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : 'Could not export benchmark run history.');
     }
@@ -1834,6 +1925,21 @@ export function BenchmarkRunner() {
       setExportMessage(`Exported ${exported.suite_run_count} suite runs to ${exported.filename}. ${suiteHistoryExportSummary(exported.summary)} ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.suite_contract_artifact_summary)}`);
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : 'Could not export suite run history.');
+    }
+  }
+
+  async function onRefreshSuiteRuns() {
+    if (!userId || !selectedSuite?.id) return;
+
+    setIsRefreshingSuiteRuns(true);
+    try {
+      const refreshed = await listBenchmarkSuiteRuns(userId, projectId, selectedSuite.id, suiteRunStatusFilter);
+      setSuiteRuns(refreshed);
+      setSaveMessage(`Refreshed ${refreshed.length} suite runs for ${selectedSuite.title}.`);
+    } catch (err) {
+      setSaveMessage(err instanceof Error ? err.message : 'Could not refresh suite runs.');
+    } finally {
+      setIsRefreshingSuiteRuns(false);
     }
   }
 
@@ -2060,7 +2166,22 @@ export function BenchmarkRunner() {
         ...runMetadata,
       });
       setSuiteRuns((current) => [queued, ...current.filter((run) => run.suite_run_id !== queued.suite_run_id)]);
-      setSaveMessage(`Queued suite run ${queued.suite_run_id} for ${projectId}.`);
+      if (suiteRunStatusFilter) setSuiteRunStatusFilter('');
+      let latest = queued;
+      for (let attempt = 0; attempt < 8 && isActiveSuiteRunStatus(latest.status); attempt += 1) {
+        await delay(750);
+        try {
+          latest = await fetchBenchmarkSuiteRun(userId, queued.suite_run_id);
+          setSuiteRuns((current) => [latest, ...current.filter((run) => run.suite_run_id !== latest.suite_run_id)]);
+        } catch {
+          break;
+        }
+      }
+      setSaveMessage(
+        isActiveSuiteRunStatus(latest.status)
+          ? `Queued suite run ${queued.suite_run_id} for ${projectId}; it is ${latest.status}.`
+          : `Suite run ${queued.suite_run_id} finished as ${latest.status}.`,
+      );
     } catch (err) {
       setRunError(err instanceof Error ? err.message : 'Could not queue suite simulation.');
     } finally {
@@ -2071,7 +2192,6 @@ export function BenchmarkRunner() {
   const evidence = report?.evidence_spans ?? report?.evidence ?? [];
   const score = report?.score ?? report?.overall_score;
   const verdict = report?.verdict ?? report?.overall;
-  const reportBrief = report ? formatReportBrief(report, selectedScenario?.title) : '';
   const suiteBrief = suiteSimulation ? formatSuiteBrief(suiteSimulation) : '';
   const selectedScenarioContract = contractManifest?.scenario_contracts?.find((item) => item.scenario_id === selectedScenario?.id) ?? null;
   const selectedScenarioManifestFingerprint = selectedScenarioContract?.scenario_contract_sha256
@@ -2094,6 +2214,8 @@ export function BenchmarkRunner() {
   const hasSavedCurrentScenario = Boolean(
     selectedScenario?.id && savedRuns.some((run) => run.report.scenario_id === selectedScenario.id),
   );
+  const currentRegressionDelta = useMemo(() => currentReportRegressionDelta(report, savedRuns), [report, savedRuns]);
+  const reportBrief = report ? formatReportBrief(report, selectedScenario?.title, currentRegressionDelta) : '';
   const onboardingSteps = [
     {
       title: 'Pick a scenario',
@@ -2711,6 +2833,26 @@ export function BenchmarkRunner() {
             <ScoreTile label="Final state" score={report.final_state_score} />
           </div>
 
+          {currentRegressionDelta ? (
+            <section
+              aria-label="Unsaved regression comparison"
+              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 8, background: 'var(--panel-alt)' }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                <h3 style={{ margin: 0, color: regressionDeltaColor(currentRegressionDelta.status) }}>
+                  Current run: {currentRegressionDelta.status}
+                </h3>
+                <strong style={{ color: regressionDeltaColor(currentRegressionDelta.status) }}>
+                  {formatSignedDelta(currentRegressionDelta.score_delta)}
+                </strong>
+              </div>
+              <p style={{ margin: 0, color: 'var(--muted)' }}>
+                {regressionDeltaSummary(currentRegressionDelta)}
+                {currentRegressionDelta.previous_run_id ? ` against ${currentRegressionDelta.previous_run_id}` : ' before saving.'}
+              </p>
+            </section>
+          ) : null}
+
           <section style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 12, background: 'var(--panel-alt)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
               <div>
@@ -3085,6 +3227,22 @@ export function BenchmarkRunner() {
                 </label>
                 <button
                   type="button"
+                  onClick={() => void onRefreshSuiteRuns()}
+                  disabled={isRefreshingSuiteRuns}
+                  style={{
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    background: isRefreshingSuiteRuns ? 'var(--panel)' : 'white',
+                    color: isRefreshingSuiteRuns ? 'var(--muted)' : 'var(--text)',
+                    padding: '8px 12px',
+                    fontWeight: 800,
+                    cursor: isRefreshingSuiteRuns ? 'wait' : 'pointer',
+                  }}
+                >
+                  {isRefreshingSuiteRuns ? 'Refreshing...' : 'Refresh suite runs'}
+                </button>
+                <button
+                  type="button"
                   onClick={() => void onExportBenchmarkSuiteRunHistory()}
                   style={{
                     border: '1px solid var(--border)',
@@ -3103,6 +3261,11 @@ export function BenchmarkRunner() {
           {visibleSuiteHistorySummary ? (
             <p style={{ margin: 0, color: regressionDeltaColor(visibleSuiteHistorySummary.latest_trend ?? undefined), fontWeight: 800 }}>
               Visible {suiteHistoryExportSummary(visibleSuiteHistorySummary)}
+            </p>
+          ) : null}
+          {latestSuiteRunUpdate ? (
+            <p style={{ margin: 0, color: 'var(--muted)' }} aria-label="Latest suite run update">
+              Latest suite run update {formatHistoryDate(latestSuiteRunUpdate)}
             </p>
           ) : null}
           {suiteRuns.length ? (

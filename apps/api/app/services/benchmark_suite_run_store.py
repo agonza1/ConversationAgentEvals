@@ -405,9 +405,15 @@ def _suite_history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     total_scenarios = 0
     total_passes = 0
     total_needs_review = 0
+    active_suite_runs = 0
+    terminal_suite_runs = 0
     for record in records:
         status = str(record.get('status') or 'unknown')
         status_counts[status] = status_counts.get(status, 0) + 1
+        if status in TERMINAL_SUITE_STATUSES:
+            terminal_suite_runs += 1
+        else:
+            active_suite_runs += 1
         total_scenarios += _non_negative_int(record.get('scenario_count'))
         total_passes += _non_negative_int(record.get('pass_count'))
         total_needs_review += _non_negative_int(record.get('needs_review_count'))
@@ -425,6 +431,8 @@ def _suite_history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         'worst_average_score': min(numeric_scores) if numeric_scores else None,
         'average_score': round(sum(numeric_scores) / len(numeric_scores), 2) if numeric_scores else None,
         'status_counts': status_counts,
+        'active_suite_runs': active_suite_runs,
+        'terminal_suite_runs': terminal_suite_runs,
         'total_scenarios': total_scenarios,
         'total_passes': total_passes,
         'total_needs_review': total_needs_review,

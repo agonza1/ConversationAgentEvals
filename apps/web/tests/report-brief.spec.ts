@@ -17,11 +17,91 @@ test('benchmark report includes a share-ready brief', async ({ page }) => {
   await expect(brief).toContainText('Scenario:');
   await expect(brief).toContainText('Verdict:');
   await expect(brief).toContainText('Score:');
+  await expect(brief).toContainText('Regression:');
   await expect(brief).toContainText('Missing actions:');
   await expect(brief).toContainText('Suggested fixes:');
 
   await page.getByRole('button', { name: 'Copy brief' }).click();
   await expect(page.getByText('Copied report brief.')).toBeVisible();
+});
+
+test('current benchmark report previews regression delta before saving', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    window.localStorage.setItem('conversation-evals-demo-project', 'qa-project');
+  });
+
+  await page.route('**/api/product/runs?*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          id: 'saved-baseline',
+          project_id: 'qa-project',
+          firestore_path: 'users/demo-user/projects/qa-project/runs/saved-baseline',
+          plan: 'starter',
+          created_at: '2026-05-31T12:00:00+00:00',
+          report: {
+            run_id: 'saved-baseline',
+            suite_id: 'call-center-voice-ai',
+            scenario_id: 'billing-address-change',
+            scenario_title: 'Billing Address Change',
+            verdict: 'pass',
+            overall_score: 88,
+          },
+          artifacts: {
+            regression_delta: {
+              status: 'baseline',
+              previous_run_id: null,
+              previous_overall_score: null,
+              current_overall_score: 88,
+              score_delta: null,
+            },
+            vcon_export: { available: false },
+          },
+        },
+      ]),
+    });
+  });
+
+  await page.route('**/api/benchmarks/simulate', async (route) => {
+    const payload = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        suite_id: payload.suite_id,
+        scenario_id: payload.scenario_id,
+        scenario_title: 'Billing Address Change',
+        transcript: 'Agent verified the account and confirmed the new billing address.',
+        action_trace: [{ action: 'confirm_address_update', result: 'success' }],
+        final_state: { address_updated: true },
+        benchmark_report: {
+          run_id: 'current-unsaved-run',
+          suite_id: payload.suite_id,
+          scenario_id: payload.scenario_id,
+          scenario_title: 'Billing Address Change',
+          verdict: 'pass',
+          overall_score: 94,
+          evidence: ['Agent verified the account and confirmed the new billing address.'],
+          recommendations: [],
+        },
+      }),
+    });
+  });
+
+  await page.goto('/benchmarks');
+  await expect(page.getByRole('heading', { name: /1 saved for Billing Address Change/ })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Simulate scenario' }).click();
+
+  await expect(page.getByLabel('Unsaved regression comparison')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Current run: improved' })).toBeVisible();
+  await expect(page.getByText('improved: 94 vs 88 (+6) against saved-baseline')).toBeVisible();
+
+  const brief = page.getByLabel('Report brief');
+  await expect(brief).toContainText('Regression: improved: 94 vs 88 (+6)');
 });
 
 test('benchmark runner submits structured voice call evidence', async ({ page }) => {
@@ -546,6 +626,14 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
             { category: 'task_completion', count: 1 },
           ],
         },
+        scenario_coverage_summary: {
+          suite_id: 'call-center-voice-ai',
+          scenario_count: 4,
+          covered_scenario_count: 2,
+          coverage_percent: 50,
+          covered_scenario_ids: ['membership-renewal-save', 'billing-escalation'],
+          missing_scenario_ids: ['refund-policy-boundary', 'interruption-correction-handling'],
+        },
         vcon_export_summary: {
           available_records: 2,
           missing_records: 0,
@@ -631,6 +719,7 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   const benchmarkHistoryDownload = await benchmarkHistoryDownloadPromise;
   expect(benchmarkHistoryDownload.suggestedFilename()).toBe('agentbench-qa-project-call-center-voice-ai-run-history.json');
   await expect(page.getByText(/^Exported 2 benchmark runs to .* Benchmark trend regressed: 73 vs 91 \(-18\)\. Top issue: required action execution \(1\)\./)).toBeVisible();
+  await expect(page.getByText('2/4 suite scenarios covered (50%); 2 missing.')).toBeVisible();
 
   await suiteHistory.getByLabel('Filter suite runs by status').selectOption('completed');
 
@@ -659,4 +748,45 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe('agentbench-call-center-voice-ai-suite-history-1-vcon-bundle.json');
   await expect(page.getByText('Exported 3 retained suite vCon records')).toBeVisible();
+});
+
+
+test('suite run history can be refreshed on demand', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    window.localStorage.setItem('conversation-evals-demo-project', 'qa-project');
+  });
+
+  let requestCount = 0;
+  await page.route('**/api/benchmarks/suite-runs?*', async (route) => {
+    requestCount += 1;
+    const runs = requestCount === 1 ? [] : [
+      {
+        suite_run_id: 'suite-refresh-1',
+        suite_id: 'call-center-voice-ai',
+        status: 'queued',
+        scenario_count: 4,
+        pass_count: 0,
+        needs_review_count: 0,
+        average_score: 0,
+        updated_at: '2026-06-01T09:00:00Z',
+        retention: { retained_until: '2026-07-16T09:00:00Z', retention_days: 45 },
+        progress: { phase: 'queued', active: true, completed_scenarios: 0, total_scenarios: 4, percent: 0 },
+        artifacts: { scenario_summaries: [], vcon_export: { available: false } },
+        run_lifecycle: { status: 'queued', terminal: false, transitions: [{ to: 'queued', at: '2026-06-01T09:00:00Z', reason: 'queued for background execution' }] },
+      },
+    ];
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(runs) });
+  });
+
+  await page.goto('/benchmarks');
+  await expect(page.getByRole('heading', { name: /0 suite runs for Call Center Voice AI/ })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Refresh suite runs' }).click();
+
+  await expect(page.getByText('Refreshed 1 suite runs for Call Center Voice AI.')).toBeVisible();
+  await expect(page.getByRole('heading', { name: /1 suite runs for Call Center Voice AI/ })).toBeVisible();
+  await expect(page.getByText('suite-refresh-1')).toBeVisible();
+  await expect(page.getByLabel('Latest suite run update')).toContainText('Jun 1, 2026');
+  await expect(page.getByLabel('Progress: 0/4 (0%)')).toBeVisible();
 });

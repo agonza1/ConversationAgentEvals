@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db.database import SessionLocal
 from app.models.entities import BenchmarkRunRecord
-from app.services.benchmark_service import DETERMINISTIC_EVALUATOR_VERSION
+from app.services.benchmark_service import DETERMINISTIC_EVALUATOR_VERSION, get_suite
 
 
 DEFAULT_RETENTION_DAYS = 90
@@ -178,6 +178,7 @@ def export_benchmark_run_history(
         'filename': _history_export_filename(project_id=project_id, suite_id=suite_id, scenario_id=scenario_id),
         'run_count': len(records),
         'summary': _history_summary(records),
+        'scenario_coverage_summary': _history_scenario_coverage(records=records, suite_id=suite_id),
         'vcon_export_summary': _history_vcon_summary(records),
         'contract_artifact_summary': _history_contract_artifact_summary(records),
         'runs': records,
@@ -282,6 +283,33 @@ def _history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         'top_failure_categories': _top_failure_categories(failure_category_counts),
     }
 
+
+def _history_scenario_coverage(*, records: list[dict[str, Any]], suite_id: str | None) -> dict[str, Any]:
+    if suite_id is None:
+        covered_ids = sorted({str(record.get('scenario_id')) for record in records if record.get('scenario_id')})
+        return {
+            'suite_id': None,
+            'scenario_count': None,
+            'covered_scenario_count': len(covered_ids),
+            'coverage_percent': None,
+            'covered_scenario_ids': covered_ids,
+            'missing_scenario_ids': [],
+        }
+
+    suite = get_suite(suite_id)
+    scenario_ids = [str(scenario.get('id')) for scenario in suite.get('scenarios', []) if scenario.get('id')] if suite else []
+    covered_ids = sorted({str(record.get('scenario_id')) for record in records if record.get('scenario_id')})
+    covered_in_suite = [scenario_id for scenario_id in scenario_ids if scenario_id in covered_ids]
+    missing_ids = [scenario_id for scenario_id in scenario_ids if scenario_id not in covered_ids]
+    coverage_percent = round((len(covered_in_suite) / len(scenario_ids)) * 100, 2) if scenario_ids else None
+    return {
+        'suite_id': suite_id,
+        'scenario_count': len(scenario_ids) if suite else None,
+        'covered_scenario_count': len(covered_in_suite),
+        'coverage_percent': coverage_percent,
+        'covered_scenario_ids': covered_in_suite,
+        'missing_scenario_ids': missing_ids,
+    }
 
 def _failure_categories(record: dict[str, Any]) -> list[str]:
     report = record.get('report') if isinstance(record.get('report'), dict) else {}
