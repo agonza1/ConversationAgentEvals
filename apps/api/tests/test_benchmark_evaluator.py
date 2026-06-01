@@ -69,6 +69,33 @@ def test_required_action_execution_scores_argument_subset_matches():
     assert result.evidence[0]['name'] == 'crm.lookup_customer'
 
 
+def test_required_action_execution_does_not_credit_failed_tool_call_without_expected_failure():
+    trace = [
+        {'name': 'support.create_ticket', 'status': 'failed'},
+        {'name': 'notify_user', 'status': 'completed'},
+    ]
+
+    result = score_required_action_execution(
+        trace,
+        ['support.create_ticket', 'notify_user'],
+    )
+
+    assert result.score == 50
+    assert result.passed is False
+    assert result.missing == ['support.create_ticket']
+    assert result.evidence == [{'name': 'notify_user', 'status': 'completed'}]
+
+
+def test_required_action_execution_allows_explicit_failed_status_when_required():
+    result = score_required_action_execution(
+        [{'name': 'payment.retry', 'status': 'failed'}],
+        [{'name': 'payment.retry', 'status': 'failed'}],
+    )
+
+    assert result.score == 100
+    assert result.passed is True
+
+
 def test_forbidden_action_avoidance_fails_on_any_matching_action():
     trace = [
         {'name': 'crm.lookup_customer'},

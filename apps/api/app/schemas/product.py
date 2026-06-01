@@ -254,10 +254,23 @@ class ProductProjectExportResponse(BaseModel):
     exported_at: str
 
 
+class ProductAuditEventResponse(BaseModel):
+    id: str
+    user_id: str
+    actor_user_id: str
+    project_id: str | None = None
+    workspace_id: str | None = None
+    event_type: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+
+
 class JudgeRequest(BaseModel):
     plan: PlanId = 'free'
     report: dict[str, Any] = Field(default_factory=dict)
     transcript: str | None = None
+    user_id: str | None = None
+    project_id: str | None = None
 
 
 class JudgeResponse(BaseModel):

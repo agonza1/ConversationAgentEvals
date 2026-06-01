@@ -262,6 +262,13 @@ interface ProjectRegressionSummary {
   failing_runs?: number;
   pass_rate?: number | null;
   scenario_summaries?: ScenarioRegressionSummary[];
+  failure_category_summary?: FailureCategorySummary[];
+}
+
+interface FailureCategorySummary {
+  category: string;
+  count: number;
+  latest_run_id?: string | null;
 }
 
 interface ScenarioRegressionSummary {
@@ -423,6 +430,13 @@ interface JudgeGate {
     provider_configured?: boolean;
     within_budget?: boolean;
   };
+}
+
+interface ProductAuditEvent {
+  id: string;
+  event_type: string;
+  payload: JsonRecord;
+  created_at: string;
 }
 
 interface BenchmarkSimulationResponse {
@@ -910,13 +924,21 @@ function downloadJson(filename: string, payload: unknown) {
   URL.revokeObjectURL(href);
 }
 
-async function requestJudge(payload: { plan: PricingPlan['id']; report: BenchmarkReport; transcript: string }) {
+async function requestJudge(payload: { plan: PricingPlan['id']; report: BenchmarkReport; transcript: string; user_id?: string; project_id?: string }) {
   return handleJson<JudgeGate>(
     await fetch(`${getApiBase()}/api/product/judge`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     }),
+  );
+}
+
+async function listAuditEvents(userId: string, projectId: string) {
+  const params = new URLSearchParams({ user_id: userId, project_id: projectId, limit: '8' });
+
+  return handleJson<ProductAuditEvent[]>(
+    await fetch(`${getApiBase()}/api/product/audit-events?${params.toString()}`, { cache: 'no-store' }),
   );
 }
 
@@ -1149,6 +1171,20 @@ function formatHistoryDate(value?: string | null) {
   return parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+function auditEventSummary(event: ProductAuditEvent) {
+  const payload = event.payload ?? {};
+  if (event.event_type === 'run.saved') {
+    return `Saved ${String(payload.scenario_id ?? 'benchmark run')} at ${String(payload.overall_score ?? 'n/a')}.`;
+  }
+  if (event.event_type === 'run.exported') {
+    return `Exported ${String(payload.export_type ?? 'run')} ${String(payload.run_id ?? '')}`.trim();
+  }
+  if (event.event_type === 'judge.requested') {
+    return `Judge ${String(payload.status ?? 'requested')} for ${String(payload.credits ?? 'n/a')} credits.`;
+  }
+  return event.event_type.replace(/\./g, ' ');
+}
+
 function suiteRunTitle(run: BenchmarkSuiteRunRecord) {
   return run.suite_report?.suite_name ?? run.suite_id;
 }
@@ -1331,6 +1367,7 @@ export function BenchmarkRunner() {
   const [projectId, setProjectId] = useState('call-center-demo');
   const [plan, setPlan] = useState<PricingPlan['id']>('free');
   const [savedRuns, setSavedRuns] = useState<SavedRun[]>([]);
+  const [auditEvents, setAuditEvents] = useState<ProductAuditEvent[]>([]);
   const [suiteRuns, setSuiteRuns] = useState<BenchmarkSuiteRunRecord[]>([]);
   const visibleSuiteHistorySummary = useMemo(() => suiteHistorySummaryFromRuns(suiteRuns), [suiteRuns]);
   const [suiteRunStatusFilter, setSuiteRunStatusFilter] = useState('');
@@ -1399,6 +1436,7 @@ export function BenchmarkRunner() {
   useEffect(() => {
     if (!userId) {
       setSavedRuns([]);
+      setAuditEvents([]);
       setSuiteRuns([]);
       setProjectRegressionSummary(null);
       setScenarioRegressionSummary(null);
@@ -1408,15 +1446,17 @@ export function BenchmarkRunner() {
     let isMounted = true;
     Promise.all([
       listSavedRuns(userId, projectId, selectedSuite?.id, selectedScenario?.id),
+      listAuditEvents(userId, projectId).catch(() => []),
       listBenchmarkSuiteRuns(userId, projectId, selectedSuite?.id, suiteRunStatusFilter).catch(() => []),
       fetchProjectRegressionSummary(userId, projectId).catch(() => null),
       selectedSuite?.id && selectedScenario?.id
         ? fetchProjectRegressionSummary(userId, projectId, selectedSuite.id, selectedScenario.id).catch(() => null)
         : Promise.resolve(null),
     ])
-      .then(([runs, nextSuiteRuns, summary, scenarioSummary]) => {
+      .then(([runs, events, nextSuiteRuns, summary, scenarioSummary]) => {
         if (!isMounted) return;
         setSavedRuns(runs);
+        setAuditEvents(events);
         setSuiteRuns(nextSuiteRuns);
         setProjectRegressionSummary(summary);
         setScenarioRegressionSummary(scenarioSummary);
@@ -1424,6 +1464,7 @@ export function BenchmarkRunner() {
       .catch(() => {
         if (!isMounted) return;
         setSavedRuns([]);
+        setAuditEvents([]);
         setSuiteRuns([]);
         setProjectRegressionSummary(null);
         setScenarioRegressionSummary(null);
@@ -1517,6 +1558,15 @@ export function BenchmarkRunner() {
     }
   }
 
+  async function refreshAuditTrail() {
+    if (!userId) return;
+    try {
+      setAuditEvents(await listAuditEvents(userId, projectId));
+    } catch {
+      setAuditEvents([]);
+    }
+  }
+
   async function onSaveRun() {
     if (!report) return;
     if (!userId) {
@@ -1533,6 +1583,7 @@ export function BenchmarkRunner() {
       fetchProjectRegressionSummary(userId, projectId, saved.report.suite_id, saved.report.scenario_id)
         .then(setScenarioRegressionSummary)
         .catch(() => setScenarioRegressionSummary(null));
+      await refreshAuditTrail();
       setSaveMessage(`Saved run ${saved.id} to ${projectId}.`);
     } catch (err) {
       setSaveMessage(err instanceof Error ? err.message : 'Could not save this run.');
@@ -1571,6 +1622,7 @@ export function BenchmarkRunner() {
       listBenchmarkSuiteRuns(userId, projectId, suiteSimulation.suite_id)
         .then(setSuiteRuns)
         .catch(() => setSuiteRuns([]));
+      await refreshAuditTrail();
       setSaveMessage(`Saved ${saved.length} suite runs to ${projectId}.`);
     } catch (err) {
       setSaveMessage(err instanceof Error ? err.message : 'Could not save this suite.');
@@ -1580,7 +1632,8 @@ export function BenchmarkRunner() {
   async function onJudge() {
     if (!report) return;
     try {
-      setJudgeGate(await requestJudge({ plan, report, transcript }));
+      setJudgeGate(await requestJudge({ plan, report, transcript, user_id: userId || undefined, project_id: userId ? projectId : undefined }));
+      await refreshAuditTrail();
     } catch (err) {
       setJudgeGate({
         status: 'blocked',
@@ -1598,6 +1651,7 @@ export function BenchmarkRunner() {
     try {
       const exported = await exportSavedRun(userId, runId);
       downloadJson(exported.filename, exported);
+      await refreshAuditTrail();
       setExportMessage(`Exported ${exported.filename}.`);
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : 'Could not export this saved run.');
@@ -1636,6 +1690,7 @@ export function BenchmarkRunner() {
     try {
       const exported = await exportProjectHistory(userId, projectId, selectedSuite?.id, selectedScenario?.id);
       downloadJson(exported.filename, exported);
+      await refreshAuditTrail();
       setExportMessage(`Exported ${exported.run_count} runs to ${exported.filename}. ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.contract_artifact_summary)}`);
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : 'Could not export this project history.');
@@ -2857,6 +2912,20 @@ export function BenchmarkRunner() {
                   </ul>
                 </div>
               ) : null}
+              {projectRegressionSummary.failure_category_summary?.length ? (
+                <div style={{ display: 'grid', gap: 6 }}>
+                  <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13, fontWeight: 800 }}>Failure mix</p>
+                  <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--muted)', display: 'grid', gap: 4 }}>
+                    {projectRegressionSummary.failure_category_summary.slice(0, 3).map((summary) => (
+                      <li key={summary.category}>
+                        <strong style={{ color: 'var(--danger)' }}>{summary.category}</strong>
+                        {': '}{summary.count} run{summary.count === 1 ? '' : 's'}
+                        {summary.latest_run_id ? `, latest ${summary.latest_run_id}` : ''}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </div>
           ) : null}
           {scenarioRegressionSummary ? (
@@ -2965,6 +3034,25 @@ export function BenchmarkRunner() {
           ) : (
             <p style={{ margin: 0, color: 'var(--muted)' }}>Run this scenario, sign up, then save it to build focused history.</p>
           )}
+          {auditEvents.length ? (
+            <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'var(--panel-alt)', display: 'grid', gap: 8 }} aria-label="Project audit trail">
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                <strong>Project audit trail</strong>
+                <span style={{ color: 'var(--muted)', fontWeight: 800 }}>{auditEvents.length} recent</span>
+              </div>
+              <ol style={{ margin: 0, paddingLeft: 18, color: 'var(--muted)', display: 'grid', gap: 4 }}>
+                {auditEvents.slice(0, 5).map((event) => (
+                  <li key={event.id}>
+                    <strong style={{ color: 'var(--ink)' }}>{event.event_type}</strong>
+                    {': '}
+                    {auditEventSummary(event)}
+                    {' '}
+                    <span>{formatHistoryDate(event.created_at)}</span>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
           {exportMessage ? <p style={{ margin: 0, color: 'var(--muted)' }}>{exportMessage}</p> : null}
         </div>
 

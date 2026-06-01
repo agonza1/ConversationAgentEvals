@@ -95,7 +95,7 @@ def score_required_action_execution(action_trace: Any, required_actions: list[An
     evidence: list[Any] = []
     missing: list[Any] = []
     for requirement in requirements:
-        match = _first_matching_action(actions, requirement)
+        match = _first_matching_required_action(actions, requirement)
         if match:
             evidence.append(_event_evidence(match))
         else:
@@ -218,6 +218,13 @@ def _first_matching_action(actions: list[ActionEvent], requirement: Any) -> Acti
     return None
 
 
+def _first_matching_required_action(actions: list[ActionEvent], requirement: Any) -> ActionEvent | None:
+    for action in actions:
+        if _action_matches(action, requirement) and _action_has_successful_status(action, requirement):
+            return action
+    return None
+
+
 def _action_matches(action: ActionEvent, requirement: Any) -> bool:
     if isinstance(requirement, str):
         return _normalize_name(action.name) == _normalize_name(requirement)
@@ -242,6 +249,23 @@ def _action_matches(action: ActionEvent, requirement: Any) -> bool:
         return False
 
     return expected_name is not None or expected_args is not None or expected_status is not None
+
+
+def _action_has_successful_status(action: ActionEvent, requirement: Any) -> bool:
+    if isinstance(requirement, dict):
+        expected_status = requirement.get('status') or requirement.get('state') or requirement.get('outcome')
+        if expected_status is not None:
+            return True
+
+    if action.status is None:
+        return True
+
+    normalized_status = _normalized_status_value(action.status)
+    return normalized_status not in {_normalized_status_value(value) for value in FAILURE_VALUES}
+
+
+def _normalized_status_value(value: Any) -> str:
+    return str(value).strip().lower().replace('-', '_').replace(' ', '_')
 
 
 def _normalize_name(value: str) -> str:

@@ -1245,3 +1245,66 @@ def test_llm_judge_spend_control_respects_budget_env(monkeypatch):
         'provider_configured': True,
         'within_budget': False,
     }
+
+
+
+def test_product_audit_events_track_saved_runs_exports_and_judge_requests():
+    saved = client.post(
+        '/api/product/runs',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'call-center',
+            'plan': 'starter',
+            'report': {
+                'run_id': 'run-1',
+                'suite_id': 'call-center-voice-ai',
+                'scenario_id': 'billing-address-change',
+                'overall_score': 91,
+            },
+            'transcript': 'Agent: verified the caller and updated the address.',
+        },
+    ).json()
+
+    export_response = client.get(f"/api/product/runs/{saved['id']}/export", params={'user_id': 'demo-user'})
+    assert export_response.status_code == 200
+
+    judge_response = client.post(
+        '/api/product/judge',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'call-center',
+            'plan': 'starter',
+            'report': {'overall_score': 91},
+        },
+    )
+    assert judge_response.status_code == 200
+
+    response = client.get('/api/product/audit-events', params={'user_id': 'demo-user', 'project_id': 'call-center'})
+
+    assert response.status_code == 200
+    events = response.json()
+    assert [event['event_type'] for event in events] == ['judge.requested', 'run.exported', 'run.saved']
+    assert events[0]['payload'] == {
+        'project_id': 'call-center',
+        'plan': 'starter',
+        'status': 'ready',
+        'credits': 10,
+    }
+    assert events[1]['payload'] == {'run_id': saved['id'], 'export_type': 'single_run'}
+    assert events[2]['payload'] == {
+        'run_id': saved['id'],
+        'logical_run_id': 'run-1',
+        'suite_id': 'call-center-voice-ai',
+        'scenario_id': 'billing-address-change',
+        'overall_score': 91,
+    }
+
+    filtered = client.get(
+        '/api/product/audit-events',
+        params={'user_id': 'demo-user', 'project_id': 'call-center', 'event_type': 'run.saved'},
+    )
+    assert [event['event_type'] for event in filtered.json()] == ['run.saved']
+
+    outsider = client.get('/api/product/audit-events', params={'user_id': 'other-user', 'project_id': 'call-center'})
+    assert outsider.status_code == 200
+    assert outsider.json() == []

@@ -121,6 +121,22 @@ class ProductSavedRun(Base):
     project = relationship('ProductProject', back_populates='saved_runs')
 
 
+class ProductAuditEvent(Base):
+    __tablename__ = 'product_audit_events'
+
+    id = Column(String, primary_key=True, default=lambda: f'audit_{uuid.uuid4().hex[:16]}')
+    user_id = Column(String, nullable=False, index=True)
+    actor_user_id = Column(String, nullable=False, index=True)
+    project_id = Column(String, ForeignKey('product_projects.id'), nullable=True, index=True)
+    workspace_id = Column(String, ForeignKey('product_workspaces.id'), nullable=True, index=True)
+    event_type = Column(String, nullable=False, index=True)
+    payload_json = Column(Text, nullable=False, default='{}')
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    project = relationship('ProductProject')
+    workspace = relationship('ProductWorkspace')
+
+
 class BenchmarkRunRecord(Base):
     __tablename__ = 'benchmark_run_records'
 

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.db.database import SessionLocal
 from app.models.entities import (
+    ProductAuditEvent,
     ProductProject,
     ProductSavedRun,
     ProductWorkspace,
@@ -23,6 +24,7 @@ from app.schemas.product import (
     FirebaseAuthConfig,
     JudgeResponse,
     PricingPlan,
+    ProductAuditEventResponse,
     ProductFailureCategorySummary,
     ProductScenarioRegressionSummary,
     ProductProjectRegressionSummary,
@@ -307,6 +309,21 @@ def save_run(db: Session, user_id: str, project_id: str, plan: str, report: dict
     project.last_run_at = created_at
     db.add(project)
     db.add(saved)
+    db.flush()
+    _record_audit_event(
+        db=db,
+        user_id=project.user_id,
+        actor_user_id=user_id,
+        event_type='run.saved',
+        project=project,
+        payload={
+            'run_id': saved.id,
+            'logical_run_id': report.get('run_id'),
+            'suite_id': _report_label(report, 'suite_id'),
+            'scenario_id': _report_label(report, 'scenario_id'),
+            'overall_score': _report_score(report),
+        },
+    )
     db.commit()
     db.refresh(saved)
     db.refresh(project)
@@ -530,6 +547,15 @@ def export_saved_run(db: Session, user_id: str, run_id: str) -> SavedRunExportRe
         return None
 
     saved_run, project = row
+    _record_audit_event(
+        db=db,
+        user_id=project.user_id,
+        actor_user_id=user_id,
+        event_type='run.exported',
+        project=project,
+        payload={'run_id': saved_run.id, 'export_type': 'single_run'},
+    )
+    db.commit()
     return SavedRunExportResponse(
         id=saved_run.id,
         filename=f'agentbench-{project.project_key}-{saved_run.id}.json',
@@ -599,6 +625,21 @@ def export_project_runs(
         filename_parts.append(scenario_id)
     filename_parts.append('project-export')
 
+    _record_audit_event(
+        db=db,
+        user_id=project.user_id,
+        actor_user_id=user_id,
+        event_type='project.exported',
+        project=project,
+        payload={
+            'export_type': 'project_history',
+            'run_count': len(runs),
+            'suite_id': suite_id,
+            'scenario_id': scenario_id,
+        },
+    )
+    db.commit()
+
     return ProductProjectExportResponse(
         id=project.id,
         filename=f"{'-'.join(filename_parts)}.json",
@@ -665,6 +706,62 @@ def _project_vcon_export_summary(runs: list[SavedRunExportResponse]) -> ProductP
 
 def _int_count(value: Any) -> int:
     return value if isinstance(value, int) and value > 0 else 0
+
+
+def list_audit_events(
+    db: Session,
+    user_id: str,
+    project_id: str | None = None,
+    event_type: str | None = None,
+    limit: int = 50,
+) -> list[ProductAuditEventResponse]:
+    workspace_ids = _member_workspace_ids(db=db, user_id=user_id)
+    visible_projects = (
+        db.query(ProductProject)
+        .filter(_visible_project_clause(user_id=user_id, workspace_ids=workspace_ids))
+        .all()
+    )
+    if project_id is not None:
+        visible_projects = [project for project in visible_projects if project.project_key == project_id]
+        if not visible_projects:
+            return []
+
+    visible_project_ids = [project.id for project in visible_projects]
+    query = db.query(ProductAuditEvent).filter(
+        or_(
+            ProductAuditEvent.user_id == user_id,
+            ProductAuditEvent.actor_user_id == user_id,
+            ProductAuditEvent.project_id.in_(visible_project_ids) if visible_project_ids else False,
+            ProductAuditEvent.workspace_id.in_(workspace_ids) if workspace_ids else False,
+        )
+    )
+    if event_type is not None:
+        query = query.filter(ProductAuditEvent.event_type == event_type)
+
+    rows = query.order_by(ProductAuditEvent.created_at.desc()).limit(limit).all()
+    return [_serialize_audit_event(row) for row in rows]
+
+
+def record_judge_request(
+    db: Session,
+    user_id: str,
+    project_id: str | None,
+    plan: str,
+    status: str,
+    credits: int,
+) -> None:
+    project = None
+    if project_id:
+        project = _get_or_create_project(db=db, user_id=user_id, project_id=project_id, plan=plan)
+    _record_audit_event(
+        db=db,
+        user_id=user_id,
+        actor_user_id=user_id,
+        event_type='judge.requested',
+        project=project,
+        payload={'project_id': project_id, 'plan': plan, 'status': status, 'credits': credits},
+    )
+    db.commit()
 
 
 def checkout_gate(
@@ -753,6 +850,7 @@ def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> Jud
 
 def reset_saved_runs_for_tests() -> None:
     with SessionLocal() as db:
+        db.query(ProductAuditEvent).delete()
         db.query(ProductSavedRun).delete()
         db.query(ProductProject).delete()
         db.query(ProductWorkspaceInvitation).delete()
@@ -1029,6 +1127,40 @@ def _firestore_run_path(user_id: str, project_key: str, run_id: str) -> str:
 
 def _firestore_segment(value: str) -> str:
     return value.strip().replace('/', '_') or 'default'
+
+def _serialize_audit_event(event: ProductAuditEvent) -> ProductAuditEventResponse:
+    return ProductAuditEventResponse(
+        id=event.id,
+        user_id=event.user_id,
+        actor_user_id=event.actor_user_id,
+        project_id=event.project.project_key if event.project else None,
+        workspace_id=event.workspace_id,
+        event_type=event.event_type,
+        payload=_load_json(event.payload_json, {}),
+        created_at=event.created_at.replace(tzinfo=UTC).isoformat(),
+    )
+
+
+def _record_audit_event(
+    db: Session,
+    user_id: str,
+    actor_user_id: str,
+    event_type: str,
+    project: ProductProject | None = None,
+    workspace: ProductWorkspace | None = None,
+    payload: dict[str, Any] | None = None,
+) -> ProductAuditEvent:
+    event = ProductAuditEvent(
+        user_id=user_id,
+        actor_user_id=actor_user_id,
+        project_id=project.id if project else None,
+        workspace_id=workspace.id if workspace else (project.workspace_id if project else None),
+        event_type=event_type,
+        payload_json=json.dumps({key: value for key, value in (payload or {}).items() if value is not None}),
+    )
+    db.add(event)
+    return event
+
 
 def _serialize_saved_run(saved_run: ProductSavedRun, project: ProductProject) -> SavedRunResponse:
     return SavedRunResponse(

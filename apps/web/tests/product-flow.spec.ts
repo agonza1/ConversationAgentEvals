@@ -46,6 +46,8 @@ test('free-to-paid eval journey works end to end', async ({ page }) => {
   await expect(page.getByText('Baseline run for this project.')).toBeVisible();
   await expect(page.getByText(/vCon ready: \d+ dialog turns, \d+ analysis records/)).toBeVisible();
   await expect(page.getByText(/Audit export ready: transcript, action trace, final state/)).toBeVisible();
+  await expect(page.getByText('Project audit trail')).toBeVisible();
+  await expect(page.getByText('run.saved')).toBeVisible();
   await expect(page.getByLabel('Save repeatable history: Done')).toBeVisible();
   await expect(page.getByText('Selected scenario: baseline')).toBeVisible();
   await expect(page.getByText('1 focused runs')).toBeVisible();
@@ -82,4 +84,9 @@ test('failure baseline surfaces actionable benchmark report issues', async ({ pa
   await expect(page.getByRole('heading', { name: 'Missing actions' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Forbidden actions observed' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Suggested fixes' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Sign up to save' }).click();
+  await page.getByRole('button', { name: 'Save run' }).click();
+  await expect(page.getByText('Failure mix')).toBeVisible();
+  await expect(page.getByText('required_action_execution')).toBeVisible();
 });
