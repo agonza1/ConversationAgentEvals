@@ -1412,6 +1412,27 @@ function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: stri
   ].join('\n');
 }
 
+function reportActionPlan(report: BenchmarkReport, regressionDelta?: RegressionDelta | null) {
+  const verdict = (report.verdict ?? report.overall ?? '').toLowerCase();
+  const score = report.score ?? report.overall_score;
+  const missingCount = report.missing_actions?.length ?? 0;
+  const forbiddenCount = (report.forbidden_actions_observed?.length ?? report.forbidden_action_hits?.length) ?? 0;
+  const failureCategory = report.failure_categories?.[0]?.replace(/_/g, ' ') ?? null;
+  const suggestedFix = report.suggested_fixes?.[0] ?? report.recommendations?.[0] ?? null;
+  const isPass = verdict === 'pass' || (typeof score === 'number' && score >= 80 && missingCount === 0 && forbiddenCount === 0);
+
+  const headline = isPass ? 'Ready for release review' : 'Needs operator review';
+  const primaryRisk = isPass
+    ? 'No blocking failure category was reported for this scenario.'
+    : failureCategory ?? (missingCount ? `${missingCount} required action${missingCount === 1 ? '' : 's'} missing` : 'Benchmark evidence needs review');
+  const nextStep = isPass
+    ? 'Save this run as the baseline, then compare the next prompt or model change against it.'
+    : suggestedFix ?? 'Fix the highest-risk failure, regenerate evidence, and rerun this scenario before release.';
+  const regression = regressionDelta ? regressionDeltaSummary(regressionDelta) : 'Save the run to establish regression tracking.';
+
+  return { headline, primaryRisk, nextStep, regression };
+}
+
 function formatSuiteBrief(simulation: BenchmarkSuiteSimulationResponse) {
   const needsReview = simulation.scenario_runs
     .filter((run) => run.benchmark_report.verdict !== 'pass')
@@ -2281,6 +2302,7 @@ export function BenchmarkRunner() {
   );
   const currentRegressionDelta = useMemo(() => currentReportRegressionDelta(report, savedRuns), [report, savedRuns]);
   const reportBrief = report ? formatReportBrief(report, selectedScenario?.title, currentRegressionDelta) : '';
+  const actionPlan = report ? reportActionPlan(report, currentRegressionDelta) : null;
   const onboardingSteps = [
     {
       title: 'Pick a scenario',
@@ -2901,6 +2923,23 @@ export function BenchmarkRunner() {
             <ScoreTile label="Forbidden actions" score={report.forbidden_action_score} />
             <ScoreTile label="Final state" score={report.final_state_score} />
           </div>
+
+          {actionPlan ? (
+            <section
+              aria-label="Operator action plan"
+              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 12, background: 'white' }}
+            >
+              <div>
+                <p style={{ margin: '0 0 6px', color: 'var(--muted)', fontSize: 13, fontWeight: 800, textTransform: 'uppercase' }}>Operator action plan</p>
+                <h3 style={{ margin: 0 }}>{actionPlan.headline}</h3>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 10 }}>
+                <AuditFact label="Primary risk" value={actionPlan.primaryRisk} />
+                <AuditFact label="Next step" value={actionPlan.nextStep} />
+                <AuditFact label="Regression note" value={actionPlan.regression} />
+              </div>
+            </section>
+          ) : null}
 
           {currentRegressionDelta ? (
             <section
