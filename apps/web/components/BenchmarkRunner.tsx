@@ -1016,6 +1016,44 @@ function regressionDeltaColor(status?: string) {
   return 'var(--text)';
 }
 
+function reportScore(report?: BenchmarkReport | null) {
+  const score = report?.overall_score ?? report?.score;
+  return typeof score === 'number' && !Number.isNaN(score) ? score : null;
+}
+
+function currentReportRegressionDelta(report: BenchmarkReport | null, savedRuns: SavedRun[]): RegressionDelta | null {
+  const currentScore = reportScore(report);
+  if (!report || currentScore === null) return null;
+
+  const priorRun = [...savedRuns]
+    .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime())
+    .find((run) => {
+      if (report.scenario_id && run.report.scenario_id !== report.scenario_id) return false;
+      if (report.suite_id && run.report.suite_id !== report.suite_id) return false;
+      return run.report.run_id !== report.run_id;
+    });
+  const previousScore = reportScore(priorRun?.report);
+
+  if (!priorRun || previousScore === null) {
+    return {
+      status: 'baseline',
+      previous_run_id: null,
+      previous_overall_score: null,
+      current_overall_score: currentScore,
+      score_delta: null,
+    };
+  }
+
+  const scoreDelta = currentScore - previousScore;
+  return {
+    status: scoreDelta > 0 ? 'improved' : scoreDelta < 0 ? 'regressed' : 'unchanged',
+    previous_run_id: priorRun.report.run_id ?? priorRun.id,
+    previous_overall_score: previousScore,
+    current_overall_score: currentScore,
+    score_delta: scoreDelta,
+  };
+}
+
 function savedRunVconSummary(summary?: SavedRunVconExportSummary) {
   if (!summary?.available) return 'vCon export not captured.';
   const source = summary.source_format ?? 'benchmark';
@@ -1254,7 +1292,7 @@ function formatForbiddenActionHit(hit: string | JsonRecord) {
   return JSON.stringify(hit);
 }
 
-function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: string) {
+function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: string, regressionDelta?: RegressionDelta | null) {
   const verdict = report.verdict ?? report.overall ?? 'complete';
   const score = report.score ?? report.overall_score ?? 'n/a';
   const scenario = report.scenario_title ?? fallbackScenarioTitle ?? 'Selected scenario';
@@ -1280,6 +1318,7 @@ function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: stri
     `Suite contract manifest: ${suiteFingerprint}`,
     `Scenario contract: ${contractFingerprint}`,
     `Failure categories: ${failureCategories}`,
+    `Regression: ${regressionDelta ? regressionDeltaSummary(regressionDelta) : 'Not compared'}`,
     `Missing actions: ${missingActions}`,
     `Forbidden actions observed: ${forbiddenActions}`,
     `Suggested fixes: ${suggestedFixes}`,
@@ -2071,7 +2110,6 @@ export function BenchmarkRunner() {
   const evidence = report?.evidence_spans ?? report?.evidence ?? [];
   const score = report?.score ?? report?.overall_score;
   const verdict = report?.verdict ?? report?.overall;
-  const reportBrief = report ? formatReportBrief(report, selectedScenario?.title) : '';
   const suiteBrief = suiteSimulation ? formatSuiteBrief(suiteSimulation) : '';
   const selectedScenarioContract = contractManifest?.scenario_contracts?.find((item) => item.scenario_id === selectedScenario?.id) ?? null;
   const selectedScenarioManifestFingerprint = selectedScenarioContract?.scenario_contract_sha256
@@ -2094,6 +2132,8 @@ export function BenchmarkRunner() {
   const hasSavedCurrentScenario = Boolean(
     selectedScenario?.id && savedRuns.some((run) => run.report.scenario_id === selectedScenario.id),
   );
+  const currentRegressionDelta = useMemo(() => currentReportRegressionDelta(report, savedRuns), [report, savedRuns]);
+  const reportBrief = report ? formatReportBrief(report, selectedScenario?.title, currentRegressionDelta) : '';
   const onboardingSteps = [
     {
       title: 'Pick a scenario',
@@ -2710,6 +2750,26 @@ export function BenchmarkRunner() {
             <ScoreTile label="Forbidden actions" score={report.forbidden_action_score} />
             <ScoreTile label="Final state" score={report.final_state_score} />
           </div>
+
+          {currentRegressionDelta ? (
+            <section
+              aria-label="Unsaved regression comparison"
+              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 8, background: 'var(--panel-alt)' }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+                <h3 style={{ margin: 0, color: regressionDeltaColor(currentRegressionDelta.status) }}>
+                  Current run: {currentRegressionDelta.status}
+                </h3>
+                <strong style={{ color: regressionDeltaColor(currentRegressionDelta.status) }}>
+                  {formatSignedDelta(currentRegressionDelta.score_delta)}
+                </strong>
+              </div>
+              <p style={{ margin: 0, color: 'var(--muted)' }}>
+                {regressionDeltaSummary(currentRegressionDelta)}
+                {currentRegressionDelta.previous_run_id ? ` against ${currentRegressionDelta.previous_run_id}` : ' before saving.'}
+              </p>
+            </section>
+          ) : null}
 
           <section style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 12, background: 'var(--panel-alt)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
