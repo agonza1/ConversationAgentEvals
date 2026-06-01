@@ -206,6 +206,15 @@ interface ProjectContractArtifactSummary {
   scenario_contract_sha256s?: string[];
 }
 
+interface ScenarioCoverageSummary {
+  suite_id?: string | null;
+  scenario_count?: number | null;
+  covered_scenario_count?: number;
+  coverage_percent?: number | null;
+  covered_scenario_ids?: string[];
+  missing_scenario_ids?: string[];
+}
+
 interface PricingPlan {
   id: 'free' | 'starter' | 'team' | 'business';
   name: string;
@@ -350,6 +359,7 @@ interface BenchmarkRunHistoryExport {
     failure_category_counts?: Record<string, number>;
     top_failure_categories?: Array<{ category: string; count: number }>;
   };
+  scenario_coverage_summary?: ScenarioCoverageSummary;
   vcon_export_summary: ProjectVconExportSummary;
   contract_artifact_summary?: ProjectContractArtifactSummary;
   runs: JsonRecord[];
@@ -1100,6 +1110,17 @@ function projectContractArtifactSummary(summary?: ProjectContractArtifactSummary
   return `${summary.available_records}/${summary.total_runs} runs include contract fingerprints (${suiteCount} suite, ${scenarioCount} scenario).`;
 }
 
+function scenarioCoverageExportSummary(summary?: ScenarioCoverageSummary) {
+  if (!summary) return 'Scenario coverage unavailable.';
+  if (typeof summary.scenario_count !== 'number') {
+    return `${summary.covered_scenario_count ?? 0} distinct scenarios covered.`;
+  }
+
+  const coverage = typeof summary.coverage_percent === 'number' ? `${summary.coverage_percent}%` : 'n/a';
+  const missingCount = summary.missing_scenario_ids?.length ?? 0;
+  return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); ${missingCount} missing.`;
+}
+
 function benchmarkRunHistoryExportSummary(summary?: BenchmarkRunHistoryExport['summary']) {
   if (!summary) return 'Benchmark trend not available.';
   const trend = summary.latest_trend ? summary.latest_trend.replace(/_/g, ' ') : 'unavailable';
@@ -1773,7 +1794,7 @@ export function BenchmarkRunner() {
     try {
       const exported = await exportBenchmarkRunHistory(userId, projectId, selectedSuite?.id, selectedScenario?.id);
       downloadJson(exported.filename, exported);
-      setExportMessage(`Exported ${exported.run_count} benchmark runs to ${exported.filename}. ${benchmarkRunHistoryExportSummary(exported.summary)} ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.contract_artifact_summary)}`);
+      setExportMessage(`Exported ${exported.run_count} benchmark runs to ${exported.filename}. ${benchmarkRunHistoryExportSummary(exported.summary)} ${scenarioCoverageExportSummary(exported.scenario_coverage_summary)} ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.contract_artifact_summary)}`);
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : 'Could not export benchmark run history.');
     }

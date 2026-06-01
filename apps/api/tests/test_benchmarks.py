@@ -373,6 +373,14 @@ def test_runs_export_returns_owner_scoped_history_bundle_with_vcon_summary():
             second.json()['scenario_contract_sha256'],
         ]),
     }
+    assert exported['scenario_coverage_summary'] == {
+        'suite_id': 'call-center-voice-ai',
+        'scenario_count': 4,
+        'covered_scenario_count': 2,
+        'coverage_percent': 50.0,
+        'covered_scenario_ids': ['billing-address-change', 'angry-outage-escalation'],
+        'missing_scenario_ids': ['interruption-correction-handling', 'refund-policy-boundary'],
+    }
     assert {run['run_id'] for run in exported['runs']} == {first.json()['run_id'], second.json()['run_id']}
 
     wrong_owner = client.get(
