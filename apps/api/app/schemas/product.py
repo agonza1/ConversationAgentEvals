@@ -141,6 +141,22 @@ class ProductProjectContractArtifactSummary(BaseModel):
     scenario_contract_sha256s: list[str] = Field(default_factory=list)
 
 
+class ProductScenarioCoverageItem(BaseModel):
+    id: str
+    title: str
+
+
+class ProductProjectScenarioCoverageSummary(BaseModel):
+    suite_id: str | None = None
+    scenario_count: int | None = None
+    covered_scenario_count: int = 0
+    coverage_percent: float | None = None
+    covered_scenario_ids: list[str] = Field(default_factory=list)
+    missing_scenario_ids: list[str] = Field(default_factory=list)
+    covered_scenarios: list[ProductScenarioCoverageItem] = Field(default_factory=list)
+    missing_scenarios: list[ProductScenarioCoverageItem] = Field(default_factory=list)
+
+
 class ProductWorkspaceRequest(BaseModel):
     owner_user_id: str = Field(min_length=1)
     workspace_id: str = Field(default='default')
@@ -250,6 +266,7 @@ class ProductProjectExportResponse(BaseModel):
     summary: ProductProjectRegressionSummary
     vcon_export_summary: ProductProjectVconExportSummary = Field(default_factory=ProductProjectVconExportSummary)
     contract_artifact_summary: ProductProjectContractArtifactSummary = Field(default_factory=ProductProjectContractArtifactSummary)
+    scenario_coverage_summary: ProductProjectScenarioCoverageSummary = Field(default_factory=ProductProjectScenarioCoverageSummary)
     runs: list[SavedRunExportResponse] = Field(default_factory=list)
     exported_at: str
 

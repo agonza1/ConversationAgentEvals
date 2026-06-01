@@ -19,6 +19,7 @@ from app.models.entities import (
     ProductWorkspaceInvitation,
     ProductWorkspaceMember,
 )
+from app.services.benchmark_service import get_suite
 from app.schemas.product import (
     CheckoutResponse,
     FirebaseAuthConfig,
@@ -30,6 +31,7 @@ from app.schemas.product import (
     ProductProjectRegressionSummary,
     ProductProjectContractArtifactSummary,
     ProductProjectExportResponse,
+    ProductProjectScenarioCoverageSummary,
     ProductProjectSettingsRequest,
     ProductProjectVconExportSummary,
     ProductProjectResponse,
@@ -653,6 +655,7 @@ def export_project_runs(
         summary=summary,
         vcon_export_summary=_project_vcon_export_summary(runs),
         contract_artifact_summary=_project_contract_artifact_summary(runs),
+        scenario_coverage_summary=_project_scenario_coverage_summary(runs, suite_id=suite_id),
         runs=runs,
         exported_at=datetime.now(UTC).isoformat(),
     )
@@ -680,6 +683,45 @@ def _project_contract_artifact_summary(runs: list[SavedRunExportResponse]) -> Pr
         total_runs=len(runs),
         suite_contract_manifest_sha256s=sorted(suite_hashes),
         scenario_contract_sha256s=sorted(scenario_hashes),
+    )
+
+
+def _project_scenario_coverage_summary(
+    runs: list[SavedRunExportResponse],
+    suite_id: str | None,
+) -> ProductProjectScenarioCoverageSummary:
+    covered_ids = sorted({
+        str(run.report.get('scenario_id'))
+        for run in runs
+        if isinstance(run.report, dict) and run.report.get('scenario_id')
+    })
+    if not suite_id:
+        return ProductProjectScenarioCoverageSummary(
+            covered_scenario_count=len(covered_ids),
+            covered_scenario_ids=covered_ids,
+            covered_scenarios=[{'id': scenario_id, 'title': scenario_id} for scenario_id in covered_ids],
+        )
+
+    suite = get_suite(suite_id)
+    scenario_titles = {
+        str(scenario.get('id')): str(scenario.get('title') or scenario.get('id'))
+        for scenario in suite.get('scenarios', [])
+        if scenario.get('id')
+    } if suite else {}
+    scenario_ids = list(scenario_titles.keys())
+    covered_in_suite = [scenario_id for scenario_id in scenario_ids if scenario_id in covered_ids]
+    missing_ids = [scenario_id for scenario_id in scenario_ids if scenario_id not in covered_ids]
+    coverage_percent = round((len(covered_in_suite) / len(scenario_ids)) * 100, 2) if scenario_ids else None
+
+    return ProductProjectScenarioCoverageSummary(
+        suite_id=suite_id,
+        scenario_count=len(scenario_ids) if scenario_ids else None,
+        covered_scenario_count=len(covered_in_suite),
+        coverage_percent=coverage_percent,
+        covered_scenario_ids=covered_in_suite,
+        missing_scenario_ids=missing_ids,
+        covered_scenarios=[{'id': scenario_id, 'title': scenario_titles[scenario_id]} for scenario_id in covered_in_suite],
+        missing_scenarios=[{'id': scenario_id, 'title': scenario_titles[scenario_id]} for scenario_id in missing_ids],
     )
 
 

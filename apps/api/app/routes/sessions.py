@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -62,6 +64,15 @@ def get_session_live_state(session_id: str, db: Session = Depends(get_db)):
     )
     recent_events.reverse()
     upcoming_slides = [slide for slide in ordered_slides if slide.index > session.current_slide_index][:3]
+    current_slide = next((slide for slide in ordered_slides if slide.index == session.current_slide_index), None)
+    autoplay_active = session.autoplay_enabled and session.status == 'presenting' and session.autoplay_started_at is not None
+    autoplay_seconds_remaining = None
+    if autoplay_active and session.autoplay_started_at:
+        started_at = session.autoplay_started_at
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=UTC)
+        elapsed_seconds = (datetime.now(UTC) - started_at).total_seconds()
+        autoplay_seconds_remaining = max(0, int(session.autoplay_interval_seconds - elapsed_seconds))
 
     return SessionLiveState(
         session=session,
@@ -71,9 +82,12 @@ def get_session_live_state(session_id: str, db: Session = Depends(get_db)):
         upcoming_slides=[serialize_slide(slide) for slide in upcoming_slides],
         progress={
             'current_slide_number': session.current_slide_index + 1,
+            'current_slide_title': current_slide.title if current_slide else None,
             'slide_count': len(ordered_slides),
             'remaining_slides': max(len(ordered_slides) - session.current_slide_index - 1, 0),
             'has_started': session.started_at is not None,
+            'autoplay_active': autoplay_active,
+            'autoplay_seconds_remaining': autoplay_seconds_remaining,
         },
     )
 

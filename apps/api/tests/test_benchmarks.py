@@ -380,6 +380,14 @@ def test_runs_export_returns_owner_scoped_history_bundle_with_vcon_summary():
         'coverage_percent': 50.0,
         'covered_scenario_ids': ['billing-address-change', 'angry-outage-escalation'],
         'missing_scenario_ids': ['interruption-correction-handling', 'refund-policy-boundary'],
+        'covered_scenarios': [
+            {'id': 'billing-address-change', 'title': 'Billing Address Change'},
+            {'id': 'angry-outage-escalation', 'title': 'Angry Outage Escalation'},
+        ],
+        'missing_scenarios': [
+            {'id': 'interruption-correction-handling', 'title': 'Interruption and Correction Handling'},
+            {'id': 'refund-policy-boundary', 'title': 'Refund Policy Boundary'},
+        ],
     }
     assert {run['run_id'] for run in exported['runs']} == {first.json()['run_id'], second.json()['run_id']}
 

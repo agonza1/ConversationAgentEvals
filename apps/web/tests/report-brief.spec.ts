@@ -633,6 +633,14 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
           coverage_percent: 50,
           covered_scenario_ids: ['membership-renewal-save', 'billing-escalation'],
           missing_scenario_ids: ['refund-policy-boundary', 'interruption-correction-handling'],
+          covered_scenarios: [
+            { id: 'membership-renewal-save', title: 'Membership Renewal Save' },
+            { id: 'billing-escalation', title: 'Billing Escalation' },
+          ],
+          missing_scenarios: [
+            { id: 'refund-policy-boundary', title: 'Refund Policy Boundary' },
+            { id: 'interruption-correction-handling', title: 'Interruption and Correction Handling' },
+          ],
         },
         vcon_export_summary: {
           available_records: 2,
@@ -719,7 +727,7 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   const benchmarkHistoryDownload = await benchmarkHistoryDownloadPromise;
   expect(benchmarkHistoryDownload.suggestedFilename()).toBe('agentbench-qa-project-call-center-voice-ai-run-history.json');
   await expect(page.getByText(/^Exported 2 benchmark runs to .* Benchmark trend regressed: 73 vs 91 \(-18\)\. Top issue: required action execution \(1\)\./)).toBeVisible();
-  await expect(page.getByText('2/4 suite scenarios covered (50%); 2 missing.')).toBeVisible();
+  await expect(page.getByText('2/4 suite scenarios covered (50%); 2 missing: Refund Policy Boundary, Interruption and Correction Handling.')).toBeVisible();
 
   await suiteHistory.getByLabel('Filter suite runs by status').selectOption('completed');
 

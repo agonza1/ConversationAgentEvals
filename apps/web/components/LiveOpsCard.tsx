@@ -18,11 +18,16 @@ export function LiveOpsCard({ live }: { live: SessionLiveState | null }) {
           Slide {live.progress.current_slide_number} / {live.progress.slide_count}
         </span>
       </div>
+      {live.progress.current_slide_title ? (
+        <p style={{ margin: '-6px 0 0', fontWeight: 700 }}>{live.progress.current_slide_title}</p>
+      ) : null}
 
       <div className="card" style={{ padding: 14, background: 'var(--panel-alt)' }}>
         <p style={{ margin: '0 0 6px', color: 'var(--muted)', fontSize: 12, textTransform: 'uppercase' }}>Progress</p>
         <p style={{ margin: 0, lineHeight: 1.6 }}>
-          {live.progress.has_started ? 'Presentation has started.' : 'Presentation has not started yet.'} {live.progress.remaining_slides} slides remaining.
+          {live.progress.has_started ? 'Presentation has started.' : 'Presentation has not started yet.'} {live.progress.remaining_slides} slides remaining. {live.progress.autoplay_active && live.progress.autoplay_seconds_remaining !== null
+            ? `Auto advance in ${live.progress.autoplay_seconds_remaining}s.`
+            : 'Manual or voice-controlled pacing.'}
         </p>
       </div>
 

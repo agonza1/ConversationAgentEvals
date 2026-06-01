@@ -213,6 +213,8 @@ interface ScenarioCoverageSummary {
   coverage_percent?: number | null;
   covered_scenario_ids?: string[];
   missing_scenario_ids?: string[];
+  covered_scenarios?: Array<{ id?: string; title?: string }>;
+  missing_scenarios?: Array<{ id?: string; title?: string }>;
 }
 
 interface PricingPlan {
@@ -332,6 +334,7 @@ interface ProjectHistoryExport {
   summary: ProjectRegressionSummary;
   vcon_export_summary: ProjectVconExportSummary;
   contract_artifact_summary?: ProjectContractArtifactSummary;
+  scenario_coverage_summary?: ScenarioCoverageSummary;
   runs: SavedRunExport[];
   exported_at: string;
 }
@@ -1112,13 +1115,22 @@ function projectContractArtifactSummary(summary?: ProjectContractArtifactSummary
 
 function scenarioCoverageExportSummary(summary?: ScenarioCoverageSummary) {
   if (!summary) return 'Scenario coverage unavailable.';
+  const coveredScenarios = summary.covered_scenarios?.length
+    ? summary.covered_scenarios.map((scenario) => scenario.title ?? scenario.id).filter(Boolean)
+    : summary.covered_scenario_ids ?? [];
   if (typeof summary.scenario_count !== 'number') {
-    return `${summary.covered_scenario_count ?? 0} distinct scenarios covered.`;
+    const coveredPreview = coveredScenarios.slice(0, 2).join(', ');
+    return `${summary.covered_scenario_count ?? 0} distinct scenarios covered${coveredPreview ? `: ${coveredPreview}` : ''}.`;
   }
 
   const coverage = typeof summary.coverage_percent === 'number' ? `${summary.coverage_percent}%` : 'n/a';
-  const missingCount = summary.missing_scenario_ids?.length ?? 0;
-  return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); ${missingCount} missing.`;
+  const missingScenarios = summary.missing_scenarios?.length
+    ? summary.missing_scenarios.map((scenario) => scenario.title ?? scenario.id).filter(Boolean)
+    : summary.missing_scenario_ids ?? [];
+  const missingCount = missingScenarios.length;
+  const missingPreview = missingScenarios.slice(0, 2).join(', ');
+  const coveredPreview = !missingCount && coveredScenarios.length ? ` Covered: ${coveredScenarios.slice(0, 2).join(', ')}.` : '';
+  return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); ${missingCount} missing${missingPreview ? `: ${missingPreview}` : ''}.${coveredPreview}`;
 }
 
 function benchmarkRunHistoryExportSummary(summary?: BenchmarkRunHistoryExport['summary']) {
@@ -1782,7 +1794,7 @@ export function BenchmarkRunner() {
       const exported = await exportProjectHistory(userId, projectId, selectedSuite?.id, selectedScenario?.id);
       downloadJson(exported.filename, exported);
       await refreshAuditTrail();
-      setExportMessage(`Exported ${exported.run_count} runs to ${exported.filename}. ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.contract_artifact_summary)}`);
+      setExportMessage(`Exported ${exported.run_count} runs to ${exported.filename}. ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.contract_artifact_summary)} ${scenarioCoverageExportSummary(exported.scenario_coverage_summary)}`);
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : 'Could not export this project history.');
     }

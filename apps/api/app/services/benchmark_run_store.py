@@ -294,10 +294,17 @@ def _history_scenario_coverage(*, records: list[dict[str, Any]], suite_id: str |
             'coverage_percent': None,
             'covered_scenario_ids': covered_ids,
             'missing_scenario_ids': [],
+            'covered_scenarios': [{'id': scenario_id, 'title': scenario_id} for scenario_id in covered_ids],
+            'missing_scenarios': [],
         }
 
     suite = get_suite(suite_id)
-    scenario_ids = [str(scenario.get('id')) for scenario in suite.get('scenarios', []) if scenario.get('id')] if suite else []
+    scenario_titles = {
+        str(scenario.get('id')): str(scenario.get('title') or scenario.get('id'))
+        for scenario in suite.get('scenarios', [])
+        if scenario.get('id')
+    } if suite else {}
+    scenario_ids = list(scenario_titles.keys())
     covered_ids = sorted({str(record.get('scenario_id')) for record in records if record.get('scenario_id')})
     covered_in_suite = [scenario_id for scenario_id in scenario_ids if scenario_id in covered_ids]
     missing_ids = [scenario_id for scenario_id in scenario_ids if scenario_id not in covered_ids]
@@ -309,6 +316,8 @@ def _history_scenario_coverage(*, records: list[dict[str, Any]], suite_id: str |
         'coverage_percent': coverage_percent,
         'covered_scenario_ids': covered_in_suite,
         'missing_scenario_ids': missing_ids,
+        'covered_scenarios': [{'id': scenario_id, 'title': scenario_titles[scenario_id]} for scenario_id in covered_in_suite],
+        'missing_scenarios': [{'id': scenario_id, 'title': scenario_titles[scenario_id]} for scenario_id in missing_ids],
     }
 
 def _failure_categories(record: dict[str, Any]) -> list[str]:
