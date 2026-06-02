@@ -124,6 +124,66 @@ def test_run_eval_from_vcon_like_json():
     assert payload['vcon_analysis']['source']['format'] == 'vcon'
 
 
+def test_run_eval_includes_voice_call_artifacts_and_vcon_attachment():
+    response = client.post(
+        '/api/evals/run',
+        json={
+            'conversation': 'Caller: I need a human. Agent: I can transfer you to a representative.',
+            'criteria': 'Agent transfers the caller',
+            'call': {
+                'metrics': {
+                    'durationMs': 92000,
+                    'avgLatencyMs': 340,
+                    'maxLatencyMs': 870,
+                },
+                'quality': {
+                    'packetLossPercent': 0.2,
+                    'jitterMs': 18,
+                },
+                'media': {
+                    'recordingUrl': 'https://storage.example.test/calls/demo.wav',
+                    'recordingSha256': 'abc123',
+                    'mimeType': 'audio/wav',
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    summary = payload['voice_interaction_summary']
+    assert summary['turn_count'] == 2
+    assert summary['handoff_signal_count'] == 3
+    assert summary['duration_ms'] == 92000
+    assert summary['average_latency_ms'] == 340
+    assert summary['max_latency_ms'] == 870
+    assert summary['packet_loss_percent'] == 0.2
+    assert summary['jitter_ms'] == 18
+    assert summary['media'] == {
+        'recording_url': 'https://storage.example.test/calls/demo.wav',
+        'recording_sha256': 'abc123',
+        'mime_type': 'audio/wav',
+        'duration_ms': 92000,
+    }
+    assert payload['vcon_analysis']['body']['voice_interaction_summary'] == summary
+    assert payload['vcon_export']['attachments'] == [
+        {
+            'type': 'recording',
+            'url': 'https://storage.example.test/calls/demo.wav',
+            'mime_type': 'audio/wav',
+            'sha256': 'abc123',
+            'duration_ms': 92000,
+        }
+    ]
+    assert {artifact['id'] for artifact in payload['artifact_manifest']} == {
+        'input_transcript',
+        'eval_criteria',
+        'voice_call_artifact',
+        'deterministic_report',
+    }
+    assert 'voice_call_artifact' in payload['audit_events'][0]['artifact_ids']
+
+
 def test_failed_eval_includes_root_cause_layer():
     response = client.post(
         '/api/evals/run',

@@ -92,6 +92,7 @@ def _build_vcon_export(
     source_format: str,
     parsed_source: dict[str, Any] | None,
     analysis: dict[str, Any],
+    call: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if parsed_source is not None:
         exported = copy.deepcopy(parsed_source)
@@ -124,6 +125,15 @@ def _build_vcon_export(
     exported['analysis'] = analyses
     exported['appended_analysis_type'] = analysis.get('type')
     exported['source_format'] = source_format
+    attachments = _vcon_call_attachments(call)
+    if attachments:
+        existing_attachments = exported.get('attachments')
+        if isinstance(existing_attachments, list):
+            exported['attachments'] = [*existing_attachments, *attachments]
+        elif existing_attachments:
+            exported['attachments'] = [existing_attachments, *attachments]
+        else:
+            exported['attachments'] = attachments
     return exported
 
 
@@ -206,8 +216,122 @@ def _artifact_reference(artifact_id: str, artifact_type: str, source: str) -> di
     }
 
 
+
+def _first_string(mapping: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _first_number(mapping: dict[str, Any], *keys: str) -> int | float | None:
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str) and value.strip():
+            try:
+                return float(value)
+            except ValueError:
+                continue
+    return None
+
+
+def _voice_call_media_summary(call: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(call, dict):
+        return {}
+
+    media = call.get('media') if isinstance(call.get('media'), dict) else {}
+    metrics = call.get('metrics') if isinstance(call.get('metrics'), dict) else {}
+    source = {**metrics, **media, **call}
+    summary: dict[str, Any] = {}
+
+    recording_url = _first_string(source, 'recording_url', 'recordingUrl', 'audio_url', 'audioUrl')
+    if recording_url:
+        summary['recording_url'] = recording_url
+
+    recording_sha256 = _first_string(source, 'recording_sha256', 'recordingSha256', 'audio_sha256', 'audioSha256')
+    if recording_sha256:
+        summary['recording_sha256'] = recording_sha256
+
+    mime_type = _first_string(source, 'mime_type', 'mimeType', 'content_type', 'contentType')
+    if mime_type:
+        summary['mime_type'] = mime_type
+
+    duration_ms = _first_number(source, 'duration_ms', 'durationMs', 'call_duration_ms', 'callDurationMs')
+    if duration_ms is not None:
+        summary['duration_ms'] = duration_ms
+
+    return summary
+
+
+def _voice_call_metric_summary(call: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(call, dict):
+        return {}
+
+    metrics = call.get('metrics') if isinstance(call.get('metrics'), dict) else {}
+    quality = call.get('quality') if isinstance(call.get('quality'), dict) else {}
+    source = {**quality, **metrics, **call}
+    metric_fields = {
+        'duration_ms': ('duration_ms', 'durationMs', 'call_duration_ms', 'callDurationMs'),
+        'average_latency_ms': ('average_latency_ms', 'averageLatencyMs', 'avg_latency_ms', 'avgLatencyMs', 'latency_ms', 'latencyMs'),
+        'max_latency_ms': ('max_latency_ms', 'maxLatencyMs', 'p95_latency_ms', 'p95LatencyMs'),
+        'packet_loss_percent': ('packet_loss_percent', 'packetLossPercent'),
+        'jitter_ms': ('jitter_ms', 'jitterMs'),
+    }
+
+    summary: dict[str, Any] = {}
+    for output_key, input_keys in metric_fields.items():
+        value = _first_number(source, *input_keys)
+        if value is not None:
+            summary[output_key] = value
+
+    media = _voice_call_media_summary(call)
+    if media:
+        summary['media'] = media
+    return summary
+
+
+def _voice_interaction_summary(call: dict[str, Any] | None, transcript: str) -> dict[str, Any] | None:
+    if not isinstance(call, dict):
+        return None
+
+    normalized = transcript.lower()
+    summary = {
+        'turn_count': len(_iter_transcript_turns(transcript)),
+        'interruption_signal_count': sum(1 for phrase in ('interrupt', 'sorry to interrupt', 'let me stop you', 'hold on', 'go ahead', 'pause') if phrase in normalized),
+        'correction_signal_count': sum(1 for phrase in ('actually', 'correction', 'corrected', 'instead', 'i meant', 'not the') if phrase in normalized),
+        'handoff_signal_count': sum(1 for phrase in ('human', 'representative', 'escalate', 'transfer') if phrase in normalized),
+    }
+    summary.update(_voice_call_metric_summary(call))
+    return summary
+
+
+def _vcon_call_attachments(call: dict[str, Any] | None) -> list[dict[str, Any]]:
+    media = _voice_call_media_summary(call)
+    recording_url = media.get('recording_url')
+    if not recording_url:
+        return []
+
+    attachment: dict[str, Any] = {
+        'type': 'recording',
+        'url': recording_url,
+    }
+    if media.get('mime_type'):
+        attachment['mime_type'] = media['mime_type']
+    if media.get('recording_sha256'):
+        attachment['sha256'] = media['recording_sha256']
+    if media.get('duration_ms') is not None:
+        attachment['duration_ms'] = media['duration_ms']
+    return [attachment]
+
+
 def run_eval(payload: EvalRunRequest) -> EvalRunResponse:
     transcript, source_format, parsed_source = normalize_conversation(payload.conversation)
+    voice_interaction_summary = _voice_interaction_summary(payload.call, transcript)
     criteria = _split_criteria(payload.criteria)
     checks: list[EvalCheck] = []
     created_at = datetime.now(UTC).isoformat()
@@ -251,11 +375,15 @@ def run_eval(payload: EvalRunRequest) -> EvalRunResponse:
         'risk_flags': risk_flags,
         'suggested_fixes': suggested_fixes,
     }
+    if voice_interaction_summary is not None:
+        report_body['voice_interaction_summary'] = voice_interaction_summary
 
     source_artifacts = [
         _artifact('input_transcript', 'transcript', transcript, source_format),
         _artifact('eval_criteria', 'criteria', payload.criteria, 'request'),
     ]
+    if payload.call is not None:
+        source_artifacts.append(_artifact('voice_call_artifact', 'call', payload.call, 'request'))
     audit_events = [
         EvalAuditEvent(
             event_type='eval.run.created',
@@ -289,7 +417,7 @@ def run_eval(payload: EvalRunRequest) -> EvalRunResponse:
             'has_existing_analysis': bool(isinstance(parsed_source.get('analysis'), list)) if isinstance(parsed_source, dict) else False,
         }
 
-    vcon_export = _build_vcon_export(transcript, source_format, parsed_source, vcon_analysis)
+    vcon_export = _build_vcon_export(transcript, source_format, parsed_source, vcon_analysis, payload.call)
 
     return EvalRunResponse(
         run_id=run_id,
@@ -302,6 +430,7 @@ def run_eval(payload: EvalRunRequest) -> EvalRunResponse:
         risk_flags=risk_flags,
         suggested_fixes=suggested_fixes,
         transcript_preview=transcript[:700],
+        voice_interaction_summary=voice_interaction_summary,
         artifact_manifest=artifact_manifest,
         audit_events=audit_events,
         vcon_analysis=vcon_analysis,

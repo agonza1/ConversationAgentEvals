@@ -9,6 +9,7 @@ class EvalRunRequest(BaseModel):
     conversation: str | dict[str, Any] | list[Any] = Field(...)
     criteria: str = Field(..., min_length=1)
     title: str | None = None
+    call: dict[str, Any] | None = None
 
     @field_validator('conversation')
     @classmethod
@@ -65,6 +66,7 @@ class EvalRunResponse(BaseModel):
     risk_flags: list[str]
     suggested_fixes: list[str]
     transcript_preview: str
+    voice_interaction_summary: dict[str, Any] | None = None
     artifact_manifest: list[EvalArtifact]
     audit_events: list[EvalAuditEvent]
     vcon_analysis: dict[str, Any]
