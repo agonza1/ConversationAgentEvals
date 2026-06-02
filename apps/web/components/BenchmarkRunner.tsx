@@ -1171,7 +1171,11 @@ function scenarioCoverageExportSummary(summary?: ScenarioCoverageSummary) {
 }
 
 
-function scenarioCoverageFromSavedRuns(suite: BenchmarkSuite | null, runs: SavedRun[]): ScenarioCoverageSummary | null {
+function scenarioCoverageFromRuns(
+  suite: BenchmarkSuite | null,
+  runs: SavedRun[],
+  currentReport?: BenchmarkReport | null,
+): ScenarioCoverageSummary | null {
   if (!suite) return null;
   const scenarioTitles = new Map(suite.scenarios.map((scenario) => [scenario.id, scenario.title]));
   const coveredIds = new Set(
@@ -1179,6 +1183,9 @@ function scenarioCoverageFromSavedRuns(suite: BenchmarkSuite | null, runs: Saved
       .map((run) => run.report.scenario_id)
       .filter((scenarioId): scenarioId is string => Boolean(scenarioId && scenarioTitles.has(scenarioId))),
   );
+  if (currentReport?.scenario_id && scenarioTitles.has(currentReport.scenario_id)) {
+    coveredIds.add(currentReport.scenario_id);
+  }
   const coveredScenarioIds = suite.scenarios.map((scenario) => scenario.id).filter((scenarioId) => coveredIds.has(scenarioId));
   const missingScenarioIds = suite.scenarios.map((scenario) => scenario.id).filter((scenarioId) => !coveredIds.has(scenarioId));
   const recommendedNextScenario = missingScenarioIds[0] ?? null;
@@ -1420,7 +1427,12 @@ function formatForbiddenActionHit(hit: string | JsonRecord) {
   return JSON.stringify(hit);
 }
 
-function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: string, regressionDelta?: RegressionDelta | null) {
+function formatReportBrief(
+  report: BenchmarkReport,
+  fallbackScenarioTitle?: string,
+  regressionDelta?: RegressionDelta | null,
+  suiteCoverage?: ScenarioCoverageSummary | null,
+) {
   const verdict = report.verdict ?? report.overall ?? 'complete';
   const score = report.score ?? report.overall_score ?? 'n/a';
   const scenario = report.scenario_title ?? fallbackScenarioTitle ?? 'Selected scenario';
@@ -1447,6 +1459,7 @@ function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: stri
     `Scenario contract: ${contractFingerprint}`,
     `Failure categories: ${failureCategories}`,
     `Regression: ${regressionDelta ? regressionDeltaSummary(regressionDelta) : 'Not compared'}`,
+    `Suite coverage: ${suiteCoverage ? scenarioCoverageExportSummary(suiteCoverage) : 'Not available'}`,
     `Missing actions: ${missingActions}`,
     `Forbidden actions observed: ${forbiddenActions}`,
     `Suggested fixes: ${suggestedFixes}`,
@@ -2348,10 +2361,10 @@ export function BenchmarkRunner() {
   );
   const currentRegressionDelta = useMemo(() => currentReportRegressionDelta(report, savedRuns), [report, savedRuns]);
   const suiteScenarioCoverage = useMemo(
-    () => scenarioCoverageFromSavedRuns(selectedSuite, suiteSavedRuns),
-    [selectedSuite, suiteSavedRuns],
+    () => scenarioCoverageFromRuns(selectedSuite, suiteSavedRuns, report),
+    [selectedSuite, suiteSavedRuns, report],
   );
-  const reportBrief = report ? formatReportBrief(report, selectedScenario?.title, currentRegressionDelta) : '';
+  const reportBrief = report ? formatReportBrief(report, selectedScenario?.title, currentRegressionDelta, suiteScenarioCoverage) : '';
   const actionPlan = report ? reportActionPlan(report, currentRegressionDelta) : null;
   const onboardingSteps = [
     {

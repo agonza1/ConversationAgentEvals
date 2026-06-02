@@ -18,11 +18,61 @@ test('benchmark report includes a share-ready brief', async ({ page }) => {
   await expect(brief).toContainText('Verdict:');
   await expect(brief).toContainText('Score:');
   await expect(brief).toContainText('Regression:');
+  await expect(brief).toContainText('Suite coverage:');
   await expect(brief).toContainText('Missing actions:');
   await expect(brief).toContainText('Suggested fixes:');
 
   await page.getByRole('button', { name: 'Copy brief' }).click();
   await expect(page.getByText('Copied report brief.')).toBeVisible();
+});
+
+test('benchmark report counts the current unsaved run in suite coverage', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    window.localStorage.setItem('conversation-evals-demo-project', 'qa-project');
+  });
+
+  await page.route('**/api/product/runs?*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([]),
+    });
+  });
+
+  await page.route('**/api/benchmarks/simulate', async (route) => {
+    const payload = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        suite_id: payload.suite_id,
+        scenario_id: payload.scenario_id,
+        scenario_title: 'Billing Address Change',
+        transcript: 'Agent verified the account and confirmed the new billing address.',
+        action_trace: [{ action: 'confirm_address_update', result: 'success' }],
+        final_state: { address_updated: true },
+        benchmark_report: {
+          run_id: 'current-unsaved-run',
+          suite_id: payload.suite_id,
+          scenario_id: payload.scenario_id,
+          scenario_title: 'Billing Address Change',
+          verdict: 'pass',
+          overall_score: 94,
+          evidence: ['Agent verified the account and confirmed the new billing address.'],
+          recommendations: [],
+        },
+      }),
+    });
+  });
+
+  await page.goto('/benchmarks');
+  await page.getByRole('button', { name: 'Simulate scenario' }).click();
+
+  await expect(page.getByText('1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling. Next: Angry Outage Escalation.')).toBeVisible();
+  await expect(page.getByLabel('Report brief')).toContainText(
+    'Suite coverage: 1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling. Next: Angry Outage Escalation.',
+  );
 });
 
 test('current benchmark report previews regression delta before saving', async ({ page }) => {
@@ -99,9 +149,11 @@ test('current benchmark report previews regression delta before saving', async (
   await expect(page.getByLabel('Unsaved regression comparison')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Current run: improved' })).toBeVisible();
   await expect(page.getByText('improved: 94 vs 88 (+6) against saved-baseline')).toBeVisible();
+  await expect(page.getByText('1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling. Next: Angry Outage Escalation.')).toBeVisible();
 
   const brief = page.getByLabel('Report brief');
   await expect(brief).toContainText('Regression: improved: 94 vs 88 (+6)');
+  await expect(brief).toContainText('Suite coverage: 1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling. Next: Angry Outage Escalation.');
 });
 
 test('benchmark runner submits structured voice call evidence', async ({ page }) => {
