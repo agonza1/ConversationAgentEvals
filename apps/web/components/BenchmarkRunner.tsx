@@ -1170,6 +1170,35 @@ function scenarioCoverageExportSummary(summary?: ScenarioCoverageSummary) {
   return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); ${missingCount} missing${missingPreview ? `: ${missingPreview}` : ''}.${nextStep}${coveredPreview}`;
 }
 
+
+function scenarioCoverageFromSavedRuns(suite: BenchmarkSuite | null, runs: SavedRun[]): ScenarioCoverageSummary | null {
+  if (!suite) return null;
+  const scenarioTitles = new Map(suite.scenarios.map((scenario) => [scenario.id, scenario.title]));
+  const coveredIds = new Set(
+    runs
+      .map((run) => run.report.scenario_id)
+      .filter((scenarioId): scenarioId is string => Boolean(scenarioId && scenarioTitles.has(scenarioId))),
+  );
+  const coveredScenarioIds = suite.scenarios.map((scenario) => scenario.id).filter((scenarioId) => coveredIds.has(scenarioId));
+  const missingScenarioIds = suite.scenarios.map((scenario) => scenario.id).filter((scenarioId) => !coveredIds.has(scenarioId));
+  const recommendedNextScenario = missingScenarioIds[0] ?? null;
+
+  return {
+    suite_id: suite.id,
+    scenario_count: suite.scenarios.length,
+    covered_scenario_count: coveredScenarioIds.length,
+    coverage_percent: suite.scenarios.length ? Math.round((coveredScenarioIds.length / suite.scenarios.length) * 10000) / 100 : null,
+    covered_scenario_ids: coveredScenarioIds,
+    missing_scenario_ids: missingScenarioIds,
+    covered_scenarios: coveredScenarioIds.map((scenarioId) => ({ id: scenarioId, title: scenarioTitles.get(scenarioId) ?? scenarioId })),
+    missing_scenarios: missingScenarioIds.map((scenarioId) => ({ id: scenarioId, title: scenarioTitles.get(scenarioId) ?? scenarioId })),
+    recommended_next_scenario: recommendedNextScenario
+      ? { id: recommendedNextScenario, title: scenarioTitles.get(recommendedNextScenario) ?? recommendedNextScenario }
+      : null,
+    coverage_status: missingScenarioIds.length === 0 && suite.scenarios.length ? 'complete' : coveredScenarioIds.length ? 'partial' : 'empty',
+  };
+}
+
 function benchmarkRunHistoryExportSummary(summary?: BenchmarkRunHistoryExport['summary']) {
   if (!summary) return 'Benchmark trend not available.';
   const trend = summary.latest_trend ? summary.latest_trend.replace(/_/g, ' ') : 'unavailable';
@@ -1526,6 +1555,7 @@ export function BenchmarkRunner() {
   const [projectId, setProjectId] = useState('call-center-demo');
   const [plan, setPlan] = useState<PricingPlan['id']>('free');
   const [savedRuns, setSavedRuns] = useState<SavedRun[]>([]);
+  const [suiteSavedRuns, setSuiteSavedRuns] = useState<SavedRun[]>([]);
   const [auditEvents, setAuditEvents] = useState<ProductAuditEvent[]>([]);
   const [suiteRuns, setSuiteRuns] = useState<BenchmarkSuiteRunRecord[]>([]);
   const visibleSuiteHistorySummary = useMemo(() => suiteHistorySummaryFromRuns(suiteRuns), [suiteRuns]);
@@ -1598,6 +1628,7 @@ export function BenchmarkRunner() {
   useEffect(() => {
     if (!userId) {
       setSavedRuns([]);
+      setSuiteSavedRuns([]);
       setAuditEvents([]);
       setSuiteRuns([]);
       setProjectRegressionSummary(null);
@@ -1608,6 +1639,7 @@ export function BenchmarkRunner() {
     let isMounted = true;
     Promise.all([
       listSavedRuns(userId, projectId, selectedSuite?.id, selectedScenario?.id),
+      selectedSuite?.id ? listSavedRuns(userId, projectId, selectedSuite.id).catch(() => []) : Promise.resolve([]),
       listAuditEvents(userId, projectId).catch(() => []),
       listBenchmarkSuiteRuns(userId, projectId, selectedSuite?.id, suiteRunStatusFilter).catch(() => []),
       fetchProjectRegressionSummary(userId, projectId).catch(() => null),
@@ -1615,9 +1647,10 @@ export function BenchmarkRunner() {
         ? fetchProjectRegressionSummary(userId, projectId, selectedSuite.id, selectedScenario.id).catch(() => null)
         : Promise.resolve(null),
     ])
-      .then(([runs, events, nextSuiteRuns, summary, scenarioSummary]) => {
+      .then(([runs, nextSuiteSavedRuns, events, nextSuiteRuns, summary, scenarioSummary]) => {
         if (!isMounted) return;
         setSavedRuns(runs);
+        setSuiteSavedRuns(nextSuiteSavedRuns);
         setAuditEvents(events);
         setSuiteRuns(nextSuiteRuns);
         setProjectRegressionSummary(summary);
@@ -1626,6 +1659,7 @@ export function BenchmarkRunner() {
       .catch(() => {
         if (!isMounted) return;
         setSavedRuns([]);
+        setSuiteSavedRuns([]);
         setAuditEvents([]);
         setSuiteRuns([]);
         setProjectRegressionSummary(null);
@@ -2313,6 +2347,10 @@ export function BenchmarkRunner() {
     selectedScenario?.id && savedRuns.some((run) => run.report.scenario_id === selectedScenario.id),
   );
   const currentRegressionDelta = useMemo(() => currentReportRegressionDelta(report, savedRuns), [report, savedRuns]);
+  const suiteScenarioCoverage = useMemo(
+    () => scenarioCoverageFromSavedRuns(selectedSuite, suiteSavedRuns),
+    [selectedSuite, suiteSavedRuns],
+  );
   const reportBrief = report ? formatReportBrief(report, selectedScenario?.title, currentRegressionDelta) : '';
   const actionPlan = report ? reportActionPlan(report, currentRegressionDelta) : null;
   const onboardingSteps = [
@@ -3203,6 +3241,21 @@ export function BenchmarkRunner() {
               <p style={{ margin: 0, color: 'var(--muted)' }}>
                 Latest {scenarioRegressionSummary.latest_score ?? 'n/a'} vs previous {scenarioRegressionSummary.previous_score ?? 'n/a'}
                 {' '}({formatSignedDelta(scenarioRegressionSummary.latest_delta)}), pass rate {scenarioRegressionSummary.pass_rate ?? 'n/a'}%.
+              </p>
+            </div>
+          ) : null}
+          {suiteScenarioCoverage ? (
+            <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white', display: 'grid', gap: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                <strong style={{ color: suiteScenarioCoverage.coverage_status === 'complete' ? 'var(--success-text)' : 'var(--text)' }}>
+                  Suite scenario coverage
+                </strong>
+                <span style={{ color: 'var(--muted)', fontWeight: 800 }}>
+                  {suiteScenarioCoverage.covered_scenario_count}/{suiteScenarioCoverage.scenario_count ?? 0} covered
+                </span>
+              </div>
+              <p style={{ margin: 0, color: 'var(--muted)' }}>
+                {scenarioCoverageExportSummary(suiteScenarioCoverage)}
               </p>
             </div>
           ) : null}
