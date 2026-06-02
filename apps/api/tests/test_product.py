@@ -1404,3 +1404,51 @@ def test_product_audit_events_track_saved_runs_exports_and_judge_requests():
     outsider = client.get('/api/product/audit-events', params={'user_id': 'other-user', 'project_id': 'call-center'})
     assert outsider.status_code == 200
     assert outsider.json() == []
+
+
+def test_project_export_preserves_custom_suite_covered_scenarios():
+    project_response = client.post(
+        "/api/product/projects",
+        json={
+            "user_id": "demo-user",
+            "project_id": "custom-support",
+            "name": "Custom Support QA",
+            "plan": "starter",
+        },
+    )
+    assert project_response.status_code == 200
+
+    run_response = client.post(
+        "/api/product/runs",
+        json={
+            "user_id": "demo-user",
+            "project_id": "custom-support",
+            "plan": "starter",
+            "report": {
+                "run_id": "custom-coverage-run",
+                "overall_score": 88,
+                "suite_id": "custom-suite",
+                "scenario_id": "custom-refund-save",
+            },
+        },
+    )
+    assert run_response.status_code == 200
+
+    export_response = client.get(
+        "/api/product/projects/custom-support/export",
+        params={"user_id": "demo-user", "suite_id": "custom-suite"},
+    )
+
+    assert export_response.status_code == 200
+    assert export_response.json()["scenario_coverage_summary"] == {
+        "suite_id": "custom-suite",
+        "scenario_count": None,
+        "covered_scenario_count": 1,
+        "coverage_percent": None,
+        "covered_scenario_ids": ["custom-refund-save"],
+        "missing_scenario_ids": [],
+        "covered_scenarios": [{"id": "custom-refund-save", "title": "custom-refund-save"}],
+        "missing_scenarios": [],
+        "recommended_next_scenario": None,
+        "coverage_status": "partial",
+    }

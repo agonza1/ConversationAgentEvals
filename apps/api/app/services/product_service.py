@@ -692,25 +692,34 @@ def _project_scenario_coverage_summary(
     suite_id: str | None,
 ) -> ProductProjectScenarioCoverageSummary:
     covered_ids = sorted({
-        str(run.report.get('scenario_id'))
+        str(run.report.get("scenario_id"))
         for run in runs
-        if isinstance(run.report, dict) and run.report.get('scenario_id')
+        if isinstance(run.report, dict) and run.report.get("scenario_id")
     })
     if not suite_id:
         return ProductProjectScenarioCoverageSummary(
             covered_scenario_count=len(covered_ids),
             covered_scenario_ids=covered_ids,
-            covered_scenarios=[{'id': scenario_id, 'title': scenario_id} for scenario_id in covered_ids],
-            coverage_status='partial' if covered_ids else 'empty',
+            covered_scenarios=[{"id": scenario_id, "title": scenario_id} for scenario_id in covered_ids],
+            coverage_status="partial" if covered_ids else "empty",
         )
 
     suite = get_suite(suite_id)
     scenario_titles = {
-        str(scenario.get('id')): str(scenario.get('title') or scenario.get('id'))
-        for scenario in suite.get('scenarios', [])
-        if scenario.get('id')
+        str(scenario.get("id")): str(scenario.get("title") or scenario.get("id"))
+        for scenario in suite.get("scenarios", [])
+        if scenario.get("id")
     } if suite else {}
     scenario_ids = list(scenario_titles.keys())
+    if suite_id and not scenario_ids:
+        return ProductProjectScenarioCoverageSummary(
+            suite_id=suite_id,
+            covered_scenario_count=len(covered_ids),
+            covered_scenario_ids=covered_ids,
+            covered_scenarios=[{"id": scenario_id, "title": scenario_id} for scenario_id in covered_ids],
+            coverage_status="partial" if covered_ids else "empty",
+        )
+
     covered_in_suite = [scenario_id for scenario_id in scenario_ids if scenario_id in covered_ids]
     missing_ids = [scenario_id for scenario_id in scenario_ids if scenario_id not in covered_ids]
     coverage_percent = round((len(covered_in_suite) / len(scenario_ids)) * 100, 2) if scenario_ids else None
@@ -723,15 +732,14 @@ def _project_scenario_coverage_summary(
         coverage_percent=coverage_percent,
         covered_scenario_ids=covered_in_suite,
         missing_scenario_ids=missing_ids,
-        covered_scenarios=[{'id': scenario_id, 'title': scenario_titles[scenario_id]} for scenario_id in covered_in_suite],
-        missing_scenarios=[{'id': scenario_id, 'title': scenario_titles[scenario_id]} for scenario_id in missing_ids],
+        covered_scenarios=[{"id": scenario_id, "title": scenario_titles[scenario_id]} for scenario_id in covered_in_suite],
+        missing_scenarios=[{"id": scenario_id, "title": scenario_titles[scenario_id]} for scenario_id in missing_ids],
         recommended_next_scenario=(
-            {'id': recommended_next_scenario, 'title': scenario_titles[recommended_next_scenario]}
+            {"id": recommended_next_scenario, "title": scenario_titles[recommended_next_scenario]}
             if recommended_next_scenario else None
         ),
-        coverage_status='complete' if scenario_ids and not missing_ids else 'partial' if covered_in_suite else 'empty',
+        coverage_status="complete" if scenario_ids and not missing_ids else "partial" if covered_in_suite else "empty",
     )
-
 
 def _project_vcon_export_summary(runs: list[SavedRunExportResponse]) -> ProductProjectVconExportSummary:
     available_records = 0

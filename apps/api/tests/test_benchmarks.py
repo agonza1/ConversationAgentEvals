@@ -6,8 +6,8 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.services.benchmark_service import get_suite, get_suite_contract_manifest, list_suites, run_scenario, run_suite, simulate_scenario, simulate_suite
 from app.db.database import SessionLocal
-from app.services.benchmark_run_store import reset_benchmark_run_records_for_tests
-from app.services.benchmark_suite_run_store import create_benchmark_suite_run_record, reset_benchmark_suite_run_records_for_tests
+from app.services.benchmark_run_store import _history_scenario_coverage, reset_benchmark_run_records_for_tests
+from app.services.benchmark_suite_run_store import _suite_history_scenario_coverage, create_benchmark_suite_run_record, reset_benchmark_suite_run_records_for_tests
 
 client = TestClient(app)
 
@@ -1766,3 +1766,43 @@ def test_simulate_suite_endpoint_rejects_unknown_suite():
 
     assert response.status_code == 404
     assert response.json()['detail'] == 'Unknown benchmark suite: missing'
+
+
+def test_benchmark_history_coverage_preserves_custom_suite_scenarios():
+    coverage = _history_scenario_coverage(
+        records=[{"suite_id": "custom-suite", "scenario_id": "custom-refund-save"}],
+        suite_id="custom-suite",
+    )
+
+    assert coverage == {
+        "suite_id": "custom-suite",
+        "scenario_count": None,
+        "covered_scenario_count": 1,
+        "coverage_percent": None,
+        "covered_scenario_ids": ["custom-refund-save"],
+        "missing_scenario_ids": [],
+        "covered_scenarios": [{"id": "custom-refund-save", "title": "custom-refund-save"}],
+        "missing_scenarios": [],
+        "recommended_next_scenario": None,
+        "coverage_status": "partial",
+    }
+
+
+def test_suite_history_coverage_preserves_custom_suite_scenarios():
+    coverage = _suite_history_scenario_coverage(
+        records=[{"suite_report": {"scenario_reports": [{"scenario_id": "custom-refund-save"}]}}],
+        suite_id="custom-suite",
+    )
+
+    assert coverage == {
+        "suite_id": "custom-suite",
+        "scenario_count": None,
+        "covered_scenario_count": 1,
+        "coverage_percent": None,
+        "covered_scenario_ids": ["custom-refund-save"],
+        "missing_scenario_ids": [],
+        "covered_scenarios": [{"id": "custom-refund-save", "title": "custom-refund-save"}],
+        "missing_scenarios": [],
+        "recommended_next_scenario": None,
+        "coverage_status": "partial",
+    }

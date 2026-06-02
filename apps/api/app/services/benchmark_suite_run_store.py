@@ -445,51 +445,65 @@ def _suite_history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _suite_history_scenario_coverage(*, records: list[dict[str, Any]], suite_id: str | None) -> dict[str, Any]:
     covered_ids = sorted({
-        str(summary.get('scenario_id'))
+        str(summary.get("scenario_id"))
         for record in records
-        for summary in _scenario_summaries(record.get('suite_report') if isinstance(record.get('suite_report'), dict) else {})
-        if summary.get('scenario_id')
+        for summary in _scenario_summaries(record.get("suite_report") if isinstance(record.get("suite_report"), dict) else {})
+        if summary.get("scenario_id")
     })
     if suite_id is None:
         return {
-            'suite_id': None,
-            'scenario_count': None,
-            'covered_scenario_count': len(covered_ids),
-            'coverage_percent': None,
-            'covered_scenario_ids': covered_ids,
-            'missing_scenario_ids': [],
-            'covered_scenarios': [{'id': scenario_id, 'title': scenario_id} for scenario_id in covered_ids],
-            'missing_scenarios': [],
-            'recommended_next_scenario': None,
-            'coverage_status': 'partial' if covered_ids else 'empty',
+            "suite_id": None,
+            "scenario_count": None,
+            "covered_scenario_count": len(covered_ids),
+            "coverage_percent": None,
+            "covered_scenario_ids": covered_ids,
+            "missing_scenario_ids": [],
+            "covered_scenarios": [{"id": scenario_id, "title": scenario_id} for scenario_id in covered_ids],
+            "missing_scenarios": [],
+            "recommended_next_scenario": None,
+            "coverage_status": "partial" if covered_ids else "empty",
         }
 
     suite = get_suite(suite_id)
     scenario_titles = {
-        str(scenario.get('id')): str(scenario.get('title') or scenario.get('id'))
-        for scenario in suite.get('scenarios', [])
-        if scenario.get('id')
+        str(scenario.get("id")): str(scenario.get("title") or scenario.get("id"))
+        for scenario in suite.get("scenarios", [])
+        if scenario.get("id")
     } if suite else {}
     scenario_ids = list(scenario_titles.keys())
+    if suite_id and not scenario_ids:
+        return {
+            "suite_id": suite_id,
+            "scenario_count": None,
+            "covered_scenario_count": len(covered_ids),
+            "coverage_percent": None,
+            "covered_scenario_ids": covered_ids,
+            "missing_scenario_ids": [],
+            "covered_scenarios": [{"id": scenario_id, "title": scenario_id} for scenario_id in covered_ids],
+            "missing_scenarios": [],
+            "recommended_next_scenario": None,
+            "coverage_status": "partial" if covered_ids else "empty",
+        }
+
     covered_in_suite = [scenario_id for scenario_id in scenario_ids if scenario_id in covered_ids]
     missing_ids = [scenario_id for scenario_id in scenario_ids if scenario_id not in covered_ids]
     coverage_percent = round((len(covered_in_suite) / len(scenario_ids)) * 100, 2) if scenario_ids else None
     recommended_next_scenario = missing_ids[0] if missing_ids else None
 
     return {
-        'suite_id': suite_id,
-        'scenario_count': len(scenario_ids) if suite else None,
-        'covered_scenario_count': len(covered_in_suite),
-        'coverage_percent': coverage_percent,
-        'covered_scenario_ids': covered_in_suite,
-        'missing_scenario_ids': missing_ids,
-        'covered_scenarios': [{'id': scenario_id, 'title': scenario_titles[scenario_id]} for scenario_id in covered_in_suite],
-        'missing_scenarios': [{'id': scenario_id, 'title': scenario_titles[scenario_id]} for scenario_id in missing_ids],
-        'recommended_next_scenario': {
-            'id': recommended_next_scenario,
-            'title': scenario_titles[recommended_next_scenario],
+        "suite_id": suite_id,
+        "scenario_count": len(scenario_ids) if suite else None,
+        "covered_scenario_count": len(covered_in_suite),
+        "coverage_percent": coverage_percent,
+        "covered_scenario_ids": covered_in_suite,
+        "missing_scenario_ids": missing_ids,
+        "covered_scenarios": [{"id": scenario_id, "title": scenario_titles[scenario_id]} for scenario_id in covered_in_suite],
+        "missing_scenarios": [{"id": scenario_id, "title": scenario_titles[scenario_id]} for scenario_id in missing_ids],
+        "recommended_next_scenario": {
+            "id": recommended_next_scenario,
+            "title": scenario_titles[recommended_next_scenario],
         } if recommended_next_scenario else None,
-        'coverage_status': 'complete' if scenario_ids and not missing_ids else 'partial' if covered_in_suite else 'empty',
+        "coverage_status": "complete" if scenario_ids and not missing_ids else "partial" if covered_in_suite else "empty",
     }
 
 def _suite_failure_categories(record: dict[str, Any]) -> list[str]:
