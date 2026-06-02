@@ -2073,6 +2073,13 @@ export function BenchmarkRunner() {
     }
   }
 
+  function onSelectRecommendedScenario() {
+    const nextScenarioId = suiteScenarioCoverage?.recommended_next_scenario?.id;
+    if (!nextScenarioId || nextScenarioId === selectedScenario?.id) return;
+    setSelectedScenarioId(nextScenarioId);
+    setSaveMessage(`Switched to the next uncovered scenario: ${suiteScenarioCoverage?.recommended_next_scenario?.title ?? nextScenarioId}.`);
+  }
+
   async function onRefreshSuiteRuns() {
     if (!userId || !selectedSuite?.id) return;
 
@@ -3270,6 +3277,24 @@ export function BenchmarkRunner() {
               <p style={{ margin: 0, color: 'var(--muted)' }}>
                 {scenarioCoverageExportSummary(suiteScenarioCoverage)}
               </p>
+              {suiteScenarioCoverage.recommended_next_scenario?.id ? (
+                <div>
+                  <button
+                    type="button"
+                    onClick={onSelectRecommendedScenario}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 999,
+                      background: 'white',
+                      color: 'var(--text)',
+                      padding: '8px 12px',
+                      fontWeight: 800,
+                    }}
+                  >
+                    Open next uncovered scenario
+                  </button>
+                </div>
+              ) : null}
             </div>
           ) : null}
           {savedRuns.length ? (
