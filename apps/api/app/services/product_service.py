@@ -5,6 +5,7 @@ import json
 import os
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlencode
 
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
@@ -831,10 +832,15 @@ def checkout_gate(
     base_url = (os.getenv('STRIPE_CHECKOUT_BASE_URL') or '').rstrip('/')
     checkout_url = None
     if base_url:
-        checkout_url = (
-            f'{base_url}?price_id={price_id}'
-            f'&client_reference_id={user_id}:{project_id}'
-        )
+        params = {
+            'price_id': price_id,
+            'client_reference_id': f'{user_id}:{project_id}',
+        }
+        if success_url:
+            params['success_url'] = success_url
+        if cancel_url:
+            params['cancel_url'] = cancel_url
+        checkout_url = f'{base_url}?{urlencode(params)}'
 
     if success_url:
         metadata['success_url'] = success_url

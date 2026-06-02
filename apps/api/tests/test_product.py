@@ -81,7 +81,7 @@ def test_checkout_gate_reports_ready_when_plan_price_is_configured(monkeypatch):
         'status': 'ready',
         'plan': 'team',
         'stripe_price_id': 'price_team_456',
-        'checkout_url': 'https://billing.example.com/checkout?price_id=price_team_456&client_reference_id=demo-user:call-center',
+        'checkout_url': 'https://billing.example.com/checkout?price_id=price_team_456&client_reference_id=demo-user%3Acall-center&success_url=https%3A%2F%2Fapp.example.com%2Fsuccess&cancel_url=https%3A%2F%2Fapp.example.com%2Fcancel',
         'mode': 'subscription',
         'message': 'Stripe price is configured and ready for checkout session creation.',
         'metadata': {
