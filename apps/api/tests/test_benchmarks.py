@@ -388,6 +388,11 @@ def test_runs_export_returns_owner_scoped_history_bundle_with_vcon_summary():
             {'id': 'interruption-correction-handling', 'title': 'Interruption and Correction Handling'},
             {'id': 'refund-policy-boundary', 'title': 'Refund Policy Boundary'},
         ],
+        'recommended_next_scenario': {
+            'id': 'interruption-correction-handling',
+            'title': 'Interruption and Correction Handling',
+        },
+        'coverage_status': 'partial',
     }
     assert {run['run_id'] for run in exported['runs']} == {first.json()['run_id'], second.json()['run_id']}
 
@@ -661,6 +666,19 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
         ]),
     }
     assert history_export['suite_runs'][0]['suite_run_id'] == simulation['suite_run_id']
+
+    run_history_export_response = client.get(
+        '/api/benchmarks/runs/export',
+        params={'user_id': 'demo-user', 'project_id': 'qa-project', 'suite_id': 'call-center-voice-ai'},
+    )
+
+    assert run_history_export_response.status_code == 200
+    run_history_export = run_history_export_response.json()
+    assert run_history_export['scenario_coverage_summary']['covered_scenario_count'] == simulation['scenario_count']
+    assert run_history_export['scenario_coverage_summary']['coverage_percent'] == 100.0
+    assert run_history_export['scenario_coverage_summary']['missing_scenario_ids'] == []
+    assert run_history_export['scenario_coverage_summary']['recommended_next_scenario'] is None
+    assert run_history_export['scenario_coverage_summary']['coverage_status'] == 'complete'
 
     audit_export_response = client.get(
         f"/api/benchmarks/suite-runs/{simulation['suite_run_id']}/audit-artifacts",

@@ -215,6 +215,8 @@ interface ScenarioCoverageSummary {
   missing_scenario_ids?: string[];
   covered_scenarios?: Array<{ id?: string; title?: string }>;
   missing_scenarios?: Array<{ id?: string; title?: string }>;
+  recommended_next_scenario?: { id?: string; title?: string } | null;
+  coverage_status?: 'empty' | 'partial' | 'complete' | string;
 }
 
 interface PricingPlan {
@@ -1154,8 +1156,10 @@ function scenarioCoverageExportSummary(summary?: ScenarioCoverageSummary) {
     : summary.missing_scenario_ids ?? [];
   const missingCount = missingScenarios.length;
   const missingPreview = missingScenarios.slice(0, 2).join(', ');
+  const nextScenario = summary.recommended_next_scenario?.title ?? summary.recommended_next_scenario?.id;
+  const nextStep = nextScenario ? ` Next: ${nextScenario}.` : '';
   const coveredPreview = !missingCount && coveredScenarios.length ? ` Covered: ${coveredScenarios.slice(0, 2).join(', ')}.` : '';
-  return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); ${missingCount} missing${missingPreview ? `: ${missingPreview}` : ''}.${coveredPreview}`;
+  return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); ${missingCount} missing${missingPreview ? `: ${missingPreview}` : ''}.${nextStep}${coveredPreview}`;
 }
 
 function benchmarkRunHistoryExportSummary(summary?: BenchmarkRunHistoryExport['summary']) {
