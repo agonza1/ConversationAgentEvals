@@ -408,6 +408,7 @@ interface BenchmarkSuiteRunHistoryExport {
   };
   vcon_export_summary: ProjectVconExportSummary;
   suite_contract_artifact_summary?: ProjectContractArtifactSummary;
+  scenario_coverage_summary?: ScenarioCoverageSummary;
   suite_runs: BenchmarkSuiteRunRecord[];
   exported_at: string;
 }
@@ -2019,7 +2020,7 @@ export function BenchmarkRunner() {
     try {
       const exported = await exportBenchmarkSuiteRunHistory(userId, projectId, selectedSuite?.id, suiteRunStatusFilter);
       downloadJson(exported.filename, exported);
-      setExportMessage(`Exported ${exported.suite_run_count} suite runs to ${exported.filename}. ${suiteHistoryExportSummary(exported.summary)} ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.suite_contract_artifact_summary)}`);
+      setExportMessage(`Exported ${exported.suite_run_count} suite runs to ${exported.filename}. ${suiteHistoryExportSummary(exported.summary)} ${scenarioCoverageExportSummary(exported.scenario_coverage_summary)} ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.suite_contract_artifact_summary)}`);
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : 'Could not export suite run history.');
     }

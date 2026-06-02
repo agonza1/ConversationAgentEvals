@@ -793,6 +793,13 @@ def test_suite_run_history_export_includes_regression_trend_and_pass_rate():
         'task_completion': failing.json()['scenario_count'],
     }
     assert summary['top_failure_categories'][0] == {'category': 'final_state_correctness', 'count': failing.json()['scenario_count']}
+    coverage = export_response.json()['scenario_coverage_summary']
+    assert coverage['scenario_count'] == passing.json()['scenario_count']
+    assert coverage['covered_scenario_count'] == passing.json()['scenario_count']
+    assert coverage['coverage_percent'] == 100.0
+    assert coverage['missing_scenario_ids'] == []
+    assert coverage['recommended_next_scenario'] is None
+    assert coverage['coverage_status'] == 'complete'
 
     with SessionLocal() as db:
         create_benchmark_suite_run_record(
