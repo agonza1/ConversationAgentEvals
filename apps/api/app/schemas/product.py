@@ -153,8 +153,10 @@ class ProductProjectScenarioCoverageSummary(BaseModel):
     coverage_percent: float | None = None
     covered_scenario_ids: list[str] = Field(default_factory=list)
     missing_scenario_ids: list[str] = Field(default_factory=list)
+    out_of_suite_scenario_ids: list[str] = Field(default_factory=list)
     covered_scenarios: list[ProductScenarioCoverageItem] = Field(default_factory=list)
     missing_scenarios: list[ProductScenarioCoverageItem] = Field(default_factory=list)
+    out_of_suite_scenarios: list[ProductScenarioCoverageItem] = Field(default_factory=list)
     recommended_next_scenario: ProductScenarioCoverageItem | None = None
     coverage_status: Literal['empty', 'partial', 'complete'] = 'empty'
 

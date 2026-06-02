@@ -1232,11 +1232,13 @@ def test_project_export_returns_owner_scoped_history_bundle():
         'coverage_percent': None,
         'covered_scenario_ids': ['angry-outage-escalation', 'billing-address-change'],
         'missing_scenario_ids': [],
+        'out_of_suite_scenario_ids': [],
         'covered_scenarios': [
             {'id': 'angry-outage-escalation', 'title': 'angry-outage-escalation'},
             {'id': 'billing-address-change', 'title': 'billing-address-change'},
         ],
         'missing_scenarios': [],
+        'out_of_suite_scenarios': [],
         'recommended_next_scenario': None,
         'coverage_status': 'partial',
     }
@@ -1275,12 +1277,14 @@ def test_project_export_returns_owner_scoped_history_bundle():
         'coverage_percent': 25.0,
         'covered_scenario_ids': ['angry-outage-escalation'],
         'missing_scenario_ids': ['billing-address-change', 'interruption-correction-handling', 'refund-policy-boundary'],
+        'out_of_suite_scenario_ids': [],
         'covered_scenarios': [{'id': 'angry-outage-escalation', 'title': 'Angry Outage Escalation'}],
         'missing_scenarios': [
             {'id': 'billing-address-change', 'title': 'Billing Address Change'},
             {'id': 'interruption-correction-handling', 'title': 'Interruption and Correction Handling'},
             {'id': 'refund-policy-boundary', 'title': 'Refund Policy Boundary'},
         ],
+        'out_of_suite_scenarios': [],
         'recommended_next_scenario': {'id': 'billing-address-change', 'title': 'Billing Address Change'},
         'coverage_status': 'partial',
     }
@@ -1447,8 +1451,10 @@ def test_project_export_preserves_custom_suite_covered_scenarios():
         "coverage_percent": None,
         "covered_scenario_ids": ["custom-refund-save"],
         "missing_scenario_ids": [],
+        "out_of_suite_scenario_ids": [],
         "covered_scenarios": [{"id": "custom-refund-save", "title": "custom-refund-save"}],
         "missing_scenarios": [],
+        "out_of_suite_scenarios": [],
         "recommended_next_scenario": None,
         "coverage_status": "partial",
     }
