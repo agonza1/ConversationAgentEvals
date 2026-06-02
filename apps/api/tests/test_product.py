@@ -282,6 +282,71 @@ def test_projects_store_workspace_and_onboarding_settings():
     assert missing.status_code == 404
 
 
+def test_project_export_recommends_first_suite_scenario_when_history_is_empty():
+    project_response = client.post(
+        '/api/product/projects',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'call-center',
+            'name': 'Call Center QA',
+            'plan': 'free',
+        },
+    )
+    assert project_response.status_code == 200
+
+    export_response = client.get(
+        '/api/product/projects/call-center/export',
+        params={'user_id': 'demo-user', 'suite_id': 'call-center-voice-ai'},
+    )
+
+    assert export_response.status_code == 200
+    coverage = export_response.json()['scenario_coverage_summary']
+    assert coverage['covered_scenario_count'] == 0
+    assert coverage['coverage_percent'] == 0.0
+    assert coverage['coverage_status'] == 'empty'
+    assert coverage['recommended_next_scenario'] == {
+        'id': 'billing-address-change',
+        'title': 'Billing Address Change',
+    }
+
+
+def test_project_export_marks_suite_coverage_complete_when_all_scenarios_are_saved():
+    for index, scenario_id in enumerate([
+        'billing-address-change',
+        'angry-outage-escalation',
+        'interruption-correction-handling',
+        'refund-policy-boundary',
+    ]):
+        response = client.post(
+            '/api/product/runs',
+            json={
+                'user_id': 'demo-user',
+                'project_id': 'call-center',
+                'plan': 'starter',
+                'report': {
+                    'run_id': f'coverage-run-{index}',
+                    'overall_score': 90,
+                    'suite_id': 'call-center-voice-ai',
+                    'scenario_id': scenario_id,
+                },
+            },
+        )
+        assert response.status_code == 200
+
+    export_response = client.get(
+        '/api/product/projects/call-center/export',
+        params={'user_id': 'demo-user', 'suite_id': 'call-center-voice-ai'},
+    )
+
+    assert export_response.status_code == 200
+    coverage = export_response.json()['scenario_coverage_summary']
+    assert coverage['covered_scenario_count'] == 4
+    assert coverage['coverage_percent'] == 100.0
+    assert coverage['coverage_status'] == 'complete'
+    assert coverage['missing_scenario_ids'] == []
+    assert coverage['recommended_next_scenario'] is None
+
+
 def test_workspace_editors_can_update_shared_project_settings_but_viewers_cannot():
     workspace = client.post(
         '/api/product/workspaces',
@@ -1172,6 +1237,8 @@ def test_project_export_returns_owner_scoped_history_bundle():
             {'id': 'billing-address-change', 'title': 'billing-address-change'},
         ],
         'missing_scenarios': [],
+        'recommended_next_scenario': None,
+        'coverage_status': 'partial',
     }
     assert [run['report']['run_id'] for run in exported['runs']] == ['run-2', 'run-1', 'run-0']
     assert exported['runs'][0]['artifacts']['regression_delta']['status'] == 'improved'
@@ -1214,6 +1281,8 @@ def test_project_export_returns_owner_scoped_history_bundle():
             {'id': 'interruption-correction-handling', 'title': 'Interruption and Correction Handling'},
             {'id': 'refund-policy-boundary', 'title': 'Refund Policy Boundary'},
         ],
+        'recommended_next_scenario': {'id': 'billing-address-change', 'title': 'Billing Address Change'},
+        'coverage_status': 'partial',
     }
     assert [run['report']['run_id'] for run in filtered['runs']] == ['run-2', 'run-1']
 

@@ -1157,8 +1157,15 @@ function scenarioCoverageExportSummary(summary?: ScenarioCoverageSummary) {
   const missingCount = missingScenarios.length;
   const missingPreview = missingScenarios.slice(0, 2).join(', ');
   const nextScenario = summary.recommended_next_scenario?.title ?? summary.recommended_next_scenario?.id;
-  const nextStep = nextScenario ? ` Next: ${nextScenario}.` : '';
+  const nextStep = nextScenario
+    ? summary.coverage_status === 'empty'
+      ? ` Start with ${nextScenario}.`
+      : ` Next: ${nextScenario}.`
+    : '';
   const coveredPreview = !missingCount && coveredScenarios.length ? ` Covered: ${coveredScenarios.slice(0, 2).join(', ')}.` : '';
+  if (summary.coverage_status === 'complete' || (!missingCount && summary.covered_scenario_count === summary.scenario_count)) {
+    return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); all scenarios covered.${coveredPreview}`;
+  }
   return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); ${missingCount} missing${missingPreview ? `: ${missingPreview}` : ''}.${nextStep}${coveredPreview}`;
 }
 

@@ -155,6 +155,8 @@ class ProductProjectScenarioCoverageSummary(BaseModel):
     missing_scenario_ids: list[str] = Field(default_factory=list)
     covered_scenarios: list[ProductScenarioCoverageItem] = Field(default_factory=list)
     missing_scenarios: list[ProductScenarioCoverageItem] = Field(default_factory=list)
+    recommended_next_scenario: ProductScenarioCoverageItem | None = None
+    coverage_status: Literal['empty', 'partial', 'complete'] = 'empty'
 
 
 class ProductWorkspaceRequest(BaseModel):
