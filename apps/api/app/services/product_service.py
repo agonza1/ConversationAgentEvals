@@ -721,6 +721,7 @@ def _project_scenario_coverage_summary(
         )
 
     covered_in_suite = [scenario_id for scenario_id in scenario_ids if scenario_id in covered_ids]
+    out_of_suite_ids = [scenario_id for scenario_id in covered_ids if scenario_id not in scenario_titles]
     missing_ids = [scenario_id for scenario_id in scenario_ids if scenario_id not in covered_ids]
     coverage_percent = round((len(covered_in_suite) / len(scenario_ids)) * 100, 2) if scenario_ids else None
     recommended_next_scenario = missing_ids[0] if missing_ids else None
@@ -732,8 +733,10 @@ def _project_scenario_coverage_summary(
         coverage_percent=coverage_percent,
         covered_scenario_ids=covered_in_suite,
         missing_scenario_ids=missing_ids,
+        out_of_suite_scenario_ids=out_of_suite_ids,
         covered_scenarios=[{"id": scenario_id, "title": scenario_titles[scenario_id]} for scenario_id in covered_in_suite],
         missing_scenarios=[{"id": scenario_id, "title": scenario_titles[scenario_id]} for scenario_id in missing_ids],
+        out_of_suite_scenarios=[{"id": scenario_id, "title": scenario_id} for scenario_id in out_of_suite_ids],
         recommended_next_scenario=(
             {"id": recommended_next_scenario, "title": scenario_titles[recommended_next_scenario]}
             if recommended_next_scenario else None

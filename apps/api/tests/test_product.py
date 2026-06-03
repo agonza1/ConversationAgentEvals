@@ -1458,3 +1458,62 @@ def test_project_export_preserves_custom_suite_covered_scenarios():
         "recommended_next_scenario": None,
         "coverage_status": "partial",
     }
+
+
+def test_project_export_tracks_out_of_suite_covered_scenarios_for_suite_filters():
+    project_response = client.post(
+        "/api/product/projects",
+        json={
+            "user_id": "demo-user",
+            "project_id": "legacy-suite-history",
+            "name": "Legacy Suite History",
+            "plan": "starter",
+        },
+    )
+    assert project_response.status_code == 200
+
+    suite_runs = [
+        ("legacy-suite-run", "angry-outage-escalation"),
+        ("legacy-custom-run", "legacy-custom-scenario"),
+    ]
+    for run_id, scenario_id in suite_runs:
+        run_response = client.post(
+            "/api/product/runs",
+            json={
+                "user_id": "demo-user",
+                "project_id": "legacy-suite-history",
+                "plan": "starter",
+                "report": {
+                    "run_id": run_id,
+                    "overall_score": 88,
+                    "suite_id": "call-center-voice-ai",
+                    "scenario_id": scenario_id,
+                },
+            },
+        )
+        assert run_response.status_code == 200
+
+    export_response = client.get(
+        "/api/product/projects/legacy-suite-history/export",
+        params={"user_id": "demo-user", "suite_id": "call-center-voice-ai"},
+    )
+
+    assert export_response.status_code == 200
+    assert export_response.json()["scenario_coverage_summary"] == {
+        "suite_id": "call-center-voice-ai",
+        "scenario_count": 4,
+        "covered_scenario_count": 1,
+        "coverage_percent": 25.0,
+        "covered_scenario_ids": ["angry-outage-escalation"],
+        "missing_scenario_ids": ["billing-address-change", "interruption-correction-handling", "refund-policy-boundary"],
+        "out_of_suite_scenario_ids": ["legacy-custom-scenario"],
+        "covered_scenarios": [{"id": "angry-outage-escalation", "title": "Angry Outage Escalation"}],
+        "missing_scenarios": [
+            {"id": "billing-address-change", "title": "Billing Address Change"},
+            {"id": "interruption-correction-handling", "title": "Interruption and Correction Handling"},
+            {"id": "refund-policy-boundary", "title": "Refund Policy Boundary"},
+        ],
+        "out_of_suite_scenarios": [{"id": "legacy-custom-scenario", "title": "legacy-custom-scenario"}],
+        "recommended_next_scenario": {"id": "billing-address-change", "title": "Billing Address Change"},
+        "coverage_status": "partial",
+    }
