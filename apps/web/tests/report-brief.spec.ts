@@ -19,6 +19,8 @@ test('benchmark report includes a share-ready brief', async ({ page }) => {
   await expect(brief).toContainText('Score:');
   await expect(brief).toContainText('Regression:');
   await expect(brief).toContainText('Suite coverage:');
+  await expect(brief).toContainText('Primary risk:');
+  await expect(brief).toContainText('Next step:');
   await expect(brief).toContainText('Missing actions:');
   await expect(brief).toContainText('Suggested fixes:');
 
@@ -94,6 +96,161 @@ test('benchmark report counts the current unsaved run in suite coverage', async 
   await expect(page.getByLabel('Operator action plan')).toContainText('Keep moving through uncovered scenarios');
   await expect(page.getByLabel('Operator action plan')).toContainText(
     'Run Angry Outage Escalation next to keep suite coverage moving before release review.',
+  );
+  await expect(page.getByLabel('Report brief')).toContainText(
+    'Primary risk: 3 suite scenarios still need fresh coverage before release review.',
+  );
+  await expect(page.getByLabel('Report brief')).toContainText(
+    'Next step: Run Angry Outage Escalation next to keep suite coverage moving before release review.',
+  );
+});
+
+test('benchmark report marks complete suite coverage as ready for release review', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    window.localStorage.setItem('conversation-evals-demo-project', 'qa-project');
+  });
+
+  await page.route('**/api/product/runs?*', async (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    const isSuiteCoverageRequest = params.get('suite_id') === 'call-center-voice-ai' && !params.get('scenario_id');
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(isSuiteCoverageRequest ? [
+        {
+          id: 'saved-angry-outage',
+          project_id: 'qa-project',
+          firestore_path: 'users/demo-user/projects/qa-project/runs/saved-angry-outage',
+          plan: 'starter',
+          created_at: '2026-05-31T12:00:00+00:00',
+          report: {
+            run_id: 'saved-angry-outage',
+            suite_id: 'call-center-voice-ai',
+            scenario_id: 'angry-outage-escalation',
+            scenario_title: 'Angry Outage Escalation',
+            verdict: 'pass',
+            overall_score: 90,
+          },
+        },
+        {
+          id: 'saved-interruption',
+          project_id: 'qa-project',
+          firestore_path: 'users/demo-user/projects/qa-project/runs/saved-interruption',
+          plan: 'starter',
+          created_at: '2026-05-31T12:30:00+00:00',
+          report: {
+            run_id: 'saved-interruption',
+            suite_id: 'call-center-voice-ai',
+            scenario_id: 'interruption-correction-handling',
+            scenario_title: 'Interruption and Correction Handling',
+            verdict: 'pass',
+            overall_score: 92,
+          },
+        },
+        {
+          id: 'saved-refund-policy',
+          project_id: 'qa-project',
+          firestore_path: 'users/demo-user/projects/qa-project/runs/saved-refund-policy',
+          plan: 'starter',
+          created_at: '2026-05-31T13:00:00+00:00',
+          report: {
+            run_id: 'saved-refund-policy',
+            suite_id: 'call-center-voice-ai',
+            scenario_id: 'refund-policy-boundary',
+            scenario_title: 'Refund Policy Boundary',
+            verdict: 'pass',
+            overall_score: 93,
+          },
+        },
+      ] : []),
+    });
+  });
+
+  await page.route('**/api/benchmarks/simulate', async (route) => {
+    const payload = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        suite_id: payload.suite_id,
+        scenario_id: payload.scenario_id,
+        scenario_title: 'Billing Address Change',
+        transcript: 'Agent verified the account and confirmed the new billing address.',
+        action_trace: [{ action: 'confirm_address_update', result: 'success' }],
+        final_state: { address_updated: true },
+        benchmark_report: {
+          run_id: 'current-unsaved-run',
+          suite_id: payload.suite_id,
+          scenario_id: payload.scenario_id,
+          scenario_title: 'Billing Address Change',
+          verdict: 'pass',
+          overall_score: 94,
+          evidence: ['Agent verified the account and confirmed the new billing address.'],
+          recommendations: [],
+        },
+      }),
+    });
+  });
+
+  await page.goto('/benchmarks');
+  await page.getByRole('button', { name: 'Simulate scenario' }).click();
+
+  await expect(page.getByLabel('Saved runs and e2e validation')).toContainText('4/4 suite scenarios covered (100%); full suite covered.');
+  await expect(page.getByLabel('Operator action plan')).toContainText('Ready for release review');
+  await expect(page.getByLabel('Operator action plan')).toContainText('No blocking failure category was reported for this scenario.');
+  await expect(page.getByLabel('Report brief')).toContainText(
+    'Primary risk: No blocking failure category was reported for this scenario.',
+  );
+  await expect(page.getByLabel('Operator action plan')).toContainText(
+    'Save this run as the baseline, then compare the next prompt or model change against it.',
+  );
+  await expect(page.getByLabel('Report brief')).toContainText(
+    'Next step: Save this run as the baseline, then compare the next prompt or model change against it.',
+  );
+  await expect(page.getByRole('button', { name: 'Open next uncovered scenario' })).toHaveCount(0);
+});
+
+test('benchmark report keeps failure remediation guidance when the scenario needs review', async ({ page }) => {
+  await page.route('**/api/benchmarks/simulate', async (route) => {
+    const payload = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        suite_id: payload.suite_id,
+        scenario_id: payload.scenario_id,
+        scenario_title: 'Billing Address Change',
+        transcript: 'Agent changed the billing address without confirming identity.',
+        action_trace: [{ action: 'confirm_address_update', result: 'success' }],
+        final_state: { address_updated: true },
+        benchmark_report: {
+          run_id: 'current-unsaved-run',
+          suite_id: payload.suite_id,
+          scenario_id: payload.scenario_id,
+          scenario_title: 'Billing Address Change',
+          verdict: 'needs_review',
+          overall_score: 61,
+          failure_categories: ['required_action_execution'],
+          missing_actions: ['confirm identity'],
+          recommendations: ['Confirm the caller identity before changing the billing address.'],
+          evidence: ['Agent changed the billing address without confirming identity.'],
+        },
+      }),
+    });
+  });
+
+  await page.goto('/benchmarks');
+  await page.getByRole('button', { name: 'Simulate scenario' }).click();
+
+  await expect(page.getByLabel('Operator action plan')).toContainText('Needs operator review');
+  await expect(page.getByLabel('Operator action plan')).toContainText('required action execution');
+  await expect(page.getByLabel('Operator action plan')).toContainText(
+    'Confirm the caller identity before changing the billing address.',
+  );
+  await expect(page.getByLabel('Report brief')).toContainText('Primary risk: required action execution');
+  await expect(page.getByLabel('Report brief')).toContainText(
+    'Next step: Confirm the caller identity before changing the billing address.',
   );
 });
 
@@ -941,7 +1098,7 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   await suiteHistory.getByRole('button', { name: 'Export suite history' }).click();
   const historyDownload = await historyDownloadPromise;
   expect(historyDownload.suggestedFilename()).toBe('agentbench-qa-project-call-center-voice-ai-suite-run-history.json');
-  await expect(page.getByText(/^Exported 2 suite runs to .* Suite trend improved: 82 vs 76 \(\+6\), 75% pass rate\. Top issue: required action execution \(1\)\. 4\/4 suite scenarios covered \(100%\); all scenarios covered\. Covered: Membership Renewal Save, Billing Escalation\./)).toBeVisible();
+  await expect(page.getByText(/^Exported 2 suite runs to .* Suite trend improved: 82 vs 76 \(\+6\), 75% pass rate\. Top issue: required action execution \(1\)\. 4\/4 suite scenarios covered \(100%\); full suite covered\. Covered: Membership Renewal Save, Billing Escalation\./)).toBeVisible();
   await expect(page.getByText('3/2 vCon-ready runs with 4 dialog turns and 1 analysis records.')).toBeVisible();
 
   await latestSuiteRun.getByRole('button', { name: 'Load suite run' }).click();

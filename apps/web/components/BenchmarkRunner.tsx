@@ -1173,7 +1173,7 @@ function scenarioCoverageExportSummary(summary?: ScenarioCoverageSummary) {
     : '';
   const coveredPreview = !missingCount && coveredScenarios.length ? ` Covered: ${coveredScenarios.slice(0, 2).join(', ')}.` : '';
   if (summary.coverage_status === 'complete' || (!missingCount && summary.covered_scenario_count === summary.scenario_count)) {
-    return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); all scenarios covered.${coveredPreview}${outOfSuiteSummary}`;
+    return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); full suite covered.${coveredPreview}${outOfSuiteSummary}`;
   }
   return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); ${missingCount} missing${missingPreview ? `: ${missingPreview}` : ''}.${nextStep}${coveredPreview}${outOfSuiteSummary}`;
 }
@@ -1480,6 +1480,7 @@ function formatReportBrief(
   fallbackScenarioTitle?: string,
   regressionDelta?: RegressionDelta | null,
   suiteCoverage?: ScenarioCoverageSummary | null,
+  actionPlan?: { primaryRisk: string; nextStep: string } | null,
 ) {
   const verdict = report.verdict ?? report.overall ?? 'complete';
   const score = report.score ?? report.overall_score ?? 'n/a';
@@ -1508,6 +1509,8 @@ function formatReportBrief(
     `Failure categories: ${failureCategories}`,
     `Regression: ${regressionDelta ? regressionDeltaSummary(regressionDelta) : 'Not compared'}`,
     `Suite coverage: ${suiteCoverage ? scenarioCoverageExportSummary(suiteCoverage) : 'Not available'}`,
+    `Primary risk: ${actionPlan?.primaryRisk ?? 'Not available'}`,
+    `Next step: ${actionPlan?.nextStep ?? 'Not available'}`,
     `Missing actions: ${missingActions}`,
     `Forbidden actions observed: ${forbiddenActions}`,
     `Suggested fixes: ${suggestedFixes}`,
@@ -2443,8 +2446,10 @@ export function BenchmarkRunner() {
     () => scenarioCoverageFromRuns(selectedSuite, suiteSavedRuns, report),
     [selectedSuite, suiteSavedRuns, report],
   );
-  const reportBrief = report ? formatReportBrief(report, selectedScenario?.title, currentRegressionDelta, suiteScenarioCoverage) : '';
   const actionPlan = report ? reportActionPlan(report, currentRegressionDelta, suiteScenarioCoverage) : null;
+  const reportBrief = report
+    ? formatReportBrief(report, selectedScenario?.title, currentRegressionDelta, suiteScenarioCoverage, actionPlan)
+    : '';
   const onboardingSteps = [
     {
       title: 'Pick a scenario',
