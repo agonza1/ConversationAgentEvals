@@ -142,10 +142,12 @@ test('suite coverage can jump to the next uncovered scenario', async ({ page }) 
 
   await page.getByRole('button', { name: 'Open next uncovered scenario' }).click();
 
+  const benchmarkForm = page.locator('form').first();
+  const scenarioSelect = benchmarkForm.getByLabel('Scenario');
   const selectedScenario = page.getByLabel('Selected scenario');
   await expect(page.getByText('Switched to the next uncovered scenario: Angry Outage Escalation.')).toBeVisible();
   await expect(selectedScenario.getByRole('heading', { name: 'Angry Outage Escalation' })).toBeVisible();
-  await expect(page.getByLabel('Scenario')).toHaveValue('angry-outage-escalation');
+  await expect(scenarioSelect).toHaveValue('angry-outage-escalation');
 });
 
 
@@ -194,10 +196,12 @@ test('suite coverage can focus a specific uncovered scenario from the coverage c
 
   await page.getByRole('button', { name: 'Refund Policy Boundary' }).click();
 
+  const benchmarkForm = page.locator('form').first();
+  const scenarioSelect = benchmarkForm.getByLabel('Scenario');
   const selectedScenario = page.getByLabel('Selected scenario');
   await expect(page.getByText('Focused uncovered scenario: Refund Policy Boundary.')).toBeVisible();
   await expect(selectedScenario.getByRole('heading', { name: 'Refund Policy Boundary' })).toBeVisible();
-  await expect(page.getByLabel('Scenario')).toHaveValue('refund-policy-boundary');
+  await expect(scenarioSelect).toHaveValue('refund-policy-boundary');
   await expect(page.getByLabel('Saved runs and e2e validation')).not.toContainText('Outside suite history:');
 });
 
@@ -998,7 +1002,7 @@ test('suite run history can be refreshed on demand', async ({ page }) => {
 
   await expect(page.getByText('Refreshed 1 suite runs for Call Center Voice AI.')).toBeVisible();
   await expect(suiteHistory.getByRole('heading', { name: /1 suite runs for Call Center Voice AI/ })).toBeVisible();
-  await expect(suiteHistory.getByText('suite-refresh-1')).toBeVisible();
+  await expect(suiteHistory.getByText('call-center-voice-ai')).toBeVisible();
   await expect(page.getByLabel('Latest suite run update')).toContainText('Jun 1, 2026');
   await expect(page.getByLabel('Progress: 0/4 (0%)')).toBeVisible();
 });
