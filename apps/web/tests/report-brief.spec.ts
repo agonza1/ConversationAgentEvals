@@ -143,7 +143,7 @@ test('suite coverage can jump to the next uncovered scenario', async ({ page }) 
   await page.getByRole('button', { name: 'Open next uncovered scenario' }).click();
 
   const benchmarkForm = page.locator('form').first();
-  const scenarioSelect = benchmarkForm.getByLabel('Scenario');
+  const scenarioSelect = benchmarkForm.locator('select').nth(1);
   const selectedScenario = page.getByLabel('Selected scenario');
   await expect(page.getByText('Switched to the next uncovered scenario: Angry Outage Escalation.')).toBeVisible();
   await expect(selectedScenario.getByRole('heading', { name: 'Angry Outage Escalation' })).toBeVisible();
@@ -197,7 +197,7 @@ test('suite coverage can focus a specific uncovered scenario from the coverage c
   await page.getByRole('button', { name: 'Refund Policy Boundary' }).click();
 
   const benchmarkForm = page.locator('form').first();
-  const scenarioSelect = benchmarkForm.getByLabel('Scenario');
+  const scenarioSelect = benchmarkForm.locator('select').nth(1);
   const selectedScenario = page.getByLabel('Selected scenario');
   await expect(page.getByText('Focused uncovered scenario: Refund Policy Boundary.')).toBeVisible();
   await expect(selectedScenario.getByRole('heading', { name: 'Refund Policy Boundary' })).toBeVisible();
