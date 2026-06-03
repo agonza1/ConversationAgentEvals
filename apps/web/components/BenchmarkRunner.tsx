@@ -1493,7 +1493,11 @@ function formatReportBrief(
   ].join('\n');
 }
 
-function reportActionPlan(report: BenchmarkReport, regressionDelta?: RegressionDelta | null) {
+function reportActionPlan(
+  report: BenchmarkReport,
+  regressionDelta?: RegressionDelta | null,
+  suiteCoverage?: ScenarioCoverageSummary | null,
+) {
   const verdict = (report.verdict ?? report.overall ?? '').toLowerCase();
   const score = report.score ?? report.overall_score;
   const missingCount = report.missing_actions?.length ?? 0;
@@ -1501,13 +1505,24 @@ function reportActionPlan(report: BenchmarkReport, regressionDelta?: RegressionD
   const failureCategory = report.failure_categories?.[0]?.replace(/_/g, ' ') ?? null;
   const suggestedFix = report.suggested_fixes?.[0] ?? report.recommendations?.[0] ?? null;
   const isPass = verdict === 'pass' || (typeof score === 'number' && score >= 80 && missingCount === 0 && forbiddenCount === 0);
+  const uncoveredCount = suiteCoverage?.missing_scenarios?.length ?? suiteCoverage?.missing_scenario_ids?.length ?? 0;
+  const nextCoverageScenario = suiteCoverage?.recommended_next_scenario?.title ?? suiteCoverage?.recommended_next_scenario?.id ?? null;
+  const hasCoverageGap = isPass && suiteCoverage?.coverage_status !== 'complete' && uncoveredCount > 0;
 
-  const headline = isPass ? 'Ready for release review' : 'Needs operator review';
+  const headline = hasCoverageGap
+    ? 'Keep moving through uncovered scenarios'
+    : isPass
+      ? 'Ready for release review'
+      : 'Needs operator review';
   const primaryRisk = isPass
-    ? 'No blocking failure category was reported for this scenario.'
+    ? hasCoverageGap
+      ? `${uncoveredCount} suite scenario${uncoveredCount === 1 ? '' : 's'} still need fresh coverage before release review.`
+      : 'No blocking failure category was reported for this scenario.'
     : failureCategory ?? (missingCount ? `${missingCount} required action${missingCount === 1 ? '' : 's'} missing` : 'Benchmark evidence needs review');
   const nextStep = isPass
-    ? 'Save this run as the baseline, then compare the next prompt or model change against it.'
+    ? hasCoverageGap && nextCoverageScenario
+      ? `Run ${nextCoverageScenario} next to keep suite coverage moving before release review.`
+      : 'Save this run as the baseline, then compare the next prompt or model change against it.'
     : suggestedFix ?? 'Fix the highest-risk failure, regenerate evidence, and rerun this scenario before release.';
   const regression = regressionDelta ? regressionDeltaSummary(regressionDelta) : 'Save the run to establish regression tracking.';
 
@@ -2405,7 +2420,7 @@ export function BenchmarkRunner() {
     [selectedSuite, suiteSavedRuns, report],
   );
   const reportBrief = report ? formatReportBrief(report, selectedScenario?.title, currentRegressionDelta, suiteScenarioCoverage) : '';
-  const actionPlan = report ? reportActionPlan(report, currentRegressionDelta) : null;
+  const actionPlan = report ? reportActionPlan(report, currentRegressionDelta, suiteScenarioCoverage) : null;
   const onboardingSteps = [
     {
       title: 'Pick a scenario',

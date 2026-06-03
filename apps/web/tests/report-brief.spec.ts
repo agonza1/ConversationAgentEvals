@@ -89,6 +89,10 @@ test('benchmark report counts the current unsaved run in suite coverage', async 
   await expect(page.getByLabel('Report brief')).toContainText(
     'Suite coverage: 1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling. Next: Angry Outage Escalation. Outside suite: Legacy Escalation.',
   );
+  await expect(page.getByLabel('Operator action plan')).toContainText('Keep moving through uncovered scenarios');
+  await expect(page.getByLabel('Operator action plan')).toContainText(
+    'Run Angry Outage Escalation next to keep suite coverage moving before release review.',
+  );
 });
 
 test('suite coverage can jump to the next uncovered scenario', async ({ page }) => {
