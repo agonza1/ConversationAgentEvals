@@ -85,7 +85,9 @@ test('benchmark report counts the current unsaved run in suite coverage', async 
   await page.goto('/benchmarks');
   await page.getByRole('button', { name: 'Simulate scenario' }).click();
 
-  await expect(page.getByText('1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling. Next: Angry Outage Escalation. Outside suite: Legacy Escalation.')).toBeVisible();
+  await expect(page.getByLabel('Saved runs and e2e validation')).toContainText(
+    '1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling. Next: Angry Outage Escalation. Outside suite: Legacy Escalation.',
+  );
   await expect(page.getByLabel('Report brief')).toContainText(
     'Suite coverage: 1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling. Next: Angry Outage Escalation. Outside suite: Legacy Escalation.',
   );
@@ -194,7 +196,7 @@ test('suite coverage can focus a specific uncovered scenario from the coverage c
   await expect(page.getByText('Focused uncovered scenario: Refund Policy Boundary.')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Refund Policy Boundary' })).toBeVisible();
   await expect(page.getByLabel('Scenario')).toHaveValue('refund-policy-boundary');
-  await expect(page.getByText('Outside suite history: Legacy Escalation.')).toBeVisible();
+  await expect(page.getByLabel('Saved runs and e2e validation')).not.toContainText('Outside suite history:');
 });
 
 test('current benchmark report previews regression delta before saving', async ({ page }) => {
@@ -270,8 +272,10 @@ test('current benchmark report previews regression delta before saving', async (
 
   await expect(page.getByLabel('Unsaved regression comparison')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Current run: improved' })).toBeVisible();
-  await expect(page.getByText('improved: 94 vs 88 (+6) against saved-baseline')).toBeVisible();
-  await expect(page.getByText('1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling. Next: Angry Outage Escalation.')).toBeVisible();
+  await expect(page.getByLabel('Unsaved regression comparison')).toContainText('improved: 94 vs 88 (+6) against saved-baseline');
+  await expect(page.getByLabel('Saved runs and e2e validation')).toContainText(
+    '1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling. Next: Angry Outage Escalation.',
+  );
 
   const brief = page.getByLabel('Report brief');
   await expect(brief).toContainText('Regression: improved: 94 vs 88 (+6)');
@@ -923,8 +927,7 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   await page.getByRole('button', { name: 'Export benchmark history' }).click();
   const benchmarkHistoryDownload = await benchmarkHistoryDownloadPromise;
   expect(benchmarkHistoryDownload.suggestedFilename()).toBe('agentbench-qa-project-call-center-voice-ai-run-history.json');
-  await expect(page.getByText(/^Exported 2 benchmark runs to .* Benchmark trend regressed: 73 vs 91 \(-18\)\. Top issue: required action execution \(1\)\./)).toBeVisible();
-  await expect(page.getByText('2/4 suite scenarios covered (50%); 2 missing: Refund Policy Boundary, Interruption and Correction Handling. Next: Refund Policy Boundary. Outside suite: Legacy Escalation.')).toBeVisible();
+  await expect(page.getByText(/^Exported 2 benchmark runs to .* Benchmark trend regressed: 73 vs 91 \(-18\)\. Top issue: required action execution \(1\)\. 2\/4 suite scenarios covered \(50%\); 2 missing: Refund Policy Boundary, Interruption and Correction Handling\. Next: Refund Policy Boundary\. Outside suite: Legacy Escalation\./)).toBeVisible();
 
   await suiteHistory.getByLabel('Filter suite runs by status').selectOption('completed');
 
@@ -932,8 +935,7 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   await suiteHistory.getByRole('button', { name: 'Export suite history' }).click();
   const historyDownload = await historyDownloadPromise;
   expect(historyDownload.suggestedFilename()).toBe('agentbench-qa-project-call-center-voice-ai-suite-run-history.json');
-  await expect(page.getByText(/^Exported 2 suite runs to .* Suite trend improved: 82 vs 76 \(\+6\), 75% pass rate\. Top issue: required action execution \(1\)\./)).toBeVisible();
-  await expect(page.getByText('4/4 suite scenarios covered (100%); all scenarios covered. Covered: Membership Renewal Save, Billing Escalation.')).toBeVisible();
+  await expect(page.getByText(/^Exported 2 suite runs to .* Suite trend improved: 82 vs 76 \(\+6\), 75% pass rate\. Top issue: required action execution \(1\)\. 4\/4 suite scenarios covered \(100%\); all scenarios covered\. Covered: Membership Renewal Save, Billing Escalation\./)).toBeVisible();
   await expect(page.getByText('3/2 vCon-ready runs with 4 dialog turns and 1 analysis records.')).toBeVisible();
 
   await latestSuiteRun.getByRole('button', { name: 'Load suite run' }).click();
