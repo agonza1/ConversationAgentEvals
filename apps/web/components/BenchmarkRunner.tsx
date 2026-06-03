@@ -2107,6 +2107,12 @@ export function BenchmarkRunner() {
     setSaveMessage(`Switched to the next uncovered scenario: ${suiteScenarioCoverage?.recommended_next_scenario?.title ?? nextScenarioId}.`);
   }
 
+  function onSelectCoverageScenario(scenarioId: string, scenarioTitle?: string) {
+    if (!scenarioId || scenarioId === selectedScenario?.id) return;
+    setSelectedScenarioId(scenarioId);
+    setSaveMessage(`Focused uncovered scenario: ${scenarioTitle ?? scenarioId}.`);
+  }
+
   async function onRefreshSuiteRuns() {
     if (!userId || !selectedSuite?.id) return;
 
@@ -3321,6 +3327,37 @@ export function BenchmarkRunner() {
                     Open next uncovered scenario
                   </button>
                 </div>
+              ) : null}
+              {suiteScenarioCoverage.missing_scenarios?.length ? (
+                <div style={{ display: 'grid', gap: 8 }}>
+                  <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13, fontWeight: 800 }}>
+                    Focus an uncovered scenario
+                  </p>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {suiteScenarioCoverage.missing_scenarios.slice(0, 4).map((scenario) => (
+                      <button
+                        key={scenario.id ?? scenario.title}
+                        type="button"
+                        onClick={() => onSelectCoverageScenario(scenario.id ?? '', scenario.title ?? scenario.id ?? undefined)}
+                        style={{
+                          border: '1px solid var(--border)',
+                          borderRadius: 999,
+                          background: 'var(--surface)',
+                          color: 'var(--text)',
+                          padding: '8px 12px',
+                          fontWeight: 700,
+                        }}
+                      >
+                        {scenario.title ?? scenario.id}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {suiteScenarioCoverage.out_of_suite_scenarios?.length ? (
+                <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13 }}>
+                  Outside suite history: {suiteScenarioCoverage.out_of_suite_scenarios.map((scenario) => scenario.title ?? scenario.id).join(', ')}.
+                </p>
               ) : null}
             </div>
           ) : null}

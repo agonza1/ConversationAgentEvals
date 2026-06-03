@@ -141,6 +141,58 @@ test('suite coverage can jump to the next uncovered scenario', async ({ page }) 
   await expect(page.getByLabel('Scenario')).toHaveValue('angry-outage-escalation');
 });
 
+
+test('suite coverage can focus a specific uncovered scenario from the coverage card', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    window.localStorage.setItem('conversation-evals-demo-project', 'qa-project');
+  });
+
+  await page.route('**/api/product/runs?*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([]),
+    });
+  });
+
+  await page.route('**/api/benchmarks/simulate', async (route) => {
+    const payload = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        suite_id: payload.suite_id,
+        scenario_id: payload.scenario_id,
+        scenario_title: 'Billing Address Change',
+        transcript: 'Agent verified the account and confirmed the new billing address.',
+        action_trace: [{ action: 'confirm_address_update', result: 'success' }],
+        final_state: { address_updated: true },
+        benchmark_report: {
+          run_id: 'current-unsaved-run',
+          suite_id: payload.suite_id,
+          scenario_id: payload.scenario_id,
+          scenario_title: 'Billing Address Change',
+          verdict: 'pass',
+          overall_score: 94,
+          evidence: ['Agent verified the account and confirmed the new billing address.'],
+          recommendations: [],
+        },
+      }),
+    });
+  });
+
+  await page.goto('/benchmarks');
+  await page.getByRole('button', { name: 'Simulate scenario' }).click();
+
+  await page.getByRole('button', { name: 'Refund Policy Boundary' }).click();
+
+  await expect(page.getByText('Focused uncovered scenario: Refund Policy Boundary.')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Refund Policy Boundary' })).toBeVisible();
+  await expect(page.getByLabel('Scenario')).toHaveValue('refund-policy-boundary');
+  await expect(page.getByText('Outside suite history: Legacy Escalation.')).toBeVisible();
+});
+
 test('current benchmark report previews regression delta before saving', async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
