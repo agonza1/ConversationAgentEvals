@@ -213,8 +213,10 @@ interface ScenarioCoverageSummary {
   coverage_percent?: number | null;
   covered_scenario_ids?: string[];
   missing_scenario_ids?: string[];
+  out_of_suite_scenario_ids?: string[];
   covered_scenarios?: Array<{ id?: string; title?: string }>;
   missing_scenarios?: Array<{ id?: string; title?: string }>;
+  out_of_suite_scenarios?: Array<{ id?: string; title?: string }>;
   recommended_next_scenario?: { id?: string; title?: string } | null;
   coverage_status?: 'empty' | 'partial' | 'complete' | string;
 }
@@ -408,6 +410,7 @@ interface BenchmarkSuiteRunHistoryExport {
   };
   vcon_export_summary: ProjectVconExportSummary;
   suite_contract_artifact_summary?: ProjectContractArtifactSummary;
+  scenario_coverage_summary?: ScenarioCoverageSummary;
   suite_runs: BenchmarkSuiteRunRecord[];
   exported_at: string;
 }
@@ -1145,9 +1148,15 @@ function scenarioCoverageExportSummary(summary?: ScenarioCoverageSummary) {
   const coveredScenarios = summary.covered_scenarios?.length
     ? summary.covered_scenarios.map((scenario) => scenario.title ?? scenario.id).filter(Boolean)
     : summary.covered_scenario_ids ?? [];
+  const outOfSuiteScenarios = summary.out_of_suite_scenarios?.length
+    ? summary.out_of_suite_scenarios.map((scenario) => scenario.title ?? scenario.id).filter(Boolean)
+    : summary.out_of_suite_scenario_ids ?? [];
+  const outOfSuiteCount = outOfSuiteScenarios.length;
+  const outOfSuitePreview = outOfSuiteScenarios.slice(0, 2).join(', ');
+  const outOfSuiteSummary = outOfSuiteCount ? ` Outside suite: ${outOfSuitePreview}${outOfSuiteCount > 2 ? `, +${outOfSuiteCount - 2} more` : ''}.` : '';
   if (typeof summary.scenario_count !== 'number') {
     const coveredPreview = coveredScenarios.slice(0, 2).join(', ');
-    return `${summary.covered_scenario_count ?? 0} distinct scenarios covered${coveredPreview ? `: ${coveredPreview}` : ''}.`;
+    return `${summary.covered_scenario_count ?? 0} distinct scenarios covered${coveredPreview ? `: ${coveredPreview}` : ''}.${outOfSuiteSummary}`;
   }
 
   const coverage = typeof summary.coverage_percent === 'number' ? `${summary.coverage_percent}%` : 'n/a';
@@ -1157,9 +1166,71 @@ function scenarioCoverageExportSummary(summary?: ScenarioCoverageSummary) {
   const missingCount = missingScenarios.length;
   const missingPreview = missingScenarios.slice(0, 2).join(', ');
   const nextScenario = summary.recommended_next_scenario?.title ?? summary.recommended_next_scenario?.id;
-  const nextStep = nextScenario ? ` Next: ${nextScenario}.` : '';
+  const nextStep = nextScenario
+    ? summary.coverage_status === 'empty'
+      ? ` Start with ${nextScenario}.`
+      : ` Next: ${nextScenario}.`
+    : '';
   const coveredPreview = !missingCount && coveredScenarios.length ? ` Covered: ${coveredScenarios.slice(0, 2).join(', ')}.` : '';
-  return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); ${missingCount} missing${missingPreview ? `: ${missingPreview}` : ''}.${nextStep}${coveredPreview}`;
+  if (summary.coverage_status === 'complete' || (!missingCount && summary.covered_scenario_count === summary.scenario_count)) {
+    return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); all scenarios covered.${coveredPreview}${outOfSuiteSummary}`;
+  }
+  return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); ${missingCount} missing${missingPreview ? `: ${missingPreview}` : ''}.${nextStep}${coveredPreview}${outOfSuiteSummary}`;
+}
+
+
+function scenarioCoverageFromRuns(
+  suite: BenchmarkSuite | null,
+  runs: SavedRun[],
+  currentReport?: BenchmarkReport | null,
+): ScenarioCoverageSummary | null {
+  if (!suite) return null;
+  const scenarioTitles = new Map(suite.scenarios.map((scenario) => [scenario.id, scenario.title]));
+  const outOfSuiteScenarios = new Map<string, string>();
+  const coveredIds = new Set(
+    runs
+      .map((run) => {
+        const scenarioId = run.report.scenario_id;
+        if (!scenarioId) return null;
+        if (!scenarioTitles.has(scenarioId)) {
+          outOfSuiteScenarios.set(scenarioId, run.report.scenario_title ?? scenarioId);
+          return null;
+        }
+        return scenarioId;
+      })
+      .filter((scenarioId): scenarioId is string => Boolean(scenarioId)),
+  );
+  if (currentReport?.scenario_id) {
+    if (scenarioTitles.has(currentReport.scenario_id)) {
+      coveredIds.add(currentReport.scenario_id);
+    } else if ((currentReport.suite_id ?? suite.id) === suite.id) {
+      outOfSuiteScenarios.set(currentReport.scenario_id, currentReport.scenario_title ?? currentReport.scenario_id);
+    }
+  }
+  const coveredScenarioIds = suite.scenarios.map((scenario) => scenario.id).filter((scenarioId) => coveredIds.has(scenarioId));
+  const missingScenarioIds = suite.scenarios.map((scenario) => scenario.id).filter((scenarioId) => !coveredIds.has(scenarioId));
+  const recommendedNextScenario = missingScenarioIds[0] ?? null;
+  const outOfSuiteScenarioIds = [...outOfSuiteScenarios.keys()];
+
+  return {
+    suite_id: suite.id,
+    scenario_count: suite.scenarios.length,
+    covered_scenario_count: coveredScenarioIds.length,
+    coverage_percent: suite.scenarios.length ? Math.round((coveredScenarioIds.length / suite.scenarios.length) * 10000) / 100 : null,
+    covered_scenario_ids: coveredScenarioIds,
+    missing_scenario_ids: missingScenarioIds,
+    out_of_suite_scenario_ids: outOfSuiteScenarioIds,
+    covered_scenarios: coveredScenarioIds.map((scenarioId) => ({ id: scenarioId, title: scenarioTitles.get(scenarioId) ?? scenarioId })),
+    missing_scenarios: missingScenarioIds.map((scenarioId) => ({ id: scenarioId, title: scenarioTitles.get(scenarioId) ?? scenarioId })),
+    out_of_suite_scenarios: outOfSuiteScenarioIds.map((scenarioId) => ({
+      id: scenarioId,
+      title: outOfSuiteScenarios.get(scenarioId) ?? scenarioId,
+    })),
+    recommended_next_scenario: recommendedNextScenario
+      ? { id: recommendedNextScenario, title: scenarioTitles.get(recommendedNextScenario) ?? recommendedNextScenario }
+      : null,
+    coverage_status: missingScenarioIds.length === 0 && suite.scenarios.length ? 'complete' : coveredScenarioIds.length ? 'partial' : 'empty',
+  };
 }
 
 function benchmarkRunHistoryExportSummary(summary?: BenchmarkRunHistoryExport['summary']) {
@@ -1353,6 +1424,27 @@ function formatSuiteRunProgress(progress?: BenchmarkSuiteRunProgress) {
   return `${completed}/${total} (${percent})`;
 }
 
+function mergeSuiteRunRecords(
+  currentRuns: BenchmarkSuiteRunRecord[],
+  incomingRuns: BenchmarkSuiteRunRecord[],
+  suiteId?: string,
+  statusFilter?: string,
+) {
+  const mergedRuns = [...incomingRuns];
+  const seenSuiteRunIds = new Set(incomingRuns.map((run) => run.suite_run_id));
+
+  currentRuns.forEach((run) => {
+    if (seenSuiteRunIds.has(run.suite_run_id)) return;
+    if (!isActiveSuiteRunStatus(run.status)) return;
+    if (suiteId && run.suite_id !== suiteId) return;
+    if (statusFilter && run.status !== statusFilter) return;
+
+    mergedRuns.push(run);
+  });
+
+  return mergedRuns;
+}
+
 function formatMetricPercent(value?: number) {
   if (typeof value !== 'number' || Number.isNaN(value)) return 'n/a';
   return `${Math.round(value * 100)}%`;
@@ -1383,7 +1475,12 @@ function formatForbiddenActionHit(hit: string | JsonRecord) {
   return JSON.stringify(hit);
 }
 
-function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: string, regressionDelta?: RegressionDelta | null) {
+function formatReportBrief(
+  report: BenchmarkReport,
+  fallbackScenarioTitle?: string,
+  regressionDelta?: RegressionDelta | null,
+  suiteCoverage?: ScenarioCoverageSummary | null,
+) {
   const verdict = report.verdict ?? report.overall ?? 'complete';
   const score = report.score ?? report.overall_score ?? 'n/a';
   const scenario = report.scenario_title ?? fallbackScenarioTitle ?? 'Selected scenario';
@@ -1410,13 +1507,18 @@ function formatReportBrief(report: BenchmarkReport, fallbackScenarioTitle?: stri
     `Scenario contract: ${contractFingerprint}`,
     `Failure categories: ${failureCategories}`,
     `Regression: ${regressionDelta ? regressionDeltaSummary(regressionDelta) : 'Not compared'}`,
+    `Suite coverage: ${suiteCoverage ? scenarioCoverageExportSummary(suiteCoverage) : 'Not available'}`,
     `Missing actions: ${missingActions}`,
     `Forbidden actions observed: ${forbiddenActions}`,
     `Suggested fixes: ${suggestedFixes}`,
   ].join('\n');
 }
 
-function reportActionPlan(report: BenchmarkReport, regressionDelta?: RegressionDelta | null) {
+function reportActionPlan(
+  report: BenchmarkReport,
+  regressionDelta?: RegressionDelta | null,
+  suiteCoverage?: ScenarioCoverageSummary | null,
+) {
   const verdict = (report.verdict ?? report.overall ?? '').toLowerCase();
   const score = report.score ?? report.overall_score;
   const missingCount = report.missing_actions?.length ?? 0;
@@ -1424,13 +1526,24 @@ function reportActionPlan(report: BenchmarkReport, regressionDelta?: RegressionD
   const failureCategory = report.failure_categories?.[0]?.replace(/_/g, ' ') ?? null;
   const suggestedFix = report.suggested_fixes?.[0] ?? report.recommendations?.[0] ?? null;
   const isPass = verdict === 'pass' || (typeof score === 'number' && score >= 80 && missingCount === 0 && forbiddenCount === 0);
+  const uncoveredCount = suiteCoverage?.missing_scenarios?.length ?? suiteCoverage?.missing_scenario_ids?.length ?? 0;
+  const nextCoverageScenario = suiteCoverage?.recommended_next_scenario?.title ?? suiteCoverage?.recommended_next_scenario?.id ?? null;
+  const hasCoverageGap = isPass && suiteCoverage?.coverage_status !== 'complete' && uncoveredCount > 0;
 
-  const headline = isPass ? 'Ready for release review' : 'Needs operator review';
+  const headline = hasCoverageGap
+    ? 'Keep moving through uncovered scenarios'
+    : isPass
+      ? 'Ready for release review'
+      : 'Needs operator review';
   const primaryRisk = isPass
-    ? 'No blocking failure category was reported for this scenario.'
+    ? hasCoverageGap
+      ? `${uncoveredCount} suite scenario${uncoveredCount === 1 ? '' : 's'} still need fresh coverage before release review.`
+      : 'No blocking failure category was reported for this scenario.'
     : failureCategory ?? (missingCount ? `${missingCount} required action${missingCount === 1 ? '' : 's'} missing` : 'Benchmark evidence needs review');
   const nextStep = isPass
-    ? 'Save this run as the baseline, then compare the next prompt or model change against it.'
+    ? hasCoverageGap && nextCoverageScenario
+      ? `Run ${nextCoverageScenario} next to keep suite coverage moving before release review.`
+      : 'Save this run as the baseline, then compare the next prompt or model change against it.'
     : suggestedFix ?? 'Fix the highest-risk failure, regenerate evidence, and rerun this scenario before release.';
   const regression = regressionDelta ? regressionDeltaSummary(regressionDelta) : 'Save the run to establish regression tracking.';
 
@@ -1518,6 +1631,7 @@ export function BenchmarkRunner() {
   const [projectId, setProjectId] = useState('call-center-demo');
   const [plan, setPlan] = useState<PricingPlan['id']>('free');
   const [savedRuns, setSavedRuns] = useState<SavedRun[]>([]);
+  const [suiteSavedRuns, setSuiteSavedRuns] = useState<SavedRun[]>([]);
   const [auditEvents, setAuditEvents] = useState<ProductAuditEvent[]>([]);
   const [suiteRuns, setSuiteRuns] = useState<BenchmarkSuiteRunRecord[]>([]);
   const visibleSuiteHistorySummary = useMemo(() => suiteHistorySummaryFromRuns(suiteRuns), [suiteRuns]);
@@ -1590,34 +1704,37 @@ export function BenchmarkRunner() {
   useEffect(() => {
     if (!userId) {
       setSavedRuns([]);
+      setSuiteSavedRuns([]);
       setAuditEvents([]);
       setSuiteRuns([]);
       setProjectRegressionSummary(null);
       setScenarioRegressionSummary(null);
       return;
     }
+    if (!selectedSuite?.id || !selectedScenario?.id) return;
 
     let isMounted = true;
     Promise.all([
-      listSavedRuns(userId, projectId, selectedSuite?.id, selectedScenario?.id),
+      listSavedRuns(userId, projectId, selectedSuite.id, selectedScenario.id),
+      listSavedRuns(userId, projectId, selectedSuite.id).catch(() => []),
       listAuditEvents(userId, projectId).catch(() => []),
-      listBenchmarkSuiteRuns(userId, projectId, selectedSuite?.id, suiteRunStatusFilter).catch(() => []),
+      listBenchmarkSuiteRuns(userId, projectId, selectedSuite.id, suiteRunStatusFilter).catch(() => []),
       fetchProjectRegressionSummary(userId, projectId).catch(() => null),
-      selectedSuite?.id && selectedScenario?.id
-        ? fetchProjectRegressionSummary(userId, projectId, selectedSuite.id, selectedScenario.id).catch(() => null)
-        : Promise.resolve(null),
+      fetchProjectRegressionSummary(userId, projectId, selectedSuite.id, selectedScenario.id).catch(() => null),
     ])
-      .then(([runs, events, nextSuiteRuns, summary, scenarioSummary]) => {
+      .then(([runs, nextSuiteSavedRuns, events, nextSuiteRuns, summary, scenarioSummary]) => {
         if (!isMounted) return;
         setSavedRuns(runs);
+        setSuiteSavedRuns(nextSuiteSavedRuns);
         setAuditEvents(events);
-        setSuiteRuns(nextSuiteRuns);
+        setSuiteRuns((current) => mergeSuiteRunRecords(current, nextSuiteRuns, selectedSuite.id, suiteRunStatusFilter));
         setProjectRegressionSummary(summary);
         setScenarioRegressionSummary(scenarioSummary);
       })
       .catch(() => {
         if (!isMounted) return;
         setSavedRuns([]);
+        setSuiteSavedRuns([]);
         setAuditEvents([]);
         setSuiteRuns([]);
         setProjectRegressionSummary(null);
@@ -1687,7 +1804,9 @@ export function BenchmarkRunner() {
 
     const interval = window.setInterval(() => {
       listBenchmarkSuiteRuns(userId, projectId, selectedSuite.id, suiteRunStatusFilter)
-        .then(setSuiteRuns)
+        .then((nextSuiteRuns) => {
+          setSuiteRuns((current) => mergeSuiteRunRecords(current, nextSuiteRuns, selectedSuite.id, suiteRunStatusFilter));
+        })
         .catch(() => undefined);
     }, 4000);
 
@@ -2012,10 +2131,23 @@ export function BenchmarkRunner() {
     try {
       const exported = await exportBenchmarkSuiteRunHistory(userId, projectId, selectedSuite?.id, suiteRunStatusFilter);
       downloadJson(exported.filename, exported);
-      setExportMessage(`Exported ${exported.suite_run_count} suite runs to ${exported.filename}. ${suiteHistoryExportSummary(exported.summary)} ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.suite_contract_artifact_summary)}`);
+      setExportMessage(`Exported ${exported.suite_run_count} suite runs to ${exported.filename}. ${suiteHistoryExportSummary(exported.summary)} ${scenarioCoverageExportSummary(exported.scenario_coverage_summary)} ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.suite_contract_artifact_summary)}`);
     } catch (err) {
       setExportMessage(err instanceof Error ? err.message : 'Could not export suite run history.');
     }
+  }
+
+  function onSelectRecommendedScenario() {
+    const nextScenarioId = suiteScenarioCoverage?.recommended_next_scenario?.id;
+    if (!nextScenarioId || nextScenarioId === selectedScenario?.id) return;
+    setSelectedScenarioId(nextScenarioId);
+    setSaveMessage(`Switched to the next uncovered scenario: ${suiteScenarioCoverage?.recommended_next_scenario?.title ?? nextScenarioId}.`);
+  }
+
+  function onSelectCoverageScenario(scenarioId: string, scenarioTitle?: string) {
+    if (!scenarioId || scenarioId === selectedScenario?.id) return;
+    setSelectedScenarioId(scenarioId);
+    setSaveMessage(`Focused uncovered scenario: ${scenarioTitle ?? scenarioId}.`);
   }
 
   async function onRefreshSuiteRuns() {
@@ -2024,8 +2156,9 @@ export function BenchmarkRunner() {
     setIsRefreshingSuiteRuns(true);
     try {
       const refreshed = await listBenchmarkSuiteRuns(userId, projectId, selectedSuite.id, suiteRunStatusFilter);
-      setSuiteRuns(refreshed);
-      setSaveMessage(`Refreshed ${refreshed.length} suite runs for ${selectedSuite.title}.`);
+      const merged = mergeSuiteRunRecords(suiteRuns, refreshed, selectedSuite.id, suiteRunStatusFilter);
+      setSuiteRuns(merged);
+      setSaveMessage(`Refreshed ${merged.length} suite runs for ${selectedSuite.title}.`);
     } catch (err) {
       setSaveMessage(err instanceof Error ? err.message : 'Could not refresh suite runs.');
     } finally {
@@ -2212,7 +2345,9 @@ export function BenchmarkRunner() {
       setSuiteSimulation(simulation);
       if (userId) {
         listBenchmarkSuiteRuns(userId, projectId, selectedSuite.id, suiteRunStatusFilter)
-          .then(setSuiteRuns)
+          .then((nextSuiteRuns) => {
+            setSuiteRuns((current) => mergeSuiteRunRecords(current, nextSuiteRuns, selectedSuite.id, suiteRunStatusFilter));
+          })
           .catch(() => setSuiteRuns([]));
       }
       if (focusedRun) {
@@ -2256,6 +2391,7 @@ export function BenchmarkRunner() {
         ...runMetadata,
       });
       setSuiteRuns((current) => [queued, ...current.filter((run) => run.suite_run_id !== queued.suite_run_id)]);
+      setSaveMessage(`Queued suite run ${queued.suite_run_id} for ${projectId}.`);
       if (suiteRunStatusFilter) setSuiteRunStatusFilter('');
       let latest = queued;
       for (let attempt = 0; attempt < 8 && isActiveSuiteRunStatus(latest.status); attempt += 1) {
@@ -2267,11 +2403,9 @@ export function BenchmarkRunner() {
           break;
         }
       }
-      setSaveMessage(
-        isActiveSuiteRunStatus(latest.status)
-          ? `Queued suite run ${queued.suite_run_id} for ${projectId}; it is ${latest.status}.`
-          : `Suite run ${queued.suite_run_id} finished as ${latest.status}.`,
-      );
+      if (!isActiveSuiteRunStatus(latest.status)) {
+        setSaveMessage(`Suite run ${queued.suite_run_id} finished as ${latest.status}.`);
+      }
     } catch (err) {
       setRunError(err instanceof Error ? err.message : 'Could not queue suite simulation.');
     } finally {
@@ -2305,8 +2439,12 @@ export function BenchmarkRunner() {
     selectedScenario?.id && savedRuns.some((run) => run.report.scenario_id === selectedScenario.id),
   );
   const currentRegressionDelta = useMemo(() => currentReportRegressionDelta(report, savedRuns), [report, savedRuns]);
-  const reportBrief = report ? formatReportBrief(report, selectedScenario?.title, currentRegressionDelta) : '';
-  const actionPlan = report ? reportActionPlan(report, currentRegressionDelta) : null;
+  const suiteScenarioCoverage = useMemo(
+    () => scenarioCoverageFromRuns(selectedSuite, suiteSavedRuns, report),
+    [selectedSuite, suiteSavedRuns, report],
+  );
+  const reportBrief = report ? formatReportBrief(report, selectedScenario?.title, currentRegressionDelta, suiteScenarioCoverage) : '';
+  const actionPlan = report ? reportActionPlan(report, currentRegressionDelta, suiteScenarioCoverage) : null;
   const onboardingSteps = [
     {
       title: 'Pick a scenario',
@@ -2463,7 +2601,10 @@ export function BenchmarkRunner() {
         {isLoading ? <p style={{ margin: 0, color: 'var(--muted)' }}>Loading benchmark suites...</p> : null}
 
         {selectedScenario ? (
-          <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, background: 'var(--panel-alt)', display: 'grid', gap: 10 }}>
+          <div
+            aria-label="Selected scenario"
+            style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, background: 'var(--panel-alt)', display: 'grid', gap: 10 }}
+          >
             <div>
               <p style={{ margin: '0 0 6px', color: 'var(--muted)', fontSize: 13 }}>{selectedScenario.domain ?? selectedSuite?.title}</p>
               <h3 style={{ margin: 0 }}>{selectedScenario.title}</h3>
@@ -3196,6 +3337,70 @@ export function BenchmarkRunner() {
                 Latest {scenarioRegressionSummary.latest_score ?? 'n/a'} vs previous {scenarioRegressionSummary.previous_score ?? 'n/a'}
                 {' '}({formatSignedDelta(scenarioRegressionSummary.latest_delta)}), pass rate {scenarioRegressionSummary.pass_rate ?? 'n/a'}%.
               </p>
+            </div>
+          ) : null}
+          {suiteScenarioCoverage ? (
+            <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white', display: 'grid', gap: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                <strong style={{ color: suiteScenarioCoverage.coverage_status === 'complete' ? 'var(--success-text)' : 'var(--text)' }}>
+                  Suite scenario coverage
+                </strong>
+                <span style={{ color: 'var(--muted)', fontWeight: 800 }}>
+                  {suiteScenarioCoverage.covered_scenario_count}/{suiteScenarioCoverage.scenario_count ?? 0} covered
+                </span>
+              </div>
+              <p style={{ margin: 0, color: 'var(--muted)' }}>
+                {scenarioCoverageExportSummary(suiteScenarioCoverage)}
+              </p>
+              {suiteScenarioCoverage.recommended_next_scenario?.id ? (
+                <div>
+                  <button
+                    type="button"
+                    onClick={onSelectRecommendedScenario}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 999,
+                      background: 'white',
+                      color: 'var(--text)',
+                      padding: '8px 12px',
+                      fontWeight: 800,
+                    }}
+                  >
+                    Open next uncovered scenario
+                  </button>
+                </div>
+              ) : null}
+              {suiteScenarioCoverage.missing_scenarios?.length ? (
+                <div style={{ display: 'grid', gap: 8 }}>
+                  <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13, fontWeight: 800 }}>
+                    Focus an uncovered scenario
+                  </p>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {suiteScenarioCoverage.missing_scenarios.slice(0, 4).map((scenario) => (
+                      <button
+                        key={scenario.id ?? scenario.title}
+                        type="button"
+                        onClick={() => onSelectCoverageScenario(scenario.id ?? '', scenario.title ?? scenario.id ?? undefined)}
+                        style={{
+                          border: '1px solid var(--border)',
+                          borderRadius: 999,
+                          background: 'var(--surface)',
+                          color: 'var(--text)',
+                          padding: '8px 12px',
+                          fontWeight: 700,
+                        }}
+                      >
+                        {scenario.title ?? scenario.id}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {suiteScenarioCoverage.out_of_suite_scenarios?.length ? (
+                <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13 }}>
+                  Outside suite history: {suiteScenarioCoverage.out_of_suite_scenarios.map((scenario) => scenario.title ?? scenario.id).join(', ')}.
+                </p>
+              ) : null}
             </div>
           ) : null}
           {savedRuns.length ? (
