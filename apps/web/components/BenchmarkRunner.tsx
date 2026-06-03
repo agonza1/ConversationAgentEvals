@@ -1424,6 +1424,27 @@ function formatSuiteRunProgress(progress?: BenchmarkSuiteRunProgress) {
   return `${completed}/${total} (${percent})`;
 }
 
+function mergeSuiteRunRecords(
+  currentRuns: BenchmarkSuiteRunRecord[],
+  incomingRuns: BenchmarkSuiteRunRecord[],
+  suiteId?: string,
+  statusFilter?: string,
+) {
+  const mergedRuns = [...incomingRuns];
+  const seenSuiteRunIds = new Set(incomingRuns.map((run) => run.suite_run_id));
+
+  currentRuns.forEach((run) => {
+    if (seenSuiteRunIds.has(run.suite_run_id)) return;
+    if (!isActiveSuiteRunStatus(run.status)) return;
+    if (suiteId && run.suite_id !== suiteId) return;
+    if (statusFilter && run.status !== statusFilter) return;
+
+    mergedRuns.push(run);
+  });
+
+  return mergedRuns;
+}
+
 function formatMetricPercent(value?: number) {
   if (typeof value !== 'number' || Number.isNaN(value)) return 'n/a';
   return `${Math.round(value * 100)}%`;
@@ -1690,24 +1711,23 @@ export function BenchmarkRunner() {
       setScenarioRegressionSummary(null);
       return;
     }
+    if (!selectedSuite?.id || !selectedScenario?.id) return;
 
     let isMounted = true;
     Promise.all([
-      listSavedRuns(userId, projectId, selectedSuite?.id, selectedScenario?.id),
-      selectedSuite?.id ? listSavedRuns(userId, projectId, selectedSuite.id).catch(() => []) : Promise.resolve([]),
+      listSavedRuns(userId, projectId, selectedSuite.id, selectedScenario.id),
+      listSavedRuns(userId, projectId, selectedSuite.id).catch(() => []),
       listAuditEvents(userId, projectId).catch(() => []),
-      listBenchmarkSuiteRuns(userId, projectId, selectedSuite?.id, suiteRunStatusFilter).catch(() => []),
+      listBenchmarkSuiteRuns(userId, projectId, selectedSuite.id, suiteRunStatusFilter).catch(() => []),
       fetchProjectRegressionSummary(userId, projectId).catch(() => null),
-      selectedSuite?.id && selectedScenario?.id
-        ? fetchProjectRegressionSummary(userId, projectId, selectedSuite.id, selectedScenario.id).catch(() => null)
-        : Promise.resolve(null),
+      fetchProjectRegressionSummary(userId, projectId, selectedSuite.id, selectedScenario.id).catch(() => null),
     ])
       .then(([runs, nextSuiteSavedRuns, events, nextSuiteRuns, summary, scenarioSummary]) => {
         if (!isMounted) return;
         setSavedRuns(runs);
         setSuiteSavedRuns(nextSuiteSavedRuns);
         setAuditEvents(events);
-        setSuiteRuns(nextSuiteRuns);
+        setSuiteRuns((current) => mergeSuiteRunRecords(current, nextSuiteRuns, selectedSuite.id, suiteRunStatusFilter));
         setProjectRegressionSummary(summary);
         setScenarioRegressionSummary(scenarioSummary);
       })
@@ -1784,7 +1804,9 @@ export function BenchmarkRunner() {
 
     const interval = window.setInterval(() => {
       listBenchmarkSuiteRuns(userId, projectId, selectedSuite.id, suiteRunStatusFilter)
-        .then(setSuiteRuns)
+        .then((nextSuiteRuns) => {
+          setSuiteRuns((current) => mergeSuiteRunRecords(current, nextSuiteRuns, selectedSuite.id, suiteRunStatusFilter));
+        })
         .catch(() => undefined);
     }, 4000);
 
@@ -2134,8 +2156,9 @@ export function BenchmarkRunner() {
     setIsRefreshingSuiteRuns(true);
     try {
       const refreshed = await listBenchmarkSuiteRuns(userId, projectId, selectedSuite.id, suiteRunStatusFilter);
-      setSuiteRuns(refreshed);
-      setSaveMessage(`Refreshed ${refreshed.length} suite runs for ${selectedSuite.title}.`);
+      const merged = mergeSuiteRunRecords(suiteRuns, refreshed, selectedSuite.id, suiteRunStatusFilter);
+      setSuiteRuns(merged);
+      setSaveMessage(`Refreshed ${merged.length} suite runs for ${selectedSuite.title}.`);
     } catch (err) {
       setSaveMessage(err instanceof Error ? err.message : 'Could not refresh suite runs.');
     } finally {
@@ -2322,7 +2345,9 @@ export function BenchmarkRunner() {
       setSuiteSimulation(simulation);
       if (userId) {
         listBenchmarkSuiteRuns(userId, projectId, selectedSuite.id, suiteRunStatusFilter)
-          .then(setSuiteRuns)
+          .then((nextSuiteRuns) => {
+            setSuiteRuns((current) => mergeSuiteRunRecords(current, nextSuiteRuns, selectedSuite.id, suiteRunStatusFilter));
+          })
           .catch(() => setSuiteRuns([]));
       }
       if (focusedRun) {
@@ -2366,6 +2391,7 @@ export function BenchmarkRunner() {
         ...runMetadata,
       });
       setSuiteRuns((current) => [queued, ...current.filter((run) => run.suite_run_id !== queued.suite_run_id)]);
+      setSaveMessage(`Queued suite run ${queued.suite_run_id} for ${projectId}.`);
       if (suiteRunStatusFilter) setSuiteRunStatusFilter('');
       let latest = queued;
       for (let attempt = 0; attempt < 8 && isActiveSuiteRunStatus(latest.status); attempt += 1) {
@@ -2377,11 +2403,9 @@ export function BenchmarkRunner() {
           break;
         }
       }
-      setSaveMessage(
-        isActiveSuiteRunStatus(latest.status)
-          ? `Queued suite run ${queued.suite_run_id} for ${projectId}; it is ${latest.status}.`
-          : `Suite run ${queued.suite_run_id} finished as ${latest.status}.`,
-      );
+      if (!isActiveSuiteRunStatus(latest.status)) {
+        setSaveMessage(`Suite run ${queued.suite_run_id} finished as ${latest.status}.`);
+      }
     } catch (err) {
       setRunError(err instanceof Error ? err.message : 'Could not queue suite simulation.');
     } finally {
@@ -2577,7 +2601,10 @@ export function BenchmarkRunner() {
         {isLoading ? <p style={{ margin: 0, color: 'var(--muted)' }}>Loading benchmark suites...</p> : null}
 
         {selectedScenario ? (
-          <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, background: 'var(--panel-alt)', display: 'grid', gap: 10 }}>
+          <div
+            aria-label="Selected scenario"
+            style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, background: 'var(--panel-alt)', display: 'grid', gap: 10 }}
+          >
             <div>
               <p style={{ margin: '0 0 6px', color: 'var(--muted)', fontSize: 13 }}>{selectedScenario.domain ?? selectedSuite?.title}</p>
               <h3 style={{ margin: 0 }}>{selectedScenario.title}</h3>
