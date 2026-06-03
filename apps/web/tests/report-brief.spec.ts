@@ -19,6 +19,8 @@ test('benchmark report includes a share-ready brief', async ({ page }) => {
   await expect(brief).toContainText('Score:');
   await expect(brief).toContainText('Regression:');
   await expect(brief).toContainText('Suite coverage:');
+  await expect(brief).toContainText('Primary risk:');
+  await expect(brief).toContainText('Next step:');
   await expect(brief).toContainText('Missing actions:');
   await expect(brief).toContainText('Suggested fixes:');
 
@@ -94,6 +96,12 @@ test('benchmark report counts the current unsaved run in suite coverage', async 
   await expect(page.getByLabel('Operator action plan')).toContainText('Keep moving through uncovered scenarios');
   await expect(page.getByLabel('Operator action plan')).toContainText(
     'Run Angry Outage Escalation next to keep suite coverage moving before release review.',
+  );
+  await expect(page.getByLabel('Report brief')).toContainText(
+    'Primary risk: 3 suite scenarios still need fresh coverage before release review.',
+  );
+  await expect(page.getByLabel('Report brief')).toContainText(
+    'Next step: Run Angry Outage Escalation next to keep suite coverage moving before release review.',
   );
 });
 
@@ -191,8 +199,14 @@ test('benchmark report marks complete suite coverage as ready for release review
   await expect(page.getByLabel('Saved runs and e2e validation')).toContainText('4/4 suite scenarios covered (100%); full suite covered.');
   await expect(page.getByLabel('Operator action plan')).toContainText('Ready for release review');
   await expect(page.getByLabel('Operator action plan')).toContainText('No blocking failure category was reported for this scenario.');
+  await expect(page.getByLabel('Report brief')).toContainText(
+    'Primary risk: No blocking failure category was reported for this scenario.',
+  );
   await expect(page.getByLabel('Operator action plan')).toContainText(
     'Save this run as the baseline, then compare the next prompt or model change against it.',
+  );
+  await expect(page.getByLabel('Report brief')).toContainText(
+    'Next step: Save this run as the baseline, then compare the next prompt or model change against it.',
   );
   await expect(page.getByRole('button', { name: 'Open next uncovered scenario' })).toHaveCount(0);
 });
@@ -233,6 +247,10 @@ test('benchmark report keeps failure remediation guidance when the scenario need
   await expect(page.getByLabel('Operator action plan')).toContainText('required action execution');
   await expect(page.getByLabel('Operator action plan')).toContainText(
     'Confirm the caller identity before changing the billing address.',
+  );
+  await expect(page.getByLabel('Report brief')).toContainText('Primary risk: required action execution');
+  await expect(page.getByLabel('Report brief')).toContainText(
+    'Next step: Confirm the caller identity before changing the billing address.',
   );
 });
 

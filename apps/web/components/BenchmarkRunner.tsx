@@ -1480,6 +1480,7 @@ function formatReportBrief(
   fallbackScenarioTitle?: string,
   regressionDelta?: RegressionDelta | null,
   suiteCoverage?: ScenarioCoverageSummary | null,
+  actionPlan?: { primaryRisk: string; nextStep: string } | null,
 ) {
   const verdict = report.verdict ?? report.overall ?? 'complete';
   const score = report.score ?? report.overall_score ?? 'n/a';
@@ -1508,6 +1509,8 @@ function formatReportBrief(
     `Failure categories: ${failureCategories}`,
     `Regression: ${regressionDelta ? regressionDeltaSummary(regressionDelta) : 'Not compared'}`,
     `Suite coverage: ${suiteCoverage ? scenarioCoverageExportSummary(suiteCoverage) : 'Not available'}`,
+    `Primary risk: ${actionPlan?.primaryRisk ?? 'Not available'}`,
+    `Next step: ${actionPlan?.nextStep ?? 'Not available'}`,
     `Missing actions: ${missingActions}`,
     `Forbidden actions observed: ${forbiddenActions}`,
     `Suggested fixes: ${suggestedFixes}`,
@@ -2443,8 +2446,10 @@ export function BenchmarkRunner() {
     () => scenarioCoverageFromRuns(selectedSuite, suiteSavedRuns, report),
     [selectedSuite, suiteSavedRuns, report],
   );
-  const reportBrief = report ? formatReportBrief(report, selectedScenario?.title, currentRegressionDelta, suiteScenarioCoverage) : '';
   const actionPlan = report ? reportActionPlan(report, currentRegressionDelta, suiteScenarioCoverage) : null;
+  const reportBrief = report
+    ? formatReportBrief(report, selectedScenario?.title, currentRegressionDelta, suiteScenarioCoverage, actionPlan)
+    : '';
   const onboardingSteps = [
     {
       title: 'Pick a scenario',
