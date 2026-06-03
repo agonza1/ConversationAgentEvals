@@ -33,10 +33,26 @@ test('benchmark report counts the current unsaved run in suite coverage', async 
   });
 
   await page.route('**/api/product/runs?*', async (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    const isSuiteCoverageRequest = params.get('suite_id') === 'call-center-voice-ai' && !params.get('scenario_id');
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify([]),
+      body: JSON.stringify(isSuiteCoverageRequest ? [{
+        id: 'legacy-suite-run',
+        project_id: 'qa-project',
+        firestore_path: 'users/demo-user/projects/qa-project/runs/legacy-suite-run',
+        plan: 'starter',
+        created_at: '2026-05-31T12:00:00+00:00',
+        report: {
+          run_id: 'legacy-suite-run',
+          suite_id: 'call-center-voice-ai',
+          scenario_id: 'legacy-escalation',
+          scenario_title: 'Legacy Escalation',
+          verdict: 'pass',
+          overall_score: 80,
+        },
+      }] : []),
     });
   });
 
@@ -69,9 +85,9 @@ test('benchmark report counts the current unsaved run in suite coverage', async 
   await page.goto('/benchmarks');
   await page.getByRole('button', { name: 'Simulate scenario' }).click();
 
-  await expect(page.getByText('1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling. Next: Angry Outage Escalation.')).toBeVisible();
+  await expect(page.getByText('1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling. Next: Angry Outage Escalation. Outside suite: Legacy Escalation.')).toBeVisible();
   await expect(page.getByLabel('Report brief')).toContainText(
-    'Suite coverage: 1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling. Next: Angry Outage Escalation.',
+    'Suite coverage: 1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling. Next: Angry Outage Escalation. Outside suite: Legacy Escalation.',
   );
 });
 
@@ -735,6 +751,7 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
           coverage_percent: 50,
           covered_scenario_ids: ['membership-renewal-save', 'billing-escalation'],
           missing_scenario_ids: ['refund-policy-boundary', 'interruption-correction-handling'],
+          out_of_suite_scenario_ids: ['legacy-escalation'],
           covered_scenarios: [
             { id: 'membership-renewal-save', title: 'Membership Renewal Save' },
             { id: 'billing-escalation', title: 'Billing Escalation' },
@@ -742,6 +759,9 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
           missing_scenarios: [
             { id: 'refund-policy-boundary', title: 'Refund Policy Boundary' },
             { id: 'interruption-correction-handling', title: 'Interruption and Correction Handling' },
+          ],
+          out_of_suite_scenarios: [
+            { id: 'legacy-escalation', title: 'Legacy Escalation' },
           ],
           recommended_next_scenario: { id: 'refund-policy-boundary', title: 'Refund Policy Boundary' },
           coverage_status: 'partial',
@@ -848,7 +868,7 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   const benchmarkHistoryDownload = await benchmarkHistoryDownloadPromise;
   expect(benchmarkHistoryDownload.suggestedFilename()).toBe('agentbench-qa-project-call-center-voice-ai-run-history.json');
   await expect(page.getByText(/^Exported 2 benchmark runs to .* Benchmark trend regressed: 73 vs 91 \(-18\)\. Top issue: required action execution \(1\)\./)).toBeVisible();
-  await expect(page.getByText('2/4 suite scenarios covered (50%); 2 missing: Refund Policy Boundary, Interruption and Correction Handling. Next: Refund Policy Boundary.')).toBeVisible();
+  await expect(page.getByText('2/4 suite scenarios covered (50%); 2 missing: Refund Policy Boundary, Interruption and Correction Handling. Next: Refund Policy Boundary. Outside suite: Legacy Escalation.')).toBeVisible();
 
   await suiteHistory.getByLabel('Filter suite runs by status').selectOption('completed');
 

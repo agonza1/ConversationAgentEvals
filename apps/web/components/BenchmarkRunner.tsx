@@ -213,8 +213,10 @@ interface ScenarioCoverageSummary {
   coverage_percent?: number | null;
   covered_scenario_ids?: string[];
   missing_scenario_ids?: string[];
+  out_of_suite_scenario_ids?: string[];
   covered_scenarios?: Array<{ id?: string; title?: string }>;
   missing_scenarios?: Array<{ id?: string; title?: string }>;
+  out_of_suite_scenarios?: Array<{ id?: string; title?: string }>;
   recommended_next_scenario?: { id?: string; title?: string } | null;
   coverage_status?: 'empty' | 'partial' | 'complete' | string;
 }
@@ -1146,9 +1148,15 @@ function scenarioCoverageExportSummary(summary?: ScenarioCoverageSummary) {
   const coveredScenarios = summary.covered_scenarios?.length
     ? summary.covered_scenarios.map((scenario) => scenario.title ?? scenario.id).filter(Boolean)
     : summary.covered_scenario_ids ?? [];
+  const outOfSuiteScenarios = summary.out_of_suite_scenarios?.length
+    ? summary.out_of_suite_scenarios.map((scenario) => scenario.title ?? scenario.id).filter(Boolean)
+    : summary.out_of_suite_scenario_ids ?? [];
+  const outOfSuiteCount = outOfSuiteScenarios.length;
+  const outOfSuitePreview = outOfSuiteScenarios.slice(0, 2).join(', ');
+  const outOfSuiteSummary = outOfSuiteCount ? ` Outside suite: ${outOfSuitePreview}${outOfSuiteCount > 2 ? `, +${outOfSuiteCount - 2} more` : ''}.` : '';
   if (typeof summary.scenario_count !== 'number') {
     const coveredPreview = coveredScenarios.slice(0, 2).join(', ');
-    return `${summary.covered_scenario_count ?? 0} distinct scenarios covered${coveredPreview ? `: ${coveredPreview}` : ''}.`;
+    return `${summary.covered_scenario_count ?? 0} distinct scenarios covered${coveredPreview ? `: ${coveredPreview}` : ''}.${outOfSuiteSummary}`;
   }
 
   const coverage = typeof summary.coverage_percent === 'number' ? `${summary.coverage_percent}%` : 'n/a';
@@ -1165,9 +1173,9 @@ function scenarioCoverageExportSummary(summary?: ScenarioCoverageSummary) {
     : '';
   const coveredPreview = !missingCount && coveredScenarios.length ? ` Covered: ${coveredScenarios.slice(0, 2).join(', ')}.` : '';
   if (summary.coverage_status === 'complete' || (!missingCount && summary.covered_scenario_count === summary.scenario_count)) {
-    return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); all scenarios covered.${coveredPreview}`;
+    return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); all scenarios covered.${coveredPreview}${outOfSuiteSummary}`;
   }
-  return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); ${missingCount} missing${missingPreview ? `: ${missingPreview}` : ''}.${nextStep}${coveredPreview}`;
+  return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); ${missingCount} missing${missingPreview ? `: ${missingPreview}` : ''}.${nextStep}${coveredPreview}${outOfSuiteSummary}`;
 }
 
 
@@ -1178,17 +1186,31 @@ function scenarioCoverageFromRuns(
 ): ScenarioCoverageSummary | null {
   if (!suite) return null;
   const scenarioTitles = new Map(suite.scenarios.map((scenario) => [scenario.id, scenario.title]));
+  const outOfSuiteScenarios = new Map<string, string>();
   const coveredIds = new Set(
     runs
-      .map((run) => run.report.scenario_id)
-      .filter((scenarioId): scenarioId is string => Boolean(scenarioId && scenarioTitles.has(scenarioId))),
+      .map((run) => {
+        const scenarioId = run.report.scenario_id;
+        if (!scenarioId) return null;
+        if (!scenarioTitles.has(scenarioId)) {
+          outOfSuiteScenarios.set(scenarioId, run.report.scenario_title ?? scenarioId);
+          return null;
+        }
+        return scenarioId;
+      })
+      .filter((scenarioId): scenarioId is string => Boolean(scenarioId)),
   );
-  if (currentReport?.scenario_id && scenarioTitles.has(currentReport.scenario_id)) {
-    coveredIds.add(currentReport.scenario_id);
+  if (currentReport?.scenario_id) {
+    if (scenarioTitles.has(currentReport.scenario_id)) {
+      coveredIds.add(currentReport.scenario_id);
+    } else if ((currentReport.suite_id ?? suite.id) === suite.id) {
+      outOfSuiteScenarios.set(currentReport.scenario_id, currentReport.scenario_title ?? currentReport.scenario_id);
+    }
   }
   const coveredScenarioIds = suite.scenarios.map((scenario) => scenario.id).filter((scenarioId) => coveredIds.has(scenarioId));
   const missingScenarioIds = suite.scenarios.map((scenario) => scenario.id).filter((scenarioId) => !coveredIds.has(scenarioId));
   const recommendedNextScenario = missingScenarioIds[0] ?? null;
+  const outOfSuiteScenarioIds = [...outOfSuiteScenarios.keys()];
 
   return {
     suite_id: suite.id,
@@ -1197,8 +1219,13 @@ function scenarioCoverageFromRuns(
     coverage_percent: suite.scenarios.length ? Math.round((coveredScenarioIds.length / suite.scenarios.length) * 10000) / 100 : null,
     covered_scenario_ids: coveredScenarioIds,
     missing_scenario_ids: missingScenarioIds,
+    out_of_suite_scenario_ids: outOfSuiteScenarioIds,
     covered_scenarios: coveredScenarioIds.map((scenarioId) => ({ id: scenarioId, title: scenarioTitles.get(scenarioId) ?? scenarioId })),
     missing_scenarios: missingScenarioIds.map((scenarioId) => ({ id: scenarioId, title: scenarioTitles.get(scenarioId) ?? scenarioId })),
+    out_of_suite_scenarios: outOfSuiteScenarioIds.map((scenarioId) => ({
+      id: scenarioId,
+      title: outOfSuiteScenarios.get(scenarioId) ?? scenarioId,
+    })),
     recommended_next_scenario: recommendedNextScenario
       ? { id: recommendedNextScenario, title: scenarioTitles.get(recommendedNextScenario) ?? recommendedNextScenario }
       : null,
