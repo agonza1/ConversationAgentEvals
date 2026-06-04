@@ -436,6 +436,7 @@ test('suite coverage can jump to the next uncovered scenario', async ({ page }) 
   await page.goto('/benchmarks');
   await page.getByRole('button', { name: 'Simulate scenario' }).click();
 
+  await expect(page.getByLabel('Saved runs and e2e validation')).toContainText('Recommended next: Angry Outage Escalation.');
   await page.getByRole('button', { name: 'Open next uncovered scenario' }).click();
 
   const benchmarkForm = page.locator('form').first();

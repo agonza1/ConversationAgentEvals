@@ -3357,6 +3357,11 @@ export function BenchmarkRunner() {
               <p style={{ margin: 0, color: 'var(--muted)' }}>
                 {scenarioCoverageExportSummary(suiteScenarioCoverage)}
               </p>
+              {suiteScenarioCoverage.recommended_next_scenario?.title ? (
+                <p style={{ margin: 0, color: 'var(--text)', fontSize: 13, fontWeight: 700 }}>
+                  Recommended next: {suiteScenarioCoverage.recommended_next_scenario.title}.
+                </p>
+              ) : null}
               {suiteScenarioCoverage.recommended_next_scenario?.id ? (
                 <div>
                   <button
