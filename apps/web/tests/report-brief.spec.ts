@@ -364,6 +364,63 @@ test('suite coverage can focus a specific uncovered scenario from the coverage c
   await expect(page.getByLabel('Saved runs and e2e validation')).not.toContainText('Outside suite history:');
 });
 
+
+test('empty suites show setup guidance before users try to run evidence checks', async ({ page }) => {
+  await page.route('**/api/benchmarks/suites', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          id: 'empty-suite',
+          title: 'Empty Suite',
+          description: 'Needs scenario coverage setup.',
+          scenarios: [],
+        },
+      ]),
+    });
+  });
+
+  await page.route('**/api/benchmarks/suites/empty-suite/scenarios', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([]),
+    });
+  });
+
+  await page.route('**/api/benchmarks/suites/empty-suite/contract-manifest', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        suite_id: 'empty-suite',
+        scenario_count: 0,
+        suite_contract_manifest_sha256: 'abcdef1234567890abcdef1234567890',
+        scenario_contracts: [],
+        evidence_requirements: {
+          required_artifacts: ['transcript'],
+          scoring_dimensions: ['task completion'],
+        },
+      }),
+    });
+  });
+
+  await page.goto('/benchmarks');
+
+  const benchmarkForm = page.locator('form').first();
+  await expect(benchmarkForm.locator('select').nth(1)).toBeDisabled();
+  await expect(page.getByLabel('Suite setup guidance')).toContainText('Empty Suite has no benchmark scenarios yet.');
+  await expect(page.getByLabel('Suite setup guidance')).toContainText(
+    'Add at least one scenario to run evidence checks, queue suite runs, and track coverage for this suite.',
+  );
+  await expect(page.getByLabel('Getting started')).toContainText(
+    'Empty Suite needs at least one scenario before you can run evidence checks.',
+  );
+  await expect(page.getByRole('button', { name: 'Simulate scenario' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Queue suite run' })).toBeDisabled();
+});
+
 test('current benchmark report previews regression delta before saving', async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');

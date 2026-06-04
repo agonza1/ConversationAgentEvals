@@ -2457,9 +2457,13 @@ export function BenchmarkRunner() {
   const onboardingSteps = [
     {
       title: 'Pick a scenario',
-      detail: selectedScenario ? selectedScenario.title : 'Choose the benchmark suite and scenario to test.',
+      detail: selectedScenario
+        ? selectedScenario.title
+        : selectedSuite && !selectedSuite.scenarios.length
+          ? `${selectedSuite.title} needs at least one scenario before you can run evidence checks.`
+          : 'Choose the benchmark suite and scenario to test.',
       done: Boolean(selectedScenario),
-      ready: Boolean(selectedScenario),
+      ready: Boolean(selectedScenario || (selectedSuite && !selectedSuite.scenarios.length)),
     },
     {
       title: 'Run evidence check',
@@ -2652,8 +2656,16 @@ export function BenchmarkRunner() {
               )}
             </div>
           </div>
-        ) : !isLoading ? (
-          <p style={{ margin: 0, color: 'var(--muted)' }}>No benchmark scenarios are available yet.</p>
+        ) : selectedSuite && !isLoading ? (
+          <div
+            aria-label="Suite setup guidance"
+            style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, background: 'var(--panel-alt)', display: 'grid', gap: 8 }}
+          >
+            <strong>{selectedSuite.title} has no benchmark scenarios yet.</strong>
+            <p style={{ margin: 0, color: 'var(--muted)', lineHeight: 1.5 }}>
+              Add at least one scenario to run evidence checks, queue suite runs, and track coverage for this suite.
+            </p>
+          </div>
         ) : null}
 
         <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 14 }}>
