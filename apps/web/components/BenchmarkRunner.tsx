@@ -1165,6 +1165,7 @@ function scenarioCoverageExportSummary(summary?: ScenarioCoverageSummary) {
     : summary.missing_scenario_ids ?? [];
   const missingCount = missingScenarios.length;
   const missingPreview = missingScenarios.slice(0, 2).join(', ');
+  const missingOverflow = missingCount > 2 ? `, +${missingCount - 2} more` : '';
   const nextScenario = summary.recommended_next_scenario?.title ?? summary.recommended_next_scenario?.id;
   const nextStep = nextScenario
     ? summary.coverage_status === 'empty'
@@ -1175,7 +1176,7 @@ function scenarioCoverageExportSummary(summary?: ScenarioCoverageSummary) {
   if (summary.coverage_status === 'complete' || (!missingCount && summary.covered_scenario_count === summary.scenario_count)) {
     return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); full suite covered.${coveredPreview}${outOfSuiteSummary}`;
   }
-  return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); ${missingCount} missing${missingPreview ? `: ${missingPreview}` : ''}.${nextStep}${coveredPreview}${outOfSuiteSummary}`;
+  return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); ${missingCount} missing${missingPreview ? `: ${missingPreview}${missingOverflow}` : ''}.${nextStep}${coveredPreview}${outOfSuiteSummary}`;
 }
 
 

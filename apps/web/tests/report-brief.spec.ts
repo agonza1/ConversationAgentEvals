@@ -88,10 +88,10 @@ test('benchmark report counts the current unsaved run in suite coverage', async 
   await page.getByRole('button', { name: 'Simulate scenario' }).click();
 
   await expect(page.getByLabel('Saved runs and e2e validation')).toContainText(
-    '1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling. Next: Angry Outage Escalation. Outside suite: Legacy Escalation.',
+    '1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling, +1 more. Next: Angry Outage Escalation. Outside suite: Legacy Escalation.',
   );
   await expect(page.getByLabel('Report brief')).toContainText(
-    'Suite coverage: 1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling. Next: Angry Outage Escalation. Outside suite: Legacy Escalation.',
+    'Suite coverage: 1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling, +1 more. Next: Angry Outage Escalation. Outside suite: Legacy Escalation.',
   );
   await expect(page.getByLabel('Operator action plan')).toContainText('Keep moving through uncovered scenarios');
   await expect(page.getByLabel('Operator action plan')).toContainText(
@@ -577,12 +577,12 @@ test('current benchmark report previews regression delta before saving', async (
   await expect(page.getByRole('heading', { name: 'Current run: improved' })).toBeVisible();
   await expect(page.getByLabel('Unsaved regression comparison')).toContainText('improved: 94 vs 88 (+6) against saved-baseline');
   await expect(page.getByLabel('Saved runs and e2e validation')).toContainText(
-    '1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling. Next: Angry Outage Escalation.',
+    '1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling, +1 more. Next: Angry Outage Escalation.',
   );
 
   const brief = page.getByLabel('Report brief');
   await expect(brief).toContainText('Regression: improved: 94 vs 88 (+6)');
-  await expect(brief).toContainText('Suite coverage: 1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling. Next: Angry Outage Escalation.');
+  await expect(brief).toContainText('Suite coverage: 1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling, +1 more. Next: Angry Outage Escalation.');
 });
 
 test('benchmark runner submits structured voice call evidence', async ({ page }) => {
