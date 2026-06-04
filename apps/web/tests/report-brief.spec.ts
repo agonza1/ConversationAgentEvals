@@ -914,6 +914,78 @@ test('benchmark runner queues retained suite runs in the background', async ({ p
   await expect(suiteHistory.getByText('Scenario artifacts appear when the suite run completes.')).toBeVisible();
 });
 
+test('benchmark history export handles zero-scenario coverage without claiming full coverage', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    window.localStorage.setItem('conversation-evals-demo-project', 'qa-project');
+  });
+
+  await page.route('**/api/benchmarks/runs/export?*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'benchmark-history-demo-user-qa-project-empty-suite',
+        user_id: 'demo-user',
+        project_id: 'qa-project',
+        suite_id: 'empty-suite',
+        filename: 'agentbench-qa-project-empty-suite-run-history.json',
+        run_count: 1,
+        summary: {
+          latest_run_id: 'scenario-run-1',
+          latest_status: 'pass',
+          latest_score: 88,
+          previous_score: null,
+          latest_delta: null,
+          latest_trend: 'baseline',
+          status_counts: { pass: 1 },
+          failure_category_counts: {},
+          top_failure_categories: [],
+        },
+        scenario_coverage_summary: {
+          suite_id: 'empty-suite',
+          scenario_count: 0,
+          covered_scenario_count: 0,
+          coverage_percent: null,
+          covered_scenario_ids: [],
+          missing_scenario_ids: [],
+          out_of_suite_scenario_ids: ['legacy-escalation'],
+          covered_scenarios: [],
+          missing_scenarios: [],
+          out_of_suite_scenarios: [
+            { id: 'legacy-escalation', title: 'Legacy Escalation' },
+          ],
+          recommended_next_scenario: null,
+          coverage_status: 'empty',
+        },
+        vcon_export_summary: {
+          available_records: 0,
+          missing_records: 1,
+          total_runs: 1,
+          dialog_turns: 0,
+          analysis_records: 0,
+        },
+        contract_artifact_summary: {
+          available_records: 0,
+          total_runs: 1,
+          suite_contract_manifest_sha256s: [],
+          scenario_contract_sha256s: [],
+        },
+        runs: [{ run_id: 'scenario-run-1' }],
+        exported_at: '2026-05-29T15:00:00+00:00',
+      }),
+    });
+  });
+
+  await page.goto('/benchmarks');
+
+  const historyDownloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export benchmark history' }).click();
+  const historyDownload = await historyDownloadPromise;
+  expect(historyDownload.suggestedFilename()).toBe('agentbench-qa-project-empty-suite-run-history.json');
+  await expect(page.getByText(/^Exported 1 benchmark runs to .* Benchmark trend baseline: 88 vs n\/a \(n\/a\)\. No recurring failure category\. No suite scenarios configured\. Outside suite: Legacy Escalation\./)).toBeVisible();
+});
+
 test('benchmark runner shows retained suite run history', async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');

@@ -1158,6 +1158,9 @@ function scenarioCoverageExportSummary(summary?: ScenarioCoverageSummary) {
     const coveredPreview = coveredScenarios.slice(0, 2).join(', ');
     return `${summary.covered_scenario_count ?? 0} distinct scenarios covered${coveredPreview ? `: ${coveredPreview}` : ''}.${outOfSuiteSummary}`;
   }
+  if (summary.scenario_count === 0) {
+    return `No suite scenarios configured.${outOfSuiteSummary}`;
+  }
 
   const coverage = typeof summary.coverage_percent === 'number' ? `${summary.coverage_percent}%` : 'n/a';
   const missingScenarios = summary.missing_scenarios?.length
