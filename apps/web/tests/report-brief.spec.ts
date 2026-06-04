@@ -88,15 +88,16 @@ test('benchmark report counts the current unsaved run in suite coverage', async 
   await page.getByRole('button', { name: 'Simulate scenario' }).click();
 
   await expect(page.getByLabel('Saved runs and e2e validation')).toContainText(
-    '1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling. Next: Angry Outage Escalation. Outside suite: Legacy Escalation.',
+    '1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling, +1 more. Next: Angry Outage Escalation. Outside suite: Legacy Escalation.',
   );
   await expect(page.getByLabel('Report brief')).toContainText(
-    'Suite coverage: 1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling. Next: Angry Outage Escalation. Outside suite: Legacy Escalation.',
+    'Suite coverage: 1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling, +1 more. Next: Angry Outage Escalation. Outside suite: Legacy Escalation.',
   );
   await expect(page.getByLabel('Operator action plan')).toContainText('Keep moving through uncovered scenarios');
   await expect(page.getByLabel('Operator action plan')).toContainText(
     'Run Angry Outage Escalation next to keep suite coverage moving before release review.',
   );
+  await expect(page.getByRole('button', { name: 'Open Angry Outage Escalation' })).toBeVisible();
   await expect(page.getByLabel('Report brief')).toContainText(
     'Primary risk: 3 suite scenarios still need fresh coverage before release review.',
   );
@@ -297,6 +298,7 @@ test('suite coverage can jump to the next uncovered scenario', async ({ page }) 
   await page.goto('/benchmarks');
   await page.getByRole('button', { name: 'Simulate scenario' }).click();
 
+  await expect(page.getByLabel('Saved runs and e2e validation')).toContainText('Recommended next: Angry Outage Escalation.');
   await page.getByRole('button', { name: 'Open next uncovered scenario' }).click();
 
   const benchmarkForm = page.locator('form').first();
@@ -437,12 +439,12 @@ test('current benchmark report previews regression delta before saving', async (
   await expect(page.getByRole('heading', { name: 'Current run: improved' })).toBeVisible();
   await expect(page.getByLabel('Unsaved regression comparison')).toContainText('improved: 94 vs 88 (+6) against saved-baseline');
   await expect(page.getByLabel('Saved runs and e2e validation')).toContainText(
-    '1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling. Next: Angry Outage Escalation.',
+    '1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling, +1 more. Next: Angry Outage Escalation.',
   );
 
   const brief = page.getByLabel('Report brief');
   await expect(brief).toContainText('Regression: improved: 94 vs 88 (+6)');
-  await expect(brief).toContainText('Suite coverage: 1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling. Next: Angry Outage Escalation.');
+  await expect(brief).toContainText('Suite coverage: 1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling, +1 more. Next: Angry Outage Escalation.');
 });
 
 test('benchmark runner submits structured voice call evidence', async ({ page }) => {
@@ -771,6 +773,78 @@ test('benchmark runner queues retained suite runs in the background', async ({ p
   await expect(suiteHistory.getByRole('heading', { name: /1 suite runs/ })).toBeVisible();
   await expect(suiteHistory.locator('article').getByText('queued')).toBeVisible();
   await expect(suiteHistory.getByText('Scenario artifacts appear when the suite run completes.')).toBeVisible();
+});
+
+test('benchmark history export handles zero-scenario coverage without claiming full coverage', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    window.localStorage.setItem('conversation-evals-demo-project', 'qa-project');
+  });
+
+  await page.route('**/api/benchmarks/runs/export?*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        id: 'benchmark-history-demo-user-qa-project-empty-suite',
+        user_id: 'demo-user',
+        project_id: 'qa-project',
+        suite_id: 'empty-suite',
+        filename: 'agentbench-qa-project-empty-suite-run-history.json',
+        run_count: 1,
+        summary: {
+          latest_run_id: 'scenario-run-1',
+          latest_status: 'pass',
+          latest_score: 88,
+          previous_score: null,
+          latest_delta: null,
+          latest_trend: 'baseline',
+          status_counts: { pass: 1 },
+          failure_category_counts: {},
+          top_failure_categories: [],
+        },
+        scenario_coverage_summary: {
+          suite_id: 'empty-suite',
+          scenario_count: 0,
+          covered_scenario_count: 0,
+          coverage_percent: null,
+          covered_scenario_ids: [],
+          missing_scenario_ids: [],
+          out_of_suite_scenario_ids: ['legacy-escalation'],
+          covered_scenarios: [],
+          missing_scenarios: [],
+          out_of_suite_scenarios: [
+            { id: 'legacy-escalation', title: 'Legacy Escalation' },
+          ],
+          recommended_next_scenario: null,
+          coverage_status: 'empty',
+        },
+        vcon_export_summary: {
+          available_records: 0,
+          missing_records: 1,
+          total_runs: 1,
+          dialog_turns: 0,
+          analysis_records: 0,
+        },
+        contract_artifact_summary: {
+          available_records: 0,
+          total_runs: 1,
+          suite_contract_manifest_sha256s: [],
+          scenario_contract_sha256s: [],
+        },
+        runs: [{ run_id: 'scenario-run-1' }],
+        exported_at: '2026-05-29T15:00:00+00:00',
+      }),
+    });
+  });
+
+  await page.goto('/benchmarks');
+
+  const historyDownloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Export benchmark history' }).click();
+  const historyDownload = await historyDownloadPromise;
+  expect(historyDownload.suggestedFilename()).toBe('agentbench-qa-project-empty-suite-run-history.json');
+  await expect(page.getByText(/^Exported 1 benchmark runs to .* Benchmark trend baseline: 88 vs n\/a \(n\/a\)\. No recurring failure category\. No suite scenarios configured\. Outside suite: Legacy Escalation\./)).toBeVisible();
 });
 
 test('benchmark runner shows retained suite run history', async ({ page }) => {

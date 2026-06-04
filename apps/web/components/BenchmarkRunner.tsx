@@ -1158,6 +1158,9 @@ function scenarioCoverageExportSummary(summary?: ScenarioCoverageSummary) {
     const coveredPreview = coveredScenarios.slice(0, 2).join(', ');
     return `${summary.covered_scenario_count ?? 0} distinct scenarios covered${coveredPreview ? `: ${coveredPreview}` : ''}.${outOfSuiteSummary}`;
   }
+  if (summary.scenario_count === 0) {
+    return `No suite scenarios configured.${outOfSuiteSummary}`;
+  }
 
   const coverage = typeof summary.coverage_percent === 'number' ? `${summary.coverage_percent}%` : 'n/a';
   const missingScenarios = summary.missing_scenarios?.length
@@ -1165,6 +1168,7 @@ function scenarioCoverageExportSummary(summary?: ScenarioCoverageSummary) {
     : summary.missing_scenario_ids ?? [];
   const missingCount = missingScenarios.length;
   const missingPreview = missingScenarios.slice(0, 2).join(', ');
+  const missingOverflow = missingCount > 2 ? `, +${missingCount - 2} more` : '';
   const nextScenario = summary.recommended_next_scenario?.title ?? summary.recommended_next_scenario?.id;
   const nextStep = nextScenario
     ? summary.coverage_status === 'empty'
@@ -1175,7 +1179,7 @@ function scenarioCoverageExportSummary(summary?: ScenarioCoverageSummary) {
   if (summary.coverage_status === 'complete' || (!missingCount && summary.covered_scenario_count === summary.scenario_count)) {
     return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); full suite covered.${coveredPreview}${outOfSuiteSummary}`;
   }
-  return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); ${missingCount} missing${missingPreview ? `: ${missingPreview}` : ''}.${nextStep}${coveredPreview}${outOfSuiteSummary}`;
+  return `${summary.covered_scenario_count ?? 0}/${summary.scenario_count} suite scenarios covered (${coverage}); ${missingCount} missing${missingPreview ? `: ${missingPreview}${missingOverflow}` : ''}.${nextStep}${coveredPreview}${outOfSuiteSummary}`;
 }
 
 
@@ -3088,6 +3092,24 @@ export function BenchmarkRunner() {
                 <AuditFact label="Next step" value={actionPlan.nextStep} />
                 <AuditFact label="Regression note" value={actionPlan.regression} />
               </div>
+              {actionPlan.headline === 'Keep moving through uncovered scenarios' && suiteScenarioCoverage?.recommended_next_scenario?.id ? (
+                <div>
+                  <button
+                    type="button"
+                    onClick={onSelectRecommendedScenario}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 999,
+                      background: 'var(--surface)',
+                      color: 'var(--text)',
+                      padding: '8px 12px',
+                      fontWeight: 800,
+                    }}
+                  >
+                    Open {suiteScenarioCoverage.recommended_next_scenario.title ?? suiteScenarioCoverage.recommended_next_scenario.id}
+                  </button>
+                </div>
+              ) : null}
             </section>
           ) : null}
 
@@ -3357,6 +3379,11 @@ export function BenchmarkRunner() {
               <p style={{ margin: 0, color: 'var(--muted)' }}>
                 {scenarioCoverageExportSummary(suiteScenarioCoverage)}
               </p>
+              {suiteScenarioCoverage.recommended_next_scenario?.title ? (
+                <p style={{ margin: 0, color: 'var(--text)', fontSize: 13, fontWeight: 700 }}>
+                  Recommended next: {suiteScenarioCoverage.recommended_next_scenario.title}.
+                </p>
+              ) : null}
               {suiteScenarioCoverage.recommended_next_scenario?.id ? (
                 <div>
                   <button
