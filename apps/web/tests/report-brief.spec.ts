@@ -97,6 +97,7 @@ test('benchmark report counts the current unsaved run in suite coverage', async 
   await expect(page.getByLabel('Operator action plan')).toContainText(
     'Run Angry Outage Escalation next to keep suite coverage moving before release review.',
   );
+  await expect(page.getByRole('button', { name: 'Open Angry Outage Escalation' })).toBeVisible();
   await expect(page.getByLabel('Report brief')).toContainText(
     'Primary risk: 3 suite scenarios still need fresh coverage before release review.',
   );

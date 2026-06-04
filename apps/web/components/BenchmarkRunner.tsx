@@ -3089,6 +3089,24 @@ export function BenchmarkRunner() {
                 <AuditFact label="Next step" value={actionPlan.nextStep} />
                 <AuditFact label="Regression note" value={actionPlan.regression} />
               </div>
+              {actionPlan.headline === 'Keep moving through uncovered scenarios' && suiteScenarioCoverage?.recommended_next_scenario?.id ? (
+                <div>
+                  <button
+                    type="button"
+                    onClick={onSelectRecommendedScenario}
+                    style={{
+                      border: '1px solid var(--border)',
+                      borderRadius: 999,
+                      background: 'var(--surface)',
+                      color: 'var(--text)',
+                      padding: '8px 12px',
+                      fontWeight: 800,
+                    }}
+                  >
+                    Open {suiteScenarioCoverage.recommended_next_scenario.title ?? suiteScenarioCoverage.recommended_next_scenario.id}
+                  </button>
+                </div>
+              ) : null}
             </section>
           ) : null}
 
