@@ -1249,6 +1249,7 @@ def _build_artifacts(report: dict[str, Any], transcript: str | None, previous_re
         'overall_score': report.get('overall_score'),
         'regression_delta': _regression_delta(report, previous_report),
         'evidence_spans': report.get('evidence_spans') or report.get('evidence') or [],
+        'evidence_citations': report.get('evidence_citations') or [],
         'audit_artifacts': _audit_artifact_summary(report.get('evidence_audit_summary')),
         'contract_artifacts': _contract_artifact_summary(report),
         'vcon_export': _vcon_export_summary(report.get('vcon_export')),

@@ -53,6 +53,8 @@ class BenchmarkRunRequest(BaseModel):
     groupCall: str | dict[str, Any] | list[Any] | None = None
     vcon: dict[str, Any] | None = None
     action_trace: str | dict[str, Any] | list[Any] | None = None
+    assert_bundle: dict[str, Any] | None = None
+    assertBundle: dict[str, Any] | None = None
     final_state: dict[str, Any] | str | list[Any] = Field(default_factory=dict)
     agent_version: str | None = None
     agentVersion: str | None = None
@@ -82,12 +84,14 @@ class BenchmarkRunRequest(BaseModel):
             or _has_text(self.groupCall)
             or _has_text(self.vcon)
             or _has_text(self.action_trace)
+            or _has_text(self.assert_bundle)
+            or _has_text(self.assertBundle)
             or _has_text(self.final_state)
         ):
             if isinstance(self.transcript, str):
                 self.transcript = self.transcript.strip()
             return self
-        raise ValueError('Transcript, conversation, call, group_call, vcon, action_trace, or final_state evidence is required')
+        raise ValueError('Transcript, conversation, call, group_call, vcon, action_trace, assert_bundle, or final_state evidence is required')
 
 
 def _has_text(value: Any) -> bool:

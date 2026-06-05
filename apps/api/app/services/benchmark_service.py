@@ -7,8 +7,8 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
 
+from app.services.assert_adapter import normalize_assert_payload
 from app.services.benchmark_evaluator import BenchmarkEvaluation, evaluate_benchmark, parse_action_trace
-
 
 BenchmarkScenario = dict[str, Any]
 BenchmarkSuite = dict[str, Any]
@@ -383,7 +383,7 @@ def get_scenario_contract(suite_id: str, scenario_id: str) -> dict[str, Any] | N
 def _benchmark_evidence_requirements() -> dict[str, list[str]]:
     return {
         'required_artifacts': ['transcript', 'action_trace', 'final_state'],
-        'optional_artifacts': ['call', 'group_call', 'vcon'],
+        'optional_artifacts': ['call', 'group_call', 'vcon', 'assert_bundle'],
         'scoring_dimensions': [
             'task_completion',
             'required_action_execution',
@@ -482,6 +482,7 @@ def _run_lifecycle(
 def run_scenario(request: Any) -> dict[str, Any]:
     run_started_at = datetime.now(UTC).isoformat()
     payload = _payload_to_dict(request)
+    payload, _ = normalize_assert_payload(payload)
     suite_id = _first_string(payload, 'suite_id', 'suiteId')
     scenario_id = _first_string(payload, 'scenario_id', 'scenarioId')
     if not suite_id or not scenario_id:
@@ -557,7 +558,7 @@ def run_scenario(request: Any) -> dict[str, Any]:
         'recommendations': _recommendations(completed_actions, forbidden_hits, scenario),
     }
     if agentic_evaluation:
-        report.update(_agentic_report_fields(agentic_evaluation, action_trace, final_state, scenario['required_actions']))
+        report.update(_agentic_report_fields(agentic_evaluation, action_trace, final_state, scenario['required_actions'], transcript))
         if report.get('workflow_order_issues'):
             report['verdict'] = 'needs_review'
     report['run_lifecycle'] = _run_lifecycle(
@@ -973,6 +974,9 @@ def _payload_to_dict(request: Any) -> dict[str, Any]:
             'include_failure',
             'observed_actions',
             'action_trace',
+            'assert_bundle',
+            'assertBundle',
+            'assert_adapter',
             'final_state',
             'agent_version',
             'agentVersion',
@@ -1021,7 +1025,7 @@ def _evidence_audit_summary(
 ) -> dict[str, Any]:
     input_artifact_types = [
         key
-        for key in ('transcript', 'conversation', 'call', 'group_call', 'groupCall', 'vcon', 'observed_actions', 'action_trace', 'final_state')
+        for key in ('transcript', 'conversation', 'call', 'group_call', 'groupCall', 'vcon', 'observed_actions', 'action_trace', 'assert_bundle', 'assertBundle', 'final_state')
         if _artifact_present(payload.get(key))
     ]
     transcript_present = bool(_conversation_text(payload))
@@ -1051,6 +1055,9 @@ def _evidence_audit_summary(
     group_call_summary = _group_call_artifact_summary(payload)
     if group_call_summary:
         summary['group_call_summary'] = group_call_summary
+    adapter_summary = payload.get('assert_adapter') if isinstance(payload.get('assert_adapter'), dict) else None
+    if adapter_summary:
+        summary['adapter'] = deepcopy(adapter_summary)
     return summary
 
 
@@ -1259,7 +1266,7 @@ def _evidence_artifacts(payload: dict[str, Any], transcript: str) -> dict[str, A
     if transcript:
         artifacts.append(_artifact_summary('transcript_text', transcript))
 
-    for key in ('observed_actions', 'action_trace', 'final_state', 'conversation', 'call', 'group_call', 'groupCall', 'vcon'):
+    for key in ('observed_actions', 'action_trace', 'final_state', 'conversation', 'call', 'group_call', 'groupCall', 'vcon', 'assert_bundle'):
         value = payload.get(key)
         if _artifact_present(value):
             artifacts.append(_artifact_summary(key, value))
@@ -1322,6 +1329,9 @@ def _vcon_analysis(report: dict[str, Any]) -> dict[str, Any]:
         'group_call_summary',
         'voice_interaction_summary',
         'failure_categories',
+        'hard_check_failures',
+        'failure_modes',
+        'evidence_citations',
         'suggested_fixes',
         'recommendations',
     )
@@ -1620,6 +1630,7 @@ def _agentic_report_fields(
     action_trace: Any,
     final_state: Any,
     required_actions: list[Any],
+    transcript: str,
 ) -> dict[str, Any]:
     missing_actions = [_describe_requirement(item) for item in evaluation.required_action_execution.missing]
     forbidden_observed = [_describe_requirement(item) for item in evaluation.forbidden_action_avoidance.violations]
@@ -1636,6 +1647,21 @@ def _agentic_report_fields(
         failure_categories.append('forbidden_action_avoidance')
     if final_state_missing:
         failure_categories.append('final_state_correctness')
+    hard_check_failures = _hard_check_failures(
+        missing_actions=missing_actions,
+        forbidden_observed=forbidden_observed,
+        final_state_missing=final_state_missing,
+        workflow_order_issues=workflow_order_issues,
+    )
+    evidence_citations = _evidence_citations(
+        evaluation=evaluation,
+        action_trace=action_trace,
+        final_state=final_state,
+        transcript=transcript,
+        missing_actions=missing_actions,
+        forbidden_observed=forbidden_observed,
+        workflow_order_issues=workflow_order_issues,
+    )
 
     return {
         'score': evaluation.overall_score,
@@ -1649,20 +1675,197 @@ def _agentic_report_fields(
         'final_state_missing': final_state_missing,
         'workflow_order_issues': workflow_order_issues,
         'failure_categories': failure_categories,
+        'failure_modes': sorted({item['category'] for item in hard_check_failures}),
+        'hard_check_failures': hard_check_failures,
         'suggested_fixes': _agentic_suggested_fixes(missing_actions, forbidden_observed, final_state_missing, workflow_order_issues),
+        'evidence_citations': evidence_citations,
         'evidence': (
             evaluation.task_completion.evidence
             + evaluation.required_action_execution.evidence
             + evaluation.final_state_correctness.evidence
         ),
-        'evidence_spans': (
-            evaluation.task_completion.evidence
-            + evaluation.required_action_execution.evidence
-            + evaluation.final_state_correctness.evidence
-        ),
+        'evidence_spans': evidence_citations,
         'action_trace': action_trace,
         'final_state': final_state,
     }
+
+
+def _hard_check_failures(
+    *,
+    missing_actions: list[str],
+    forbidden_observed: list[str],
+    final_state_missing: list[Any],
+    workflow_order_issues: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    failures: list[dict[str, Any]] = []
+    failures.extend({'category': 'missing_action', 'action': action} for action in missing_actions)
+    failures.extend({'category': 'bad_order', **issue} for issue in workflow_order_issues)
+    failures.extend({'category': 'forbidden_action', 'action': action} for action in forbidden_observed)
+    failures.extend({'category': 'final_state_mismatch', **item} for item in final_state_missing if isinstance(item, dict))
+    return failures
+
+
+def _evidence_citations(
+    *,
+    evaluation: BenchmarkEvaluation,
+    action_trace: Any,
+    final_state: Any,
+    transcript: str,
+    missing_actions: list[str],
+    forbidden_observed: list[str],
+    workflow_order_issues: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    citations: list[dict[str, Any]] = []
+    cited_keys: set[str] = set()
+
+    for evidence in evaluation.required_action_execution.evidence:
+        action_name = str(evidence.get('name') or '') if isinstance(evidence, dict) else ''
+        _append_action_trace_citation(citations, cited_keys, action_trace, action_name, 'required_action')
+        _append_transcript_citation(citations, cited_keys, transcript, action_name, 'required_action')
+
+    for action_name in missing_actions:
+        _append_missing_action_citation(citations, cited_keys, action_trace, action_name)
+        _append_transcript_citation(citations, cited_keys, transcript, action_name, 'missing_action_context')
+
+    for action_name in forbidden_observed:
+        _append_action_trace_citation(citations, cited_keys, action_trace, action_name, 'forbidden_action')
+
+    for issue in workflow_order_issues:
+        action_name = str(issue.get('action') or '')
+        _append_action_trace_citation(citations, cited_keys, action_trace, action_name, 'bad_order', extra=issue)
+
+    for evidence in evaluation.final_state_correctness.evidence:
+        if isinstance(evidence, dict):
+            _append_final_state_citation(citations, cited_keys, evidence, 'final_state_assertion')
+
+    for missing in evaluation.final_state_correctness.missing:
+        if isinstance(missing, dict):
+            _append_final_state_citation(citations, cited_keys, missing, 'final_state_mismatch')
+
+    if evaluation.task_completion.evidence:
+        citations.append({
+            'source': 'final_state',
+            'kind': 'task_completion',
+            'assertion': deepcopy(evaluation.task_completion.evidence[0]),
+            'final_state': deepcopy(final_state) if isinstance(final_state, dict) else final_state,
+        })
+
+    return citations
+
+
+def _append_action_trace_citation(
+    citations: list[dict[str, Any]],
+    cited_keys: set[str],
+    action_trace: Any,
+    action_name: str,
+    kind: str,
+    *,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    if not action_name:
+        return
+    for index, event in enumerate(parse_action_trace(action_trace)):
+        if _normalize_requirement(event.name) != _normalize_requirement(action_name):
+            continue
+        key = f'action_trace:{kind}:{index}:{action_name}'
+        if key in cited_keys:
+            return
+        cited_keys.add(key)
+        citation = {
+            'source': 'action_trace',
+            'kind': kind,
+            'index': index,
+            'action': event.name,
+            'status': event.status,
+        }
+        if event.arguments:
+            citation['arguments'] = deepcopy(event.arguments)
+        if isinstance(event.raw, dict):
+            timestamp = _first_string(event.raw, 'timestamp', 'started_at', 'completed_at', 'time')
+            if timestamp:
+                citation['timestamp'] = timestamp
+            citation['raw'] = deepcopy(event.raw)
+        if extra:
+            citation['check'] = deepcopy(extra)
+        citations.append(citation)
+        return
+
+
+def _append_missing_action_citation(
+    citations: list[dict[str, Any]],
+    cited_keys: set[str],
+    action_trace: Any,
+    action_name: str,
+) -> None:
+    key = f'missing_action:{action_name}'
+    if key in cited_keys:
+        return
+    cited_keys.add(key)
+    citations.append({
+        'source': 'action_trace',
+        'kind': 'missing_action',
+        'action': action_name,
+        'observed_actions': [event.name for event in parse_action_trace(action_trace)],
+        'reason': 'No successful matching action trace entry was observed.',
+    })
+
+
+def _append_final_state_citation(
+    citations: list[dict[str, Any]],
+    cited_keys: set[str],
+    assertion: dict[str, Any],
+    kind: str,
+) -> None:
+    path = str(assertion.get('path') or '')
+    key = f'final_state:{kind}:{path}:{assertion.get("actual")}'
+    if key in cited_keys:
+        return
+    cited_keys.add(key)
+    citation = {
+        'source': 'final_state',
+        'kind': kind,
+        'path': path,
+        'actual': assertion.get('actual'),
+    }
+    if 'expected' in assertion:
+        citation['expected'] = assertion.get('expected')
+    citations.append(citation)
+
+
+def _append_transcript_citation(
+    citations: list[dict[str, Any]],
+    cited_keys: set[str],
+    transcript: str,
+    action_name: str,
+    kind: str,
+) -> None:
+    if not transcript.strip() or not action_name:
+        return
+    terms = _citation_terms(action_name)
+    if not terms:
+        return
+    for line_number, line in enumerate([line for line in transcript.splitlines() if line.strip()], start=1):
+        normalized = _normalize(line)
+        if sum(1 for term in terms if term in normalized) < min(2, len(terms)):
+            continue
+        key = f'transcript:{kind}:{line_number}:{action_name}'
+        if key in cited_keys:
+            return
+        cited_keys.add(key)
+        citations.append({
+            'source': 'transcript',
+            'kind': kind,
+            'line_start': line_number,
+            'line_end': line_number,
+            'action': action_name,
+            'text': line.strip()[:240],
+        })
+        return
+
+
+def _citation_terms(value: str) -> list[str]:
+    stopwords = {'a', 'an', 'and', 'for', 'in', 'of', 'on', 'or', 'the', 'to'}
+    return [term for term in _normalize(value).replace('_', ' ').split() if len(term) > 2 and term not in stopwords]
 
 
 def _workflow_order_issues(action_trace: Any, required_actions: list[Any], missing_requirements: list[Any]) -> list[dict[str, Any]]:
