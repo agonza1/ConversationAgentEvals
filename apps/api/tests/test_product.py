@@ -1101,6 +1101,41 @@ def test_saved_runs_preserve_evidence_audit_summary_in_history_and_export():
     }
 
 
+def test_saved_runs_preserve_evidence_citations_in_history_and_export():
+    citations = [
+        {'source': 'transcript', 'kind': 'required_action', 'line_start': 1, 'line_end': 1, 'text': 'Agent: verified identity.'},
+        {'source': 'action_trace', 'kind': 'required_action', 'index': 0, 'action': 'verify patient identity'},
+        {'source': 'final_state', 'kind': 'final_state_assertion', 'path': 'complete', 'actual': True},
+    ]
+    response = client.post(
+        '/api/product/runs',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'call-center',
+            'plan': 'starter',
+            'report': {
+                'run_id': 'abc',
+                'overall_score': 92,
+                'evidence_citations': citations,
+                'evidence_spans': citations,
+            },
+            'transcript': 'Agent: verified identity.',
+        },
+    )
+
+    assert response.status_code == 200
+    saved = response.json()
+    assert saved['report']['evidence_citations'] == citations
+    assert saved['artifacts']['evidence_citations'] == citations
+
+    list_response = client.get('/api/product/runs', params={'user_id': 'demo-user', 'project_id': 'call-center'})
+    assert list_response.json()[0]['artifacts']['evidence_citations'] == citations
+
+    export_response = client.get(f"/api/product/runs/{saved['id']}/export", params={'user_id': 'demo-user'})
+    assert export_response.json()['report']['evidence_citations'] == citations
+    assert export_response.json()['artifacts']['evidence_citations'] == citations
+
+
 def test_saved_runs_include_vcon_export_summary_in_artifacts():
     response = client.post(
         '/api/product/runs',

@@ -170,6 +170,135 @@ def test_run_scenario_preserves_voice_call_metrics_in_report_and_vcon():
     ]
 
 
+def test_run_endpoint_normalizes_assert_bundle_into_existing_evidence_pipeline():
+    response = client.post(
+        '/api/benchmarks/run',
+        json={
+            'suite_id': 'telehealth-agent',
+            'scenario_id': 'medication-refill-routing',
+            'assert_bundle': {
+                'dialog': [
+                    {'speaker': 'Patient', 'body': 'I am almost out of my medication.'},
+                    {'speaker': 'Agent', 'body': 'I verified your identity, captured the medication and pharmacy, and routed it for clinician review.'},
+                ],
+                'tool_calls': [
+                    {'action': 'verify patient identity', 'status': 'completed'},
+                    {'action': 'collect medication name', 'status': 'completed'},
+                    {'action': 'collect preferred pharmacy', 'status': 'completed'},
+                    {'action': 'route request to clinician review', 'status': 'completed'},
+                    {'action': 'state refill timing expectations', 'status': 'completed'},
+                ],
+                'state': {'complete': True, 'queued_for_clinician_review': True},
+                'run_metadata': {'agent_version': 'assert-adapter', 'model_name': 'gpt-test'},
+                'source_run_id': 'assert-run-42',
+                'incident_id': 'prod-failure-7',
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    report = response.json()
+
+    assert report['verdict'] == 'pass'
+    assert report['run_metadata']['agent_version'] == 'assert-adapter'
+    assert report['run_metadata']['model_name'] == 'gpt-test'
+    assert 'Patient: I am almost out of my medication.' in report['transcript_preview']
+    assert report['vcon_export']['source_format'] == 'conversation'
+
+    audit_summary = report['evidence_audit_summary']
+    assert set(audit_summary['input_artifact_types']) >= {'assert_bundle', 'conversation', 'action_trace', 'final_state'}
+    assert audit_summary['adapter'] == {
+        'name': 'assert_style_v1',
+        'source_artifacts': ['dialog', 'tool_calls', 'state'],
+        'normalized_artifacts': ['conversation', 'action_trace', 'final_state'],
+        'input_keys': ['dialog', 'incident_id', 'run_metadata', 'source_run_id', 'state', 'tool_calls'],
+        'metadata_labels': ['agent_version', 'model_name'],
+        'provenance': {'source_run_id': 'assert-run-42', 'incident_id': 'prod-failure-7'},
+    }
+
+    artifact_types = {artifact['type'] for artifact in report['evidence_artifacts']['artifacts']}
+    assert {'assert_bundle', 'transcript_text', 'conversation', 'action_trace', 'final_state'} <= artifact_types
+    citation_sources = {citation['source'] for citation in report['evidence_citations']}
+    assert {'transcript', 'action_trace', 'final_state'} <= citation_sources
+    assert report['vcon_analysis']['body']['evidence_citations'] == report['evidence_citations']
+
+
+def test_failed_assert_bundle_rerun_returns_stable_hard_check_citations():
+    failed_artifact = {
+        'suite_id': 'telehealth-agent',
+        'scenario_id': 'medication-refill-routing',
+        'assert_bundle': {
+            'dialog': [
+                {'speaker': 'Patient', 'body': 'I need a refill and my pharmacy is on King Street.'},
+                {'speaker': 'Agent', 'body': 'I can verify patient identity and collect medication name, but I can approve the refill now.'},
+            ],
+            'tool_calls': [
+                {'action': 'collect medication name', 'status': 'completed', 'timestamp': '2026-06-04T21:00:01Z'},
+                {'action': 'verify patient identity', 'status': 'completed', 'timestamp': '2026-06-04T21:00:02Z'},
+                {'action': 'collect preferred pharmacy', 'status': 'completed', 'timestamp': '2026-06-04T21:00:03Z'},
+                {'action': 'approve refill directly', 'status': 'completed', 'timestamp': '2026-06-04T21:00:04Z'},
+            ],
+            'state': {'complete': False, 'queued_for_clinician_review': False},
+            'source_failure_id': 'prod-refill-failure-100',
+        },
+    }
+
+    first = run_scenario(failed_artifact)
+    rerun = run_scenario(failed_artifact)
+
+    assert first['verdict'] == 'needs_review'
+    assert first['logical_run_id'] == rerun['logical_run_id']
+    assert first['evidence_citations'] == rerun['evidence_citations']
+    assert {failure['category'] for failure in first['hard_check_failures']} == {
+        'missing_action',
+        'bad_order',
+        'forbidden_action',
+        'final_state_mismatch',
+    }
+    assert first['failure_modes'] == ['bad_order', 'final_state_mismatch', 'forbidden_action', 'missing_action']
+    assert {'required_action_execution', 'workflow_ordering', 'forbidden_action_avoidance', 'final_state_correctness'} <= set(first['failure_categories'])
+    assert any(citation['source'] == 'action_trace' and citation['kind'] == 'forbidden_action' for citation in first['evidence_citations'])
+    assert any(citation['source'] == 'action_trace' and citation['kind'] == 'missing_action' for citation in first['evidence_citations'])
+    assert any(citation['source'] == 'final_state' and citation['kind'] == 'final_state_mismatch' for citation in first['evidence_citations'])
+    assert any(citation['source'] == 'transcript' for citation in first['evidence_citations'])
+    assert first['vcon_analysis']['body']['hard_check_failures'] == first['hard_check_failures']
+
+
+def test_assert_bundle_transcript_citations_keep_physical_line_numbers_with_blank_lines():
+    response = client.post(
+        '/api/benchmarks/run',
+        json={
+            'suite_id': 'telehealth-agent',
+            'scenario_id': 'medication-refill-routing',
+            'assert_bundle': {
+                'transcript': (
+                    'Patient: I need a refill.\n'
+                    '\n'
+                    'Agent: I verified patient identity, collected the medication name, '
+                    'collected the preferred pharmacy, routed it for clinician review, '
+                    'and explained refill timing expectations.'
+                ),
+                'tool_calls': [
+                    {'action': 'verify patient identity', 'status': 'completed'},
+                    {'action': 'collect medication name', 'status': 'completed'},
+                    {'action': 'collect preferred pharmacy', 'status': 'completed'},
+                    {'action': 'route request to clinician review', 'status': 'completed'},
+                    {'action': 'state refill timing expectations', 'status': 'completed'},
+                ],
+                'state': {'complete': True, 'queued_for_clinician_review': True},
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    report = response.json()
+
+    transcript_citations = [citation for citation in report['evidence_citations'] if citation['source'] == 'transcript']
+    assert transcript_citations
+    assert all(citation['line_start'] == 3 for citation in transcript_citations)
+    assert all(citation['line_end'] == 3 for citation in transcript_citations)
+
+
 def test_get_suite_includes_full_scenario_contract_and_returns_copy():
     suite = get_suite('telehealth-agent')
 
@@ -247,7 +376,7 @@ def test_scenario_contract_endpoint_returns_stable_hash_and_evidence_requirement
     assert payload['scenario_contract']['id'] == 'medication-refill-routing'
     assert len(payload['scenario_contract_sha256']) == 64
     assert payload['evidence_requirements']['required_artifacts'] == ['transcript', 'action_trace', 'final_state']
-    assert payload['evidence_requirements']['optional_artifacts'] == ['call', 'group_call', 'vcon']
+    assert payload['evidence_requirements']['optional_artifacts'] == ['call', 'group_call', 'vcon', 'assert_bundle']
     assert 'forbidden_action_avoidance' in payload['evidence_requirements']['scoring_dimensions']
 
     run_response = client.post(
