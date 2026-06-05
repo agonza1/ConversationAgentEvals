@@ -1844,7 +1844,9 @@ def _append_transcript_citation(
     terms = _citation_terms(action_name)
     if not terms:
         return
-    for line_number, line in enumerate([line for line in transcript.splitlines() if line.strip()], start=1):
+    for line_number, line in enumerate(transcript.splitlines(), start=1):
+        if not line.strip():
+            continue
         normalized = _normalize(line)
         if sum(1 for term in terms if term in normalized) < min(2, len(terms)):
             continue

@@ -264,6 +264,41 @@ def test_failed_assert_bundle_rerun_returns_stable_hard_check_citations():
     assert first['vcon_analysis']['body']['hard_check_failures'] == first['hard_check_failures']
 
 
+def test_assert_bundle_transcript_citations_keep_physical_line_numbers_with_blank_lines():
+    response = client.post(
+        '/api/benchmarks/run',
+        json={
+            'suite_id': 'telehealth-agent',
+            'scenario_id': 'medication-refill-routing',
+            'assert_bundle': {
+                'transcript': (
+                    'Patient: I need a refill.\n'
+                    '\n'
+                    'Agent: I verified patient identity, collected the medication name, '
+                    'collected the preferred pharmacy, routed it for clinician review, '
+                    'and explained refill timing expectations.'
+                ),
+                'tool_calls': [
+                    {'action': 'verify patient identity', 'status': 'completed'},
+                    {'action': 'collect medication name', 'status': 'completed'},
+                    {'action': 'collect preferred pharmacy', 'status': 'completed'},
+                    {'action': 'route request to clinician review', 'status': 'completed'},
+                    {'action': 'state refill timing expectations', 'status': 'completed'},
+                ],
+                'state': {'complete': True, 'queued_for_clinician_review': True},
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    report = response.json()
+
+    transcript_citations = [citation for citation in report['evidence_citations'] if citation['source'] == 'transcript']
+    assert transcript_citations
+    assert all(citation['line_start'] == 3 for citation in transcript_citations)
+    assert all(citation['line_end'] == 3 for citation in transcript_citations)
+
+
 def test_get_suite_includes_full_scenario_contract_and_returns_copy():
     suite = get_suite('telehealth-agent')
 
