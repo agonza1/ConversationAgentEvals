@@ -28,6 +28,48 @@ test('benchmark report includes a share-ready brief', async ({ page }) => {
   await expect(page.getByText('Copied report brief.')).toBeVisible();
 });
 
+
+test('benchmark report surfaces evidence citations in the brief and detail view', async ({ page }) => {
+  await page.route('**/api/benchmarks/simulate', async (route) => {
+    const payload = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        suite_id: payload.suite_id,
+        scenario_id: payload.scenario_id,
+        scenario_title: 'Billing Address Change',
+        transcript: 'Agent verified the caller identity and updated the billing address.',
+        action_trace: [{ action: 'verify_identity', result: 'success', timestamp: '2026-06-06T12:00:00Z' }],
+        final_state: { address_updated: true },
+        benchmark_report: {
+          run_id: 'citation-report-run',
+          suite_id: payload.suite_id,
+          scenario_id: payload.scenario_id,
+          scenario_title: 'Billing Address Change',
+          verdict: 'pass',
+          overall_score: 94,
+          evidence: ['Agent verified the caller identity and updated the billing address.'],
+          evidence_citations: [
+            { source: 'action_trace', kind: 'required_action', action: 'verify_identity', status: 'success', timestamp: '2026-06-06T12:00:00Z' },
+            { source: 'final_state', kind: 'task_completion', assertion: { address_updated: true } },
+          ],
+          recommendations: [],
+        },
+      }),
+    });
+  });
+
+  await page.goto('/benchmarks');
+  await page.getByRole('button', { name: 'Simulate scenario' }).click();
+
+  const brief = page.getByLabel('Report brief');
+  await expect(brief).toContainText('Evidence citations: action trace: required action: verify_identity: status success: at 2026-06-06T12:00:00Z; final state: task completion: {"address_updated":true}');
+  await expect(page.getByRole('heading', { name: 'Evidence citations' })).toBeVisible();
+  await expect(page.getByRole('listitem').filter({ hasText: 'action trace: required action: verify_identity: status success: at 2026-06-06T12:00:00Z' })).toBeVisible();
+  await expect(page.getByRole('listitem').filter({ hasText: 'final state: task completion: {"address_updated":true}' })).toBeVisible();
+});
+
 test('benchmark report counts the current unsaved run in suite coverage', async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
