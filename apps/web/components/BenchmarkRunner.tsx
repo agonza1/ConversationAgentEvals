@@ -1048,24 +1048,31 @@ function formatCitationItem(item: string | JsonRecord) {
     return item;
   }
 
-  const source = typeof item.source === "string" ? item.source.replace(/_/g, " ") : "evidence";
+  const sourceKey = typeof item.source === "string" ? item.source : null;
+  const source = sourceKey ? sourceKey.replace(/_/g, " ") : "evidence";
   const kind = typeof item.kind === "string" ? item.kind.replace(/_/g, " ") : null;
   const action = typeof item.action === "string" ? item.action : null;
   const assertionSummary = formatCitationValue(item.assertion);
   const path = typeof item.path === "string" ? item.path : null;
   const actualSummary = Object.hasOwn(item, "actual") ? formatCitationValue(item.actual) : null;
   const expectedSummary = Object.hasOwn(item, "expected") ? formatCitationValue(item.expected) : null;
+  const lineStart = typeof item.line_start === "number" ? item.line_start : null;
+  const lineEnd = typeof item.line_end === "number" ? item.line_end : null;
+  const textSummary = typeof item.text === "string" ? item.text : null;
   const status = typeof item.status === "string" ? item.status : null;
   const timestamp = typeof item.timestamp === "string" ? item.timestamp : null;
+  const lineRange = lineStart === null ? null : lineEnd !== null && lineEnd !== lineStart ? `lines ${lineStart}-${lineEnd}` : `line ${lineStart}`;
 
   return [
     source,
     kind,
     action,
     assertionSummary,
-    source === "final state" && path ? `path ${path}` : null,
-    source === "final state" && actualSummary ? `actual ${actualSummary}` : null,
-    source === "final state" && expectedSummary ? `expected ${expectedSummary}` : null,
+    sourceKey === "final_state" && path ? `path ${path}` : null,
+    sourceKey === "final_state" && actualSummary ? `actual ${actualSummary}` : null,
+    sourceKey === "final_state" && expectedSummary ? `expected ${expectedSummary}` : null,
+    sourceKey === "transcript" && lineRange ? lineRange : null,
+    sourceKey === "transcript" && textSummary ? textSummary : null,
     status ? `status ${status}` : null,
     timestamp ? `at ${timestamp}` : null,
   ].filter(Boolean).join(": ");

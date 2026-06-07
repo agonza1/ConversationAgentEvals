@@ -299,6 +299,62 @@ test('benchmark report keeps failure remediation guidance when the scenario need
   );
 });
 
+test('benchmark report surfaces transcript and final-state citation details', async ({ page }) => {
+  await page.route('**/api/benchmarks/simulate', async (route) => {
+    const payload = route.request().postDataJSON();
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        suite_id: payload.suite_id,
+        scenario_id: payload.scenario_id,
+        scenario_title: 'Billing Address Change',
+        transcript: 'Agent changed the billing address without verifying identity first.',
+        action_trace: [{ action: 'confirm_address_update', result: 'success' }],
+        final_state: { customer: { billing_address: '123 New St' } },
+        benchmark_report: {
+          run_id: 'current-unsaved-run',
+          suite_id: payload.suite_id,
+          scenario_id: payload.scenario_id,
+          scenario_title: 'Billing Address Change',
+          verdict: 'needs_review',
+          overall_score: 58,
+          evidence_citations: [
+            {
+              source: 'transcript',
+              kind: 'required_action',
+              action: 'verify_identity',
+              line_start: 12,
+              line_end: 13,
+              text: 'Agent changed the billing address without verifying identity first.',
+            },
+            {
+              source: 'final_state',
+              kind: 'final_state_mismatch',
+              path: 'customer.billing_address',
+              actual: '123 New St',
+              expected: 'Verified address only after identity check',
+            },
+          ],
+          recommendations: ['Verify identity before mutating the billing address.'],
+        },
+      }),
+    });
+  });
+
+  await page.goto('/benchmarks');
+  await page.getByRole('button', { name: 'Simulate scenario' }).click();
+
+  const brief = page.getByLabel('Report brief');
+  await expect(brief).toContainText('Evidence citations: transcript: required action: verify_identity: lines 12-13: Agent changed the billing address without verifying identity first.; final state: final state mismatch: path customer.billing_address: actual 123 New St: expected Verified address only after identity check');
+
+  const citationsHeading = page.getByRole('heading', { name: 'Evidence citations' });
+  await expect(citationsHeading).toBeVisible();
+  const citations = citationsHeading.locator('..');
+  await expect(citations).toContainText('transcript: required action: verify_identity: lines 12-13: Agent changed the billing address without verifying identity first.');
+  await expect(citations).toContainText('final state: final state mismatch: path customer.billing_address: actual 123 New St: expected Verified address only after identity check');
+});
+
 test('suite coverage can jump to the next uncovered scenario', async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
