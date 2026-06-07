@@ -60,6 +60,7 @@ interface BenchmarkReport {
   task_completion_score?: number;
   required_action_score?: number;
   forbidden_action_score?: number;
+  evidence_citations?: Array<string | JsonRecord>;
   final_state_score?: number;
   evidence_spans?: Array<string | JsonRecord>;
   evidence?: Array<string | JsonRecord>;
@@ -1015,11 +1016,70 @@ function formatJudgeSpend(spendControl: JudgeGate['spend_control']) {
 }
 
 function EvidenceItem({ item }: { item: string | JsonRecord }) {
-  if (typeof item === 'string') {
+  if (typeof item === "string") {
     return <li>{item}</li>;
   }
 
   return <li><code>{JSON.stringify(item)}</code></li>;
+}
+
+function formatCitationValue(value: unknown) {
+  if (value === undefined) {
+    return null;
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean" || value === null) {
+    return JSON.stringify(value);
+  }
+
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
+
+  return String(value);
+}
+
+function formatCitationItem(item: string | JsonRecord) {
+  if (typeof item === "string") {
+    return item;
+  }
+
+  const sourceKey = typeof item.source === "string" ? item.source : null;
+  const source = sourceKey ? sourceKey.replace(/_/g, " ") : "evidence";
+  const kind = typeof item.kind === "string" ? item.kind.replace(/_/g, " ") : null;
+  const action = typeof item.action === "string" ? item.action : null;
+  const assertionSummary = formatCitationValue(item.assertion);
+  const path = typeof item.path === "string" ? item.path : null;
+  const actualSummary = Object.hasOwn(item, "actual") ? formatCitationValue(item.actual) : null;
+  const expectedSummary = Object.hasOwn(item, "expected") ? formatCitationValue(item.expected) : null;
+  const lineStart = typeof item.line_start === "number" ? item.line_start : null;
+  const lineEnd = typeof item.line_end === "number" ? item.line_end : null;
+  const textSummary = typeof item.text === "string" ? item.text : null;
+  const status = typeof item.status === "string" ? item.status : null;
+  const timestamp = typeof item.timestamp === "string" ? item.timestamp : null;
+  const lineRange = lineStart === null ? null : lineEnd !== null && lineEnd !== lineStart ? `lines ${lineStart}-${lineEnd}` : `line ${lineStart}`;
+
+  return [
+    source,
+    kind,
+    action,
+    assertionSummary,
+    sourceKey === "final_state" && path ? `path ${path}` : null,
+    sourceKey === "final_state" && actualSummary ? `actual ${actualSummary}` : null,
+    sourceKey === "final_state" && expectedSummary ? `expected ${expectedSummary}` : null,
+    sourceKey === "transcript" && lineRange ? lineRange : null,
+    sourceKey === "transcript" && textSummary ? textSummary : null,
+    status ? `status ${status}` : null,
+    timestamp ? `at ${timestamp}` : null,
+  ].filter(Boolean).join(": ");
+}
+
+function formatCitationSummary(items: Array<string | JsonRecord>) {
+  return items.length ? items.slice(0, 2).map(formatCitationItem).join("; ") : "None captured";
 }
 
 function cleanRunMetadata(metadata: RunMetadata): RunMetadata {
@@ -1483,6 +1543,7 @@ function formatReportBrief(
   report: BenchmarkReport,
   fallbackScenarioTitle?: string,
   regressionDelta?: RegressionDelta | null,
+  evidenceCitations?: Array<string | JsonRecord>,
   suiteCoverage?: ScenarioCoverageSummary | null,
   actionPlan?: { primaryRisk: string; nextStep: string } | null,
 ) {
@@ -1516,6 +1577,7 @@ function formatReportBrief(
     `Primary risk: ${actionPlan?.primaryRisk ?? 'Not available'}`,
     `Next step: ${actionPlan?.nextStep ?? 'Not available'}`,
     `Missing actions: ${missingActions}`,
+    `Evidence citations: ${formatCitationSummary(evidenceCitations ?? report.evidence_citations ?? [])}`,
     `Forbidden actions observed: ${forbiddenActions}`,
     `Suggested fixes: ${suggestedFixes}`,
   ].join('\n');
@@ -2422,6 +2484,7 @@ export function BenchmarkRunner() {
 
   const evidence = report?.evidence_spans ?? report?.evidence ?? [];
   const score = report?.score ?? report?.overall_score;
+  const evidenceCitations = report?.evidence_citations ?? [];
   const verdict = report?.verdict ?? report?.overall;
   const suiteBrief = suiteSimulation ? formatSuiteBrief(suiteSimulation) : '';
   const selectedScenarioContract = contractManifest?.scenario_contracts?.find((item) => item.scenario_id === selectedScenario?.id) ?? null;
@@ -2452,7 +2515,7 @@ export function BenchmarkRunner() {
   );
   const actionPlan = report ? reportActionPlan(report, currentRegressionDelta, suiteScenarioCoverage) : null;
   const reportBrief = report
-    ? formatReportBrief(report, selectedScenario?.title, currentRegressionDelta, suiteScenarioCoverage, actionPlan)
+    ? formatReportBrief(report, selectedScenario?.title, currentRegressionDelta, evidenceCitations, suiteScenarioCoverage, actionPlan)
     : '';
   const onboardingSteps = [
     {
@@ -3257,6 +3320,19 @@ export function BenchmarkRunner() {
               </ul>
             ) : (
               <p style={{ margin: 0, color: 'var(--muted)' }}>No evidence spans returned.</p>
+            )}
+          </div>
+
+          <div>
+            <h3 style={{ marginTop: 0 }}>Evidence citations</h3>
+            {evidenceCitations.length ? (
+              <ul style={{ marginBottom: 0 }}>
+                {evidenceCitations.map((item, index) => (
+                  <li key={`${index}-${typeof item === 'string' ? item : JSON.stringify(item)}`}>{formatCitationItem(item)}</li>
+                ))}
+              </ul>
+            ) : (
+              <p style={{ margin: 0, color: 'var(--muted)' }}>No evidence citations returned.</p>
             )}
           </div>
 
