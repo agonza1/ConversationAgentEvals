@@ -1023,6 +1023,26 @@ function EvidenceItem({ item }: { item: string | JsonRecord }) {
   return <li><code>{JSON.stringify(item)}</code></li>;
 }
 
+function formatCitationValue(value: unknown) {
+  if (value === undefined) {
+    return null;
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean" || value === null) {
+    return JSON.stringify(value);
+  }
+
+  if (typeof value === "object") {
+    return JSON.stringify(value);
+  }
+
+  return String(value);
+}
+
 function formatCitationItem(item: string | JsonRecord) {
   if (typeof item === "string") {
     return item;
@@ -1031,8 +1051,10 @@ function formatCitationItem(item: string | JsonRecord) {
   const source = typeof item.source === "string" ? item.source.replace(/_/g, " ") : "evidence";
   const kind = typeof item.kind === "string" ? item.kind.replace(/_/g, " ") : null;
   const action = typeof item.action === "string" ? item.action : null;
-  const assertion = item.assertion;
-  const assertionSummary = assertion && typeof assertion === "object" ? JSON.stringify(assertion) : typeof assertion === "string" ? assertion : null;
+  const assertionSummary = formatCitationValue(item.assertion);
+  const path = typeof item.path === "string" ? item.path : null;
+  const actualSummary = Object.hasOwn(item, "actual") ? formatCitationValue(item.actual) : null;
+  const expectedSummary = Object.hasOwn(item, "expected") ? formatCitationValue(item.expected) : null;
   const status = typeof item.status === "string" ? item.status : null;
   const timestamp = typeof item.timestamp === "string" ? item.timestamp : null;
 
@@ -1041,6 +1063,9 @@ function formatCitationItem(item: string | JsonRecord) {
     kind,
     action,
     assertionSummary,
+    source === "final state" && path ? `path ${path}` : null,
+    source === "final state" && actualSummary ? `actual ${actualSummary}` : null,
+    source === "final state" && expectedSummary ? `expected ${expectedSummary}` : null,
     status ? `status ${status}` : null,
     timestamp ? `at ${timestamp}` : null,
   ].filter(Boolean).join(": ");

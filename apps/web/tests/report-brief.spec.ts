@@ -52,6 +52,7 @@ test('benchmark report surfaces evidence citations in the brief and detail view'
           evidence: ['Agent verified the caller identity and updated the billing address.'],
           evidence_citations: [
             { source: 'action_trace', kind: 'required_action', action: 'verify_identity', status: 'success', timestamp: '2026-06-06T12:00:00Z' },
+            { source: 'final_state', kind: 'final_state_mismatch', path: 'customer.address.city', actual: 'Boston', expected: 'New York' },
             { source: 'final_state', kind: 'task_completion', assertion: { address_updated: true } },
           ],
           recommendations: [],
@@ -64,10 +65,11 @@ test('benchmark report surfaces evidence citations in the brief and detail view'
   await page.getByRole('button', { name: 'Simulate scenario' }).click();
 
   const brief = page.getByLabel('Report brief');
-  await expect(brief).toContainText('Evidence citations: action trace: required action: verify_identity: status success: at 2026-06-06T12:00:00Z; final state: task completion: {"address_updated":true}');
+  await expect(brief).toContainText('Evidence citations: action trace: required action: verify_identity: status success: at 2026-06-06T12:00:00Z; final state: final state mismatch: path customer.address.city: actual Boston: expected New York');
   await expect(page.getByRole('heading', { name: 'Evidence citations' })).toBeVisible();
   await expect(page.getByRole('listitem').filter({ hasText: 'action trace: required action: verify_identity: status success: at 2026-06-06T12:00:00Z' })).toBeVisible();
   await expect(page.getByRole('listitem').filter({ hasText: 'final state: task completion: {"address_updated":true}' })).toBeVisible();
+  await expect(page.getByRole('listitem').filter({ hasText: 'final state: final state mismatch: path customer.address.city: actual Boston: expected New York' })).toBeVisible();
 });
 
 test('benchmark report counts the current unsaved run in suite coverage', async ({ page }) => {
