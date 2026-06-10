@@ -21,8 +21,8 @@ test('free-to-paid eval journey works end to end', async ({ page }) => {
   await expect(page.getByText('Benchmark report').last()).toBeVisible();
   const actionPlan = page.getByLabel('Operator action plan');
   await expect(actionPlan).toBeVisible();
-  await expect(actionPlan.getByRole('heading', { name: 'Ready for release review' })).toBeVisible();
-  await expect(actionPlan.getByText('No blocking failure category was reported for this scenario.')).toBeVisible();
+  await expect(actionPlan.getByRole('heading', { name: 'Keep moving through uncovered scenarios' })).toBeVisible();
+  await expect(actionPlan.getByText('3 suite scenarios still need fresh coverage before release review.')).toBeVisible();
   await expect(actionPlan.getByText('Baseline run for this project.')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Contract evidence' })).toBeVisible();
   await expect(page.getByText('Suite manifest')).toBeVisible();

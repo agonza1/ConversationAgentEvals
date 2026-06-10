@@ -330,7 +330,22 @@ def list_suites() -> list[BenchmarkSuite]:
 
 def get_suite(suite_id: str) -> BenchmarkSuite | None:
     suite = _SUITES_BY_ID.get(suite_id)
-    return deepcopy(suite) if suite else None
+    if not suite:
+        return None
+
+    return _suite_with_starter_evidence(deepcopy(suite))
+
+
+def _suite_with_starter_evidence(suite: BenchmarkSuite) -> BenchmarkSuite:
+    suite['scenarios'] = [_scenario_with_starter_evidence(scenario) for scenario in suite['scenarios']]
+    return suite
+
+
+def _scenario_with_starter_evidence(scenario: BenchmarkScenario) -> BenchmarkScenario:
+    scenario.setdefault('sample_transcript', _simulated_transcript(scenario, 'starter sample agent', False))
+    scenario.setdefault('sample_action_trace', _simulated_action_trace(scenario, False))
+    scenario.setdefault('sample_final_state', _simulated_final_state(scenario, False))
+    return scenario
 
 
 def get_suite_contract_manifest(suite_id: str) -> dict[str, Any] | None:

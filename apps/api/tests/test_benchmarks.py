@@ -78,6 +78,20 @@ def test_call_center_catalog_includes_interruption_correction_scenario():
     assert simulation['final_state']['complete'] is True
 
 
+def test_get_suite_includes_starter_evidence_for_onboarding():
+    suite = get_suite('call-center-voice-ai')
+
+    assert suite is not None
+    scenario = next(item for item in suite['scenarios'] if item['id'] == 'billing-address-change')
+
+    assert 'sample_transcript' in scenario
+    assert 'sample_action_trace' in scenario
+    assert 'sample_final_state' in scenario
+    assert 'collect new billing address' in scenario['sample_transcript']
+    assert scenario['sample_action_trace'][0]['action'] == 'greet caller and identify intent'
+    assert scenario['sample_final_state']['complete'] is True
+
+
 def test_run_scenario_summarizes_interruption_and_correction_signals():
     result = run_scenario(
         {
