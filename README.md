@@ -1,12 +1,13 @@
 # ConversationAgentEvals
 
-Benchmark conversation, voice, and group-call AI agents end to end, scoring task completion, tool actions, policy compliance, and final outcomes from real evidence.
+Managed QA and regression testing for voice and conversation agents, scoring task completion, tool actions, policy compliance, and final outcomes from real evidence.
 
 ## What this repo does
 
 - Defines domain benchmark suites for consequential agent workflows.
 - Runs scenario tests against conversation evidence: transcript, action/tool trace, and final observed state.
 - Scores task completion, required actions, forbidden actions, policy constraints, final-state correctness, and evidence quality.
+- Normalizes the evidence needed for operator-facing QA reports, audit trails, and regression reruns.
 - Provides a focused benchmark runner UI at `/benchmarks`.
 - Exposes a product config API for Free, Starter, Team, and Business gates, including Firebase-ready auth metadata, saved runs, and credit rules.
 - Keeps the architecture ready for voice, WebRTC, phone, and group-call evaluation as the product expands.
@@ -17,7 +18,16 @@ Most conversation eval tools grade tone or transcript quality. This project is a
 
 > Did the AI agent actually complete the job?
 
-The MVP starts with text-first scenario simulation and deterministic scoring, then graduates the same benchmark shape to voice AI calls, group calls, tool execution, and vCon-compatible artifacts.
+The repo should no longer be positioned as a generic eval harness or a generic plain-language-spec-to-eval generator. ASSERT already sits directly in that lane as a requirement-driven, trace-aware eval framework with synthetic case generation, scoring, and local artifacts.
+
+The refactor direction is:
+
+- Use ASSERT as optional infrastructure and a compatibility layer where spec-driven eval generation or trace-aware judging helps.
+- Differentiate on voice-native QA operations: audio/call evidence, vCon, WebRTC or phone metadata, STT/TTS failure modes, interruption handling, latency, and transfer behavior.
+- Prove task completion against external state, not just transcript quality.
+- Turn production failures into saved regression scenarios with operator-ready evidence and reports.
+
+The MVP can still start with text-first scenario simulation and deterministic scoring, but that path should now be understood as an ingestion and reporting wedge for voice and conversation QA, not the final product identity.
 
 ## Pricing And Access Model
 
@@ -42,8 +52,11 @@ flowchart LR
   Web[Next.js web app] -->|scenario selection and evidence| API[FastAPI app]
   API --> Suites[Benchmark suite service]
   API --> Evaluator[Deterministic benchmark evaluator]
+  API --> Evidence[Evidence normalization and audit artifacts]
   API --> Product[Product config, saved runs, judge gates]
+  API --> ASSERT[Optional ASSERT import/export adapter]
   Evaluator --> Report[Scores, evidence, failures, suggested fixes]
+  Evidence --> Report
   Web --> Report
 
   Auth[Firebase Auth] --> Web
@@ -128,8 +141,8 @@ The current product surface is a SaaS homepage plus a focused benchmark runner. 
 
 Near-term next slices:
 
-- Replace in-memory saved runs with Firestore documents scoped by Firebase users/projects.
-- Wire Stripe price IDs for Starter and Team.
-- Execute LLM judge requests through a provider/Vertex abstraction with spend controls.
-- Add voice/WebRTC call artifacts to the same benchmark schema.
-- Export vCon-compatible records for voice workflows.
+- Add an ASSERT adapter for import/export and optional trace-grounded judging instead of rebuilding a parallel spec-to-eval taxonomy.
+- Ingest one real artifact type well first: vCon or call transcript plus metadata plus tool/action log.
+- Define 10-20 hard task-completion and failure-diagnosis checks for one production vertical.
+- Expand QA reports so they cite transcript spans, tool calls, timestamps, final state, and failure layer.
+- Add a production-failure-to-regression flow so real missed bookings, bad escalations, or failed transfers become rerunnable saved scenarios.

@@ -18,9 +18,13 @@ Voice remains a beachhead because WebRTC.ventures can credibly own it, but the l
 
 vCon compatibility remains useful for voice/call artifacts, but it is not the first message. The first message is eliminating the annoying manual agent-testing loop.
 
+ASSERT changes the framing of this plan: do not continue treating the generic eval harness layer as the product moat. ASSERT already covers requirement-driven eval generation, trace-aware judging, and portable local artifacts well enough that the smarter move is to integrate or stay compatible.
+
 ## Differentiated Wedge
 
 Do not compete as a generic voice AI QA dashboard or generic LLM eval dashboard.
+
+Do not compete as a generic plain-language requirements to evals product either.
 
 The wedge is domain-specific agentic benchmarks plus layered failure diagnosis:
 
@@ -43,6 +47,22 @@ Classify failures by:
 - TTS timing
 - barge-in / interruption handling
 - latency
+
+ASSERT can help with the generic parts of the stack:
+
+- spec-to-eval generation from natural-language requirements
+- synthetic scenario generation and scoring rubrics
+- multi-turn eval orchestration
+- trace-aware judging over tool calls and intermediate actions
+- local and CI artifact handling
+
+ConversationAgentEvals should differentiate on the parts ASSERT does not make specific enough for voice and conversation deployments:
+
+- voice-native evidence: audio, vCon, WebRTC/phone metadata, STT errors, silence gaps, latency, TTS failures, DTMF, transfers
+- task completion proof tied to external system state
+- production failure to saved regression flow
+- operator- and client-ready QA reporting
+- benchmark packs for real deployed workflows
 
 ## Benchmark Families
 
@@ -82,6 +102,14 @@ The next build slice should move from pasted evals to domain benchmark scenarios
 4. Evaluate task completion, action correctness, policy compliance, and user experience.
 5. Save the run so users can rerun the same benchmark suite after prompt/model/tool changes.
 
+The next build slice after that should move from generic scenarios to managed QA operations:
+
+1. Import or export ASSERT-compatible artifacts where useful instead of rebuilding ASSERT taxonomy.
+2. Ingest one real artifact type deeply: vCon or transcript plus metadata plus tool/action log.
+3. Define 10-20 hard task-completion checks for one vertical.
+4. Produce pass/fail QA reports citing transcript spans, tool calls, timestamps, and final state.
+5. Convert production failures into rerunnable saved regression scenarios.
+
 Production-call monitoring comes later, after users prove they want repeatable benchmark suites and ask to run the same rubrics automatically on live calls.
 
 ## Runtime
@@ -111,6 +139,7 @@ PORT=3013 API_PORT=8026 PIPECAT_PORT=8111 docker compose up --build -d
 - Large team workflows.
 - Production monitoring as the primary product.
 - Deep telephony/contact-center integrations.
+- A generic eval generation platform that competes head-on with ASSERT.
 
 Live WebRTC or phone simulation is allowed only when it helps evaluate agentic behavior end-to-end. Deep voice platform integrations come after a lightweight text/tool benchmark runner proves useful.
 
@@ -128,3 +157,10 @@ Live WebRTC or phone simulation is allowed only when it helps evaluate agentic b
 Give us your AI agent and 10 must-pass domain scenarios. We will run the benchmark, produce QA reports, identify recurring task failures, and turn the scenarios into a reusable regression suite.
 
 The SaaS product should grow from that service loop, not ahead of it.
+
+## Kill Criteria
+
+- If the product still looks like a generic eval runner, stop and tighten the wedge.
+- If synthetic transcripts are the only evidence, differentiation is weak.
+- If ASSERT plus a thin adapter can reproduce most of the value, the product is not differentiated enough.
+- If the reports do not change release or client-acceptance decisions, the value is not real enough yet.

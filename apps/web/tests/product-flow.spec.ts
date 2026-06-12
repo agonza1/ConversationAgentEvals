@@ -9,16 +9,20 @@ test('free-to-paid eval journey works end to end', async ({ page }) => {
   await expect(page.getByLabel('Pick a scenario: Done')).toBeVisible();
   await expect(page.getByLabel('Run evidence check: Ready')).toBeVisible();
   await expect(page.getByLabel('Save repeatable history: Next')).toBeVisible();
+  await expect(page.getByText('Starter evidence ready: transcript, action trace, final state.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Reload starter data' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Run sample now' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Create demo project' })).toBeVisible();
   await expect(page.getByRole('button', { name: /Starter/ })).toContainText('$19/month');
   await expect(page.getByRole('button', { name: /Team/ })).toContainText('$99/month');
 
-  await page.getByRole('button', { name: 'Simulate scenario' }).click();
+  await page.getByRole('button', { name: 'Run sample now' }).click();
   await expect(page.getByRole('heading', { name: /pass|needs_review/i })).toBeVisible();
   await expect(page.getByText('Benchmark report').last()).toBeVisible();
   const actionPlan = page.getByLabel('Operator action plan');
   await expect(actionPlan).toBeVisible();
-  await expect(actionPlan.getByRole('heading', { name: 'Ready for release review' })).toBeVisible();
-  await expect(actionPlan.getByText('No blocking failure category was reported for this scenario.')).toBeVisible();
+  await expect(actionPlan.getByRole('heading', { name: 'Keep moving through uncovered scenarios' })).toBeVisible();
+  await expect(actionPlan.getByText('3 suite scenarios still need fresh coverage before release review.')).toBeVisible();
   await expect(actionPlan.getByText('Baseline run for this project.')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Contract evidence' })).toBeVisible();
   await expect(page.getByText('Suite manifest')).toBeVisible();
@@ -42,10 +46,10 @@ test('free-to-paid eval journey works end to end', async ({ page }) => {
   await page.getByRole('button', { name: 'Save run' }).click();
   await expect(page.getByText('Sign up first to save projects and run history.')).toBeVisible();
 
-  await page.getByRole('button', { name: 'Sign up to save' }).click();
+  await page.getByRole('button', { name: 'Create demo project' }).click();
   await expect(page.getByText(/Signed in with local Firebase-ready demo identity/)).toBeVisible();
 
-  await page.getByRole('button', { name: 'Save run' }).click();
+  await page.getByRole('button', { name: 'Save this run' }).click();
   await expect(page.getByText(/Saved run/)).toBeVisible();
   await expect(page.getByRole('heading', { name: /1 saved for Billing Address Change/ })).toBeVisible();
   await expect(page.getByLabel('Saved runs and e2e validation').getByText('Baseline run for this project.')).toBeVisible();

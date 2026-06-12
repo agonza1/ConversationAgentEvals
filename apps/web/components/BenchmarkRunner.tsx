@@ -1642,6 +1642,22 @@ function onboardingStatusLabel(done: boolean, ready: boolean) {
   return 'Next';
 }
 
+function starterDataSummary(scenario?: BenchmarkScenario | null) {
+  if (!scenario) return 'Choose a sample scenario to preload starter evidence.';
+
+  const available = [
+    scenario.sample_transcript ? 'transcript' : null,
+    scenario.sample_action_trace ? 'action trace' : null,
+    scenario.sample_final_state ?? scenario.expected_final_state ? 'final state' : null,
+  ].filter(Boolean) as string[];
+
+  if (!available.length) {
+    return 'No starter evidence is attached to this scenario yet.';
+  }
+
+  return `Starter evidence ready: ${available.join(', ')}.`;
+}
+
 async function copyText(text: string) {
   if (navigator.clipboard?.writeText) {
     try {
@@ -1729,6 +1745,23 @@ export function BenchmarkRunner() {
     () => selectedSuite?.scenarios.find((scenario) => scenario.id === selectedScenarioId) ?? selectedSuite?.scenarios[0] ?? null,
     [selectedScenarioId, selectedSuite],
   );
+
+  function loadScenarioStarterData(nextScenario = selectedScenario) {
+    if (!nextScenario) return;
+
+    setTranscript(nextScenario.sample_transcript ?? '');
+    setActionTrace(stringifyEditable(nextScenario.sample_action_trace, '[]'));
+    setFinalState(stringifyEditable(nextScenario.sample_final_state ?? nextScenario.expected_final_state, '{}'));
+    setCallEvidence('');
+    setGroupCall('');
+    setVconEvidence('');
+    setReport(null);
+    setSuiteSimulation(null);
+    setSaveMessage(null);
+    setJudgeGate(null);
+    setCopyMessage(null);
+    setRunError(null);
+  }
 
   useEffect(() => {
     let isMounted = true;
@@ -1858,6 +1891,9 @@ export function BenchmarkRunner() {
     setTranscript(selectedScenario.sample_transcript ?? '');
     setActionTrace(stringifyEditable(selectedScenario.sample_action_trace, '[]'));
     setFinalState(stringifyEditable(selectedScenario.sample_final_state ?? selectedScenario.expected_final_state, '{}'));
+    setCallEvidence('');
+    setGroupCall('');
+    setVconEvidence('');
     setReport(null);
     setSuiteSimulation(null);
     setSaveMessage(null);
@@ -2521,18 +2557,33 @@ export function BenchmarkRunner() {
     {
       title: 'Pick a scenario',
       detail: selectedScenario
-        ? selectedScenario.title
+        ? `${selectedScenario.title}. ${starterDataSummary(selectedScenario)}`
         : selectedSuite && !selectedSuite.scenarios.length
           ? `${selectedSuite.title} needs at least one scenario before you can run evidence checks.`
           : 'Choose the benchmark suite and scenario to test.',
       done: Boolean(selectedScenario),
       ready: Boolean(selectedScenario || (selectedSuite && !selectedSuite.scenarios.length)),
+      actionLabel: selectedScenario ? 'Reload starter data' : selectedSuite?.scenarios[0] ? 'Pick first scenario' : null,
+      action: selectedScenario
+        ? () => loadScenarioStarterData()
+        : selectedSuite?.scenarios[0]
+          ? () => setSelectedScenarioId(selectedSuite.scenarios[0].id)
+          : undefined,
+      actionVariant: 'secondary' as const,
     },
     {
       title: 'Run evidence check',
       detail: report ? `Latest verdict: ${verdict ?? 'complete'}${score !== undefined ? ` at ${score}` : ''}.` : 'Simulate the scenario or run the benchmark against pasted evidence.',
       done: Boolean(report),
       ready: hasRunnableEvidence && !isRunning && !isSimulating,
+      actionLabel: report ? 'Run again' : hasRunnableEvidence ? 'Run sample now' : selectedScenario ? 'Load starter data first' : null,
+      action: hasRunnableEvidence || report
+        ? () => void onSimulate()
+        : selectedScenario
+          ? () => loadScenarioStarterData()
+          : undefined,
+      actionVariant: 'primary' as const,
+      disabled: Boolean((hasRunnableEvidence || report) && (isRunning || isSimulating)),
     },
     {
       title: 'Save repeatable history',
@@ -2543,6 +2594,26 @@ export function BenchmarkRunner() {
           : 'Sign up with the demo identity, then save the run for regression history.',
       done: hasSavedCurrentScenario,
       ready: Boolean(report && userId),
+      actionLabel: !userId
+        ? 'Create demo project'
+        : report && !hasSavedCurrentScenario
+          ? 'Save this run'
+          : hasSavedCurrentScenario && savedRuns.length
+            ? 'Export saved history'
+            : report
+              ? 'Save this run'
+              : null,
+      action: !userId
+        ? signInDemo
+        : report && !hasSavedCurrentScenario
+          ? () => void onSaveRun()
+          : hasSavedCurrentScenario && savedRuns.length
+            ? () => void onExportProjectHistory()
+            : report
+              ? () => void onSaveRun()
+              : undefined,
+      actionVariant: 'secondary' as const,
+      disabled: Boolean(userId && !report),
     },
   ];
 
@@ -2602,9 +2673,19 @@ export function BenchmarkRunner() {
             return (
               <li key={step.title} data-state={step.done ? 'done' : step.ready ? 'ready' : 'next'}>
                 <span aria-hidden="true">{index + 1}</span>
-                <div>
+                <div className="onboarding-step-copy">
                   <strong>{step.title}</strong>
                   <p>{step.detail}</p>
+                  {step.actionLabel && step.action ? (
+                    <button
+                      type="button"
+                      className={step.actionVariant === 'primary' ? 'primary-link onboarding-step-action' : 'secondary-link onboarding-step-action'}
+                      onClick={step.action}
+                      disabled={step.disabled}
+                    >
+                      {step.actionLabel}
+                    </button>
+                  ) : null}
                 </div>
                 <em aria-label={`${step.title}: ${status}`}>{status}</em>
               </li>

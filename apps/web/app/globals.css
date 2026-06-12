@@ -574,10 +574,24 @@ select {
   margin-bottom: 4px;
 }
 
+.onboarding-step-copy {
+  display: grid;
+  gap: 10px;
+}
+
 .onboarding-steps p {
   margin: 0;
   color: var(--muted);
   line-height: 1.45;
+}
+
+.onboarding-step-action {
+  width: fit-content;
+}
+
+.onboarding-step-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
 }
 
 .onboarding-steps em {
