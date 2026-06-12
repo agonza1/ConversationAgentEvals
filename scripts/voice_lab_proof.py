@@ -26,6 +26,9 @@ def main() -> int:
 
     print(f'Saved voice lab proof artifact: {output_path}')
     print(json.dumps(report['summary'], indent=2))
+    summary = report.get('summary') if isinstance(report.get('summary'), dict) else {}
+    if summary.get('fail_count', 0) or summary.get('blocked_count', 0):
+        return 1
     return 0
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 
 from app.services.voice_lab import (
@@ -118,3 +119,42 @@ def test_runner_counts_pass_and_blocked_results():
     assert report['results'][0]['status'] == 'blocked'
     assert report['results'][0]['verdict'] == 'blocked'
     assert report['results'][0]['scores']['overall'] == 0
+
+
+def test_voice_lab_proof_script_returns_nonzero_for_failed_or_blocked_summary(tmp_path, monkeypatch):
+    script_path = Path(__file__).resolve().parents[3] / 'scripts' / 'voice_lab_proof.py'
+    spec = importlib.util.spec_from_file_location('voice_lab_proof_script', script_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    class StubRunner:
+        def __init__(self, report):
+            self._report = report
+
+        def run(self, _scenarios):
+            return self._report
+
+    monkeypatch.setattr(module, 'PROJECT_ROOT', tmp_path)
+    monkeypatch.setattr(module, 'seeded_voice_lab_scenarios', lambda: ['scenario'])
+
+    monkeypatch.setattr(
+        module,
+        'build_default_voice_lab_runner',
+        lambda _project_root: StubRunner({'summary': {'fail_count': 0, 'blocked_count': 0}}),
+    )
+    assert module.main() == 0
+
+    monkeypatch.setattr(
+        module,
+        'build_default_voice_lab_runner',
+        lambda _project_root: StubRunner({'summary': {'fail_count': 1, 'blocked_count': 0}}),
+    )
+    assert module.main() == 1
+
+    monkeypatch.setattr(
+        module,
+        'build_default_voice_lab_runner',
+        lambda _project_root: StubRunner({'summary': {'fail_count': 0, 'blocked_count': 1}}),
+    )
+    assert module.main() == 1
