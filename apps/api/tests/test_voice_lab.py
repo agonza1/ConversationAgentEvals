@@ -122,7 +122,17 @@ def test_runner_counts_pass_and_blocked_results():
 
 
 def test_voice_lab_proof_script_returns_nonzero_for_failed_or_blocked_summary(tmp_path, monkeypatch):
-    script_path = Path(__file__).resolve().parents[3] / 'scripts' / 'voice_lab_proof.py'
+    test_file_path = Path(__file__).resolve()
+    script_path = next(
+        (
+            candidate
+            for parent in test_file_path.parents
+            for candidate in [parent / 'scripts' / 'voice_lab_proof.py']
+            if candidate.exists()
+        ),
+        None,
+    )
+    assert script_path is not None
     spec = importlib.util.spec_from_file_location('voice_lab_proof_script', script_path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
