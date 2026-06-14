@@ -84,5 +84,10 @@ def test_materialize_private_site_copies_bundle_and_rewrites_manifest(tmp_path):
     assert 'Risk behavior proven' in index_html
     assert 'Evidence to trust' in index_html
     assert 'Evidence Appendix' in index_html
+    assert 'Text mode' in index_html
+    assert 'Visual mode' in index_html
+    assert 'Call/session continuity' in index_html
+    assert 'Call quality / MOS' in index_html
+    assert 'E2E / response latency' in index_html
     assert 'Fixture Scenario' in index_html
     assert 'Source manifest' not in index_html

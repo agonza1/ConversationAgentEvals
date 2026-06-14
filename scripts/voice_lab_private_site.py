@@ -7,6 +7,7 @@ import json
 import shutil
 import sys
 from copy import deepcopy
+from datetime import datetime
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -180,6 +181,156 @@ def _scenario_evidence_line(scenario: dict) -> str:
     return ', '.join(proof_bits) if proof_bits else 'transcript and timeline captured'
 
 
+def _parse_iso(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError:
+        return None
+
+
+def _duration_label(start: object, end: object) -> str | None:
+    start_at = _parse_iso(start)
+    end_at = _parse_iso(end)
+    if start_at is None or end_at is None:
+        return None
+    seconds = max(0.0, (end_at - start_at).total_seconds())
+    if seconds < 1:
+        return f'{round(seconds * 1000)} ms'
+    return f'{seconds:.1f} s'
+
+
+def _operator_latency(final_state: dict) -> str | None:
+    operator = final_state.get('operator_steer') if isinstance(final_state.get('operator_steer'), dict) else {}
+    return _duration_label(operator.get('requestedAt'), operator.get('respondedAt'))
+
+
+def _scenario_measurements(scenario: dict) -> list[dict[str, str]]:
+    metrics = scenario.get('metrics', {}) if isinstance(scenario.get('metrics'), dict) else {}
+    final_state = scenario.get('final_state', {}) if isinstance(scenario.get('final_state'), dict) else {}
+    integration = scenario.get('integration_status', {}) if isinstance(scenario.get('integration_status'), dict) else {}
+    unsupported = set(integration.get('unsupported_layers', [])) if isinstance(integration.get('unsupported_layers'), list) else set()
+    within_budget = metrics.get('within_budget_marks', {}) if isinstance(metrics.get('within_budget_marks'), dict) else {}
+    latency_count = metrics.get('latency_mark_count')
+    over_budget = within_budget.get('over_budget')
+    in_budget = within_budget.get('within_budget')
+    operator_latency = _operator_latency(final_state)
+    event_count = metrics.get('platform_event_count', metrics.get('event_count'))
+    turn_count = metrics.get('turn_count')
+
+    fallback = final_state.get('demo_fallback') if isinstance(final_state.get('demo_fallback'), dict) else {}
+    flow_state = final_state.get('flow_state')
+    pipecat_flow = final_state.get('pipecat_flow') if isinstance(final_state.get('pipecat_flow'), dict) else {}
+    tool_coverage = pipecat_flow.get('toolCoverage') if isinstance(pipecat_flow.get('toolCoverage'), list) else []
+
+    continuity_value = 'Completed'
+    continuity_detail = 'Scenario reached a terminal proof state without a failed verdict.'
+    if fallback.get('armed'):
+        continuity_value = 'Escalated safely'
+        continuity_detail = 'Automation stopped and moved to human escalation instead of continuing unsafely.'
+    elif flow_state:
+        continuity_value = _compact_label(flow_state)
+
+    latency_value = 'Not captured yet'
+    latency_state = 'missing'
+    latency_detail = 'Live end-to-end voice latency is not in this proof tier.'
+    if latency_count is not None:
+        latency_value = f'{in_budget or 0}/{(in_budget or 0) + (over_budget or 0)} marks in budget'
+        latency_state = 'pass' if not over_budget else 'warn'
+        latency_detail = f'{_plural(latency_count, "latency mark")} captured in the deterministic run.'
+
+    tool_value = 'Not captured yet'
+    tool_state = 'missing'
+    tool_detail = 'No tool trace was recorded for this scenario.'
+    if tool_coverage:
+        tool_value = _plural(len(tool_coverage), 'tool')
+        tool_state = 'pass'
+        tool_detail = _format_list(tool_coverage, limit=4)
+    elif operator_latency:
+        tool_value = operator_latency
+        tool_state = 'pass'
+        tool_detail = 'Operator approval round-trip captured.'
+
+    if operator_latency and tool_coverage:
+        tool_detail = f'{_format_list(tool_coverage, limit=3)}; operator response {operator_latency}.'
+
+    return [
+        {
+            'label': 'Call/session continuity',
+            'value': continuity_value,
+            'detail': continuity_detail,
+            'state': 'pass',
+        },
+        {
+            'label': 'Disconnection signal',
+            'value': 'No disconnect in fixture',
+            'detail': f'{_plural(event_count, "event") if event_count is not None else "Timeline"} retained; live RTP disconnect detection is not yet measured.',
+            'state': 'warn' if 'sip_trunk' in unsupported or 'webrtc_media' in unsupported else 'pass',
+        },
+        {
+            'label': 'Call quality / MOS',
+            'value': 'Not captured yet',
+            'detail': 'No live audio MOS, packet loss, jitter, or waveform quality score is present in this bundle.',
+            'state': 'missing',
+        },
+        {
+            'label': 'Codec / media path',
+            'value': 'Not captured yet',
+            'detail': 'Scenario is transcript/deterministic proof; live codec evidence belongs to the FreeSWITCH proof tier.',
+            'state': 'missing',
+        },
+        {
+            'label': 'E2E / response latency',
+            'value': latency_value,
+            'detail': latency_detail,
+            'state': latency_state,
+        },
+        {
+            'label': 'Tool / operator timing',
+            'value': tool_value,
+            'detail': tool_detail,
+            'state': tool_state,
+        },
+        {
+            'label': 'Conversation evidence',
+            'value': _plural(turn_count, 'turn') if turn_count is not None else 'Transcript retained',
+            'detail': 'Transcript, timeline, and raw result are linked below for audit.',
+            'state': 'pass',
+        },
+    ]
+
+
+def _measurement_panels(measurements: list[dict[str, str]]) -> tuple[str, str]:
+    text_rows = []
+    visual_cards = []
+    for item in measurements:
+        state = html.escape(item['state'])
+        label = html.escape(item['label'])
+        value = html.escape(item['value'])
+        detail = html.escape(item['detail'])
+        text_rows.append(
+            f"""
+            <div class="measurement-row state-{state}">
+              <span>{label}</span>
+              <strong>{value}</strong>
+              <p>{detail}</p>
+            </div>
+            """
+        )
+        visual_cards.append(
+            f"""
+            <div class="visual-card state-{state}">
+              <div class="visual-indicator"></div>
+              <span>{label}</span>
+              <strong>{value}</strong>
+              <small>{detail}</small>
+            </div>
+            """
+        )
+    return ''.join(text_rows), ''.join(visual_cards)
+
+
 def _safe_artifact_link(href: object, label: str) -> str:
     href_text = str(href or '').strip()
     if not href_text:
@@ -206,6 +357,7 @@ def render_index_html(manifest: dict) -> str:
         evidence_paths = scenario.get('evidence_paths', {}) if isinstance(scenario.get('evidence_paths'), dict) else {}
         business_result = html.escape(_scenario_business_result(scenario))
         evidence_line = html.escape(_scenario_evidence_line(scenario))
+        text_panel, visual_panel = _measurement_panels(_scenario_measurements(scenario))
         artifact_links = ''.join(
             [
                 _safe_artifact_link(evidence_paths.get('transcript'), 'Transcript'),
@@ -233,6 +385,12 @@ def render_index_html(manifest: dict) -> str:
                   <p class="scenario-result">{business_result}</p>
                   <p class="meta">Evidence: {evidence_line}</p>
                 </div>
+              </div>
+              <div class="mode-panel text-panel">
+                {text_panel}
+              </div>
+              <div class="mode-panel visual-panel">
+                {visual_panel}
               </div>
               <div class="actions compact">
                 <span>{scenario_id}</span>
@@ -338,6 +496,46 @@ def render_index_html(manifest: dict) -> str:
         margin-bottom: 5px;
         text-transform: uppercase;
       }}
+      .mode-switch {{
+        align-items: center;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        justify-content: space-between;
+        margin-bottom: 14px;
+      }}
+      .mode-switch p {{ margin: 0; }}
+      .mode-controls {{
+        background: #f1f5f9;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        display: inline-flex;
+        padding: 3px;
+      }}
+      .mode-controls label {{
+        border-radius: 6px;
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 0.88rem;
+        font-weight: 800;
+        min-height: 32px;
+        padding: 7px 12px;
+      }}
+      input[name="display-mode"] {{
+        position: absolute;
+        opacity: 0;
+        pointer-events: none;
+      }}
+      #mode-text:checked ~ .appendix .mode-controls label[for="mode-text"],
+      #mode-visual:checked ~ .appendix .mode-controls label[for="mode-visual"] {{
+        background: #ffffff;
+        color: var(--accent);
+        box-shadow: 0 1px 4px rgba(22, 32, 42, 0.1);
+      }}
+      #mode-text:checked ~ .appendix .visual-panel,
+      #mode-visual:checked ~ .appendix .text-panel {{
+        display: none;
+      }}
       .appendix {{
         margin-top: 18px;
         padding: 18px;
@@ -402,6 +600,94 @@ def render_index_html(manifest: dict) -> str:
         justify-content: space-between;
         padding: 4px 10px 0;
       }}
+      .mode-panel {{
+        margin: 12px 10px 0;
+      }}
+      .measurement-row {{
+        border-top: 1px solid var(--line);
+        display: grid;
+        gap: 10px;
+        grid-template-columns: minmax(150px, 0.8fr) minmax(120px, 0.7fr) minmax(220px, 1.5fr);
+        padding: 11px 0;
+      }}
+      .measurement-row:first-child {{ border-top: 0; }}
+      .measurement-row span {{
+        color: var(--muted);
+        font-size: 0.84rem;
+        font-weight: 800;
+      }}
+      .measurement-row strong {{
+        color: var(--ink);
+        font-size: 0.94rem;
+      }}
+      .measurement-row p {{
+        color: var(--muted);
+        line-height: 1.4;
+        margin: 0;
+      }}
+      .visual-panel {{
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }}
+      .visual-card {{
+        background: #f8fafc;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        min-height: 124px;
+        padding: 12px;
+        position: relative;
+      }}
+      .visual-indicator {{
+        border-radius: 999px;
+        height: 10px;
+        position: absolute;
+        right: 12px;
+        top: 12px;
+        width: 10px;
+      }}
+      .visual-card span {{
+        color: var(--muted);
+        display: block;
+        font-size: 0.75rem;
+        font-weight: 850;
+        max-width: calc(100% - 18px);
+        text-transform: uppercase;
+      }}
+      .visual-card strong {{
+        display: block;
+        font-size: 1rem;
+        line-height: 1.25;
+        margin-top: 10px;
+      }}
+      .visual-card small {{
+        color: var(--muted);
+        display: block;
+        line-height: 1.35;
+        margin-top: 8px;
+      }}
+      .state-pass {{
+        --state-color: #0f766e;
+        --state-bg: #ecfdf5;
+      }}
+      .state-warn {{
+        --state-color: #b45309;
+        --state-bg: #fffbeb;
+      }}
+      .state-missing {{
+        --state-color: #64748b;
+        --state-bg: #f1f5f9;
+      }}
+      .visual-card.state-pass,
+      .visual-card.state-warn,
+      .visual-card.state-missing {{
+        background: var(--state-bg);
+        border-color: color-mix(in srgb, var(--state-color) 24%, #ffffff);
+      }}
+      .visual-indicator {{ background: var(--state-color); }}
+      .measurement-row.state-pass strong {{ color: #0f766e; }}
+      .measurement-row.state-warn strong {{ color: #b45309; }}
+      .measurement-row.state-missing strong {{ color: #64748b; }}
       .status {{
         background: var(--accent-soft);
         border-radius: 999px;
@@ -444,6 +730,8 @@ def render_index_html(manifest: dict) -> str:
         .proof-grid {{ grid-template-columns: 1fr; }}
         .scenario-head, .scenario summary {{ align-items: stretch; flex-direction: column; }}
         .scenario-summary-actions {{ justify-content: space-between; }}
+        .measurement-row, .visual-panel {{ grid-template-columns: 1fr; }}
+        .mode-switch {{ align-items: stretch; flex-direction: column; }}
         .status {{ width: fit-content; }}
       }}
     </style>
@@ -476,9 +764,19 @@ def render_index_html(manifest: dict) -> str:
         </div>
         <p class="meta">Generated {generated_at}. Average score: {html.escape(str(average_score))}. Not claimed by this proof: {html.escape(_format_list(unsupported_layers, limit=3))}.</p>
       </section>
+      <input checked id="mode-text" name="display-mode" type="radio">
+      <input id="mode-visual" name="display-mode" type="radio">
       <section class="appendix" aria-label="Evidence appendix">
-        <h2>Evidence Appendix</h2>
-        <p class="meta">Scenario details are tucked here so the main page stays buyer-focused. Use these links only when you want to inspect the proof artifacts.</p>
+        <div class="mode-switch">
+          <div>
+            <h2>Evidence Appendix</h2>
+            <p class="meta">Expand a scenario to inspect what was measured, what was not captured yet, and which artifacts support the verdict.</p>
+          </div>
+          <div class="mode-controls" aria-label="Display mode">
+            <label for="mode-text">Text mode</label>
+            <label for="mode-visual">Visual mode</label>
+          </div>
+        </div>
         {scenario_html}
         <div class="hero-actions">
           <a href="manifest.json">Site manifest</a>
