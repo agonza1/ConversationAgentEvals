@@ -80,4 +80,9 @@ def test_materialize_private_site_copies_bundle_and_rewrites_manifest(tmp_path):
     assert (site_root / 'bundle' / 'fixture-scenario' / 'transcript.txt').read_text() == 'Caller: Hello\nAgent: Hi'
     index_html = (site_root / 'index.html').read_text()
     assert 'Voice Agent Reliability Lab' in index_html
+    assert 'Business outcome tested' in index_html
+    assert 'Risk behavior proven' in index_html
+    assert 'Evidence to trust' in index_html
+    assert 'Evidence Appendix' in index_html
     assert 'Fixture Scenario' in index_html
+    assert 'Source manifest' not in index_html

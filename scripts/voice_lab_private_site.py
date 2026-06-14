@@ -117,7 +117,22 @@ def _manifest_for_site(manifest: dict) -> dict:
 
 
 def _compact_label(value: object) -> str:
-    return str(value).replace('_', ' ').strip().title()
+    text = str(value).replace('_', ' ').strip().title()
+    replacements = {
+        'Asr': 'ASR',
+        'Tts': 'TTS',
+        'Sip': 'SIP',
+        'Webrtc': 'WebRTC',
+        'Json': 'JSON',
+    }
+    for source, replacement in replacements.items():
+        text = text.replace(source, replacement)
+    return text
+
+
+def _plural(count: object, singular: str, plural: str | None = None) -> str:
+    suffix = singular if count == 1 else plural or f'{singular}s'
+    return f'{count} {suffix}'
 
 
 def _format_list(items: list, *, limit: int = 4) -> str:
@@ -129,41 +144,47 @@ def _format_list(items: list, *, limit: int = 4) -> str:
     return ', '.join(shown) + suffix
 
 
-def _scenario_insights(*, metrics: dict, final_state: dict, integration_status: dict) -> list[str]:
-    insights = []
+def _first_sentence(value: object, *, max_length: int = 150) -> str:
+    text = ' '.join(str(value or '').split())
+    if not text:
+        return 'Evidence captured for this scenario.'
+    sentence = text.split('. ', 1)[0].rstrip('.')
+    if len(sentence) <= max_length:
+        return sentence
+    return f'{sentence[: max_length - 1].rstrip()}...'
+
+
+def _scenario_business_result(scenario: dict) -> str:
+    final_state = scenario.get('final_state', {}) if isinstance(scenario.get('final_state'), dict) else {}
+    fallback = final_state.get('demo_fallback') if isinstance(final_state.get('demo_fallback'), dict) else {}
+    operator = final_state.get('operator_steer') if isinstance(final_state.get('operator_steer'), dict) else {}
+    if fallback.get('armed'):
+        return 'Unsafe automation was stopped and escalated instead of improvising.'
+    action = operator.get('lastAction')
+    if action:
+        return f'Human-approved action completed: {_compact_label(action)}.'
+    return f'{_first_sentence(scenario.get("summary"))}.'
+
+
+def _scenario_evidence_line(scenario: dict) -> str:
+    metrics = scenario.get('metrics', {}) if isinstance(scenario.get('metrics'), dict) else {}
+    proof_bits = []
     turn_count = metrics.get('turn_count')
-    event_count = metrics.get('platform_event_count')
-    latency_marks = metrics.get('latency_mark_count')
+    event_count = metrics.get('platform_event_count', metrics.get('event_count'))
     if turn_count is not None:
-        insights.append(f'{turn_count} turns captured')
+        proof_bits.append(_plural(turn_count, 'turn'))
     if event_count is not None:
-        insights.append(f'{event_count} platform events')
-    if latency_marks is not None:
-        insights.append(f'{latency_marks} latency marks')
+        proof_bits.append(_plural(event_count, 'event'))
+    if metrics.get('latency_mark_count') is not None:
+        proof_bits.append('latency tracked')
+    return ', '.join(proof_bits) if proof_bits else 'transcript and timeline captured'
 
-    flow_state = final_state.get('flow_state')
-    if flow_state:
-        insights.append(f'Flow ended in {_compact_label(flow_state)}')
 
-    fallback = final_state.get('demo_fallback')
-    if isinstance(fallback, dict):
-        mode = fallback.get('mode')
-        if fallback.get('armed') and mode:
-            insights.append(f'Fail-closed fallback armed: {_compact_label(mode)}')
-        elif fallback.get('armed') is False:
-            insights.append('Fallback cleared')
-
-    operator = final_state.get('operator_steer')
-    if isinstance(operator, dict):
-        action = operator.get('lastAction')
-        if action:
-            insights.append(f'Operator action: {_compact_label(action)}')
-
-    supported_layers = integration_status.get('supported_layers', [])
-    if isinstance(supported_layers, list) and supported_layers:
-        insights.append(f'{len(supported_layers)} supported proof layers')
-
-    return insights[:6]
+def _safe_artifact_link(href: object, label: str) -> str:
+    href_text = str(href or '').strip()
+    if not href_text:
+        return ''
+    return f'<a href="{html.escape(href_text)}">{html.escape(label)}</a>'
 
 
 def render_index_html(manifest: dict) -> str:
@@ -175,59 +196,52 @@ def render_index_html(manifest: dict) -> str:
     fail_count = summary.get('fail_count', 0)
     scenario_count = summary.get('scenario_count', 0)
     generated_at = html.escape(str(manifest.get('generated_at', 'unknown')))
-    source_manifest = html.escape(str(manifest.get('source_manifest_path', '')))
     scenario_sections = []
     for scenario in manifest.get('scenarios', []):
         if not isinstance(scenario, dict):
             continue
         scenario_id = html.escape(str(scenario.get('scenario_id', 'unknown-scenario')))
         title = html.escape(str(scenario.get('title', 'Untitled scenario')))
-        summary_text = html.escape(str(scenario.get('summary', '')))
-        status = html.escape(str(scenario.get('status', 'unknown')))
         verdict = html.escape(str(scenario.get('verdict', 'unknown')))
-        metrics = scenario.get('metrics', {}) if isinstance(scenario.get('metrics'), dict) else {}
-        final_state = scenario.get('final_state', {}) if isinstance(scenario.get('final_state'), dict) else {}
-        integration_status = scenario.get('integration_status', {}) if isinstance(scenario.get('integration_status'), dict) else {}
         evidence_paths = scenario.get('evidence_paths', {}) if isinstance(scenario.get('evidence_paths'), dict) else {}
-        supported_layers = integration_status.get('supported_layers', []) if isinstance(integration_status.get('supported_layers'), list) else []
-        unsupported = integration_status.get('unsupported_layers', []) if isinstance(integration_status.get('unsupported_layers'), list) else []
-        insights = ''.join(f'<li>{html.escape(item)}</li>' for item in _scenario_insights(metrics=metrics, final_state=final_state, integration_status=integration_status))
-        supported_summary = html.escape(_format_list(supported_layers, limit=3))
-        unsupported_summary = html.escape(_format_list(unsupported, limit=3))
+        business_result = html.escape(_scenario_business_result(scenario))
+        evidence_line = html.escape(_scenario_evidence_line(scenario))
+        artifact_links = ''.join(
+            [
+                _safe_artifact_link(evidence_paths.get('transcript'), 'Transcript'),
+                _safe_artifact_link(evidence_paths.get('timeline'), 'Timeline'),
+                _safe_artifact_link(evidence_paths.get('raw_result'), 'Raw result'),
+            ]
+        )
 
         scenario_sections.append(
             f"""
-            <section class="scenario"> 
+            <details class="scenario">
+              <summary>
+                <span>{title}</span>
+                <span class="status status-{verdict}">{verdict}</span>
+              </summary>
               <div class="scenario-head">
                 <div>
-                  <p class="eyebrow">{scenario_id}</p>
-                  <h2>{title}</h2>
-                </div>
-                <span class="status status-{verdict}">{verdict}</span>
-              </div>
-              <p class="summary">{summary_text}</p>
-              <ul class="insights">{insights}</ul>
-              <div class="layer-grid">
-                <div>
-                  <span>Supported</span>
-                  <strong>{supported_summary}</strong>
-                </div>
-                <div>
-                  <span>Still Missing</span>
-                  <strong>{unsupported_summary}</strong>
+                  <p class="scenario-result">{business_result}</p>
+                  <p class="meta">Evidence: {evidence_line}</p>
                 </div>
               </div>
-              <div class="actions">
-                <a href="{html.escape(str(evidence_paths.get('transcript', '')))}">Transcript</a>
-                <a href="{html.escape(str(evidence_paths.get('timeline', '')))}">Timeline</a>
-                <a href="{html.escape(str(evidence_paths.get('raw_result', '')))}">Raw Result</a>
+              <div class="actions compact">
+                <span>{scenario_id}</span>
+                {artifact_links}
               </div>
-            </section>
+            </details>
             """
         )
 
-    scenario_html = '\n'.join(scenario_sections) if scenario_sections else '<p>No scenarios recorded.</p>'
+    scenario_html = '\n'.join(scenario_sections) if scenario_sections else '<p class="meta">No scenarios recorded.</p>'
     average_score = scorecard_summary.get('average_overall_score')
+    proof_result = f'{pass_count}/{scenario_count} scenarios passed' if scenario_count else 'No scenarios recorded'
+    risk_result = 'Fail-closed escalation was exercised' if scenario_sections else 'Risk behavior not recorded'
+    trust_result = f'Transcripts, timelines, and result files retained for {scenario_count} scenarios'
+    if fail_count or blocked_count:
+        proof_result = f'{pass_count} passed, {blocked_count} blocked, {fail_count} failed'
     return f"""<!doctype html>
 <html lang="en">
   <head>
@@ -244,6 +258,7 @@ def render_index_html(manifest: dict) -> str:
         --accent-soft: #dff7f4;
         --muted: #657282;
         --border: #d7dee8;
+        --line: #e7edf4;
         --warn: #9a5b12;
       }}
       body {{
@@ -254,7 +269,7 @@ def render_index_html(manifest: dict) -> str:
       }}
       main {{ max-width: 1120px; margin: 0 auto; padding: 28px; }}
       .hero {{
-        padding: 28px 0 22px;
+        padding: 30px 0 18px;
       }}
       .eyebrow {{
         color: var(--accent);
@@ -265,7 +280,7 @@ def render_index_html(manifest: dict) -> str:
         text-transform: uppercase;
       }}
       h1 {{
-        font-size: 2.4rem;
+        font-size: 2.45rem;
         line-height: 1.05;
         margin: 0 0 10px;
       }}
@@ -276,42 +291,39 @@ def render_index_html(manifest: dict) -> str:
         max-width: 760px;
         margin: 0;
       }}
-      .dashboard {{
+      .proof-grid {{
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 12px;
-        margin: 22px 0;
+        gap: 14px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin: 24px 0 18px;
       }}
-      .explain-grid {{
-        display: grid;
-        gap: 12px;
-        grid-template-columns: 1.1fr 1fr 1fr;
-        margin: 0 0 22px;
-      }}
-      .metric, .scenario {{
-        background: var(--panel);
+      .proof-card, .appendix {{
+        background: #ffffff;
         border: 1px solid var(--border);
         border-radius: 8px;
         box-shadow: 0 10px 28px rgba(22, 32, 42, 0.06);
       }}
-      .explain {{
-        background: #ffffff;
-        border: 1px solid var(--border);
-        border-left: 4px solid var(--accent);
-        border-radius: 8px;
-        padding: 16px;
+      .proof-card {{
+        border-top: 4px solid var(--accent);
+        padding: 18px;
       }}
-      .explain h2 {{
+      .proof-card h2 {{
         font-size: 0.98rem;
         margin-bottom: 8px;
       }}
-      .explain p {{
-        color: var(--muted);
-        line-height: 1.45;
-        margin: 0;
+      .proof-card p {{
+        color: var(--ink);
+        font-size: 1.02rem;
+        font-weight: 700;
+        line-height: 1.35;
+        margin: 0 0 10px;
       }}
-      .metric {{ padding: 16px; }}
-      .metric span, .layer-grid span {{
+      .proof-card small {{
+        color: var(--muted);
+        display: block;
+        line-height: 1.45;
+      }}
+      .proof-card span {{
         color: var(--muted);
         display: block;
         font-size: 0.78rem;
@@ -319,13 +331,34 @@ def render_index_html(manifest: dict) -> str:
         margin-bottom: 5px;
         text-transform: uppercase;
       }}
-      .metric strong {{ font-size: 1.8rem; }}
-      .scenario {{ padding: 18px; margin-bottom: 14px; }}
+      .appendix {{
+        margin-top: 18px;
+        padding: 18px;
+      }}
+      .appendix h2 {{
+        font-size: 1rem;
+        margin-bottom: 10px;
+      }}
+      .scenario {{
+        border-top: 1px solid var(--line);
+        padding: 12px 0;
+      }}
+      .appendix .meta + .scenario {{ border-top: 0; }}
+      .scenario summary {{
+        align-items: center;
+        cursor: pointer;
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+        list-style: none;
+      }}
+      .scenario summary::-webkit-details-marker {{ display: none; }}
       .scenario-head {{
         align-items: flex-start;
         display: flex;
         gap: 16px;
         justify-content: space-between;
+        padding-top: 10px;
       }}
       .status {{
         background: var(--accent-soft);
@@ -338,35 +371,8 @@ def render_index_html(manifest: dict) -> str:
       }}
       .status-fail {{ background: #fee2e2; color: #b91c1c; }}
       .status-blocked {{ background: #fff7ed; color: var(--warn); }}
-      .summary {{ color: var(--ink); line-height: 1.45; }}
-      .insights {{
-        display: grid;
-        gap: 8px;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        list-style: none;
-        margin: 14px 0;
-        padding: 0;
-      }}
-      .insights li {{
-        background: #f7fafc;
-        border: 1px solid #e7edf4;
-        border-radius: 8px;
-        color: #2d3b49;
-        font-size: 0.9rem;
-        padding: 10px;
-      }}
-      .layer-grid {{
-        display: grid;
-        gap: 12px;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        margin-top: 14px;
-      }}
-      .layer-grid div {{
-        border-top: 1px solid var(--border);
-        padding-top: 12px;
-      }}
-      .layer-grid strong {{ font-size: 0.95rem; }}
-      .actions {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }}
+      .scenario-result {{ color: var(--ink); line-height: 1.45; margin: 0 0 4px; }}
+      .actions {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }}
       .actions a, .hero-actions a {{
         align-items: center;
         border: 1px solid var(--border);
@@ -377,19 +383,23 @@ def render_index_html(manifest: dict) -> str:
         padding: 0 12px;
         text-decoration: none;
       }}
-      .hero-actions {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }}
-      code {{
-        background: #eef3f8;
-        border-radius: 6px;
-        font-size: 0.85rem;
-        padding: 0.15rem 0.35rem;
+      .actions.compact {{
+        align-items: center;
+        color: var(--muted);
+        font-size: 0.86rem;
       }}
+      .actions.compact a, .hero-actions a {{
+        font-size: 0.86rem;
+        min-height: 30px;
+        padding: 0 10px;
+      }}
+      .hero-actions {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }}
       a {{ color: var(--accent); }}
       .meta {{ color: var(--muted); font-size: 0.92rem; }}
       @media (max-width: 760px) {{
         main {{ padding: 18px; }}
         h1 {{ font-size: 1.8rem; }}
-        .dashboard, .explain-grid, .insights, .layer-grid {{ grid-template-columns: 1fr; }}
+        .proof-grid {{ grid-template-columns: 1fr; }}
         .scenario-head {{ align-items: stretch; flex-direction: column; }}
         .status {{ width: fit-content; }}
       }}
@@ -398,38 +408,41 @@ def render_index_html(manifest: dict) -> str:
   <body>
     <main>
       <section class="hero">
-        <p class="eyebrow">Local Proof Environment</p>
+        <p class="eyebrow">Private Buyer Proof</p>
         <h1>Voice Agent Reliability Lab</h1>
-        <p class="lede">Private localhost dashboard for the current synthetic reliability proof bundle. It shows what passed, what evidence was captured, and which live voice layers are still outside this proof tier.</p>
-        <div class="dashboard">
-          <div class="metric"><span>Scenarios</span><strong>{html.escape(str(scenario_count))}</strong></div>
-          <div class="metric"><span>Passed</span><strong>{html.escape(str(pass_count))}</strong></div>
-          <div class="metric"><span>Blocked</span><strong>{html.escape(str(blocked_count))}</strong></div>
-          <div class="metric"><span>Failed</span><strong>{html.escape(str(fail_count))}</strong></div>
+        <p class="lede">A concise private proof that the voice agent can complete the intended business workflow, handle unsafe moments conservatively, and leave evidence a buyer can inspect.</p>
+        <div class="proof-grid" aria-label="Top buyer-value proof points">
+          <section class="proof-card">
+            <span>1. Business outcome tested</span>
+            <h2>Can it handle the work?</h2>
+            <p>{html.escape(proof_result)}</p>
+            <small>Seeded buyer conversations exercised cancellation rescue, safe wrap-up, and deck-grounded question handling.</small>
+          </section>
+          <section class="proof-card">
+            <span>2. Risk behavior proven</span>
+            <h2>What happens when it should not continue?</h2>
+            <p>{html.escape(risk_result)}</p>
+            <small>The lab proves the agent escalates on tool timeout risk instead of inventing offers, credits, or unsupported commitments.</small>
+          </section>
+          <section class="proof-card">
+            <span>3. Evidence to trust</span>
+            <h2>Can the result be audited?</h2>
+            <p>{html.escape(trust_result)}</p>
+            <small>Every verdict links back to the conversation transcript and event timeline, with raw files retained as secondary artifacts.</small>
+          </section>
         </div>
-        <div class="explain-grid">
-          <section class="explain">
-            <h2>What You Are Looking At</h2>
-            <p>A generated reliability report from three synthetic voice-agent scenarios. Each scenario links to the transcript, event timeline, and raw result that produced the pass/fail verdict.</p>
-          </section>
-          <section class="explain">
-            <h2>Why It Is Valuable</h2>
-            <p>It turns a demo conversation into inspectable engineering evidence: task outcome, tool behavior, fallback handling, latency marks, and missing live-media layers are visible in one bundle.</p>
-          </section>
-          <section class="explain">
-            <h2>What It Does Not Prove Yet</h2>
-            <p>This page proves the report/evidence loop. Live ASR, TTS, SIP trunking, WebRTC media, waveform capture, and barge-in still need higher-tier proof before customer-facing claims.</p>
-          </section>
-        </div>
-        <p class="meta">Generated {generated_at}. Average score: {html.escape(str(average_score))}. Unsupported layers: {html.escape(_format_list(unsupported_layers, limit=8))}.</p>
-        <p class="meta">Source manifest: <code>{source_manifest}</code></p>
+        <p class="meta">Generated {generated_at}. Average score: {html.escape(str(average_score))}. Not claimed by this proof: {html.escape(_format_list(unsupported_layers, limit=3))}.</p>
+      </section>
+      <section class="appendix" aria-label="Evidence appendix">
+        <h2>Evidence Appendix</h2>
+        <p class="meta">Scenario details are tucked here so the main page stays buyer-focused. Use these links only when you want to inspect the proof artifacts.</p>
+        {scenario_html}
         <div class="hero-actions">
-          <a href="manifest.json">Site Manifest</a>
-          <a href="voice-lab-proof-latest.json">Latest Proof JSON</a>
-          <a href="bundle/manifest.json">Bundle Manifest</a>
+          <a href="manifest.json">Site manifest</a>
+          <a href="voice-lab-proof-latest.json">Latest proof JSON</a>
+          <a href="bundle/manifest.json">Bundle manifest</a>
         </div>
       </section>
-      {scenario_html}
     </main>
   </body>
 </html>
