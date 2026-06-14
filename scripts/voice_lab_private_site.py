@@ -31,10 +31,10 @@ def main(argv: list[str] | None = None) -> int:
     serve_parser = subparsers.add_parser('serve', help='Serve an existing static report site over HTTP.')
     serve_parser.add_argument('--site-root', type=Path, default=Path('artifacts/voice-lab-private-site/current'))
     serve_parser.add_argument('--host', default='127.0.0.1')
-    serve_parser.add_argument('--port', type=int, default=18766)
+    serve_parser.add_argument('--port', type=int, default=18767)
 
     smoke_parser = subparsers.add_parser('smoke', help='Verify a served proof site and latest manifest.')
-    smoke_parser.add_argument('--base-url', default='http://127.0.0.1:18766')
+    smoke_parser.add_argument('--base-url', default='http://127.0.0.1:18767')
 
     args = parser.parse_args(argv)
 
@@ -218,8 +218,15 @@ def render_index_html(manifest: dict) -> str:
             f"""
             <details class="scenario">
               <summary>
-                <span>{title}</span>
-                <span class="status status-{verdict}">{verdict}</span>
+                <span class="scenario-title">{title}</span>
+                <span class="scenario-summary-actions">
+                  <span class="status status-{verdict}">{verdict}</span>
+                  <span class="expand-label">
+                    <span class="chevron">›</span>
+                    <span class="expand-closed">Click to expand</span>
+                    <span class="expand-open">Expanded</span>
+                  </span>
+                </span>
               </summary>
               <div class="scenario-head">
                 <div>
@@ -341,24 +348,59 @@ def render_index_html(manifest: dict) -> str:
       }}
       .scenario {{
         border-top: 1px solid var(--line);
-        padding: 12px 0;
+        padding: 10px 0;
       }}
       .appendix .meta + .scenario {{ border-top: 0; }}
       .scenario summary {{
         align-items: center;
+        border: 1px solid transparent;
+        border-radius: 8px;
         cursor: pointer;
         display: flex;
         gap: 12px;
         justify-content: space-between;
         list-style: none;
+        padding: 10px;
+        transition: background-color 120ms ease, border-color 120ms ease;
+      }}
+      .scenario summary:hover {{
+        background: #f7fafc;
+        border-color: var(--line);
       }}
       .scenario summary::-webkit-details-marker {{ display: none; }}
+      .scenario-title {{ font-weight: 750; }}
+      .scenario-summary-actions {{
+        align-items: center;
+        display: inline-flex;
+        flex-shrink: 0;
+        gap: 10px;
+      }}
+      .expand-label {{
+        align-items: center;
+        color: var(--muted);
+        display: inline-flex;
+        font-size: 0.82rem;
+        font-weight: 700;
+        gap: 4px;
+        white-space: nowrap;
+      }}
+      .chevron {{
+        display: inline-block;
+        font-size: 1.1rem;
+        line-height: 1;
+        transform: rotate(0deg);
+        transition: transform 120ms ease;
+      }}
+      .scenario[open] .chevron {{ transform: rotate(90deg); }}
+      .expand-open {{ display: none; }}
+      .scenario[open] .expand-closed {{ display: none; }}
+      .scenario[open] .expand-open {{ display: inline; }}
       .scenario-head {{
         align-items: flex-start;
         display: flex;
         gap: 16px;
         justify-content: space-between;
-        padding-top: 10px;
+        padding: 4px 10px 0;
       }}
       .status {{
         background: var(--accent-soft);
@@ -400,7 +442,8 @@ def render_index_html(manifest: dict) -> str:
         main {{ padding: 18px; }}
         h1 {{ font-size: 1.8rem; }}
         .proof-grid {{ grid-template-columns: 1fr; }}
-        .scenario-head {{ align-items: stretch; flex-direction: column; }}
+        .scenario-head, .scenario summary {{ align-items: stretch; flex-direction: column; }}
+        .scenario-summary-actions {{ justify-content: space-between; }}
         .status {{ width: fit-content; }}
       }}
     </style>
@@ -481,7 +524,19 @@ def smoke_private_site(base_url: str) -> None:
     scenario_count = summary.get('scenario_count', 0)
     if scenario_count < 1:
         raise RuntimeError('Smoke check failed: manifest reports zero scenarios.')
-    print(json.dumps({'base_url': normalized_base, 'summary': summary}, indent=2))
+
+    print(
+        json.dumps(
+            {
+                'base_url': normalized_base,
+                'bundle_id': manifest.get('bundle_id'),
+                'summary': summary,
+                'unsupported_layers': manifest.get('unsupported_layers', []),
+                'source_manifest_path': manifest.get('source_manifest_path'),
+            },
+            indent=2,
+        )
+    )
 
 
 def _load_voice_lab_proof_module():
