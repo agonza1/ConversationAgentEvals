@@ -121,10 +121,13 @@ npm run test:api
 npm run test:api:docker
 npm run test:api:local
 npm run test:benchmark-smoke
+npm run test:voice-lab-proof
 npm run test:e2e
 ```
 
 `npm run test:benchmark-smoke` is an API-level smoke path for the benchmark runner. It does not need browser or voice credentials; it lists suites, simulates pass and failure runs, verifies run metadata and audit fields, then saves, lists, and exports a run.
+
+`npm run test:voice-lab-proof` runs the minimal integrated evidence runner. It executes the deterministic contact-center fixture plus the transcript-injected `/ask` loop, then writes a bundle manifest under `artifacts/voice-lab/voice-lab-bundle-<timestamp>/manifest.json` with per-scenario transcript, timeline, raw result files, scorecard fields, and explicit unsupported live layers.
 
 Voice proof against a running stack:
 
