@@ -192,6 +192,23 @@ def test_render_index_html_uses_status_aware_measurements_and_risk_copy():
     assert 'Completed' in html  # passing scenario still renders its successful continuity state
 
 
+def test_render_index_html_does_not_mark_missing_blocked_evidence_as_pass():
+    module = _load_private_site_module()
+    measurements = module._scenario_measurements(
+        {
+            'status': 'blocked',
+            'metrics': {},
+            'integration_status': {},
+            'final_state': {},
+            'transcript': '',
+        }
+    )
+
+    conversation = next(item for item in measurements if item['label'] == 'Conversation evidence')
+    assert conversation['state'] == 'warn'
+    assert conversation['value'] == 'Not captured before blocker'
+
+
 def test_private_site_main_returns_nonzero_when_bundle_summary_has_failures(tmp_path, monkeypatch):
     module = _load_private_site_module()
     manifest_path = tmp_path / 'manifest.json'

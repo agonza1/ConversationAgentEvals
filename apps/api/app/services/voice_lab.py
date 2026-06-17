@@ -50,6 +50,9 @@ class VoiceTargetAdapter(Protocol):
     def run_scenario(self, scenario: VoiceLabScenario) -> dict[str, Any]:
         ...
 
+    def diagnostic_artifacts(self) -> list[dict[str, Any]]:
+        ...
+
 
 class VoiceLabRunner:
     def __init__(self, adapters: list[VoiceTargetAdapter]):
@@ -87,12 +90,14 @@ class VoiceLabRunner:
 
             try:
                 results.append(_enrich_result(adapter.run_scenario(scenario), scenario))
-            except Exception as exc:  # pragma: no cover
+            except Exception as exc:
+                artifacts = adapter.diagnostic_artifacts() if hasattr(adapter, 'diagnostic_artifacts') else []
                 results.append(
                     _enrich_result(
                         _blocked_result(
                             scenario=scenario,
                             blocker=str(exc),
+                            artifacts=artifacts,
                         ),
                         scenario,
                     )
@@ -129,6 +134,26 @@ class AgenticContactCenterAdapter:
             'acc-fail-closed-fallback',
         }
 
+    def diagnostic_artifacts(self) -> list[dict[str, Any]]:
+        artifacts: list[dict[str, Any]] = []
+        if self._cached_bundle_path is not None:
+            artifacts.append(
+                {
+                    'type': 'proof_bundle',
+                    'path': str(self._cached_bundle_path),
+                    'source': self.name,
+                }
+            )
+        if self._cached_log_path is not None:
+            artifacts.append(
+                {
+                    'type': 'runner_log',
+                    'path': str(self._cached_log_path),
+                    'source': self.name,
+                }
+            )
+        return artifacts
+
     def run_scenario(self, scenario: VoiceLabScenario) -> dict[str, Any]:
         bundle = self._load_proof_bundle()
         scenario_payload = self._bundle_slice(bundle, scenario.scenario_id)
@@ -143,20 +168,10 @@ class AgenticContactCenterAdapter:
         status = 'pass' if expected_outcome in {None, outcome} else 'fail'
 
         captured_artifacts = [
-            {
-                'type': 'proof_bundle',
-                'path': str(self._cached_bundle_path) if self._cached_bundle_path else None,
-                'source': self.name,
-            }
+            artifact
+            for artifact in self.diagnostic_artifacts()
+            if artifact.get('type') == 'proof_bundle' or artifact.get('path')
         ]
-        if self._cached_log_path is not None:
-            captured_artifacts.append(
-                {
-                    'type': 'runner_log',
-                    'path': str(self._cached_log_path),
-                    'source': self.name,
-                }
-            )
 
         return _with_report_fields({
             'scenario_id': scenario.scenario_id,
@@ -204,7 +219,7 @@ class AgenticContactCenterAdapter:
         latest_path = self.artifact_dir / 'agentic-contact-center-proof-latest.json'
         log_path = self.artifact_dir / f'agentic-contact-center-proof-{timestamp}.log'
         command = ['npm', 'run', 'proof', '--', '--out', str(proof_path), '--latest-out', str(latest_path)]
-        completed = subprocess.run(command, cwd=self.repo_root, check=True, capture_output=True, text=True)
+        completed = subprocess.run(command, cwd=self.repo_root, check=False, capture_output=True, text=True)
         log_path.write_text(
             '\n'.join(
                 [
@@ -218,9 +233,16 @@ class AgenticContactCenterAdapter:
                 ]
             )
         )
-        self._cached_bundle = json.loads(proof_path.read_text())
-        self._cached_bundle_path = proof_path
         self._cached_log_path = log_path
+        if proof_path.exists():
+            self._cached_bundle_path = proof_path
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f'agentic-contact-center proof command failed with exit code {completed.returncode}; see {log_path}'
+            )
+        if not proof_path.exists():
+            raise RuntimeError(f'agentic-contact-center proof command did not write expected artifact: {proof_path}')
+        self._cached_bundle = json.loads(proof_path.read_text())
         return self._cached_bundle
 
     def _bundle_slice(self, bundle: dict[str, Any], scenario_id: str) -> dict[str, Any]:
@@ -593,7 +615,7 @@ def _within_budget_marks(latency_marks: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
-def _blocked_result(*, scenario: VoiceLabScenario, blocker: str) -> dict[str, Any]:
+def _blocked_result(*, scenario: VoiceLabScenario, blocker: str, artifacts: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     timestamp = _utc_now()
     return _with_report_fields({
         'scenario_id': scenario.scenario_id,
@@ -608,7 +630,7 @@ def _blocked_result(*, scenario: VoiceLabScenario, blocker: str) -> dict[str, An
         'transcript': '',
         'final_state': {},
         'metrics': {},
-        'artifacts': [],
+        'artifacts': artifacts or [],
         'evidence': {'blocker': blocker},
     })
 

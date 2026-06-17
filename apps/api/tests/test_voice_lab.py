@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 
 from app.services.voice_lab import (
@@ -146,6 +147,42 @@ def test_runner_counts_pass_and_blocked_results():
     assert report['results'][0]['verdict'] == 'blocked'
     assert report['results'][0]['scores']['overall'] == 0
     assert report['results'][0]['scenario']['scenario_id'] == 'missing-scenario'
+
+
+def test_runner_preserves_contact_center_diagnostics_when_proof_command_fails(tmp_path, monkeypatch):
+    repo_root = tmp_path / 'agentic-contact-center'
+    repo_root.mkdir()
+    artifact_dir = tmp_path / 'artifacts'
+    adapter = AgenticContactCenterAdapter(repo_root=repo_root, artifact_dir=artifact_dir)
+    scenario = VoiceLabScenario(
+        scenario_id='acc-scripted-wrap',
+        adapter='agentic-contact-center',
+        title='Deterministic Cancellation Rescue Script',
+        prompt='Run the scripted local target.',
+        metadata={'expected_outcome': 'scripted_wrap_complete'},
+    )
+
+    monkeypatch.setattr('app.services.voice_lab.shutil.which', lambda _name: '/usr/bin/npm')
+
+    def fake_run(command, cwd, check, capture_output, text):
+        proof_path = Path(command[5])
+        latest_path = Path(command[7])
+        payload = json.dumps({'generatedAt': '2026-06-17T11:00:00Z', 'provider': 'fixture'})
+        proof_path.write_text(payload)
+        latest_path.write_text(payload)
+        return subprocess.CompletedProcess(command, 1, stdout='proof stdout', stderr='proof stderr')
+
+    monkeypatch.setattr('app.services.voice_lab.subprocess.run', fake_run)
+
+    result = VoiceLabRunner(adapters=[adapter]).run([scenario])['results'][0]
+
+    assert result['status'] == 'blocked'
+    assert 'exit code 1' in result['summary']
+    assert any(artifact['type'] == 'runner_log' for artifact in result['artifacts'])
+    assert any(artifact['type'] == 'proof_bundle' for artifact in result['artifacts'])
+    log_artifact = next(artifact for artifact in result['artifacts'] if artifact['type'] == 'runner_log')
+    assert Path(log_artifact['path']).read_text().count('proof stdout') == 1
+    assert Path(log_artifact['path']).read_text().count('proof stderr') == 1
 
 
 def test_voice_lab_proof_script_writes_bundle_manifest(tmp_path):

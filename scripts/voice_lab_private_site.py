@@ -306,6 +306,25 @@ def _scenario_measurements(scenario: dict) -> list[dict[str, str]]:
     if operator_latency and tool_coverage:
         tool_detail = f'{_format_list(tool_coverage, limit=3)}; operator response {operator_latency}.'
 
+    has_transcript = bool(str(scenario.get('transcript') or '').strip())
+    has_events = isinstance(event_count, int) and event_count > 0
+    evidence_value = _plural(turn_count, 'turn') if turn_count is not None else 'Transcript retained'
+    evidence_detail = 'Transcript, timeline, and raw result are linked below for audit.'
+    evidence_state = 'pass'
+    if not has_transcript and not has_events:
+        if scenario_status == 'blocked':
+            evidence_value = 'Not captured before blocker'
+            evidence_detail = 'Scenario blocked before any transcript or timeline evidence was collected.'
+            evidence_state = 'warn'
+        elif scenario_status == 'fail':
+            evidence_value = 'Missing evidence'
+            evidence_detail = 'Scenario failed before any transcript or timeline evidence was collected.'
+            evidence_state = 'warn'
+        else:
+            evidence_value = 'Not captured yet'
+            evidence_detail = 'Transcript and timeline evidence are not available for this scenario.'
+            evidence_state = 'missing'
+
     return [
         {
             'label': 'Call/session continuity',
@@ -345,9 +364,9 @@ def _scenario_measurements(scenario: dict) -> list[dict[str, str]]:
         },
         {
             'label': 'Conversation evidence',
-            'value': _plural(turn_count, 'turn') if turn_count is not None else 'Transcript retained',
-            'detail': 'Transcript, timeline, and raw result are linked below for audit.',
-            'state': 'pass',
+            'value': evidence_value,
+            'detail': evidence_detail,
+            'state': evidence_state,
         },
     ]
 
