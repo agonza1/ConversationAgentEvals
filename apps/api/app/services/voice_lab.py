@@ -63,29 +63,38 @@ class VoiceLabRunner:
             adapter = self._adapters.get(scenario.adapter)
             if adapter is None:
                 results.append(
-                    _blocked_result(
-                        scenario=scenario,
-                        blocker=f'Adapter "{scenario.adapter}" is not registered.',
+                    _enrich_result(
+                        _blocked_result(
+                            scenario=scenario,
+                            blocker=f'Adapter "{scenario.adapter}" is not registered.',
+                        ),
+                        scenario,
                     )
                 )
                 continue
 
             if not adapter.supports(scenario):
                 results.append(
-                    _blocked_result(
-                        scenario=scenario,
-                        blocker=f'Adapter "{scenario.adapter}" does not support scenario "{scenario.scenario_id}".',
+                    _enrich_result(
+                        _blocked_result(
+                            scenario=scenario,
+                            blocker=f'Adapter "{scenario.adapter}" does not support scenario "{scenario.scenario_id}".',
+                        ),
+                        scenario,
                     )
                 )
                 continue
 
             try:
-                results.append(adapter.run_scenario(scenario))
+                results.append(_enrich_result(adapter.run_scenario(scenario), scenario))
             except Exception as exc:  # pragma: no cover
                 results.append(
-                    _blocked_result(
-                        scenario=scenario,
-                        blocker=str(exc),
+                    _enrich_result(
+                        _blocked_result(
+                            scenario=scenario,
+                            blocker=str(exc),
+                        ),
+                        scenario,
                     )
                 )
 
@@ -112,6 +121,7 @@ class AgenticContactCenterAdapter:
         self.artifact_dir = Path(artifact_dir) if artifact_dir else self.repo_root / 'artifacts' / 'voice-lab'
         self._cached_bundle: dict[str, Any] | None = None
         self._cached_bundle_path: Path | None = None
+        self._cached_log_path: Path | None = None
 
     def supports(self, scenario: VoiceLabScenario) -> bool:
         return scenario.scenario_id in {
@@ -131,6 +141,22 @@ class AgenticContactCenterAdapter:
         outcome = scenario_payload['outcome']
         expected_outcome = scenario.metadata.get('expected_outcome')
         status = 'pass' if expected_outcome in {None, outcome} else 'fail'
+
+        captured_artifacts = [
+            {
+                'type': 'proof_bundle',
+                'path': str(self._cached_bundle_path) if self._cached_bundle_path else None,
+                'source': self.name,
+            }
+        ]
+        if self._cached_log_path is not None:
+            captured_artifacts.append(
+                {
+                    'type': 'runner_log',
+                    'path': str(self._cached_log_path),
+                    'source': self.name,
+                }
+            )
 
         return _with_report_fields({
             'scenario_id': scenario.scenario_id,
@@ -155,13 +181,7 @@ class AgenticContactCenterAdapter:
                 'latency_mark_count': len(checkpoint.get('latencyMarks', [])),
                 'within_budget_marks': _within_budget_marks(checkpoint.get('latencyMarks', [])),
             },
-            'artifacts': [
-                {
-                    'type': 'proof_bundle',
-                    'path': str(self._cached_bundle_path) if self._cached_bundle_path else None,
-                    'source': self.name,
-                }
-            ],
+            'artifacts': captured_artifacts,
             'evidence': {
                 'target_snapshot': checkpoint,
                 'native_outcome': outcome,
@@ -182,10 +202,25 @@ class AgenticContactCenterAdapter:
         timestamp = datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')
         proof_path = self.artifact_dir / f'agentic-contact-center-proof-{timestamp}.json'
         latest_path = self.artifact_dir / 'agentic-contact-center-proof-latest.json'
+        log_path = self.artifact_dir / f'agentic-contact-center-proof-{timestamp}.log'
         command = ['npm', 'run', 'proof', '--', '--out', str(proof_path), '--latest-out', str(latest_path)]
-        subprocess.run(command, cwd=self.repo_root, check=True, capture_output=True, text=True)
+        completed = subprocess.run(command, cwd=self.repo_root, check=True, capture_output=True, text=True)
+        log_path.write_text(
+            '\n'.join(
+                [
+                    f'command: {" ".join(command)}',
+                    f'cwd: {self.repo_root}',
+                    '--- stdout ---',
+                    completed.stdout.strip(),
+                    '--- stderr ---',
+                    completed.stderr.strip(),
+                    '',
+                ]
+            )
+        )
         self._cached_bundle = json.loads(proof_path.read_text())
         self._cached_bundle_path = proof_path
+        self._cached_log_path = log_path
         return self._cached_bundle
 
     def _bundle_slice(self, bundle: dict[str, Any], scenario_id: str) -> dict[str, Any]:
@@ -276,6 +311,16 @@ class TranscriptInjectionAdapter:
                         'type': 'session_ask_harness',
                         'path': f'/api/sessions/{session_id}/ask' if session_id else None,
                         'source': self.name,
+                    },
+                    {
+                        'type': 'session_transcript',
+                        'path': f'/api/sessions/{session_id}/transcript' if session_id else None,
+                        'source': self.name,
+                    },
+                    {
+                        'type': 'session_events',
+                        'path': f'/api/sessions/{session_id}/events' if session_id else None,
+                        'source': self.name,
                     }
                 ],
                 'evidence': {
@@ -337,6 +382,75 @@ def build_default_voice_lab_runner(project_root: Path) -> VoiceLabRunner:
             TranscriptInjectionAdapter(),
         ]
     )
+
+
+def _enrich_result(result: dict[str, Any], scenario: VoiceLabScenario) -> dict[str, Any]:
+    return {
+        **result,
+        'scenario': {
+            'scenario_id': scenario.scenario_id,
+            'title': scenario.title,
+            'adapter': scenario.adapter,
+            'prompt': scenario.prompt,
+            'metadata': scenario.metadata,
+            'execution_mode': _execution_mode_for_adapter(scenario.adapter),
+        },
+        'integration_status': _integration_status_for_adapter(scenario.adapter),
+    }
+
+
+def _execution_mode_for_adapter(adapter_name: str) -> str:
+    if adapter_name == 'agentic-contact-center':
+        return 'deterministic_fixture'
+    if adapter_name == 'session-ask':
+        return 'transcript_injection'
+    return 'unknown'
+
+
+def _integration_status_for_adapter(adapter_name: str) -> dict[str, Any]:
+    if adapter_name == 'agentic-contact-center':
+        return {
+            'proof_stage': 'progressive_baseline',
+            'supported_layers': [
+                'deterministic contact-center flow execution',
+                'structured transcript capture',
+                'platform event trail capture',
+                'latency mark capture',
+                'artifact log persistence',
+            ],
+            'unsupported_layers': [
+                'live_asr',
+                'live_tts',
+                'sip_trunk',
+                'webrtc_media',
+                'recorded_audio_waveforms',
+            ],
+            'next_integration_step': 'Run the same seeded scenario contract through the Pipecat or WebRTC path and persist audio, ASR turns, TTS turns, and transport logs beside the deterministic proof bundle.',
+        }
+    if adapter_name == 'session-ask':
+        return {
+            'proof_stage': 'progressive_fixture',
+            'supported_layers': [
+                'transcript-injected question loop',
+                'citation capture',
+                'session transcript export',
+                'session event export',
+            ],
+            'unsupported_layers': [
+                'live_asr',
+                'live_tts',
+                'sip_trunk',
+                'webrtc_media',
+                'barge_in_interruptions',
+            ],
+            'next_integration_step': 'Drive this same ask loop through a live Pipecat session so the evidence bundle can add media recordings and transcript-to-audio alignment for the identical scenario contract.',
+        }
+    return {
+        'proof_stage': 'unknown',
+        'supported_layers': [],
+        'unsupported_layers': ['unknown'],
+        'next_integration_step': 'Register a concrete adapter before claiming integrated voice coverage.',
+    }
 
 
 def _create_lab_deck(db, *, title: str, slides: list[dict[str, str]]) -> Deck:
