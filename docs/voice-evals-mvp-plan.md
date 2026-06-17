@@ -135,7 +135,7 @@ PORT=3013 API_PORT=8026 PIPECAT_PORT=8111 docker compose up --build -d
 ## What We Are Not Building Yet
 
 - Full dashboards.
-- Billing.
+- Commercial packaging.
 - Large team workflows.
 - Production monitoring as the primary product.
 - Deep telephony/contact-center integrations.

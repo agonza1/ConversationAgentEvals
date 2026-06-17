@@ -11,7 +11,7 @@ The product should start simple:
 - Run scenario tests in the browser.
 - Score real conversation evidence.
 - Show exactly what passed, failed, and why.
-- Gate signup/payment when the user wants stronger LLM judges, saved runs, integrations, voice calls, or team reporting.
+- Keep commercial packaging separate from the core eval/evidence runner until the validated service loop proves which limits matter.
 
 ## Key Problems We Solve
 
@@ -75,59 +75,15 @@ This is the acquisition loop: users should get value before signup.
 - Firestore for users, orgs, projects, scenario definitions, and run metadata.
 - Cloud Storage for transcripts, audio, vCon files, and report artifacts.
 - Pub/Sub + Cloud Tasks for async eval jobs.
-- Vertex AI or provider-routed LLM judges for paid tiers.
+- Vertex AI or provider-routed LLM judges with explicit cost controls.
 - Secret Manager for provider API keys.
 - Cloud Logging/Monitoring for reliability and cost observability.
 
-## Pricing Direction
+## Packaging Direction
 
-### Free
+Commercial packaging belongs around the eval system, not inside the core architecture. The repo should keep the primitives clean: benchmark suites, evidence ingestion, deterministic checks, judge controls, saved runs, and reports.
 
-- Browser transcript evals.
-- Limited scenario runs per month.
-- Deterministic checks.
-- Public/sample benchmark suites.
-- No saved team history beyond recent local/browser state.
-
-Goal: prove value instantly.
-
-### Starter: $19/month
-
-- Saved projects and run history.
-- Custom benchmark suites.
-- Credits-based runs.
-- Basic LLM judge credits.
-- Export reports.
-- Unlimited seats.
-
-Best for solo builders and early voice-agent teams.
-
-### Team: $99/month
-
-- Unlimited seats.
-- Higher included run and judge credit limits.
-- CI/API access.
-- Version comparisons.
-- Shared reports and audit history.
-- Basic voice/WebRTC test runs.
-
-Best for agencies and teams shipping agents for customers.
-
-### Business: Contact Us
-
-- Custom integration.
-- Readiness assessment.
-- Consulting and benchmark design.
-- High-volume evals.
-- Phone/SIP or deeper voice integrations.
-- Custom benchmarks.
-- Compliance-oriented audit exports.
-- Dedicated judge/model routing.
-- Priority support.
-
-Best for call centers, healthcare, fintech, education, and regulated workflows.
-
-Pricing should be simple: unlimited seats on paid plans, with usage governed by credits/runs. Keep deterministic browser evals cheap; charge for expensive LLM judges, saved history, API/CI usage, voice minutes, integrations, and custom consulting.
+The initial commercial motion should be service-led: run customer-specific benchmarks, produce QA reports, and convert successful scenarios into reusable regression suites. Only after that loop is clear should a separate product layer decide packaging and usage limits.
 
 ## Suggested Next Slides
 
@@ -156,10 +112,10 @@ Pricing should be simple: unlimited seats on paid plans, with usage governed by 
    - Get score and failure reasons.
    - Compare against previous versions.
 
-6. Free-To-Paid Loop
-   - Free browser eval gives immediate value.
-   - Signup saves projects and run history.
-   - Paid unlocks LLM judges, integrations, voice runs, and team reporting.
+6. Service-To-Product Loop
+   - A lightweight browser eval gives immediate value.
+   - A pilot produces reusable benchmark suites and QA reports.
+   - Repeated pilot needs define future packaging limits.
 
 7. Google Cloud Architecture
    - Firebase Auth, Cloud Run, Firestore, Cloud Storage, Pub/Sub/Tasks, Vertex/provider judges.
@@ -168,9 +124,9 @@ Pricing should be simple: unlimited seats on paid plans, with usage governed by 
    - Call center voice AI first.
    - Then telehealth, online teaching, fintech support, and group-call workflows.
 
-9. Pricing
-   - Free, Starter, Team, Business.
-   - Charge for run volume, LLM judging, voice minutes, integrations, and team/audit features.
+9. Packaging
+   - Keep commercial packaging outside the core runner for now.
+   - Let usage, judge cost, saved history, and integration needs emerge from pilots.
 
 10. Roadmap
    - Real browser evals.
@@ -181,7 +137,7 @@ Pricing should be simple: unlimited seats on paid plans, with usage governed by 
    - vCon import/export and group-call reports.
 
 11. E2E Validation
-   - Playwright validates the full browser path: free eval, signup prompt, saved project flow, paid-gated judge/voice actions, and report rendering.
+   - Playwright validates the full browser path: eval run, saved project flow, controlled judge/voice actions, and report rendering.
 
 ## Today's Build Goal
 
@@ -192,19 +148,19 @@ Ship the first end-to-end product skeleton today, with enough real behavior to p
 3. Call-center benchmark suite with realistic scenarios as the first wedge.
 4. Firebase Auth-ready signup/login surface and project model.
 5. Saved runs/projects flow behind authentication.
-6. Pricing and upgrade gates: Free, Starter $19, Team $99, Business Contact Us.
-7. Credit/run model foundation for LLM judges, voice minutes, and API usage.
-8. Paid LLM judge abstraction with evidence citations and cost controls.
-9. Voice/WebRTC integration path defined in the app, gated for paid/team usage until fully wired.
+6. Judge and voice-run controls that make expensive paths explicit without packaging plumbing.
+7. Usage metadata foundation for LLM judges, voice minutes, and API usage.
+8. LLM judge abstraction with evidence citations and cost controls.
+9. Voice/WebRTC integration path defined in the app, controlled until fully wired.
 10. Google Cloud deployment architecture documented and reflected in env/config naming.
-11. Playwright e2e validation covering the core free-to-paid eval journey.
+11. Playwright e2e validation covering the core eval-to-report journey.
 
 ## Immediate Build Priorities
 
 1. Replace demo/mock paths with a real eval path for pasted transcripts and browser-run text scenarios.
-2. Add pricing/upgrade UI for Free, Starter $19, Team $99, and Business Contact Us.
+2. Make the boundary between the eval runner and future product packaging explicit in docs and UI copy.
 3. Add Firebase Auth scaffolding and project-scoped saved runs.
-4. Add a paid LLM judge abstraction with cost controls and evidence citations.
+4. Add an LLM judge abstraction with cost controls and evidence citations.
 5. Build one excellent call-center voice AI benchmark suite before expanding too broadly.
 6. Add Playwright e2e coverage for the full browser validation path.
-7. Add Stripe only after signup, saved projects, and paid judge limits are clear.
+7. Keep commercial packaging work out of this repo until a separate layer is intentionally designed.

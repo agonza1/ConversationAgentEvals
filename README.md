@@ -9,7 +9,7 @@ Managed QA and regression testing for voice and conversation agents, scoring tas
 - Scores task completion, required actions, forbidden actions, policy constraints, final-state correctness, and evidence quality.
 - Normalizes the evidence needed for operator-facing QA reports, audit trails, and regression reruns.
 - Provides a focused benchmark runner UI at `/benchmarks`.
-- Exposes a product config API for Free, Starter, Team, and Business gates, including Firebase-ready auth metadata, saved runs, and credit rules.
+- Exposes configuration APIs for benchmark catalogs, saved runs, judge controls, and evidence artifacts.
 - Keeps the architecture ready for voice, WebRTC, phone, and group-call evaluation as the product expands.
 
 ## Product Direction
@@ -29,14 +29,13 @@ The refactor direction is:
 
 The MVP can still start with text-first scenario simulation and deterministic scoring, but that path should now be understood as an ingestion and reporting wedge for voice and conversation QA, not the final product identity.
 
-## Pricing And Access Model
+## Relationship To Voice Agent Reliability Lab
 
-- Free: browser transcript evals, deterministic checks, sample benchmarks, local report preview.
-- Starter: `$19/month`, unlimited seats, saved projects, custom suites, LLM judge credits, exports.
-- Team: `$99/month`, unlimited seats, higher credits, CI/API access, version comparisons, shared audit history, voice/WebRTC access.
-- Business: Contact Us for custom integration, readiness assessment, consulting, high-volume evals, phone/SIP, and compliance exports.
+ConversationAgentEvals is the reusable evaluation and evidence system. It defines scenarios, ingests transcripts/tool traces/call artifacts, scores outcomes, and produces audit-ready reports.
 
-Usage is credits/runs-based. Deterministic browser evals are cheap; LLM judging, voice minutes, API/CI runs, persistence, and custom integrations are the paid value.
+The Voice Agent Reliability Lab is an operating program that uses tools like this repo to prove whether voice agents can perform real business work end-to-end. The lab owns mission packets, buyer-facing proof cycles, QA gates, and go/no-go decisions. This repo can supply evidence bundles and regression checks for the lab, but it is not the lab itself.
+
+Commercial packaging is intentionally out of scope for this repository's current architecture. If a packaging layer is needed later, it should wrap the eval system rather than live inside the core eval runner.
 
 ## Benchmark Families
 
@@ -53,14 +52,13 @@ flowchart LR
   API --> Suites[Benchmark suite service]
   API --> Evaluator[Deterministic benchmark evaluator]
   API --> Evidence[Evidence normalization and audit artifacts]
-  API --> Product[Product config, saved runs, judge gates]
+  API --> Runs[Saved runs and benchmark catalog]
+  API --> Judges[Judge controls and cost guardrails]
   API --> ASSERT[Optional ASSERT import/export adapter]
   Evaluator --> Report[Scores, evidence, failures, suggested fixes]
   Evidence --> Report
   Web --> Report
 
-  Auth[Firebase Auth] --> Web
-  Billing[Stripe usage and subscriptions] --> API
   Cloud[Google Cloud Run, Firestore, Storage, Tasks] --> API
   Voice[Future voice/WebRTC/phone runs] --> API
   GroupCalls[Future group-call artifacts] --> API
@@ -140,7 +138,7 @@ npm run test:voice-proof
 
 ## Current MVP Boundary
 
-The current product surface is a SaaS homepage plus a focused benchmark runner. The runner can load benchmark suites, simulate a scenario or full suite, inspect transcript/action/final-state/group-call evidence, produce scored benchmark reports, export vCon-compatible records, show pricing gates, request a paid LLM judge gate, and save runs behind a Firebase-ready signup flow.
+The current product surface is a focused benchmark runner and evidence/reporting API. The runner can load benchmark suites, simulate a scenario or full suite, inspect transcript/action/final-state/group-call evidence, produce scored benchmark reports, export vCon-compatible records, request controlled LLM judge runs, and save runs for regression comparison.
 
 Near-term next slices:
 
