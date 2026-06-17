@@ -47,7 +47,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f'Saved voice lab proof manifest: {manifest_path}')
         print(f'Saved private proof site: {site_root}')
-        return 0
+        summary = json.loads(manifest_path.read_text()).get('summary', {})
+        return 1 if _summary_has_failures(summary) else 0
 
     if args.command == 'serve':
         serve_private_site(site_root=args.site_root, host=args.host, port=args.port)
@@ -78,9 +79,12 @@ def build_private_site(*, artifact_root: Path, site_root: Path, access_boundary:
 
 def materialize_private_site(*, manifest_path: Path, site_root: Path, access_boundary: str) -> Path:
     manifest = json.loads(Path(manifest_path).read_text())
-    bundle_root = Path(manifest['bundle_root'])
+    bundle_root = Path(manifest['bundle_root']).resolve()
     if not bundle_root.exists():
         raise FileNotFoundError(f'Bundle root is missing: {bundle_root}')
+
+    site_root = site_root.resolve()
+    _ensure_non_overlapping_roots(bundle_root=bundle_root, site_root=site_root)
 
     if site_root.exists():
         shutil.rmtree(site_root)
@@ -103,6 +107,7 @@ def materialize_private_site(*, manifest_path: Path, site_root: Path, access_bou
 def _manifest_for_site(manifest: dict) -> dict:
     site_manifest = deepcopy(manifest)
     site_manifest['bundle_root'] = 'bundle'
+    source_bundle_root = Path(str(manifest.get('bundle_root', ''))).resolve()
     for scenario in site_manifest.get('scenarios', []):
         scenario_id = scenario.get('scenario_id', 'unknown-scenario')
         scenario_dir = Path('bundle') / scenario_id
@@ -114,7 +119,42 @@ def _manifest_for_site(manifest: dict) -> dict:
             evidence_paths['transcript'] = str(scenario_dir / 'transcript.txt')
             evidence_paths['timeline'] = str(scenario_dir / 'timeline.json')
             evidence_paths['raw_result'] = str(scenario_dir / 'result.json')
+            captured_artifacts = evidence_paths.get('captured_artifacts')
+            if isinstance(captured_artifacts, list):
+                evidence_paths['captured_artifacts'] = _site_captured_artifacts(
+                    captured_artifacts,
+                    source_bundle_root=source_bundle_root,
+                )
     return site_manifest
+
+
+def _summary_has_failures(summary: object) -> bool:
+    if not isinstance(summary, dict):
+        return False
+    return bool(summary.get('fail_count', 0) or summary.get('blocked_count', 0))
+
+
+def _ensure_non_overlapping_roots(*, bundle_root: Path, site_root: Path) -> None:
+    if site_root == bundle_root or site_root in bundle_root.parents or bundle_root in site_root.parents:
+        raise ValueError(f'Site root must not overlap the bundle root: {site_root} vs {bundle_root}')
+
+
+def _site_captured_artifacts(captured_artifacts: list[dict], *, source_bundle_root: Path) -> list[dict]:
+    site_artifacts: list[dict] = []
+    for artifact in captured_artifacts:
+        if not isinstance(artifact, dict):
+            continue
+        artifact_entry = dict(artifact)
+        artifact_path = artifact_entry.get('path')
+        if isinstance(artifact_path, str) and artifact_path.strip():
+            try:
+                relative_path = Path(artifact_path).resolve().relative_to(source_bundle_root)
+            except (ValueError, OSError):
+                artifact_entry['path'] = None
+            else:
+                artifact_entry['path'] = str(Path('bundle') / relative_path)
+        site_artifacts.append(artifact_entry)
+    return site_artifacts
 
 
 def _compact_label(value: object) -> str:
@@ -224,19 +264,30 @@ def _scenario_measurements(scenario: dict) -> list[dict[str, str]]:
     pipecat_flow = final_state.get('pipecat_flow') if isinstance(final_state.get('pipecat_flow'), dict) else {}
     tool_coverage = pipecat_flow.get('toolCoverage') if isinstance(pipecat_flow.get('toolCoverage'), list) else []
 
+    scenario_status = str(scenario.get('status') or '')
     continuity_value = 'Completed'
     continuity_detail = 'Scenario reached a terminal proof state without a failed verdict.'
+    continuity_state = 'pass'
     if fallback.get('armed'):
         continuity_value = 'Escalated safely'
         continuity_detail = 'Automation stopped and moved to human escalation instead of continuing unsafely.'
     elif flow_state:
         continuity_value = _compact_label(flow_state)
+    elif scenario_status == 'blocked':
+        continuity_value = 'Blocked'
+        continuity_detail = 'Scenario did not reach a terminal proof state because the required dependency was unavailable.'
+        continuity_state = 'warn'
+    elif scenario_status == 'fail':
+        continuity_value = 'Failed'
+        continuity_detail = 'Scenario ended without proving the expected terminal behavior.'
+        continuity_state = 'warn'
 
     latency_value = 'Not captured yet'
     latency_state = 'missing'
     latency_detail = 'Live end-to-end voice latency is not in this proof tier.'
-    if latency_count is not None:
-        latency_value = f'{in_budget or 0}/{(in_budget or 0) + (over_budget or 0)} marks in budget'
+    total_latency_budget_marks = (in_budget or 0) + (over_budget or 0)
+    if latency_count and total_latency_budget_marks:
+        latency_value = f'{in_budget or 0}/{total_latency_budget_marks} marks in budget'
         latency_state = 'pass' if not over_budget else 'warn'
         latency_detail = f'{_plural(latency_count, "latency mark")} captured in the deterministic run.'
 
@@ -260,7 +311,7 @@ def _scenario_measurements(scenario: dict) -> list[dict[str, str]]:
             'label': 'Call/session continuity',
             'value': continuity_value,
             'detail': continuity_detail,
-            'state': 'pass',
+            'state': continuity_state,
         },
         {
             'label': 'Disconnection signal',
@@ -329,6 +380,20 @@ def _measurement_panels(measurements: list[dict[str, str]]) -> tuple[str, str]:
             """
         )
     return ''.join(text_rows), ''.join(visual_cards)
+
+
+def _risk_result(scenarios: object) -> str:
+    if not isinstance(scenarios, list):
+        return 'Risk behavior not recorded'
+    fallback_scenario = next(
+        (scenario for scenario in scenarios if isinstance(scenario, dict) and scenario.get('scenario_id') == 'acc-fail-closed-fallback'),
+        None,
+    )
+    if not isinstance(fallback_scenario, dict):
+        return 'Risk behavior not recorded'
+    if fallback_scenario.get('status') == 'pass':
+        return 'Fail-closed escalation was exercised'
+    return 'Fail-closed escalation was not proven in this run'
 
 
 def _safe_artifact_link(href: object, label: str) -> str:
@@ -403,7 +468,7 @@ def render_index_html(manifest: dict) -> str:
     scenario_html = '\n'.join(scenario_sections) if scenario_sections else '<p class="meta">No scenarios recorded.</p>'
     average_score = scorecard_summary.get('average_overall_score')
     proof_result = f'{pass_count}/{scenario_count} scenarios passed' if scenario_count else 'No scenarios recorded'
-    risk_result = 'Fail-closed escalation was exercised' if scenario_sections else 'Risk behavior not recorded'
+    risk_result = _risk_result(manifest.get('scenarios', []))
     trust_result = f'Transcripts, timelines, and result files retained for {scenario_count} scenarios'
     if fail_count or blocked_count:
         proof_result = f'{pass_count} passed, {blocked_count} blocked, {fail_count} failed'

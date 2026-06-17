@@ -84,7 +84,10 @@ def write_evidence_bundle(report: dict, artifact_root: Path) -> Path:
                     'transcript': str(transcript_path),
                     'timeline': str(timeline_path),
                     'raw_result': str(raw_result_path),
-                    'captured_artifacts': [artifact for artifact in result.get('artifacts', []) if isinstance(artifact, dict)],
+                    'captured_artifacts': _bundle_captured_artifacts(
+                        scenario_dir,
+                        [artifact for artifact in result.get('artifacts', []) if isinstance(artifact, dict)],
+                    ),
                 },
                 'metrics': result.get('metrics', {}),
                 'final_state': result.get('final_state', {}),
@@ -113,6 +116,45 @@ def write_evidence_bundle(report: dict, artifact_root: Path) -> Path:
     _write_json(timestamped_manifest_path, manifest)
     _write_json(latest_manifest_path, manifest)
     return manifest_path
+
+
+def _bundle_captured_artifacts(scenario_dir: Path, artifacts: list[dict]) -> list[dict]:
+    bundled: list[dict] = []
+    bundled_dir = scenario_dir / 'captured-artifacts'
+    for artifact in artifacts:
+        artifact_entry = dict(artifact)
+        artifact_path = artifact_entry.get('path')
+        if not isinstance(artifact_path, str) or not artifact_path.strip():
+            bundled.append(artifact_entry)
+            continue
+
+        source_path = Path(artifact_path)
+        if not source_path.is_file():
+            artifact_entry['path'] = None
+            bundled.append(artifact_entry)
+            continue
+
+        bundled_dir.mkdir(parents=True, exist_ok=True)
+        destination = _unique_artifact_destination(bundled_dir, source_path.name)
+        destination.write_bytes(source_path.read_bytes())
+        artifact_entry['path'] = str(destination)
+        bundled.append(artifact_entry)
+    return bundled
+
+
+def _unique_artifact_destination(bundled_dir: Path, filename: str) -> Path:
+    destination = bundled_dir / filename
+    if not destination.exists():
+        return destination
+
+    stem = Path(filename).stem
+    suffix = Path(filename).suffix
+    counter = 2
+    while True:
+        candidate = bundled_dir / f'{stem}-{counter}{suffix}'
+        if not candidate.exists():
+            return candidate
+        counter += 1
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:

@@ -150,6 +150,8 @@ def test_runner_counts_pass_and_blocked_results():
 
 def test_voice_lab_proof_script_writes_bundle_manifest(tmp_path):
     module = _load_voice_lab_proof_module()
+    source_artifact = tmp_path / 'fixture.log'
+    source_artifact.write_text('fixture log\n')
     report = {
         'generated_at': '2026-06-13T12:00:00Z',
         'runner_version': 'test-runner',
@@ -171,7 +173,7 @@ def test_voice_lab_proof_script_writes_bundle_manifest(tmp_path):
                 'transcript': 'Caller: Hello\nAgent: Hi',
                 'final_state': {'state': 'done'},
                 'metrics': {'turn_count': 2},
-                'artifacts': [{'type': 'runner_log', 'path': '/tmp/fixture.log', 'source': 'fixture'}],
+                'artifacts': [{'type': 'runner_log', 'path': str(source_artifact), 'source': 'fixture'}],
                 'scores': {'overall': 100, 'task_completion': 100, 'evidence_completeness': 100},
                 'scenario': {'scenario_id': 'fixture-scenario', 'execution_mode': 'transcript_injection'},
                 'integration_status': {'unsupported_layers': ['live_asr'], 'next_integration_step': 'Add live ASR.'},
@@ -189,10 +191,13 @@ def test_voice_lab_proof_script_writes_bundle_manifest(tmp_path):
     transcript_path = Path(scenario_entry['evidence_paths']['transcript'])
     timeline_path = Path(scenario_entry['timeline']['path'])
     raw_result_path = Path(scenario_entry['evidence_paths']['raw_result'])
+    captured_artifact_path = Path(scenario_entry['evidence_paths']['captured_artifacts'][0]['path'])
     assert transcript_path.exists()
     assert timeline_path.exists()
     assert raw_result_path.exists()
+    assert captured_artifact_path.exists()
     assert transcript_path.read_text() == 'Caller: Hello\nAgent: Hi'
+    assert captured_artifact_path.read_text() == 'fixture log\n'
 
 
 def test_voice_lab_proof_script_returns_nonzero_for_failed_or_blocked_summary(tmp_path, monkeypatch):
