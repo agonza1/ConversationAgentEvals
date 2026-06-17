@@ -1,80 +1,121 @@
 # Voice Lab Private Deployment Runbook
 
-## Deployment target
+## Decision for June 19
 
-- Target: repo-local static proof site generated from the seeded `ConversationAgentEvals` voice-lab runner.
-- Access boundary: bind the HTTP server to `127.0.0.1` only. This keeps the demo private to the host session while still making it inspectable in a browser.
-- Data policy: synthetic/demo data only. The bundle is generated from the deterministic contact-center proof plus the transcript-injected `/ask` loop.
+Keep the review path private and localhost-only.
 
-This is the lowest-risk production shape available in the current runtime because `docker` and `gcloud` are unavailable here. Instead of pretending to ship a public SaaS surface, this runbook ships a private, inspectable proof environment with explicit boundaries and reproducible artifacts.
+Why this is the lowest-risk deployment-equivalent shape right now:
 
-## Deploy
+- `docker` is unavailable in this runtime, so the checked-in container path cannot be rebuilt or validated here.
+- `gcloud` is unavailable in this runtime, so the documented Cloud Run path cannot be executed or smoke-tested here.
+- The only checked-in external deployment material is for the API container, not for a full buyer-facing proof site with a safe private access boundary.
+- A public tunnel or ad hoc host would create an unnecessary exposure path without adding proof quality.
+
+The approved review surface for June 19 is therefore a repo-local static proof site bound to `127.0.0.1`, generated only from seeded synthetic/demo scenarios.
+
+## Review surface
+
+- Browser URL: `http://127.0.0.1:18767/`
+- Canonical site root: `artifacts/voice-lab-private-site/current/`
+- Handoff mirror root: `artifacts/voice-lab-private-site/parent-current/`
+- HTML report: `artifacts/voice-lab-private-site/current/index.html`
+- Site manifest: `artifacts/voice-lab-private-site/current/manifest.json`
+- Latest proof JSON: `artifacts/voice-lab-private-site/current/voice-lab-proof-latest.json`
+- Latest raw bundle manifest: `artifacts/voice-lab-private-site/current/bundle/manifest.json`
+- Managed session name when `tmux` exists: `voice-lab-private-site`
+- Background pidfile fallback: `artifacts/voice-lab-private-site/server.pid`
+- Server log: `artifacts/voice-lab-private-site/server.log`
+- Release snapshots for rollback: `artifacts/voice-lab-private-site/releases/`
+
+`parent-current/` is a mirrored copy of `current/` so parent-card reviewers can keep using the previously shared artifact path.
+
+## Start / publish
 
 From the repo root:
 
 ```bash
-./scripts/ensure-venv.sh apps/api/.venv apps/api/requirements.txt
-apps/api/.venv/bin/python scripts/voice_lab_private_site.py build   --artifact-root artifacts/voice-lab   --site-root artifacts/voice-lab-private-site/current
-apps/api/.venv/bin/python scripts/voice_lab_private_site.py serve   --site-root artifacts/voice-lab-private-site/current   --host 127.0.0.1   --port 18766
+./scripts/voice_lab_private_deploy.sh build
+./scripts/voice_lab_private_deploy.sh start
 ```
 
-Expected private access path:
+What `build` does:
 
-```text
-http://127.0.0.1:18766/
-```
+- ensures the API virtualenv exists
+- generates a fresh seeded proof bundle under `artifacts/voice-lab/`
+- publishes the static site to `artifacts/voice-lab-private-site/current/`
+- mirrors the same site to `artifacts/voice-lab-private-site/parent-current/`
+- archives the previous `current/` site under `artifacts/voice-lab-private-site/releases/site-<timestamp>/` before replacing it
 
-The static site root is written to:
+What `start` does:
 
-```text
-artifacts/voice-lab-private-site/current/
-```
+- serves the current site from a detached `tmux` session named `voice-lab-private-site` when `tmux` is available
+- falls back to a background process tracked in `artifacts/voice-lab-private-site/server.pid` when `tmux` is unavailable
+- binds only to `127.0.0.1`
+- listens on port `18767`
+- writes the HTTP server log to `artifacts/voice-lab-private-site/server.log`
 
-The generated manifest and latest proof pointer are available at:
+To inspect status:
 
-```text
-artifacts/voice-lab-private-site/current/manifest.json
-artifacts/voice-lab-private-site/current/voice-lab-proof-latest.json
+```bash
+./scripts/voice_lab_private_deploy.sh status
 ```
 
 ## Smoke test
 
-In a second shell while the server is running:
+With the server running:
 
 ```bash
-curl --fail --show-error --silent http://127.0.0.1:18766/ >/dev/null
-apps/api/.venv/bin/python scripts/voice_lab_private_site.py smoke --base-url http://127.0.0.1:18766
+./scripts/voice_lab_private_deploy.sh smoke
 ```
+
+This performs:
+
+```bash
+curl --fail --show-error --silent http://127.0.0.1:18767/ >/dev/null
+apps/api/.venv/bin/python scripts/voice_lab_private_site.py smoke --base-url http://127.0.0.1:18767
+```
+
+Smoke output is saved to `artifacts/voice-lab-private-site/smoke-<timestamp>.json`.
 
 Expected smoke result:
 
 - `curl` exits `0`
-- the smoke command prints a JSON summary with `scenario_count >= 1`
+- JSON output includes `scenario_count >= 1`
+- JSON output includes the current `bundle_id`
+- JSON output lists `unsupported_layers` so QA can verify what is intentionally out of scope
 
-Inspect these proof files after the smoke run:
+## Stop / rollback
 
-```text
-artifacts/voice-lab-private-site/current/index.html
-artifacts/voice-lab-private-site/current/bundle/manifest.json
-artifacts/voice-lab/voice-lab-proof-latest.json
+Stop the private review server:
+
+```bash
+./scripts/voice_lab_private_deploy.sh stop
 ```
 
-## Rollback / disable
+Rollback to the latest archived site snapshot:
 
-- If the server is running in the foreground, stop it with `Ctrl-C`.
-- If it was started in the background, stop that process explicitly.
-- To remove the currently published private site, delete `artifacts/voice-lab-private-site/current/` after stopping the server.
-- To invalidate the current proof pointer, regenerate the site or remove `artifacts/voice-lab-private-site/current/voice-lab-proof-latest.json`.
+```bash
+./scripts/voice_lab_private_deploy.sh rollback
+```
+
+Rollback to a specific snapshot:
+
+```bash
+./scripts/voice_lab_private_deploy.sh rollback site-YYYYMMDDTHHMMSSZ
+```
+
+Rollback restores both `current/` and `parent-current/` from the chosen archived site. Start the server again after rollback if QA needs the reverted site live.
 
 ## Supported and unsupported layers
 
 Supported in this deployment shape:
 
-- deterministic contact-center scripted and fallback proof bundle capture
+- deterministic contact-center scripted and fail-closed proof bundle capture
 - transcript-injected `/ask` loop with citations, transcript export, and event export
-- HTML report plus JSON manifest for operator review
+- buyer-facing HTML report plus JSON manifests for operator review
+- explicit unsupported-layer disclosure embedded in the artifact itself
 
-Not supported yet:
+Not supported in this proof:
 
 - live ASR
 - live TTS
@@ -82,6 +123,8 @@ Not supported yet:
 - WebRTC media transport
 - recorded audio waveform capture
 - transcript-to-audio alignment
-- real-customer data or production credentials
+- real customer data processing
+- production credentials
+- public internet exposure
 
-The site surfaces these unsupported layers directly from the generated manifest so QA can see the gap in the artifact, not just in the docs.
+The site manifest surfaces the unsupported layers directly so QA can validate the current boundary from the artifact, not just from the runbook.
