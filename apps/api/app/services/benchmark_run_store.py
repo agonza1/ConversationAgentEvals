@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db.database import SessionLocal
 from app.models.entities import BenchmarkRunRecord
-from app.services.benchmark_service import DETERMINISTIC_EVALUATOR_VERSION, get_suite
+from app.services.benchmark_service import ASSERT_EVALUATOR_VERSION, get_suite
 
 
 DEFAULT_RETENTION_DAYS = 90
@@ -142,7 +142,7 @@ def get_benchmark_run_audit_artifacts(db: Session, *, user_id: str, run_id: str)
             'sha256': report.get('scenario_contract_sha256'),
         },
         'report_artifact': {
-            'type': 'deterministic_report',
+            'type': 'assert_result_report',
             'sha256': hashlib.sha256(report_json.encode('utf-8')).hexdigest(),
             'size_bytes': len(report_json.encode('utf-8')),
         },
@@ -212,7 +212,7 @@ def serialize_benchmark_run(record: BenchmarkRunRecord) -> dict[str, Any]:
             'retention_days': retention.get('retention_days', DEFAULT_RETENTION_DAYS),
             'retained_until': _isoformat(record.retained_until),
             'policy': retention.get('policy', 'benchmark_run_report_v1'),
-            'evaluator_version': retention.get('evaluator_version', DETERMINISTIC_EVALUATOR_VERSION),
+            'evaluator_version': retention.get('evaluator_version', ASSERT_EVALUATOR_VERSION),
         },
         'created_at': _isoformat(record.created_at),
         'updated_at': _isoformat(record.updated_at),
@@ -427,7 +427,7 @@ def _retention_envelope(*, report: dict[str, Any], retained_until: datetime, now
             'policy': 'benchmark_run_report_v1',
             'retention_days': max((retained_until - now).days, 0),
             'retained_until': _isoformat(retained_until),
-            'evaluator_version': DETERMINISTIC_EVALUATOR_VERSION,
+            'evaluator_version': ASSERT_EVALUATOR_VERSION,
         },
     }
 
