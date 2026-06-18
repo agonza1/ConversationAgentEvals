@@ -8,11 +8,15 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.services.assert_adapter import normalize_assert_payload
-from app.services.benchmark_evaluator import BenchmarkEvaluation, evaluate_benchmark, parse_action_trace
+from app.schemas.assert_v2 import AssertResultManifest, AssertRunCreateRequest
+from app.services.assert_v2_boundary import ingest_assert_run_result, queue_assert_run, with_default_runtime_config
+from app.services.benchmark_evaluator import parse_action_trace
 
 BenchmarkScenario = dict[str, Any]
 BenchmarkSuite = dict[str, Any]
-DETERMINISTIC_EVALUATOR_VERSION = 'deterministic-agentic-v1'
+ASSERT_EVALUATOR_VERSION = 'assert-v2-boundary-v1'
+ASSERT_SPEC_VERSION = '2026-06-18'
+ASSERT_ADAPTER_VERSION = 'conversation-agent-evals-assert-v2-adapter-v1'
 
 
 _SUITES: tuple[BenchmarkSuite, ...] = (
@@ -467,7 +471,7 @@ def _run_lifecycle(
     transitions = [
         {'from': None, 'to': 'queued', 'at': run_started_at, 'reason': 'run accepted'},
         {'from': 'queued', 'to': 'running', 'at': run_started_at, 'reason': 'evidence normalization started'},
-        {'from': 'running', 'to': 'evaluating', 'at': run_started_at, 'reason': 'deterministic evaluator started'},
+        {'from': 'running', 'to': 'evaluating', 'at': run_started_at, 'reason': 'ASSERT v2 boundary execution started'},
         {'from': 'evaluating', 'to': terminal_status, 'at': evaluated_at, 'reason': reason},
     ]
 
@@ -509,37 +513,52 @@ def run_scenario(request: Any) -> dict[str, Any]:
         raise ValueError(f'Unknown benchmark scenario: {suite_id}/{scenario_id}')
 
     transcript = _conversation_text(payload)
-    action_evidence_text = _action_evidence_text(payload)
-    scoring_text = '\n'.join(item for item in (transcript, action_evidence_text) if item)
-    completed_actions = _completed_actions(scoring_text, scenario['required_actions'])
-    forbidden_hits = _forbidden_hits(scoring_text, scenario['forbidden_actions'])
-    rubric_checks = _rubric_checks(transcript, scenario['rubric'])
-    required_score = round((len(completed_actions) / len(scenario['required_actions'])) * 100)
-    rubric_score = sum(check['earned_weight'] for check in rubric_checks)
-    penalty = min(40, len(forbidden_hits) * 20)
-    overall_score = max(0, round((required_score * 0.45) + (rubric_score * 0.55) - penalty))
-    verdict = 'pass' if overall_score >= 75 and not forbidden_hits else 'needs_review'
     run_metadata = _run_metadata(payload)
     perturbation_tags = _perturbation_tags(payload)
     lifecycle_context = _run_lifecycle_context(payload)
     evidence_artifacts = _evidence_artifacts(payload, transcript)
     logical_run_id = _logical_run_id(suite_id, scenario_id, evidence_artifacts, run_metadata)
     run_id = _run_id(suite_id, scenario_id, evidence_artifacts, run_metadata, lifecycle_context)
-    action_trace = payload.get('action_trace')
-    final_state = payload.get('final_state')
-    agentic_evaluation = _agentic_evaluation(scenario, action_trace, final_state) if _has_agentic_evidence(payload) else None
-
-    if agentic_evaluation:
-        overall_score = agentic_evaluation.overall_score
-        verdict = 'pass' if overall_score >= 75 and agentic_evaluation.forbidden_action_avoidance.passed else 'needs_review'
-
     scenario_contract = _scenario_contract(scenario)
     suite_contract_manifest = get_suite_contract_manifest(suite_id)
     suite_contract_manifest_sha256 = str(suite_contract_manifest['suite_contract_manifest_sha256']) if suite_contract_manifest else ''
+
+    assert_request = _assert_run_request(
+        suite_id=suite_id,
+        scenario_id=scenario_id,
+        payload=payload,
+        run_metadata=run_metadata,
+        logical_run_id=logical_run_id,
+        run_id=run_id,
+    )
+    queued_assert_record = queue_assert_run(assert_request, platform_run_id=run_id, now=_parse_iso_datetime(run_started_at))
+    assert_manifest = _execute_assert_contract(
+        suite=suite,
+        scenario=scenario,
+        payload=payload,
+        transcript=transcript,
+        evidence_artifacts=evidence_artifacts,
+        scenario_contract=scenario_contract,
+        suite_contract_manifest_sha256=suite_contract_manifest_sha256,
+    )
     evaluated_at = datetime.now(UTC).isoformat()
+    completed_assert_record = ingest_assert_run_result(
+        queued_assert_record,
+        assert_run_id=f'assert-{run_id}',
+        result=assert_manifest,
+        now=_parse_iso_datetime(evaluated_at),
+    )
+
+    verdict = 'pass' if assert_manifest.verdict.status == 'pass' else 'needs_review'
+    overall_score = int(assert_manifest.verdict.score or 0)
+    assert_fields = _assert_report_fields(assert_manifest, payload=payload, transcript=transcript)
     report = {
         'run_id': run_id,
         'logical_run_id': logical_run_id,
+        'assert_run_id': completed_assert_record.assert_run_id,
+        'assert_boundary': completed_assert_record.summary.get('boundary'),
+        'assert_result_manifest': assert_manifest.model_dump(mode='json'),
+        'assert_platform_record': completed_assert_record.model_dump(mode='json'),
         'suite_id': suite_id,
         'suite_name': suite['name'],
         'suite_contract_manifest_sha256': suite_contract_manifest_sha256,
@@ -557,25 +576,24 @@ def run_scenario(request: Any) -> dict[str, Any]:
             run_id=run_id,
             run_started_at=run_started_at,
             evaluated_at=evaluated_at,
+            assert_manifest=assert_manifest,
         ),
         'overall_score': overall_score,
+        'score': overall_score,
         'verdict': verdict,
-        'required_action_score': required_score,
-        'rubric_score': rubric_score,
-        'completed_actions': completed_actions,
-        'missing_actions': [action for action in scenario['required_actions'] if action not in completed_actions],
-        'forbidden_action_hits': forbidden_hits,
-        'rubric_checks': rubric_checks,
+        'required_action_score': assert_fields['required_action_score'],
+        'rubric_score': assert_fields['rubric_score'],
+        'completed_actions': assert_fields['completed_actions'],
+        'missing_actions': assert_fields['missing_actions'],
+        'forbidden_action_hits': assert_fields['forbidden_action_hits'],
+        'rubric_checks': assert_fields['rubric_checks'],
         'expected_final_state': scenario['expected_final_state'],
         'transcript_preview': transcript[:700],
         'group_call_summary': _group_call_artifact_summary(payload),
         'voice_interaction_summary': _voice_interaction_summary(payload, transcript),
-        'recommendations': _recommendations(completed_actions, forbidden_hits, scenario),
+        'recommendations': _recommendations(assert_fields['completed_actions'], assert_fields['forbidden_action_hits'], scenario),
+        **assert_fields['web_result_fields'],
     }
-    if agentic_evaluation:
-        report.update(_agentic_report_fields(agentic_evaluation, action_trace, final_state, scenario['required_actions'], transcript))
-        if report.get('workflow_order_issues'):
-            report['verdict'] = 'needs_review'
     report['run_lifecycle'] = _run_lifecycle(
         lifecycle_context=lifecycle_context,
         logical_run_id=logical_run_id,
@@ -589,6 +607,360 @@ def run_scenario(request: Any) -> dict[str, Any]:
     report['vcon_export'] = _vcon_export(payload, transcript, report['vcon_analysis'])
     return report
 
+
+def _assert_run_request(
+    *,
+    suite_id: str,
+    scenario_id: str,
+    payload: dict[str, Any],
+    run_metadata: dict[str, str],
+    logical_run_id: str,
+    run_id: str,
+) -> AssertRunCreateRequest:
+    return AssertRunCreateRequest.model_validate(
+        {
+            'spec_ref': {
+                'spec_id': f'{suite_id}/{scenario_id}',
+                'spec_kind': 'scenario',
+                'spec_version': ASSERT_SPEC_VERSION,
+                'assert_project': 'conversation-agent-evals',
+            },
+            'evidence': _assert_evidence_input(payload),
+            'runtime_config': with_default_runtime_config(None, environment='local').model_dump(mode='json'),
+            'platform_metadata': {
+                'user_id': run_metadata.get('user_id') or 'anonymous',
+                'project_id': run_metadata.get('project_id') or 'default',
+                'project_run_label': run_metadata.get('notes'),
+                'root_run_id': logical_run_id,
+                'retry_parent_run_id': _first_string(payload, 'retry_of_run_id', 'retryOfRunId'),
+                'resume_parent_run_id': _first_string(payload, 'resume_from_run_id', 'resumeFromRunId'),
+                'initiated_by': 'api',
+                'notes': run_metadata.get('notes'),
+                'labels': ['assert-v2-primary-path'],
+                'retention_days': int(run_metadata.get('retention_days') or 90),
+                'billing_tags': {
+                    key: value
+                    for key, value in {
+                        'agent_version': run_metadata.get('agent_version'),
+                        'prompt_version': run_metadata.get('prompt_version'),
+                        'model_name': run_metadata.get('model_name'),
+                    }.items()
+                    if value
+                },
+                'quota_scope': run_id,
+            },
+        }
+    )
+
+
+def _assert_evidence_input(payload: dict[str, Any]) -> dict[str, Any]:
+    evidence: dict[str, Any] = {'provenance': {}}
+    transcript = _conversation_text(payload)
+    if transcript:
+        evidence['transcript'] = _assert_pointer('input-transcript', 'transcript', transcript)
+    for field, kind in (
+        ('conversation', 'conversation'),
+        ('vcon', 'vcon'),
+        ('action_trace', 'action_trace'),
+        ('final_state', 'final_state'),
+        ('assert_bundle', 'assert_bundle'),
+    ):
+        value = payload.get(field)
+        if _artifact_present(value):
+            evidence[field] = _assert_pointer(f'input-{field.replace("_", "-")}', kind, value)
+    observed_actions = payload.get('observed_actions')
+    if _artifact_present(observed_actions):
+        evidence.setdefault('additional_artifacts', []).append(_assert_pointer('input-observed-actions', 'action_trace', observed_actions))
+    for field in ('call', 'group_call', 'groupCall'):
+        value = payload.get(field)
+        if _artifact_present(value):
+            evidence.setdefault('call_media', []).append(_assert_pointer(f'input-{field}', 'call_media', value))
+    adapter = payload.get('assert_adapter') if isinstance(payload.get('assert_adapter'), dict) else None
+    if adapter and isinstance(adapter.get('provenance'), dict):
+        evidence['provenance'] = deepcopy(adapter['provenance'])
+    return evidence
+
+
+def _assert_pointer(artifact_id: str, kind: str, value: Any, *, role: str = 'input') -> dict[str, Any]:
+    encoded = _stable_json(value)
+    return {
+        'artifact_id': artifact_id,
+        'kind': kind,
+        'role': role,
+        'inline_data': deepcopy(value),
+        'mime_type': 'application/json' if isinstance(value, (dict, list)) else 'text/plain',
+        'sha256': hashlib.sha256(encoded.encode('utf-8')).hexdigest(),
+        'size_bytes': len(encoded.encode('utf-8')),
+        'source': 'conversation-agent-evals',
+        'metadata': {'adapter_version': ASSERT_ADAPTER_VERSION},
+    }
+
+
+def _execute_assert_contract(
+    *,
+    suite: BenchmarkSuite,
+    scenario: BenchmarkScenario,
+    payload: dict[str, Any],
+    transcript: str,
+    evidence_artifacts: dict[str, Any],
+    scenario_contract: dict[str, Any],
+    suite_contract_manifest_sha256: str,
+) -> AssertResultManifest:
+    scoring_text = '\n'.join(item for item in (transcript, _action_evidence_text(payload)) if item)
+    completed_actions = _completed_actions(scoring_text, scenario['required_actions'])
+    forbidden_hits = _forbidden_hits(scoring_text, scenario['forbidden_actions'])
+    rubric_checks = _rubric_checks(transcript, scenario['rubric'])
+    required_score = round((len(completed_actions) / len(scenario['required_actions'])) * 100)
+    rubric_score = sum(check['earned_weight'] for check in rubric_checks)
+    penalty = min(40, len(forbidden_hits) * 20)
+    overall_score = max(0, round((required_score * 0.45) + (rubric_score * 0.55) - penalty))
+
+    action_trace = payload.get('action_trace')
+    final_state = payload.get('final_state')
+    missing_actions = [action for action in scenario['required_actions'] if action not in completed_actions]
+    forbidden_observed = [hit['action'] for hit in forbidden_hits]
+    final_state_missing = _assert_final_state_missing(final_state)
+    workflow_order_issues = _workflow_order_issues(action_trace, scenario['required_actions'], missing_actions) if _artifact_present(action_trace) else []
+    hard_check_failures = _hard_check_failures(
+        missing_actions=missing_actions,
+        forbidden_observed=forbidden_observed,
+        final_state_missing=final_state_missing,
+        workflow_order_issues=workflow_order_issues,
+    )
+    if _has_agentic_evidence(payload):
+        task_score = 0 if final_state_missing else 100
+        forbidden_score = 0 if forbidden_observed else 100
+        workflow_score = 0 if workflow_order_issues else 100
+        overall_score = round((task_score + required_score + forbidden_score + workflow_score + (0 if final_state_missing else 100)) / 5)
+
+    status = 'pass' if overall_score >= 75 and not forbidden_observed and not final_state_missing and not workflow_order_issues else 'needs_review'
+    failures = _assert_failures(
+        missing_actions=missing_actions,
+        forbidden_observed=forbidden_observed,
+        final_state_missing=final_state_missing,
+        workflow_order_issues=workflow_order_issues,
+    )
+    report_payload = {
+        'suite_id': suite['id'],
+        'suite_name': suite['name'],
+        'scenario_id': scenario['id'],
+        'scenario_title': scenario['title'],
+        'scenario_contract_sha256': _stable_digest(scenario_contract),
+        'suite_contract_manifest_sha256': suite_contract_manifest_sha256,
+        'score': overall_score,
+        'status': status,
+        'completed_actions': completed_actions,
+        'missing_actions': missing_actions,
+        'forbidden_action_hits': forbidden_hits,
+        'rubric_checks': rubric_checks,
+        'hard_check_failures': hard_check_failures,
+    }
+    return AssertResultManifest.model_validate(
+        {
+            'verdict': {
+                'status': status,
+                'score': overall_score,
+                'summary': 'ASSERT contract execution completed.' if status == 'pass' else 'ASSERT contract execution requires review.',
+                'metrics': {
+                    'required_action_score': required_score,
+                    'rubric_score': rubric_score,
+                    'workflow_order_score': 0 if workflow_order_issues else 100,
+                    'failure_count': len(failures),
+                },
+            },
+            'failures': failures,
+            'artifacts': [
+                _assert_pointer('assert-result-report', 'report', report_payload, role='output'),
+                _assert_pointer('assert-evidence-manifest', 'manifest', evidence_artifacts, role='output'),
+            ],
+            'raw_result': _assert_pointer('assert-raw-result', 'manifest', report_payload, role='output'),
+            'summary_artifacts': [
+                _assert_pointer('assert-report-summary', 'summary', report_payload, role='derived'),
+            ],
+            'manifest_metadata': {
+                'assert_version': ASSERT_EVALUATOR_VERSION,
+                'assert_commit': 'local-v2-boundary',
+                'spec_version': ASSERT_SPEC_VERSION,
+                'platform_adapter_version': ASSERT_ADAPTER_VERSION,
+                'provider_model_settings': _run_metadata(payload),
+                'artifact_manifest_location': 'inline://assert-result-manifest',
+                'platform_version': 'conversation-agent-evals-v2',
+            },
+        }
+    )
+
+
+def _assert_report_fields(assert_manifest: AssertResultManifest, *, payload: dict[str, Any], transcript: str) -> dict[str, Any]:
+    metrics = assert_manifest.verdict.metrics
+    result_artifact = next((artifact for artifact in assert_manifest.artifacts if artifact.artifact_id == 'assert-result-report'), None)
+    result_payload = result_artifact.inline_data if result_artifact is not None and isinstance(result_artifact.inline_data, dict) else {}
+    missing_actions = [str(item) for item in result_payload.get('missing_actions', [])]
+    forbidden_hits = result_payload.get('forbidden_action_hits') if isinstance(result_payload.get('forbidden_action_hits'), list) else []
+    forbidden_observed = [str(item.get('action')) for item in forbidden_hits if isinstance(item, dict) and item.get('action')]
+    workflow_order_issues = [failure.metadata for failure in assert_manifest.failures if failure.code.startswith('workflow-order:')]
+    final_state_missing = [failure.metadata for failure in assert_manifest.failures if failure.category == 'final_state']
+    hard_check_failures = result_payload.get('hard_check_failures') if isinstance(result_payload.get('hard_check_failures'), list) else []
+    failure_categories = sorted({_platform_failure_category(failure.category) for failure in assert_manifest.failures})
+    evidence_citations = _assert_evidence_citations(
+        action_trace=payload.get('action_trace'),
+        final_state=payload.get('final_state'),
+        transcript=transcript,
+        missing_actions=missing_actions,
+        forbidden_observed=forbidden_observed,
+        final_state_missing=final_state_missing,
+        workflow_order_issues=workflow_order_issues,
+    )
+    web_result_fields = {
+        'task_completion_score': 0 if final_state_missing else 100,
+        'forbidden_action_score': 0 if forbidden_observed else 100,
+        'final_state_score': 0 if final_state_missing else 100,
+        'workflow_order_score': int(metrics.get('workflow_order_score', 100)),
+        'forbidden_actions_observed': forbidden_observed,
+        'final_state_missing': final_state_missing,
+        'workflow_order_issues': workflow_order_issues,
+        'failure_categories': failure_categories,
+        'failure_modes': sorted({item['category'] for item in hard_check_failures if isinstance(item, dict) and item.get('category')}),
+        'hard_check_failures': hard_check_failures,
+        'suggested_fixes': _agentic_suggested_fixes(missing_actions, forbidden_observed, final_state_missing, workflow_order_issues),
+        'evidence_citations': evidence_citations,
+        'evidence_spans': evidence_citations,
+        'action_trace': payload.get('action_trace'),
+        'final_state': payload.get('final_state'),
+    }
+    return {
+        'required_action_score': int(metrics.get('required_action_score', 0)),
+        'rubric_score': int(metrics.get('rubric_score', 0)),
+        'completed_actions': [str(item) for item in result_payload.get('completed_actions', [])],
+        'missing_actions': missing_actions,
+        'forbidden_action_hits': forbidden_hits,
+        'rubric_checks': result_payload.get('rubric_checks', []),
+        'web_result_fields': web_result_fields,
+    }
+
+
+def _assert_final_state_missing(final_state: Any) -> list[dict[str, Any]]:
+    if not _artifact_present(final_state):
+        return []
+    if isinstance(final_state, dict) and final_state.get('complete') is True:
+        return []
+    actual = final_state.get('complete') if isinstance(final_state, dict) else None
+    return [{'path': 'complete', 'expected': True, 'actual': actual}]
+
+
+def _assert_failures(
+    *,
+    missing_actions: list[str],
+    forbidden_observed: list[str],
+    final_state_missing: list[dict[str, Any]],
+    workflow_order_issues: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    failures = []
+    failures.extend(
+        {
+            'code': f'missing-required-action:{_slug_part(action)}',
+            'category': 'required_action',
+            'severity': 'error',
+            'summary': f'Required action was not observed: {action}',
+            'expected': action,
+            'evidence_artifact_ids': ['input-action-trace', 'input-transcript'],
+            'metadata': {'action': action},
+        }
+        for action in missing_actions
+    )
+    failures.extend(
+        {
+            'code': f'forbidden-action:{_slug_part(action)}',
+            'category': 'forbidden_action',
+            'severity': 'critical',
+            'summary': f'Forbidden action was observed: {action}',
+            'observed': action,
+            'evidence_artifact_ids': ['input-action-trace', 'input-transcript'],
+            'metadata': {'action': action},
+        }
+        for action in forbidden_observed
+    )
+    failures.extend(
+        {
+            'code': f'task-completion:{_slug_part(item.get("path"))}',
+            'category': 'task_completion',
+            'severity': 'error',
+            'summary': 'Task completion could not be confirmed from the ASSERT final state.',
+            'expected': str(item.get('expected')),
+            'observed': str(item.get('actual')),
+            'evidence_artifact_ids': ['input-final-state'],
+            'metadata': item,
+        }
+        for item in final_state_missing
+    )
+    failures.extend(
+        {
+            'code': f'final-state:{_slug_part(item.get("path"))}',
+            'category': 'final_state',
+            'severity': 'error',
+            'summary': f'Final state assertion failed: {item.get("path")}',
+            'expected': str(item.get('expected')),
+            'observed': str(item.get('actual')),
+            'evidence_artifact_ids': ['input-final-state'],
+            'metadata': item,
+        }
+        for item in final_state_missing
+    )
+    failures.extend(
+        {
+            'code': f'workflow-order:{_slug_part(issue.get("action"))}',
+            'category': 'tool_use',
+            'severity': 'warning',
+            'summary': f'Workflow action occurred out of order: {issue.get("action")}',
+            'observed': str(issue.get('observed_index')),
+            'evidence_artifact_ids': ['input-action-trace'],
+            'metadata': issue,
+        }
+        for issue in workflow_order_issues
+    )
+    return failures
+
+
+def _platform_failure_category(assert_category: str) -> str:
+    return {
+        'required_action': 'required_action_execution',
+        'forbidden_action': 'forbidden_action_avoidance',
+        'final_state': 'final_state_correctness',
+        'tool_use': 'workflow_ordering',
+        'task_completion': 'task_completion',
+    }.get(assert_category, assert_category)
+
+
+def _assert_evidence_citations(
+    *,
+    action_trace: Any,
+    final_state: Any,
+    transcript: str,
+    missing_actions: list[str],
+    forbidden_observed: list[str],
+    final_state_missing: list[dict[str, Any]],
+    workflow_order_issues: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    citations: list[dict[str, Any]] = []
+    cited_keys: set[str] = set()
+    for event in parse_action_trace(action_trace):
+        _append_action_trace_citation(citations, cited_keys, action_trace, event.name, 'required_action')
+        _append_transcript_citation(citations, cited_keys, transcript, event.name, 'required_action')
+    for action_name in missing_actions:
+        _append_missing_action_citation(citations, cited_keys, action_trace, action_name)
+        _append_transcript_citation(citations, cited_keys, transcript, action_name, 'missing_action_context')
+    for action_name in forbidden_observed:
+        _append_action_trace_citation(citations, cited_keys, action_trace, action_name, 'forbidden_action')
+    for issue in workflow_order_issues:
+        _append_action_trace_citation(citations, cited_keys, action_trace, str(issue.get('action') or ''), 'bad_order', extra=issue)
+    for missing in final_state_missing:
+        _append_final_state_citation(citations, cited_keys, missing, 'final_state_mismatch')
+    if isinstance(final_state, dict):
+        citations.append({'source': 'final_state', 'kind': 'task_completion', 'assertion': {'actual': final_state.get('complete')}, 'final_state': deepcopy(final_state)})
+    return citations
+
+
+def _parse_iso_datetime(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace('Z', '+00:00'))
 
 def simulate_scenario(request: Any) -> dict[str, Any]:
     payload = _payload_to_dict(request)
@@ -1037,6 +1409,7 @@ def _evidence_audit_summary(
     run_id: str,
     run_started_at: str,
     evaluated_at: str,
+    assert_manifest: AssertResultManifest | None = None,
 ) -> dict[str, Any]:
     input_artifact_types = [
         key
@@ -1060,7 +1433,8 @@ def _evidence_audit_summary(
         'action_trace_present': action_trace_present,
         'final_state_present': final_state_present,
         'metadata_labels': sorted(run_metadata.keys()),
-        'evaluator_version': DETERMINISTIC_EVALUATOR_VERSION,
+        'evaluator_version': ASSERT_EVALUATOR_VERSION,
+        'assert_manifest_metadata': assert_manifest.manifest_metadata if assert_manifest is not None else {},
         'export_readiness': {
             'ready': not missing_for_export,
             'format': 'saved_run_json',
@@ -1562,6 +1936,11 @@ def _stable_digest(value: Any) -> str:
     return hashlib.sha256(_stable_json(value).encode('utf-8')).hexdigest()
 
 
+
+def _slug_part(value: Any) -> str:
+    cleaned = re.sub(r'[^a-z0-9-]+', '-', str(value).lower()).strip('-') if value is not None else ''
+    return cleaned
+
 def _stable_json(value: Any) -> str:
     return json.dumps(_stable_json_value(value), sort_keys=True, separators=(',', ':'), default=str)
 
@@ -1629,82 +2008,6 @@ def _has_agentic_evidence(payload: dict[str, Any]) -> bool:
     return bool(action_trace) or (isinstance(final_state, dict) and bool(final_state))
 
 
-def _agentic_evaluation(scenario: BenchmarkScenario, action_trace: Any, final_state: Any) -> BenchmarkEvaluation:
-    return evaluate_benchmark(
-        action_trace=action_trace,
-        final_state=final_state,
-        task_completion={'completed': True},
-        required_actions=scenario['required_actions'],
-        forbidden_actions=scenario['forbidden_actions'],
-        expected_final_state={'complete': True},
-    )
-
-
-def _agentic_report_fields(
-    evaluation: BenchmarkEvaluation,
-    action_trace: Any,
-    final_state: Any,
-    required_actions: list[Any],
-    transcript: str,
-) -> dict[str, Any]:
-    missing_actions = [_describe_requirement(item) for item in evaluation.required_action_execution.missing]
-    forbidden_observed = [_describe_requirement(item) for item in evaluation.forbidden_action_avoidance.violations]
-    final_state_missing = evaluation.final_state_correctness.missing
-    workflow_order_issues = _workflow_order_issues(action_trace, required_actions, evaluation.required_action_execution.missing)
-    failure_categories = []
-    if not evaluation.task_completion.passed:
-        failure_categories.append('task_completion')
-    if missing_actions:
-        failure_categories.append('required_action_execution')
-    if workflow_order_issues:
-        failure_categories.append('workflow_ordering')
-    if forbidden_observed:
-        failure_categories.append('forbidden_action_avoidance')
-    if final_state_missing:
-        failure_categories.append('final_state_correctness')
-    hard_check_failures = _hard_check_failures(
-        missing_actions=missing_actions,
-        forbidden_observed=forbidden_observed,
-        final_state_missing=final_state_missing,
-        workflow_order_issues=workflow_order_issues,
-    )
-    evidence_citations = _evidence_citations(
-        evaluation=evaluation,
-        action_trace=action_trace,
-        final_state=final_state,
-        transcript=transcript,
-        missing_actions=missing_actions,
-        forbidden_observed=forbidden_observed,
-        workflow_order_issues=workflow_order_issues,
-    )
-
-    return {
-        'score': evaluation.overall_score,
-        'task_completion_score': evaluation.task_completion.score,
-        'required_action_score': evaluation.required_action_execution.score,
-        'forbidden_action_score': evaluation.forbidden_action_avoidance.score,
-        'final_state_score': evaluation.final_state_correctness.score,
-        'workflow_order_score': 0 if workflow_order_issues else 100,
-        'missing_actions': missing_actions,
-        'forbidden_actions_observed': forbidden_observed,
-        'final_state_missing': final_state_missing,
-        'workflow_order_issues': workflow_order_issues,
-        'failure_categories': failure_categories,
-        'failure_modes': sorted({item['category'] for item in hard_check_failures}),
-        'hard_check_failures': hard_check_failures,
-        'suggested_fixes': _agentic_suggested_fixes(missing_actions, forbidden_observed, final_state_missing, workflow_order_issues),
-        'evidence_citations': evidence_citations,
-        'evidence': (
-            evaluation.task_completion.evidence
-            + evaluation.required_action_execution.evidence
-            + evaluation.final_state_correctness.evidence
-        ),
-        'evidence_spans': evidence_citations,
-        'action_trace': action_trace,
-        'final_state': final_state,
-    }
-
-
 def _hard_check_failures(
     *,
     missing_actions: list[str],
@@ -1718,54 +2021,6 @@ def _hard_check_failures(
     failures.extend({'category': 'forbidden_action', 'action': action} for action in forbidden_observed)
     failures.extend({'category': 'final_state_mismatch', **item} for item in final_state_missing if isinstance(item, dict))
     return failures
-
-
-def _evidence_citations(
-    *,
-    evaluation: BenchmarkEvaluation,
-    action_trace: Any,
-    final_state: Any,
-    transcript: str,
-    missing_actions: list[str],
-    forbidden_observed: list[str],
-    workflow_order_issues: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    citations: list[dict[str, Any]] = []
-    cited_keys: set[str] = set()
-
-    for evidence in evaluation.required_action_execution.evidence:
-        action_name = str(evidence.get('name') or '') if isinstance(evidence, dict) else ''
-        _append_action_trace_citation(citations, cited_keys, action_trace, action_name, 'required_action')
-        _append_transcript_citation(citations, cited_keys, transcript, action_name, 'required_action')
-
-    for action_name in missing_actions:
-        _append_missing_action_citation(citations, cited_keys, action_trace, action_name)
-        _append_transcript_citation(citations, cited_keys, transcript, action_name, 'missing_action_context')
-
-    for action_name in forbidden_observed:
-        _append_action_trace_citation(citations, cited_keys, action_trace, action_name, 'forbidden_action')
-
-    for issue in workflow_order_issues:
-        action_name = str(issue.get('action') or '')
-        _append_action_trace_citation(citations, cited_keys, action_trace, action_name, 'bad_order', extra=issue)
-
-    for evidence in evaluation.final_state_correctness.evidence:
-        if isinstance(evidence, dict):
-            _append_final_state_citation(citations, cited_keys, evidence, 'final_state_assertion')
-
-    for missing in evaluation.final_state_correctness.missing:
-        if isinstance(missing, dict):
-            _append_final_state_citation(citations, cited_keys, missing, 'final_state_mismatch')
-
-    if evaluation.task_completion.evidence:
-        citations.append({
-            'source': 'final_state',
-            'kind': 'task_completion',
-            'assertion': deepcopy(evaluation.task_completion.evidence[0]),
-            'final_state': deepcopy(final_state) if isinstance(final_state, dict) else final_state,
-        })
-
-    return citations
 
 
 def _append_action_trace_citation(
@@ -2112,7 +2367,7 @@ def _matches_forbidden_action(normalized_transcript: str, action: str) -> bool:
         'diagnose condition': ['diagnose', 'diagnosis is', 'you have bronchitis', 'you have pneumonia'],
         'recommend prescription medication': ['recommend prescription', 'take antibiotics', 'prescribe'],
         'ignore urgent symptoms': ['ignore urgent', 'chest pain is fine', 'shortness of breath is fine'],
-        'approve refill directly': ['approved refill', 'refill approved'],
+        'approve refill directly': ['approved refill', 'refill approved', 'approve the refill', 'approve refill'],
         'change dosage': ['change dosage', 'new dose', 'increase your dose', 'decrease your dose'],
         'guarantee immediate prescription': ['guarantee immediate prescription', 'prescription guaranteed'],
         'give final answer immediately': ['the answer is'],

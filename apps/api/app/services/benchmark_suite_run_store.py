@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db.database import SessionLocal
 from app.models.entities import BenchmarkSuiteRunRecord
-from app.services.benchmark_service import DETERMINISTIC_EVALUATOR_VERSION, get_suite, get_suite_contract_manifest
+from app.services.benchmark_service import ASSERT_EVALUATOR_VERSION, get_suite, get_suite_contract_manifest
 from app.services.benchmark_run_store import DEFAULT_PROJECT_ID, DEFAULT_RETENTION_DAYS, DEFAULT_USER_ID
 
 TERMINAL_SUITE_STATUSES = {'completed', 'needs_review', 'failed'}
@@ -186,7 +186,7 @@ def get_benchmark_suite_run_audit_artifacts(db: Session, *, user_id: str, suite_
             'ready_scenarios': len(ready_scenarios),
             'missing_scenarios': len(missing_scenarios),
             'ready_for_export': len(scenario_artifacts) > 0 and len(missing_scenarios) == 0,
-            'evaluator_version': retention.get('evaluator_version', DETERMINISTIC_EVALUATOR_VERSION),
+            'evaluator_version': retention.get('evaluator_version', ASSERT_EVALUATOR_VERSION),
         },
         'suite_contract_artifact': {
             'type': 'suite_contract_manifest',
@@ -195,7 +195,7 @@ def get_benchmark_suite_run_audit_artifacts(db: Session, *, user_id: str, suite_
         },
         'scenario_artifacts': scenario_artifacts,
         'report_artifact': {
-            'type': 'deterministic_suite_report',
+            'type': 'assert_suite_result_report',
             'sha256': hashlib.sha256(report_json.encode('utf-8')).hexdigest(),
             'size_bytes': len(report_json.encode('utf-8')),
         },
@@ -278,7 +278,7 @@ def serialize_benchmark_suite_run(record: BenchmarkSuiteRunRecord) -> dict[str, 
             'retention_days': retention.get('retention_days', DEFAULT_RETENTION_DAYS),
             'retained_until': _isoformat(record.retained_until),
             'policy': retention.get('policy', 'benchmark_suite_run_report_v1'),
-            'evaluator_version': retention.get('evaluator_version', DETERMINISTIC_EVALUATOR_VERSION),
+            'evaluator_version': retention.get('evaluator_version', ASSERT_EVALUATOR_VERSION),
         },
         'created_at': _isoformat(record.created_at),
         'updated_at': _isoformat(record.updated_at),
@@ -307,7 +307,7 @@ def _retention_envelope(*, suite_report: dict[str, Any], retained_until: datetim
             'policy': 'benchmark_suite_run_report_v1',
             'retention_days': max((retained_until - now).days, 0),
             'retained_until': _isoformat(retained_until),
-            'evaluator_version': DETERMINISTIC_EVALUATOR_VERSION,
+            'evaluator_version': ASSERT_EVALUATOR_VERSION,
         },
     }
 
@@ -598,7 +598,7 @@ def _transition_benchmark_suite_run(db: Session, *, suite_run_id: str, status: s
                 'policy': retention.get('policy', 'benchmark_suite_run_report_v1'),
                 'retention_days': retention.get('retention_days', DEFAULT_RETENTION_DAYS),
                 'retained_until': _isoformat(retained_until),
-                'evaluator_version': retention.get('evaluator_version', DETERMINISTIC_EVALUATOR_VERSION),
+                'evaluator_version': retention.get('evaluator_version', ASSERT_EVALUATOR_VERSION),
             },
         }
     )
