@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.schemas.assert_v2 import (
+    AuditArtifactView,
     AssertResultManifest,
     AssertRunCreateRequest,
     AssertRuntimeConfig,
@@ -67,12 +68,12 @@ def ingest_assert_run_result(
             'verdict': result.verdict,
             'failure_taxonomy': result.failures,
             'artifact_manifest': [*record.artifact_manifest, *result.artifacts],
-            'audit_artifacts': {
-                'ready_for_export': True,
-                'missing_artifact_ids': [],
-                'artifacts': [*record.artifact_manifest, *result.artifacts],
-                'exports': list(result.summary_artifacts),
-            },
+            'audit_artifacts': AuditArtifactView(
+                ready_for_export=True,
+                missing_artifact_ids=[],
+                artifacts=[*record.artifact_manifest, *result.artifacts],
+                exports=list(result.summary_artifacts),
+            ),
             'summary': {
                 **record.summary,
                 'assert_run_id': assert_run_id,
