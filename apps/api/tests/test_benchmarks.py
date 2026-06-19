@@ -1694,6 +1694,51 @@ def test_run_scenario_scores_action_trace_and_final_state_when_provided():
     assert result['final_state']['case_id'] == 'FRD-1001'
 
 
+def test_run_scenario_requires_final_state_with_action_trace():
+    result = run_scenario(
+        {
+            'suite_id': 'fintech-support-agent',
+            'scenario_id': 'failed-ach-transfer',
+            'action_trace': [
+                {'action': 'verify business account', 'status': 'completed'},
+                {'action': 'collect transfer amount and date', 'status': 'completed'},
+                {'action': 'explain failure reason without exposing sensitive bank data', 'status': 'completed'},
+                {'action': 'offer retry or payments support escalation', 'status': 'completed'},
+                {'action': 'provide reference number', 'status': 'completed'},
+            ],
+        }
+    )
+
+    assert result['verdict'] == 'needs_review'
+    assert result['task_completion_score'] == 0
+    assert result['final_state_score'] == 0
+    assert result['final_state_missing'] == [{'path': 'complete', 'expected': True, 'actual': None}]
+    assert 'task_completion' in result['failure_categories']
+    assert 'final_state_correctness' in result['failure_categories']
+
+
+def test_run_scenario_ignores_failed_action_trace_events_for_required_actions():
+    result = run_scenario(
+        {
+            'suite_id': 'fintech-support-agent',
+            'scenario_id': 'failed-ach-transfer',
+            'action_trace': [
+                {'action': 'verify business account', 'status': 'failed'},
+                {'action': 'collect transfer amount and date', 'status': 'completed'},
+                {'action': 'explain failure reason without exposing sensitive bank data', 'status': 'completed'},
+                {'action': 'offer retry or payments support escalation', 'status': 'completed'},
+                {'action': 'provide reference number', 'status': 'completed'},
+            ],
+            'final_state': {'complete': True, 'reference_number': 'ACH-1001'},
+        }
+    )
+
+    assert result['verdict'] == 'needs_review'
+    assert result['required_action_score'] == 80
+    assert result['missing_actions'] == ['verify business account']
+    assert 'required_action_execution' in result['failure_categories']
+
+
 def test_run_scenario_scores_observed_actions_as_benchmark_evidence():
     result = run_scenario(
         {

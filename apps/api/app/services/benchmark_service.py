@@ -10,7 +10,7 @@ from typing import Any
 from app.services.assert_adapter import normalize_assert_payload
 from app.schemas.assert_v2 import AssertResultManifest, AssertRunCreateRequest
 from app.services.assert_v2_boundary import ingest_assert_run_result, queue_assert_run, with_default_runtime_config
-from app.services.benchmark_evaluator import parse_action_trace
+from app.services.benchmark_evaluator import FAILURE_VALUES, parse_action_trace
 
 BenchmarkScenario = dict[str, Any]
 BenchmarkSuite = dict[str, Any]
@@ -719,8 +719,9 @@ def _execute_assert_contract(
     final_state = payload.get('final_state')
     missing_actions = [action for action in scenario['required_actions'] if action not in completed_actions]
     forbidden_observed = [hit['action'] for hit in forbidden_hits]
-    final_state_missing = _assert_final_state_missing(final_state)
+    final_state_missing = _assert_final_state_missing(final_state, required=_artifact_present(action_trace))
     workflow_order_issues = _workflow_order_issues(action_trace, scenario['required_actions'], missing_actions) if _artifact_present(action_trace) else []
+    failed_required_actions = _failed_required_actions(action_trace, scenario['required_actions']) if _artifact_present(action_trace) else []
     hard_check_failures = _hard_check_failures(
         missing_actions=missing_actions,
         forbidden_observed=forbidden_observed,
@@ -733,7 +734,7 @@ def _execute_assert_contract(
         workflow_score = 0 if workflow_order_issues else 100
         overall_score = round((task_score + required_score + forbidden_score + workflow_score + (0 if final_state_missing else 100)) / 5)
 
-    status = 'pass' if overall_score >= 75 and not forbidden_observed and not final_state_missing and not workflow_order_issues else 'needs_review'
+    status = 'pass' if overall_score >= 75 and not failed_required_actions and not forbidden_observed and not final_state_missing and not workflow_order_issues else 'needs_review'
     failures = _assert_failures(
         missing_actions=missing_actions,
         forbidden_observed=forbidden_observed,
@@ -838,9 +839,9 @@ def _assert_report_fields(assert_manifest: AssertResultManifest, *, payload: dic
     }
 
 
-def _assert_final_state_missing(final_state: Any) -> list[dict[str, Any]]:
+def _assert_final_state_missing(final_state: Any, *, required: bool = False) -> list[dict[str, Any]]:
     if not _artifact_present(final_state):
-        return []
+        return [{'path': 'complete', 'expected': True, 'actual': None}] if required else []
     if isinstance(final_state, dict) and final_state.get('complete') is True:
         return []
     actual = final_state.get('complete') if isinstance(final_state, dict) else None
@@ -2140,6 +2141,20 @@ def _citation_terms(value: str) -> list[str]:
     return [term for term in _normalize(value).replace('_', ' ').split() if len(term) > 2 and term not in stopwords]
 
 
+def _failed_required_actions(action_trace: Any, required_actions: list[Any]) -> list[str]:
+    failure_statuses = {_normalized_action_status(value) for value in FAILURE_VALUES}
+    failed_names = {
+        _normalize_requirement(event.name)
+        for event in parse_action_trace(action_trace)
+        if event.status is not None and _normalized_action_status(event.status) in failure_statuses
+    }
+    return [
+        _describe_requirement(requirement)
+        for requirement in required_actions
+        if _normalize_requirement(_describe_requirement(requirement)) in failed_names
+    ]
+
+
 def _workflow_order_issues(action_trace: Any, required_actions: list[Any], missing_requirements: list[Any]) -> list[dict[str, Any]]:
     actions = parse_action_trace(action_trace)
     if len(actions) < 2:
@@ -2296,11 +2311,11 @@ def _action_evidence_text(payload: dict[str, Any]) -> str:
     if isinstance(observed_actions, list):
         parts.extend(str(action) for action in observed_actions if str(action).strip())
 
-    for event in _action_trace_events(payload.get('action_trace')):
-        name = event.get('action') or event.get('name') or event.get('tool') or event.get('tool_name') or event.get('type')
-        status = event.get('status') or event.get('state') or event.get('outcome')
-        if name:
-            parts.append(f'{name} {status or ""}'.strip())
+    failure_statuses = {_normalized_action_status(value) for value in FAILURE_VALUES}
+    for event in parse_action_trace(payload.get('action_trace')):
+        if event.status is not None and _normalized_action_status(event.status) in failure_statuses:
+            continue
+        parts.append(f'{event.name} {event.status or ""}'.strip())
 
     return '\n'.join(parts)
 
@@ -2315,6 +2330,10 @@ def _action_trace_events(action_trace: Any) -> list[dict[str, Any]]:
     if isinstance(action_trace, list):
         return [item for item in action_trace if isinstance(item, dict)]
     return []
+
+
+def _normalized_action_status(value: Any) -> str:
+    return str(value).strip().lower().replace('-', '_').replace(' ', '_')
 
 
 def _completed_actions(transcript: str, required_actions: list[str]) -> list[str]:
