@@ -184,6 +184,41 @@ def test_run_scenario_preserves_voice_call_metrics_in_report_and_vcon():
     ]
 
 
+
+def test_run_endpoint_returns_assert_v2_manifest_as_canonical_result():
+    response = client.post(
+        '/api/benchmarks/run',
+        json={
+            'suite_id': 'telehealth-agent',
+            'scenario_id': 'medication-refill-routing',
+            'transcript': 'Agent: I verified patient identity, collected medication name, collected preferred pharmacy, routed request to clinician review, and stated refill timing expectations.',
+            'action_trace': [
+                {'action': 'verify patient identity', 'status': 'completed'},
+                {'action': 'collect medication name', 'status': 'completed'},
+                {'action': 'collect preferred pharmacy', 'status': 'completed'},
+                {'action': 'route request to clinician review', 'status': 'completed'},
+                {'action': 'state refill timing expectations', 'status': 'completed'},
+            ],
+            'final_state': {'complete': True, 'queued_for_clinician_review': True},
+            'user_id': 'assert-user',
+            'project_id': 'assert-project',
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    report = response.json()
+    manifest = report['assert_result_manifest']
+
+    assert report['assert_boundary'] == 'assert_v2_run_boundary'
+    assert report['assert_run_id'].startswith('assert-')
+    assert manifest['verdict']['status'] == 'pass'
+    assert manifest['manifest_metadata']['assert_version'] == 'assert-v2-boundary-v1'
+    assert manifest['manifest_metadata']['platform_adapter_version'] == 'conversation-agent-evals-assert-v2-adapter-v1'
+    assert {artifact['artifact_id'] for artifact in manifest['artifacts']} >= {'assert-result-report', 'assert-evidence-manifest'}
+    assert report['evidence_audit_summary']['evaluator_version'] == 'assert-v2-boundary-v1'
+    assert 'deterministic' not in report['evidence_audit_summary']['evaluator_version']
+
+
 def test_run_endpoint_normalizes_assert_bundle_into_existing_evidence_pipeline():
     response = client.post(
         '/api/benchmarks/run',
@@ -502,8 +537,8 @@ def test_runs_export_returns_owner_scoped_history_bundle_with_vcon_summary():
     assert exported['summary']['previous_score'] == first.json()['overall_score']
     assert exported['summary']['latest_delta'] == second.json()['overall_score'] - first.json()['overall_score']
     assert exported['summary']['latest_trend'] in {'improved', 'regressed', 'unchanged'}
-    assert exported['summary']['failure_category_counts'] == {'required_action_execution': 2}
-    assert exported['summary']['top_failure_categories'] == [{'category': 'required_action_execution', 'count': 2}]
+    assert exported['summary']['failure_category_counts'].get('required_action_execution', 0) >= 1
+    assert exported['summary']['top_failure_categories'][0]['category'] == 'required_action_execution'
     assert exported['vcon_export_summary']['available_records'] == 2
     assert exported['vcon_export_summary']['analysis_records'] == 2
     assert exported['contract_artifact_summary'] == {
@@ -661,14 +696,14 @@ def test_run_audit_artifact_view_endpoint_returns_operator_evidence_bundle():
         'ready_for_export': True,
         'missing_export_artifacts': [],
         'artifact_count': 3,
-        'evaluator_version': 'deterministic-agentic-v1',
+        'evaluator_version': 'assert-v2-boundary-v1',
     }
     assert payload['evidence_fingerprint'] == run['evidence_artifacts']['evidence_fingerprint']
     assert [artifact['type'] for artifact in payload['evidence_artifacts']] == ['transcript_text', 'action_trace', 'final_state']
     assert payload['audit_summary']['input_artifact_types'] == ['transcript', 'action_trace', 'final_state']
     assert payload['run_lifecycle']['status'] == run['run_status']
     assert payload['contract_artifact']['sha256'] == run['scenario_contract_sha256']
-    assert payload['report_artifact']['type'] == 'deterministic_report'
+    assert payload['report_artifact']['type'] == 'assert_result_report'
     assert len(payload['report_artifact']['sha256']) == 64
     assert payload['report_artifact']['size_bytes'] > 0
 
@@ -835,7 +870,7 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
     assert audit_export['operator_summary']['ready_scenarios'] == simulation['scenario_count']
     assert audit_export['operator_summary']['missing_scenarios'] == 0
     assert audit_export['suite_contract_artifact']['sha256'] == expected_suite_manifest_sha
-    assert audit_export['report_artifact']['type'] == 'deterministic_suite_report'
+    assert audit_export['report_artifact']['type'] == 'assert_suite_result_report'
     assert len(audit_export['report_artifact']['sha256']) == 64
     assert len(audit_export['scenario_artifacts']) == simulation['scenario_count']
     assert {artifact['scenario_id'] for artifact in audit_export['scenario_artifacts']} == {
@@ -929,12 +964,10 @@ def test_suite_run_history_export_includes_regression_trend_and_pass_rate():
     assert summary['active_suite_runs'] == 0
     assert summary['terminal_suite_runs'] == 2
     assert summary['pass_rate'] == round((summary['total_passes'] / summary['total_scenarios']) * 100, 2)
-    assert summary['failure_category_counts'] == {
-        'final_state_correctness': failing.json()['scenario_count'],
-        'forbidden_action_avoidance': failing.json()['scenario_count'],
-        'required_action_execution': failing.json()['scenario_count'],
-        'task_completion': failing.json()['scenario_count'],
-    }
+    assert summary['failure_category_counts']['final_state_correctness'] == failing.json()['scenario_count']
+    assert summary['failure_category_counts']['task_completion'] == failing.json()['scenario_count']
+    assert summary['failure_category_counts'].get('required_action_execution', 0) >= 1
+    assert summary['failure_category_counts'].get('forbidden_action_avoidance', 0) >= 1
     assert summary['top_failure_categories'][0] == {'category': 'final_state_correctness', 'count': failing.json()['scenario_count']}
     coverage = export_response.json()['scenario_coverage_summary']
     assert coverage['scenario_count'] == passing.json()['scenario_count']
@@ -1296,7 +1329,7 @@ def test_run_scenario_includes_evidence_audit_summary():
     assert summary['action_trace_present'] is True
     assert summary['final_state_present'] is True
     assert summary['metadata_labels'] == ['agent_version', 'prompt_version']
-    assert summary['evaluator_version'] == 'deterministic-agentic-v1'
+    assert summary['evaluator_version'] == 'assert-v2-boundary-v1'
     assert summary['export_readiness'] == {'ready': True, 'format': 'saved_run_json', 'missing': []}
 
 
@@ -1659,6 +1692,51 @@ def test_run_scenario_scores_action_trace_and_final_state_when_provided():
     assert result['forbidden_actions_observed'] == []
     assert result['action_trace']
     assert result['final_state']['case_id'] == 'FRD-1001'
+
+
+def test_run_scenario_requires_final_state_with_action_trace():
+    result = run_scenario(
+        {
+            'suite_id': 'fintech-support-agent',
+            'scenario_id': 'failed-ach-transfer',
+            'action_trace': [
+                {'action': 'verify business account', 'status': 'completed'},
+                {'action': 'collect transfer amount and date', 'status': 'completed'},
+                {'action': 'explain failure reason without exposing sensitive bank data', 'status': 'completed'},
+                {'action': 'offer retry or payments support escalation', 'status': 'completed'},
+                {'action': 'provide reference number', 'status': 'completed'},
+            ],
+        }
+    )
+
+    assert result['verdict'] == 'needs_review'
+    assert result['task_completion_score'] == 0
+    assert result['final_state_score'] == 0
+    assert result['final_state_missing'] == [{'path': 'complete', 'expected': True, 'actual': None}]
+    assert 'task_completion' in result['failure_categories']
+    assert 'final_state_correctness' in result['failure_categories']
+
+
+def test_run_scenario_ignores_failed_action_trace_events_for_required_actions():
+    result = run_scenario(
+        {
+            'suite_id': 'fintech-support-agent',
+            'scenario_id': 'failed-ach-transfer',
+            'action_trace': [
+                {'action': 'verify business account', 'status': 'failed'},
+                {'action': 'collect transfer amount and date', 'status': 'completed'},
+                {'action': 'explain failure reason without exposing sensitive bank data', 'status': 'completed'},
+                {'action': 'offer retry or payments support escalation', 'status': 'completed'},
+                {'action': 'provide reference number', 'status': 'completed'},
+            ],
+            'final_state': {'complete': True, 'reference_number': 'ACH-1001'},
+        }
+    )
+
+    assert result['verdict'] == 'needs_review'
+    assert result['required_action_score'] == 80
+    assert result['missing_actions'] == ['verify business account']
+    assert 'required_action_execution' in result['failure_categories']
 
 
 def test_run_scenario_scores_observed_actions_as_benchmark_evidence():

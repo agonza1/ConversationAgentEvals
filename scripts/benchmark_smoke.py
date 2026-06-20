@@ -68,7 +68,7 @@ def main() -> None:
     failure_report = failure_run['benchmark_report']
     _assert(failure_report['verdict'] == 'needs_review', 'expected failure simulation verdict')
     _assert(failure_report['overall_score'] < 75, 'expected failing score')
-    _assert('state refill timing expectations' in failure_report['missing_actions'], 'expected missing action evidence')
+    _assert(failure_run['final_state']['missing_actions'] == ['state refill timing expectations'], 'expected final-state missing action evidence')
     _assert('approve refill directly' in failure_report['forbidden_actions_observed'], 'expected forbidden action evidence')
 
     saved = _json(_ok(client.post(
@@ -134,7 +134,7 @@ def _assert_audit_summary(summary: dict[str, Any]) -> None:
     _assert(summary.get('action_trace_present') is True, 'expected action trace audit flag')
     _assert(summary.get('final_state_present') is True, 'expected final state audit flag')
     _assert(summary.get('metadata_labels') == ['agent_version', 'model_name', 'notes', 'prompt_version'], 'expected metadata audit labels')
-    _assert(summary.get('evaluator_version') == 'deterministic-agentic-v1', 'expected evaluator version')
+    _assert(summary.get('evaluator_version') == 'assert-v2-boundary-v1', 'expected ASSERT v2 evaluator version')
     _assert(summary.get('export_readiness') == {
         'ready': True,
         'format': 'saved_run_json',
