@@ -103,7 +103,7 @@ flowchart LR
 Core ownership:
 
 - `apps/web`: Next.js SaaS homepage, benchmark runner, and presentation/demo surfaces.
-- `apps/api`: FastAPI backend for sessions, benchmark APIs, ASSERT v2 boundary, evidence ingestion, run persistence, artifact indexes, queue lifecycle, and exports.
+- `apps/api`: FastAPI backend for sessions, benchmark APIs, ASSERT v2 boundary, evidence ingestion, run persistence, report metadata, and exports.
 - `apps/pipecat`: live media orchestration groundwork for voice/WebRTC paths.
 - `docs`: ASSERT v2 migration docs, product notes, implementation plan, and benchmark direction.
 
@@ -113,8 +113,6 @@ Important code anchors:
 - `docs/assert-v2-boundary-and-schemas.md`
 - `apps/api/app/schemas/assert_v2.py`
 - `apps/api/app/services/assert_v2_boundary.py`
-- `apps/api/app/services/assert_artifact_store.py`
-- `apps/api/app/services/assert_queue_lifecycle.py`
 
 ## Local Setup
 
@@ -190,10 +188,11 @@ Implemented or in progress for issue #73:
 - Phase 0 decision/inventory: v2 is a breaking ASSERT-first migration; no supported dual runtime.
 - Phase 1 boundary/schemas: one server-side ASSERT boundary with v2 request/result schemas.
 - Primary run path: benchmark run creation/report data are being wired through ASSERT artifacts plus platform metadata.
-- Artifact persistence/queue lifecycle: canonical manifests are written at `local-artifact://assert-v2/runs/{run_id}/manifest.json`; DB rows keep platform metadata/indexes and manifest pointers; queue states cover `queued`, `running`, `completed`, `failed`, `canceled`, retries, cancellation, and cost limits.
 
 Still to finish:
 
+- Persist canonical ASSERT run manifests outside inline result payloads, then store platform metadata/indexes and manifest pointers in the app database.
+- Add the queue lifecycle surface for `queued`, `running`, `completed`, `failed`, `canceled`, retries, cancellation, and cost limits.
 - Delete or quarantine legacy evaluator/runtime modules from production run creation.
 - Remove deterministic fallback behavior from acceptance paths and tests.
 - Finish UI/API migrations to v2 ASSERT contracts.
