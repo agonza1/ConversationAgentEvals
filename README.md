@@ -1,15 +1,19 @@
 # ConversationAgentEvals
 
-Managed QA and regression testing for voice and conversation agents, scoring task completion, tool actions, policy compliance, and final outcomes from real evidence.
+ASSERT-first managed QA and regression testing for voice and conversation agents.
+
+ConversationAgentEvals v2 is the hosted/on-demand platform wrapper around ASSERT. ASSERT owns the canonical eval core: specs, scenarios, runtime orchestration, judging, scoring, failure taxonomy, and portable artifacts. ConversationAgentEvals owns the product wrapper: evidence ingestion, tenant/project/run APIs, platform metadata, queue/worker lifecycle, report UX, exports, and operational deployment.
 
 ## What this repo does
 
-- Defines domain benchmark suites for consequential agent workflows.
-- Runs scenario tests against conversation evidence: transcript, action/tool trace, and final observed state.
-- Scores task completion, required actions, forbidden actions, policy constraints, final-state correctness, and evidence quality.
-- Normalizes the evidence needed for operator-facing QA reports, audit trails, and regression reruns.
+- Wraps ASSERT so hosted users can create projects, suites, runs, reruns, comparisons, exports, and audit views.
+- Normalizes production evidence into ASSERT-compatible inputs: transcripts, vCon/call metadata, tool/action traces, final-state snapshots, audio pointers, and related voice metadata.
+- Stores ASSERT artifacts/manifests as canonical eval evidence/results while keeping platform metadata and indexes in the app database.
+- Records ASSERT provenance for every v2 run: ASSERT version/commit, adapter version, spec version, provider/model settings, artifact manifest location, and platform version.
+- Provides queue/worker lifecycle primitives for long-running ASSERT jobs: queued, running, completed, failed, canceled, retry, cancellation, and cost-limit handling.
+- Packages ASSERT artifacts plus platform context into operator-facing QA reports, audit trails, exports, and regression reruns.
 - Provides a focused benchmark runner UI at `/benchmarks`.
-- Exposes configuration APIs for benchmark catalogs, saved runs, judge controls, and evidence artifacts.
+- Exposes configuration APIs for benchmark catalogs, saved runs, judge controls, evidence artifacts, and platform wrapper state.
 - Keeps the architecture ready for voice, WebRTC, phone, and group-call evaluation as the product expands.
 
 ## Product Direction
@@ -18,16 +22,15 @@ Most conversation eval tools grade tone or transcript quality. This project is a
 
 > Did the AI agent actually complete the job?
 
-The repo should no longer be positioned as a generic eval harness or a generic plain-language-spec-to-eval generator. ASSERT already sits directly in that lane as a requirement-driven, trace-aware eval framework with synthetic case generation, scoring, and local artifacts.
+The #73 migration makes this a breaking ASSERT-first v2 architecture. The repo should no longer be positioned as a generic eval harness, a plain-language-spec-to-eval generator, or a second evaluator competing with ASSERT.
 
-The refactor direction is:
+The current direction is:
 
-- Use ASSERT as optional infrastructure and a compatibility layer where spec-driven eval generation or trace-aware judging helps.
-- Differentiate on voice-native QA operations: audio/call evidence, vCon, WebRTC or phone metadata, STT/TTS failure modes, interruption handling, latency, and transfer behavior.
-- Prove task completion against external state, not just transcript quality.
-- Turn production failures into saved regression scenarios with operator-ready evidence and reports.
-
-The MVP can still start with text-first scenario simulation and deterministic scoring, but that path should now be understood as an ingestion and reporting wedge for voice and conversation QA, not the final product identity.
+- ASSERT is the only canonical eval core for v2.
+- ConversationAgentEvals is the deployable platform around ASSERT.
+- Legacy deterministic evaluator/runtime paths are migration targets for deletion or quarantine, not fallback paths to preserve.
+- Differentiation lives in hosted workflows, evidence ingestion, report UX, saved runs, regression comparison, queueing, storage, auth, quotas, billing hooks, observability, and voice/conversation QA packaging.
+- Voice-native QA remains a key product wedge: audio/call evidence, vCon, WebRTC or phone metadata, STT/TTS failure modes, interruption handling, latency, transfer behavior, and final-state proof.
 
 ## Relationship To Voice Agent Reliability Lab
 
@@ -48,29 +51,68 @@ Commercial packaging is intentionally out of scope for this repository's current
 
 ```mermaid
 flowchart LR
-  Web[Next.js web app] -->|scenario selection and evidence| API[FastAPI app]
-  API --> Suites[Benchmark suite service]
-  API --> Evaluator[Deterministic benchmark evaluator]
-  API --> Evidence[Evidence normalization and audit artifacts]
-  API --> Runs[Saved runs and benchmark catalog]
-  API --> Judges[Judge controls and cost guardrails]
-  API --> ASSERT[Optional ASSERT import/export adapter]
-  Evaluator --> Report[Scores, evidence, failures, suggested fixes]
-  Evidence --> Report
-  Web --> Report
+  subgraph Inputs[Inputs]
+    Req["Eval requests<br/>project / suite / run / rerun"]
+    Evidence["Production evidence<br/>transcripts / vCon / tool logs<br/>audio pointers / metadata"]
+    Config["Runtime config<br/>models / tools / credentials<br/>cost guardrails"]
+  end
 
-  Cloud[Google Cloud Run, Firestore, Storage, Tasks] --> API
-  Voice[Future voice/WebRTC/phone runs] --> API
-  GroupCalls[Future group-call artifacts] --> API
-  Tools[Future agent tool traces] --> Evaluator
+  subgraph Platform[ConversationAgentEvals v2 platform wrapper]
+    Web[Next.js web app]
+    API[FastAPI API]
+    Ingest["Evidence ingestion<br/>ASSERT-compatible specs/traces"]
+    Boundary["ASSERT service boundary<br/>single server-side interface"]
+    Ops["Platform operations<br/>queues / workers / health<br/>quotas / billing / observability"]
+    Reports["Report + export UX<br/>saved runs / comparisons / audit trail"]
+  end
+
+  subgraph Core[ASSERT core]
+    Specs["Specs + scenarios<br/>requirements / rubrics"]
+    Runtime["Runtime orchestration<br/>multi-turn execution / tools / providers"]
+    Judge["Judging + scoring<br/>verdicts / failure taxonomy"]
+    Manifest["Artifact manifest<br/>canonical eval evidence/results"]
+  end
+
+  subgraph Storage[Artifacts and metadata]
+    ArtifactStore["Artifact storage<br/>immutable ASSERT outputs"]
+    MetadataDB["Platform DB<br/>tenants / projects / run indexes<br/>lineage / cost / labels"]
+    Exports[Exports + client-ready reports]
+  end
+
+  Req --> API
+  Evidence --> Ingest
+  Config --> Boundary
+  Web --> API
+  API --> Ingest
+  API --> Ops
+  Ingest --> Boundary
+  Boundary --> Specs
+  Ops --> Runtime
+  Specs --> Runtime
+  Runtime --> Judge
+  Judge --> Manifest
+  Manifest --> ArtifactStore
+  API --> MetadataDB
+  Ops --> MetadataDB
+  Manifest --> Reports
+  MetadataDB --> Reports
+  Reports --> Exports
+  ArtifactStore --> Exports
 ```
 
 Core ownership:
 
 - `apps/web`: Next.js SaaS homepage, benchmark runner, and presentation/demo surfaces.
-- `apps/api`: FastAPI backend for sessions, evals, benchmark suites, simulation, and scoring.
+- `apps/api`: FastAPI backend for sessions, benchmark APIs, ASSERT v2 boundary, evidence ingestion, run persistence, report metadata, and exports.
 - `apps/pipecat`: live media orchestration groundwork for voice/WebRTC paths.
-- `docs`: product notes, implementation plan, and benchmark direction.
+- `docs`: ASSERT v2 migration docs, product notes, implementation plan, and benchmark direction.
+
+Important code anchors:
+
+- `docs/assert-v2-decision-and-deletion-inventory.md`
+- `docs/assert-v2-boundary-and-schemas.md`
+- `apps/api/app/schemas/assert_v2.py`
+- `apps/api/app/services/assert_v2_boundary.py`
 
 ## Local Setup
 
@@ -119,6 +161,7 @@ npm run test:api
 npm run test:api:docker
 npm run test:api:local
 npm run test:benchmark-smoke
+apps/api/.venv/bin/python -m pytest apps/api/tests/test_assert_v2_boundary.py apps/api/tests/test_benchmarks.py -q
 npm run test:voice-lab-proof
 npm run test:e2e
 ```
@@ -136,14 +179,21 @@ PLAYWRIGHT_PIPECAT_BASE_URL=http://127.0.0.1:8110 \
 npm run test:voice-proof
 ```
 
-## Current MVP Boundary
+## Current ASSERT v2 Boundary
 
-The current product surface is a focused benchmark runner and evidence/reporting API. The runner can load benchmark suites, simulate a scenario or full suite, inspect transcript/action/final-state/group-call evidence, produce scored benchmark reports, export vCon-compatible records, request controlled LLM judge runs, and save runs for regression comparison.
+The current product surface is a focused benchmark runner and evidence/reporting API being migrated to ASSERT-first contracts. The platform can load benchmark suites, inspect transcript/action/final-state/group-call evidence, produce reports, export vCon-compatible records, request controlled judge runs, and save runs for regression comparison. The v2 direction is to make ASSERT artifacts and manifests the canonical truth behind those surfaces.
 
-Near-term next slices:
+Implemented or in progress for issue #73:
 
-- Add an ASSERT adapter for import/export and optional trace-grounded judging instead of rebuilding a parallel spec-to-eval taxonomy.
-- Ingest one real artifact type well first: vCon or call transcript plus metadata plus tool/action log.
-- Define 10-20 hard task-completion and failure-diagnosis checks for one production vertical.
-- Expand QA reports so they cite transcript spans, tool calls, timestamps, final state, and failure layer.
-- Add a production-failure-to-regression flow so real missed bookings, bad escalations, or failed transfers become rerunnable saved scenarios.
+- Phase 0 decision/inventory: v2 is a breaking ASSERT-first migration; no supported dual runtime.
+- Phase 1 boundary/schemas: one server-side ASSERT boundary with v2 request/result schemas.
+- Primary run path: benchmark run creation/report data are being wired through ASSERT artifacts plus platform metadata.
+
+Still to finish:
+
+- Persist canonical ASSERT run manifests outside inline result payloads, then store platform metadata/indexes and manifest pointers in the app database.
+- Add the queue lifecycle surface for `queued`, `running`, `completed`, `failed`, `canceled`, retries, cancellation, and cost limits.
+- Delete or quarantine legacy evaluator/runtime modules from production run creation.
+- Remove deterministic fallback behavior from acceptance paths and tests.
+- Finish UI/API migrations to v2 ASSERT contracts.
+- Expand generic evidence adapters and lab-consumable report exports on top of ASSERT artifacts.
