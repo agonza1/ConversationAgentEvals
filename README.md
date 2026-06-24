@@ -4,6 +4,43 @@ ASSERT-first managed QA and regression testing for voice and conversation agents
 
 ConversationAgentEvals v2 is the hosted/on-demand platform wrapper around ASSERT. ASSERT owns the canonical eval core: specs, scenarios, runtime orchestration, judging, scoring, failure taxonomy, and portable artifacts. ConversationAgentEvals owns the product wrapper: evidence ingestion, tenant/project/run APIs, platform metadata, queue/worker lifecycle, report UX, exports, and operational deployment.
 
+## First-Run Local Demo
+
+Use this path first. It starts the API, Pipecat service, and web app together and opens the focused benchmark runner. Docker, E2E voice proof, and live ASR paths are advanced follow-ons below.
+
+Prerequisites:
+
+- Node.js 20+
+- npm 10+
+- Python 3.11+ with `venv` support
+
+Install dependencies:
+
+```bash
+npm run setup
+```
+
+Create the local environment file:
+
+```bash
+cp .env.example .env
+```
+
+Run the local demo stack:
+
+```bash
+npm run dev
+```
+
+Expected success output:
+
+- The command prints API, Web, and Pipecat URLs.
+- If a default port is busy, the command prints the replacement port for that run.
+- Open the printed Web URL, then use the benchmark runner at `/benchmarks`.
+- Success means benchmark suites load, a scenario can run, and the report shows transcript, action trace, final state, scores, and evidence artifacts.
+
+ASR source for this first run: the minimal local demo uses transcript/action/final-state evidence and does not require live microphone ASR. Live conversation demos use `rtc-asr` as the ASR provider contract; see [issue #78](https://github.com/agonza1/ConversationAgentEvals/issues/78) and the contract section below. Any local mock or transcript fixture is demo support, not the production ASR contract.
+
 ## What this repo does
 
 - Wraps ASSERT so hosted users can create projects, suites, runs, reruns, comparisons, exports, and audit views.
@@ -114,20 +151,9 @@ Important code anchors:
 - `apps/api/app/schemas/assert_v2.py`
 - `apps/api/app/services/assert_v2_boundary.py`
 
-## Local Setup
+## Advanced Local Paths
 
-```bash
-cp .env.example .env
-npm run setup
-```
-
-Then run the stack:
-
-```bash
-npm run dev
-```
-
-Or use Docker:
+Use Docker after the first-run demo when you want a production-style container startup:
 
 ```bash
 npm run docker:check
@@ -154,6 +180,8 @@ Default local endpoints:
 - Pipecat service: `http://localhost:8110`
 
 ### ASR contract for conversation demos
+
+See [issue #78](https://github.com/agonza1/ConversationAgentEvals/issues/78) for the tracked endpoint and configuration work.
 
 Conversation demos use `rtc-asr` as the speech-to-text provider contract. Live Pipecat ASR expects an rtc-asr service reachable at `RTC_ASR_BASE_URL`, and streams audio to `RTC_ASR_STREAM_PATH` using the Local STT v1 WebSocket protocol. The default stream path is `/v1/stt/stream`; the default health path is `/health`.
 
