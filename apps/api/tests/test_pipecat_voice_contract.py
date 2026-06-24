@@ -44,6 +44,58 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     return TestClient(pipecat_server.app)
 
 
+def test_pipecat_health_surfaces_rtc_asr_contract(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pipecat_server, 'RTC_ASR_BASE_URL', '')
+
+    response = client.get('/health')
+
+    assert response.status_code == 200
+    asr = response.json()['providers']['asr']
+    assert asr['provider'] == 'rtc-asr'
+    assert asr['required_for_live_asr'] is True
+    assert asr['configured'] is False
+    assert asr['status'] == 'not_configured'
+    assert asr['audio'] == {
+        'sample_rate_hz': 16000,
+        'channels': 1,
+        'encoding': 'pcm16le',
+        'endianness': 'little',
+    }
+    assert asr['demo_fallback']['transcript_text_loop'] == 'non-production demo support only'
+
+
+def test_pipecat_rtc_asr_stream_contract_uses_v1_websocket(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pipecat_server, 'RTC_ASR_BASE_URL', 'http://rtc-asr:8000')
+    monkeypatch.setattr(pipecat_server, 'RTC_ASR_STREAM_PATH', '/v1/stt/stream')
+    monkeypatch.setattr(pipecat_server, 'RTC_ASR_HEALTH_PATH', '/health')
+
+    asr = pipecat_server._build_asr_contract(status='configured')
+
+    assert asr['stream_url'] == 'ws://rtc-asr:8000/v1/stt/stream'
+    assert asr['health_url'] == 'http://rtc-asr:8000/health'
+    assert asr['stream_protocol'] == '/v1/stt/stream WebSocket'
+    assert asr['audio']['sample_rate_hz'] == 16000
+    assert asr['audio']['channels'] == 1
+    assert asr['audio']['encoding'] == 'pcm16le'
+
+
+def test_live_create_skips_live_asr_clearly_when_rtc_asr_unconfigured(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pipecat_server, 'RTC_ASR_BASE_URL', '')
+
+    response = client.post('/sessions/session-1/live/create', json={'publicToken': 'public-test-token'})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['providers']['asr_ready'] is False
+    assert payload['providers']['asr']['status'] == 'not_configured'
+    assert payload['live']['asr_ready'] is False
+    assert payload['live']['asr']['provider'] == 'rtc-asr'
+    assert any(event['type'] == 'rtc_asr_skipped' for event in payload['live']['events'])
+
+
 def test_pipecat_transcript_loop_handles_slide_tools_and_grounded_answers(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
