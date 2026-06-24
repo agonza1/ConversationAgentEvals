@@ -172,6 +172,12 @@ app.add_middleware(
 API_BASE_URL = os.getenv('API_BASE_URL', 'http://localhost:8025').rstrip('/')
 PIPECAT_SERVICE_URL = os.getenv('PIPECAT_SERVICE_URL', 'http://localhost:8110').rstrip('/')
 OPENAI_REALTIME_MODEL = os.getenv('OPENAI_REALTIME_MODEL', 'gpt-realtime-mini')
+RTC_ASR_BASE_URL = os.getenv('RTC_ASR_BASE_URL', '').rstrip('/')
+RTC_ASR_HEALTH_PATH = os.getenv('RTC_ASR_HEALTH_PATH', '/health')
+RTC_ASR_STREAM_PATH = os.getenv('RTC_ASR_STREAM_PATH', '/v1/stt/stream')
+RTC_ASR_SAMPLE_RATE = 16000
+RTC_ASR_CHANNELS = 1
+RTC_ASR_ENCODING = 'pcm16le'
 HEYGEN_LIVE_AVATAR_API_KEY = os.getenv('HEYGEN_LIVE_AVATAR_API_KEY') or os.getenv('HEYGEN_API_KEY')
 HEYGEN_AVATAR_ID = os.getenv('HEYGEN_AVATAR_ID', 'dd73ea75-1218-4ef3-92ce-606d5f7fbc0a')
 HEYGEN_SANDBOX = os.getenv('HEYGEN_SANDBOX', 'true').lower() == 'true'
@@ -249,6 +255,7 @@ class LivePresenterSession:
     state: str = 'idle'
     runtime_status: str = 'idle'
     transport_ready: bool = False
+    asr_ready: bool = False
     openai_ready: bool = False
     video_ready: bool = False
     pipeline_ready: bool = False
@@ -258,6 +265,7 @@ class LivePresenterSession:
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     last_error: str | None = None
+    asr_contract: dict[str, Any] = field(default_factory=dict)
     events: list[dict[str, Any]] = field(default_factory=list)
     runtime_task: asyncio.Task | None = field(default=None, repr=False, compare=False)
     pipeline_task: Any | None = field(default=None, repr=False, compare=False)
@@ -294,6 +302,7 @@ def health() -> dict[str, Any]:
             'openaiConfigured': bool(os.getenv('OPENAI_API_KEY')),
             'heygenConfigured': bool(HEYGEN_LIVE_AVATAR_API_KEY),
             'pipecatRuntimeAvailable': PIPECAT_RUNTIME_AVAILABLE,
+            'asr': _build_asr_contract(status='configured' if RTC_ASR_BASE_URL else 'not_configured'),
         },
     }
 
@@ -342,6 +351,7 @@ def connect(session_id: str, payload: SessionConnectRequest | None = None) -> di
         'voice': {
             'status': 'listening',
             'mode': 'pipecat-orchestrated',
+            'asr': _build_asr_contract(status='configured' if RTC_ASR_BASE_URL else 'not_configured'),
             'start_endpoint': f'/sessions/{session_id}/connect',
             'ask_endpoint': f'/sessions/{session_id}/ask',
             'stop_endpoint': f'/sessions/{session_id}/disconnect',
@@ -403,6 +413,8 @@ async def create_live_session(session_id: str, payload: LiveSessionCreateRequest
                 },
                 'providers': {
                     'openai_realtime_ready': existing_live.openai_ready,
+                    'asr_ready': existing_live.asr_ready,
+                    'asr': existing_live.asr_contract or _build_asr_contract(status='unknown'),
                     'video_ready': existing_live.video_ready,
                 },
                 'nextStep': 'Reuse the existing browser WebRTC live session and POST the browser offer to /live/join.',
@@ -421,15 +433,26 @@ async def create_live_session(session_id: str, payload: LiveSessionCreateRequest
             pass
         LIVE_SESSIONS.pop(session_id, None)
 
+    asr_contract = await _resolve_asr_contract()
     live = LivePresenterSession(
         session_id=session_id,
         public_token=state.public_token,
         webrtc=LivePresenterWebRTCConnection(video_out_enabled=video_ready),
         state='connecting',
+        asr_ready=asr_contract['status'] == 'ready',
         openai_ready=bool(os.getenv('OPENAI_API_KEY')),
         video_ready=video_ready,
+        asr_contract=asr_contract,
     )
-    live.add_event('live_session_created', openai_ready=live.openai_ready, video_ready=live.video_ready)
+    live.add_event(
+        'live_session_created',
+        asr_ready=live.asr_ready,
+        asr_status=asr_contract['status'],
+        openai_ready=live.openai_ready,
+        video_ready=live.video_ready,
+    )
+    if not live.asr_ready:
+        live.add_event('rtc_asr_skipped', reason=asr_contract.get('reason') or asr_contract['status'])
     LIVE_SESSIONS[session_id] = live
 
     state.live_session = _serialize_live_session(live)
@@ -450,6 +473,8 @@ async def create_live_session(session_id: str, payload: LiveSessionCreateRequest
         },
         'providers': {
             'openai_realtime_ready': live.openai_ready,
+            'asr_ready': live.asr_ready,
+            'asr': live.asr_contract,
             'video_ready': live.video_ready,
         },
         'nextStep': 'Create a browser WebRTC offer and POST it to /live/join so Pipecat can answer and own the live session.',
@@ -481,8 +506,10 @@ async def start_heygen_live_session(session_id: str, payload: LiveSessionCreateR
             public_token=state.public_token,
             webrtc=LivePresenterWebRTCConnection(video_out_enabled=True),
             state='connecting',
+            asr_ready=False,
             openai_ready=bool(os.getenv('OPENAI_API_KEY')),
             video_ready=True,
+            asr_contract=_build_asr_contract(status='unknown'),
         )
         LIVE_SESSIONS[session_id] = live
 
@@ -1221,6 +1248,7 @@ def _upsert_session(
             **pipecat_plan,
             'orchestrator': 'pipecat',
             'state_authority': 'fastapi',
+            'asr': _build_asr_contract(status='configured' if RTC_ASR_BASE_URL else 'not_configured'),
         }
         existing.frontend_contract = _build_agent_contract(existing)
         existing.touch()
@@ -1248,6 +1276,7 @@ def _upsert_session(
             **pipecat_plan,
             'orchestrator': 'pipecat',
             'state_authority': 'fastapi',
+            'asr': _build_asr_contract(status='configured' if RTC_ASR_BASE_URL else 'not_configured'),
         },
     )
     state.frontend_contract = _build_agent_contract(state)
@@ -1262,6 +1291,8 @@ def _serialize_live_session(live: LivePresenterSession) -> dict[str, Any]:
         'state': live.state,
         'runtime_status': live.runtime_status,
         'transport_ready': live.transport_ready,
+        'asr_ready': live.asr_ready,
+        'asr': live.asr_contract or _build_asr_contract(status='unknown'),
         'openai_ready': live.openai_ready,
         'video_ready': live.video_ready,
         'pipeline_ready': live.pipeline_ready,
@@ -1277,6 +1308,66 @@ def _serialize_live_session(live: LivePresenterSession) -> dict[str, Any]:
 
 def _heygen_video_service_enabled() -> bool:
     return bool(HEYGEN_LIVE_AVATAR_API_KEY and HeyGenVideoService and LiveAvatarNewSessionRequest)
+
+
+def _join_url(base_url: str, path: str) -> str:
+    normalized_path = path if path.startswith('/') else f'/{path}'
+    return f'{base_url.rstrip()}{normalized_path}'
+
+
+def _rtc_asr_stream_url() -> str | None:
+    if not RTC_ASR_BASE_URL:
+        return None
+    url = _join_url(RTC_ASR_BASE_URL, RTC_ASR_STREAM_PATH)
+    if url.startswith('http://'):
+        return f'ws://{url[len("http://"):]}'
+    if url.startswith('https://'):
+        return f'wss://{url[len("https://"):]}'
+    return url
+
+
+def _rtc_asr_health_url() -> str | None:
+    if not RTC_ASR_BASE_URL:
+        return None
+    return _join_url(RTC_ASR_BASE_URL, RTC_ASR_HEALTH_PATH)
+
+
+def _build_asr_contract(*, status: str = 'unknown', reason: str | None = None) -> dict[str, Any]:
+    configured = bool(RTC_ASR_BASE_URL)
+    return {
+        'provider': 'rtc-asr',
+        'required_for_live_asr': True,
+        'configured': configured,
+        'status': status if configured else 'not_configured',
+        'reason': reason or (None if configured else 'Set RTC_ASR_BASE_URL to enable live ASR.'),
+        'base_url': RTC_ASR_BASE_URL or None,
+        'health_url': _rtc_asr_health_url(),
+        'stream_url': _rtc_asr_stream_url(),
+        'stream_protocol': '/v1/stt/stream WebSocket',
+        'audio': {
+            'sample_rate_hz': RTC_ASR_SAMPLE_RATE,
+            'channels': RTC_ASR_CHANNELS,
+            'encoding': RTC_ASR_ENCODING,
+            'endianness': 'little',
+        },
+        'demo_fallback': {
+            'transcript_text_loop': 'non-production demo support only',
+        },
+    }
+
+
+async def _resolve_asr_contract() -> dict[str, Any]:
+    health_url = _rtc_asr_health_url()
+    if not health_url:
+        return _build_asr_contract(status='not_configured')
+    try:
+        async with httpx.AsyncClient(timeout=1.5) as client:
+            response = await client.get(health_url)
+        if 200 <= response.status_code < 400:
+            return _build_asr_contract(status='ready')
+        return _build_asr_contract(status='unavailable', reason=f'rtc-asr health returned HTTP {response.status_code}.')
+    except Exception as exc:
+        return _build_asr_contract(status='unavailable', reason=f'rtc-asr health check failed: {exc}')
 
 
 def _format_heygen_start_error(error: str | None) -> str:
@@ -1319,7 +1410,7 @@ async def _ensure_live_runtime(live: LivePresenterSession, state: PipecatSession
             audio_in_enabled=True,
             audio_out_enabled=True,
             audio_out_sample_rate=24000,
-            audio_in_sample_rate=24000,
+            audio_in_sample_rate=RTC_ASR_SAMPLE_RATE,
             video_in_enabled=False,
             video_out_enabled=_heygen_video_service_enabled(),
             video_out_is_live=_heygen_video_service_enabled(),
@@ -1359,7 +1450,7 @@ async def _ensure_live_runtime(live: LivePresenterSession, state: PipecatSession
         live.pipeline_task = PipelineTask(
             pipeline,
             params=PipelineParams(
-                audio_in_sample_rate=24000,
+                audio_in_sample_rate=RTC_ASR_SAMPLE_RATE,
                 audio_out_sample_rate=24000,
                 enable_metrics=True,
                 enable_usage_metrics=True,
@@ -1399,6 +1490,7 @@ async def _ensure_live_runtime(live: LivePresenterSession, state: PipecatSession
             openai_enabled=bool(llm),
             video_enabled=live.video_pipeline_enabled,
             heygen_enabled=_heygen_video_service_enabled(),
+            asr_status=(live.asr_contract or _build_asr_contract(status='unknown'))['status'],
         )
         if _heygen_video_service_enabled():
             await _mark_heygen_video_ready(live)
@@ -1590,6 +1682,7 @@ def _build_bootstrap_response(state: PipecatSessionState) -> dict[str, Any]:
         'voice': {
             'status': 'idle',
             'mode': 'pipecat-orchestrated',
+            'asr': _build_asr_contract(status='configured' if RTC_ASR_BASE_URL else 'not_configured'),
             'start_endpoint': f'/sessions/{state.session_id}/connect',
             'ask_endpoint': f'/sessions/{state.session_id}/ask',
             'stop_endpoint': f'/sessions/{state.session_id}/disconnect',

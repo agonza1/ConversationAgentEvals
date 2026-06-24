@@ -153,6 +153,22 @@ Default local endpoints:
 - API: `http://localhost:8025`
 - Pipecat service: `http://localhost:8110`
 
+### ASR contract for conversation demos
+
+Conversation demos use `rtc-asr` as the speech-to-text provider contract. Live Pipecat ASR expects an rtc-asr service reachable at `RTC_ASR_BASE_URL`, and streams audio to `RTC_ASR_STREAM_PATH` using the Local STT v1 WebSocket protocol. The default stream path is `/v1/stt/stream`; the default health path is `/health`.
+
+The Pipecat live input contract is 16 kHz, mono, little-endian PCM16. The checked-in Pipecat transport and pipeline params set `audio_in_sample_rate=16000`; any future resampler/downmixer must be documented as the processor responsible for converting browser audio into that contract before rtc-asr receives it.
+
+Required local env names:
+
+```bash
+RTC_ASR_BASE_URL=http://localhost:8000
+RTC_ASR_HEALTH_PATH=/health
+RTC_ASR_STREAM_PATH=/v1/stt/stream
+```
+
+When `RTC_ASR_BASE_URL` is empty or the health check is unavailable, live session startup marks ASR as `not_configured` or `unavailable` and records a `rtc_asr_skipped` event. The `/sessions/{id}/ask` transcript loop remains non-production demo support only; it is not the ASR provider contract.
+
 ## Useful Commands
 
 ```bash
