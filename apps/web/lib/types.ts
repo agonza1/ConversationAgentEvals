@@ -253,50 +253,6 @@ export interface DefaultDeckMeta {
   available: boolean;
   name: string;
 }
-
-export interface EvalCheck {
-  name: string;
-  status: 'pass' | 'needs_review' | string;
-  score: number;
-  layer: string;
-  root_cause_tag: string;
-  evidence: string[];
-  reason: string;
-}
-
-export interface EvalArtifact {
-  id: string;
-  type: string;
-  sha256: string;
-  bytes: number;
-  source: string;
-}
-
-export interface EvalAuditEvent {
-  event_type: string;
-  actor: string;
-  at: string;
-  summary: string;
-  artifact_ids: string[];
-}
-
-export interface EvalRunResponse {
-  run_id: string;
-  created_at: string;
-  title: string;
-  source_format: string;
-  overall_score: number;
-  verdict: 'pass' | 'needs_review' | string;
-  checks: EvalCheck[];
-  risk_flags: string[];
-  suggested_fixes: string[];
-  transcript_preview: string;
-  artifact_manifest: EvalArtifact[];
-  audit_events: EvalAuditEvent[];
-  vcon_analysis: Record<string, unknown>;
-  vcon_export: Record<string, unknown>;
-}
-
 export interface BenchmarkScenarioAction {
   name: string;
   description?: string;

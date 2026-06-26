@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services.assert_artifact_store import load_assert_run_artifact_manifest
 from app.services.benchmark_service import get_suite, get_suite_contract_manifest, list_suites, run_scenario, run_suite, simulate_scenario, simulate_suite
 from app.db.database import SessionLocal
 from app.services.benchmark_run_store import _history_scenario_coverage, reset_benchmark_run_records_for_tests
@@ -23,6 +24,15 @@ EXPECTED_SUITE_IDS = {
     'online-teaching-agent',
     'fintech-support-agent',
 }
+
+
+def test_legacy_eval_run_endpoint_is_not_mounted():
+    response = client.post(
+        '/api/evals/run',
+        json={'conversation': 'Agent: Hello', 'criteria': 'Agent greets the caller'},
+    )
+
+    assert response.status_code == 404
 
 
 def test_list_suites_returns_seeded_webrtc_ventures_catalog():
@@ -212,11 +222,34 @@ def test_run_endpoint_returns_assert_v2_manifest_as_canonical_result():
     assert report['assert_boundary'] == 'assert_v2_run_boundary'
     assert report['assert_run_id'].startswith('assert-')
     assert manifest['verdict']['status'] == 'pass'
+    canonical = report['assert_canonical_artifact']
+    assert canonical['uri'].startswith(f"local-artifact://assert-v2/runs/{report['run_id']}/")
+    assert canonical['sha256']
     assert manifest['manifest_metadata']['assert_version'] == 'assert-v2-boundary-v1'
     assert manifest['manifest_metadata']['platform_adapter_version'] == 'conversation-agent-evals-assert-v2-adapter-v1'
+    assert manifest['manifest_metadata']['artifact_manifest_location'] == canonical['uri']
     assert {artifact['artifact_id'] for artifact in manifest['artifacts']} >= {'assert-result-report', 'assert-evidence-manifest'}
     assert report['evidence_audit_summary']['evaluator_version'] == 'assert-v2-boundary-v1'
+    assert report['evidence_audit_summary']['export_readiness']['format'] == 'assert_artifact_manifest'
     assert 'deterministic' not in report['evidence_audit_summary']['evaluator_version']
+
+    loaded_manifest = load_assert_run_artifact_manifest(canonical['uri'])
+    assert loaded_manifest is not None
+    assert loaded_manifest['assert_result_manifest']['manifest_metadata']['artifact_manifest_location'] == canonical['uri']
+    assert loaded_manifest['platform_metadata_index']['assert_version'] == 'assert-v2-boundary-v1'
+    assert loaded_manifest['platform_metadata_index']['adapter_version'] == 'conversation-agent-evals-assert-v2-adapter-v1'
+    assert loaded_manifest['platform_metadata_index']['spec_version'] == '2026-06-18'
+    assert loaded_manifest['platform_metadata_index']['provider_model_settings'] == {}
+    assert loaded_manifest['platform_metadata_index']['platform_version'] == 'conversation-agent-evals-v2'
+
+    detail = client.get(f"/api/benchmarks/runs/{report['run_id']}", params={'user_id': 'assert-user'})
+    assert detail.status_code == 200, detail.text
+    saved = detail.json()
+    assert saved['assert_canonical_artifact']['uri'] == canonical['uri']
+    assert saved['assert_platform_metadata_index']['artifact_manifest_location'] == canonical['uri']
+    assert saved['assert_platform_metadata_index']['assert_version'] == 'assert-v2-boundary-v1'
+    assert 'assert_result_manifest' not in saved['report']
+    assert 'assert_platform_record' not in saved['report']
 
 
 def test_run_endpoint_normalizes_assert_bundle_into_existing_evidence_pipeline():
@@ -1330,7 +1363,7 @@ def test_run_scenario_includes_evidence_audit_summary():
     assert summary['final_state_present'] is True
     assert summary['metadata_labels'] == ['agent_version', 'prompt_version']
     assert summary['evaluator_version'] == 'assert-v2-boundary-v1'
-    assert summary['export_readiness'] == {'ready': True, 'format': 'saved_run_json', 'missing': []}
+    assert summary['export_readiness'] == {'ready': True, 'format': 'assert_artifact_manifest', 'missing': []}
 
 
 def test_simulate_scenario_carries_metadata_into_report_and_response():

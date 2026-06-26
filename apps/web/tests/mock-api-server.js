@@ -209,12 +209,6 @@ function handleRequest(req, res) {
     return;
   }
   
-  // Evaluations page
-  if (path.includes('/evals')) {
-    res.statusCode = 200;
-    res.end('<html><body><h1>Evals</h1></body></html>');
-    return;
-  }
   
   // Bootstrap page
   if (path.includes('/bootstrap')) {

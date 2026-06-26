@@ -8,7 +8,6 @@ import {
   DeckSlidesResponse,
   DeckSummary,
   DefaultDeckMeta,
-  EvalRunResponse,
   PipecatAgentStatus,
   PipecatLiveCreateResponse,
   SessionCreateResponse,
@@ -185,27 +184,6 @@ export async function createSession(deckId: string): Promise<SessionCreateRespon
   });
 
   return handleResponse<SessionCreateResponse>(response);
-}
-
-export async function runVoiceEval(payload: { title?: string; conversation: string; criteria: string }): Promise<EvalRunResponse> {
-  let conversation: string | Record<string, unknown> | unknown[] = payload.conversation;
-  try {
-    conversation = JSON.parse(payload.conversation) as Record<string, unknown> | unknown[];
-  } catch {
-    conversation = payload.conversation;
-  }
-
-  const response = await fetch(`${getApiBase()}/api/evals/run`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      title: payload.title,
-      conversation,
-      criteria: payload.criteria,
-    }),
-  });
-
-  return handleResponse<EvalRunResponse>(response);
 }
 
 export async function listBenchmarkSuites(): Promise<BenchmarkSuite[]> {

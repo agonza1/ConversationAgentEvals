@@ -31,7 +31,7 @@ There is no supported dual runtime in v2. The existing local evaluator is a migr
 The repo currently mixes four different responsibilities:
 
 1. Benchmark/spec catalog ownership in `apps/api/app/services/benchmark_service.py` via `_SUITES`, `_scenario_contract`, `get_suite_contract_manifest`, and `get_scenario_contract`.
-2. Local eval execution and scoring in `apps/api/app/services/eval_service.py`, `apps/api/app/services/benchmark_evaluator.py`, and `benchmark_service.py` via `run_scenario`, `run_suite`, `simulate_scenario`, and `simulate_suite`.
+2. Local eval execution and scoring in `apps/api/app/services/eval_service.py` and remaining migration-only benchmark simulation helpers. Production benchmark run creation now goes through the ASSERT v2 boundary and stores ASSERT artifacts as canonical results.
 3. Platform persistence/export UX in `apps/api/app/services/benchmark_run_store.py`, `benchmark_suite_run_store.py`, `apps/api/app/routes/benchmarks.py`, and `apps/web/components/BenchmarkRunner.tsx`.
 4. Evidence normalization and post-processing in `apps/api/app/services/assert_adapter.py` plus `benchmark_service.py` helpers for audit summaries, voice summaries, and vCon export packaging.
 
@@ -43,12 +43,12 @@ The v2 migration should separate those concerns instead of carrying them forward
 
 | Current path | Current responsibility | v2 action |
 | --- | --- | --- |
-| `apps/api/app/routes/evals.py` | First-class local evaluator endpoint calling `run_eval`. | Remove or replace with an ASSERT-backed run-creation endpoint. No second evaluator surface in v2. |
-| `apps/api/app/services/eval_service.py` | Transcript/vCon normalization, criteria splitting, local scoring, failure-layer tagging, artifact manifest generation, and vCon analysis for `/api/evals/run`. | Delete after the shared ASSERT boundary exists. Only reusable evidence normalization can survive, moved behind the ASSERT ingress layer. |
-| `apps/api/app/services/benchmark_evaluator.py` | Canonical local hard checks for required actions, forbidden actions, task completion, final-state correctness, and ordering semantics. | Delete from production once ASSERT owns hard-check semantics. |
+| `apps/api/app/routes/evals.py` | Deleted local evaluator endpoint that called `run_eval`. | Keep deleted; no second evaluator surface in v2. |
+| `apps/api/app/services/eval_service.py` | Deleted transcript-first deterministic eval runtime. | Keep deleted; reusable evidence normalization belongs behind ASSERT ingress only. |
+| `apps/api/app/services/benchmark_evaluator.py` | Deleted legacy local hard-check scorer. | Replaced in production by ASSERT v2 manifest-backed checks; shared trace parsing moved to `assert_trace.py`. |
 | `apps/api/app/services/benchmark_service.py` `_SUITES`, `_scenario_contract`, `get_suite_contract_manifest`, `get_scenario_contract` | Repo-owned benchmark/spec catalog and contract manifest semantics. | Move canonical spec ownership into ASSERT. Keep only light platform-side metadata/lookups if needed. |
 | `apps/api/app/services/benchmark_service.py` `run_scenario`, `run_suite`, `simulate_scenario`, `simulate_suite` | Local run orchestration, deterministic scoring, synthetic simulation, verdict assembly, and suite aggregation. | Replace with one ASSERT-only orchestration boundary used by routes, workers, and reruns. |
-| `apps/api/app/schemas/evals.py` | Local evaluator request/response schema centered on transcript + criteria + deterministic report. | Replace with ASSERT-first run/spec/artifact schemas. |
+| `apps/api/app/schemas/evals.py` | Deleted local evaluator request/response schema centered on transcript + criteria + deterministic report. | ASSERT-first run/spec/artifact schemas are the supported contract. |
 | `apps/api/app/schemas/benchmarks.py` run and suite request/response models | Local benchmark contracts centered on transcript-first scoring and synthetic simulation payloads. | Replace with v2 schemas that reference ASSERT specs, evidence manifests, runtime config, and platform metadata. |
 
 ### Keep as platform wrapper, but rewire to ASSERT artifacts
@@ -73,13 +73,13 @@ The v2 migration should separate those concerns instead of carrying them forward
 
 | Current path | Why it should leave production | v2 action |
 | --- | --- | --- |
-| `apps/api/app/routes/evals.py` | Maintains a second local evaluator entrypoint. | Delete. |
-| `apps/api/app/services/eval_service.py` | Entirely local deterministic evaluator flow. | Delete. |
-| `apps/api/app/services/benchmark_evaluator.py` | Competing local scoring semantics. | Delete after ASSERT-backed contract coverage exists. |
+| `apps/api/app/routes/evals.py` | Deleted second local evaluator entrypoint. | Keep deleted. |
+| `apps/api/app/services/eval_service.py` | Deleted entirely local deterministic evaluator flow. | Keep deleted. |
+| `apps/api/app/services/benchmark_evaluator.py` | Deleted competing local scoring semantics. | Keep deleted; do not restore as a fallback runtime. |
 | `apps/api/app/services/benchmark_service.py` local simulation helpers and `simulate_*` flows | Synthetic runtime generation belongs in ASSERT tooling or migration-only fixtures, not the hosted production path. | Delete from production path or quarantine under test-only tooling during migration. |
 | `apps/api/app/services/benchmark_service.py` `DETERMINISTIC_EVALUATOR_VERSION` and downstream usages | Bakes legacy evaluator identity into audit, retention, and exports. | Remove; replace with ASSERT version/commit and optional platform wrapper version fields. |
-| `apps/api/tests/test_evals.py` | Tests a legacy deterministic evaluator endpoint. | Delete or replace with ASSERT-backed contract tests. |
-| `apps/api/tests/test_benchmark_evaluator.py` | Tests local scoring semantics that should stop being canonical. | Delete or replace with ASSERT golden-artifact tests. |
+| `apps/api/tests/test_evals.py` | Deleted legacy deterministic evaluator endpoint tests. | ASSERT-backed contract tests cover supported acceptance paths. |
+| `apps/api/tests/test_benchmark_evaluator.py` | Deleted old scorer parity tests. | ASSERT-backed behavior is covered by boundary and benchmark manifest tests. |
 | Deterministic report assertions inside `apps/api/tests/test_benchmarks.py` | Lock in local scoring behavior and adapter-to-legacy-pipeline assumptions. | Rewrite around ASSERT ingress normalization, artifact persistence, and wrapper exports. |
 
 ## Paths explicitly outside the delete list
@@ -134,7 +134,7 @@ Issue #73's next card, `define v2 ASSERT boundary and schemas`, can start from t
 2. Convert one benchmark vertical end to end so API, worker, persistence, and UI consume ASSERT artifacts.
 3. Remove `apps/api/app/routes/evals.py` and `apps/api/app/services/eval_service.py`.
 4. Remove production entrypoints that directly call local `run_scenario`, `run_suite`, `simulate_scenario`, or `simulate_suite`.
-5. Delete `apps/api/app/services/benchmark_evaluator.py` and deterministic-evaluator tests after ASSERT-backed contract coverage exists.
+5. Keep `apps/api/app/services/benchmark_evaluator.py` and `apps/api/tests/test_benchmark_evaluator.py` deleted; do not reintroduce deterministic scorer parity as an acceptance path.
 6. Remove `DETERMINISTIC_EVALUATOR_VERSION` and deterministic report assumptions from stores, exports, audit views, and UI types.
 
 ## Proof For Issue #73
@@ -143,7 +143,6 @@ This inventory was verified against the repo's current implementation surfaces:
 
 - `apps/api/app/routes/evals.py`
 - `apps/api/app/services/eval_service.py`
-- `apps/api/app/services/benchmark_evaluator.py`
 - `apps/api/app/routes/benchmarks.py`
 - `apps/api/app/services/benchmark_service.py`
 - `apps/api/app/services/benchmark_run_store.py`
@@ -153,11 +152,10 @@ This inventory was verified against the repo's current implementation surfaces:
 - `apps/api/app/schemas/benchmarks.py`
 - `apps/web/components/BenchmarkRunner.tsx`
 - `apps/api/tests/test_evals.py`
-- `apps/api/tests/test_benchmark_evaluator.py`
 - `apps/api/tests/test_benchmarks.py`
 
 ## Outcome
 
 - Durable artifact exists in-repo at `docs/assert-v2-decision-and-deletion-inventory.md`.
-- Legacy evaluator deletion/replacement targets are explicit.
+- Legacy benchmark evaluator and old scorer parity tests have been removed from the production-supported code path.
 - The next card can move to `ready` once Workboard is updated in a session with mutation access.

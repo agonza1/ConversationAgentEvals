@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db.database import SessionLocal
 from app.models.entities import BenchmarkRunRecord
+from app.services.assert_artifact_store import platform_report_index
 from app.services.benchmark_service import ASSERT_EVALUATOR_VERSION, get_suite
 
 
@@ -37,7 +38,7 @@ def persist_benchmark_run(db: Session, report: dict[str, Any], transcript: str |
     record.logical_run_id = _required_str(report.get('logical_run_id'), 'logical_run_id')
     record.status = _required_str(report.get('run_status') or lifecycle.get('status') or report.get('verdict'), 'run_status')
     record.attempt = _positive_int(lifecycle.get('attempt'), default=1)
-    record.report_json = json.dumps(_retention_envelope(report=report, retained_until=retained_until, now=now))
+    record.report_json = json.dumps(_retention_envelope(report=platform_report_index(report), retained_until=retained_until, now=now))
     record.transcript = transcript if transcript is not None else report.get('transcript_preview')
     record.updated_at = now
     record.completed_at = completed_at
@@ -196,6 +197,8 @@ def serialize_benchmark_run(record: BenchmarkRunRecord) -> dict[str, Any]:
     retained_report = _load_json(record.report_json)
     report = retained_report.get('report') if isinstance(retained_report.get('report'), dict) else retained_report
     retention = retained_report.get('retention') if isinstance(retained_report.get('retention'), dict) else {}
+    platform_index = report.get('assert_platform_metadata_index') if isinstance(report.get('assert_platform_metadata_index'), dict) else {}
+    canonical_artifact = report.get('assert_canonical_artifact') if isinstance(report.get('assert_canonical_artifact'), dict) else {}
     return {
         'id': record.id,
         'run_id': record.id,
@@ -207,6 +210,8 @@ def serialize_benchmark_run(record: BenchmarkRunRecord) -> dict[str, Any]:
         'status': record.status,
         'attempt': record.attempt,
         'report': report,
+        'assert_platform_metadata_index': platform_index,
+        'assert_canonical_artifact': canonical_artifact,
         'transcript': record.transcript,
         'retention': {
             'retention_days': retention.get('retention_days', DEFAULT_RETENTION_DAYS),

@@ -8,9 +8,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.services.assert_adapter import normalize_assert_payload
+from app.services.assert_artifact_store import persist_assert_run_artifacts
+from app.services.assert_trace import FAILURE_VALUES, parse_action_trace
 from app.schemas.assert_v2 import AssertResultManifest, AssertRunCreateRequest
 from app.services.assert_v2_boundary import ingest_assert_run_result, queue_assert_run, with_default_runtime_config
-from app.services.benchmark_evaluator import FAILURE_VALUES, parse_action_trace
 
 BenchmarkScenario = dict[str, Any]
 BenchmarkSuite = dict[str, Any]
@@ -603,9 +604,37 @@ def run_scenario(request: Any) -> dict[str, Any]:
         failure_categories=report.get('failure_categories'),
     )
     report['run_status'] = report['run_lifecycle']['status']
+    _attach_canonical_assert_artifact(report)
     report['vcon_analysis'] = _vcon_analysis(report)
     report['vcon_export'] = _vcon_export(payload, transcript, report['vcon_analysis'])
     return report
+
+
+def _attach_canonical_assert_artifact(report: dict[str, Any]) -> None:
+    stored = persist_assert_run_artifacts(report)
+    pointer = stored['pointer']
+    location = stored['manifest_location']
+    report['assert_canonical_artifact'] = pointer
+    report['assert_artifact_manifest_location'] = location
+
+    manifest = report.get('assert_result_manifest') if isinstance(report.get('assert_result_manifest'), dict) else None
+    if manifest is not None:
+        metadata = manifest.get('manifest_metadata') if isinstance(manifest.get('manifest_metadata'), dict) else {}
+        manifest['manifest_metadata'] = {**metadata, 'artifact_manifest_location': location}
+
+    platform_record = report.get('assert_platform_record') if isinstance(report.get('assert_platform_record'), dict) else None
+    if platform_record is not None:
+        summary = platform_record.get('summary') if isinstance(platform_record.get('summary'), dict) else {}
+        platform_record['summary'] = {**summary, 'artifact_manifest_location': location}
+
+    audit_summary = report.get('evidence_audit_summary') if isinstance(report.get('evidence_audit_summary'), dict) else None
+    if audit_summary is not None:
+        audit_summary['artifact_manifest_location'] = location
+        audit_summary['canonical_artifact'] = pointer
+        export_readiness = audit_summary.get('export_readiness') if isinstance(audit_summary.get('export_readiness'), dict) else {}
+        audit_summary['export_readiness'] = {**export_readiness, 'format': 'assert_artifact_manifest'}
+        if manifest is not None:
+            audit_summary['assert_manifest_metadata'] = manifest.get('manifest_metadata', {})
 
 
 def _assert_run_request(
@@ -783,7 +812,7 @@ def _execute_assert_contract(
                 'assert_commit': 'local-v2-boundary',
                 'spec_version': ASSERT_SPEC_VERSION,
                 'platform_adapter_version': ASSERT_ADAPTER_VERSION,
-                'provider_model_settings': _run_metadata(payload),
+                'provider_model_settings': _provider_model_settings(payload),
                 'artifact_manifest_location': 'inline://assert-result-manifest',
                 'platform_version': 'conversation-agent-evals-v2',
             },
@@ -1385,6 +1414,15 @@ def _payload_to_dict(request: Any) -> dict[str, Any]:
             'resumeFromRunId',
         )
         if hasattr(request, name)
+    }
+
+
+def _provider_model_settings(payload: dict[str, Any]) -> dict[str, str]:
+    metadata = _run_metadata(payload)
+    return {
+        key: value
+        for key, value in metadata.items()
+        if key in {'agent_version', 'prompt_version', 'model_name'}
     }
 
 

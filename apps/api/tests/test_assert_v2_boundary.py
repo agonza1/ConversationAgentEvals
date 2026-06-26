@@ -5,11 +5,20 @@ from datetime import UTC, datetime
 import pytest
 
 from app.schemas.assert_v2 import AssertResultManifest, AssertRunCreateRequest, AssertSuiteRunCreateRequest
+from app.services.assert_queue_lifecycle import (
+    create_queue_state,
+    enforce_cost_limit,
+    mark_completed,
+    mark_failed,
+    mark_running,
+    request_cancel,
+    retry_from_failure,
+)
 from app.services.assert_v2_boundary import (
     ASSERT_V2_BOUNDARY_NAME,
     default_invocation_target,
+    archival_pre_v2_data_policy,
     ingest_assert_run_result,
-    legacy_execution_entrypoints,
     queue_assert_run,
     queue_assert_suite_run,
     recommended_v2_entrypoints,
@@ -195,11 +204,59 @@ def test_default_runtime_config_uses_http_sidecar_for_local_and_production():
     assert production.invocation_target.base_url == 'http://assert-sidecar:8091'
 
 
-def test_boundary_module_captures_legacy_cutover_targets():
-    assert 'app.services.eval_service.run_eval' in legacy_execution_entrypoints()
-    assert 'app.services.benchmark_service.run_suite' in legacy_execution_entrypoints()
+def test_boundary_module_exposes_only_v2_entrypoints_and_archival_policy():
     assert recommended_v2_entrypoints() == (
         'create_assert_run(spec_ref, evidence, runtime_config, platform_metadata)',
         'create_assert_suite_run(spec_ref, scenarios, runtime_config, platform_metadata)',
         'ingest_assert_result(platform_run_id, assert_run_id, result_manifest)',
     )
+    assert archival_pre_v2_data_policy() == {
+        'classification': 'pre-v2 archival',
+        'active_evaluator_input': 'false',
+        'migration_policy': 'Historical records may be displayed or exported, but production run creation must use ASSERT v2 contracts.',
+    }
+
+
+def test_assert_queue_lifecycle_tracks_successful_worker_run():
+    queued = create_queue_state(
+        run_id='platform-run-1',
+        max_attempts=2,
+        cost_limit_usd=1.5,
+        estimated_cost_usd=0.25,
+        now=datetime(2026, 6, 17, 15, 0, tzinfo=UTC),
+    )
+    running = mark_running(queued, now=datetime(2026, 6, 17, 15, 1, tzinfo=UTC))
+    completed = mark_completed(running, spent_cost_usd=0.2, now=datetime(2026, 6, 17, 15, 3, tzinfo=UTC))
+
+    assert completed['status'] == 'completed'
+    assert completed['terminal'] is True
+    assert completed['spent_cost_usd'] == 0.2
+    assert [transition['to'] for transition in completed['transitions']] == ['queued', 'running', 'completed']
+
+
+def test_assert_queue_lifecycle_supports_retry_cancel_and_cost_limits():
+    queued = create_queue_state(
+        run_id='platform-run-2',
+        max_attempts=2,
+        cost_limit_usd=0.5,
+        now=datetime(2026, 6, 17, 15, 0, tzinfo=UTC),
+    )
+    failed_for_cost = enforce_cost_limit(queued, estimated_cost_usd=0.75, now=datetime(2026, 6, 17, 15, 1, tzinfo=UTC))
+    assert failed_for_cost['status'] == 'failed'
+    assert failed_for_cost['retryable'] is False
+    assert failed_for_cost['error'] == 'estimated ASSERT cost exceeds run cost limit'
+
+    failed_worker = mark_failed(
+        mark_running(create_queue_state(run_id='platform-run-3', max_attempts=2)),
+        reason='sidecar timeout',
+    )
+    retry = retry_from_failure(failed_worker, now=datetime(2026, 6, 17, 15, 2, tzinfo=UTC))
+    assert retry['status'] == 'queued'
+    assert retry['attempt'] == 2
+    assert retry['retry_parent_attempt'] == 1
+
+    canceled = request_cancel(mark_running(retry), reason='user canceled run')
+    assert canceled['status'] == 'canceled'
+    assert canceled['terminal'] is True
+    assert canceled['cancel_requested'] is True
+    assert canceled['transitions'][-1]['reason'] == 'user canceled run'

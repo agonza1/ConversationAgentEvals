@@ -126,23 +126,20 @@ def with_default_runtime_config(runtime_config: AssertRuntimeConfig | None, *, e
     )
 
 
-def legacy_execution_entrypoints() -> tuple[str, ...]:
-    return (
-        'app.routes.evals.run_voice_eval',
-        'app.services.eval_service.run_eval',
-        'app.services.benchmark_service.run_scenario',
-        'app.services.benchmark_service.run_suite',
-        'app.services.benchmark_service.simulate_scenario',
-        'app.services.benchmark_service.simulate_suite',
-    )
-
-
 def recommended_v2_entrypoints() -> tuple[str, ...]:
     return (
         'create_assert_run(spec_ref, evidence, runtime_config, platform_metadata)',
         'create_assert_suite_run(spec_ref, scenarios, runtime_config, platform_metadata)',
         'ingest_assert_result(platform_run_id, assert_run_id, result_manifest)',
     )
+
+
+def archival_pre_v2_data_policy() -> dict[str, str]:
+    return {
+        'classification': 'pre-v2 archival',
+        'active_evaluator_input': 'false',
+        'migration_policy': 'Historical records may be displayed or exported, but production run creation must use ASSERT v2 contracts.',
+    }
 
 
 def _input_artifacts(request: AssertRunCreateRequest) -> list[Any]:
