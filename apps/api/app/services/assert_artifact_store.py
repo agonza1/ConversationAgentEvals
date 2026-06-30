@@ -14,25 +14,15 @@ ARTIFACT_ROOT = Path(__file__).resolve().parents[2] / 'artifacts' / 'assert-v2'
 
 def persist_assert_run_artifacts(report: dict[str, Any]) -> dict[str, Any]:
     run_id = _required_text(report.get('run_id'), 'run_id')
-    manifest = report.get('assert_result_manifest') if isinstance(report.get('assert_result_manifest'), dict) else {}
-    platform_record = report.get('assert_platform_record') if isinstance(report.get('assert_platform_record'), dict) else {}
     manifest_location = _manifest_location(run_id)
     manifest_path = _manifest_path(run_id)
     now = _isoformat(datetime.now(UTC))
 
-    canonical_manifest = {
-        'store_version': ARTIFACT_STORE_VERSION,
-        'run_id': run_id,
-        'logical_run_id': report.get('logical_run_id'),
-        'assert_run_id': report.get('assert_run_id'),
-        'suite_id': report.get('suite_id'),
-        'scenario_id': report.get('scenario_id'),
-        'created_at': now,
-        'manifest_location': manifest_location,
-        'assert_result_manifest': _with_manifest_location(manifest, manifest_location),
-        'assert_platform_record': _with_platform_manifest_location(platform_record, manifest_location),
-        'platform_metadata_index': platform_metadata_index(report, manifest_location=manifest_location),
-    }
+    canonical_manifest = canonical_assert_run_manifest(
+        report,
+        manifest_location=manifest_location,
+        created_at=now,
+    )
     encoded = _stable_json(canonical_manifest)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(encoded, encoding='utf-8')
@@ -68,6 +58,29 @@ def load_assert_run_artifact_manifest(location: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return loaded if isinstance(loaded, dict) else None
+
+
+def canonical_assert_run_manifest(
+    report: dict[str, Any],
+    *,
+    manifest_location: str,
+    created_at: str | None = None,
+) -> dict[str, Any]:
+    manifest = report.get('assert_result_manifest') if isinstance(report.get('assert_result_manifest'), dict) else {}
+    platform_record = report.get('assert_platform_record') if isinstance(report.get('assert_platform_record'), dict) else {}
+    return {
+        'store_version': ARTIFACT_STORE_VERSION,
+        'run_id': report.get('run_id'),
+        'logical_run_id': report.get('logical_run_id'),
+        'assert_run_id': report.get('assert_run_id'),
+        'suite_id': report.get('suite_id'),
+        'scenario_id': report.get('scenario_id'),
+        'created_at': created_at,
+        'manifest_location': manifest_location,
+        'assert_result_manifest': _with_manifest_location(manifest, manifest_location),
+        'assert_platform_record': _with_platform_manifest_location(platform_record, manifest_location),
+        'platform_metadata_index': platform_metadata_index(report, manifest_location=manifest_location),
+    }
 
 
 def platform_metadata_index(report: dict[str, Any], *, manifest_location: str | None = None) -> dict[str, Any]:
@@ -110,7 +123,25 @@ def platform_report_index(report: dict[str, Any]) -> dict[str, Any]:
     location = canonical.get('uri') if isinstance(canonical.get('uri'), str) else None
     indexed['assert_platform_metadata_index'] = platform_metadata_index(report, manifest_location=location)
     indexed['assert_canonical_artifact'] = canonical
+    indexed['assert_canonical_manifest'] = _durable_canonical_manifest(report, manifest_location=location)
     return indexed
+
+
+def _durable_canonical_manifest(report: dict[str, Any], *, manifest_location: str | None) -> dict[str, Any]:
+    existing = report.get('assert_canonical_manifest')
+    if isinstance(existing, dict):
+        return deepcopy(existing)
+
+    if manifest_location:
+        loaded = load_assert_run_artifact_manifest(manifest_location)
+        if loaded is not None:
+            return loaded
+
+    has_assert_payload = isinstance(report.get('assert_result_manifest'), dict) or isinstance(report.get('assert_platform_record'), dict)
+    if not has_assert_payload:
+        return {}
+
+    return canonical_assert_run_manifest(report, manifest_location=manifest_location or '')
 
 
 def _with_manifest_location(manifest: dict[str, Any], manifest_location: str) -> dict[str, Any]:

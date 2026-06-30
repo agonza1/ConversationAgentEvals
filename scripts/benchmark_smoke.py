@@ -104,7 +104,7 @@ def main() -> None:
     _assert(exported['report']['run_metadata'] == pass_report['run_metadata'], 'expected export metadata')
     _assert(exported['report']['evidence_audit_summary']['export_readiness'] == {
         'ready': True,
-        'format': 'saved_run_json',
+        'format': 'assert_artifact_manifest',
         'missing': [],
     }, 'expected export-ready audit summary')
     _assert(exported['transcript'] == pass_run['transcript'], 'expected export transcript')
@@ -137,7 +137,7 @@ def _assert_audit_summary(summary: dict[str, Any]) -> None:
     _assert(summary.get('evaluator_version') == 'assert-v2-boundary-v1', 'expected ASSERT v2 evaluator version')
     _assert(summary.get('export_readiness') == {
         'ready': True,
-        'format': 'saved_run_json',
+        'format': 'assert_artifact_manifest',
         'missing': [],
     }, 'expected export readiness')
 

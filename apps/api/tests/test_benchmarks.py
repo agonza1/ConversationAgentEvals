@@ -248,6 +248,12 @@ def test_run_endpoint_returns_assert_v2_manifest_as_canonical_result():
     assert saved['assert_canonical_artifact']['uri'] == canonical['uri']
     assert saved['assert_platform_metadata_index']['artifact_manifest_location'] == canonical['uri']
     assert saved['assert_platform_metadata_index']['assert_version'] == 'assert-v2-boundary-v1'
+    durable_manifest = saved['report']['assert_canonical_manifest']
+    assert durable_manifest['manifest_location'] == canonical['uri']
+    assert durable_manifest['assert_result_manifest']['manifest_metadata']['artifact_manifest_location'] == canonical['uri']
+    assert durable_manifest['assert_result_manifest']['verdict']['status'] == 'pass'
+    assert durable_manifest['assert_platform_record']['assert_run_id'] == report['assert_run_id']
+    assert durable_manifest['platform_metadata_index']['artifact_manifest_location'] == canonical['uri']
     assert 'assert_result_manifest' not in saved['report']
     assert 'assert_platform_record' not in saved['report']
 
