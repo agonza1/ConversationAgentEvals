@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from fastapi.testclient import TestClient
 
+from app.main import app
 from app.schemas.assert_v2 import AssertResultManifest, AssertRunCreateRequest, AssertSuiteRunCreateRequest
 from app.services.assert_queue_lifecycle import (
     create_queue_state,
@@ -260,3 +262,62 @@ def test_assert_queue_lifecycle_supports_retry_cancel_and_cost_limits():
     assert canceled['terminal'] is True
     assert canceled['cancel_requested'] is True
     assert canceled['transitions'][-1]['reason'] == 'user canceled run'
+
+
+def test_local_v2_runs_sidecar_ingests_acc_assert_request(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        'app.services.assert_sidecar.local_assert_sidecar_artifact_path',
+        lambda platform_run_id, artifact_root=None: tmp_path / f'{platform_run_id}.json',
+    )
+    client = TestClient(app)
+    request = _run_request().model_dump(mode='json')
+    request['spec_ref'] = {
+        'spec_id': 'agentic-contact-center/cancellation-rescue',
+        'spec_kind': 'scenario',
+        'spec_version': '2026-06-29',
+        'assert_project': 'conversation-agent-evals',
+    }
+    request['runtime_config']['environment_labels'] = [
+        'agentic-contact-center',
+        'pipecat_local_runtime',
+        'mocked-telephony',
+    ]
+    request['platform_metadata'].update(
+        {
+            'user_id': 'alberto-local-proof',
+            'project_id': 'agentic-contact-center',
+            'initiated_by': 'local-script',
+        }
+    )
+
+    response = client.post('/v2/runs', json=request)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload['status'] == 'completed'
+    assert payload['assert_run_id'] == f"local-assert-{payload['platform_run_id']}"
+    assert payload['spec_ref']['spec_id'] == 'agentic-contact-center/cancellation-rescue'
+    assert payload['platform_metadata']['project_id'] == 'agentic-contact-center'
+    assert payload['runtime_config']['invocation_target']['entrypoint'] == '/v2/runs'
+    assert payload['verdict'] == {
+        'status': 'pass',
+        'score': 100.0,
+        'summary': 'Local synthetic ASSERT sidecar accepted the run evidence for platform ingestion.',
+        'metrics': {'input_artifact_count': 3, 'missing_input_artifact_count': 0},
+    }
+    assert payload['audit_artifacts']['ready_for_export'] is True
+    assert [artifact['artifact_id'] for artifact in payload['artifact_manifest']][-1] == 'local-sidecar-result-manifest'
+    saved_path = tmp_path / f"{payload['platform_run_id']}.json"
+    assert saved_path.exists()
+
+    detail = client.get(f"/v2/runs/{payload['platform_run_id']}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()['platform_run_id'] == payload['platform_run_id']
+
+
+def test_local_v2_runs_sidecar_rejects_legacy_payload():
+    client = TestClient(app)
+
+    response = client.post('/v2/runs', json={'conversation': 'Agent: hello'})
+
+    assert response.status_code == 422
