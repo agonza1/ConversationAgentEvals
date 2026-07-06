@@ -36,10 +36,7 @@ def persist_assert_run_artifacts(report: dict[str, Any]) -> dict[str, Any]:
         'sha256': hashlib.sha256(encoded.encode('utf-8')).hexdigest(),
         'size_bytes': len(encoded.encode('utf-8')),
         'source': 'conversation-agent-evals',
-        'metadata': {
-            'store_version': ARTIFACT_STORE_VERSION,
-            'path': str(manifest_path),
-        },
+        'metadata': {'store_version': ARTIFACT_STORE_VERSION},
     }
     return {
         'manifest_location': manifest_location,

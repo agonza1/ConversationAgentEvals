@@ -225,6 +225,7 @@ def test_run_endpoint_returns_assert_v2_manifest_as_canonical_result():
     canonical = report['assert_canonical_artifact']
     assert canonical['uri'].startswith(f"local-artifact://assert-v2/runs/{report['run_id']}/")
     assert canonical['sha256']
+    assert canonical['metadata'] == {'store_version': 'assert-artifact-store-v1'}
     assert manifest['manifest_metadata']['assert_version'] == 'assert-v2-boundary-v1'
     assert manifest['manifest_metadata']['platform_adapter_version'] == 'conversation-agent-evals-assert-v2-adapter-v1'
     assert manifest['manifest_metadata']['artifact_manifest_location'] == canonical['uri']
