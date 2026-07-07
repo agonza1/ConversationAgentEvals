@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
+from app.config import local_assert_sidecar_enabled
 from app.main import app
 from app.schemas.assert_v2 import AssertResultManifest, AssertRunCreateRequest, AssertSuiteRunCreateRequest
 from app.services.assert_queue_lifecycle import (
@@ -204,6 +205,24 @@ def test_default_runtime_config_uses_http_sidecar_for_local_and_production():
     assert local.invocation_target.transport == 'http_sidecar'
     assert local.invocation_target.base_url == 'http://127.0.0.1:8091'
     assert production.invocation_target.base_url == 'http://assert-sidecar:8091'
+
+
+def test_local_assert_sidecar_route_defaults_to_non_production_only(monkeypatch):
+    monkeypatch.delenv('ASSERT_LOCAL_SIDECAR_ENABLED', raising=False)
+    monkeypatch.delenv('K_SERVICE', raising=False)
+    monkeypatch.setenv('APP_ENV', 'development')
+
+    assert local_assert_sidecar_enabled() is True
+
+    monkeypatch.setenv('APP_ENV', 'production')
+    assert local_assert_sidecar_enabled() is False
+
+    monkeypatch.setenv('APP_ENV', 'development')
+    monkeypatch.setenv('K_SERVICE', 'conversation-agent-evals-api')
+    assert local_assert_sidecar_enabled() is False
+
+    monkeypatch.setenv('ASSERT_LOCAL_SIDECAR_ENABLED', 'true')
+    assert local_assert_sidecar_enabled() is True
 
 
 def test_boundary_module_exposes_only_v2_entrypoints_and_archival_policy():
