@@ -29,7 +29,7 @@ The right move is to treat ASSERT as optional infrastructure and compatibility, 
 The repo already has useful starting seams:
 
 - `apps/api/app/services/benchmark_service.py` contains benchmark suites, simulation flows, and report assembly.
-- `apps/api/app/services/benchmark_evaluator.py` already scores required actions, forbidden actions, and final state.
+- `apps/api/app/services/assert_trace.py` preserves only ASSERT v2 action-trace normalization needed for evidence citations and platform report assembly.
 - `apps/api/app/schemas/benchmarks.py` already accepts transcript, vCon, action trace, and final-state evidence.
 - `apps/web/components/BenchmarkRunner.tsx` already exposes audit artifacts, evidence panels, and suite-run flows.
 

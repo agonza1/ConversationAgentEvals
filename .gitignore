@@ -23,6 +23,7 @@ apps/api/.venv
 apps/api/.pytest_cache
 apps/api/storage/
 apps/api/sales_presenter.db
+apps/api/artifacts/
 apps/web/node_modules/
 apps/web/.next/
 apps/web/test-results/

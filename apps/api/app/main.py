@@ -5,11 +5,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect, text
 
+from app.config import settings
 from app.db.database import Base, engine
+from app.routes.assert_sidecar import router as assert_sidecar_router
 from app.routes.benchmarks import router as benchmarks_router
 from app.routes.bootstrap import router as bootstrap_router
 from app.routes.decks import router as decks_router
-from app.routes.evals import router as evals_router
 from app.routes.product import router as product_router
 from app.routes.realtime import router as realtime_router
 from app.routes.sessions import router as sessions_router
@@ -97,11 +98,12 @@ app.add_middleware(
     allow_headers=['*'],
 )
 
+if settings.assert_local_sidecar_enabled:
+    app.include_router(assert_sidecar_router)
 app.include_router(decks_router)
 app.include_router(sessions_router)
 app.include_router(realtime_router)
 app.include_router(bootstrap_router)
-app.include_router(evals_router)
 app.include_router(benchmarks_router)
 app.include_router(product_router)
 

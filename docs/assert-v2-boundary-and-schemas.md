@@ -135,26 +135,39 @@ This is where v2 intentionally keeps wrapper metadata instead of leaking it into
 
 ## Route Cutover
 
-These are the legacy direct execution entrypoints named in the boundary module and scheduled for removal from production flow:
+Removed legacy direct execution entrypoints:
 
-- `app.routes.evals.run_voice_eval`
-- `app.services.eval_service.run_eval`
 - `app.services.benchmark_service.run_scenario`
 - `app.services.benchmark_service.run_suite`
 - `app.services.benchmark_service.simulate_scenario`
 - `app.services.benchmark_service.simulate_suite`
 
-The replacement entrypoints are:
+The supported v2 entrypoints are:
 
 - `create_assert_run(spec_ref, evidence, runtime_config, platform_metadata)`
 - `create_assert_suite_run(spec_ref, scenarios, runtime_config, platform_metadata)`
 - `ingest_assert_result(platform_run_id, assert_run_id, result_manifest)`
 
+## v2 Artifact Persistence And Queue Lifecycle
+
+ASSERT artifacts are canonical run outputs. The platform writes each completed scenario run to a local canonical manifest location of the form `local-artifact://assert-v2/runs/{run_id}/manifest.json`. That manifest contains the ASSERT result manifest, ASSERT/platform run record, and a compact platform metadata index. The app database keeps the saved run index, UI/report fields, ownership metadata, lifecycle state, and the canonical manifest pointer instead of treating the database blob as the source of truth for core ASSERT results.
+
+Every v2 run records these provenance fields in `assert_result_manifest.manifest_metadata` and mirrors them in the saved metadata index:
+
+- ASSERT version and commit
+- platform adapter version
+- spec version
+- provider/model settings
+- canonical artifact manifest location
+- platform version
+
+Hosted/on-demand workers use the queue lifecycle states `queued`, `running`, `completed`, `failed`, and `canceled`. The platform lifecycle helper enforces terminal-state safety, bounded retries from failed runs, explicit cancellation, and estimated-cost checks before a worker starts expensive ASSERT execution. ASSERT still owns eval semantics; the platform owns scheduling, retries, cancellation, cost guards, and durable artifact pointers.
+
 ## API Surface Changes Required In The Next Card
 
 The next implementation card should make these route-level changes:
 
-1. Replace `/api/evals/run` with an ASSERT-backed run-creation surface or remove it entirely.
+1. Keep `/api/evals/run` removed; expose new evaluation creation through ASSERT-backed run contracts only.
 2. Change benchmark run creation endpoints so they validate into `AssertRunCreateRequest` or `AssertSuiteRunCreateRequest` before any worker logic runs.
 3. Make stores persist `platform_run_id` plus `assert_run_id` and manifests instead of deterministic report JSON as the primary truth.
 4. Make audit/export endpoints read from `AuditArtifactView` and `AssertResultManifest` derivatives.

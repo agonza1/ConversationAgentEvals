@@ -170,8 +170,8 @@ export default function HomePage() {
           <p className="eyebrow">Runner</p>
           <h2 id="homepage-runner-title">Simulate or score a benchmark now.</h2>
           <p>
-            Use the same focused runner from the workspace: generate a deterministic text scenario, inspect the
-            action trace and final state, or paste your own transcript evidence for scoring.
+            Use the same focused runner from the workspace: generate ASSERT-backed scenario artifacts, inspect the
+            action trace and final state, or paste your own transcript evidence for manifest-backed scoring.
           </p>
         </div>
         <BenchmarkRunner />

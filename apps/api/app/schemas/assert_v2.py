@@ -22,7 +22,7 @@ ArtifactKind = Literal[
 ArtifactReadiness = Literal['ready', 'pending', 'missing']
 ExecutionMode = Literal['sync', 'async', 'batch']
 TransportKind = Literal['http_sidecar']
-RunStatus = Literal['queued', 'running', 'completed', 'failed', 'cancelled']
+RunStatus = Literal['queued', 'running', 'completed', 'failed', 'canceled', 'cancelled']
 VerdictStatus = Literal['pass', 'fail', 'needs_review', 'error', 'queued', 'running']
 FailureCategory = Literal[
     'task_completion',

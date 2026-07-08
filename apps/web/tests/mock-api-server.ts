@@ -185,9 +185,6 @@ function createMockServer(): Server {
         } else if (route.includes('/decks')) {
           res.statusCode = 200;
           res.end('<html><body><h1>Decks</h1></body></html>');
-        } else if (route.includes('/evals')) {
-          res.statusCode = 200;
-          res.end('<html><body><h1>Evals</h1></body></html>');
         } else if (route.includes('/bootstrap')) {
           res.statusCode = 200;
           res.end('<html><body><h1>Bootstrap</h1></body></html>');
