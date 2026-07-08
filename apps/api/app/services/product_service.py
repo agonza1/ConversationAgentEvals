@@ -1273,13 +1273,21 @@ def _audit_artifact_summary(evidence_audit_summary: Any) -> dict[str, Any]:
     artifact_types = evidence_audit_summary.get('input_artifact_types')
     missing = export_readiness.get('missing')
 
+    evaluator_version = evidence_audit_summary.get('evaluator_version')
     return {
         'available': True,
         'ready_for_export': bool(export_readiness.get('ready')),
         'artifact_types': artifact_types if isinstance(artifact_types, list) else [],
         'missing': missing if isinstance(missing, list) else [],
-        'evaluator_version': evidence_audit_summary.get('evaluator_version'),
+        'evaluator_version': evaluator_version,
+        **_audit_artifact_v2_policy(evaluator_version),
     }
+
+
+def _audit_artifact_v2_policy(evaluator_version: Any) -> dict[str, Any]:
+    if isinstance(evaluator_version, str) and evaluator_version.startswith('assert-'):
+        return {'classification': 'assert-v2', 'active_evaluator_input': True}
+    return {'classification': 'pre-v2 archival', 'active_evaluator_input': False}
 
 
 def _contract_artifact_summary(report: dict[str, Any]) -> dict[str, Any]:

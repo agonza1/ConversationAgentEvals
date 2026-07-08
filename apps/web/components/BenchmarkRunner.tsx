@@ -183,6 +183,8 @@ interface SavedRunAuditArtifactSummary {
   artifact_types?: string[];
   missing?: string[];
   evaluator_version?: string | null;
+  classification?: 'assert-v2' | 'pre-v2 archival' | string;
+  active_evaluator_input?: boolean;
 }
 
 interface SavedRunContractArtifactSummary {
@@ -1178,7 +1180,8 @@ function savedRunAuditArtifactSummary(summary?: SavedRunAuditArtifactSummary) {
   if (!summary?.available) return 'Audit artifacts not captured.';
   const artifactTypes = summary.artifact_types?.length ? summary.artifact_types.map(artifactLabel).join(', ') : 'none';
   if (summary.ready_for_export) {
-    return `Audit export ready: ${artifactTypes} (${summary.evaluator_version ?? 'unknown evaluator'}).`;
+    const evaluatorLabel = summary.classification === 'pre-v2 archival' ? 'pre-v2 archival' : summary.evaluator_version ?? 'unknown evaluator';
+    return `Audit export ready: ${artifactTypes} (${evaluatorLabel}).`;
   }
   const missing = summary.missing?.length ? summary.missing.map(artifactLabel).join(', ') : 'not specified';
   return `Audit export incomplete: missing ${missing}.`;

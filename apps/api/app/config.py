@@ -17,12 +17,15 @@ def _env_bool(name: str) -> bool | None:
 
 
 def local_assert_sidecar_enabled() -> bool:
+    if os.getenv('K_SERVICE'):
+        return False
+    app_env = os.getenv('APP_ENV', 'development').strip().lower()
+    if app_env in {'production', 'prod'}:
+        return False
     explicit = _env_bool('ASSERT_LOCAL_SIDECAR_ENABLED')
     if explicit is not None:
         return explicit
-    if os.getenv('K_SERVICE'):
-        return False
-    return os.getenv('APP_ENV', 'development').strip().lower() in {'development', 'dev', 'local', 'test'}
+    return app_env in {'development', 'dev', 'local', 'test'}
 
 
 @dataclass(frozen=True)
