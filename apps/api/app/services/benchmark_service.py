@@ -825,12 +825,17 @@ def _assert_report_fields(assert_manifest: AssertResultManifest, *, payload: dic
     result_artifact = next((artifact for artifact in assert_manifest.artifacts if artifact.artifact_id == 'assert-result-report'), None)
     result_payload = result_artifact.inline_data if result_artifact is not None and isinstance(result_artifact.inline_data, dict) else {}
     missing_actions = [str(item) for item in result_payload.get('missing_actions', [])]
+    final_state_payload = payload.get('final_state')
+    if isinstance(final_state_payload, dict) and isinstance(final_state_payload.get('missing_actions'), list):
+        missing_actions = sorted({*missing_actions, *[str(item) for item in final_state_payload['missing_actions']]})
     forbidden_hits = result_payload.get('forbidden_action_hits') if isinstance(result_payload.get('forbidden_action_hits'), list) else []
     forbidden_observed = [str(item.get('action')) for item in forbidden_hits if isinstance(item, dict) and item.get('action')]
     workflow_order_issues = [failure.metadata for failure in assert_manifest.failures if failure.code.startswith('workflow-order:')]
     final_state_missing = [failure.metadata for failure in assert_manifest.failures if failure.category == 'final_state']
     hard_check_failures = result_payload.get('hard_check_failures') if isinstance(result_payload.get('hard_check_failures'), list) else []
-    failure_categories = sorted({_platform_failure_category(failure.category) for failure in assert_manifest.failures})
+    failure_categories = {_platform_failure_category(failure.category) for failure in assert_manifest.failures}
+    if missing_actions:
+        failure_categories.add('required_action_execution')
     evidence_citations = _assert_evidence_citations(
         action_trace=payload.get('action_trace'),
         final_state=payload.get('final_state'),
@@ -848,7 +853,7 @@ def _assert_report_fields(assert_manifest: AssertResultManifest, *, payload: dic
         'forbidden_actions_observed': forbidden_observed,
         'final_state_missing': final_state_missing,
         'workflow_order_issues': workflow_order_issues,
-        'failure_categories': failure_categories,
+        'failure_categories': sorted(failure_categories),
         'failure_modes': sorted({item['category'] for item in hard_check_failures if isinstance(item, dict) and item.get('category')}),
         'hard_check_failures': hard_check_failures,
         'suggested_fixes': _agentic_suggested_fixes(missing_actions, forbidden_observed, final_state_missing, workflow_order_issues),
