@@ -156,31 +156,38 @@ Important code anchors:
 
 ## Advanced Local Paths
 
-Use Docker after the first-run demo when you want a production-style container startup:
+Use Docker after the first-run demo when you want the containerized minimal benchmark demo:
 
 ```bash
 npm run docker:check
 npm run docker:up
 ```
 
-The Docker path is intended to mirror a production-style container startup:
+The default Compose path is intentionally small:
 
-- `docker compose up --build` builds the API, Pipecat, and web images from the checked-in Dockerfiles.
-- Compose starts Postgres first, runs the one-shot `seed` service to create the demo workspace and benchmark projects, then starts the API, worker, Pipecat, and web services behind health checks.
-- Containers run the code baked into those images; source directories are not bind-mounted over the built app.
-- Local state remains mounted for MVP persistence: `./storage` for generated artifacts and the named `postgres_data` volume for database state.
-- The API and worker use the same API image and container-internal `DATABASE_URL` pointed at the `db` service; `.env.example` also includes a localhost `DATABASE_URL` for host-side tools.
-- The worker is intentionally lightweight for the MVP: it verifies database connectivity and the seeded benchmark catalog on an interval so Compose exercises the background-process shape before a queue is introduced.
+- `docker compose up --build` starts only `api` and `web`, the services needed for the blessed local benchmark runner.
+- The API uses SQLite at `./storage/conversation_agent_evals.db` through `COMPOSE_DATABASE_URL`, so Postgres is not required for the default demo.
+- Containers run the code baked into the checked-in Dockerfiles; source directories are not bind-mounted over the built app.
 - The web image builds Next.js during `docker build` with compose-provided build args for internal service URLs and browser-facing localhost ports, then starts the prebuilt app at container runtime.
-- Compose uses internal service URLs for server-side traffic (`http://api:8000`, `http://pipecat:8110`) and localhost URLs only for browser-facing `NEXT_PUBLIC_*` values.
-- `npm run docker:check` is a fast static smoke check for compose defaults, database/worker/seed wiring, and Dockerfile parity. It does not build images or require Docker to be running.
+- Compose uses internal service URLs for server-side traffic (`http://api:8000`, `http://pipecat:8110` when the voice profile is enabled) and localhost URLs only for browser-facing `NEXT_PUBLIC_*` values.
+- `npm run docker:check` is a fast static smoke check for compose defaults, profiles, env wiring, and Dockerfile parity. It does not build images or require Docker to be running.
 - `npm run test:api` is Docker-first API validation: when Docker is available it builds the checked-in API Dockerfile and runs pytest inside that image, so validation does not depend on host Python virtualenv or ensurepip support. If Docker is unavailable, it falls back to an existing local venv for sandbox-only iteration; use `npm run test:api:docker` to require the hermetic path or `npm run test:api:local` after `npm run setup` for local-only iteration.
 
 Default local endpoints:
 
 - Web app: `http://localhost:3012` with Docker, or the URL printed by `npm run dev`
 - API: `http://localhost:8025`
-- Pipecat service: `http://localhost:8110`
+
+Optional Compose profiles:
+
+- `voice` starts the Pipecat conversation service for WebRTC/live voice paths: `docker compose --profile voice up --build`.
+- `persistence` starts Postgres, the one-shot `seed` service, and the worker: `COMPOSE_DATABASE_URL=postgresql://cae:cae_local_password@db:5432/conversation_agent_evals docker compose --profile persistence up --build`.
+- Use both profiles when you need the full local container shape: `COMPOSE_DATABASE_URL=postgresql://cae:cae_local_password@db:5432/conversation_agent_evals docker compose --profile persistence --profile voice up --build`.
+
+Optional profile endpoints:
+
+- Pipecat service with `--profile voice`: `http://localhost:8110`
+- Postgres with `--profile persistence`: `localhost:54329`
 
 ### ASR contract for conversation demos
 
@@ -190,12 +197,18 @@ Conversation demos use `rtc-asr` as the speech-to-text provider contract. Live P
 
 The Pipecat live input contract is 16 kHz, mono, little-endian PCM16. The checked-in Pipecat transport and pipeline params set `audio_in_sample_rate=16000`; any future resampler/downmixer must be documented as the processor responsible for converting browser audio into that contract before rtc-asr receives it.
 
-Required local env names:
+Required local env names for host-side dev:
 
 ```bash
 RTC_ASR_BASE_URL=http://localhost:8000
 RTC_ASR_HEALTH_PATH=/health
 RTC_ASR_STREAM_PATH=/v1/stt/stream
+```
+
+When Pipecat runs in the Compose `voice` profile and rtc-asr runs on the host, use the host-reachable base URL instead:
+
+```bash
+RTC_ASR_BASE_URL=http://host.docker.internal:8000 docker compose --profile voice up --build
 ```
 
 When `RTC_ASR_BASE_URL` is empty or the health check is unavailable, live session startup marks ASR as `not_configured` or `unavailable` and records a `rtc_asr_skipped` event. The `/sessions/{id}/ask` transcript loop remains non-production demo support only; it is not the ASR provider contract.

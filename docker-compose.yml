@@ -1,6 +1,8 @@
 services:
   db:
     image: postgres:16-alpine
+    profiles:
+      - persistence
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-conversation_agent_evals}
       POSTGRES_USER: ${POSTGRES_USER:-cae}
@@ -17,6 +19,8 @@ services:
 
   seed:
     image: conversation-agent-evals-api:latest
+    profiles:
+      - persistence
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -40,7 +44,7 @@ services:
       - .env
     environment:
       PORT: 8000
-      DATABASE_URL: postgresql://${POSTGRES_USER:-cae}:${POSTGRES_PASSWORD:-cae_local_password}@db:5432/${POSTGRES_DB:-conversation_agent_evals}
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:-sqlite:////workspace/storage/conversation_agent_evals.db}
       API_BASE_URL: http://api:8000
       PIPECAT_SERVICE_URL: http://pipecat:8110
       APP_ENV: ${APP_ENV:-development}
@@ -51,8 +55,10 @@ services:
     depends_on:
       db:
         condition: service_healthy
+        required: false
       seed:
         condition: service_completed_successfully
+        required: false
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 15s
@@ -61,6 +67,8 @@ services:
 
   worker:
     image: conversation-agent-evals-api:latest
+    profiles:
+      - persistence
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -86,6 +94,8 @@ services:
 
   pipecat:
     image: conversation-agent-evals-pipecat:latest
+    profiles:
+      - voice
     build:
       context: .
       dockerfile: apps/pipecat/Dockerfile
@@ -94,8 +104,13 @@ services:
     environment:
       API_BASE_URL: http://api:8000
       PIPECAT_SERVICE_URL: http://pipecat:8110
+      RTC_ASR_BASE_URL: ${RTC_ASR_BASE_URL:-}
+      RTC_ASR_HEALTH_PATH: ${RTC_ASR_HEALTH_PATH:-/health}
+      RTC_ASR_STREAM_PATH: ${RTC_ASR_STREAM_PATH:-/v1/stt/stream}
     ports:
       - "${PIPECAT_PORT:-8110}:8110"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       api:
         condition: service_healthy
@@ -130,10 +145,9 @@ services:
     depends_on:
       api:
         condition: service_healthy
-      worker:
-        condition: service_healthy
       pipecat:
         condition: service_healthy
+        required: false
 
 volumes:
   postgres_data:

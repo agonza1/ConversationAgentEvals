@@ -114,7 +114,7 @@ Production-call monitoring comes later, after users prove they want repeatable b
 
 ## Runtime
 
-Use Docker Compose as the default way to run the MVP and any supporting services.
+Use Docker Compose as the default way to run the minimal benchmark demo. The default profile starts only the web and API containers.
 
 ```bash
 npm run docker:up
@@ -124,12 +124,17 @@ Default local endpoints:
 
 - Web: `http://localhost:3012`
 - API: `http://localhost:8025`
-- Pipecat: `http://localhost:8110`
+
+Optional supporting services stay behind named profiles:
+
+- Pipecat voice/WebRTC path: `docker compose --profile voice up --build -d`
+- Postgres, seed, and worker: `COMPOSE_DATABASE_URL=postgresql://cae:cae_local_password@db:5432/conversation_agent_evals docker compose --profile persistence up --build -d`
 
 If a port is already occupied during local iteration, override only the host port:
 
 ```bash
-PORT=3013 API_PORT=8026 PIPECAT_PORT=8111 docker compose up --build -d
+PORT=3013 API_PORT=8026 docker compose up --build -d
+PORT=3013 API_PORT=8026 PIPECAT_PORT=8111 docker compose --profile voice up --build -d
 ```
 
 ## What We Are Not Building Yet
