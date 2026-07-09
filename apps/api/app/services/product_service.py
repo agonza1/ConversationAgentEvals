@@ -559,14 +559,15 @@ def export_saved_run(db: Session, user_id: str, run_id: str) -> SavedRunExportRe
         payload={'run_id': saved_run.id, 'export_type': 'single_run'},
     )
     db.commit()
+    report = _load_saved_run_report(saved_run)
     return SavedRunExportResponse(
         id=saved_run.id,
         filename=f'agentbench-{project.project_key}-{saved_run.id}.json',
         project_id=project.project_key,
         project_name=project.name,
         firestore_path=_firestore_run_path(user_id=saved_run.user_id, project_key=project.project_key, run_id=saved_run.id),
-        report=_load_json(saved_run.report_json, {}),
-        artifacts=_load_json(saved_run.artifact_json, {}),
+        report=report,
+        artifacts=_load_saved_run_artifacts(saved_run, report=report),
         transcript=saved_run.transcript,
         created_at=saved_run.created_at.replace(tzinfo=UTC).isoformat(),
     )
@@ -606,20 +607,22 @@ def export_project_runs(
     if summary is None:
         return None
 
-    runs = [
-        SavedRunExportResponse(
-            id=saved_run.id,
-            filename=f'agentbench-{project.project_key}-{saved_run.id}.json',
-            project_id=project.project_key,
-            project_name=project.name,
-            firestore_path=_firestore_run_path(user_id=saved_run.user_id, project_key=project.project_key, run_id=saved_run.id),
-            report=_load_json(saved_run.report_json, {}),
-            artifacts=_load_json(saved_run.artifact_json, {}),
-            transcript=saved_run.transcript,
-            created_at=saved_run.created_at.replace(tzinfo=UTC).isoformat(),
+    runs = []
+    for saved_run in saved_runs:
+        report = _load_saved_run_report(saved_run)
+        runs.append(
+            SavedRunExportResponse(
+                id=saved_run.id,
+                filename=f'agentbench-{project.project_key}-{saved_run.id}.json',
+                project_id=project.project_key,
+                project_name=project.name,
+                firestore_path=_firestore_run_path(user_id=saved_run.user_id, project_key=project.project_key, run_id=saved_run.id),
+                report=report,
+                artifacts=_load_saved_run_artifacts(saved_run, report=report),
+                transcript=saved_run.transcript,
+                created_at=saved_run.created_at.replace(tzinfo=UTC).isoformat(),
+            )
         )
-        for saved_run in saved_runs
-    ]
 
     filename_parts = ['agentbench', project.project_key]
     if suite_id:
@@ -1229,6 +1232,7 @@ def _record_audit_event(
 
 
 def _serialize_saved_run(saved_run: ProductSavedRun, project: ProductProject) -> SavedRunResponse:
+    report = _load_saved_run_report(saved_run)
     return SavedRunResponse(
         id=saved_run.id,
         user_id=saved_run.user_id,
@@ -1236,11 +1240,34 @@ def _serialize_saved_run(saved_run: ProductSavedRun, project: ProductProject) ->
         project_name=project.name,
         firestore_path=_firestore_run_path(user_id=saved_run.user_id, project_key=project.project_key, run_id=saved_run.id),
         plan=saved_run.plan,  # type: ignore[arg-type]
-        report=_load_json(saved_run.report_json, {}),
-        artifacts=_load_json(saved_run.artifact_json, {}),
+        report=report,
+        artifacts=_load_saved_run_artifacts(saved_run, report=report),
         transcript=saved_run.transcript,
         created_at=saved_run.created_at.replace(tzinfo=UTC).isoformat(),
     )
+
+
+def _load_saved_run_report(saved_run: ProductSavedRun) -> dict[str, Any]:
+    return _load_json(saved_run.report_json, {})
+
+
+def _load_saved_run_artifacts(saved_run: ProductSavedRun, *, report: dict[str, Any]) -> dict[str, Any]:
+    artifacts = _load_json(saved_run.artifact_json, {})
+    audit_artifacts = artifacts.get('audit_artifacts')
+    if isinstance(audit_artifacts, dict):
+        evaluator_version = audit_artifacts.get('evaluator_version')
+        if evaluator_version is None:
+            evidence_audit_summary = report.get('evidence_audit_summary')
+            if isinstance(evidence_audit_summary, dict):
+                evaluator_version = evidence_audit_summary.get('evaluator_version')
+        artifacts = {
+            **artifacts,
+            'audit_artifacts': {
+                **audit_artifacts,
+                **_audit_artifact_v2_policy(evaluator_version),
+            },
+        }
+    return artifacts
 
 
 def _build_artifacts(report: dict[str, Any], transcript: str | None, previous_report: dict[str, Any] | None = None) -> dict[str, Any]:
