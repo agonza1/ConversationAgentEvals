@@ -1084,6 +1084,8 @@ def test_saved_runs_preserve_evidence_audit_summary_in_history_and_export():
         'artifact_types': ['transcript', 'action_trace', 'final_state'],
         'missing': [],
         'evaluator_version': 'deterministic-agentic-v1',
+        'classification': 'pre-v2 archival',
+        'active_evaluator_input': False,
     }
     assert list_response.json()[0]['artifacts']['contract_artifacts'] == {
         'available': True,

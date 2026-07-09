@@ -222,7 +222,13 @@ def test_local_assert_sidecar_route_defaults_to_non_production_only(monkeypatch)
     assert local_assert_sidecar_enabled() is False
 
     monkeypatch.setenv('ASSERT_LOCAL_SIDECAR_ENABLED', 'true')
+    assert local_assert_sidecar_enabled() is False
+
+    monkeypatch.delenv('K_SERVICE', raising=False)
     assert local_assert_sidecar_enabled() is True
+
+    monkeypatch.setenv('APP_ENV', 'production')
+    assert local_assert_sidecar_enabled() is False
 
 
 def test_boundary_module_exposes_only_v2_entrypoints_and_archival_policy():
