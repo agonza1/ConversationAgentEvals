@@ -1,9 +1,11 @@
+import json
+
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 
 from app.db.database import SessionLocal
 from app.main import app
-from app.models.entities import ProductProject
+from app.models.entities import ProductProject, ProductSavedRun
 from app.services.product_service import reset_saved_runs_for_tests
 
 client = TestClient(app)
@@ -1101,6 +1103,63 @@ def test_saved_runs_preserve_evidence_audit_summary_in_history_and_export():
         'suite_contract_manifest_sha256': 'a' * 64,
         'scenario_contract_sha256': 'b' * 64,
     }
+
+
+def test_saved_runs_apply_archival_audit_policy_to_existing_artifacts():
+    audit_summary = {
+        'input_artifact_types': ['transcript'],
+        'evaluator_version': 'deterministic-agentic-v1',
+        'export_readiness': {'ready': True, 'missing': []},
+    }
+    response = client.post(
+        '/api/product/runs',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'call-center',
+            'plan': 'starter',
+            'report': {
+                'run_id': 'legacy-abc',
+                'overall_score': 88,
+                'evidence_audit_summary': audit_summary,
+            },
+            'transcript': 'Agent: verified and completed the update.',
+        },
+    )
+    assert response.status_code == 200
+    saved = response.json()
+
+    db = SessionLocal()
+    try:
+        saved_run = db.query(ProductSavedRun).filter(ProductSavedRun.id == saved['id']).one()
+        saved_run.artifact_json = json.dumps(
+            {
+                'audit_artifacts': {
+                    'available': True,
+                    'ready_for_export': True,
+                    'artifact_types': ['transcript'],
+                    'missing': [],
+                    'evaluator_version': 'deterministic-agentic-v1',
+                }
+            }
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    list_response = client.get('/api/product/runs', params={'user_id': 'demo-user', 'project_id': 'call-center'})
+    list_audit = list_response.json()[0]['artifacts']['audit_artifacts']
+    assert list_audit['classification'] == 'pre-v2 archival'
+    assert list_audit['active_evaluator_input'] is False
+
+    run_export = client.get(f"/api/product/runs/{saved['id']}/export", params={'user_id': 'demo-user'})
+    run_audit = run_export.json()['artifacts']['audit_artifacts']
+    assert run_audit['classification'] == 'pre-v2 archival'
+    assert run_audit['active_evaluator_input'] is False
+
+    project_export = client.get('/api/product/projects/call-center/export', params={'user_id': 'demo-user'})
+    project_audit = project_export.json()['runs'][0]['artifacts']['audit_artifacts']
+    assert project_audit['classification'] == 'pre-v2 archival'
+    assert project_audit['active_evaluator_input'] is False
 
 
 def test_saved_runs_preserve_evidence_citations_in_history_and_export():
