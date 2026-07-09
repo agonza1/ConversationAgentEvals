@@ -1593,9 +1593,17 @@ function reportActionPlan(
 ) {
   const verdict = (report.verdict ?? report.overall ?? '').toLowerCase();
   const score = report.score ?? report.overall_score;
-  const missingCount = report.missing_actions?.length ?? 0;
+  const validationMissingActions = report.simulation_validation?.missing_required_actions ?? [];
+  const missingActionHints = [
+    ...(report.missing_actions ?? []),
+    ...validationMissingActions.map((action) => `Add explicit tool/action execution for: ${action}`),
+  ];
+  const missingCount = missingActionHints.length;
   const forbiddenCount = (report.forbidden_actions_observed?.length ?? report.forbidden_action_hits?.length) ?? 0;
   const failureCategory = report.failure_categories?.[0]?.replace(/_/g, ' ') ?? null;
+  const failureCategories = report.failure_categories?.length
+    ? report.failure_categories.map((category) => category.replace(/_/g, ' ')).join(', ')
+    : null;
   const suggestedFix = report.suggested_fixes?.[0] ?? report.recommendations?.[0] ?? null;
   const isPass = verdict === 'pass' || (typeof score === 'number' && score >= 80 && missingCount === 0 && forbiddenCount === 0);
   const uncoveredCount = suiteCoverage?.missing_scenarios?.length ?? suiteCoverage?.missing_scenario_ids?.length ?? 0;
@@ -1619,7 +1627,7 @@ function reportActionPlan(
     : suggestedFix ?? 'Fix the highest-risk failure, regenerate evidence, and rerun this scenario before release.';
   const regression = regressionDelta ? regressionDeltaSummary(regressionDelta) : 'Save the run to establish regression tracking.';
 
-  return { headline, primaryRisk, nextStep, regression };
+  return { headline, primaryRisk, nextStep, regression, failureCategories };
 }
 
 function formatSuiteBrief(simulation: BenchmarkSuiteSimulationResponse) {
@@ -3250,6 +3258,9 @@ export function BenchmarkRunner() {
                 <AuditFact label="Primary risk" value={actionPlan.primaryRisk} />
                 <AuditFact label="Next step" value={actionPlan.nextStep} />
                 <AuditFact label="Regression note" value={actionPlan.regression} />
+                {actionPlan.failureCategories ? (
+                  <AuditFact label="Failure categories" value={actionPlan.failureCategories} />
+                ) : null}
               </div>
               {actionPlan.headline === 'Keep moving through uncovered scenarios' && suiteScenarioCoverage?.recommended_next_scenario?.id ? (
                 <div>
