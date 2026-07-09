@@ -5,6 +5,7 @@ const root = process.cwd();
 const compose = readFileSync(join(root, 'docker-compose.yml'), 'utf8');
 const envExample = readFileSync(join(root, '.env.example'), 'utf8');
 const webDockerfile = readFileSync(join(root, 'apps/web/Dockerfile'), 'utf8');
+const environmentDocs = readFileSync(join(root, 'docs/environment.md'), 'utf8');
 
 const failures = [];
 
@@ -131,19 +132,26 @@ for (const envName of [
   'PORT=3012',
   'API_PORT=8025',
   'PIPECAT_PORT=8110',
-  'API_BASE_URL=http://localhost:8025',
-  'PIPECAT_SERVICE_URL=http://localhost:8110',
-  'NEXT_PUBLIC_API_BASE_URL=http://localhost:8025',
-  'NEXT_PUBLIC_PIPECAT_SERVICE_URL=http://localhost:8110',
-  'POSTGRES_DB=conversation_agent_evals',
-  'POSTGRES_USER=cae',
-  'POSTGRES_PASSWORD=cae_local_password',
-  'POSTGRES_PORT=54329',
-  'DATABASE_URL=postgresql://cae:cae_local_password@localhost:54329/conversation_agent_evals',
-  'COMPOSE_DATABASE_URL=sqlite:////workspace/storage/conversation_agent_evals.db',
-  'WORKER_POLL_INTERVAL_SECONDS=30',
+  'APP_ENV=development',
+  'PRODUCTION=false',
+  'PLAYWRIGHT_BASE_URL=http://127.0.0.1:3012',
+  'PLAYWRIGHT_REUSE_EXISTING_SERVER=1',
 ]) {
   requireIncludes('.env.example', envExample, envName);
+}
+
+for (const advancedEnvName of [
+  'OPENAI_API_KEY=',
+  'OPENAI_REALTIME_MODEL=gpt-realtime-mini',
+  'OPENAI_RESPONSES_MODEL=gpt-4.1-mini',
+  'POSTGRES_DB=conversation_agent_evals',
+  'COMPOSE_DATABASE_URL=sqlite:////workspace/storage/conversation_agent_evals.db',
+  'RTC_ASR_BASE_URL=http://localhost:8000',
+  'STRIPE_SECRET_KEY=',
+  'FIREBASE_PROJECT_ID=',
+]) {
+  requireIncludes('docs/environment.md', environmentDocs, advancedEnvName);
+  requireNotIncludes('.env.example first-run env', envExample, advancedEnvName);
 }
 
 requireIncludes('api Dockerfile', readFileSync(join(root, 'apps/api/Dockerfile'), 'utf8'), 'ENV PYTHONPATH=/workspace/apps/api');

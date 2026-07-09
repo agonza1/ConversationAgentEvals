@@ -57,8 +57,10 @@ async function findFreePort(preferredPort, attempts = 200, reservedPorts = new S
   throw new Error(`No free port found starting at ${preferredPort}`);
 }
 
-async function resolvePort({ name, envKey, preferredPort, attempts = 400, reservedPorts }) {
-  const configuredPort = Number(process.env[envKey]);
+async function resolvePort({ name, envKey, envKeys, preferredPort, attempts = 400, reservedPorts }) {
+  const keys = envKeys || [envKey];
+  const configuredKey = keys.find((key) => process.env[key]);
+  const configuredPort = Number(configuredKey ? process.env[configuredKey] : undefined);
   const requestedPort = Number.isFinite(configuredPort) && configuredPort > 0 ? configuredPort : preferredPort;
 
   if (!reservedPorts.has(requestedPort) && await isPortFree(requestedPort)) {
@@ -66,7 +68,7 @@ async function resolvePort({ name, envKey, preferredPort, attempts = 400, reserv
   }
 
   const fallbackPort = await findFreePort(requestedPort + 1, attempts, reservedPorts);
-  const source = configuredPort ? `${envKey}=${configuredPort}` : `preferred ${preferredPort}`;
+  const source = configuredKey ? `${configuredKey}=${configuredPort}` : `preferred ${preferredPort}`;
   console.warn(`${name} port ${requestedPort} (${source}) is busy; using ${fallbackPort} for this dev run.`);
   return fallbackPort;
 }
@@ -105,7 +107,7 @@ async function main() {
   const apiPort = await resolvePort({
     name: 'API',
     envKey: 'API_PORT',
-    preferredPort: 18000,
+    preferredPort: 8025,
     reservedPorts,
   });
   reservedPorts.add(apiPort);
@@ -120,8 +122,8 @@ async function main() {
 
   const webPort = await resolvePort({
     name: 'Web',
-    envKey: 'WEB_PORT',
-    preferredPort: 13000,
+    envKeys: ['WEB_PORT', 'PORT'],
+    preferredPort: 3012,
     reservedPorts,
   });
   reservedPorts.add(webPort);
