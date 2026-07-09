@@ -134,7 +134,7 @@ If a port is already occupied during local iteration, override only the host por
 
 ```bash
 PORT=3013 API_PORT=8026 docker compose up --build -d
-PIPECAT_PORT=8111 docker compose --profile voice up --build -d
+PORT=3013 API_PORT=8026 PIPECAT_PORT=8111 docker compose --profile voice up --build -d
 ```
 
 ## What We Are Not Building Yet

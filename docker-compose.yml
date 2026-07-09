@@ -109,6 +109,8 @@ services:
       RTC_ASR_STREAM_PATH: ${RTC_ASR_STREAM_PATH:-/v1/stt/stream}
     ports:
       - "${PIPECAT_PORT:-8110}:8110"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       api:
         condition: service_healthy
