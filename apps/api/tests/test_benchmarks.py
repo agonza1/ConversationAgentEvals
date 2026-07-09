@@ -312,6 +312,83 @@ def test_run_endpoint_normalizes_assert_bundle_into_existing_evidence_pipeline()
     assert report['vcon_analysis']['body']['evidence_citations'] == report['evidence_citations']
 
 
+def test_run_endpoint_accepts_generic_artifact_bundle_and_returns_lab_report():
+    response = client.post(
+        '/api/benchmarks/run',
+        json={
+            'suite_id': 'telehealth-agent',
+            'scenario_id': 'medication-refill-routing',
+            'assert_bundle': {
+                'artifacts': [
+                    {
+                        'id': 'dialog-1',
+                        'kind': 'messages',
+                        'data': [
+                            {'speaker': 'Patient', 'body': 'I need a refill and use the King Street pharmacy.'},
+                            {
+                                'speaker': 'Agent',
+                                'body': (
+                                    'I verified patient identity, collected the medication name and preferred '
+                                    'pharmacy, routed request to clinician review, and stated refill timing expectations.'
+                                ),
+                            },
+                        ],
+                    },
+                    {
+                        'id': 'tools-1',
+                        'type': 'tool_calls',
+                        'payload': [
+                            {'action': 'verify patient identity', 'status': 'completed'},
+                            {'action': 'collect medication name', 'status': 'completed'},
+                            {'action': 'collect preferred pharmacy', 'status': 'completed'},
+                            {'action': 'route request to clinician review', 'status': 'completed'},
+                            {'action': 'state refill timing expectations', 'status': 'completed'},
+                        ],
+                    },
+                    {
+                        'id': 'state-1',
+                        'type': 'task_state',
+                        'content': {'complete': True, 'queued_for_clinician_review': True},
+                    },
+                ],
+                'metadata': {'agent_version': 'generic-adapter', 'model_name': 'gpt-lab'},
+                'provenance': {'source_run_id': 'assert-lab-run-1'},
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    report = response.json()
+
+    assert report['verdict'] == 'pass'
+    assert report['run_metadata']['agent_version'] == 'generic-adapter'
+    assert 'Patient: I need a refill' in report['transcript_preview']
+    assert report['evidence_audit_summary']['adapter']['source_artifacts'] == [
+        'artifacts:dialog-1:dialog',
+        'artifacts:tools-1:action_trace',
+        'artifacts:state-1:final_state',
+    ]
+    assert report['evidence_audit_summary']['adapter']['normalized_artifacts'] == [
+        'conversation',
+        'action_trace',
+        'final_state',
+    ]
+
+    lab_report = report['assert_lab_report']
+    assert lab_report['schema'] == 'conversation_agent_evals_assert_lab_report_v1'
+    assert lab_report['lab_status'] == 'ready_for_lab_review'
+    assert lab_report['artifact_manifest']['uri'] == report['assert_canonical_artifact']['uri']
+    assert lab_report['assert_versions']['adapter_version'] == 'conversation-agent-evals-assert-v2-adapter-v1'
+    assert lab_report['evidence']['input_artifact_types'] == [
+        'conversation',
+        'action_trace',
+        'assert_bundle',
+        'final_state',
+    ]
+    assert {'action_trace', 'final_state', 'transcript'} <= set(lab_report['evidence']['citation_sources'])
+    assert lab_report['failure_taxonomy'] == []
+    assert report['vcon_analysis']['body']['assert_lab_report'] == lab_report
+
 def test_failed_assert_bundle_rerun_returns_stable_hard_check_citations():
     failed_artifact = {
         'suite_id': 'telehealth-agent',
@@ -674,7 +751,6 @@ def test_runs_export_summarizes_scenario_failure_categories():
         'task_completion': 1,
     }
     assert summary['top_failure_categories'][0] == {'category': 'final_state_correctness', 'count': 1}
-
 
 def test_run_endpoint_accepts_vcon_record_evidence():
     response = client.post(
@@ -1861,7 +1937,6 @@ def test_path_simulate_endpoint_uses_route_scenario_ids():
     assert payload['final_state']['complete'] is False
     assert payload['benchmark_report']['verdict'] == 'needs_review'
 
-
 def test_run_endpoint_accepts_vcon_without_duplicate_transcript_field():
     response = client.post(
         '/api/benchmarks/run',
@@ -1883,7 +1958,6 @@ def test_run_endpoint_accepts_vcon_without_duplicate_transcript_field():
     assert payload['scenario_id'] == 'angry-outage-escalation'
     assert payload['verdict'] == 'pass'
     assert payload['transcript_preview'].startswith('This outage is frustrating')
-
 
 def test_run_endpoint_accepts_group_call_artifacts():
     response = client.post(
@@ -1927,7 +2001,6 @@ def test_run_endpoint_accepts_group_call_artifacts():
     assert payload['vcon_export']['parties'] == [{'name': 'caller'}, {'name': 'agent'}, {'name': 'supervisor'}]
     assert [turn['originator'] for turn in payload['vcon_export']['dialog']] == ['caller', 'agent', 'supervisor']
     assert payload['vcon_export']['analysis'][-1] == payload['vcon_analysis']
-
 
 def test_run_endpoint_accepts_action_trace_and_final_state_without_transcript():
     response = client.post(

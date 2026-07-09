@@ -605,6 +605,7 @@ def run_scenario(request: Any) -> dict[str, Any]:
     )
     report['run_status'] = report['run_lifecycle']['status']
     _attach_canonical_assert_artifact(report)
+    report['assert_lab_report'] = _assert_lab_report(report)
     report['vcon_analysis'] = _vcon_analysis(report)
     report['vcon_export'] = _vcon_export(payload, transcript, report['vcon_analysis'])
     return report
@@ -1731,6 +1732,84 @@ def _artifact_summary(artifact_type: str, value: Any) -> dict[str, Any]:
 SPEAKER_LABEL_PATTERN = re.compile(r'(?:(?<=^)|(?<=\s))([A-Za-z][A-Za-z0-9 _-]{0,30}):\s*')
 
 
+
+def _assert_lab_report(report: dict[str, Any]) -> dict[str, Any]:
+    manifest = report.get('assert_result_manifest') if isinstance(report.get('assert_result_manifest'), dict) else {}
+    manifest_metadata = manifest.get('manifest_metadata') if isinstance(manifest.get('manifest_metadata'), dict) else {}
+    artifact_manifest = report.get('assert_canonical_artifact') if isinstance(report.get('assert_canonical_artifact'), dict) else {}
+    evidence_artifacts = report.get('evidence_artifacts') if isinstance(report.get('evidence_artifacts'), dict) else {}
+    audit_summary = report.get('evidence_audit_summary') if isinstance(report.get('evidence_audit_summary'), dict) else {}
+    citations = report.get('evidence_citations') if isinstance(report.get('evidence_citations'), list) else []
+    failures = manifest.get('failures') if isinstance(manifest.get('failures'), list) else []
+
+    return {
+        'schema': 'conversation_agent_evals_assert_lab_report_v1',
+        'run_id': report.get('run_id'),
+        'assert_run_id': report.get('assert_run_id'),
+        'suite_id': report.get('suite_id'),
+        'scenario_id': report.get('scenario_id'),
+        'verdict': report.get('verdict'),
+        'overall_score': report.get('overall_score'),
+        'lab_status': (
+            'ready_for_lab_review'
+            if audit_summary.get('export_readiness', {}).get('ready')
+            else 'missing_evidence'
+        ),
+        'artifact_manifest': {
+            'uri': artifact_manifest.get('uri'),
+            'sha256': artifact_manifest.get('sha256'),
+            'location': report.get('assert_artifact_manifest_location'),
+        },
+        'assert_versions': {
+            'assert_version': manifest_metadata.get('assert_version'),
+            'assert_commit': manifest_metadata.get('assert_commit'),
+            'adapter_version': manifest_metadata.get('platform_adapter_version'),
+            'spec_version': manifest_metadata.get('spec_version'),
+            'platform_version': manifest_metadata.get('platform_version'),
+        },
+        'evidence': {
+            'input_artifact_types': (
+                audit_summary.get('input_artifact_types')
+                if isinstance(audit_summary.get('input_artifact_types'), list)
+                else []
+            ),
+            'artifact_count': (
+                len(evidence_artifacts.get('artifacts', []))
+                if isinstance(evidence_artifacts.get('artifacts'), list)
+                else 0
+            ),
+            'fingerprint': evidence_artifacts.get('evidence_fingerprint'),
+            'citation_count': len(citations),
+            'citation_sources': sorted(
+                {
+                    str(citation.get('source'))
+                    for citation in citations
+                    if isinstance(citation, dict) and citation.get('source')
+                }
+            ),
+        },
+        'failure_taxonomy': [
+            {
+                'code': item.get('code'),
+                'category': item.get('category'),
+                'severity': item.get('severity'),
+                'summary': item.get('summary'),
+                'evidence_artifact_ids': (
+                    item.get('evidence_artifact_ids')
+                    if isinstance(item.get('evidence_artifact_ids'), list)
+                    else []
+                ),
+            }
+            for item in failures
+            if isinstance(item, dict)
+        ],
+        'operator_summary': {
+            'missing_actions': report.get('missing_actions') if isinstance(report.get('missing_actions'), list) else [],
+            'forbidden_action_hits': report.get('forbidden_action_hits') if isinstance(report.get('forbidden_action_hits'), list) else [],
+            'recommendations': report.get('recommendations') if isinstance(report.get('recommendations'), list) else [],
+        },
+    }
+
 def _vcon_analysis(report: dict[str, Any]) -> dict[str, Any]:
     body_keys = (
         'run_id',
@@ -1765,6 +1844,7 @@ def _vcon_analysis(report: dict[str, Any]) -> dict[str, Any]:
         'hard_check_failures',
         'failure_modes',
         'evidence_citations',
+        'assert_lab_report',
         'suggested_fixes',
         'recommendations',
     )
