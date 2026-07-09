@@ -24,7 +24,10 @@ Create the local environment file:
 
 ```bash
 cp .env.example .env
+npm run check:env
 ```
+
+The first-run `.env` is intentionally small. Required values are `PORT`, `API_PORT`, `PIPECAT_PORT`, `APP_ENV`, and `PRODUCTION`; the checked-in defaults are enough for the benchmark demo. Optional provider keys, Docker persistence settings, live ASR variables, billing, and auth knobs are documented in [docs/environment.md](docs/environment.md).
 
 Run the local demo stack:
 
@@ -39,7 +42,7 @@ Expected success output:
 - Open the printed Web URL, then use the benchmark runner at `/benchmarks`.
 - Success means benchmark suites load, a scenario can run, and the report shows transcript, action trace, final state, scores, and evidence artifacts.
 
-ASR source for this first run: the minimal local demo uses transcript/action/final-state evidence and does not require live microphone ASR. Live conversation demos use `rtc-asr` as the ASR provider contract; see [issue #78](https://github.com/agonza1/ConversationAgentEvals/issues/78) and the contract section below. Any local mock or transcript fixture is demo support, not the production ASR contract.
+ASR source for this first run: the minimal local demo uses transcript/action/final-state evidence and does not require live microphone ASR. Live conversation demos use `rtc-asr` as the ASR provider contract; see [docs/environment.md](docs/environment.md#live-asr-and-voice-experiments) for the advanced env values.
 
 ## What this repo does
 
@@ -191,31 +194,12 @@ Optional profile endpoints:
 
 ### ASR contract for conversation demos
 
-See [issue #78](https://github.com/agonza1/ConversationAgentEvals/issues/78) for the tracked endpoint and configuration work.
-
-Conversation demos use `rtc-asr` as the speech-to-text provider contract. Live Pipecat ASR expects an rtc-asr service reachable at `RTC_ASR_BASE_URL`, and streams audio to `RTC_ASR_STREAM_PATH` using the Local STT v1 WebSocket protocol. The default stream path is `/v1/stt/stream`; the default health path is `/health`.
-
-The Pipecat live input contract is 16 kHz, mono, little-endian PCM16. The checked-in Pipecat transport and pipeline params set `audio_in_sample_rate=16000`; any future resampler/downmixer must be documented as the processor responsible for converting browser audio into that contract before rtc-asr receives it.
-
-Required local env names for host-side dev:
-
-```bash
-RTC_ASR_BASE_URL=http://localhost:8000
-RTC_ASR_HEALTH_PATH=/health
-RTC_ASR_STREAM_PATH=/v1/stt/stream
-```
-
-When Pipecat runs in the Compose `voice` profile and rtc-asr runs on the host, use the host-reachable base URL instead:
-
-```bash
-RTC_ASR_BASE_URL=http://host.docker.internal:8000 docker compose --profile voice up --build
-```
-
-When `RTC_ASR_BASE_URL` is empty or the health check is unavailable, live session startup marks ASR as `not_configured` or `unavailable` and records a `rtc_asr_skipped` event. The `/sessions/{id}/ask` transcript loop remains non-production demo support only; it is not the ASR provider contract.
+The first-run benchmark demo does not need live microphone ASR. For live conversation demos, `rtc-asr` is the tracked speech-to-text provider contract and Pipecat sends 16 kHz mono PCM16 little-endian input to that service. Configure the advanced ASR variables only when running the `voice` profile or a live WebRTC path; see [docs/environment.md](docs/environment.md#live-asr-and-voice-experiments).
 
 ## Useful Commands
 
 ```bash
+npm run check:env
 npm run build:web
 npm run test:api
 npm run test:api:docker
