@@ -1162,6 +1162,56 @@ def test_saved_runs_apply_archival_audit_policy_to_existing_artifacts():
     assert project_audit['active_evaluator_input'] is False
 
 
+def test_saved_runs_rebuild_missing_legacy_audit_artifacts_from_report():
+    audit_summary = {
+        'input_artifact_types': ['transcript', 'action_trace'],
+        'evaluator_version': 'deterministic-agentic-v1',
+        'export_readiness': {'ready': True, 'missing': []},
+    }
+    response = client.post(
+        '/api/product/runs',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'call-center',
+            'plan': 'starter',
+            'report': {
+                'run_id': 'legacy-missing-audit',
+                'overall_score': 91,
+                'evidence_audit_summary': audit_summary,
+            },
+            'transcript': 'Agent: verified and completed the update.',
+        },
+    )
+    assert response.status_code == 200
+    saved = response.json()
+
+    db = SessionLocal()
+    try:
+        saved_run = db.query(ProductSavedRun).filter(ProductSavedRun.id == saved['id']).one()
+        saved_run.artifact_json = json.dumps({'run_id': 'legacy-missing-audit', 'overall_score': 91})
+        db.commit()
+    finally:
+        db.close()
+
+    list_response = client.get('/api/product/runs', params={'user_id': 'demo-user', 'project_id': 'call-center'})
+    list_audit = list_response.json()[0]['artifacts']['audit_artifacts']
+    assert list_audit == {
+        'available': True,
+        'ready_for_export': True,
+        'artifact_types': ['transcript', 'action_trace'],
+        'missing': [],
+        'evaluator_version': 'deterministic-agentic-v1',
+        'classification': 'pre-v2 archival',
+        'active_evaluator_input': False,
+    }
+
+    run_export = client.get(f"/api/product/runs/{saved['id']}/export", params={'user_id': 'demo-user'})
+    assert run_export.json()['artifacts']['audit_artifacts'] == list_audit
+
+    project_export = client.get('/api/product/projects/call-center/export', params={'user_id': 'demo-user'})
+    assert project_export.json()['runs'][0]['artifacts']['audit_artifacts'] == list_audit
+
+
 def test_saved_runs_preserve_evidence_citations_in_history_and_export():
     citations = [
         {'source': 'transcript', 'kind': 'required_action', 'line_start': 1, 'line_end': 1, 'text': 'Agent: verified identity.'},
