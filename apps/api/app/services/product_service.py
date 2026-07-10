@@ -1267,6 +1267,11 @@ def _load_saved_run_artifacts(saved_run: ProductSavedRun, *, report: dict[str, A
                 **_audit_artifact_v2_policy(evaluator_version),
             },
         }
+    elif 'evidence_audit_summary' in report:
+        artifacts = {
+            **artifacts,
+            'audit_artifacts': _audit_artifact_summary(report.get('evidence_audit_summary')),
+        }
     return artifacts
 
 
