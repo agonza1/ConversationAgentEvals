@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 COPY apps/api /workspace/apps/api
 COPY apps/pipecat /workspace/apps/pipecat
+COPY docs /workspace/docs
 COPY scripts /workspace/scripts
 RUN mkdir -p /workspace/storage
 

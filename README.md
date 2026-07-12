@@ -44,6 +44,10 @@ Expected success output:
 
 ASR source for this first run: the minimal local demo uses transcript/action/final-state evidence and does not require live microphone ASR. Live conversation demos use `rtc-asr` as the ASR provider contract; see [docs/environment.md](docs/environment.md#live-asr-and-voice-experiments) for the advanced env values.
 
+## Simple ASSERT Flow Demo
+
+For the shortest human-readable walkthrough of ASSERT in this repo, see [docs/assert-flow-demo.md](docs/assert-flow-demo.md). It follows one example in order: natural-language requirements -> behavior taxonomy -> generated scenario/test set -> target execution -> judged results. The same example is available as machine-readable JSON at [docs/examples/assert-flow-demo.json](docs/examples/assert-flow-demo.json).
+
 ## What this repo does
 
 - Wraps ASSERT so hosted users can create projects, suites, runs, reruns, comparisons, exports, and audit views.
