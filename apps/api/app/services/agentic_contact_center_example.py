@@ -99,12 +99,7 @@ def build_benchmark_run_request(
     user_id: str = 'acc-example-user',
     project_id: str = 'agentic-contact-center',
 ) -> BenchmarkRunRequest:
-    """Build the benchmark request shape for later scenario-catalog registration.
-
-    Phase 1 submits the canonical AssertRunCreateRequest because the cancellation-
-    rescue scenario is not yet registered in the built-in benchmark catalog. The
-    checked-in benchmark request makes that next integration step explicit.
-    """
+    """Build the native benchmark request for the registered cancellation scenario."""
 
     return BenchmarkRunRequest.model_validate(
         {
@@ -115,7 +110,7 @@ def build_benchmark_run_request(
             'action_trace': evidence['action_trace'],
             'final_state': evidence['final_state'],
             'assert_bundle': evidence,
-            'notes': 'ACC external-target Phase 1 example; register the scenario before benchmark endpoint submission.',
+            'notes': 'Optional ACC evidence evaluated by the native cancellation-rescue benchmark.',
             'metadata': {
                 'execution_mode': evidence['execution_mode'],
                 'adapter_version': evidence['adapter_version'],
@@ -125,8 +120,10 @@ def build_benchmark_run_request(
                     'required_actions': scenario.get('required_actions', []),
                     'forbidden_actions': scenario.get('forbidden_actions', []),
                     'expected_final_state': scenario.get('expected_final_state', {}),
+                    'deterministic_checks': scenario.get('deterministic_checks', []),
+                    'evidence_requirements': scenario.get('evidence_requirements', {}),
                 },
-                'benchmark_catalog_status': 'scenario_registration_pending',
+                'benchmark_catalog_status': 'registered_native',
             },
             'user_id': user_id,
             'project_id': project_id,
@@ -190,6 +187,8 @@ def build_assert_run_request(
                 'required_actions': scenario.get('required_actions', []),
                 'forbidden_actions': scenario.get('forbidden_actions', []),
                 'expected_final_state': scenario.get('expected_final_state', {}),
+                'deterministic_checks': scenario.get('deterministic_checks', []),
+                'evidence_requirements': scenario.get('evidence_requirements', {}),
             },
             'environment_labels': ['agentic-contact-center', evidence['execution_mode'], 'external-target-example'],
         },
@@ -198,7 +197,7 @@ def build_assert_run_request(
             'project_id': project_id,
             'project_run_label': run_label,
             'initiated_by': 'agentic-contact-center-example',
-            'notes': 'Phase 1 scripted ACC HTTP target example; realtime audio remains a later transport mode.',
+            'notes': 'Optional scripted ACC HTTP target example; realtime audio remains a later transport mode.',
             'labels': ['acc-example', 'assert-ingestion', evidence['execution_mode']],
             'retention_days': 90,
             'billing_tags': {},
