@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.services.agentic_contact_center_example import build_assert_run_request, normalize_acc_run
+from app.services.agentic_contact_center_example import (
+    build_assert_run_request,
+    build_benchmark_run_request,
+    normalize_acc_run,
+)
 
 
 def _scenario() -> dict:
@@ -109,6 +113,31 @@ def test_normalize_acc_run_preserves_call_evidence_and_limitations():
     assert normalized['latency_evidence']['over_budget'] == 1
     assert 'Full-duplex media and barge-in are not proven by this example.' in normalized['runtime_caveats']
     assert normalized['provenance']['source_repo'] == 'agonza1/agentic-contact-center'
+
+
+def test_build_benchmark_run_request_records_pending_catalog_registration():
+    scenario = _scenario()
+    normalized = normalize_acc_run(_acc_payload(), scenario=scenario)
+
+    request = build_benchmark_run_request(
+        normalized,
+        scenario=scenario,
+        user_id='alberto',
+        project_id='acc-cluecon',
+    )
+
+    assert request.suite_id == 'call-center-voice-ai'
+    assert request.scenario_id == 'cancellation-rescue'
+    assert request.transcript.startswith('Caller:')
+    assert request.conversation == normalized['conversation']
+    assert request.action_trace == normalized['action_trace']
+    assert request.final_state == normalized['final_state']
+    assert request.assert_bundle == normalized
+    assert request.metadata['execution_mode'] == 'acc_http_scripted_fixture'
+    assert request.metadata['benchmark_catalog_status'] == 'scenario_registration_pending'
+    assert request.metadata['scenario_contract']['required_actions'] == scenario['required_actions']
+    assert request.user_id == 'alberto'
+    assert request.project_id == 'acc-cluecon'
 
 
 def test_build_assert_run_request_uses_canonical_evidence_contract():
