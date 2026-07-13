@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from app.schemas.assert_v2 import AssertRunCreateRequest
+from app.schemas.assert_contracts import AssertRunCreateRequest
 from app.services.assert_sidecar import create_local_assert_sidecar_run, load_local_assert_sidecar_run
 
-router = APIRouter(prefix='/v2', tags=['assert-local-sidecar'])
+router = APIRouter(prefix='/api/assert', tags=['assert'])
 
 
 @router.post('/runs')

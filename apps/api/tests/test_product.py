@@ -1052,7 +1052,7 @@ def test_saved_runs_preserve_evidence_audit_summary_in_history_and_export():
         'action_trace_present': True,
         'final_state_present': True,
         'metadata_labels': ['agent_version', 'prompt_version'],
-        'evaluator_version': 'deterministic-agentic-v1',
+        'evaluator_version': 'assert-boundary',
         'export_readiness': {'ready': True, 'format': 'saved_run_json', 'missing': []},
     }
     report_contracts = {
@@ -1085,9 +1085,9 @@ def test_saved_runs_preserve_evidence_audit_summary_in_history_and_export():
         'ready_for_export': True,
         'artifact_types': ['transcript', 'action_trace', 'final_state'],
         'missing': [],
-        'evaluator_version': 'deterministic-agentic-v1',
-        'classification': 'pre-v2 archival',
-        'active_evaluator_input': False,
+        'evaluator_version': 'assert-boundary',
+        'classification': 'assert',
+        'active_evaluator_input': True,
     }
     assert list_response.json()[0]['artifacts']['contract_artifacts'] == {
         'available': True,
@@ -1105,10 +1105,10 @@ def test_saved_runs_preserve_evidence_audit_summary_in_history_and_export():
     }
 
 
-def test_saved_runs_apply_archival_audit_policy_to_existing_artifacts():
+def test_saved_runs_apply_assert_audit_policy_to_existing_artifacts():
     audit_summary = {
         'input_artifact_types': ['transcript'],
-        'evaluator_version': 'deterministic-agentic-v1',
+        'evaluator_version': 'assert-boundary',
         'export_readiness': {'ready': True, 'missing': []},
     }
     response = client.post(
@@ -1118,7 +1118,7 @@ def test_saved_runs_apply_archival_audit_policy_to_existing_artifacts():
             'project_id': 'call-center',
             'plan': 'starter',
             'report': {
-                'run_id': 'legacy-abc',
+                'run_id': 'assert-abc',
                 'overall_score': 88,
                 'evidence_audit_summary': audit_summary,
             },
@@ -1138,7 +1138,7 @@ def test_saved_runs_apply_archival_audit_policy_to_existing_artifacts():
                     'ready_for_export': True,
                     'artifact_types': ['transcript'],
                     'missing': [],
-                    'evaluator_version': 'deterministic-agentic-v1',
+                    'evaluator_version': 'assert-boundary',
                 }
             }
         )
@@ -1148,24 +1148,24 @@ def test_saved_runs_apply_archival_audit_policy_to_existing_artifacts():
 
     list_response = client.get('/api/product/runs', params={'user_id': 'demo-user', 'project_id': 'call-center'})
     list_audit = list_response.json()[0]['artifacts']['audit_artifacts']
-    assert list_audit['classification'] == 'pre-v2 archival'
-    assert list_audit['active_evaluator_input'] is False
+    assert list_audit['classification'] == 'assert'
+    assert list_audit['active_evaluator_input'] is True
 
     run_export = client.get(f"/api/product/runs/{saved['id']}/export", params={'user_id': 'demo-user'})
     run_audit = run_export.json()['artifacts']['audit_artifacts']
-    assert run_audit['classification'] == 'pre-v2 archival'
-    assert run_audit['active_evaluator_input'] is False
+    assert run_audit['classification'] == 'assert'
+    assert run_audit['active_evaluator_input'] is True
 
     project_export = client.get('/api/product/projects/call-center/export', params={'user_id': 'demo-user'})
     project_audit = project_export.json()['runs'][0]['artifacts']['audit_artifacts']
-    assert project_audit['classification'] == 'pre-v2 archival'
-    assert project_audit['active_evaluator_input'] is False
+    assert project_audit['classification'] == 'assert'
+    assert project_audit['active_evaluator_input'] is True
 
 
-def test_saved_runs_rebuild_missing_legacy_audit_artifacts_from_report():
+def test_saved_runs_rebuild_missing_audit_artifacts_from_report():
     audit_summary = {
         'input_artifact_types': ['transcript', 'action_trace'],
-        'evaluator_version': 'deterministic-agentic-v1',
+        'evaluator_version': 'assert-boundary',
         'export_readiness': {'ready': True, 'missing': []},
     }
     response = client.post(
@@ -1175,7 +1175,7 @@ def test_saved_runs_rebuild_missing_legacy_audit_artifacts_from_report():
             'project_id': 'call-center',
             'plan': 'starter',
             'report': {
-                'run_id': 'legacy-missing-audit',
+                'run_id': 'assert-missing-audit',
                 'overall_score': 91,
                 'evidence_audit_summary': audit_summary,
             },
@@ -1188,7 +1188,7 @@ def test_saved_runs_rebuild_missing_legacy_audit_artifacts_from_report():
     db = SessionLocal()
     try:
         saved_run = db.query(ProductSavedRun).filter(ProductSavedRun.id == saved['id']).one()
-        saved_run.artifact_json = json.dumps({'run_id': 'legacy-missing-audit', 'overall_score': 91})
+        saved_run.artifact_json = json.dumps({'run_id': 'assert-missing-audit', 'overall_score': 91})
         db.commit()
     finally:
         db.close()
@@ -1200,9 +1200,9 @@ def test_saved_runs_rebuild_missing_legacy_audit_artifacts_from_report():
         'ready_for_export': True,
         'artifact_types': ['transcript', 'action_trace'],
         'missing': [],
-        'evaluator_version': 'deterministic-agentic-v1',
-        'classification': 'pre-v2 archival',
-        'active_evaluator_input': False,
+        'evaluator_version': 'assert-boundary',
+        'classification': 'assert',
+        'active_evaluator_input': True,
     }
 
     run_export = client.get(f"/api/product/runs/{saved['id']}/export", params={'user_id': 'demo-user'})

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from app.schemas.assert_v2 import (
+from app.schemas.assert_contracts import (
     AuditArtifactView,
     AssertResultManifest,
     AssertRunCreateRequest,
@@ -15,7 +15,7 @@ from app.schemas.assert_v2 import (
 )
 
 
-ASSERT_V2_BOUNDARY_NAME = 'assert_v2_run_boundary'
+ASSERT_BOUNDARY_NAME = 'assert_run_boundary'
 
 
 def default_invocation_target(*, environment: str) -> dict[str, str | int]:
@@ -25,7 +25,7 @@ def default_invocation_target(*, environment: str) -> dict[str, str | int]:
         'environment': environment,
         'base_url': base_url,
         'package_name': 'assert',
-        'entrypoint': '/v2/runs',
+        'entrypoint': '/api/assert/runs',
         'timeout_seconds': 300,
     }
 
@@ -42,7 +42,7 @@ def queue_assert_run(request: AssertRunCreateRequest, *, platform_run_id: str, n
         platform_metadata=request.platform_metadata,
         artifact_manifest=_input_artifacts(request),
         summary={
-            'boundary': ASSERT_V2_BOUNDARY_NAME,
+            'boundary': ASSERT_BOUNDARY_NAME,
             'transport': request.runtime_config.invocation_target.transport,
             'execution_mode': request.runtime_config.execution_mode,
             'spec_id': request.spec_ref.spec_id,
@@ -108,7 +108,7 @@ def queue_assert_suite_run(
             for scenario in request.scenarios
         ],
         summary={
-            'boundary': ASSERT_V2_BOUNDARY_NAME,
+            'boundary': ASSERT_BOUNDARY_NAME,
             'transport': request.runtime_config.invocation_target.transport,
             'scenario_count': len(request.scenarios),
         },
@@ -126,22 +126,12 @@ def with_default_runtime_config(runtime_config: AssertRuntimeConfig | None, *, e
     )
 
 
-def recommended_v2_entrypoints() -> tuple[str, ...]:
+def recommended_entrypoints() -> tuple[str, ...]:
     return (
         'create_assert_run(spec_ref, evidence, runtime_config, platform_metadata)',
         'create_assert_suite_run(spec_ref, scenarios, runtime_config, platform_metadata)',
         'ingest_assert_result(platform_run_id, assert_run_id, result_manifest)',
     )
-
-
-def archival_pre_v2_data_policy() -> dict[str, str]:
-    return {
-        'classification': 'pre-v2 archival',
-        'active_evaluator_input': 'false',
-        'migration_policy': 'Historical records may be displayed or exported, but production run creation must use ASSERT v2 contracts.',
-    }
-
-
 def _input_artifacts(request: AssertRunCreateRequest) -> list[Any]:
     evidence = request.evidence
     artifacts = [

@@ -6,11 +6,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.schemas.assert_v2 import AssertFailureItem, AssertResultManifest, AssertRunCreateRequest, AssertVerdict, PlatformRunRecord
-from app.services.assert_v2_boundary import ingest_assert_run_result, queue_assert_run
+from app.schemas.assert_contracts import AssertFailureItem, AssertResultManifest, AssertRunCreateRequest, AssertVerdict, PlatformRunRecord
+from app.services.assert_boundary import ingest_assert_run_result, queue_assert_run
 
 
-SIDECAR_ADAPTER_VERSION = 'conversation-agent-evals-local-assert-sidecar-v1'
+SIDECAR_ADAPTER_VERSION = 'conversation-agent-evals-local-assert-sidecar'
 
 
 def create_local_assert_sidecar_run(request: AssertRunCreateRequest, *, artifact_root: Path | None = None) -> PlatformRunRecord:
@@ -27,7 +27,7 @@ def create_local_assert_sidecar_run(request: AssertRunCreateRequest, *, artifact
 
 
 def local_assert_sidecar_artifact_path(platform_run_id: str, *, artifact_root: Path | None = None) -> Path:
-    root = artifact_root or Path(__file__).resolve().parents[4] / 'artifacts' / 'assert-v2-sidecar'
+    root = artifact_root or Path(__file__).resolve().parents[4] / 'artifacts' / 'assert-sidecar'
     return root / f'{platform_run_id}.json'
 
 
@@ -57,7 +57,7 @@ def _result_manifest(*, request: AssertRunCreateRequest, platform_run_id: str) -
         for artifact in missing_artifacts
     ]
 
-    manifest_uri = f'local-artifact://assert-v2-sidecar/runs/{platform_run_id}/manifest.json'
+    manifest_uri = f'local-artifact://assert-sidecar/runs/{platform_run_id}/manifest.json'
     return AssertResultManifest(
         verdict=AssertVerdict(
             status=status,

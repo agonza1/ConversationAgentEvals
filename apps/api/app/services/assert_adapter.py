@@ -4,7 +4,7 @@ from copy import deepcopy
 from typing import Any
 
 
-ASSERT_ADAPTER_VERSION = 'assert_style_v1'
+ASSERT_ADAPTER_VERSION = 'assert-style'
 
 
 def normalize_assert_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:

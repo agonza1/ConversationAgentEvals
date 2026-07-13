@@ -1,3 +1,5 @@
+"""Platform contracts for the ASSERT service boundary."""
+
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -124,7 +126,7 @@ class AssertInvocationTarget(BaseModel):
     environment: Literal['local', 'production']
     base_url: str = Field(..., min_length=1)
     package_name: str = Field(default='assert')
-    entrypoint: str = Field(default='/v2/runs')
+    entrypoint: str = Field(default='/api/assert/runs')
     timeout_seconds: int = Field(default=300, ge=1)
 
 

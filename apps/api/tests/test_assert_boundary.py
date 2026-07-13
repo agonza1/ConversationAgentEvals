@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.config import local_assert_sidecar_enabled
 from app.main import app
-from app.schemas.assert_v2 import AssertResultManifest, AssertRunCreateRequest, AssertSuiteRunCreateRequest
+from app.schemas.assert_contracts import AssertResultManifest, AssertRunCreateRequest, AssertSuiteRunCreateRequest
 from app.services.assert_queue_lifecycle import (
     create_queue_state,
     enforce_cost_limit,
@@ -17,14 +17,13 @@ from app.services.assert_queue_lifecycle import (
     request_cancel,
     retry_from_failure,
 )
-from app.services.assert_v2_boundary import (
-    ASSERT_V2_BOUNDARY_NAME,
+from app.services.assert_boundary import (
+    ASSERT_BOUNDARY_NAME,
     default_invocation_target,
-    archival_pre_v2_data_policy,
     ingest_assert_run_result,
     queue_assert_run,
     queue_assert_suite_run,
-    recommended_v2_entrypoints,
+    recommended_entrypoints,
     with_default_runtime_config,
 )
 
@@ -70,7 +69,7 @@ def _run_request() -> AssertRunCreateRequest:
     )
 
 
-def test_assert_v2_run_requires_version_or_hash():
+def test_assert_run_requires_version_or_hash():
     with pytest.raises(ValueError, match='spec_version or spec_hash is required'):
         AssertRunCreateRequest.model_validate(
             {
@@ -101,7 +100,7 @@ def test_queue_assert_run_creates_single_boundary_record():
     assert record.platform_run_id == 'platform-run-1'
     assert record.status == 'queued'
     assert record.summary == {
-        'boundary': ASSERT_V2_BOUNDARY_NAME,
+        'boundary': ASSERT_BOUNDARY_NAME,
         'transport': 'http_sidecar',
         'execution_mode': 'async',
         'spec_id': 'telehealth-agent/medication-refill-routing',
@@ -231,17 +230,12 @@ def test_local_assert_sidecar_route_defaults_to_non_production_only(monkeypatch)
     assert local_assert_sidecar_enabled() is False
 
 
-def test_boundary_module_exposes_only_v2_entrypoints_and_archival_policy():
-    assert recommended_v2_entrypoints() == (
+def test_boundary_module_exposes_canonical_entrypoints():
+    assert recommended_entrypoints() == (
         'create_assert_run(spec_ref, evidence, runtime_config, platform_metadata)',
         'create_assert_suite_run(spec_ref, scenarios, runtime_config, platform_metadata)',
         'ingest_assert_result(platform_run_id, assert_run_id, result_manifest)',
     )
-    assert archival_pre_v2_data_policy() == {
-        'classification': 'pre-v2 archival',
-        'active_evaluator_input': 'false',
-        'migration_policy': 'Historical records may be displayed or exported, but production run creation must use ASSERT v2 contracts.',
-    }
 
 
 def test_assert_queue_lifecycle_tracks_successful_worker_run():
@@ -289,7 +283,7 @@ def test_assert_queue_lifecycle_supports_retry_cancel_and_cost_limits():
     assert canceled['transitions'][-1]['reason'] == 'user canceled run'
 
 
-def test_local_v2_runs_sidecar_ingests_acc_assert_request(tmp_path, monkeypatch):
+def test_local_assert_runs_sidecar_ingests_acc_assert_request(tmp_path, monkeypatch):
     monkeypatch.setattr(
         'app.services.assert_sidecar.local_assert_sidecar_artifact_path',
         lambda platform_run_id, artifact_root=None: tmp_path / f'{platform_run_id}.json',
@@ -315,7 +309,7 @@ def test_local_v2_runs_sidecar_ingests_acc_assert_request(tmp_path, monkeypatch)
         }
     )
 
-    response = client.post('/v2/runs', json=request)
+    response = client.post('/api/assert/runs', json=request)
 
     assert response.status_code == 200, response.text
     payload = response.json()
@@ -323,7 +317,7 @@ def test_local_v2_runs_sidecar_ingests_acc_assert_request(tmp_path, monkeypatch)
     assert payload['assert_run_id'] == f"local-assert-{payload['platform_run_id']}"
     assert payload['spec_ref']['spec_id'] == 'agentic-contact-center/cancellation-rescue'
     assert payload['platform_metadata']['project_id'] == 'agentic-contact-center'
-    assert payload['runtime_config']['invocation_target']['entrypoint'] == '/v2/runs'
+    assert payload['runtime_config']['invocation_target']['entrypoint'] == '/api/assert/runs'
     assert payload['verdict'] == {
         'status': 'pass',
         'score': 100.0,
@@ -335,14 +329,14 @@ def test_local_v2_runs_sidecar_ingests_acc_assert_request(tmp_path, monkeypatch)
     saved_path = tmp_path / f"{payload['platform_run_id']}.json"
     assert saved_path.exists()
 
-    detail = client.get(f"/v2/runs/{payload['platform_run_id']}")
+    detail = client.get(f"/api/assert/runs/{payload['platform_run_id']}")
     assert detail.status_code == 200, detail.text
     assert detail.json()['platform_run_id'] == payload['platform_run_id']
 
 
-def test_local_v2_runs_sidecar_rejects_legacy_payload():
+def test_local_assert_runs_sidecar_rejects_invalid_payload():
     client = TestClient(app)
 
-    response = client.post('/v2/runs', json={'conversation': 'Agent: hello'})
+    response = client.post('/api/assert/runs', json={'conversation': 'Agent: hello'})
 
     assert response.status_code == 422

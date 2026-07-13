@@ -1264,7 +1264,7 @@ def _load_saved_run_artifacts(saved_run: ProductSavedRun, *, report: dict[str, A
             **artifacts,
             'audit_artifacts': {
                 **audit_artifacts,
-                **_audit_artifact_v2_policy(evaluator_version),
+                **_audit_artifact_policy(evaluator_version),
             },
         }
     elif 'evidence_audit_summary' in report:
@@ -1312,14 +1312,14 @@ def _audit_artifact_summary(evidence_audit_summary: Any) -> dict[str, Any]:
         'artifact_types': artifact_types if isinstance(artifact_types, list) else [],
         'missing': missing if isinstance(missing, list) else [],
         'evaluator_version': evaluator_version,
-        **_audit_artifact_v2_policy(evaluator_version),
+        **_audit_artifact_policy(evaluator_version),
     }
 
 
-def _audit_artifact_v2_policy(evaluator_version: Any) -> dict[str, Any]:
+def _audit_artifact_policy(evaluator_version: Any) -> dict[str, Any]:
     if isinstance(evaluator_version, str) and evaluator_version.startswith('assert-'):
-        return {'classification': 'assert-v2', 'active_evaluator_input': True}
-    return {'classification': 'pre-v2 archival', 'active_evaluator_input': False}
+        return {'classification': 'assert', 'active_evaluator_input': True}
+    return {'classification': 'unsupported', 'active_evaluator_input': False}
 
 
 def _contract_artifact_summary(report: dict[str, Any]) -> dict[str, Any]:
