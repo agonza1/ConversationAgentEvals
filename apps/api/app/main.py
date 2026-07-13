@@ -14,6 +14,7 @@ from app.routes.decks import router as decks_router
 from app.routes.product import router as product_router
 from app.routes.realtime import router as realtime_router
 from app.routes.sessions import router as sessions_router
+from app.services.benchmark_catalog_extensions import register_builtin_benchmark_extensions
 
 Base.metadata.create_all(bind=engine)
 
@@ -88,6 +89,7 @@ _ensure_session_columns()
 _ensure_deck_columns()
 _ensure_product_project_columns()
 _ensure_product_project_indexes()
+register_builtin_benchmark_extensions()
 
 app = FastAPI(title='ConversationAgentEvals API', version='0.1.0')
 app.add_middleware(
