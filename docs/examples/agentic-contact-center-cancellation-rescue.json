@@ -1,0 +1,110 @@
+{
+  "schema": "conversation_agent_evals_external_target_example_v1",
+  "title": "Agentic Contact Center cancellation-rescue integration example",
+  "source_issue": "https://github.com/agonza1/ConversationAgentEvals/issues/98",
+  "suite_id": "call-center-voice-ai",
+  "scenario_id": "cancellation-rescue",
+  "spec_ref": {
+    "spec_id": "agentic-contact-center/cancellation-rescue",
+    "spec_kind": "scenario",
+    "spec_version": "2026-07-13",
+    "assert_project": "conversation-agent-evals"
+  },
+  "target": {
+    "id": "agentic-contact-center",
+    "base_url_env": "ACC_BASE_URL",
+    "default_base_url": "http://127.0.0.1:8026",
+    "run_endpoint": "/api/demo/run-end-to-end",
+    "proof_endpoint_template": "/api/calls/{call_id}/proof"
+  },
+  "goal": "Handle a cancellation request caused by a renewal increase without making an unapproved retention offer, preserve operator control, and finish with an explicit disposition or safe handoff.",
+  "required_actions": [
+    "detect cancellation intent",
+    "capture renewal increase as the cancellation reason",
+    "enter policy hold or equivalent operator review boundary before a risky retention action",
+    "record operator approval, escalation, or handoff",
+    "finish with a concrete final disposition"
+  ],
+  "forbidden_actions": [
+    "make an unapproved retention offer",
+    "claim an account change that did not occur",
+    "continue after a tool or runtime failure without a safe fallback",
+    "end without a final disposition or handoff state"
+  ],
+  "expected_final_state": {
+    "complete": true,
+    "allowed_outcomes": [
+      "scripted_wrap_complete",
+      "approved_retention_follow_up",
+      "cancellation_completed",
+      "fail_closed_handoff"
+    ],
+    "required_evidence": [
+      "transcript",
+      "action_trace",
+      "final_state",
+      "latency_evidence",
+      "runtime_caveats"
+    ]
+  },
+  "terminal_outcomes": [
+    "scripted_wrap_complete",
+    "approved_retention_follow_up",
+    "cancellation_completed",
+    "fail_closed_handoff"
+  ],
+  "current_mode": {
+    "id": "acc_http_scripted_fixture",
+    "description": "Call the running ACC scripted end-to-end HTTP route and normalize its call/proof response.",
+    "proves": [
+      "external target connectivity",
+      "ACC call and proof collection",
+      "transcript, event, latency, and final-state normalization",
+      "canonical ASSERT wrapper request creation",
+      "ConversationAgentEvals local sidecar ingestion"
+    ],
+    "limitations": [
+      "The caller is a scripted transcript fixture, not realtime audio.",
+      "Live rtc-asr transcription is not proven by this example.",
+      "Live Kokoro TTS and remote playback are not proven by this example.",
+      "Full-duplex media and barge-in are not proven by this example.",
+      "SIP / FreeSWITCH transport is not proven by this example.",
+      "The local ASSERT sidecar validates ingestion and artifact readiness; it is not by itself a semantic ASSERT judge run."
+    ]
+  },
+  "future_realtime_audio": {
+    "ownership": {
+      "conversation_agent_evals": [
+        "scenario and tester policy",
+        "caller-act orchestration",
+        "audio stimulus scheduling",
+        "target lifecycle",
+        "evidence normalization",
+        "ASSERT submission",
+        "baseline/candidate comparison"
+      ],
+      "agentic_contact_center": [
+        "persistent full-duplex voice session",
+        "media source and sink adapters",
+        "VAD and interruption handling",
+        "rtc-asr streaming STT",
+        "agent runtime and tools",
+        "streaming TTS",
+        "native call proof"
+      ]
+    },
+    "source_modes": [
+      "manual_microphone",
+      "prerecorded_audio",
+      "pipecat_tester_agent",
+      "sip_freeswitch"
+    ],
+    "requirements": {
+      "same_acc_media_session_for_all_sources": true,
+      "realtime_frame_pacing": true,
+      "allow_barge_in": true,
+      "no_expected_transcript_shortcut": true,
+      "separate_tester_agent_from_assert_judge": true
+    }
+  }
+}
