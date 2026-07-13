@@ -48,6 +48,8 @@ Open the printed web URL and visit `/benchmarks`. The basic demo uses transcript
 
 For the shortest end-to-end walkthrough, see [docs/assert-flow-demo.md](docs/assert-flow-demo.md) or its [machine-readable example](docs/examples/assert-flow-demo.json).
 
+For an external-system example, see [docs/agentic-contact-center-example.md](docs/agentic-contact-center-example.md). It runs a scripted HTTP proof against a local Agentic Contact Center target, normalizes the evidence, and builds the canonical ASSERT wrapper request while keeping realtime-audio limitations explicit.
+
 ## Architecture
 
 ```mermaid
