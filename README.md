@@ -58,6 +58,24 @@ Standalone offline example after `npm run setup`:
 npm run example:acc:fixture
 ```
 
+Evaluate that offline fixture through a separately running local ConversationAgentEvals API:
+
+```bash
+npm run example:acc:fixture:run
+```
+
+The blessed voice-lab proof is also standalone and uses checked-in target-shaped fixtures:
+
+```bash
+npm run test:voice-lab-proof
+```
+
+The former sibling-repository ACC execution is retained only as an explicit integration command:
+
+```bash
+npm run test:voice-lab-proof:acc
+```
+
 ## Architecture
 
 ```mermaid
@@ -116,6 +134,7 @@ npm run lint:web
 npm run build:web
 npm run test:api
 npm run test:benchmark-smoke
+npm run test:voice-lab-proof
 apps/api/.venv/bin/python -m pytest apps/api/tests/test_assert_boundary.py apps/api/tests/test_benchmarks.py -q
 ```
 
@@ -125,8 +144,8 @@ apps/api/.venv/bin/python -m pytest apps/api/tests/test_assert_boundary.py apps/
 
 - Call-center voice AI: appointments, cancellations, transfers, interruptions, escalation.
 - Telehealth intake: patient routing, privacy boundaries, medication, and emergency handling.
-- Online teaching: adaptive tutoring, quiz flow, confusion handling, and grading boundaries.
-- Fintech support: identity checks, disputes, card freezes, fraud escalation, and compliance.
+- Online teaching: adaptive tutoring, quiz flow, confusion handling, grading boundaries.
+- Fintech support: identity checks, disputes, card freezes, fraud escalation, compliance.
 
 ## Scope
 
