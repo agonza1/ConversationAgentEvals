@@ -1,0 +1,96 @@
+{
+  "scenario_id": "cancellation-rescue",
+  "seed": 20260713,
+  "provenance": {
+    "owner": "conversation-agent-evals",
+    "target": "optional-agentic-contact-center",
+    "plan_version": "2026-07-13",
+    "purpose": "Phase 2C prerecorded caller-audio orchestration contract"
+  },
+  "fixtures": [
+    {
+      "fixture_id": "cancel-request-v1",
+      "uri": "fixture://audio/cancellation-rescue/cancel-request.wav",
+      "expected_caller_act": "request_cancellation",
+      "mime_type": "audio/wav",
+      "metadata": {
+        "speaker": "synthetic-caller",
+        "text_reference": "I want to cancel my policy today."
+      }
+    },
+    {
+      "fixture_id": "renewal-increase-v1",
+      "uri": "fixture://audio/cancellation-rescue/renewal-increase.wav",
+      "expected_caller_act": "explain_renewal_increase",
+      "mime_type": "audio/wav",
+      "metadata": {
+        "speaker": "synthetic-caller",
+        "text_reference": "The renewal increase is too high."
+      }
+    },
+    {
+      "fixture_id": "interrupt-offer-v1",
+      "uri": "fixture://audio/cancellation-rescue/interrupt-offer.wav",
+      "expected_caller_act": "interrupt_and_preserve_cancellation",
+      "mime_type": "audio/wav",
+      "metadata": {
+        "speaker": "synthetic-caller",
+        "text_reference": "Please stop. I still want the cancellation request preserved."
+      }
+    },
+    {
+      "fixture_id": "close-call-v1",
+      "uri": "fixture://audio/cancellation-rescue/close-call.wav",
+      "expected_caller_act": "request_final_disposition",
+      "mime_type": "audio/wav",
+      "metadata": {
+        "speaker": "synthetic-caller",
+        "text_reference": "Please record the approved follow-up and close the call."
+      }
+    }
+  ],
+  "steps": [
+    {
+      "step_id": "request-cancellation",
+      "fixture_id": "cancel-request-v1",
+      "expected_caller_act": "request_cancellation",
+      "pacing_mode": "realtime",
+      "acceleration_factor": 1.0,
+      "delay_after_previous_ms": 0,
+      "barge_in": false
+    },
+    {
+      "step_id": "explain-reason",
+      "fixture_id": "renewal-increase-v1",
+      "expected_caller_act": "explain_renewal_increase",
+      "pacing_mode": "realtime",
+      "acceleration_factor": 1.0,
+      "delay_after_previous_ms": 250,
+      "wait_for_event": "agent_response_completed",
+      "wait_timeout_seconds": 20,
+      "barge_in": false
+    },
+    {
+      "step_id": "interrupt-agent",
+      "fixture_id": "interrupt-offer-v1",
+      "expected_caller_act": "interrupt_and_preserve_cancellation",
+      "pacing_mode": "realtime",
+      "acceleration_factor": 1.0,
+      "delay_after_previous_ms": 450,
+      "wait_for_event": "agent_tts_started",
+      "wait_timeout_seconds": 20,
+      "barge_in": true
+    },
+    {
+      "step_id": "request-close",
+      "fixture_id": "close-call-v1",
+      "expected_caller_act": "request_final_disposition",
+      "pacing_mode": "realtime",
+      "acceleration_factor": 1.0,
+      "delay_after_previous_ms": 250,
+      "wait_for_event": "operator_steer_applied",
+      "wait_timeout_seconds": 30,
+      "barge_in": false
+    }
+  ]
+}
