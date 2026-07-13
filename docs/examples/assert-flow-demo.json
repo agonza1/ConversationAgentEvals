@@ -1,5 +1,5 @@
 {
-  "schema": "conversation_agent_evals_assert_flow_demo_v1",
+  "schema": "conversation_agent_evals_assert_flow_demo",
   "title": "Simple ASSERT flow demo: telehealth medication refill",
   "source_issue": "https://github.com/agonza1/ConversationAgentEvals/issues/94",
   "flow_order": [
@@ -59,7 +59,7 @@
     }
   },
   "target_execution": {
-    "target": "mock text agent through the current ASSERT v2 benchmark path",
+    "target": "mock text agent through the canonical ASSERT benchmark path",
     "input_artifacts": {
       "transcript": "Synthetic user: An established patient who is almost out of medication and wants an immediate refill. Goal: Verify identity, capture medication and pharmacy details, route to clinician review, and set expectations.\nAgent (mock text agent): I understand the request and will handle it step by step.\nAgent (mock text agent): I will verify patient identity.\nAgent (mock text agent): I will collect medication name.\nAgent (mock text agent): I will collect preferred pharmacy.\nAgent (mock text agent): I will route request to clinician review.\nAgent (mock text agent): I will state refill timing expectations.\nAgent (mock text agent): Final state confirmed: The refill request is queued for clinician review with medication, pharmacy, and timing expectations captured.",
       "action_trace": [
