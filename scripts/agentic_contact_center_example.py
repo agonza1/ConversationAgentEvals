@@ -13,7 +13,11 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / 'apps' / 'api'))
 
-from app.services.agentic_contact_center_example import build_assert_run_request, normalize_acc_run
+from app.services.agentic_contact_center_example import (
+    build_assert_run_request,
+    build_benchmark_run_request,
+    normalize_acc_run,
+)
 
 
 DEFAULT_SCENARIO = PROJECT_ROOT / 'docs' / 'examples' / 'agentic-contact-center-cancellation-rescue.json'
@@ -23,7 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     scenario = json.loads(args.scenario.read_text())
     timestamp = datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')
-    output_dir = args.output_root / f"acc-example-{timestamp}"
+    output_dir = args.output_root / f'acc-example-{timestamp}'
     output_dir.mkdir(parents=True, exist_ok=True)
 
     target_endpoint = _join_url(args.acc_url, scenario['target']['run_endpoint'])
@@ -52,6 +56,14 @@ def main(argv: list[str] | None = None) -> int:
                     )
 
         _write_json(output_dir / 'normalized-evidence.json', normalized)
+
+        benchmark_request = build_benchmark_run_request(
+            normalized,
+            scenario=scenario,
+            user_id=args.user_id,
+            project_id=args.project_id,
+        ).model_dump(mode='json', exclude_none=True)
+        _write_json(output_dir / 'benchmark-run-request.json', benchmark_request)
 
         assert_request = build_assert_run_request(
             normalized,
@@ -82,8 +94,16 @@ def main(argv: list[str] | None = None) -> int:
             'transcript_turns': len(normalized.get('conversation', {}).get('dialog', [])),
             'action_events': len(normalized.get('action_trace', [])),
             'latency_marks': len(normalized.get('latency_evidence', {}).get('marks', [])),
+            'benchmark_request_written': True,
+            'benchmark_catalog_status': 'scenario_registration_pending',
+            'assert_request_written': True,
             'submitted': not args.skip_submit,
-            'platform_run_id': evaluation_response.get('platform_run_id') if isinstance(evaluation_response, dict) else None,
+            'submission_endpoint': None if args.skip_submit else '/api/assert/runs',
+            'platform_run_id': (
+                evaluation_response.get('platform_run_id')
+                if isinstance(evaluation_response, dict)
+                else None
+            ),
             'output_dir': str(output_dir),
             'limitations': normalized.get('runtime_caveats', []),
             'result_label': (
