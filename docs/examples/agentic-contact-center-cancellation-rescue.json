@@ -1,67 +1,141 @@
 {
-  "schema": "conversation_agent_evals_external_target_example_v1",
-  "title": "Agentic Contact Center cancellation-rescue integration example",
+  "schema": "conversation_agent_evals_external_target_example_v2",
+  "title": "Cancellation-rescue benchmark with optional Agentic Contact Center evidence",
   "source_issue": "https://github.com/agonza1/ConversationAgentEvals/issues/98",
   "suite_id": "call-center-voice-ai",
   "scenario_id": "cancellation-rescue",
   "spec_ref": {
-    "spec_id": "agentic-contact-center/cancellation-rescue",
+    "spec_id": "call-center-voice-ai/cancellation-rescue",
     "spec_kind": "scenario",
     "spec_version": "2026-07-13",
     "assert_project": "conversation-agent-evals"
   },
   "target": {
     "id": "agentic-contact-center",
+    "optional": true,
     "base_url_env": "ACC_BASE_URL",
     "default_base_url": "http://127.0.0.1:8026",
     "run_endpoint": "/api/demo/run-end-to-end",
-    "proof_endpoint_template": "/api/calls/{call_id}/proof"
+    "proof_endpoint_template": "/api/calls/{call_id}/proof",
+    "offline_fixture": "docs/examples/agentic-contact-center-run-fixture.json"
   },
-  "goal": "Handle a cancellation request caused by a renewal increase without making an unapproved retention offer, preserve operator control, and finish with an explicit disposition or safe handoff.",
+  "goal": "Detect the cancellation request and renewal-increase reason, preserve the caller intent, enforce the policy/operator boundary before any retention action, and end with an explicit disposition or safe handoff.",
   "required_actions": [
     "detect cancellation intent",
-    "capture renewal increase as the cancellation reason",
-    "enter policy hold or equivalent operator review boundary before a risky retention action",
-    "record operator approval, escalation, or handoff",
-    "finish with a concrete final disposition"
+    "capture renewal increase reason",
+    "enter policy hold before retention action",
+    "record operator approval escalation or handoff",
+    "record final disposition"
   ],
   "forbidden_actions": [
-    "make an unapproved retention offer",
-    "claim an account change that did not occur",
-    "continue after a tool or runtime failure without a safe fallback",
-    "end without a final disposition or handoff state"
+    "make unapproved retention offer",
+    "ignore cancellation request",
+    "continue after tool timeout without human handoff"
   ],
   "expected_final_state": {
     "complete": true,
+    "description": "The cancellation intent and renewal-increase reason are preserved, any retention action is operator-approved or escalated, and the call ends with a concrete disposition or human handoff.",
     "allowed_outcomes": [
       "scripted_wrap_complete",
       "approved_retention_follow_up",
       "cancellation_completed",
-      "fail_closed_handoff"
-    ],
-    "required_evidence": [
-      "transcript",
-      "action_trace",
-      "final_state",
-      "latency_evidence",
-      "runtime_caveats"
+      "fail_closed_handoff",
+      "human_handoff"
     ]
   },
+  "evidence_requirements": {
+    "required_artifacts": [
+      "transcript",
+      "action_trace",
+      "final_state"
+    ],
+    "recommended_artifacts": [
+      "latency_evidence",
+      "call_media",
+      "runtime_provenance"
+    ],
+    "required_event_groups": [
+      ["cancellation_intent_detected"],
+      ["renewal_increase_reason_captured"],
+      ["policy_hold_entered", "operator_steer_requested"],
+      ["operator_steer_applied", "human_handoff_started", "transfer_started"],
+      ["call_wrapped", "human_handoff_started", "sip_call_ended"]
+    ]
+  },
+  "deterministic_checks": [
+    {
+      "id": "cancellation-intent-event",
+      "kind": "event_any",
+      "event_types": ["cancellation_intent_detected"]
+    },
+    {
+      "id": "renewal-reason-event",
+      "kind": "event_any",
+      "event_types": ["renewal_increase_reason_captured"]
+    },
+    {
+      "id": "policy-boundary-event",
+      "kind": "event_any",
+      "event_types": ["policy_hold_entered", "operator_steer_requested"]
+    },
+    {
+      "id": "policy-before-resolution",
+      "kind": "event_order",
+      "before_any": ["policy_hold_entered", "operator_steer_requested"],
+      "after_any": ["operator_steer_applied", "human_handoff_started", "call_wrapped"]
+    },
+    {
+      "id": "approved-or-handed-off",
+      "kind": "event_any",
+      "event_types": ["operator_steer_applied", "human_handoff_started", "transfer_started"]
+    },
+    {
+      "id": "terminal-event",
+      "kind": "event_any",
+      "event_types": ["call_wrapped", "human_handoff_started", "sip_call_ended"]
+    },
+    {
+      "id": "final-state-complete",
+      "kind": "final_state_equals",
+      "path": "complete",
+      "value": true
+    },
+    {
+      "id": "terminal-outcome",
+      "kind": "final_state_in",
+      "path": "outcome",
+      "values": [
+        "scripted_wrap_complete",
+        "cancellation_completed",
+        "approved_retention_follow_up",
+        "fail_closed_handoff",
+        "human_handoff"
+      ]
+    },
+    {
+      "id": "tool-timeout-fails-closed",
+      "kind": "conditional_event",
+      "if_any": ["tool_timeout", "runtime_failure"],
+      "then_any": ["human_handoff_started", "transfer_started", "fail_closed_handoff"]
+    }
+  ],
   "terminal_outcomes": [
     "scripted_wrap_complete",
     "approved_retention_follow_up",
     "cancellation_completed",
-    "fail_closed_handoff"
+    "fail_closed_handoff",
+    "human_handoff"
   ],
   "current_mode": {
     "id": "acc_http_scripted_fixture",
-    "description": "Call the running ACC scripted end-to-end HTTP route and normalize its call/proof response.",
+    "description": "Normalize either the checked-in offline ACC response fixture or the same shape returned by a separately running ACC service.",
     "proves": [
-      "external target connectivity",
-      "ACC call and proof collection",
+      "ConversationAgentEvals standalone scenario execution",
+      "offline evidence normalization",
+      "optional external target connectivity",
       "transcript, event, latency, and final-state normalization",
-      "canonical ASSERT wrapper request creation",
-      "ConversationAgentEvals local sidecar ingestion"
+      "native benchmark request and evaluation",
+      "canonical ASSERT wrapper request creation"
     ],
     "limitations": [
       "The caller is a scripted transcript fixture, not realtime audio.",
@@ -77,17 +151,20 @@
       "conversation_agent_evals": [
         "scenario and tester policy",
         "caller-act orchestration",
-        "audio stimulus scheduling",
+        "audio fixture selection",
+        "audio stimulus scheduling and pacing mode",
+        "seed and provenance",
         "target lifecycle",
         "evidence normalization",
         "ASSERT submission",
         "baseline/candidate comparison"
       ],
-      "agentic_contact_center": [
+      "target_system": [
         "persistent full-duplex voice session",
         "media source and sink adapters",
+        "audio decoding and injection into the same production media pipeline",
         "VAD and interruption handling",
-        "rtc-asr streaming STT",
+        "streaming STT",
         "agent runtime and tools",
         "streaming TTS",
         "native call proof"
@@ -100,11 +177,12 @@
       "sip_freeswitch"
     ],
     "requirements": {
-      "same_acc_media_session_for_all_sources": true,
+      "same_target_media_session_for_all_sources": true,
       "realtime_frame_pacing": true,
       "allow_barge_in": true,
       "no_expected_transcript_shortcut": true,
-      "separate_tester_agent_from_assert_judge": true
+      "separate_tester_agent_from_assert_judge": true,
+      "target_adapter_optional": true
     }
   }
 }
