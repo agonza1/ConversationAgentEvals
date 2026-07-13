@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.schemas.assert_contracts import AssertRunCreateRequest
+from app.schemas.benchmarks import BenchmarkRunRequest
 
 
 EXAMPLE_ADAPTER_VERSION = 'conversation-agent-evals-acc-http-example-v1'
@@ -89,6 +90,48 @@ def normalize_acc_run(payload: dict[str, Any], *, scenario: dict[str, Any]) -> d
             'execution_mode': scenario.get('current_mode', {}).get('id', 'acc_http_scripted_fixture'),
         },
     }
+
+
+def build_benchmark_run_request(
+    evidence: dict[str, Any],
+    *,
+    scenario: dict[str, Any],
+    user_id: str = 'acc-example-user',
+    project_id: str = 'agentic-contact-center',
+) -> BenchmarkRunRequest:
+    """Build the benchmark request shape for later scenario-catalog registration.
+
+    Phase 1 submits the canonical AssertRunCreateRequest because the cancellation-
+    rescue scenario is not yet registered in the built-in benchmark catalog. The
+    checked-in benchmark request makes that next integration step explicit.
+    """
+
+    return BenchmarkRunRequest.model_validate(
+        {
+            'suite_id': scenario['suite_id'],
+            'scenario_id': scenario['scenario_id'],
+            'transcript': evidence['transcript'],
+            'conversation': evidence['conversation'],
+            'action_trace': evidence['action_trace'],
+            'final_state': evidence['final_state'],
+            'assert_bundle': evidence,
+            'notes': 'ACC external-target Phase 1 example; register the scenario before benchmark endpoint submission.',
+            'metadata': {
+                'execution_mode': evidence['execution_mode'],
+                'adapter_version': evidence['adapter_version'],
+                'runtime_caveats': evidence['runtime_caveats'],
+                'provenance': evidence['provenance'],
+                'scenario_contract': {
+                    'required_actions': scenario.get('required_actions', []),
+                    'forbidden_actions': scenario.get('forbidden_actions', []),
+                    'expected_final_state': scenario.get('expected_final_state', {}),
+                },
+                'benchmark_catalog_status': 'scenario_registration_pending',
+            },
+            'user_id': user_id,
+            'project_id': project_id,
+        }
+    )
 
 
 def build_assert_run_request(
