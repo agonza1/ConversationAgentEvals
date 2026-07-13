@@ -96,16 +96,27 @@ def main(argv: list[str] | None = None) -> int:
         ).model_dump(mode='json', exclude_none=True)
         _write_json(output_dir / 'assert-run-request.json', assert_request)
 
-        evaluation_response = None
+        benchmark_response = None
+        assert_response = None
         if not args.skip_submit:
-            evaluation_endpoint = _join_url(args.conversation_agent_evals_url, '/api/assert/runs')
-            evaluation_response = _json_request(
+            benchmark_endpoint = _join_url(args.conversation_agent_evals_url, '/api/benchmarks/run')
+            benchmark_response = _json_request(
                 'POST',
-                evaluation_endpoint,
-                assert_request,
+                benchmark_endpoint,
+                benchmark_request,
                 timeout=args.timeout,
             )
-            _write_json(output_dir / 'assert-ingestion-response.json', evaluation_response)
+            _write_json(output_dir / 'benchmark-evaluation-response.json', benchmark_response)
+
+            if args.also_submit_assert_wrapper:
+                assert_endpoint = _join_url(args.conversation_agent_evals_url, '/api/assert/runs')
+                assert_response = _json_request(
+                    'POST',
+                    assert_endpoint,
+                    assert_request,
+                    timeout=args.timeout,
+                )
+                _write_json(output_dir / 'assert-ingestion-response.json', assert_response)
 
         summary = {
             'ok': True,
@@ -118,13 +129,17 @@ def main(argv: list[str] | None = None) -> int:
             'transcript_turns': len(normalized.get('conversation', {}).get('dialog', [])),
             'action_events': len(normalized.get('action_trace', [])),
             'latency_marks': len(normalized.get('latency_evidence', {}).get('marks', [])),
-            'submitted': not args.skip_submit,
-            'platform_run_id': evaluation_response.get('platform_run_id') if isinstance(evaluation_response, dict) else None,
+            'submitted_to_benchmark': benchmark_response is not None,
+            'submitted_to_assert_wrapper': assert_response is not None,
+            'benchmark_run_id': benchmark_response.get('run_id') if isinstance(benchmark_response, dict) else None,
+            'benchmark_verdict': benchmark_response.get('verdict') if isinstance(benchmark_response, dict) else None,
+            'benchmark_score': benchmark_response.get('overall_score') if isinstance(benchmark_response, dict) else None,
+            'assert_platform_run_id': assert_response.get('platform_run_id') if isinstance(assert_response, dict) else None,
             'output_dir': str(output_dir),
             'limitations': normalized.get('runtime_caveats', []),
             'result_label': (
-                'assert_sidecar_ingestion_validation'
-                if evaluation_response is not None
+                'benchmark_evaluation'
+                if benchmark_response is not None
                 else 'target_evidence_collection_only'
             ),
         }
@@ -170,7 +185,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         '--conversation-agent-evals-url',
         default=os.getenv('CONVERSATION_AGENT_EVALS_BASE_URL', 'http://127.0.0.1:8025'),
-        help='Running ConversationAgentEvals API base URL when submitting the wrapper request.',
+        help='Running ConversationAgentEvals API base URL when submitting the benchmark or ASSERT request.',
     )
     parser.add_argument(
         '--assert-sidecar-url',
@@ -191,6 +206,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         action='store_true',
         help='Normalize evidence and write requests without calling the ConversationAgentEvals API.',
     )
+    parser.add_argument(
+        '--also-submit-assert-wrapper',
+        action='store_true',
+        help='After the benchmark run, also submit the canonical wrapper request to /api/assert/runs.',
+    )
     return parser.parse_args(argv)
 
 
@@ -209,7 +229,7 @@ def _json_request(
         headers={
             'accept': 'application/json',
             'content-type': 'application/json',
-            'user-agent': 'conversation-agent-evals-acc-example/1',
+            'user-agent': 'conversation-agent-evals-acc-example/2',
         },
     )
     try:
