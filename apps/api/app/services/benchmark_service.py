@@ -10,14 +10,14 @@ from typing import Any
 from app.services.assert_adapter import normalize_assert_payload
 from app.services.assert_artifact_store import persist_assert_run_artifacts
 from app.services.assert_trace import FAILURE_VALUES, parse_action_trace
-from app.schemas.assert_v2 import AssertResultManifest, AssertRunCreateRequest
-from app.services.assert_v2_boundary import ingest_assert_run_result, queue_assert_run, with_default_runtime_config
+from app.schemas.assert_contracts import AssertResultManifest, AssertRunCreateRequest
+from app.services.assert_boundary import ingest_assert_run_result, queue_assert_run, with_default_runtime_config
 
 BenchmarkScenario = dict[str, Any]
 BenchmarkSuite = dict[str, Any]
-ASSERT_EVALUATOR_VERSION = 'assert-v2-boundary-v1'
+ASSERT_EVALUATOR_VERSION = 'assert-boundary'
 ASSERT_SPEC_VERSION = '2026-06-18'
-ASSERT_ADAPTER_VERSION = 'conversation-agent-evals-assert-v2-adapter-v1'
+ASSERT_ADAPTER_VERSION = 'conversation-agent-evals-assert-adapter'
 
 
 _SUITES: tuple[BenchmarkSuite, ...] = (
@@ -472,7 +472,7 @@ def _run_lifecycle(
     transitions = [
         {'from': None, 'to': 'queued', 'at': run_started_at, 'reason': 'run accepted'},
         {'from': 'queued', 'to': 'running', 'at': run_started_at, 'reason': 'evidence normalization started'},
-        {'from': 'running', 'to': 'evaluating', 'at': run_started_at, 'reason': 'ASSERT v2 boundary execution started'},
+        {'from': 'running', 'to': 'evaluating', 'at': run_started_at, 'reason': 'ASSERT boundary execution started'},
         {'from': 'evaluating', 'to': terminal_status, 'at': evaluated_at, 'reason': reason},
     ]
 
@@ -666,7 +666,7 @@ def _assert_run_request(
                 'resume_parent_run_id': _first_string(payload, 'resume_from_run_id', 'resumeFromRunId'),
                 'initiated_by': 'api',
                 'notes': run_metadata.get('notes'),
-                'labels': ['assert-v2-primary-path'],
+                'labels': ['assert-primary-path'],
                 'retention_days': int(run_metadata.get('retention_days') or 90),
                 'billing_tags': {
                     key: value
@@ -810,12 +810,12 @@ def _execute_assert_contract(
             ],
             'manifest_metadata': {
                 'assert_version': ASSERT_EVALUATOR_VERSION,
-                'assert_commit': 'local-v2-boundary',
+                'assert_commit': 'local-assert-boundary',
                 'spec_version': ASSERT_SPEC_VERSION,
                 'platform_adapter_version': ASSERT_ADAPTER_VERSION,
                 'provider_model_settings': _provider_model_settings(payload),
                 'artifact_manifest_location': 'inline://assert-result-manifest',
-                'platform_version': 'conversation-agent-evals-v2',
+                'platform_version': 'conversation-agent-evals',
             },
         }
     )
@@ -1743,7 +1743,7 @@ def _assert_lab_report(report: dict[str, Any]) -> dict[str, Any]:
     failures = manifest.get('failures') if isinstance(manifest.get('failures'), list) else []
 
     return {
-        'schema': 'conversation_agent_evals_assert_lab_report_v1',
+        'schema': 'conversation_agent_evals_assert_lab_report',
         'run_id': report.get('run_id'),
         'assert_run_id': report.get('assert_run_id'),
         'suite_id': report.get('suite_id'),
