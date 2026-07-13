@@ -21,7 +21,7 @@ class ActionEvent:
 
 
 def parse_action_trace(action_trace: Any) -> list[ActionEvent]:
-    """Normalize supported ASSERT v2 action/tool trace shapes into ordered events."""
+    """Normalize supported ASSERT action/tool trace shapes into ordered events."""
     if action_trace is None:
         return []
 
