@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Protocol
 
 from app.services.acc_realtime_target import (
@@ -218,7 +218,7 @@ class PipecatTesterAgentRunner:
             'error': error,
             'tester_provenance': controller.provenance(),
             'session': session_payload,
-            'turns': [record.__dict__ for record in turns],
+            'turns': [asdict(record) for record in turns],
             'close': close_payload,
             'proof': proof,
         }
