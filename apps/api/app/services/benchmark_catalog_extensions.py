@@ -130,17 +130,31 @@ CANCELLATION_RESCUE_SCENARIO: dict[str, Any] = {
         'cancellation_intent_discarded',
         'tool_timeout_continued_without_handoff',
     ],
+    'catalog_scope': 'optional_external_target',
 }
 
 _REGISTERED = False
+_ORIGINAL_LIST_SUITES: Callable[[], list[dict[str, Any]]] | None = None
+_ORIGINAL_GET_SUITE: Callable[[str], dict[str, Any] | None] | None = None
+_ORIGINAL_SUITE_CONTRACT_MANIFEST: Callable[[str], dict[str, Any] | None] | None = None
 _ORIGINAL_SCENARIO_CONTRACT: Callable[[dict[str, Any]], dict[str, Any]] | None = None
 _ORIGINAL_EXECUTE_ASSERT: Callable[..., AssertResultManifest] | None = None
 
 
 def register_builtin_benchmark_extensions() -> None:
-    """Register native optional benchmark scenarios without requiring any target repo."""
+    """Register optional native scenarios without changing default suite coverage.
 
-    global _REGISTERED, _ORIGINAL_SCENARIO_CONTRACT, _ORIGINAL_EXECUTE_ASSERT
+    The cancellation-rescue scenario is runnable through the normal benchmark endpoint
+    and discoverable as an optional scenario. It is deliberately not appended to the
+    core suite's ``scenarios`` list: existing projects that covered the four built-in
+    call-center scenarios must not regress to 80% coverage merely because an optional
+    external-target example was installed.
+    """
+
+    global _REGISTERED
+    global _ORIGINAL_LIST_SUITES, _ORIGINAL_GET_SUITE, _ORIGINAL_SUITE_CONTRACT_MANIFEST
+    global _ORIGINAL_SCENARIO_CONTRACT, _ORIGINAL_EXECUTE_ASSERT
+
     if _REGISTERED:
         return
 
@@ -148,22 +162,63 @@ def register_builtin_benchmark_extensions() -> None:
     if suite is None:
         raise RuntimeError('call-center-voice-ai benchmark suite is missing')
 
-    existing = next(
-        (scenario for scenario in suite['scenarios'] if scenario.get('id') == CANCELLATION_RESCUE_SCENARIO['id']),
-        None,
-    )
-    scenario = existing or deepcopy(CANCELLATION_RESCUE_SCENARIO)
-    if existing is None:
-        suite['scenarios'].append(scenario)
+    scenario = deepcopy(CANCELLATION_RESCUE_SCENARIO)
     benchmark_service._SCENARIOS_BY_ID[(suite['id'], scenario['id'])] = scenario
 
+    _ORIGINAL_LIST_SUITES = benchmark_service.list_suites
+    _ORIGINAL_GET_SUITE = benchmark_service.get_suite
+    _ORIGINAL_SUITE_CONTRACT_MANIFEST = benchmark_service.get_suite_contract_manifest
     _ORIGINAL_SCENARIO_CONTRACT = benchmark_service._scenario_contract
     _ORIGINAL_EXECUTE_ASSERT = benchmark_service._execute_assert_contract
+
+    def extended_list_suites() -> list[dict[str, Any]]:
+        assert _ORIGINAL_LIST_SUITES is not None
+        summaries = _ORIGINAL_LIST_SUITES()
+        for summary in summaries:
+            if summary.get('id') != suite['id']:
+                continue
+            summary['optional_scenarios'] = [_scenario_summary(scenario)]
+            summary['optional_scenario_count'] = 1
+            summary['total_scenario_count'] = int(summary.get('scenario_count') or 0) + 1
+        return summaries
+
+    def extended_get_suite(suite_id: str) -> dict[str, Any] | None:
+        assert _ORIGINAL_GET_SUITE is not None
+        value = _ORIGINAL_GET_SUITE(suite_id)
+        if value is None or suite_id != suite['id']:
+            return value
+        value['optional_scenarios'] = [_optional_scenario_with_starter_evidence(scenario)]
+        value['optional_scenario_count'] = 1
+        value['total_scenario_count'] = len(value.get('scenarios') or []) + 1
+        return value
+
+    def extended_suite_contract_manifest(suite_id: str) -> dict[str, Any] | None:
+        assert _ORIGINAL_SUITE_CONTRACT_MANIFEST is not None
+        manifest = _ORIGINAL_SUITE_CONTRACT_MANIFEST(suite_id)
+        if manifest is None or suite_id != suite['id']:
+            return manifest
+        contract = extended_scenario_contract(scenario)
+        manifest['optional_scenario_contracts'] = [
+            {
+                'scenario_id': scenario['id'],
+                'scenario_title': scenario['title'],
+                'scenario_contract': contract,
+                'scenario_contract_sha256': benchmark_service._stable_digest(contract),
+            }
+        ]
+        manifest['optional_scenario_count'] = 1
+        manifest['total_scenario_count'] = int(manifest.get('scenario_count') or 0) + 1
+        return manifest
 
     def extended_scenario_contract(value: dict[str, Any]) -> dict[str, Any]:
         assert _ORIGINAL_SCENARIO_CONTRACT is not None
         contract = _ORIGINAL_SCENARIO_CONTRACT(value)
-        for key in ('evidence_requirements', 'deterministic_checks', 'forbidden_event_types'):
+        for key in (
+            'evidence_requirements',
+            'deterministic_checks',
+            'forbidden_event_types',
+            'catalog_scope',
+        ):
             if key in value:
                 contract[key] = deepcopy(value[key])
         return contract
@@ -179,9 +234,30 @@ def register_builtin_benchmark_extensions() -> None:
             return result
         return _apply_cancellation_rescue_checks(result, scenario=value, payload=payload)
 
+    benchmark_service.list_suites = extended_list_suites
+    benchmark_service.get_suite = extended_get_suite
+    benchmark_service.get_suite_contract_manifest = extended_suite_contract_manifest
     benchmark_service._scenario_contract = extended_scenario_contract
     benchmark_service._execute_assert_contract = extended_execute_assert_contract
     _REGISTERED = True
+
+
+def _scenario_summary(scenario: dict[str, Any]) -> dict[str, Any]:
+    return {
+        'id': scenario['id'],
+        'title': scenario['title'],
+        'persona': scenario['persona'],
+        'goal': scenario['goal'],
+        'catalog_scope': scenario['catalog_scope'],
+    }
+
+
+def _optional_scenario_with_starter_evidence(scenario: dict[str, Any]) -> dict[str, Any]:
+    value = deepcopy(scenario)
+    value.setdefault('sample_transcript', benchmark_service._simulated_transcript(value, 'starter sample agent', False))
+    value.setdefault('sample_action_trace', benchmark_service._simulated_action_trace(value, False))
+    value.setdefault('sample_final_state', benchmark_service._simulated_final_state(value, False))
+    return value
 
 
 def _apply_cancellation_rescue_checks(
