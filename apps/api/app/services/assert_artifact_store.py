@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any
 
 
-ARTIFACT_STORE_VERSION = 'assert-artifact-store-v1'
-ARTIFACT_ROOT = Path(__file__).resolve().parents[2] / 'artifacts' / 'assert-v2'
+ARTIFACT_STORE_VERSION = 'assert-artifact-store'
+ARTIFACT_ROOT = Path(__file__).resolve().parents[2] / 'artifacts' / 'assert'
 
 
 def persist_assert_run_artifacts(report: dict[str, Any]) -> dict[str, Any]:
@@ -156,7 +156,7 @@ def _with_platform_manifest_location(platform_record: dict[str, Any], manifest_l
 
 
 def _manifest_location(run_id: str) -> str:
-    return f'local-artifact://assert-v2/runs/{run_id}/manifest.json'
+    return f'local-artifact://assert/runs/{run_id}/manifest.json'
 
 
 def _manifest_path(run_id: str) -> Path:
@@ -164,7 +164,7 @@ def _manifest_path(run_id: str) -> Path:
 
 
 def _path_from_location(location: str) -> Path | None:
-    prefix = 'local-artifact://assert-v2/'
+    prefix = 'local-artifact://assert/'
     if not isinstance(location, str) or not location.startswith(prefix):
         return None
     relative = location.removeprefix(prefix)
