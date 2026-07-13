@@ -21,6 +21,7 @@
     "test:api:local": "API_TEST_MODE=local node scripts/test-api.mjs",
     "test:benchmark-smoke": "CHECK_ENV_ALLOW_EXAMPLE=1 npm run check:env && apps/api/.venv/bin/python scripts/benchmark_smoke.py",
     "test:voice-lab-proof": "./scripts/ensure-venv.sh apps/api/.venv apps/api/requirements.txt && apps/api/.venv/bin/python scripts/voice_lab_proof.py",
+    "example:acc": "apps/api/.venv/bin/python scripts/agentic_contact_center_example.py",
     "install:e2e": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npx playwright install chromium",
     "test:voice-proof": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npx playwright test apps/web/tests/voice-proof.spec.ts --config apps/web/playwright.config.ts",
     "test:e2e": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers npm --workspace apps/web run test:e2e",
