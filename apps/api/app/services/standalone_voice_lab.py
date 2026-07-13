@@ -132,10 +132,47 @@ class OfflineAgenticContactCenterAdapter:
         )
 
 
+class StandaloneVoiceLabRunner(VoiceLabRunner):
+    """Voice-lab runner that rewrites ACC-shaped fixture claims explicitly."""
+
+    def run(self, scenarios: list[VoiceLabScenario]) -> dict[str, Any]:
+        report = super().run(scenarios)
+        for result in report.get('results', []):
+            evidence = result.get('evidence') if isinstance(result.get('evidence'), dict) else {}
+            if evidence.get('standalone') is not True:
+                continue
+            scenario_metadata = result.get('scenario') if isinstance(result.get('scenario'), dict) else {}
+            scenario_metadata['execution_mode'] = 'offline_target_fixture'
+            result['scenario'] = scenario_metadata
+            result['integration_status'] = {
+                'proof_stage': 'standalone_fixture_baseline',
+                'supported_layers': [
+                    'checked-in target-shaped evidence replay',
+                    'structured transcript capture',
+                    'platform event trail capture',
+                    'latency mark capture',
+                    'artifact bundle persistence',
+                ],
+                'unsupported_layers': [
+                    'live_target_execution',
+                    'live_asr',
+                    'live_tts',
+                    'sip_trunk',
+                    'webrtc_media',
+                    'recorded_audio_waveforms',
+                ],
+                'next_integration_step': (
+                    'Run the same scenario through an explicitly configured target adapter; '
+                    'the standalone product does not require that integration.'
+                ),
+            }
+        return report
+
+
 def build_standalone_voice_lab_runner(project_root: Path) -> VoiceLabRunner:
     """Build the blessed voice-lab runner with no external target dependency."""
 
-    return VoiceLabRunner(
+    return StandaloneVoiceLabRunner(
         adapters=[
             OfflineAgenticContactCenterAdapter(project_root=project_root),
             TranscriptInjectionAdapter(),
