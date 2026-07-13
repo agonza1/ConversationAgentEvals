@@ -9,7 +9,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / 'apps' / 'api'))
 
-from app.services.voice_lab import build_default_voice_lab_runner, seeded_voice_lab_scenarios
+from app.services.standalone_voice_lab import build_standalone_voice_lab_runner as build_default_voice_lab_runner
+from app.services.voice_lab import seeded_voice_lab_scenarios
 
 
 BUNDLE_SCHEMA_VERSION = 'voice-lab-evidence-bundle-v1'
@@ -158,7 +159,7 @@ def _unique_artifact_destination(bundled_dir: Path, filename: str) -> Path:
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='Run the voice lab progressive proof bundle.')
+    parser = argparse.ArgumentParser(description='Run the standalone voice lab progressive proof bundle.')
     parser.add_argument(
         '--artifact-root',
         type=Path,
