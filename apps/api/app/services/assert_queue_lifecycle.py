@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 
-ASSERT_QUEUE_LIFECYCLE_VERSION = 'assert-queue-lifecycle-v1'
+ASSERT_QUEUE_LIFECYCLE_VERSION = 'assert-queue-lifecycle'
 AssertQueueStatus = Literal['queued', 'running', 'completed', 'failed', 'canceled']
 TERMINAL_STATUSES = {'completed', 'failed', 'canceled'}
 
