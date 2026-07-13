@@ -115,7 +115,7 @@ def test_normalize_acc_run_preserves_call_evidence_and_limitations():
     assert normalized['provenance']['source_repo'] == 'agonza1/agentic-contact-center'
 
 
-def test_build_benchmark_run_request_records_pending_catalog_registration():
+def test_build_benchmark_run_request_uses_registered_catalog_scenario():
     scenario = _scenario()
     normalized = normalize_acc_run(_acc_payload(), scenario=scenario)
 
@@ -134,8 +134,9 @@ def test_build_benchmark_run_request_records_pending_catalog_registration():
     assert request.final_state == normalized['final_state']
     assert request.assert_bundle == normalized
     assert request.metadata['execution_mode'] == 'acc_http_scripted_fixture'
-    assert request.metadata['benchmark_catalog_status'] == 'scenario_registration_pending'
+    assert request.metadata['benchmark_catalog_status'] == 'registered_native'
     assert request.metadata['scenario_contract']['required_actions'] == scenario['required_actions']
+    assert request.metadata['scenario_contract']['deterministic_checks'] == scenario['deterministic_checks']
     assert request.user_id == 'alberto'
     assert request.project_id == 'acc-cluecon'
 
@@ -151,7 +152,7 @@ def test_build_assert_run_request_uses_canonical_evidence_contract():
         project_id='acc-cluecon',
     )
 
-    assert request.spec_ref.spec_id == 'agentic-contact-center/cancellation-rescue'
+    assert request.spec_ref.spec_id == 'call-center-voice-ai/cancellation-rescue'
     assert request.spec_ref.spec_kind == 'scenario'
     assert request.evidence.transcript is not None
     assert request.evidence.transcript.inline_data.startswith('Caller:')
@@ -163,6 +164,7 @@ def test_build_assert_run_request_uses_canonical_evidence_contract():
     assert request.evidence.provenance['call_id'] == 'demo-call-98'
     assert request.runtime_config.invocation_target.entrypoint == '/api/assert/runs'
     assert request.runtime_config.scenario_overrides['required_actions'] == scenario['required_actions']
+    assert request.runtime_config.scenario_overrides['deterministic_checks'] == scenario['deterministic_checks']
     assert request.platform_metadata.user_id == 'alberto'
     assert request.platform_metadata.project_id == 'acc-cluecon'
     assert 'acc_http_scripted_fixture' in request.platform_metadata.labels
