@@ -48,7 +48,7 @@ This connects the original requirements to a reviewable test case: an establishe
 
 ## 4. Target / agent execution
 
-The demo execution uses the current ASSERT v2 benchmark path with a mock text agent. The run produces three input artifacts:
+The demo execution uses the canonical ASSERT benchmark path with a mock text agent. The run produces three input artifacts:
 
 Transcript excerpt:
 
@@ -109,7 +109,7 @@ The visible connection is the important part: each completed action came from th
 
 ## Where this appears in the app
 
-The local benchmark runner at `/benchmarks` uses the same ASSERT v2 run shape. A completed run includes these artifacts for review and export:
+The local benchmark runner at `/benchmarks` uses the same ASSERT run shape. A completed run includes these artifacts for review and export:
 
 - `assert_result_manifest.verdict`
 - `assert_result_manifest.artifacts`
