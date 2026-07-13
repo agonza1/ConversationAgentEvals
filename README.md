@@ -4,6 +4,8 @@ Managed QA and regression testing for voice and conversation agents, powered by 
 
 ConversationAgentEvals is a hosted/on-demand wrapper around ASSERT. ASSERT owns the evaluation core: specifications, scenarios, runtime orchestration, judging, scoring, failure taxonomy, and portable artifacts. This repository adds the product layer around that core: evidence ingestion, projects and runs, queue lifecycle, persistence, reports, exports, and deployment.
 
+**ConversationAgentEvals is independently installable, testable, and usable.** Its built-in benchmark suites, evidence APIs, ASSERT boundary, reports, exports, and saved-run workflows do not require Agentic Contact Center or another target repository. External systems are optional target adapters and examples, never runtime dependencies of the core product.
+
 There is one product and one supported evaluation path. Historical product variants and the former local evaluator are not supported.
 
 ## Acknowledgment
@@ -44,11 +46,17 @@ Start the API, web app, and Pipecat service:
 npm run dev
 ```
 
-Open the printed web URL and visit `/benchmarks`. The basic demo uses transcript, action-trace, and final-state evidence, so it does not require live microphone ASR. Advanced environment settings are documented in [docs/environment.md](docs/environment.md).
+Open the printed web URL and visit `/benchmarks`. The basic demo uses transcript, action-trace, and final-state evidence, so it does not require live microphone ASR or any external target application. Advanced environment settings are documented in [docs/environment.md](docs/environment.md).
 
-For the shortest end-to-end walkthrough, see [docs/assert-flow-demo.md](docs/assert-flow-demo.md) or its [machine-readable example](docs/examples/assert-flow-demo.json).
+For the shortest standalone end-to-end walkthrough, see [docs/assert-flow-demo.md](docs/assert-flow-demo.md) or its [machine-readable example](docs/examples/assert-flow-demo.json).
 
-For an external-system example, see [docs/agentic-contact-center-example.md](docs/agentic-contact-center-example.md). It runs a scripted HTTP proof against a local Agentic Contact Center target, normalizes the evidence, and builds the canonical ASSERT wrapper request while keeping realtime-audio limitations explicit.
+For an **optional external-target example**, see [docs/agentic-contact-center-example.md](docs/agentic-contact-center-example.md). The cancellation-rescue scenario is registered in the native `call-center-voice-ai` benchmark catalog. The example can run entirely offline from a checked-in response fixture or against a separately running Agentic Contact Center service.
+
+Standalone offline example after `npm run setup`:
+
+```bash
+npm run example:acc:fixture
+```
 
 ## Architecture
 
@@ -60,6 +68,7 @@ flowchart LR
   Platform --> Metadata["Platform metadata + indexes"]
   Artifacts --> Reports["Reports + exports"]
   Metadata --> Reports
+  OptionalTargets["Optional external targets"] -. evidence .-> Inputs
 ```
 
 Core ownership:
@@ -114,7 +123,7 @@ apps/api/.venv/bin/python -m pytest apps/api/tests/test_assert_boundary.py apps/
 
 ## Benchmark families
 
-- Call-center voice AI: appointments, cancellations, transfers, interruptions, and escalation.
+- Call-center voice AI: appointments, cancellations, transfers, interruptions, escalation.
 - Telehealth intake: patient routing, privacy boundaries, medication, and emergency handling.
 - Online teaching: adaptive tutoring, quiz flow, confusion handling, and grading boundaries.
 - Fintech support: identity checks, disputes, card freezes, fraud escalation, and compliance.
