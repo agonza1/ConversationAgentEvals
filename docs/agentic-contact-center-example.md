@@ -52,9 +52,18 @@ It then writes:
 
 - the raw ACC response;
 - normalized transcript, conversation, action trace, final state, latency, and provenance;
-- a validated `AssertRunCreateRequest`;
+- a validated `BenchmarkRunRequest` showing the future benchmark-catalog handoff;
+- a validated canonical `AssertRunCreateRequest`;
 - the optional response from `POST /api/assert/runs`;
 - a summary with explicit limitations.
+
+The benchmark request is written but not submitted in Phase 1. The built-in benchmark catalog does not yet register `call-center-voice-ai/cancellation-rescue`, so sending it to `/api/benchmarks/run` would correctly fail as an unknown scenario. The example records `scenario_registration_pending` instead of hiding that dependency.
+
+The current submitted path is the canonical ASSERT wrapper endpoint:
+
+```text
+POST /api/assert/runs
+```
 
 The example is labeled:
 
@@ -120,6 +129,7 @@ Artifacts are written under:
 artifacts/agentic-contact-center-example/acc-example-<timestamp>/
   acc-raw-response.json
   normalized-evidence.json
+  benchmark-run-request.json       # staged until scenario registration
   assert-run-request.json
   assert-ingestion-response.json   # when submitted
   summary.json
@@ -146,6 +156,16 @@ agentic-contact-center/cancellation-rescue
 ```
 
 The scenario contract requires cancellation intent, the renewal-increase reason, an operator/policy boundary before risky action, an approval/escalation/handoff record, and an explicit final disposition.
+
+## Benchmark-catalog follow-up
+
+The checked-in `benchmark-run-request.json` is the shape that should eventually be sent to:
+
+```text
+POST /api/benchmarks/run
+```
+
+Before enabling that submission, add `cancellation-rescue` to the `call-center-voice-ai` suite and make its scenario contract match the machine-readable example. That registration should be a deliberate follow-up because the existing benchmark evaluator keys required and forbidden behavior to the catalog scenario.
 
 ## Why this belongs in ConversationAgentEvals
 
