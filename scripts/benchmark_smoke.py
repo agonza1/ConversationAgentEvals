@@ -134,7 +134,7 @@ def _assert_audit_summary(summary: dict[str, Any]) -> None:
     _assert(summary.get('action_trace_present') is True, 'expected action trace audit flag')
     _assert(summary.get('final_state_present') is True, 'expected final state audit flag')
     _assert(summary.get('metadata_labels') == ['agent_version', 'model_name', 'notes', 'prompt_version'], 'expected metadata audit labels')
-    _assert(summary.get('evaluator_version') == 'assert-v2-boundary-v1', 'expected ASSERT v2 evaluator version')
+    _assert(summary.get('evaluator_version') == 'assert-boundary', 'expected ASSERT evaluator version')
     _assert(summary.get('export_readiness') == {
         'ready': True,
         'format': 'assert_artifact_manifest',
