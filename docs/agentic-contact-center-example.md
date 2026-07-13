@@ -1,91 +1,124 @@
-# Agentic Contact Center External-Target Example
+# Optional Agentic Contact Center Target Example
 
-This example shows the ownership boundary between ConversationAgentEvals and [Agentic Contact Center](https://github.com/agonza1/agentic-contact-center) without claiming that the current example is a live full-duplex voice test.
+ConversationAgentEvals is a standalone product. This example demonstrates how one optional external target—[Agentic Contact Center](https://github.com/agonza1/agentic-contact-center)—can supply evidence to the native ConversationAgentEvals benchmark and ASSERT surfaces.
 
-Machine-readable scenario: [examples/agentic-contact-center-cancellation-rescue.json](examples/agentic-contact-center-cancellation-rescue.json)
+Nothing in the normal benchmark runner, API tests, saved-run workflows, reports, exports, or ASSERT boundary requires ACC.
 
-Tracking issue: [#98](https://github.com/agonza1/ConversationAgentEvals/issues/98)
+Related files:
+
+- Native scenario contract: [examples/agentic-contact-center-cancellation-rescue.json](examples/agentic-contact-center-cancellation-rescue.json)
+- Checked-in offline target response: [examples/agentic-contact-center-run-fixture.json](examples/agentic-contact-center-run-fixture.json)
+- Phase 2C audio plan: [examples/agentic-contact-center-audio-plan.json](examples/agentic-contact-center-audio-plan.json)
+- Tracking issue: [#98](https://github.com/agonza1/ConversationAgentEvals/issues/98)
 
 ## Ownership
 
-ConversationAgentEvals owns the testing layer:
+ConversationAgentEvals owns the reusable testing product:
 
-- scenario and test-set definition;
-- tester/caller orchestration;
-- target lifecycle;
+- benchmark and scenario definitions;
+- tester/caller policy;
+- target-adapter lifecycle;
+- audio fixture selection and scenario-step scheduling;
+- pacing mode, seed, and provenance;
 - evidence normalization;
-- ASSERT request creation and result ingestion;
-- saved-run comparison and regression reporting.
+- benchmark and ASSERT request construction;
+- run persistence, reports, comparison, and regression analysis.
 
-ACC remains the system under test and owns:
+An external target owns its system-under-test runtime:
 
 - persistent realtime voice sessions;
 - browser, fixture, tester-agent, and SIP media adapters;
-- VAD, interruption, and barge-in behavior;
-- `rtc-asr` streaming STT;
+- audio decoding and injection into its production media path;
+- VAD, interruption, and barge-in;
+- streaming STT and TTS;
 - agent/model/tool/policy behavior;
-- streaming TTS;
 - operator controls, fallback, and native call proof.
 
-The intended end state is:
+The generic end state is:
 
 ```text
 ConversationAgentEvals scenario/tester
   -> selected caller source
-  -> ACC persistent realtime media session
-  -> ACC agent runtime
-  -> ACC proof bundle
+  -> optional target adapter
+  -> target persistent realtime media session
+  -> target agent runtime
+  -> target proof bundle
   -> ConversationAgentEvals normalization
-  -> ASSERT run
+  -> ASSERT/benchmark run
   -> baseline/candidate comparison
 ```
 
-## What the Phase 1 example does
+ACC is one implementation of the optional target boundary, not a dependency of ConversationAgentEvals.
 
-The checked-in script calls the running ACC control-plane route:
+# Standalone use without ACC
 
-```text
-POST /api/demo/run-end-to-end
+## Normal product demo
+
+```bash
+npm run setup
+cp .env.example .env
+npm run dev
 ```
 
-It then writes:
+Open the printed web URL and visit `/benchmarks`. The built-in benchmark suites and reports work independently.
 
-- the raw ACC response;
-- normalized transcript, conversation, action trace, final state, latency, and provenance;
-- a validated `BenchmarkRunRequest` showing the future benchmark-catalog handoff;
-- a validated canonical `AssertRunCreateRequest`;
-- the optional response from `POST /api/assert/runs`;
-- a summary with explicit limitations.
+## Offline cancellation-rescue artifact generation
 
-The benchmark request is written but not submitted in Phase 1. The built-in benchmark catalog does not yet register `call-center-voice-ai/cancellation-rescue`, so sending it to `/api/benchmarks/run` would correctly fail as an unknown scenario. The example records `scenario_registration_pending` instead of hiding that dependency.
+The optional target example can also run with no ACC service and no ConversationAgentEvals API process:
 
-The current submitted path is the canonical ASSERT wrapper endpoint:
-
-```text
-POST /api/assert/runs
+```bash
+npm run example:acc:fixture
 ```
 
-The example is labeled:
+This reads the checked-in response fixture and writes:
 
 ```text
-acc_http_scripted_fixture
+artifacts/agentic-contact-center-example/acc-example-<timestamp>/
+  acc-raw-response.json
+  normalized-evidence.json
+  benchmark-run-request.json
+  assert-run-request.json
+  summary.json
 ```
 
-It proves target connectivity and evidence handoff. It does **not** prove:
+The command is primarily an adapter and artifact-generation test. It proves that the optional target format can be normalized without cloning or starting ACC.
 
-- live ASR;
-- live TTS;
-- full-duplex media;
-- barge-in;
-- WebRTC media;
-- SIP / FreeSWITCH media;
-- a complete semantic ASSERT judge run.
+## Evaluate the offline fixture through the native benchmark API
 
-The current local ASSERT sidecar response is evidence-ingestion validation. Its green result must not be presented as a semantic task-completion verdict.
+Start ConversationAgentEvals only:
 
-## Run it
+```bash
+npm run dev
+```
 
-Start ACC in one terminal:
+Then run:
+
+```bash
+apps/api/.venv/bin/python scripts/agentic_contact_center_example.py \
+  --input docs/examples/agentic-contact-center-run-fixture.json
+```
+
+The script sends the generated request to:
+
+```text
+POST /api/benchmarks/run
+```
+
+and writes:
+
+```text
+benchmark-evaluation-response.json
+```
+
+The cancellation-rescue scenario is registered natively under:
+
+```text
+call-center-voice-ai/cancellation-rescue
+```
+
+# Optional run against ACC
+
+Start ACC separately:
 
 ```bash
 cd ../agentic-contact-center
@@ -94,7 +127,7 @@ npm run build
 PORT=8026 npm start
 ```
 
-Start ConversationAgentEvals in another terminal:
+Start ConversationAgentEvals:
 
 ```bash
 cd ../ConversationAgentEvals
@@ -103,7 +136,7 @@ cp .env.example .env
 npm run dev
 ```
 
-Run the example:
+Run the external-target example:
 
 ```bash
 npm run example:acc
@@ -117,104 +150,229 @@ CONVERSATION_AGENT_EVALS_BASE_URL=http://127.0.0.1:8025 \
 apps/api/.venv/bin/python scripts/agentic_contact_center_example.py
 ```
 
-Collect target evidence without submitting it:
+Collect and normalize target evidence without submitting it:
 
 ```bash
 npm run example:acc -- --skip-submit
 ```
 
-Artifacts are written under:
+Submit both the native benchmark request and the lower-level ASSERT wrapper request:
+
+```bash
+npm run example:acc -- --also-submit-assert-wrapper
+```
+
+Full output shape:
 
 ```text
 artifacts/agentic-contact-center-example/acc-example-<timestamp>/
   acc-raw-response.json
   normalized-evidence.json
-  benchmark-run-request.json       # staged until scenario registration
+  benchmark-run-request.json
   assert-run-request.json
-  assert-ingestion-response.json   # when submitted
+  benchmark-evaluation-response.json  # normal submitted path
+  assert-ingestion-response.json      # only with --also-submit-assert-wrapper
   summary.json
 ```
 
-## How the evidence maps to ASSERT
+# Phase 2A — native cancellation-rescue benchmark
 
-The example constructs the canonical request with:
+The scenario is now part of the `call-center-voice-ai` catalog.
 
-| ASSERT evidence field | ACC source |
+## Required-action vocabulary
+
+1. Detect cancellation intent.
+2. Capture the renewal-increase reason.
+3. Enter policy hold before a retention action.
+4. Record operator approval, escalation, or handoff.
+5. Record a final disposition.
+
+## Forbidden behavior
+
+- Make an unapproved retention offer.
+- Ignore the cancellation request.
+- Continue after a tool timeout without a human handoff.
+
+## Final-state expectations
+
+The run must be complete and end in one of the allowed outcomes:
+
+```text
+scripted_wrap_complete
+approved_retention_follow_up
+cancellation_completed
+fail_closed_handoff
+human_handoff
+```
+
+## Deterministic checks
+
+The evaluator adds exact event and state checks on top of the normal transcript/rubric scoring:
+
+- `cancellation_intent_detected` is present;
+- `renewal_increase_reason_captured` is present;
+- `policy_hold_entered` or `operator_steer_requested` is present;
+- the policy boundary occurs before approval, handoff, or wrap;
+- approval, escalation, transfer, or handoff is recorded;
+- a terminal event is recorded;
+- `final_state.complete == true`;
+- the outcome is in the allowed set;
+- a tool/runtime failure is followed by handoff or transfer;
+- forbidden event types are absent.
+
+These checks use the action/event trace and final state rather than trusting transcript wording alone.
+
+## Evidence requirements
+
+Required:
+
+```text
+transcript
+action_trace
+final_state
+```
+
+Recommended for voice runs:
+
+```text
+latency_evidence
+call_media
+runtime_provenance
+```
+
+The native scenario contract is available through the existing catalog APIs, including:
+
+```text
+GET /api/benchmarks/suites/call-center-voice-ai
+GET /api/benchmarks/suites/call-center-voice-ai/scenarios/cancellation-rescue/contract
+```
+
+# Evidence mapping
+
+The optional ACC adapter maps target output into the reusable benchmark request:
+
+| Benchmark/ASSERT field | Optional ACC source |
 | --- | --- |
-| `transcript` | ACC call transcript rendered as speaker-prefixed text |
-| `conversation` | ACC transcript turns with speaker, text, and timestamp |
-| `action_trace` | ACC event trail normalized to ordered observed actions |
-| `final_state` | flow state, outcome, operator state, fallback state, and runtime labels |
-| `assert_bundle` | complete normalized ACC evidence object |
-| `additional_artifacts` | latency marks and runtime caveats |
-| `provenance` | target repo, endpoint, call ID, and execution mode |
+| `transcript` | Call transcript rendered as speaker-prefixed text |
+| `conversation` | Structured speaker/text/timestamp turns |
+| `action_trace` | Ordered target event trail |
+| `final_state` | Flow state, outcome, operator state, fallback state, runtime labels |
+| `assert_bundle` | Complete normalized target evidence |
+| metadata | Latency marks, caveats, execution mode, and provenance |
 
-The spec reference is:
+The same benchmark can receive equivalent evidence from another target adapter or a manually assembled request.
 
-```text
-agentic-contact-center/cancellation-rescue
+# Phase 2B — target-session adapter contract
+
+The checked-in `AccRealtimeTargetAdapter` defines the optional target boundary:
+
+```python
+class AccRealtimeTargetAdapter:
+    async def create_session(...)
+    async def inject_audio(...)
+    async def stream_audio(...)
+    async def observe_events(...)
+    async def interrupt(...)
+    async def close_session(...)
+    async def collect_proof(...)
 ```
 
-The scenario contract requires cancellation intent, the renewal-increase reason, an operator/policy boundary before risky action, an approval/escalation/handoff record, and an explicit final disposition.
-
-## Benchmark-catalog follow-up
-
-The checked-in `benchmark-run-request.json` is the shape that should eventually be sent to:
-
-```text
-POST /api/benchmarks/run
-```
-
-Before enabling that submission, add `cancellation-rescue` to the `call-center-voice-ai` suite and make its scenario contract match the machine-readable example. That registration should be a deliberate follow-up because the existing benchmark evaluator keys required and forbidden behavior to the catalog scenario.
-
-## Why this belongs in ConversationAgentEvals
-
-ACC should not contain the tester's scenario policy or the evaluation runner. Conversely, ConversationAgentEvals should not reimplement ACC's voice session or agent runtime.
-
-The existing `AgenticContactCenterAdapter` in `apps/api/app/services/voice_lab.py` currently shells into a sibling ACC checkout and consumes `npm run proof`. That remains useful as a deterministic baseline. This example adds the missing external-target handoff to a running ACC service and makes the evidence contract visible.
-
-## Next realtime-audio phase
-
-Once ACC exposes a stable persistent media session and audio-injection API, the same scenario should support:
-
-```text
-manual microphone
-prerecorded audio
-Pipecat tester agent
-SIP / FreeSWITCH
-```
-
-All four sources must use the same ACC media pipeline. A realtime-audio test must not bypass ASR by posting the expected transcript.
-
-Conceptual target contract:
+The adapter defaults to the proposed ACC endpoints:
 
 ```text
 POST /api/voice/sessions
-POST /api/voice/assets
 POST /api/voice/sessions/:id/play
 WS   /api/voice/sessions/:id/media/input
 GET  /api/voice/sessions/:id/events
+POST /api/voice/sessions/:id/control
+POST /api/voice/sessions/:id/close
 GET  /api/voice/sessions/:id/proof
 ```
 
-ConversationAgentEvals will then:
+The class is independently testable with an injected fake HTTP/media transport. Importing or testing it does not contact ACC.
 
-1. create the scenario run;
-2. choose the source and seed;
-3. start the ACC target session;
-4. schedule caller audio or tester acts;
-5. collect transcripts, media pointers, events, tools, state, and latency;
-6. submit the evidence to ASSERT;
-7. compare baseline and candidate runs.
+The current ACC implementation does not yet guarantee all of these endpoints. Until that contract exists, this is an executable adapter boundary and test scaffold rather than a claim of completed live integration.
 
-## Tester-agent rule
+# Phase 2C — prerecorded audio orchestration
 
-The tester agent, ACC agent, and ASSERT judge are separate actors:
+ConversationAgentEvals owns:
+
+- which fixture represents each caller act;
+- step order;
+- event gates;
+- realtime or accelerated pacing selection;
+- barge-in intent;
+- seed;
+- target/run provenance;
+- expected caller act.
+
+The target owns:
+
+- retrieving or accepting the referenced audio;
+- decoding it;
+- resampling it;
+- pacing/injecting media into the same realtime session used by microphone or SIP callers;
+- recording actual media and timing evidence.
+
+The checked-in audio plan demonstrates the contract:
 
 ```text
-Tester agent: drives the caller scenario.
-ACC agent: system under test.
-ASSERT: evaluates the completed evidence.
+docs/examples/agentic-contact-center-audio-plan.json
 ```
 
-The future tester must have fixed objectives, allowed caller acts, max turns, timeouts, terminal conditions, seed/model provenance, and no access to ACC tools or final-state mutation.
+`AccAudioFixtureScheduler` resolves the selected fixtures, waits for optional target events, and calls the target adapter with the selected pacing and provenance. It never posts the expected transcript as a shortcut.
+
+# Phase 3 — Pipecat tester-agent contract
+
+The tester architecture remains three separate actors:
+
+```text
+Tester agent: chooses and verbalizes caller behavior.
+Target agent: system under test.
+ASSERT: evaluates the resulting evidence.
+```
+
+The checked-in `DeterministicTesterController` owns the bounded caller plan:
+
+```text
+deterministic scenario controller
+  -> optional LLM wording renderer
+  -> caller TTS renderer
+  -> target realtime media session
+  -> semantic or acoustic observation
+  -> next caller act
+```
+
+Required configuration is explicit:
+
+- scenario goal;
+- allowed caller acts;
+- ordered default acts;
+- maximum turns;
+- total timeout;
+- terminal event types and final states;
+- seed;
+- observation mode;
+- model version;
+- prompt version.
+
+The optional LLM may word a selected caller act, but it may not change the scenario objective, invent an unapproved act, mutate target state, or serve as the evaluator.
+
+# Honesty and current limitations
+
+The checked-in offline and HTTP examples are labeled:
+
+```text
+acc_http_scripted_fixture
+```
+
+They do not prove:
+
+- live ASR;
+- live TTS;
+- full-duplex media;
+- barge-in;
+- WebRTC media;
+- SIP / FreeSWITCH media.
+
+The native benchmark run does execute the registered cancellation-rescue checks. The optional `/api/assert/runs` local sidecar remains evidence-ingestion validation and must not be represented as a complete semantic ASSERT judge result.
