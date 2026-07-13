@@ -7,6 +7,13 @@ from sqlalchemy import inspect, text
 
 from app.config import settings
 from app.db.database import Base, engine
+from app.services.benchmark_catalog_extensions import register_builtin_benchmark_extensions
+
+# Register native optional benchmark extensions before route modules bind service
+# functions. This makes the scenario discoverable through the public catalog APIs
+# while keeping it outside the core suite's default coverage denominator.
+register_builtin_benchmark_extensions()
+
 from app.routes.assert_sidecar import router as assert_sidecar_router
 from app.routes.benchmarks import router as benchmarks_router
 from app.routes.bootstrap import router as bootstrap_router
@@ -14,7 +21,6 @@ from app.routes.decks import router as decks_router
 from app.routes.product import router as product_router
 from app.routes.realtime import router as realtime_router
 from app.routes.sessions import router as sessions_router
-from app.services.benchmark_catalog_extensions import register_builtin_benchmark_extensions
 
 Base.metadata.create_all(bind=engine)
 
@@ -89,7 +95,6 @@ _ensure_session_columns()
 _ensure_deck_columns()
 _ensure_product_project_columns()
 _ensure_product_project_indexes()
-register_builtin_benchmark_extensions()
 
 app = FastAPI(title='ConversationAgentEvals API', version='0.1.0')
 app.add_middleware(
