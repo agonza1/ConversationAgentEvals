@@ -111,14 +111,8 @@ class PipecatTesterAgentRunner:
 
     async def run(self, config: TesterScenarioConfig) -> dict[str, Any]:
         controller = DeterministicTesterController(config)
-        session_payload = await self.target.create_session(
-            {
-                'scenarioId': config.scenario_id,
-                'tester': controller.provenance(),
-                'observationMode': config.observation_mode,
-            }
-        )
-        session_id = _session_id(session_payload)
+        session_payload: dict[str, Any] | None = None
+        session_id: str | None = None
         cursor: str | None = None
         observation: TesterObservation | None = None
         turns: list[TesterTurnRecord] = []
@@ -128,6 +122,14 @@ class PipecatTesterAgentRunner:
 
         try:
             async with asyncio.timeout(config.total_timeout_seconds):
+                session_payload = await self.target.create_session(
+                    {
+                        'scenarioId': config.scenario_id,
+                        'tester': controller.provenance(),
+                        'observationMode': config.observation_mode,
+                    }
+                )
+                session_id = _session_id(session_payload)
                 while True:
                     act = controller.next_act(observation)
                     if act is None:
@@ -198,17 +200,23 @@ class PipecatTesterAgentRunner:
             controller.terminated_reason = controller.terminated_reason or 'runner_error'
             error = str(exc)
         finally:
-            try:
-                close_payload = await self.target.close_session(
-                    session_id,
-                    reason=controller.terminated_reason or 'tester_complete',
-                )
-            except Exception as exc:
-                error = error or f'target_close_failed: {exc}'
-            try:
-                proof = await self.target.collect_proof(session_id)
-            except Exception as exc:
-                error = error or f'target_proof_failed: {exc}'
+            if session_id is not None:
+                cleanup_timeout = min(30.0, float(config.total_timeout_seconds))
+                try:
+                    async with asyncio.timeout(cleanup_timeout):
+                        try:
+                            close_payload = await self.target.close_session(
+                                session_id,
+                                reason=controller.terminated_reason or 'tester_complete',
+                            )
+                        except Exception as exc:
+                            error = error or f'target_close_failed: {exc}'
+                        try:
+                            proof = await self.target.collect_proof(session_id)
+                        except Exception as exc:
+                            error = error or f'target_proof_failed: {exc}'
+                except TimeoutError:
+                    error = error or 'tester_cleanup_timeout'
 
         return {
             'scenario_id': config.scenario_id,

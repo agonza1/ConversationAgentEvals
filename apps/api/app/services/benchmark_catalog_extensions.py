@@ -198,6 +198,8 @@ def register_builtin_benchmark_extensions() -> None:
         if manifest is None or suite_id != suite['id']:
             return manifest
         contract = extended_scenario_contract(scenario)
+        # Drop the pre-optional digest so provenance matches the returned payload.
+        manifest.pop('suite_contract_manifest_sha256', None)
         manifest['optional_scenario_contracts'] = [
             {
                 'scenario_id': scenario['id'],
@@ -208,6 +210,7 @@ def register_builtin_benchmark_extensions() -> None:
         ]
         manifest['optional_scenario_count'] = 1
         manifest['total_scenario_count'] = int(manifest.get('scenario_count') or 0) + 1
+        manifest['suite_contract_manifest_sha256'] = benchmark_service._stable_digest(manifest)
         return manifest
 
     def extended_scenario_contract(value: dict[str, Any]) -> dict[str, Any]:
@@ -338,10 +341,48 @@ def _apply_cancellation_rescue_checks(
                 'metrics': metrics,
             }
         )
-    else:
-        verdict = result.verdict.model_copy(update={'metrics': metrics})
+        synced = _sync_assert_status_artifacts(result, status='needs_review', score=score)
+        return synced.model_copy(update={'verdict': verdict, 'failures': merged_failures})
 
+    verdict = result.verdict.model_copy(update={'metrics': metrics})
     return result.model_copy(update={'verdict': verdict, 'failures': merged_failures})
+
+
+def _sync_assert_status_artifacts(
+    result: AssertResultManifest,
+    *,
+    status: str,
+    score: float,
+) -> AssertResultManifest:
+    """Keep ASSERT report artifacts aligned when deterministic checks change the verdict."""
+
+    def rewrite(pointer: Any) -> Any:
+        if pointer is None:
+            return None
+        payload = pointer.inline_data if hasattr(pointer, 'inline_data') else None
+        if not isinstance(payload, dict):
+            return pointer
+        updated = deepcopy(payload)
+        updated['status'] = status
+        updated['score'] = score
+        rebuilt = benchmark_service._assert_pointer(
+            pointer.artifact_id,
+            pointer.kind,
+            updated,
+            role=pointer.role,
+        )
+        return pointer.model_copy(update=rebuilt)
+
+    artifacts = [rewrite(item) for item in result.artifacts]
+    summary_artifacts = [rewrite(item) for item in result.summary_artifacts]
+    raw_result = rewrite(result.raw_result)
+    return result.model_copy(
+        update={
+            'artifacts': artifacts,
+            'summary_artifacts': summary_artifacts,
+            'raw_result': raw_result,
+        }
+    )
 
 
 def _evaluate_check(

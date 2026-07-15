@@ -62,6 +62,14 @@ def test_cancellation_rescue_is_registered_as_optional_catalog_scenario():
     ]
     assert any(check['id'] == 'policy-before-resolution' for check in scenario_contract['deterministic_checks'])
 
+    from app.services.benchmark_service import get_suite_contract_manifest, _stable_digest
+
+    manifest = get_suite_contract_manifest('call-center-voice-ai')
+    assert manifest is not None
+    assert manifest['optional_scenario_count'] == 1
+    digest_source = {key: value for key, value in manifest.items() if key != 'suite_contract_manifest_sha256'}
+    assert manifest['suite_contract_manifest_sha256'] == _stable_digest(digest_source)
+
 
 def test_offline_acc_fixture_runs_through_benchmark_endpoint_logic():
     register_builtin_benchmark_extensions()
@@ -126,6 +134,15 @@ def test_missing_policy_hold_fails_deterministic_check_even_if_text_looks_safe()
     codes = {failure['code'] for failure in failures}
     assert 'deterministic-check:policy-boundary-event' in codes
     assert 'deterministic-check:policy-before-resolution' in codes
+
+    manifest = report['assert_result_manifest']
+    assert manifest['verdict']['status'] == 'needs_review'
+    report_artifact = next(
+        item for item in manifest['artifacts'] if item['artifact_id'] == 'assert-result-report'
+    )
+    assert report_artifact['inline_data']['status'] == 'needs_review'
+    assert report_artifact['inline_data']['score'] == manifest['verdict']['score']
+    assert manifest['raw_result']['inline_data']['status'] == 'needs_review'
 
 
 def test_tool_timeout_without_handoff_fails_closed_check():

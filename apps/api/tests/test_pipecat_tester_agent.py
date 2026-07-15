@@ -226,3 +226,43 @@ def test_tts_act_mismatch_fails_run_but_still_closes_and_collects_proof():
         assert result['proof']['proof'] is True
 
     asyncio.run(run())
+
+
+def test_session_setup_and_cleanup_are_bounded_by_timeouts():
+    class HangingCreateTarget(FakeTarget):
+        async def create_session(self, metadata=None):
+            await asyncio.sleep(5)
+            return await super().create_session(metadata)
+
+    class HangingCleanupTarget(FakeTarget):
+        async def close_session(self, session_id, *, reason='tester_complete'):
+            await asyncio.sleep(5)
+            return await super().close_session(session_id, reason=reason)
+
+    async def run():
+        create_runner = PipecatTesterAgentRunner(
+            target=HangingCreateTarget(),
+            tts_renderer=FakeTts(),
+            observation_provider=SequencedObservationProvider(),
+        )
+        create_config = _config()
+        create_config.total_timeout_seconds = 0.05
+        create_result = await create_runner.run(create_config)
+        assert create_result['status'] == 'needs_review'
+        assert create_result['error'] == 'tester_total_timeout'
+        assert create_result['session_id'] is None
+        assert create_result['proof'] is None
+
+        cleanup_runner = PipecatTesterAgentRunner(
+            target=HangingCleanupTarget(),
+            tts_renderer=FakeTts(),
+            observation_provider=SequencedObservationProvider(),
+        )
+        cleanup_config = _config()
+        cleanup_config.total_timeout_seconds = 0.05
+        cleanup_result = await cleanup_runner.run(cleanup_config)
+        assert cleanup_result['status'] == 'needs_review'
+        assert cleanup_result['error'] == 'tester_cleanup_timeout'
+        assert cleanup_result['session_id'] == 'target-session-1'
+
+    asyncio.run(run())
