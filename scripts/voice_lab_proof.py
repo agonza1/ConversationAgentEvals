@@ -9,7 +9,15 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / 'apps' / 'api'))
 
-from app.services.voice_lab import build_default_voice_lab_runner, seeded_voice_lab_scenarios
+from app.services.standalone_voice_lab import (
+    build_live_acc_voice_lab_runner,
+    build_standalone_voice_lab_runner,
+)
+from app.services.voice_lab import seeded_voice_lab_scenarios
+
+# Preserve the test seam used by the existing script unit tests. The default is
+# intentionally standalone and never resolves a sibling ACC repository.
+build_default_voice_lab_runner = build_standalone_voice_lab_runner
 
 
 BUNDLE_SCHEMA_VERSION = 'voice-lab-evidence-bundle-v1'
@@ -17,7 +25,11 @@ BUNDLE_SCHEMA_VERSION = 'voice-lab-evidence-bundle-v1'
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
-    runner = build_default_voice_lab_runner(PROJECT_ROOT)
+    runner = (
+        build_live_acc_voice_lab_runner(PROJECT_ROOT, acc_repo_root=args.acc_repo_root)
+        if args.acc_repo_root is not None
+        else build_default_voice_lab_runner(PROJECT_ROOT)
+    )
     report = runner.run(seeded_voice_lab_scenarios())
 
     artifact_dir = (PROJECT_ROOT / args.artifact_root).resolve() if not args.artifact_root.is_absolute() else args.artifact_root
@@ -164,6 +176,15 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         type=Path,
         default=Path('artifacts/voice-lab'),
         help='Artifact directory where the bundle manifest and scenario files should be written.',
+    )
+    parser.add_argument(
+        '--acc-repo-root',
+        type=Path,
+        default=None,
+        help=(
+            'Explicitly use the live sibling-repository ACC proof adapter. '
+            'Omit this flag for the standalone checked-in fixture runner.'
+        ),
     )
     return parser.parse_args(argv)
 

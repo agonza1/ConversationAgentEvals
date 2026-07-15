@@ -1,0 +1,79 @@
+{
+  "outcome": "fail_closed_handoff",
+  "call": {
+    "session": {
+      "callId": "acc-offline-fallback-001",
+      "runtimeModeLabels": {
+        "telephony": "mocked_telephony",
+        "media": "generated_media",
+        "rtcAsr": "rtc_asr_blocked",
+        "credentialsMode": "mocked"
+      }
+    },
+    "flowState": "wrap",
+    "operatorSteer": {
+      "pending": false,
+      "lastAction": "escalate"
+    },
+    "demoFallback": {
+      "armed": true,
+      "mode": "tool_timeout",
+      "reason": "retention lookup exceeded its latency budget"
+    },
+    "pipecatFlow": {
+      "script": {
+        "completed": false
+      }
+    },
+    "transcript": [
+      {
+        "speaker": "caller",
+        "text": "I want to cancel because the renewal increase is too high.",
+        "timestamp": "2026-07-13T01:10:00Z"
+      },
+      {
+        "speaker": "agent",
+        "text": "The required tool timed out, so I am failing closed and transferring you to a human agent.",
+        "timestamp": "2026-07-13T01:10:01Z"
+      }
+    ],
+    "events": [
+      {
+        "type": "call_started",
+        "at": "2026-07-13T01:10:00Z",
+        "detail": {
+          "mode": "mocked_telephony"
+        }
+      },
+      {
+        "type": "tool_timeout",
+        "at": "2026-07-13T01:10:01Z",
+        "detail": {
+          "tool": "retention_offer_lookup"
+        }
+      },
+      {
+        "type": "human_handoff_started",
+        "at": "2026-07-13T01:10:01.100Z",
+        "detail": {
+          "reason": "tool_timeout_fail_closed"
+        }
+      }
+    ],
+    "latencyMarks": [
+      {
+        "stage": "retention_offer_lookup",
+        "elapsedMs": 2500,
+        "budgetMs": 800,
+        "recordedAt": "2026-07-13T01:10:01Z"
+      }
+    ]
+  },
+  "proof": {
+    "callId": "acc-offline-fallback-001",
+    "outcome": "fail_closed_handoff",
+    "artifacts": {
+      "proof": "fixture://agentic-contact-center/fail-closed/proof"
+    }
+  }
+}

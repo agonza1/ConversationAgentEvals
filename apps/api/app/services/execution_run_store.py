@@ -1,0 +1,158 @@
+from __future__ import annotations
+
+import threading
+from copy import deepcopy
+from datetime import UTC, datetime
+from typing import Any
+
+from app.schemas.execution import (
+    ConversationRecord,
+    ExecutionRunProgress,
+    ExecutionRunRecord,
+)
+
+
+_LOCK = threading.Lock()
+_RUNS: dict[str, dict[str, Any]] = {}
+
+
+def reset_execution_runs_for_tests() -> None:
+    with _LOCK:
+        _RUNS.clear()
+
+
+def create_execution_run(record: ExecutionRunRecord) -> dict[str, Any]:
+    payload = record.model_dump(mode='json')
+    with _LOCK:
+        _RUNS[payload['execution_run_id']] = payload
+    return deepcopy(payload)
+
+
+def get_execution_run(execution_run_id: str) -> dict[str, Any] | None:
+    with _LOCK:
+        value = _RUNS.get(execution_run_id)
+        return deepcopy(value) if value is not None else None
+
+
+def list_execution_runs(
+    *,
+    user_id: str,
+    project_id: str | None = None,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    with _LOCK:
+        rows = [deepcopy(item) for item in _RUNS.values() if item.get('user_id') == user_id]
+    if project_id:
+        rows = [item for item in rows if item.get('project_id') == project_id]
+    if status:
+        rows = [item for item in rows if item.get('status') == status]
+    rows.sort(key=lambda item: item.get('updated_at') or '', reverse=True)
+    return rows
+
+
+def mark_execution_run_running(execution_run_id: str) -> dict[str, Any] | None:
+    return _update_run(
+        execution_run_id,
+        status='running',
+        progress_phase='executing',
+    )
+
+
+def mark_execution_run_failed(execution_run_id: str, error: str) -> dict[str, Any] | None:
+    return _update_run(
+        execution_run_id,
+        status='failed',
+        error=error,
+        progress_phase='failed',
+        completed=True,
+    )
+
+
+def upsert_conversation(execution_run_id: str, conversation: ConversationRecord) -> dict[str, Any] | None:
+    with _LOCK:
+        run = _RUNS.get(execution_run_id)
+        if run is None:
+            return None
+        conversations = list(run.get('conversations') or [])
+        payload = conversation.model_dump(mode='json')
+        replaced = False
+        for index, item in enumerate(conversations):
+            if item.get('conversation_id') == payload['conversation_id']:
+                conversations[index] = payload
+                replaced = True
+                break
+        if not replaced:
+            conversations.append(payload)
+        completed = sum(1 for item in conversations if item.get('status') in {'completed', 'failed'})
+        total = int((run.get('progress') or {}).get('total_conversations') or max(len(conversations), 1))
+        percent = round((completed / total) * 100, 1) if total else 0.0
+        active_id = None
+        for item in reversed(conversations):
+            if item.get('status') in {'queued', 'running'}:
+                active_id = item.get('conversation_id')
+                break
+        run['conversations'] = conversations
+        run['updated_at'] = _now()
+        run['progress'] = ExecutionRunProgress(
+            phase='executing',
+            completed_conversations=completed,
+            total_conversations=total,
+            percent=percent,
+            active_conversation_id=active_id,
+        ).model_dump(mode='json')
+        return deepcopy(run)
+
+
+def append_conversation(execution_run_id: str, conversation: ConversationRecord) -> dict[str, Any] | None:
+    return upsert_conversation(execution_run_id, conversation)
+
+
+def complete_execution_run(
+    execution_run_id: str,
+    *,
+    status: str,
+    inference_set_path: str | None = None,
+) -> dict[str, Any] | None:
+    return _update_run(
+        execution_run_id,
+        status=status,
+        inference_set_path=inference_set_path,
+        progress_phase='completed' if status != 'failed' else 'failed',
+        completed=True,
+    )
+
+
+def _update_run(
+    execution_run_id: str,
+    *,
+    status: str | None = None,
+    error: str | None = None,
+    inference_set_path: str | None = None,
+    progress_phase: str | None = None,
+    completed: bool = False,
+) -> dict[str, Any] | None:
+    with _LOCK:
+        run = _RUNS.get(execution_run_id)
+        if run is None:
+            return None
+        now = _now()
+        if status is not None:
+            run['status'] = status
+        if error is not None:
+            run['error'] = error
+        if inference_set_path is not None:
+            run['inference_set_path'] = inference_set_path
+        progress = dict(run.get('progress') or {})
+        if progress_phase is not None:
+            progress['phase'] = progress_phase
+        run['progress'] = progress
+        run['updated_at'] = now
+        if completed:
+            run['completed_at'] = now
+            progress['active_conversation_id'] = None
+            run['progress'] = progress
+        return deepcopy(run)
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()

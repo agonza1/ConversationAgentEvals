@@ -4,17 +4,19 @@ test('free-to-paid eval journey works end to end', async ({ page }) => {
   await page.goto('/benchmarks');
 
   await expect(page.getByRole('heading', { name: 'Run an agentic scenario test.' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Run deterministic checks now. Save and judge after signup.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Run deterministic checks now. Save runs and request LLM judge when ready.' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Get from sample scenario to saved QA history.' })).toBeVisible();
+  await expect(page.getByText('Auth', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Sign up to save' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Create demo project' })).toHaveCount(0);
   await expect(page.getByLabel('Pick a scenario: Done')).toBeVisible();
   await expect(page.getByLabel('Run evidence check: Ready')).toBeVisible();
   await expect(page.getByLabel('Save repeatable history: Next')).toBeVisible();
   await expect(page.getByText('Starter evidence ready: transcript, action trace, final state.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Reload starter data' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Run sample now' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Create demo project' })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Starter/ })).toContainText('$19/month');
-  await expect(page.getByRole('button', { name: /Team/ })).toContainText('$99/month');
+  await expect(page.getByLabel('Pricing and upgrade gates')).toHaveCount(0);
+  await expect(page.getByLabel('Demo plan')).toHaveValue('free');
 
   await page.getByRole('button', { name: 'Run sample now' }).click();
   await expect(page.getByRole('heading', { name: /pass|needs_review/i })).toBeVisible();
@@ -38,18 +40,12 @@ test('free-to-paid eval journey works end to end', async ({ page }) => {
   await page.getByRole('button', { name: 'Request LLM judge' }).click();
   await expect(page.getByText(/available on Starter and above/)).toBeVisible();
 
-  await page.getByRole('button', { name: /Starter/ }).click();
+  await page.getByLabel('Demo plan').selectOption('starter');
   await page.getByRole('button', { name: 'Request LLM judge' }).click();
   await expect(page.getByText(/LLM judge request accepted/)).toBeVisible();
   await expect(page.getByText('10 credits estimated; 200 of 200 daily credits available; vertex not configured.')).toBeVisible();
 
   await page.getByRole('button', { name: 'Save run' }).click();
-  await expect(page.getByText('Sign up first to save projects and run history.')).toBeVisible();
-
-  await page.getByRole('button', { name: 'Create demo project' }).click();
-  await expect(page.getByText(/Signed in with local Firebase-ready demo identity/)).toBeVisible();
-
-  await page.getByRole('button', { name: 'Save this run' }).click();
   await expect(page.getByText(/Saved run/)).toBeVisible();
   await expect(page.getByRole('heading', { name: /1 saved for Billing Address Change/ })).toBeVisible();
   await expect(page.getByLabel('Saved runs and e2e validation').getByText('Baseline run for this project.')).toBeVisible();
@@ -99,7 +95,6 @@ test('failure baseline surfaces actionable benchmark report issues', async ({ pa
   await expect(page.getByRole('heading', { name: 'Forbidden actions observed' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Suggested fixes' })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Sign up to save' }).click();
   await page.getByRole('button', { name: 'Save run' }).click();
   await expect(page.getByText('Failure mix')).toBeVisible();
   await expect(page.getByLabel('Saved runs and e2e validation').getByText('required_action_execution')).toBeVisible();
