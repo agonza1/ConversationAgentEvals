@@ -19,19 +19,23 @@ from app.services.product_service import (
     accept_workspace_invitation,
     checkout_gate,
     add_workspace_member,
+    disconnect_openai_provider,
     export_project_runs,
     export_saved_run,
     get_saved_run,
     list_audit_events,
     invite_workspace_member,
     judge_gate,
+    list_llm_providers,
     list_projects,
     list_saved_runs,
     list_workspaces,
+    openai_provider_status,
     product_config,
     project_regression_summary,
     record_judge_request,
     save_run,
+    start_openai_oauth,
     upsert_project,
     upsert_workspace,
     update_project_settings,
@@ -274,3 +278,26 @@ def request_llm_judge(payload: JudgeRequest, db: Session = Depends(get_db)):
             credits=response.credits,
         )
     return response
+
+
+@router.get('/providers')
+def get_llm_providers():
+    return {'providers': list_llm_providers()}
+
+
+@router.post('/providers/openai/oauth/start')
+def start_openai_provider_oauth():
+    try:
+        return start_openai_oauth()
+    except OSError as exc:
+        raise HTTPException(status_code=409, detail=f'Could not start OpenAI OAuth callback server: {exc}') from exc
+
+
+@router.get('/providers/openai/status')
+def get_openai_provider_status():
+    return openai_provider_status()
+
+
+@router.post('/providers/openai/disconnect')
+def disconnect_openai_provider_route():
+    return disconnect_openai_provider()

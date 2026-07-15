@@ -6,7 +6,10 @@ export default function BenchmarksPage() {
     <main className="page-shell compact-shell">
       <nav className="top-nav compact-nav" aria-label="Benchmark navigation">
         <Link className="brand" href="/">AgentBench</Link>
-        <Link href="/">Homepage</Link>
+        <div>
+          <Link href="/">Homepage</Link>
+          <Link href="/scenarios">Scenarios</Link>
+        </div>
       </nav>
 
       <section className="minimal-hero" aria-labelledby="benchmark-title">

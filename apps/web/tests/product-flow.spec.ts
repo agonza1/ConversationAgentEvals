@@ -4,7 +4,7 @@ test('free-to-paid eval journey works end to end', async ({ page }) => {
   await page.goto('/benchmarks');
 
   await expect(page.getByRole('heading', { name: 'Run an agentic scenario test.' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Run deterministic checks now. Save runs and request LLM judge when ready.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Run deterministic checks now. Connect OpenAI for the local LLM judge.' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Get from sample scenario to saved QA history.' })).toBeVisible();
   await expect(page.getByText('Auth', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Sign up to save' })).toHaveCount(0);
@@ -37,13 +37,9 @@ test('free-to-paid eval journey works end to end', async ({ page }) => {
   expect(reportDownloadFile.suggestedFilename()).toMatch(/agentbench-.*-report\.json/);
   await expect(page.getByText('Exported current benchmark report JSON.')).toBeVisible();
 
+  await expect(page.getByRole('button', { name: 'Connect OpenAI' })).toBeVisible();
   await page.getByRole('button', { name: 'Request LLM judge' }).click();
-  await expect(page.getByText(/available on Starter and above/)).toBeVisible();
-
-  await page.getByLabel('Demo plan').selectOption('starter');
-  await page.getByRole('button', { name: 'Request LLM judge' }).click();
-  await expect(page.getByText(/LLM judge request accepted/)).toBeVisible();
-  await expect(page.getByText('10 credits estimated; 200 of 200 daily credits available; vertex not configured.')).toBeVisible();
+  await expect(page.getByText(/Connect OpenAI/)).toBeVisible();
 
   await page.getByRole('button', { name: 'Save run' }).click();
   await expect(page.getByText(/Saved run/)).toBeVisible();

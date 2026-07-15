@@ -312,7 +312,7 @@ _SCENARIOS_BY_ID = {
 
 
 def list_suites() -> list[BenchmarkSuite]:
-    return [
+    summaries = [
         {
             'id': suite['id'],
             'name': suite['name'],
@@ -331,6 +331,36 @@ def list_suites() -> list[BenchmarkSuite]:
         }
         for suite in _SUITES
     ]
+    known_ids = {summary['id'] for summary in summaries}
+    # Dynamically registered suites (e.g. file-backed user-created scenarios).
+    for suite_id, suite in _SUITES_BY_ID.items():
+        if suite_id in known_ids:
+            continue
+        scenarios = suite.get('scenarios') or []
+        if not scenarios:
+            continue
+        summaries.append(
+            {
+                'id': suite['id'],
+                'name': suite['name'],
+                'provider': suite.get('provider'),
+                'description': suite.get('description') or '',
+                'scenario_count': len(scenarios),
+                'scenarios': [
+                    {
+                        'id': scenario['id'],
+                        'title': scenario['title'],
+                        'persona': scenario.get('persona'),
+                        'goal': scenario.get('goal'),
+                        'description': scenario.get('description'),
+                        'simulated_user_prompt': scenario.get('simulated_user_prompt') or scenario.get('prompt'),
+                        'expected_output': scenario.get('expected_output') or scenario.get('expected_final_state'),
+                    }
+                    for scenario in scenarios
+                ],
+            }
+        )
+    return summaries
 
 
 def get_suite(suite_id: str) -> BenchmarkSuite | None:

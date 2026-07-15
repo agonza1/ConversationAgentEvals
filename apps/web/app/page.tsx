@@ -82,6 +82,7 @@ export default function HomePage() {
           <a href="#product">Product</a>
           <a href="#coverage">Coverage</a>
           <a href="#benchmarks">Benchmarks</a>
+          <Link href="/scenarios">Scenarios</Link>
           <Link href="/benchmarks">Runner</Link>
         </div>
       </nav>
@@ -96,7 +97,7 @@ export default function HomePage() {
           </p>
           <div className="hero-cta">
             <Link className="primary-link" href="/benchmarks">Open benchmark runner</Link>
-            <a className="secondary-link" href="#product">See how it works</a>
+            <Link className="secondary-link" href="/scenarios">Create a scenario</Link>
           </div>
         </div>
 

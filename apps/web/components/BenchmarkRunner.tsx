@@ -442,6 +442,8 @@ interface JudgeGate {
   credits: number;
   message: string;
   evidence_citations: string[];
+  judge_output?: string | null;
+  provider?: string | null;
   spend_control?: {
     estimated_credits?: number;
     daily_credit_limit?: number;
@@ -451,6 +453,17 @@ interface JudgeGate {
     provider_configured?: boolean;
     within_budget?: boolean;
   };
+}
+
+interface OpenAIProviderStatus {
+  id?: string;
+  provider?: string;
+  status: 'connected' | 'disconnected' | 'expired' | string;
+  email?: string | null;
+  account_id?: string | null;
+  plan_type?: string | null;
+  message?: string | null;
+  last_error?: string | null;
 }
 
 interface ProductAuditEvent {
@@ -1058,6 +1071,32 @@ async function requestJudge(payload: { plan: PricingPlan['id']; report: Benchmar
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+    }),
+  );
+}
+
+async function fetchOpenAIProviderStatus() {
+  return handleJson<OpenAIProviderStatus>(
+    await fetch(`${getApiBase()}/api/product/providers/openai/status`, { cache: 'no-store' }),
+  );
+}
+
+async function startOpenAIProviderOAuth() {
+  return handleJson<{ authorize_url: string; redirect_uri: string; provider?: string }>(
+    await fetch(`${getApiBase()}/api/product/providers/openai/oauth/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    }),
+  );
+}
+
+async function disconnectOpenAIProvider() {
+  return handleJson<OpenAIProviderStatus>(
+    await fetch(`${getApiBase()}/api/product/providers/openai/disconnect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
     }),
   );
 }
@@ -1811,6 +1850,9 @@ export function BenchmarkRunner() {
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [judgeGate, setJudgeGate] = useState<JudgeGate | null>(null);
+  const [openaiProvider, setOpenaiProvider] = useState<OpenAIProviderStatus | null>(null);
+  const [openaiProviderMessage, setOpenaiProviderMessage] = useState<string | null>(null);
+  const [isConnectingOpenAI, setIsConnectingOpenAI] = useState(false);
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
@@ -1862,9 +1904,11 @@ export function BenchmarkRunner() {
       try {
         const nextSuites = await fetchBenchmarkSuites();
         const nextConfig = await fetchProductConfig();
+        const nextOpenAI = await fetchOpenAIProviderStatus().catch(() => null);
         if (!isMounted) return;
         setSuites(nextSuites);
         setProductConfig(nextConfig);
+        if (nextOpenAI) setOpenaiProvider(nextOpenAI);
         setSelectedSuiteId(nextSuites[0]?.id ?? '');
         setSelectedScenarioId(nextSuites[0]?.scenarios[0]?.id ?? '');
       } catch (err) {
@@ -2150,6 +2194,8 @@ export function BenchmarkRunner() {
     try {
       setJudgeGate(await requestJudge({ plan, report, transcript, user_id: userId || undefined, project_id: userId ? projectId : undefined }));
       await refreshAuditTrail();
+      const status = await fetchOpenAIProviderStatus().catch(() => null);
+      if (status) setOpenaiProvider(status);
     } catch (err) {
       setJudgeGate({
         status: 'blocked',
@@ -2158,6 +2204,48 @@ export function BenchmarkRunner() {
         message: err instanceof Error ? err.message : 'Judge request failed.',
         evidence_citations: [],
       });
+    }
+  }
+
+  async function onConnectOpenAI() {
+    setIsConnectingOpenAI(true);
+    setOpenaiProviderMessage(null);
+    try {
+      const started = await startOpenAIProviderOAuth();
+      if (started.authorize_url && typeof window !== 'undefined') {
+        window.open(started.authorize_url, '_blank', 'noopener,noreferrer');
+      }
+      setOpenaiProviderMessage('Complete OpenAI login in the opened browser tab. This page will refresh when connected.');
+      const deadline = Date.now() + 120_000;
+      while (Date.now() < deadline) {
+        await delay(2000);
+        const status = await fetchOpenAIProviderStatus();
+        setOpenaiProvider(status);
+        if (status.status === 'connected') {
+          setOpenaiProviderMessage(`Connected as ${status.email || status.account_id || 'OpenAI account'}.`);
+          const nextConfig = await fetchProductConfig().catch(() => null);
+          if (nextConfig) setProductConfig(nextConfig);
+          break;
+        }
+      }
+    } catch (err) {
+      setOpenaiProviderMessage(err instanceof Error ? err.message : 'Could not start OpenAI OAuth.');
+    } finally {
+      setIsConnectingOpenAI(false);
+    }
+  }
+
+  async function onDisconnectOpenAI() {
+    setOpenaiProviderMessage(null);
+    try {
+      await disconnectOpenAIProvider();
+      const status = await fetchOpenAIProviderStatus();
+      setOpenaiProvider(status);
+      const nextConfig = await fetchProductConfig().catch(() => null);
+      if (nextConfig) setProductConfig(nextConfig);
+      setOpenaiProviderMessage('OpenAI disconnected.');
+    } catch (err) {
+      setOpenaiProviderMessage(err instanceof Error ? err.message : 'Could not disconnect OpenAI.');
     }
   }
 
@@ -2766,13 +2854,13 @@ export function BenchmarkRunner() {
   return (
     <section style={{ display: 'grid', gap: 20 }}>
       {productConfig ? (
-        <section className="product-console product-console-compact" aria-label="Product plan controls">
+        <section className="product-console product-console-compact" aria-label="Product plan and OpenAI judge controls">
           <div className="console-panel">
             <p className="eyebrow">Free browser eval</p>
-            <h2>Run deterministic checks now. Save runs and request LLM judge when ready.</h2>
+            <h2>Run deterministic checks now. Connect OpenAI for the local LLM judge.</h2>
             <p>
               This path is real: the browser sends transcript, action trace, and final state evidence to the benchmark API.
-              Paid gates control persistence, LLM judging, CI/API, and voice minutes. A demo identity is stored locally so save and history work without signup.
+              A demo identity is stored locally so save and history work without signup. LLM judging unlocks via Codex-style OpenAI OAuth.
             </p>
             <div className="usage-strip">
               <span>{deterministicRule?.credits ?? 1} credit browser eval</span>
@@ -2792,6 +2880,28 @@ export function BenchmarkRunner() {
                 <option value="business">Business</option>
               </select>
             </label>
+            <div className="openai-provider-control" aria-label="OpenAI judge provider">
+              <div>
+                <strong>OpenAI judge</strong>
+                <p style={{ margin: '4px 0 0', color: 'var(--muted)', fontSize: 14 }}>
+                  {openaiProvider?.status === 'connected'
+                    ? `Connected${openaiProvider.email ? ` as ${openaiProvider.email}` : ''}${openaiProvider.plan_type ? ` (${openaiProvider.plan_type})` : ''}.`
+                    : openaiProvider?.message || 'Connect Codex OAuth to run the local LLM judge.'}
+                </p>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {openaiProvider?.status === 'connected' ? (
+                  <button type="button" className="secondary-link" onClick={() => void onDisconnectOpenAI()}>
+                    Disconnect OpenAI
+                  </button>
+                ) : (
+                  <button type="button" className="primary-link" disabled={isConnectingOpenAI} onClick={() => void onConnectOpenAI()}>
+                    {isConnectingOpenAI ? 'Waiting for OpenAI…' : 'Connect OpenAI'}
+                  </button>
+                )}
+              </div>
+              {openaiProviderMessage ? <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13 }}>{openaiProviderMessage}</p> : null}
+            </div>
           </div>
         </section>
       ) : null}
@@ -3150,7 +3260,7 @@ export function BenchmarkRunner() {
             style={{
               border: '1px solid var(--border)',
               borderRadius: 8,
-              background: plan === 'free' ? 'var(--panel-alt)' : 'white',
+              background: openaiProvider?.status === 'connected' ? 'white' : 'var(--panel-alt)',
               color: 'var(--text)',
               padding: '12px 18px',
               fontWeight: 800,
@@ -3162,7 +3272,7 @@ export function BenchmarkRunner() {
         </div>
 
         {runError ? <p style={{ color: 'var(--error-text)', margin: 0 }}>{runError}</p> : null}
-        {saveMessage ? <p style={{ color: 'var(--muted)', margin: 0 }}>{saveMessage}</p> : null}
+        {saveMessage ? <p style={{ margin: 0, color: 'var(--muted)' }}>{saveMessage}</p> : null}
         {judgeGate ? (
           <div
             style={{
@@ -3171,11 +3281,34 @@ export function BenchmarkRunner() {
               color: judgeGate.status === 'ready' ? 'var(--success-text)' : 'var(--error-text)',
               borderRadius: 8,
               padding: 12,
+              display: 'grid',
+              gap: 8,
             }}
           >
-            <strong>{judgeGate.status === 'ready' ? 'Judge gate ready' : 'Upgrade required'}:</strong> {judgeGate.message}
+            <div>
+              <strong>{judgeGate.status === 'ready' ? 'LLM judge ready' : 'LLM judge blocked'}:</strong> {judgeGate.message}
+            </div>
             {formatJudgeSpend(judgeGate.spend_control) ? (
-              <p style={{ margin: '8px 0 0', color: 'inherit' }}>{formatJudgeSpend(judgeGate.spend_control)}</p>
+              <p style={{ margin: 0, color: 'inherit' }}>{formatJudgeSpend(judgeGate.spend_control)}</p>
+            ) : null}
+            {judgeGate.judge_output ? (
+              <pre
+                aria-label="LLM judge output"
+                style={{
+                  margin: 0,
+                  whiteSpace: 'pre-wrap',
+                  fontFamily: 'inherit',
+                  fontSize: 14,
+                  lineHeight: 1.45,
+                }}
+              >
+                {judgeGate.judge_output}
+              </pre>
+            ) : null}
+            {judgeGate.status === 'blocked' && openaiProvider?.status !== 'connected' ? (
+              <button type="button" className="primary-link" disabled={isConnectingOpenAI} onClick={() => void onConnectOpenAI()}>
+                {isConnectingOpenAI ? 'Waiting for OpenAI…' : 'Connect OpenAI'}
+              </button>
             ) : null}
           </div>
         ) : null}

@@ -12,8 +12,8 @@ This is unofficial/brittle for third-party products; acceptable for local-first 
 
 ## Current state
 
-- Judge is plan-gated and does not call a model (`judge_gate` in `apps/api/app/services/product_service.py`); provider comes from `LLM_JUDGE_PROVIDER` / env keys only.
-- Pricing UI is being removed, so “upgrade to Starter” is a dead end for unlocking the judge.
+- Implemented on `feature/openai-codex-oauth-judge`: provider abstraction, local PKCE callback/token storage, provider routes, connection-gated Codex Responses judge execution, benchmark UI controls, and mocked tests.
+- The deterministic eval path remains available without OAuth; the LLM judge points disconnected users to Connect OpenAI instead of a paid-plan upgrade.
 - OpenClaw reference: client_id `app_EMoamEEZ73f0CkXaXp7hrann`, authorize/token on `auth.openai.com`, redirect `http://localhost:1455/auth/callback`, scopes `openid profile email offline_access`.
 
 ## Architecture
