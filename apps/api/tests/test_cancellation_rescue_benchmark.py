@@ -284,3 +284,64 @@ def test_missing_transcript_preserves_zero_assert_score_and_evidence_manifest():
     assert evidence_artifact.inline_data == evidence_manifest
     assert evidence_artifact.sha256 == base.artifacts[1].sha256
 
+
+def test_trace_event_type_is_preferred_over_action_label():
+    register_builtin_benchmark_extensions()
+    from app.services.benchmark_catalog_extensions import (
+        CANCELLATION_RESCUE_SCENARIO,
+        _apply_cancellation_rescue_checks,
+        _event_type_names_from_action_trace,
+    )
+    from app.schemas.assert_contracts import AssertResultManifest
+    from app.services import benchmark_service
+
+    trace = [
+        {
+            'step': 1,
+            'type': 'policy_hold_entered',
+            'action': 'enter policy hold before retention action',
+            'status': 'completed',
+        },
+        {
+            'step': 2,
+            'type': 'operator_steer_applied',
+            'action': 'record operator approval escalation or handoff',
+            'status': 'completed',
+        },
+        {
+            'step': 3,
+            'type': 'call_wrapped',
+            'action': 'record final disposition',
+            'status': 'completed',
+        },
+    ]
+    assert _event_type_names_from_action_trace(trace) == [
+        'policy_hold_entered',
+        'operator_steer_applied',
+        'call_wrapped',
+    ]
+
+    payload = {
+        'transcript': 'Caller wants to cancel because renewal increase is too high.',
+        'action_trace': [
+            {'step': 1, 'type': 'cancellation_intent_detected', 'action': 'detect cancellation intent', 'status': 'completed'},
+            {'step': 2, 'type': 'renewal_increase_reason_captured', 'action': 'capture renewal increase reason', 'status': 'completed'},
+            *trace,
+        ],
+        'final_state': {'complete': True, 'outcome': 'scripted_wrap_complete'},
+    }
+    base = AssertResultManifest.model_validate(
+        {
+            'verdict': {'status': 'pass', 'score': 100, 'summary': 'ok', 'metrics': {}},
+            'failures': [],
+            'artifacts': [
+                benchmark_service._assert_pointer('assert-result-report', 'report', {'status': 'pass', 'score': 100}, role='output'),
+                benchmark_service._assert_pointer('assert-evidence-manifest', 'manifest', {'artifacts': []}, role='output'),
+            ],
+            'raw_result': benchmark_service._assert_pointer('assert-raw-result', 'manifest', {'status': 'pass', 'score': 100}, role='output'),
+        }
+    )
+    result = _apply_cancellation_rescue_checks(base, scenario=CANCELLATION_RESCUE_SCENARIO, payload=payload)
+    assert result.verdict.status == 'pass'
+    assert result.verdict.metrics['deterministic_check_fail_count'] == 0
+

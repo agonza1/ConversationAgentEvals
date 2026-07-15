@@ -317,7 +317,7 @@ def _apply_cancellation_rescue_checks(
     scenario: dict[str, Any],
     payload: dict[str, Any],
 ) -> AssertResultManifest:
-    event_names = [_normalize_event_name(event.name) for event in parse_action_trace(payload.get('action_trace'))]
+    event_names = _event_type_names_from_action_trace(payload.get('action_trace'))
     final_state = payload.get('final_state') if isinstance(payload.get('final_state'), dict) else {}
     failures: list[AssertFailureItem] = []
     check_results: list[dict[str, Any]] = []
@@ -482,6 +482,31 @@ def _first_event_position(event_names: list[str], expected: list[str], *, start:
         if event_name in normalized:
             return index
     return None
+
+
+def _event_type_names_from_action_trace(action_trace: Any) -> list[str]:
+    """Prefer ACC event `type` over human-readable `action` labels for deterministic checks."""
+
+    if isinstance(action_trace, dict):
+        for key in ('actions', 'action_trace', 'trace', 'tool_calls', 'events', 'steps'):
+            value = action_trace.get(key)
+            if isinstance(value, list):
+                return _event_type_names_from_action_trace(value)
+        return _event_type_names_from_action_trace([action_trace])
+
+    if not isinstance(action_trace, list):
+        return [_normalize_event_name(event.name) for event in parse_action_trace(action_trace)]
+
+    names: list[str] = []
+    for item in action_trace:
+        if isinstance(item, dict):
+            event_type = item.get('type')
+            if isinstance(event_type, str) and event_type.strip():
+                names.append(_normalize_event_name(event_type))
+                continue
+        for event in parse_action_trace([item] if not isinstance(item, list) else item):
+            names.append(_normalize_event_name(event.name))
+    return names
 
 
 def _normalize_event_name(value: Any) -> str:
