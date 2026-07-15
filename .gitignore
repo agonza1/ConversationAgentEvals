@@ -33,5 +33,6 @@ storage/decks/*
 !storage/decks/.gitkeep
 .DS_Store
 .compounds/
+.local/
 artifacts/voice-lab/
 artifacts/voice-lab-private-site/

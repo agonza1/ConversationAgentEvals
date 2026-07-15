@@ -46,6 +46,8 @@ npm run dev
 
 Open the printed web URL and visit `/benchmarks`. The basic demo uses transcript, action-trace, and final-state evidence, so it does not require live microphone ASR. Advanced environment settings are documented in [docs/environment.md](docs/environment.md).
 
+Planned local LLM judge auth (Codex-style OpenAI OAuth, Claude later): [docs/openai-codex-oauth-plan.md](docs/openai-codex-oauth-plan.md).
+
 For the shortest end-to-end walkthrough, see [docs/assert-flow-demo.md](docs/assert-flow-demo.md) or its [machine-readable example](docs/examples/assert-flow-demo.json).
 
 ## Architecture
