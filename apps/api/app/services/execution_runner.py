@@ -192,7 +192,7 @@ def _run_one_conversation(
             scenario_id=scenario_id,
             scenario_title=scenario_title,
             mode=payload.mode,
-            status='completed',
+            status='failed' if result.get('verdict') in {'fail', 'failed'} else 'completed',
             iteration=iteration,
             turns=result['turns'],
             transcript=result.get('transcript'),
@@ -207,6 +207,11 @@ def _run_one_conversation(
             score=result.get('score'),
             started_at=started,
             completed_at=datetime.now(UTC).isoformat(),
+            error=(
+                str((result.get('final_state') or {}).get('tester_error'))
+                if (result.get('final_state') or {}).get('tester_error')
+                else None
+            ),
         )
     except Exception as exc:
         return ConversationRecord(
@@ -341,6 +346,10 @@ async def _execute_pipecat_webrtc(
     if not session_id:
         raise RuntimeError('pipecat_webrtc execution did not produce a session id')
 
+    tester_status = str(tester_result.get('status') or '')
+    tester_error = tester_result.get('error')
+    tester_failed = tester_status in {'failed', 'needs_review'} or bool(tester_error)
+
     transcription = transport.transcription_turns(session_id)
     recording = transport.recording_handle(session_id)
     if recording is None:
@@ -381,7 +390,19 @@ async def _execute_pipecat_webrtc(
 
     # Scoring remains fixture-backed for cancellation-rescue until a live SUT proof
     # path lands; capture (recording + dialog + vCon) comes from the WebRTC session.
-    evidence = _evidence_from_offline_fixture(suite_id, scenario_id, payload, evaluate=payload.evaluate)
+    # Do not let offline fixture pass mask a failed/needs_review tester run.
+    evidence = _evidence_from_offline_fixture(
+        suite_id,
+        scenario_id,
+        payload,
+        evaluate=payload.evaluate and not tester_failed,
+    )
+    if tester_failed:
+        verdict = 'fail' if tester_status == 'failed' else 'needs_review'
+        score = None
+    else:
+        verdict = evidence.get('verdict')
+        score = evidence.get('score')
     return {
         'turns': turns or evidence['turns'],
         'transcript': transcript or evidence.get('transcript'),
@@ -390,6 +411,7 @@ async def _execute_pipecat_webrtc(
             **(evidence.get('final_state') or {}),
             'audio_transport': transport.transport_id,
             'tester_termination_reason': tester_result.get('termination_reason'),
+            'tester_error': tester_error,
         },
         'latency_marks': evidence.get('latency_marks') or [],
         'recording': recording.as_call_media(),
@@ -398,6 +420,7 @@ async def _execute_pipecat_webrtc(
         'audio_session': {
             **transport.session_proof(session_id),
             'tester_status': tester_result.get('status'),
+            'tester_error': tester_error,
             'proof': tester_result.get('proof'),
             'extension_points': {
                 'freeswitch_verto_sip': {
@@ -409,8 +432,8 @@ async def _execute_pipecat_webrtc(
                 }
             },
         },
-        'verdict': evidence.get('verdict'),
-        'score': evidence.get('score'),
+        'verdict': verdict,
+        'score': score,
     }
 
 

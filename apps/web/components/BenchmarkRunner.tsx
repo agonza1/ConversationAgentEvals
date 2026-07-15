@@ -2538,19 +2538,28 @@ export function BenchmarkRunner() {
     if (!selectedSuite) return;
     const identity = ensureDemoIdentity();
 
-    const scenarioIds =
-      executionMode === 'voice_fixture' || executionMode === 'pipecat_webrtc'
-        ? ['cancellation-rescue']
-        : executionScope === 'suite'
-          ? selectedSuite.scenarios.map((scenario) => scenario.id)
-          : selectedScenario
-            ? [selectedScenario.id]
-            : [];
+    const voiceModes = executionMode === 'voice_fixture' || executionMode === 'pipecat_webrtc';
+    // Voice fixture / Pipecat WebRTC currently require the optional cancellation-rescue
+    // scenario on call-center-voice-ai; do not post that id against other suites.
+    const voiceSuiteId = 'call-center-voice-ai';
+    const suiteForRun = voiceModes ? voiceSuiteId : selectedSuite.id;
+    const scenarioIds = voiceModes
+      ? ['cancellation-rescue']
+      : executionScope === 'suite'
+        ? selectedSuite.scenarios.map((scenario) => scenario.id)
+        : selectedScenario
+          ? [selectedScenario.id]
+          : [];
 
     if (!scenarioIds.length) {
       setExecutionMessage('Select at least one scenario to execute.');
       return;
     }
+
+    const suiteNote =
+      voiceModes && selectedSuite.id !== voiceSuiteId
+        ? `Using suite ${voiceSuiteId} / cancellation-rescue for voice execution. `
+        : '';
 
     setIsLaunchingExecution(true);
     setExecutionMessage(null);
@@ -2558,7 +2567,7 @@ export function BenchmarkRunner() {
 
     try {
       const queued = await createExecutionRun({
-        suite_id: selectedSuite.id,
+        suite_id: suiteForRun,
         scenario_ids: scenarioIds,
         mode: executionMode,
         text_callable: executionMode === 'text_callable' ? executionTextCallable : undefined,
@@ -2569,7 +2578,7 @@ export function BenchmarkRunner() {
       });
       setExecutionRun(queued);
       setExecutionMessage(
-        `Execution queued (${queued.mode}). Streaming conversations as inference_set rows are written.`,
+        `${suiteNote}Execution queued (${queued.mode}). Streaming conversations as inference_set rows are written.`,
       );
       listExecutionRuns(identity.userId, identity.projectId).catch(() => undefined);
     } catch (err) {
@@ -3253,8 +3262,8 @@ export function BenchmarkRunner() {
               <span style={{ fontWeight: 700 }}>Voice target</span>
               <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }}>
                 {executionMode === 'pipecat_webrtc'
-                  ? 'Local Pipecat small WebRTC send/receive + recording/transcription captured as vCon (no FreeSWITCH/SIP).'
-                  : 'Uses the ACC audio plan + cancellation-rescue fixture path (no live SIP/WebRTC).'}
+                  ? 'Local Pipecat small WebRTC send/receive + recording/transcription captured as vCon (no FreeSWITCH/SIP). Runs call-center-voice-ai / cancellation-rescue.'
+                  : 'Uses the ACC audio plan + cancellation-rescue fixture path on call-center-voice-ai (no live SIP/WebRTC).'}
               </p>
             </div>
           )}

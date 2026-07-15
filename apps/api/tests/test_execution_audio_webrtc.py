@@ -11,10 +11,12 @@ from app.main import app
 from app.schemas.execution import ExecutionRunCreateRequest
 from app.services.acc_realtime_target import AccAudioFixture, AccAudioStep
 from app.services.execution_audio import (
+    AudioRecordingHandle,
     DeterministicExecutionTtsRenderer,
     ExecutionAudioTargetAdapter,
     FreeSwitchVertoSipTransport,
     LocalPipecatSmallWebRtcTransport,
+    TranscriptionTurn,
     describe_execution_audio_capabilities,
 )
 from app.services.execution_run_store import reset_execution_runs_for_tests
@@ -286,6 +288,60 @@ def test_pipecat_webrtc_execution_run_emits_vcon_without_live_sip():
     audio_session = conversation.get('audio_session') or {}
     assert audio_session.get('frames_sent', 0) >= 1
     assert audio_session.get('frames_received', 0) >= 1
+
+
+def test_pipecat_webrtc_propagates_tester_needs_review(monkeypatch, tmp_path):
+    async def _failing_run(self, config):  # noqa: ANN001
+        return {
+            'scenario_id': config.scenario_id,
+            'session_id': 'sess-failed',
+            'status': 'needs_review',
+            'termination_reason': 'runner_error',
+            'error': 'injected tester failure',
+            'tester_provenance': {},
+            'session': {},
+            'turns': [],
+            'close': {},
+            'proof': {},
+        }
+
+    monkeypatch.setattr(PipecatTesterAgentRunner, 'run', _failing_run)
+
+    def _turns(self, session_id):  # noqa: ANN001
+        return [
+            TranscriptionTurn(turn_index=1, speaker='Caller', text='hi', act_id='a'),
+            TranscriptionTurn(turn_index=2, speaker='Agent', text='ok', act_id='b'),
+        ]
+
+    def _recording(self, session_id):  # noqa: ANN001
+        return AudioRecordingHandle(uri='memory://test.wav', sha256='abc', duration_ms=10)
+
+    def _proof(self, session_id):  # noqa: ANN001
+        return {'session_id': session_id, 'frames_sent': 1, 'frames_received': 1}
+
+    monkeypatch.setattr(LocalPipecatSmallWebRtcTransport, 'transcription_turns', _turns)
+    monkeypatch.setattr(LocalPipecatSmallWebRtcTransport, 'recording_handle', _recording)
+    monkeypatch.setattr(LocalPipecatSmallWebRtcTransport, 'session_proof', _proof)
+
+    queued = client.post(
+        '/api/execution/runs',
+        json={
+            'suite_id': 'call-center-voice-ai',
+            'scenario_ids': ['cancellation-rescue'],
+            'mode': 'pipecat_webrtc',
+            'iterations': 1,
+            'user_id': 'webrtc-fail-user',
+            'project_id': 'webrtc-project',
+            'evaluate': True,
+        },
+    )
+    assert queued.status_code == 200, queued.text
+    completed = _wait_for_terminal(queued.json()['execution_run_id'], user_id='webrtc-fail-user')
+    assert completed['status'] == 'needs_review'
+    conversation = completed['conversations'][0]
+    assert conversation['verdict'] == 'needs_review'
+    assert conversation.get('audio_session', {}).get('tester_error') == 'injected tester failure'
+    assert conversation.get('vcon_export', {}).get('vcon') == '0.0.1'
 
 
 def _wait_for_terminal(run_id: str, *, user_id: str, timeout_seconds: float = 20.0) -> dict:
