@@ -197,7 +197,7 @@ class PipecatTesterAgentRunner:
             controller.terminated_reason = 'total_timeout'
             error = 'tester_total_timeout'
         except Exception as exc:
-            controller.terminated_reason = controller.terminated_reason or 'runner_error'
+            controller.terminated_reason = 'runner_error'
             error = str(exc)
         finally:
             if session_id is not None:

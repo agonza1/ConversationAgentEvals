@@ -199,3 +199,88 @@ def test_optional_cancellation_rescue_starter_evidence_satisfies_deterministic_c
 
     assert report['verdict'] == 'pass'
     assert report['assert_result_manifest']['verdict']['metrics']['deterministic_check_fail_count'] == 0
+
+
+def test_missing_transcript_preserves_zero_assert_score_and_evidence_manifest():
+    register_builtin_benchmark_extensions()
+    from app.schemas.assert_contracts import AssertResultManifest
+    from app.services import benchmark_service
+    from app.services.benchmark_catalog_extensions import (
+        CANCELLATION_RESCUE_SCENARIO,
+        _apply_cancellation_rescue_checks,
+    )
+
+    payload = {
+        'transcript': '',
+        'action_trace': [
+            {'step': 1, 'type': 'cancellation_intent_detected', 'status': 'completed'},
+            {'step': 2, 'type': 'renewal_increase_reason_captured', 'status': 'completed'},
+            {'step': 3, 'type': 'policy_hold_entered', 'status': 'completed'},
+            {'step': 4, 'type': 'operator_steer_applied', 'status': 'completed'},
+            {'step': 5, 'type': 'call_wrapped', 'status': 'completed'},
+        ],
+        'final_state': {'complete': True, 'outcome': 'scripted_wrap_complete'},
+    }
+    evidence_manifest = {
+        'artifacts': [
+            {'artifact_id': 'input-transcript', 'present': False},
+            {'artifact_id': 'input-action-trace', 'present': True},
+        ]
+    }
+    base = AssertResultManifest.model_validate(
+        {
+            'verdict': {
+                'status': 'needs_review',
+                'score': 0,
+                'summary': 'base assert scored zero',
+                'metrics': {'failure_count': 1},
+            },
+            'failures': [],
+            'artifacts': [
+                benchmark_service._assert_pointer(
+                    'assert-result-report',
+                    'report',
+                    {'status': 'needs_review', 'score': 0, 'note': 'report'},
+                    role='output',
+                ),
+                benchmark_service._assert_pointer(
+                    'assert-evidence-manifest',
+                    'manifest',
+                    evidence_manifest,
+                    role='output',
+                ),
+            ],
+            'raw_result': benchmark_service._assert_pointer(
+                'assert-raw-result',
+                'manifest',
+                {'status': 'needs_review', 'score': 0},
+                role='output',
+            ),
+            'summary_artifacts': [
+                benchmark_service._assert_pointer(
+                    'assert-report-summary',
+                    'summary',
+                    {'status': 'needs_review', 'score': 0},
+                    role='derived',
+                )
+            ],
+        }
+    )
+
+    result = _apply_cancellation_rescue_checks(
+        base,
+        scenario=CANCELLATION_RESCUE_SCENARIO,
+        payload=payload,
+    )
+
+    assert float(result.verdict.score) == 0.0
+    assert result.verdict.status == 'needs_review'
+    assert any(failure.code == 'missing-evidence:transcript' for failure in result.failures)
+
+    report_artifact = next(item for item in result.artifacts if item.artifact_id == 'assert-result-report')
+    evidence_artifact = next(item for item in result.artifacts if item.artifact_id == 'assert-evidence-manifest')
+    assert report_artifact.inline_data['status'] == 'needs_review'
+    assert report_artifact.inline_data['score'] == 0.0
+    assert evidence_artifact.inline_data == evidence_manifest
+    assert evidence_artifact.sha256 == base.artifacts[1].sha256
+

@@ -379,7 +379,7 @@ def _apply_cancellation_rescue_checks(
         'deterministic_checks': check_results,
     }
     if failures:
-        existing_score = float(result.verdict.score or 100)
+        existing_score = 100.0 if result.verdict.score is None else float(result.verdict.score)
         score = max(0.0, min(existing_score, 100.0 - (15.0 * len(failures))))
         verdict = result.verdict.model_copy(
             update={
@@ -404,9 +404,17 @@ def _sync_assert_status_artifacts(
 ) -> AssertResultManifest:
     """Keep ASSERT report artifacts aligned when deterministic checks change the verdict."""
 
+    report_artifact_ids = {
+        'assert-result-report',
+        'assert-raw-result',
+        'assert-report-summary',
+    }
+
     def rewrite(pointer: Any) -> Any:
         if pointer is None:
             return None
+        if getattr(pointer, 'artifact_id', None) not in report_artifact_ids:
+            return pointer
         payload = pointer.inline_data if hasattr(pointer, 'inline_data') else None
         if not isinstance(payload, dict):
             return pointer

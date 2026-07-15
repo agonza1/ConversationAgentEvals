@@ -266,3 +266,39 @@ def test_session_setup_and_cleanup_are_bounded_by_timeouts():
         assert cleanup_result['session_id'] == 'target-session-1'
 
     asyncio.run(run())
+
+
+def test_terminal_act_failure_uses_runner_error_reason():
+    class ExplodingInjectTarget(FakeTarget):
+        async def inject_audio(self, session_id, *, fixture, step, scenario_id, seed, provenance):
+            raise RuntimeError('injection blew up')
+
+    async def run():
+        config = _config()
+        config.acts = [
+            TesterAct(
+                act_id='request_cancellation',
+                objective='Request cancellation.',
+                example_utterance='I want to cancel my policy.',
+                terminal_after=True,
+            )
+        ]
+        config.max_turns = 1
+        target = ExplodingInjectTarget()
+        runner = PipecatTesterAgentRunner(
+            target=target,
+            tts_renderer=FakeTts(),
+            observation_provider=SequencedObservationProvider(),
+        )
+
+        result = await runner.run(config)
+
+        assert result['status'] == 'needs_review'
+        assert result['termination_reason'] == 'runner_error'
+        assert 'injection blew up' in result['error']
+        assert target.closed == [
+            {'session_id': 'target-session-1', 'reason': 'runner_error'}
+        ]
+
+    asyncio.run(run())
+
