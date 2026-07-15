@@ -1,0 +1,116 @@
+{
+  "outcome": "scripted_wrap_complete",
+  "call": {
+    "session": {
+      "callId": "acc-offline-fixture-001",
+      "runtimeModeLabels": {
+        "telephony": "mocked_telephony",
+        "media": "generated_media",
+        "rtcAsr": "rtc_asr_blocked",
+        "credentialsMode": "mocked"
+      }
+    },
+    "flowState": "wrap",
+    "operatorSteer": {
+      "pending": false,
+      "lastAction": "approve_offer"
+    },
+    "demoFallback": {
+      "armed": false,
+      "mode": null
+    },
+    "transcript": [
+      {
+        "speaker": "caller",
+        "text": "I want to cancel my policy today.",
+        "timestamp": "2026-07-13T01:00:00Z"
+      },
+      {
+        "speaker": "agent",
+        "text": "I can help. What changed for you?",
+        "timestamp": "2026-07-13T01:00:01Z"
+      },
+      {
+        "speaker": "caller",
+        "text": "The renewal increase is too high.",
+        "timestamp": "2026-07-13T01:00:02Z"
+      },
+      {
+        "speaker": "agent",
+        "text": "I reached the retention boundary and paused for an approved safe path.",
+        "timestamp": "2026-07-13T01:00:03Z"
+      },
+      {
+        "speaker": "operator",
+        "text": "Approved safe follow-up only.",
+        "timestamp": "2026-07-13T01:00:04Z"
+      },
+      {
+        "speaker": "agent",
+        "text": "I recorded the approved follow-up and preserved the cancellation request.",
+        "timestamp": "2026-07-13T01:00:05Z"
+      }
+    ],
+    "events": [
+      {
+        "type": "call_started",
+        "at": "2026-07-13T01:00:00Z",
+        "detail": {
+          "mode": "mocked_telephony"
+        }
+      },
+      {
+        "type": "cancellation_intent_detected",
+        "at": "2026-07-13T01:00:00Z",
+        "detail": {}
+      },
+      {
+        "type": "renewal_increase_reason_captured",
+        "at": "2026-07-13T01:00:02Z",
+        "detail": {}
+      },
+      {
+        "type": "policy_hold_entered",
+        "at": "2026-07-13T01:00:03Z",
+        "detail": {
+          "reason": "retention action requires approval"
+        }
+      },
+      {
+        "type": "operator_steer_applied",
+        "at": "2026-07-13T01:00:04Z",
+        "detail": {
+          "action": "approve_offer"
+        }
+      },
+      {
+        "type": "call_wrapped",
+        "at": "2026-07-13T01:00:05Z",
+        "detail": {
+          "disposition": "approved_follow_up_requested"
+        }
+      }
+    ],
+    "latencyMarks": [
+      {
+        "stage": "caller_turn_received",
+        "elapsedMs": 22,
+        "budgetMs": 100,
+        "recordedAt": "2026-07-13T01:00:00Z"
+      },
+      {
+        "stage": "operator_steer",
+        "elapsedMs": 420,
+        "budgetMs": 500,
+        "recordedAt": "2026-07-13T01:00:04Z"
+      }
+    ]
+  },
+  "proof": {
+    "callId": "acc-offline-fixture-001",
+    "outcome": "scripted_wrap_complete",
+    "artifacts": {
+      "proof": "fixture://agentic-contact-center/cancellation-rescue/proof"
+    }
+  }
+}

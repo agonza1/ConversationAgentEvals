@@ -9,6 +9,9 @@ const productionFlag = process.env.PRODUCTION === 'true' || process.env.NEXT_PUB
 
 const nextConfig = {
   typedRoutes: true,
+  // Local demos often open either localhost or 127.0.0.1; without this, Next 15 can
+  // block cross-origin /_next assets and leave client components stuck mid-load.
+  allowedDevOrigins: ['127.0.0.1', 'localhost', '192.168.86.28'],
   outputFileTracingRoot: path.join(__dirname, '../..'),
   env: {
     NEXT_PUBLIC_PRODUCTION: String(productionFlag),

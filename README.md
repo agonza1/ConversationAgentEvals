@@ -4,6 +4,8 @@ Managed QA and regression testing for voice and conversation agents, powered by 
 
 ConversationAgentEvals is a hosted/on-demand wrapper around ASSERT. ASSERT owns the evaluation core: specifications, scenarios, runtime orchestration, judging, scoring, failure taxonomy, and portable artifacts. This repository adds the product layer around that core: evidence ingestion, projects and runs, queue lifecycle, persistence, reports, exports, and deployment.
 
+**ConversationAgentEvals is independently installable, testable, and usable.** Its built-in benchmark suites, evidence APIs, ASSERT boundary, reports, exports, and saved-run workflows do not require Agentic Contact Center or another target repository. External systems are optional target adapters and examples, never runtime dependencies of the core product.
+
 There is one product and one supported evaluation path. Historical product variants and the former local evaluator are not supported.
 
 ## Acknowledgment
@@ -17,7 +19,7 @@ There is one product and one supported evaluation path. Historical product varia
 - Platform-owned authentication, project lineage, retention, labels, retries, cancellation, quotas, billing hooks, and cost limits.
 - Durable ASSERT artifact manifests with searchable platform metadata indexes.
 - Operator-facing QA reports, saved-run history, regression comparisons, and export workflows.
-- A focused benchmark runner at `/benchmarks`.
+- A focused benchmark runner at `/benchmarks`, including an Execute **Launch evaluation** panel that streams conversations into an `inference_set.jsonl` live list for text callables and voice fixtures.
 - Voice and WebRTC integration groundwork through the Pipecat service.
 
 ASSERT artifacts remain the canonical evaluation results. The application database stores product metadata and indexes; it does not replace ASSERT's result model.
@@ -44,11 +46,37 @@ Start the API, web app, and Pipecat service:
 npm run dev
 ```
 
-Open the printed web URL and visit `/benchmarks`. The basic demo uses transcript, action-trace, and final-state evidence, so it does not require live microphone ASR. Advanced environment settings are documented in [docs/environment.md](docs/environment.md).
+Open the printed web URL and visit `/benchmarks`. The basic demo uses transcript, action-trace, and final-state evidence, so it does not require live microphone ASR or any external target application. Advanced environment settings are documented in [docs/environment.md](docs/environment.md).
 
-Planned local LLM judge auth (Codex-style OpenAI OAuth, Claude later): [docs/openai-codex-oauth-plan.md](docs/openai-codex-oauth-plan.md).
+Local LLM judge auth (Codex-style OpenAI OAuth, Claude later): [docs/openai-codex-oauth-plan.md](docs/openai-codex-oauth-plan.md).
 
-For the shortest end-to-end walkthrough, see [docs/assert-flow-demo.md](docs/assert-flow-demo.md) or its [machine-readable example](docs/examples/assert-flow-demo.json).
+For the shortest standalone end-to-end walkthrough, see [docs/assert-flow-demo.md](docs/assert-flow-demo.md) or its [machine-readable example](docs/examples/assert-flow-demo.json).
+
+For an **optional external-target example**, see [docs/agentic-contact-center-example.md](docs/agentic-contact-center-example.md). The cancellation-rescue scenario is registered as an optional, individually runnable scenario under `call-center-voice-ai`; it is excluded from the default suite coverage denominator. The example can run entirely offline from a checked-in response fixture or against a separately running Agentic Contact Center service.
+
+Standalone offline example after `npm run setup`:
+
+```bash
+npm run example:acc:fixture
+```
+
+Evaluate that offline fixture through a separately running local ConversationAgentEvals API:
+
+```bash
+npm run example:acc:fixture:run
+```
+
+The blessed voice-lab proof is also standalone and uses checked-in target-shaped fixtures:
+
+```bash
+npm run test:voice-lab-proof
+```
+
+The former sibling-repository ACC execution is retained only as an explicit integration command:
+
+```bash
+npm run test:voice-lab-proof:acc
+```
 
 ## Architecture
 
@@ -60,6 +88,7 @@ flowchart LR
   Platform --> Metadata["Platform metadata + indexes"]
   Artifacts --> Reports["Reports + exports"]
   Metadata --> Reports
+  OptionalTargets["Optional external targets"] -. evidence .-> Inputs
 ```
 
 Core ownership:
@@ -107,6 +136,7 @@ npm run lint:web
 npm run build:web
 npm run test:api
 npm run test:benchmark-smoke
+npm run test:voice-lab-proof
 apps/api/.venv/bin/python -m pytest apps/api/tests/test_assert_boundary.py apps/api/tests/test_benchmarks.py -q
 ```
 
@@ -114,10 +144,10 @@ apps/api/.venv/bin/python -m pytest apps/api/tests/test_assert_boundary.py apps/
 
 ## Benchmark families
 
-- Call-center voice AI: appointments, cancellations, transfers, interruptions, and escalation.
+- Call-center voice AI: appointments, cancellations, transfers, interruptions, escalation.
 - Telehealth intake: patient routing, privacy boundaries, medication, and emergency handling.
-- Online teaching: adaptive tutoring, quiz flow, confusion handling, and grading boundaries.
-- Fintech support: identity checks, disputes, card freezes, fraud escalation, and compliance.
+- Online teaching: adaptive tutoring, quiz flow, confusion handling, grading boundaries.
+- Fintech support: identity checks, disputes, card freezes, fraud escalation, compliance.
 
 ## Scope
 

@@ -406,6 +406,10 @@ select {
   gap: 14px;
 }
 
+.product-console-compact {
+  grid-template-columns: 1fr;
+}
+
 .console-panel,
 .auth-panel,
 .pricing-card {
@@ -449,6 +453,23 @@ select {
   padding: 6px 10px;
   font-size: 13px;
   font-weight: 820;
+}
+
+.demo-plan-control {
+  display: grid;
+  gap: 7px;
+  max-width: 240px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 820;
+}
+
+.demo-plan-control select {
+  min-height: 42px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: white;
+  padding: 10px 12px;
 }
 
 .auth-panel {

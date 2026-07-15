@@ -255,15 +255,6 @@ interface ProductConfig {
   llm_judge_status: 'planned' | 'gated' | 'enabled';
 }
 
-interface CheckoutGate {
-  status: 'ready' | 'blocked';
-  plan: 'starter' | 'team';
-  stripe_price_id?: string | null;
-  checkout_url?: string | null;
-  message: string;
-  metadata?: Record<string, string>;
-}
-
 interface SavedRun {
   id: string;
   project_id: string;
@@ -796,22 +787,6 @@ async function fetchProductConfig(): Promise<ProductConfig> {
   return handleJson<ProductConfig>(await fetch(`${getApiBase()}/api/product/config`, { cache: 'no-store' }));
 }
 
-async function requestCheckoutGate(payload: {
-  plan: 'starter' | 'team';
-  user_id: string;
-  project_id: string;
-  success_url?: string;
-  cancel_url?: string;
-}) {
-  return handleJson<CheckoutGate>(
-    await fetch(`${getApiBase()}/api/product/checkout`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }),
-  );
-}
-
 async function saveBenchmarkRun(payload: {
   user_id: string;
   project_id: string;
@@ -842,6 +817,103 @@ async function fetchBenchmarkSuiteRun(userId: string, suiteRunId: string) {
   return handleJson<BenchmarkSuiteRunRecord>(
     await fetch(`${getApiBase()}/api/benchmarks/suite-runs/${encodeURIComponent(suiteRunId)}?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
   );
+}
+
+interface ExecutionConversationTurn {
+  turn_index: number;
+  speaker?: string | null;
+  text?: string | null;
+  act_id?: string | null;
+  event_types?: string[];
+  latency_ms?: number | null;
+}
+
+interface ExecutionConversationRecord {
+  conversation_id: string;
+  execution_run_id: string;
+  suite_id: string;
+  scenario_id: string;
+  scenario_title?: string | null;
+  mode: 'text_callable' | 'voice_fixture';
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  iteration?: number;
+  turns?: ExecutionConversationTurn[];
+  transcript?: string | null;
+  latency_marks?: Array<JsonRecord>;
+  verdict?: string | null;
+  score?: number | null;
+  error?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+interface ExecutionRunRecord {
+  execution_run_id: string;
+  status: 'queued' | 'running' | 'completed' | 'needs_review' | 'failed';
+  mode: 'text_callable' | 'voice_fixture';
+  suite_id: string;
+  scenario_ids: string[];
+  user_id: string;
+  project_id: string;
+  progress: {
+    phase: string;
+    completed_conversations: number;
+    total_conversations: number;
+    percent: number;
+    active_conversation_id?: string | null;
+  };
+  conversations: ExecutionConversationRecord[];
+  inference_set_path?: string | null;
+  error?: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string | null;
+}
+
+async function createExecutionRun(payload: {
+  suite_id: string;
+  scenario_ids: string[];
+  mode: 'text_callable' | 'voice_fixture';
+  text_callable?: string;
+  iterations?: number;
+  user_id: string;
+  project_id: string;
+  evaluate?: boolean;
+}) {
+  return handleJson<ExecutionRunRecord>(
+    await fetch(`${getApiBase()}/api/execution/runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+async function fetchExecutionRun(userId: string, executionRunId: string) {
+  return handleJson<ExecutionRunRecord>(
+    await fetch(
+      `${getApiBase()}/api/execution/runs/${encodeURIComponent(executionRunId)}?user_id=${encodeURIComponent(userId)}`,
+      { cache: 'no-store' },
+    ),
+  );
+}
+
+async function listExecutionRuns(userId: string, projectId: string) {
+  const params = new URLSearchParams({ user_id: userId, project_id: projectId });
+  return handleJson<ExecutionRunRecord[]>(
+    await fetch(`${getApiBase()}/api/execution/runs?${params.toString()}`, { cache: 'no-store' }),
+  );
+}
+
+function executionStatusColor(status?: string) {
+  if (status === 'completed' || status === 'pass') return 'var(--success-text)';
+  if (status === 'failed') return 'var(--error-text)';
+  if (status === 'needs_review' || status === 'running' || status === 'queued') return 'var(--warn-text, #9a6700)';
+  return 'var(--muted)';
+}
+
+function isActiveExecutionStatus(status?: string) {
+  return status === 'queued' || status === 'running';
 }
 
 async function listSavedRuns(userId: string, projectId: string, suiteId?: string, scenarioId?: string) {
@@ -1738,7 +1810,6 @@ export function BenchmarkRunner() {
   const [scenarioRegressionSummary, setScenarioRegressionSummary] = useState<ProjectRegressionSummary | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
-  const [checkoutMessage, setCheckoutMessage] = useState<string | null>(null);
   const [judgeGate, setJudgeGate] = useState<JudgeGate | null>(null);
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -1747,6 +1818,13 @@ export function BenchmarkRunner() {
   const [isRunning, setIsRunning] = useState(false);
   const [isSimulating, setIsSimulating] = useState(false);
   const [isEnqueueingSuite, setIsEnqueueingSuite] = useState(false);
+  const [executionMode, setExecutionMode] = useState<'text_callable' | 'voice_fixture'>('text_callable');
+  const [executionTextCallable, setExecutionTextCallable] = useState('mock_agent');
+  const [executionScope, setExecutionScope] = useState<'selected' | 'suite'>('selected');
+  const [executionIterations, setExecutionIterations] = useState(1);
+  const [executionRun, setExecutionRun] = useState<ExecutionRunRecord | null>(null);
+  const [isLaunchingExecution, setIsLaunchingExecution] = useState(false);
+  const [executionMessage, setExecutionMessage] = useState<string | null>(null);
 
   const selectedSuite = useMemo(
     () => suites.find((suite) => suite.id === selectedSuiteId) ?? suites[0] ?? null,
@@ -1806,12 +1884,24 @@ export function BenchmarkRunner() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+
     const storedUser = window.localStorage.getItem('conversation-evals-demo-user');
     const storedProject = window.localStorage.getItem('conversation-evals-demo-project');
     const storedPlan = window.localStorage.getItem('conversation-evals-demo-plan') as PricingPlan['id'] | null;
-    if (storedUser) setUserId(storedUser);
-    if (storedProject) setProjectId(storedProject);
-    if (storedPlan && ['free', 'starter', 'team', 'business'].includes(storedPlan)) setPlan(storedPlan);
+
+    const nextUser = storedUser || `demo-user-${Math.random().toString(36).slice(2, 8)}`;
+    const nextProject = storedProject || 'call-center-demo';
+    const nextPlan = storedPlan && ['free', 'starter', 'team', 'business'].includes(storedPlan)
+      ? storedPlan
+      : 'free';
+
+    window.localStorage.setItem('conversation-evals-demo-user', nextUser);
+    window.localStorage.setItem('conversation-evals-demo-project', nextProject);
+    window.localStorage.setItem('conversation-evals-demo-plan', nextPlan);
+
+    setUserId(nextUser);
+    setProjectId(nextProject);
+    setPlan(nextPlan);
   }, []);
 
   useEffect(() => {
@@ -1929,15 +2019,52 @@ export function BenchmarkRunner() {
     return () => window.clearInterval(interval);
   }, [projectId, selectedSuite?.id, suiteRunStatusFilter, suiteRuns, userId]);
 
-  function signInDemo() {
-    const nextUser = `demo-user-${Math.random().toString(36).slice(2, 8)}`;
-    setUserId(nextUser);
+  useEffect(() => {
+    if (!userId || !executionRun || !isActiveExecutionStatus(executionRun.status)) return;
+
+    const interval = window.setInterval(() => {
+      fetchExecutionRun(userId, executionRun.execution_run_id)
+        .then((next) => {
+          setExecutionRun(next);
+          if (!isActiveExecutionStatus(next.status)) {
+            const completed = next.progress.completed_conversations;
+            const total = next.progress.total_conversations;
+            setExecutionMessage(
+              next.status === 'failed'
+                ? `Execution failed${next.error ? `: ${next.error}` : '.'}`
+                : `Execution ${next.status}. Captured ${completed}/${total} conversations${
+                    next.inference_set_path ? ` → ${next.inference_set_path}` : ''
+                  }.`,
+            );
+          }
+        })
+        .catch(() => undefined);
+    }, 1200);
+
+    return () => window.clearInterval(interval);
+  }, [executionRun, userId]);
+
+  function ensureDemoIdentity(): { userId: string; projectId: string; plan: PricingPlan['id'] } {
+    const nextUser = userId || (typeof window !== 'undefined'
+      ? window.localStorage.getItem('conversation-evals-demo-user')
+      : null) || `demo-user-${Math.random().toString(36).slice(2, 8)}`;
+    const nextProject = projectId || (typeof window !== 'undefined'
+      ? window.localStorage.getItem('conversation-evals-demo-project')
+      : null) || 'call-center-demo';
+    const storedPlan = typeof window !== 'undefined'
+      ? window.localStorage.getItem('conversation-evals-demo-plan') as PricingPlan['id'] | null
+      : null;
+    const nextPlan = plan || (storedPlan && ['free', 'starter', 'team', 'business'].includes(storedPlan) ? storedPlan : 'free');
+
     if (typeof window !== 'undefined') {
       window.localStorage.setItem('conversation-evals-demo-user', nextUser);
-      window.localStorage.setItem('conversation-evals-demo-project', projectId);
-      window.localStorage.setItem('conversation-evals-demo-plan', plan);
+      window.localStorage.setItem('conversation-evals-demo-project', nextProject);
+      window.localStorage.setItem('conversation-evals-demo-plan', nextPlan);
     }
-    setSaveMessage('Signed in with local Firebase-ready demo identity. Real Firebase credentials can replace this without changing the product flow.');
+    if (nextUser !== userId) setUserId(nextUser);
+    if (nextProject !== projectId) setProjectId(nextProject);
+    if (nextPlan !== plan) setPlan(nextPlan);
+    return { userId: nextUser, projectId: nextProject, plan: nextPlan };
   }
 
   function updatePlan(nextPlan: PricingPlan['id']) {
@@ -1947,37 +2074,10 @@ export function BenchmarkRunner() {
     }
   }
 
-  async function onSelectPlan(nextPlan: PricingPlan['id']) {
-    updatePlan(nextPlan);
-    setCheckoutMessage(null);
-
-    if (nextPlan !== 'starter' && nextPlan !== 'team') return;
-
-    const checkoutUserId = userId || 'anonymous-upgrade-preview';
+  async function refreshAuditTrail(overrideUserId = userId, overrideProjectId = projectId) {
+    if (!overrideUserId) return;
     try {
-      const origin = typeof window !== 'undefined' ? window.location.origin : undefined;
-      const gate = await requestCheckoutGate({
-        plan: nextPlan,
-        user_id: checkoutUserId,
-        project_id: projectId,
-        success_url: origin ? `${origin}/benchmarks?checkout=success` : undefined,
-        cancel_url: origin ? `${origin}/benchmarks?checkout=cancelled` : undefined,
-      });
-      const planName = nextPlan === 'starter' ? 'Starter' : 'Team';
-      if (gate.status === 'ready') {
-        setCheckoutMessage(`${planName} checkout ready${gate.checkout_url ? `: ${gate.checkout_url}` : '.'}`);
-      } else {
-        setCheckoutMessage(gate.message);
-      }
-    } catch (err) {
-      setCheckoutMessage(err instanceof Error ? err.message : 'Could not check billing readiness.');
-    }
-  }
-
-  async function refreshAuditTrail() {
-    if (!userId) return;
-    try {
-      setAuditEvents(await listAuditEvents(userId, projectId));
+      setAuditEvents(await listAuditEvents(overrideUserId, overrideProjectId));
     } catch {
       setAuditEvents([]);
     }
@@ -1985,22 +2085,25 @@ export function BenchmarkRunner() {
 
   async function onSaveRun() {
     if (!report) return;
-    if (!userId) {
-      setSaveMessage('Sign up first to save projects and run history.');
-      return;
-    }
+    const identity = ensureDemoIdentity();
 
     try {
-      const saved = await saveBenchmarkRun({ user_id: userId, project_id: projectId, plan, report, transcript });
+      const saved = await saveBenchmarkRun({
+        user_id: identity.userId,
+        project_id: identity.projectId,
+        plan: identity.plan,
+        report,
+        transcript,
+      });
       setSavedRuns((current) => [saved, ...current.filter((run) => run.id !== saved.id)]);
-      fetchProjectRegressionSummary(userId, projectId)
+      fetchProjectRegressionSummary(identity.userId, identity.projectId)
         .then(setProjectRegressionSummary)
         .catch(() => setProjectRegressionSummary(null));
-      fetchProjectRegressionSummary(userId, projectId, saved.report.suite_id, saved.report.scenario_id)
+      fetchProjectRegressionSummary(identity.userId, identity.projectId, saved.report.suite_id, saved.report.scenario_id)
         .then(setScenarioRegressionSummary)
         .catch(() => setScenarioRegressionSummary(null));
-      await refreshAuditTrail();
-      setSaveMessage(`Saved run ${saved.id} to ${projectId}.`);
+      await refreshAuditTrail(identity.userId, identity.projectId);
+      setSaveMessage(`Saved run ${saved.id} to ${identity.projectId}.`);
     } catch (err) {
       setSaveMessage(err instanceof Error ? err.message : 'Could not save this run.');
     }
@@ -2008,17 +2111,14 @@ export function BenchmarkRunner() {
 
   async function onSaveSuiteRuns() {
     if (!suiteSimulation) return;
-    if (!userId) {
-      setSaveMessage('Sign up first to save suite runs and project history.');
-      return;
-    }
+    const identity = ensureDemoIdentity();
 
     try {
       const saved = await Promise.all(
         suiteSimulation.scenario_runs.map((run) => saveBenchmarkRun({
-          user_id: userId,
-          project_id: projectId,
-          plan,
+          user_id: identity.userId,
+          project_id: identity.projectId,
+          plan: identity.plan,
           report: run.benchmark_report,
           transcript: run.transcript,
         })),
@@ -2027,19 +2127,19 @@ export function BenchmarkRunner() {
         ...saved,
         ...current.filter((run) => !saved.some((savedRun) => savedRun.id === run.id)),
       ]);
-      fetchProjectRegressionSummary(userId, projectId)
+      fetchProjectRegressionSummary(identity.userId, identity.projectId)
         .then(setProjectRegressionSummary)
         .catch(() => setProjectRegressionSummary(null));
       if (report?.suite_id && report.scenario_id) {
-        fetchProjectRegressionSummary(userId, projectId, report.suite_id, report.scenario_id)
+        fetchProjectRegressionSummary(identity.userId, identity.projectId, report.suite_id, report.scenario_id)
           .then(setScenarioRegressionSummary)
           .catch(() => setScenarioRegressionSummary(null));
       }
-      listBenchmarkSuiteRuns(userId, projectId, suiteSimulation.suite_id)
+      listBenchmarkSuiteRuns(identity.userId, identity.projectId, suiteSimulation.suite_id)
         .then(setSuiteRuns)
         .catch(() => setSuiteRuns([]));
-      await refreshAuditTrail();
-      setSaveMessage(`Saved ${saved.length} suite runs to ${projectId}.`);
+      await refreshAuditTrail(identity.userId, identity.projectId);
+      setSaveMessage(`Saved ${saved.length} suite runs to ${identity.projectId}.`);
     } catch (err) {
       setSaveMessage(err instanceof Error ? err.message : 'Could not save this suite.');
     }
@@ -2431,6 +2531,51 @@ export function BenchmarkRunner() {
     }
   }
 
+  async function onLaunchExecution() {
+    if (!selectedSuite) return;
+    const identity = ensureDemoIdentity();
+
+    const scenarioIds =
+      executionMode === 'voice_fixture'
+        ? ['cancellation-rescue']
+        : executionScope === 'suite'
+          ? selectedSuite.scenarios.map((scenario) => scenario.id)
+          : selectedScenario
+            ? [selectedScenario.id]
+            : [];
+
+    if (!scenarioIds.length) {
+      setExecutionMessage('Select at least one scenario to execute.');
+      return;
+    }
+
+    setIsLaunchingExecution(true);
+    setExecutionMessage(null);
+    setRunError(null);
+
+    try {
+      const queued = await createExecutionRun({
+        suite_id: selectedSuite.id,
+        scenario_ids: scenarioIds,
+        mode: executionMode,
+        text_callable: executionMode === 'text_callable' ? executionTextCallable : undefined,
+        iterations: executionIterations,
+        user_id: identity.userId,
+        project_id: identity.projectId,
+        evaluate: true,
+      });
+      setExecutionRun(queued);
+      setExecutionMessage(
+        `Execution queued (${queued.mode}). Streaming conversations as inference_set rows are written.`,
+      );
+      listExecutionRuns(identity.userId, identity.projectId).catch(() => undefined);
+    } catch (err) {
+      setExecutionMessage(err instanceof Error ? err.message : 'Could not launch execution.');
+    } finally {
+      setIsLaunchingExecution(false);
+    }
+  }
+
   async function onSimulateSuite() {
     if (!selectedSuite) return;
 
@@ -2482,10 +2627,7 @@ export function BenchmarkRunner() {
 
   async function onEnqueueSuiteSimulation() {
     if (!selectedSuite) return;
-    if (!userId) {
-      setSaveMessage('Sign up first to queue retained suite runs.');
-      return;
-    }
+    const identity = ensureDemoIdentity();
 
     setIsEnqueueingSuite(true);
     setRunError(null);
@@ -2497,8 +2639,8 @@ export function BenchmarkRunner() {
         prompt_version: promptVersion,
         model_name: modelName,
         notes: runNotes,
-        user_id: userId,
-        project_id: projectId || undefined,
+        user_id: identity.userId,
+        project_id: identity.projectId || undefined,
       });
       const queued = await enqueueBenchmarkSuiteSimulation({
         suite_id: selectedSuite.id,
@@ -2507,13 +2649,13 @@ export function BenchmarkRunner() {
         ...runMetadata,
       });
       setSuiteRuns((current) => [queued, ...current.filter((run) => run.suite_run_id !== queued.suite_run_id)]);
-      setSaveMessage(`Queued suite run ${queued.suite_run_id} for ${projectId}.`);
+      setSaveMessage(`Queued suite run ${queued.suite_run_id} for ${identity.projectId}.`);
       if (suiteRunStatusFilter) setSuiteRunStatusFilter('');
       let latest = queued;
       for (let attempt = 0; attempt < 8 && isActiveSuiteRunStatus(latest.status); attempt += 1) {
         await delay(750);
         try {
-          latest = await fetchBenchmarkSuiteRun(userId, queued.suite_run_id);
+          latest = await fetchBenchmarkSuiteRun(identity.userId, queued.suite_run_id);
           setSuiteRuns((current) => [latest, ...current.filter((run) => run.suite_run_id !== latest.suite_run_id)]);
         } catch {
           break;
@@ -2545,7 +2687,6 @@ export function BenchmarkRunner() {
     ? report.suite_contract_manifest_sha256.slice(0, 12)
     : suiteManifestFingerprint ?? 'Not captured';
   const scenarioContractFingerprint = report?.scenario_contract_sha256 ? report.scenario_contract_sha256.slice(0, 12) : selectedScenarioManifestFingerprint ?? 'Not captured';
-  const pricing = productConfig?.pricing ?? [];
   const deterministicRule = productConfig?.usage_rules.find((rule) => rule.id === 'deterministic_eval');
   const judgeRule = productConfig?.usage_rules.find((rule) => rule.id === 'llm_judge');
   const voiceRule = productConfig?.usage_rules.find((rule) => rule.id === 'voice_webrtc_minute');
@@ -2600,75 +2741,57 @@ export function BenchmarkRunner() {
       title: 'Save repeatable history',
       detail: hasSavedCurrentScenario
         ? `Focused history is tracking ${selectedScenario?.title ?? 'this scenario'}.`
-        : userId
-          ? 'Save the result to compare future prompt, model, and agent changes.'
-          : 'Sign up with the demo identity, then save the run for regression history.',
+        : 'Save the result to compare future prompt, model, and agent changes.',
       done: hasSavedCurrentScenario,
       ready: Boolean(report && userId),
-      actionLabel: !userId
-        ? 'Create demo project'
-        : report && !hasSavedCurrentScenario
-          ? 'Save this run'
-          : hasSavedCurrentScenario && savedRuns.length
-            ? 'Export saved history'
-            : report
-              ? 'Save this run'
-              : null,
-      action: !userId
-        ? signInDemo
-        : report && !hasSavedCurrentScenario
-          ? () => void onSaveRun()
-          : hasSavedCurrentScenario && savedRuns.length
-            ? () => void onExportProjectHistory()
-            : report
-              ? () => void onSaveRun()
-              : undefined,
+      actionLabel: report && !hasSavedCurrentScenario
+        ? 'Save this run'
+        : hasSavedCurrentScenario && savedRuns.length
+          ? 'Export saved history'
+          : report
+            ? 'Save this run'
+            : null,
+      action: report && !hasSavedCurrentScenario
+        ? () => void onSaveRun()
+        : hasSavedCurrentScenario && savedRuns.length
+          ? () => void onExportProjectHistory()
+          : report
+            ? () => void onSaveRun()
+            : undefined,
       actionVariant: 'secondary' as const,
-      disabled: Boolean(userId && !report),
+      disabled: Boolean(!report || !userId),
     },
   ];
 
   return (
     <section style={{ display: 'grid', gap: 20 }}>
       {productConfig ? (
-        <section className="product-console" aria-label="Product plan and authentication controls">
+        <section className="product-console product-console-compact" aria-label="Product plan controls">
           <div className="console-panel">
             <p className="eyebrow">Free browser eval</p>
-            <h2>Run deterministic checks now. Save and judge after signup.</h2>
+            <h2>Run deterministic checks now. Save runs and request LLM judge when ready.</h2>
             <p>
               This path is real: the browser sends transcript, action trace, and final state evidence to the benchmark API.
-              Paid gates control persistence, LLM judging, CI/API, and voice minutes.
+              Paid gates control persistence, LLM judging, CI/API, and voice minutes. A demo identity is stored locally so save and history work without signup.
             </p>
             <div className="usage-strip">
               <span>{deterministicRule?.credits ?? 1} credit browser eval</span>
               <span>{judgeRule?.credits ?? 10} credits LLM judge</span>
               <span>{voiceRule?.credits ?? 5} credits voice minute</span>
             </div>
-          </div>
-
-          <div className="auth-panel">
-            <div>
-              <p className="eyebrow">Auth</p>
-              <h3>{userId ? 'Signed in' : 'Firebase-ready signup'}</h3>
-              <p>
-                {productConfig.auth.mode === 'configured'
-                  ? `Firebase project ${productConfig.auth.project_id} is configured.`
-                  : 'Firebase providers are scaffolded; add project keys to use live auth.'}
-              </p>
-            </div>
-            <label>
-              <span>Project</span>
-              <input
-                value={projectId}
-                onChange={(event) => {
-                  setProjectId(event.target.value);
-                  if (typeof window !== 'undefined') window.localStorage.setItem('conversation-evals-demo-project', event.target.value);
-                }}
-              />
+            <label className="demo-plan-control">
+              <span>Demo plan</span>
+              <select
+                aria-label="Demo plan"
+                value={plan}
+                onChange={(event) => updatePlan(event.target.value as PricingPlan['id'])}
+              >
+                <option value="free">Free</option>
+                <option value="starter">Starter</option>
+                <option value="team">Team</option>
+                <option value="business">Business</option>
+              </select>
             </label>
-            <button type="button" className="primary-link" onClick={signInDemo}>
-              {userId ? 'Refresh demo identity' : 'Sign up to save'}
-            </button>
           </div>
         </section>
       ) : null}
@@ -2704,30 +2827,6 @@ export function BenchmarkRunner() {
           })}
         </ol>
       </section>
-
-      {pricing.length ? (
-        <section className="pricing-grid" aria-label="Pricing and upgrade gates">
-          {pricing.map((item) => (
-            <button
-              type="button"
-              className={`pricing-card ${plan === item.id ? 'selected' : ''}`}
-              key={item.id}
-              onClick={() => void onSelectPlan(item.id)}
-            >
-              <span>{item.name}</span>
-              <strong>{item.price_label}</strong>
-              <small>{item.seats}</small>
-              <ul>
-                {item.features.slice(0, 4).map((feature) => <li key={feature}>{feature}</li>)}
-              </ul>
-            </button>
-          ))}
-        </section>
-      ) : null}
-
-      {checkoutMessage ? (
-        <p aria-live="polite" style={{ margin: 0, color: 'var(--muted)' }}>{checkoutMessage}</p>
-      ) : null}
 
       <form onSubmit={onSubmit} className="card" style={{ padding: 24, display: 'grid', gap: 18 }}>
         {loadError ? (
@@ -3081,6 +3180,188 @@ export function BenchmarkRunner() {
           </div>
         ) : null}
       </form>
+
+      <section className="card" style={{ padding: 24, display: 'grid', gap: 16 }} aria-label="Launch evaluation">
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <div>
+            <p className="eyebrow" style={{ margin: '0 0 6px' }}>
+              Execute
+            </p>
+            <h2 style={{ margin: 0, fontSize: 26 }}>Launch evaluation</h2>
+            <p style={{ margin: '8px 0 0', color: 'var(--muted)', maxWidth: 640 }}>
+              Run the agent target, capture conversation traces as they finish, and stream an ASSERT-style{' '}
+              <code>inference_set.jsonl</code> while conversations append to the live list.
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={isLaunchingExecution || isRunning || isSimulating || !selectedSuite}
+            onClick={() => void onLaunchExecution()}
+            style={{
+              border: 0,
+              borderRadius: 8,
+              background: 'var(--accent)',
+              color: 'white',
+              padding: '12px 18px',
+              fontWeight: 800,
+              opacity: isLaunchingExecution || isRunning || isSimulating || !selectedSuite ? 0.65 : 1,
+            }}
+          >
+            {isLaunchingExecution
+              ? 'Launching...'
+              : executionRun && isActiveExecutionStatus(executionRun.status)
+                ? 'Execution running...'
+                : 'Launch evaluation'}
+          </button>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+          <label style={{ display: 'grid', gap: 8 }}>
+            <span style={{ fontWeight: 700 }}>Target mode</span>
+            <select
+              aria-label="Execution target mode"
+              value={executionMode}
+              onChange={(event) => setExecutionMode(event.target.value as 'text_callable' | 'voice_fixture')}
+              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
+            >
+              <option value="text_callable">Text callable</option>
+              <option value="voice_fixture">Voice fixture</option>
+            </select>
+          </label>
+
+          {executionMode === 'text_callable' ? (
+            <label style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontWeight: 700 }}>Text callable</span>
+              <select
+                aria-label="Text callable target"
+                value={executionTextCallable}
+                onChange={(event) => setExecutionTextCallable(event.target.value)}
+                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
+              >
+                <option value="mock_agent">mock_agent</option>
+                <option value="offline_acc_fixture">offline_acc_fixture</option>
+              </select>
+            </label>
+          ) : (
+            <div style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontWeight: 700 }}>Voice target</span>
+              <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }}>
+                Uses the ACC audio plan + cancellation-rescue fixture path from this PR (no live SIP/WebRTC).
+              </p>
+            </div>
+          )}
+
+          {executionMode === 'text_callable' ? (
+            <label style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontWeight: 700 }}>Scenario scope</span>
+              <select
+                aria-label="Execution scenario scope"
+                value={executionScope}
+                onChange={(event) => setExecutionScope(event.target.value as 'selected' | 'suite')}
+                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
+              >
+                <option value="selected">Selected scenario</option>
+                <option value="suite">Entire suite</option>
+              </select>
+            </label>
+          ) : null}
+
+          <label style={{ display: 'grid', gap: 8 }}>
+            <span style={{ fontWeight: 700 }}>Iterations</span>
+            <input
+              aria-label="Execution iterations"
+              type="number"
+              min={1}
+              max={20}
+              value={executionIterations}
+              onChange={(event) => setExecutionIterations(Math.max(1, Math.min(20, Number(event.target.value) || 1)))}
+              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
+            />
+          </label>
+        </div>
+
+        {executionMessage ? <p style={{ margin: 0, color: 'var(--muted)' }}>{executionMessage}</p> : null}
+
+        {executionRun ? (
+          <div style={{ display: 'grid', gap: 12 }}>
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 12,
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                borderTop: '1px solid var(--border)',
+                paddingTop: 12,
+              }}
+            >
+              <div>
+                <strong>{executionRun.execution_run_id}</strong>
+                <span style={{ marginLeft: 10, color: executionStatusColor(executionRun.status), fontWeight: 800, textTransform: 'capitalize' }}>
+                  {executionRun.status}
+                </span>
+              </div>
+              <div style={{ color: 'var(--muted)', fontSize: 14 }}>
+                {executionRun.progress.completed_conversations}/{executionRun.progress.total_conversations} conversations ·{' '}
+                {executionRun.progress.percent}%
+                {executionRun.inference_set_path ? ` · ${executionRun.inference_set_path}` : ''}
+              </div>
+            </div>
+
+            <div aria-label="Execution conversations" style={{ display: 'grid', gap: 8, maxHeight: 420, overflow: 'auto' }}>
+              {(executionRun.conversations || []).length ? (
+                [...executionRun.conversations].reverse().map((conversation) => {
+                  const turnCount = conversation.turns?.length ?? 0;
+                  const latencyCount = conversation.latency_marks?.length ?? 0;
+                  return (
+                    <article
+                      key={conversation.conversation_id}
+                      style={{
+                        border: '1px solid var(--border)',
+                        borderRadius: 10,
+                        padding: '12px 14px',
+                        background: conversation.status === 'running' ? 'var(--panel-alt)' : 'white',
+                        display: 'grid',
+                        gap: 6,
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                        <div>
+                          <strong>{conversation.scenario_title || conversation.scenario_id}</strong>
+                          <span style={{ marginLeft: 8, color: 'var(--muted)', fontSize: 13 }}>
+                            iter {conversation.iteration ?? 1} · {conversation.mode}
+                          </span>
+                        </div>
+                        <span style={{ color: executionStatusColor(conversation.status), fontWeight: 800, textTransform: 'capitalize' }}>
+                          {conversation.status}
+                        </span>
+                      </div>
+                      <div style={{ color: 'var(--muted)', fontSize: 13, display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                        <span>{turnCount} turns</span>
+                        {latencyCount ? <span>{latencyCount} latency marks</span> : null}
+                        {conversation.verdict ? (
+                          <span style={{ color: executionStatusColor(conversation.verdict), textTransform: 'capitalize' }}>
+                            {conversation.verdict}
+                            {typeof conversation.score === 'number' ? ` · ${conversation.score}` : ''}
+                          </span>
+                        ) : null}
+                        {conversation.error ? <span style={{ color: 'var(--error-text)' }}>{conversation.error}</span> : null}
+                      </div>
+                      {conversation.transcript ? (
+                        <p style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 13, color: 'var(--text)', maxHeight: 72, overflow: 'hidden' }}>
+                          {conversation.transcript}
+                        </p>
+                      ) : null}
+                    </article>
+                  );
+                })
+              ) : (
+                <p style={{ margin: 0, color: 'var(--muted)' }}>Waiting for the first conversation row…</p>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </section>
 
       {suiteSimulation ? (
         <section className="card" style={{ padding: 24, display: 'grid', gap: 16 }} aria-label="Suite simulation summary">
