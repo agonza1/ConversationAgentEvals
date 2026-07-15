@@ -834,12 +834,15 @@ interface ExecutionConversationRecord {
   suite_id: string;
   scenario_id: string;
   scenario_title?: string | null;
-  mode: 'text_callable' | 'voice_fixture';
+  mode: 'text_callable' | 'voice_fixture' | 'pipecat_webrtc';
   status: 'queued' | 'running' | 'completed' | 'failed';
   iteration?: number;
   turns?: ExecutionConversationTurn[];
   transcript?: string | null;
   latency_marks?: Array<JsonRecord>;
+  recording?: JsonRecord | null;
+  vcon_export?: JsonRecord | null;
+  vcon_export_summary?: JsonRecord | null;
   verdict?: string | null;
   score?: number | null;
   error?: string | null;
@@ -850,7 +853,7 @@ interface ExecutionConversationRecord {
 interface ExecutionRunRecord {
   execution_run_id: string;
   status: 'queued' | 'running' | 'completed' | 'needs_review' | 'failed';
-  mode: 'text_callable' | 'voice_fixture';
+  mode: 'text_callable' | 'voice_fixture' | 'pipecat_webrtc';
   suite_id: string;
   scenario_ids: string[];
   user_id: string;
@@ -873,7 +876,7 @@ interface ExecutionRunRecord {
 async function createExecutionRun(payload: {
   suite_id: string;
   scenario_ids: string[];
-  mode: 'text_callable' | 'voice_fixture';
+  mode: 'text_callable' | 'voice_fixture' | 'pipecat_webrtc';
   text_callable?: string;
   iterations?: number;
   user_id: string;
@@ -1818,7 +1821,7 @@ export function BenchmarkRunner() {
   const [isRunning, setIsRunning] = useState(false);
   const [isSimulating, setIsSimulating] = useState(false);
   const [isEnqueueingSuite, setIsEnqueueingSuite] = useState(false);
-  const [executionMode, setExecutionMode] = useState<'text_callable' | 'voice_fixture'>('text_callable');
+  const [executionMode, setExecutionMode] = useState<'text_callable' | 'voice_fixture' | 'pipecat_webrtc'>('text_callable');
   const [executionTextCallable, setExecutionTextCallable] = useState('mock_agent');
   const [executionScope, setExecutionScope] = useState<'selected' | 'suite'>('selected');
   const [executionIterations, setExecutionIterations] = useState(1);
@@ -2536,7 +2539,7 @@ export function BenchmarkRunner() {
     const identity = ensureDemoIdentity();
 
     const scenarioIds =
-      executionMode === 'voice_fixture'
+      executionMode === 'voice_fixture' || executionMode === 'pipecat_webrtc'
         ? ['cancellation-rescue']
         : executionScope === 'suite'
           ? selectedSuite.scenarios.map((scenario) => scenario.id)
@@ -3221,11 +3224,14 @@ export function BenchmarkRunner() {
             <select
               aria-label="Execution target mode"
               value={executionMode}
-              onChange={(event) => setExecutionMode(event.target.value as 'text_callable' | 'voice_fixture')}
+              onChange={(event) =>
+                setExecutionMode(event.target.value as 'text_callable' | 'voice_fixture' | 'pipecat_webrtc')
+              }
               style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
             >
               <option value="text_callable">Text callable</option>
               <option value="voice_fixture">Voice fixture</option>
+              <option value="pipecat_webrtc">Pipecat WebRTC (local)</option>
             </select>
           </label>
 
@@ -3246,7 +3252,9 @@ export function BenchmarkRunner() {
             <div style={{ display: 'grid', gap: 8 }}>
               <span style={{ fontWeight: 700 }}>Voice target</span>
               <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }}>
-                Uses the ACC audio plan + cancellation-rescue fixture path from this PR (no live SIP/WebRTC).
+                {executionMode === 'pipecat_webrtc'
+                  ? 'Local Pipecat small WebRTC send/receive + recording/transcription captured as vCon (no FreeSWITCH/SIP).'
+                  : 'Uses the ACC audio plan + cancellation-rescue fixture path (no live SIP/WebRTC).'}
               </p>
             </div>
           )}
