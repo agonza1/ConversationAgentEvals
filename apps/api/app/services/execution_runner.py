@@ -25,6 +25,10 @@ from app.services.acc_realtime_target import (
 from app.services.agentic_contact_center_example import build_benchmark_run_request, normalize_acc_run
 from app.services.benchmark_catalog_extensions import register_builtin_benchmark_extensions
 from app.services.benchmark_service import get_suite, run_scenario, simulate_scenario
+from app.services.execution_audio import (
+    WebRtcBackedVoiceTarget,
+    create_execution_audio_session,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -48,7 +52,7 @@ def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
     if not scenario_ids:
         scenario_ids = [item['id'] for item in suite.get('scenarios') or []]
         optional = suite.get('optional_scenarios') or []
-        if payload.mode == 'voice_fixture' and optional:
+        if payload.mode in {'voice_fixture', 'voice_webrtc'} and optional:
             scenario_ids = [optional[0]['id']]
         elif not scenario_ids and optional:
             scenario_ids = [optional[0]['id']]
@@ -164,8 +168,10 @@ def _run_one_conversation(
     try:
         if payload.mode == 'text_callable':
             result = _execute_text_callable(suite_id, scenario_id, payload)
-        else:
+        elif payload.mode in {'voice_fixture', 'voice_webrtc'}:
             result = asyncio.run(_execute_voice_fixture(suite_id, scenario_id, payload))
+        else:
+            raise ValueError(f'Unsupported execution mode: {payload.mode}')
         return ConversationRecord(
             conversation_id=conversation_id,
             execution_run_id=execution_run_id,
@@ -180,6 +186,7 @@ def _run_one_conversation(
             action_trace=result.get('action_trace') or [],
             final_state=result.get('final_state') or {},
             latency_marks=result.get('latency_marks') or [],
+            audio_session=result.get('audio_session'),
             verdict=result.get('verdict'),
             score=result.get('score'),
             started_at=started,
@@ -293,16 +300,44 @@ def _evidence_from_offline_fixture(
 
 async def _execute_voice_fixture(suite_id: str, scenario_id: str, payload: ExecutionRunCreateRequest) -> dict[str, Any]:
     plan = _load_audio_plan(payload.audio_plan_path or DEFAULT_AUDIO_PLAN, scenario_id=scenario_id)
-    target = _VoiceFixtureTarget()
+    audio_transport = payload.audio_transport
+    if payload.mode == 'voice_webrtc' and audio_transport == 'none':
+        audio_transport = 'local_pipecat_webrtc'
+
+    audio_session = None
+    media_steps: list[dict[str, Any]] = []
+    if audio_transport == 'local_pipecat_webrtc':
+        audio_session = create_execution_audio_session(
+            'local_pipecat_webrtc',
+            metadata={
+                'execution_mode': payload.mode,
+                'suite_id': suite_id,
+                'scenario_id': scenario_id,
+                'user_id': payload.user_id,
+                'project_id': payload.project_id,
+            },
+        )
+        await audio_session.negotiate()
+        target = WebRtcBackedVoiceTarget(audio_session)
+    else:
+        target = _VoiceFixtureTarget()
+
     scheduler = AccAudioFixtureScheduler(target, sleeper=_fast_sleep, event_poll_interval_seconds=0.01)
-    inject_results = await scheduler.run('voice-fixture-session', plan)
+    inject_results = await scheduler.run(
+        audio_session.session_id if audio_session is not None else 'voice-fixture-session',
+        plan,
+    )
+    if isinstance(target, WebRtcBackedVoiceTarget):
+        media_steps = list(target.media_steps)
+
     turns = [
         ConversationTurn(
             turn_index=index,
             speaker='caller',
             act_id=str(item.get('expected_caller_act') or ''),
             text=str((item.get('response') or {}).get('utterance') or item.get('fixture_id') or ''),
-            event_types=['audio_injected'],
+            event_types=['audio_injected']
+            + (['webrtc_audio_streamed'] if audio_session is not None else []),
         )
         for index, item in enumerate(inject_results, start=1)
     ]
@@ -319,10 +354,29 @@ async def _execute_voice_fixture(suite_id: str, scenario_id: str, payload: Execu
                     latency_ms=item.latency_ms,
                 )
             )
+
+    audio_proof: dict[str, Any] | None = None
+    if audio_session is not None:
+        closed = await audio_session.close(reason='execution_complete')
+        audio_proof = {
+            **closed.model_dump(mode='json'),
+            'media_steps': media_steps,
+            'extension_points': {
+                'sip_verto': {
+                    'status': 'deferred',
+                    'note': (
+                        'Attach FreeSWITCH Verto outbound SIP to the same SmallWebRTC PCM session '
+                        'after local in/out hooks are proven. Not required for default CI.'
+                    ),
+                }
+            },
+        }
+
     return {
         **evidence,
         'turns': turns,
         'latency_marks': evidence.get('latency_marks') or [],
+        'audio_session': audio_proof,
     }
 
 
@@ -428,7 +482,10 @@ def _validate_scenarios(suite: dict[str, Any], scenario_ids: list[str]) -> None:
 
 
 def _validate_fixture_mode_scenarios(payload: ExecutionRunCreateRequest, scenario_ids: list[str]) -> None:
-    uses_fixture = payload.mode == 'voice_fixture' or payload.text_callable == 'offline_acc_fixture'
+    uses_fixture = (
+        payload.mode in {'voice_fixture', 'voice_webrtc'}
+        or payload.text_callable == 'offline_acc_fixture'
+    )
     if not uses_fixture:
         return
     unsupported = [scenario_id for scenario_id in scenario_ids if scenario_id not in FIXTURE_BACKED_SCENARIO_IDS]

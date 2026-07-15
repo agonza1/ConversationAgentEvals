@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.schemas.execution import ExecutionRunCreateRequest
 from app.services import execution_run_store
+from app.services.execution_audio import describe_execution_audio_capabilities
 from app.services.execution_runner import execute_execution_run, start_execution_run
 
 
@@ -43,7 +44,22 @@ def get_run(execution_run_id: str, user_id: str = Query(...)):
     return run
 
 
+@router.get('/audio/capabilities')
+def execution_audio_capabilities():
+    """Describe available execution-time audio transports.
+
+    Default CI uses in-process local Pipecat SmallWebRTC hooks. FreeSWITCH Verto
+    outbound SIP is advertised as deferred and is not required to install CAE.
+    """
+
+    return describe_execution_audio_capabilities().model_dump(mode='json')
+
+
 @router.get('/health')
 def execution_health(db: Session = Depends(get_db)):
     del db
-    return {'ok': True, 'surface': 'execution'}
+    return {
+        'ok': True,
+        'surface': 'execution',
+        'audio': describe_execution_audio_capabilities().model_dump(mode='json'),
+    }

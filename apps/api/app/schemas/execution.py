@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-ExecutionMode = Literal['text_callable', 'voice_fixture']
+ExecutionMode = Literal['text_callable', 'voice_fixture', 'voice_webrtc']
+AudioTransportId = Literal['none', 'local_pipecat_webrtc', 'sip_verto']
 ConversationStatus = Literal['queued', 'running', 'completed', 'failed']
 ExecutionRunStatus = Literal['queued', 'running', 'completed', 'needs_review', 'failed']
 
@@ -24,6 +25,27 @@ class ExecutionRunCreateRequest(BaseModel):
     text_callable: str = Field(default='mock_agent', min_length=1)
     voice_fixture_path: str | None = None
     audio_plan_path: str | None = None
+    audio_transport: AudioTransportId = 'none'
+
+    @model_validator(mode='after')
+    def voice_webrtc_uses_local_pipecat_transport(self) -> 'ExecutionRunCreateRequest':
+        if self.mode == 'voice_webrtc':
+            if self.audio_transport == 'none':
+                self.audio_transport = 'local_pipecat_webrtc'
+            if self.audio_transport == 'sip_verto':
+                raise ValueError(
+                    'audio_transport=sip_verto is deferred (FreeSWITCH Verto outbound SIP). '
+                    'Use local_pipecat_webrtc for execution audio hooks.'
+                )
+            if self.audio_transport != 'local_pipecat_webrtc':
+                raise ValueError('voice_webrtc mode requires audio_transport=local_pipecat_webrtc')
+        elif self.audio_transport == 'sip_verto':
+            raise ValueError(
+                'audio_transport=sip_verto is deferred. Use none or local_pipecat_webrtc.'
+            )
+        elif self.mode == 'text_callable' and self.audio_transport != 'none':
+            raise ValueError('text_callable mode does not stream execution audio; set audio_transport=none')
+        return self
 
 
 class ConversationTurn(BaseModel):
@@ -55,6 +77,7 @@ class ConversationRecord(BaseModel):
     action_trace: list[dict[str, Any]] = Field(default_factory=list)
     final_state: dict[str, Any] = Field(default_factory=dict)
     latency_marks: list[dict[str, Any]] = Field(default_factory=list)
+    audio_session: dict[str, Any] | None = None
     verdict: str | None = None
     score: float | None = None
     error: str | None = None
