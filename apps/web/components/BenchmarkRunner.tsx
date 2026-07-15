@@ -255,15 +255,6 @@ interface ProductConfig {
   llm_judge_status: 'planned' | 'gated' | 'enabled';
 }
 
-interface CheckoutGate {
-  status: 'ready' | 'blocked';
-  plan: 'starter' | 'team';
-  stripe_price_id?: string | null;
-  checkout_url?: string | null;
-  message: string;
-  metadata?: Record<string, string>;
-}
-
 interface SavedRun {
   id: string;
   project_id: string;
@@ -794,22 +785,6 @@ async function enqueueBenchmarkSuiteSimulation(payload: {
 
 async function fetchProductConfig(): Promise<ProductConfig> {
   return handleJson<ProductConfig>(await fetch(`${getApiBase()}/api/product/config`, { cache: 'no-store' }));
-}
-
-async function requestCheckoutGate(payload: {
-  plan: 'starter' | 'team';
-  user_id: string;
-  project_id: string;
-  success_url?: string;
-  cancel_url?: string;
-}) {
-  return handleJson<CheckoutGate>(
-    await fetch(`${getApiBase()}/api/product/checkout`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }),
-  );
 }
 
 async function saveBenchmarkRun(payload: {
@@ -1835,7 +1810,6 @@ export function BenchmarkRunner() {
   const [scenarioRegressionSummary, setScenarioRegressionSummary] = useState<ProjectRegressionSummary | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
-  const [checkoutMessage, setCheckoutMessage] = useState<string | null>(null);
   const [judgeGate, setJudgeGate] = useState<JudgeGate | null>(null);
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -1910,12 +1884,24 @@ export function BenchmarkRunner() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+
     const storedUser = window.localStorage.getItem('conversation-evals-demo-user');
     const storedProject = window.localStorage.getItem('conversation-evals-demo-project');
     const storedPlan = window.localStorage.getItem('conversation-evals-demo-plan') as PricingPlan['id'] | null;
-    if (storedUser) setUserId(storedUser);
-    if (storedProject) setProjectId(storedProject);
-    if (storedPlan && ['free', 'starter', 'team', 'business'].includes(storedPlan)) setPlan(storedPlan);
+
+    const nextUser = storedUser || `demo-user-${Math.random().toString(36).slice(2, 8)}`;
+    const nextProject = storedProject || 'call-center-demo';
+    const nextPlan = storedPlan && ['free', 'starter', 'team', 'business'].includes(storedPlan)
+      ? storedPlan
+      : 'free';
+
+    window.localStorage.setItem('conversation-evals-demo-user', nextUser);
+    window.localStorage.setItem('conversation-evals-demo-project', nextProject);
+    window.localStorage.setItem('conversation-evals-demo-plan', nextPlan);
+
+    setUserId(nextUser);
+    setProjectId(nextProject);
+    setPlan(nextPlan);
   }, []);
 
   useEffect(() => {
@@ -2058,15 +2044,27 @@ export function BenchmarkRunner() {
     return () => window.clearInterval(interval);
   }, [executionRun, userId]);
 
-  function signInDemo() {
-    const nextUser = `demo-user-${Math.random().toString(36).slice(2, 8)}`;
-    setUserId(nextUser);
+  function ensureDemoIdentity(): { userId: string; projectId: string; plan: PricingPlan['id'] } {
+    const nextUser = userId || (typeof window !== 'undefined'
+      ? window.localStorage.getItem('conversation-evals-demo-user')
+      : null) || `demo-user-${Math.random().toString(36).slice(2, 8)}`;
+    const nextProject = projectId || (typeof window !== 'undefined'
+      ? window.localStorage.getItem('conversation-evals-demo-project')
+      : null) || 'call-center-demo';
+    const storedPlan = typeof window !== 'undefined'
+      ? window.localStorage.getItem('conversation-evals-demo-plan') as PricingPlan['id'] | null
+      : null;
+    const nextPlan = plan || (storedPlan && ['free', 'starter', 'team', 'business'].includes(storedPlan) ? storedPlan : 'free');
+
     if (typeof window !== 'undefined') {
       window.localStorage.setItem('conversation-evals-demo-user', nextUser);
-      window.localStorage.setItem('conversation-evals-demo-project', projectId);
-      window.localStorage.setItem('conversation-evals-demo-plan', plan);
+      window.localStorage.setItem('conversation-evals-demo-project', nextProject);
+      window.localStorage.setItem('conversation-evals-demo-plan', nextPlan);
     }
-    setSaveMessage('Signed in with local Firebase-ready demo identity. Real Firebase credentials can replace this without changing the product flow.');
+    if (nextUser !== userId) setUserId(nextUser);
+    if (nextProject !== projectId) setProjectId(nextProject);
+    if (nextPlan !== plan) setPlan(nextPlan);
+    return { userId: nextUser, projectId: nextProject, plan: nextPlan };
   }
 
   function updatePlan(nextPlan: PricingPlan['id']) {
@@ -2076,37 +2074,10 @@ export function BenchmarkRunner() {
     }
   }
 
-  async function onSelectPlan(nextPlan: PricingPlan['id']) {
-    updatePlan(nextPlan);
-    setCheckoutMessage(null);
-
-    if (nextPlan !== 'starter' && nextPlan !== 'team') return;
-
-    const checkoutUserId = userId || 'anonymous-upgrade-preview';
+  async function refreshAuditTrail(overrideUserId = userId, overrideProjectId = projectId) {
+    if (!overrideUserId) return;
     try {
-      const origin = typeof window !== 'undefined' ? window.location.origin : undefined;
-      const gate = await requestCheckoutGate({
-        plan: nextPlan,
-        user_id: checkoutUserId,
-        project_id: projectId,
-        success_url: origin ? `${origin}/benchmarks?checkout=success` : undefined,
-        cancel_url: origin ? `${origin}/benchmarks?checkout=cancelled` : undefined,
-      });
-      const planName = nextPlan === 'starter' ? 'Starter' : 'Team';
-      if (gate.status === 'ready') {
-        setCheckoutMessage(`${planName} checkout ready${gate.checkout_url ? `: ${gate.checkout_url}` : '.'}`);
-      } else {
-        setCheckoutMessage(gate.message);
-      }
-    } catch (err) {
-      setCheckoutMessage(err instanceof Error ? err.message : 'Could not check billing readiness.');
-    }
-  }
-
-  async function refreshAuditTrail() {
-    if (!userId) return;
-    try {
-      setAuditEvents(await listAuditEvents(userId, projectId));
+      setAuditEvents(await listAuditEvents(overrideUserId, overrideProjectId));
     } catch {
       setAuditEvents([]);
     }
@@ -2114,22 +2085,25 @@ export function BenchmarkRunner() {
 
   async function onSaveRun() {
     if (!report) return;
-    if (!userId) {
-      setSaveMessage('Sign up first to save projects and run history.');
-      return;
-    }
+    const identity = ensureDemoIdentity();
 
     try {
-      const saved = await saveBenchmarkRun({ user_id: userId, project_id: projectId, plan, report, transcript });
+      const saved = await saveBenchmarkRun({
+        user_id: identity.userId,
+        project_id: identity.projectId,
+        plan: identity.plan,
+        report,
+        transcript,
+      });
       setSavedRuns((current) => [saved, ...current.filter((run) => run.id !== saved.id)]);
-      fetchProjectRegressionSummary(userId, projectId)
+      fetchProjectRegressionSummary(identity.userId, identity.projectId)
         .then(setProjectRegressionSummary)
         .catch(() => setProjectRegressionSummary(null));
-      fetchProjectRegressionSummary(userId, projectId, saved.report.suite_id, saved.report.scenario_id)
+      fetchProjectRegressionSummary(identity.userId, identity.projectId, saved.report.suite_id, saved.report.scenario_id)
         .then(setScenarioRegressionSummary)
         .catch(() => setScenarioRegressionSummary(null));
-      await refreshAuditTrail();
-      setSaveMessage(`Saved run ${saved.id} to ${projectId}.`);
+      await refreshAuditTrail(identity.userId, identity.projectId);
+      setSaveMessage(`Saved run ${saved.id} to ${identity.projectId}.`);
     } catch (err) {
       setSaveMessage(err instanceof Error ? err.message : 'Could not save this run.');
     }
@@ -2137,17 +2111,14 @@ export function BenchmarkRunner() {
 
   async function onSaveSuiteRuns() {
     if (!suiteSimulation) return;
-    if (!userId) {
-      setSaveMessage('Sign up first to save suite runs and project history.');
-      return;
-    }
+    const identity = ensureDemoIdentity();
 
     try {
       const saved = await Promise.all(
         suiteSimulation.scenario_runs.map((run) => saveBenchmarkRun({
-          user_id: userId,
-          project_id: projectId,
-          plan,
+          user_id: identity.userId,
+          project_id: identity.projectId,
+          plan: identity.plan,
           report: run.benchmark_report,
           transcript: run.transcript,
         })),
@@ -2156,19 +2127,19 @@ export function BenchmarkRunner() {
         ...saved,
         ...current.filter((run) => !saved.some((savedRun) => savedRun.id === run.id)),
       ]);
-      fetchProjectRegressionSummary(userId, projectId)
+      fetchProjectRegressionSummary(identity.userId, identity.projectId)
         .then(setProjectRegressionSummary)
         .catch(() => setProjectRegressionSummary(null));
       if (report?.suite_id && report.scenario_id) {
-        fetchProjectRegressionSummary(userId, projectId, report.suite_id, report.scenario_id)
+        fetchProjectRegressionSummary(identity.userId, identity.projectId, report.suite_id, report.scenario_id)
           .then(setScenarioRegressionSummary)
           .catch(() => setScenarioRegressionSummary(null));
       }
-      listBenchmarkSuiteRuns(userId, projectId, suiteSimulation.suite_id)
+      listBenchmarkSuiteRuns(identity.userId, identity.projectId, suiteSimulation.suite_id)
         .then(setSuiteRuns)
         .catch(() => setSuiteRuns([]));
-      await refreshAuditTrail();
-      setSaveMessage(`Saved ${saved.length} suite runs to ${projectId}.`);
+      await refreshAuditTrail(identity.userId, identity.projectId);
+      setSaveMessage(`Saved ${saved.length} suite runs to ${identity.projectId}.`);
     } catch (err) {
       setSaveMessage(err instanceof Error ? err.message : 'Could not save this suite.');
     }
@@ -2562,10 +2533,7 @@ export function BenchmarkRunner() {
 
   async function onLaunchExecution() {
     if (!selectedSuite) return;
-    if (!userId) {
-      setExecutionMessage('Sign up first to launch an execution run.');
-      return;
-    }
+    const identity = ensureDemoIdentity();
 
     const scenarioIds =
       executionMode === 'voice_fixture'
@@ -2592,15 +2560,15 @@ export function BenchmarkRunner() {
         mode: executionMode,
         text_callable: executionMode === 'text_callable' ? executionTextCallable : undefined,
         iterations: executionIterations,
-        user_id: userId,
-        project_id: projectId,
+        user_id: identity.userId,
+        project_id: identity.projectId,
         evaluate: true,
       });
       setExecutionRun(queued);
       setExecutionMessage(
         `Execution queued (${queued.mode}). Streaming conversations as inference_set rows are written.`,
       );
-      listExecutionRuns(userId, projectId).catch(() => undefined);
+      listExecutionRuns(identity.userId, identity.projectId).catch(() => undefined);
     } catch (err) {
       setExecutionMessage(err instanceof Error ? err.message : 'Could not launch execution.');
     } finally {
@@ -2659,10 +2627,7 @@ export function BenchmarkRunner() {
 
   async function onEnqueueSuiteSimulation() {
     if (!selectedSuite) return;
-    if (!userId) {
-      setSaveMessage('Sign up first to queue retained suite runs.');
-      return;
-    }
+    const identity = ensureDemoIdentity();
 
     setIsEnqueueingSuite(true);
     setRunError(null);
@@ -2674,8 +2639,8 @@ export function BenchmarkRunner() {
         prompt_version: promptVersion,
         model_name: modelName,
         notes: runNotes,
-        user_id: userId,
-        project_id: projectId || undefined,
+        user_id: identity.userId,
+        project_id: identity.projectId || undefined,
       });
       const queued = await enqueueBenchmarkSuiteSimulation({
         suite_id: selectedSuite.id,
@@ -2684,13 +2649,13 @@ export function BenchmarkRunner() {
         ...runMetadata,
       });
       setSuiteRuns((current) => [queued, ...current.filter((run) => run.suite_run_id !== queued.suite_run_id)]);
-      setSaveMessage(`Queued suite run ${queued.suite_run_id} for ${projectId}.`);
+      setSaveMessage(`Queued suite run ${queued.suite_run_id} for ${identity.projectId}.`);
       if (suiteRunStatusFilter) setSuiteRunStatusFilter('');
       let latest = queued;
       for (let attempt = 0; attempt < 8 && isActiveSuiteRunStatus(latest.status); attempt += 1) {
         await delay(750);
         try {
-          latest = await fetchBenchmarkSuiteRun(userId, queued.suite_run_id);
+          latest = await fetchBenchmarkSuiteRun(identity.userId, queued.suite_run_id);
           setSuiteRuns((current) => [latest, ...current.filter((run) => run.suite_run_id !== latest.suite_run_id)]);
         } catch {
           break;
@@ -2722,7 +2687,6 @@ export function BenchmarkRunner() {
     ? report.suite_contract_manifest_sha256.slice(0, 12)
     : suiteManifestFingerprint ?? 'Not captured';
   const scenarioContractFingerprint = report?.scenario_contract_sha256 ? report.scenario_contract_sha256.slice(0, 12) : selectedScenarioManifestFingerprint ?? 'Not captured';
-  const pricing = productConfig?.pricing ?? [];
   const deterministicRule = productConfig?.usage_rules.find((rule) => rule.id === 'deterministic_eval');
   const judgeRule = productConfig?.usage_rules.find((rule) => rule.id === 'llm_judge');
   const voiceRule = productConfig?.usage_rules.find((rule) => rule.id === 'voice_webrtc_minute');
@@ -2777,75 +2741,57 @@ export function BenchmarkRunner() {
       title: 'Save repeatable history',
       detail: hasSavedCurrentScenario
         ? `Focused history is tracking ${selectedScenario?.title ?? 'this scenario'}.`
-        : userId
-          ? 'Save the result to compare future prompt, model, and agent changes.'
-          : 'Sign up with the demo identity, then save the run for regression history.',
+        : 'Save the result to compare future prompt, model, and agent changes.',
       done: hasSavedCurrentScenario,
       ready: Boolean(report && userId),
-      actionLabel: !userId
-        ? 'Create demo project'
-        : report && !hasSavedCurrentScenario
-          ? 'Save this run'
-          : hasSavedCurrentScenario && savedRuns.length
-            ? 'Export saved history'
-            : report
-              ? 'Save this run'
-              : null,
-      action: !userId
-        ? signInDemo
-        : report && !hasSavedCurrentScenario
-          ? () => void onSaveRun()
-          : hasSavedCurrentScenario && savedRuns.length
-            ? () => void onExportProjectHistory()
-            : report
-              ? () => void onSaveRun()
-              : undefined,
+      actionLabel: report && !hasSavedCurrentScenario
+        ? 'Save this run'
+        : hasSavedCurrentScenario && savedRuns.length
+          ? 'Export saved history'
+          : report
+            ? 'Save this run'
+            : null,
+      action: report && !hasSavedCurrentScenario
+        ? () => void onSaveRun()
+        : hasSavedCurrentScenario && savedRuns.length
+          ? () => void onExportProjectHistory()
+          : report
+            ? () => void onSaveRun()
+            : undefined,
       actionVariant: 'secondary' as const,
-      disabled: Boolean(userId && !report),
+      disabled: Boolean(!report || !userId),
     },
   ];
 
   return (
     <section style={{ display: 'grid', gap: 20 }}>
       {productConfig ? (
-        <section className="product-console" aria-label="Product plan and authentication controls">
+        <section className="product-console product-console-compact" aria-label="Product plan controls">
           <div className="console-panel">
             <p className="eyebrow">Free browser eval</p>
-            <h2>Run deterministic checks now. Save and judge after signup.</h2>
+            <h2>Run deterministic checks now. Save runs and request LLM judge when ready.</h2>
             <p>
               This path is real: the browser sends transcript, action trace, and final state evidence to the benchmark API.
-              Paid gates control persistence, LLM judging, CI/API, and voice minutes.
+              Paid gates control persistence, LLM judging, CI/API, and voice minutes. A demo identity is stored locally so save and history work without signup.
             </p>
             <div className="usage-strip">
               <span>{deterministicRule?.credits ?? 1} credit browser eval</span>
               <span>{judgeRule?.credits ?? 10} credits LLM judge</span>
               <span>{voiceRule?.credits ?? 5} credits voice minute</span>
             </div>
-          </div>
-
-          <div className="auth-panel">
-            <div>
-              <p className="eyebrow">Auth</p>
-              <h3>{userId ? 'Signed in' : 'Firebase-ready signup'}</h3>
-              <p>
-                {productConfig.auth.mode === 'configured'
-                  ? `Firebase project ${productConfig.auth.project_id} is configured.`
-                  : 'Firebase providers are scaffolded; add project keys to use live auth.'}
-              </p>
-            </div>
-            <label>
-              <span>Project</span>
-              <input
-                value={projectId}
-                onChange={(event) => {
-                  setProjectId(event.target.value);
-                  if (typeof window !== 'undefined') window.localStorage.setItem('conversation-evals-demo-project', event.target.value);
-                }}
-              />
+            <label className="demo-plan-control">
+              <span>Demo plan</span>
+              <select
+                aria-label="Demo plan"
+                value={plan}
+                onChange={(event) => updatePlan(event.target.value as PricingPlan['id'])}
+              >
+                <option value="free">Free</option>
+                <option value="starter">Starter</option>
+                <option value="team">Team</option>
+                <option value="business">Business</option>
+              </select>
             </label>
-            <button type="button" className="primary-link" onClick={signInDemo}>
-              {userId ? 'Refresh demo identity' : 'Sign up to save'}
-            </button>
           </div>
         </section>
       ) : null}
@@ -2881,30 +2827,6 @@ export function BenchmarkRunner() {
           })}
         </ol>
       </section>
-
-      {pricing.length ? (
-        <section className="pricing-grid" aria-label="Pricing and upgrade gates">
-          {pricing.map((item) => (
-            <button
-              type="button"
-              className={`pricing-card ${plan === item.id ? 'selected' : ''}`}
-              key={item.id}
-              onClick={() => void onSelectPlan(item.id)}
-            >
-              <span>{item.name}</span>
-              <strong>{item.price_label}</strong>
-              <small>{item.seats}</small>
-              <ul>
-                {item.features.slice(0, 4).map((feature) => <li key={feature}>{feature}</li>)}
-              </ul>
-            </button>
-          ))}
-        </section>
-      ) : null}
-
-      {checkoutMessage ? (
-        <p aria-live="polite" style={{ margin: 0, color: 'var(--muted)' }}>{checkoutMessage}</p>
-      ) : null}
 
       <form onSubmit={onSubmit} className="card" style={{ padding: 24, display: 'grid', gap: 18 }}>
         {loadError ? (

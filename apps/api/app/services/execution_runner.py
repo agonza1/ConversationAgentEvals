@@ -31,6 +31,11 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_VOICE_FIXTURE = 'docs/examples/agentic-contact-center-run-fixture.json'
 DEFAULT_AUDIO_PLAN = 'docs/examples/agentic-contact-center-audio-plan.json'
 DEFAULT_CANCELLATION_SCENARIO = 'docs/examples/agentic-contact-center-cancellation-rescue.json'
+FIXTURE_BACKED_SCENARIO_IDS = frozenset({'cancellation-rescue'})
+ALLOWED_FIXTURE_ROOTS = (
+    REPO_ROOT / 'docs' / 'examples',
+    REPO_ROOT / 'artifacts',
+)
 
 
 def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
@@ -49,8 +54,15 @@ def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
             scenario_ids = [optional[0]['id']]
     if not scenario_ids:
         raise ValueError('No scenarios selected for execution.')
+    if len(scenario_ids) != len(set(scenario_ids)):
+        raise ValueError('Duplicate scenario ids are not allowed.')
 
     _validate_scenarios(suite, scenario_ids)
+    _validate_fixture_mode_scenarios(payload, scenario_ids)
+    if payload.voice_fixture_path:
+        _repo_path(payload.voice_fixture_path)
+    if payload.audio_plan_path:
+        _repo_path(payload.audio_plan_path)
     total = len(scenario_ids) * payload.iterations
     now = datetime.now(UTC).isoformat()
     execution_run_id = f'exec-{uuid.uuid4().hex[:12]}'
@@ -206,13 +218,15 @@ def _execute_text_callable(suite_id: str, scenario_id: str, payload: ExecutionRu
             project_id=payload.project_id,
         )
     )
-    report = simulation.get('benchmark_report') if isinstance(simulation.get('benchmark_report'), dict) else {}
     transcript = str(simulation.get('transcript') or '')
     action_trace = simulation.get('action_trace') if isinstance(simulation.get('action_trace'), list) else []
     final_state = simulation.get('final_state') if isinstance(simulation.get('final_state'), dict) else {}
     turns = _turns_from_transcript(transcript)
-    if payload.evaluate and not report:
-        report = run_scenario(
+    report: dict[str, Any] = {}
+    if payload.evaluate:
+        # simulate_scenario always evaluates; only surface the report when evaluate=true.
+        candidate = simulation.get('benchmark_report') if isinstance(simulation.get('benchmark_report'), dict) else {}
+        report = candidate or run_scenario(
             BenchmarkRunRequest(
                 suite_id=suite_id,
                 scenario_id=scenario_id,
@@ -413,6 +427,18 @@ def _validate_scenarios(suite: dict[str, Any], scenario_ids: list[str]) -> None:
         raise ValueError(f'Unknown scenario ids for suite: {", ".join(missing)}')
 
 
+def _validate_fixture_mode_scenarios(payload: ExecutionRunCreateRequest, scenario_ids: list[str]) -> None:
+    uses_fixture = payload.mode == 'voice_fixture' or payload.text_callable == 'offline_acc_fixture'
+    if not uses_fixture:
+        return
+    unsupported = [scenario_id for scenario_id in scenario_ids if scenario_id not in FIXTURE_BACKED_SCENARIO_IDS]
+    if unsupported:
+        raise ValueError(
+            'Fixture-backed execution only supports cancellation-rescue; '
+            f'unsupported: {", ".join(unsupported)}'
+        )
+
+
 def _scenario_title(suite: dict[str, Any], scenario_id: str) -> str | None:
     for collection in (suite.get('scenarios') or [], suite.get('optional_scenarios') or []):
         for item in collection:
@@ -422,12 +448,16 @@ def _scenario_title(suite: dict[str, Any], scenario_id: str) -> str | None:
 
 
 def _repo_path(relative: str) -> Path:
-    path = Path(relative)
-    if not path.is_absolute():
-        path = REPO_ROOT / path
-    if not path.is_file():
+    """Resolve fixture/plan paths and reject anything outside allowlisted repo roots."""
+    candidate = Path(relative)
+    path = candidate if candidate.is_absolute() else (REPO_ROOT / candidate)
+    resolved = path.resolve()
+    allowed_roots = [root.resolve() for root in ALLOWED_FIXTURE_ROOTS]
+    if not any(resolved == root or resolved.is_relative_to(root) for root in allowed_roots):
+        raise ValueError(f'Fixture path must stay under docs/examples or artifacts: {relative}')
+    if not resolved.is_file():
         raise ValueError(f'Missing file: {relative}')
-    return path
+    return resolved
 
 
 async def _fast_sleep(_seconds: float) -> None:

@@ -872,9 +872,6 @@ test('benchmark runner shows suite simulation summary', async ({ page }) => {
   await expect(page.getByText('Copied suite brief.')).toBeVisible();
 
   await page.getByRole('button', { name: 'Save suite runs' }).click();
-  await expect(page.getByText('Sign up first to save suite runs and project history.')).toBeVisible();
-  await page.getByRole('button', { name: 'Sign up to save' }).click();
-  await page.getByRole('button', { name: 'Save suite runs' }).click();
   await expect(page.getByText('Saved 2 suite runs to call-center-demo.')).toBeVisible();
 
   await expect(page.getByRole('heading', { name: /pass|needs_review/i })).toBeVisible();

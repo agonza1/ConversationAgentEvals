@@ -121,6 +121,93 @@ def test_execution_run_rejects_unknown_scenario():
     assert response.status_code == 400
 
 
+def test_execution_run_rejects_duplicate_scenario_ids():
+    response = client.post(
+        '/api/execution/runs',
+        json={
+            'suite_id': 'call-center-voice-ai',
+            'scenario_ids': ['billing-address-change', 'billing-address-change'],
+            'mode': 'text_callable',
+            'user_id': 'exec-user',
+            'project_id': 'exec-project',
+        },
+    )
+    assert response.status_code == 400
+    assert 'Duplicate' in response.json()['detail']
+
+
+def test_voice_fixture_rejects_non_cancellation_scenario():
+    response = client.post(
+        '/api/execution/runs',
+        json={
+            'suite_id': 'call-center-voice-ai',
+            'scenario_ids': ['billing-address-change'],
+            'mode': 'voice_fixture',
+            'user_id': 'exec-user',
+            'project_id': 'exec-project',
+        },
+    )
+    assert response.status_code == 400
+    assert 'cancellation-rescue' in response.json()['detail']
+
+
+def test_offline_acc_fixture_rejects_non_cancellation_scenario():
+    response = client.post(
+        '/api/execution/runs',
+        json={
+            'suite_id': 'call-center-voice-ai',
+            'scenario_ids': ['billing-address-change'],
+            'mode': 'text_callable',
+            'text_callable': 'offline_acc_fixture',
+            'user_id': 'exec-user',
+            'project_id': 'exec-project',
+        },
+    )
+    assert response.status_code == 400
+
+
+def test_mock_agent_evaluate_false_omits_verdict():
+    queued = client.post(
+        '/api/execution/runs',
+        json={
+            'suite_id': 'call-center-voice-ai',
+            'scenario_ids': ['billing-address-change'],
+            'mode': 'text_callable',
+            'text_callable': 'mock_agent',
+            'evaluate': False,
+            'user_id': 'capture-user',
+            'project_id': 'capture-project',
+        },
+    )
+    assert queued.status_code == 200, queued.text
+    completed = _wait_for_terminal(queued.json()['execution_run_id'], user_id='capture-user')
+    conversation = completed['conversations'][0]
+    assert conversation['status'] == 'completed'
+    assert conversation['transcript']
+    assert conversation.get('verdict') is None
+    assert conversation.get('score') is None
+
+
+def test_execution_rejects_fixture_path_outside_allowlist(tmp_path: Path):
+    outside = tmp_path / 'secrets.json'
+    outside.write_text('{"dialog":[]}', encoding='utf-8')
+    queued = client.post(
+        '/api/execution/runs',
+        json={
+            'suite_id': 'call-center-voice-ai',
+            'scenario_ids': ['cancellation-rescue'],
+            'mode': 'text_callable',
+            'text_callable': 'offline_acc_fixture',
+            'voice_fixture_path': str(outside),
+            'evaluate': False,
+            'user_id': 'path-user',
+            'project_id': 'path-project',
+        },
+    )
+    assert queued.status_code == 400
+    assert 'docs/examples' in queued.json()['detail']
+
+
 def _wait_for_terminal(run_id: str, *, user_id: str, timeout_seconds: float = 20.0) -> dict:
     deadline = time.time() + timeout_seconds
     latest = {}
