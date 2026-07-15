@@ -201,6 +201,55 @@ def test_optional_cancellation_rescue_starter_evidence_satisfies_deterministic_c
     assert report['assert_result_manifest']['verdict']['metrics']['deterministic_check_fail_count'] == 0
 
 
+def test_structured_conversation_satisfies_transcript_evidence_requirement():
+    register_builtin_benchmark_extensions()
+    from app.schemas.assert_contracts import AssertResultManifest
+    from app.services.benchmark_catalog_extensions import (
+        CANCELLATION_RESCUE_SCENARIO,
+        _apply_cancellation_rescue_checks,
+    )
+
+    payload = {
+        'conversation': {
+            'dialog': [
+                {'speaker': 'Caller', 'text': 'I want to cancel because renewal went up.'},
+                {'speaker': 'Agent', 'text': 'I preserved your cancellation request and put this on policy hold.'},
+            ]
+        },
+        'action_trace': [
+            {'step': 1, 'type': 'cancellation_intent_detected', 'status': 'completed'},
+            {'step': 2, 'type': 'renewal_increase_reason_captured', 'status': 'completed'},
+            {'step': 3, 'type': 'policy_hold_entered', 'status': 'completed'},
+            {'step': 4, 'type': 'operator_steer_applied', 'status': 'completed'},
+            {'step': 5, 'type': 'call_wrapped', 'status': 'completed'},
+        ],
+        'final_state': {'complete': True, 'outcome': 'scripted_wrap_complete'},
+    }
+    base = AssertResultManifest.model_validate(
+        {
+            'verdict': {
+                'status': 'pass',
+                'score': 92,
+                'summary': 'base assert passed',
+                'metrics': {},
+            },
+            'failures': [],
+            'artifacts': [],
+        }
+    )
+
+    result = _apply_cancellation_rescue_checks(
+        base,
+        scenario=CANCELLATION_RESCUE_SCENARIO,
+        payload=payload,
+    )
+
+    assert result.verdict.status == 'pass'
+    assert not any(failure.code == 'missing-evidence:transcript' for failure in result.failures)
+    evidence_checks = result.verdict.metrics['deterministic_checks']
+    assert any(item['id'] == 'evidence:transcript' and item['passed'] for item in evidence_checks)
+
+
 def test_missing_transcript_preserves_zero_assert_score_and_evidence_manifest():
     register_builtin_benchmark_extensions()
     from app.schemas.assert_contracts import AssertResultManifest

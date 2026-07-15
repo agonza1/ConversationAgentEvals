@@ -323,7 +323,11 @@ def _apply_cancellation_rescue_checks(
     check_results: list[dict[str, Any]] = []
 
     for required in scenario.get('evidence_requirements', {}).get('required_artifacts', []):
-        present = _artifact_present(payload.get(required))
+        if required == 'transcript':
+            # Match run_scenario/assert evidence: accept structured conversation/call/vcon as transcript.
+            present = bool(benchmark_service._conversation_text(payload))
+        else:
+            present = _artifact_present(payload.get(required))
         check_results.append({'id': f'evidence:{required}', 'passed': present})
         if not present:
             failures.append(
