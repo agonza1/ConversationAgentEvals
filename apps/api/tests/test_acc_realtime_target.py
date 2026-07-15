@@ -180,6 +180,56 @@ def test_audio_fixture_scheduler_owns_selection_order_pacing_and_provenance():
     asyncio.run(run())
 
 
+def test_audio_fixture_scheduler_bounds_event_polls_by_remaining_wait_time():
+    class HangingObserveAdapter:
+        def __init__(self):
+            self.polls = 0
+
+        async def observe_events(self, session_id, *, cursor=None):
+            self.polls += 1
+            await asyncio.sleep(5)
+            return {'events': [], 'next_cursor': 'cursor-hang'}
+
+        async def inject_audio(self, *args, **kwargs):
+            raise AssertionError('inject_audio should not run after wait timeout')
+
+    async def run():
+        adapter = HangingObserveAdapter()
+        scheduler = AccAudioFixtureScheduler(adapter, sleeper=asyncio.sleep, event_poll_interval_seconds=0.01)
+        plan = AccAudioPlan(
+            scenario_id='cancellation-rescue',
+            seed=7,
+            provenance={'source': 'timeout-test'},
+            fixtures=[
+                AccAudioFixture(
+                    fixture_id='cancel-v1',
+                    uri='fixture://cancel.wav',
+                    expected_caller_act='request_cancellation',
+                )
+            ],
+            steps=[
+                AccAudioStep(
+                    step_id='cancel',
+                    fixture_id='cancel-v1',
+                    expected_caller_act='request_cancellation',
+                    wait_for_event='agent_response_completed',
+                    wait_timeout_seconds=0.05,
+                )
+            ],
+        )
+
+        try:
+            await scheduler.run('session-timeout', plan)
+        except TimeoutError as exc:
+            assert 'agent_response_completed' in str(exc)
+        else:
+            raise AssertionError('scheduler must fail closed when observe_events exceeds wait timeout')
+
+        assert adapter.polls == 1
+
+    asyncio.run(run())
+
+
 def test_deterministic_tester_controller_keeps_llm_wording_bounded_by_allowed_acts():
     now = [100.0]
     config = TesterScenarioConfig(

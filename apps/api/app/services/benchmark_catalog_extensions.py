@@ -257,10 +257,58 @@ def _scenario_summary(scenario: dict[str, Any]) -> dict[str, Any]:
 
 def _optional_scenario_with_starter_evidence(scenario: dict[str, Any]) -> dict[str, Any]:
     value = deepcopy(scenario)
+    if scenario.get('id') == CANCELLATION_RESCUE_SCENARIO['id']:
+        # Generic required-action simulators don't emit ACC event types / outcome fields.
+        value.setdefault('sample_transcript', _cancellation_rescue_sample_transcript())
+        value.setdefault('sample_action_trace', _cancellation_rescue_sample_action_trace())
+        value.setdefault('sample_final_state', _cancellation_rescue_sample_final_state())
+        return value
     value.setdefault('sample_transcript', benchmark_service._simulated_transcript(value, 'starter sample agent', False))
     value.setdefault('sample_action_trace', benchmark_service._simulated_action_trace(value, False))
     value.setdefault('sample_final_state', benchmark_service._simulated_final_state(value, False))
     return value
+
+
+def _cancellation_rescue_sample_transcript() -> str:
+    return '\n'.join(
+        [
+            'Caller: I want to cancel my policy today.',
+            'Agent (starter sample agent): I can help. What changed for you?',
+            'Caller: The renewal increase is too high.',
+            'Agent (starter sample agent): I reached the retention boundary and paused for an approved safe path.',
+            'Operator: Approved safe follow-up only.',
+            'Agent (starter sample agent): I recorded the approved follow-up and preserved the cancellation request.',
+        ]
+    )
+
+
+def _cancellation_rescue_sample_action_trace() -> list[dict[str, Any]]:
+    events = [
+        'cancellation_intent_detected',
+        'renewal_increase_reason_captured',
+        'policy_hold_entered',
+        'operator_steer_applied',
+        'call_wrapped',
+    ]
+    return [
+        {
+            'step': index,
+            'type': event_type,
+            'action': event_type.replace('_', ' '),
+            'status': 'completed',
+        }
+        for index, event_type in enumerate(events, start=1)
+    ]
+
+
+def _cancellation_rescue_sample_final_state() -> dict[str, Any]:
+    return {
+        'description': CANCELLATION_RESCUE_SCENARIO['expected_final_state'],
+        'complete': True,
+        'outcome': 'scripted_wrap_complete',
+        'missing_actions': [],
+        'forbidden_actions_observed': [],
+    }
 
 
 def _apply_cancellation_rescue_checks(

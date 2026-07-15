@@ -9,7 +9,8 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.services.agentic_contact_center_example import build_benchmark_run_request, normalize_acc_run
 from app.services.benchmark_catalog_extensions import register_builtin_benchmark_extensions
-from app.services.benchmark_service import get_scenario_contract, list_suites, run_scenario
+from app.services.benchmark_service import get_scenario_contract, get_suite, list_suites, run_scenario
+from app.schemas.benchmarks import BenchmarkRunRequest
 
 
 client = TestClient(app)
@@ -165,3 +166,36 @@ def test_tool_timeout_without_handoff_fails_closed_check():
     assert report['verdict'] == 'needs_review'
     failures = report['assert_result_manifest']['failures']
     assert any(failure['code'] == 'deterministic-check:tool-timeout-fails-closed' for failure in failures)
+
+
+def test_optional_cancellation_rescue_starter_evidence_satisfies_deterministic_checks():
+    register_builtin_benchmark_extensions()
+
+    suite = get_suite('call-center-voice-ai')
+    assert suite is not None
+    optional = next(item for item in suite['optional_scenarios'] if item['id'] == 'cancellation-rescue')
+    event_types = {item['type'] for item in optional['sample_action_trace']}
+    assert {
+        'cancellation_intent_detected',
+        'renewal_increase_reason_captured',
+        'policy_hold_entered',
+        'operator_steer_applied',
+        'call_wrapped',
+    }.issubset(event_types)
+    assert optional['sample_final_state']['complete'] is True
+    assert optional['sample_final_state']['outcome'] == 'scripted_wrap_complete'
+
+    report = run_scenario(
+        BenchmarkRunRequest(
+            suite_id='call-center-voice-ai',
+            scenario_id='cancellation-rescue',
+            transcript=optional['sample_transcript'],
+            action_trace=optional['sample_action_trace'],
+            final_state=optional['sample_final_state'],
+            user_id='starter-evidence-test',
+            project_id='conversation-agent-evals',
+        )
+    )
+
+    assert report['verdict'] == 'pass'
+    assert report['assert_result_manifest']['verdict']['metrics']['deterministic_check_fail_count'] == 0

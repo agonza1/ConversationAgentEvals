@@ -366,15 +366,24 @@ class AccAudioFixtureScheduler:
     async def _wait_for_event(self, session_id: str, event_type: str, timeout_seconds: float) -> None:
         deadline = time.monotonic() + timeout_seconds
         cursor: str | None = None
-        while time.monotonic() < deadline:
-            payload = await self.adapter.observe_events(session_id, cursor=cursor)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f'ACC event was not observed before timeout: {event_type}')
+            try:
+                async with asyncio.timeout(remaining):
+                    payload = await self.adapter.observe_events(session_id, cursor=cursor)
+            except TimeoutError as exc:
+                raise TimeoutError(f'ACC event was not observed before timeout: {event_type}') from exc
             events = payload.get('events') if isinstance(payload.get('events'), list) else []
             if any(isinstance(event, dict) and event.get('type') == event_type for event in events):
                 return
             next_cursor = payload.get('next_cursor') or payload.get('nextCursor')
             cursor = str(next_cursor) if next_cursor is not None else cursor
-            await self.sleeper(self.event_poll_interval_seconds)
-        raise TimeoutError(f'ACC event was not observed before timeout: {event_type}')
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f'ACC event was not observed before timeout: {event_type}')
+            await self.sleeper(min(self.event_poll_interval_seconds, remaining))
 
 
 class DeterministicTesterController:
