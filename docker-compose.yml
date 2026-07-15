@@ -50,8 +50,10 @@ services:
       APP_ENV: ${APP_ENV:-development}
     ports:
       - "${API_PORT:-8025}:8000"
+      - "${OPENAI_CODEX_CALLBACK_PORT:-1455}:1455"
     volumes:
       - ./storage:/workspace/storage
+      - ./.local:/workspace/.local
     depends_on:
       db:
         condition: service_healthy

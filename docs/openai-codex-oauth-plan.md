@@ -38,7 +38,7 @@ Add `apps/api/app/services/llm_providers/`:
 
 ### 2. Local OAuth + token store
 
-- PKCE S256; one-shot `http.server` on `127.0.0.1:1455`
+- PKCE S256; one-shot `http.server` on `0.0.0.0:1455` (redirect URI stays `http://localhost:1455/auth/callback`; Compose publishes `1455:1455` for Docker)
 - Persist to project-local `.local/openai-codex-oauth.json` (gitignored)
 - Optionally import from `~/.codex/auth.json` when CAE store is empty
 - Refresh via `grant_type=refresh_token` before expiry / on 401

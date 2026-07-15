@@ -20,9 +20,18 @@ CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
 AUTHORIZE_URL = 'https://auth.openai.com/oauth/authorize'
 TOKEN_URL = 'https://auth.openai.com/oauth/token'
 CODEX_RESPONSES_URL = 'https://chatgpt.com/backend-api/codex/responses'
-CALLBACK_HOST = 'localhost'
+CALLBACK_REDIRECT_HOST = 'localhost'
 CALLBACK_PORT = 1455
-REDIRECT_URI = f'http://{CALLBACK_HOST}:{CALLBACK_PORT}/auth/callback'
+REDIRECT_URI = f'http://{CALLBACK_REDIRECT_HOST}:{CALLBACK_PORT}/auth/callback'
+
+
+def _callback_bind_host() -> str:
+    """Bind address for the ephemeral OAuth callback server.
+
+    The redirect URI stays on localhost:1455, but Docker port publishing requires
+    listening on 0.0.0.0 inside the API container.
+    """
+    return os.getenv('OPENAI_CODEX_CALLBACK_BIND_HOST', '0.0.0.0')
 SCOPE = 'openid profile email offline_access'
 ORIGINATOR = 'conversation-agent-evals'
 DEFAULT_MODEL = 'gpt-5.4-mini'
@@ -272,7 +281,7 @@ class OpenAICodexProvider:
             def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
                 return
 
-        server = HTTPServer((CALLBACK_HOST, CALLBACK_PORT), Handler)
+        server = HTTPServer((_callback_bind_host(), CALLBACK_PORT), Handler)
         thread = threading.Thread(target=server.serve_forever, name='openai-codex-oauth', daemon=True)
         self._server = server
         self._server_thread = thread
