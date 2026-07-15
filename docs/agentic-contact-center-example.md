@@ -376,3 +376,14 @@ They do not prove:
 - SIP / FreeSWITCH media.
 
 The native benchmark run does execute the registered cancellation-rescue checks. The optional `/api/assert/runs` local sidecar remains evidence-ingestion validation and must not be represented as a complete semantic ASSERT judge result.
+
+# Execute stage UI (inference_set streaming)
+
+`/benchmarks` now includes a **Launch evaluation** panel that runs an execution stage:
+
+1. `POST /api/execution/runs` queues a run (`text_callable` or `voice_fixture`).
+2. Conversations upsert into the run record as they start (`running`) and finish (`completed` / `failed`).
+3. Completed rows are appended to `artifacts/execution-runs/{id}/inference_set.jsonl`.
+4. The panel polls the run and shows a live conversations list (scenario, status, turns, latency marks, verdict).
+
+Text mode uses the built-in `mock_agent` simulator (or `offline_acc_fixture`). Voice fixture mode drives the checked-in audio plan through `AccAudioFixtureScheduler` against a local fake target, then scores with the cancellation-rescue fixture path. Live LiveKit/SIP launch is still out of scope.

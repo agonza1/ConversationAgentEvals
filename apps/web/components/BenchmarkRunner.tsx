@@ -844,6 +844,103 @@ async function fetchBenchmarkSuiteRun(userId: string, suiteRunId: string) {
   );
 }
 
+interface ExecutionConversationTurn {
+  turn_index: number;
+  speaker?: string | null;
+  text?: string | null;
+  act_id?: string | null;
+  event_types?: string[];
+  latency_ms?: number | null;
+}
+
+interface ExecutionConversationRecord {
+  conversation_id: string;
+  execution_run_id: string;
+  suite_id: string;
+  scenario_id: string;
+  scenario_title?: string | null;
+  mode: 'text_callable' | 'voice_fixture';
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  iteration?: number;
+  turns?: ExecutionConversationTurn[];
+  transcript?: string | null;
+  latency_marks?: Array<JsonRecord>;
+  verdict?: string | null;
+  score?: number | null;
+  error?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+interface ExecutionRunRecord {
+  execution_run_id: string;
+  status: 'queued' | 'running' | 'completed' | 'needs_review' | 'failed';
+  mode: 'text_callable' | 'voice_fixture';
+  suite_id: string;
+  scenario_ids: string[];
+  user_id: string;
+  project_id: string;
+  progress: {
+    phase: string;
+    completed_conversations: number;
+    total_conversations: number;
+    percent: number;
+    active_conversation_id?: string | null;
+  };
+  conversations: ExecutionConversationRecord[];
+  inference_set_path?: string | null;
+  error?: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string | null;
+}
+
+async function createExecutionRun(payload: {
+  suite_id: string;
+  scenario_ids: string[];
+  mode: 'text_callable' | 'voice_fixture';
+  text_callable?: string;
+  iterations?: number;
+  user_id: string;
+  project_id: string;
+  evaluate?: boolean;
+}) {
+  return handleJson<ExecutionRunRecord>(
+    await fetch(`${getApiBase()}/api/execution/runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+  );
+}
+
+async function fetchExecutionRun(userId: string, executionRunId: string) {
+  return handleJson<ExecutionRunRecord>(
+    await fetch(
+      `${getApiBase()}/api/execution/runs/${encodeURIComponent(executionRunId)}?user_id=${encodeURIComponent(userId)}`,
+      { cache: 'no-store' },
+    ),
+  );
+}
+
+async function listExecutionRuns(userId: string, projectId: string) {
+  const params = new URLSearchParams({ user_id: userId, project_id: projectId });
+  return handleJson<ExecutionRunRecord[]>(
+    await fetch(`${getApiBase()}/api/execution/runs?${params.toString()}`, { cache: 'no-store' }),
+  );
+}
+
+function executionStatusColor(status?: string) {
+  if (status === 'completed' || status === 'pass') return 'var(--success-text)';
+  if (status === 'failed') return 'var(--error-text)';
+  if (status === 'needs_review' || status === 'running' || status === 'queued') return 'var(--warn-text, #9a6700)';
+  return 'var(--muted)';
+}
+
+function isActiveExecutionStatus(status?: string) {
+  return status === 'queued' || status === 'running';
+}
+
 async function listSavedRuns(userId: string, projectId: string, suiteId?: string, scenarioId?: string) {
   const params = new URLSearchParams({ user_id: userId, project_id: projectId });
   if (suiteId) params.set('suite_id', suiteId);
@@ -1747,6 +1844,13 @@ export function BenchmarkRunner() {
   const [isRunning, setIsRunning] = useState(false);
   const [isSimulating, setIsSimulating] = useState(false);
   const [isEnqueueingSuite, setIsEnqueueingSuite] = useState(false);
+  const [executionMode, setExecutionMode] = useState<'text_callable' | 'voice_fixture'>('text_callable');
+  const [executionTextCallable, setExecutionTextCallable] = useState('mock_agent');
+  const [executionScope, setExecutionScope] = useState<'selected' | 'suite'>('selected');
+  const [executionIterations, setExecutionIterations] = useState(1);
+  const [executionRun, setExecutionRun] = useState<ExecutionRunRecord | null>(null);
+  const [isLaunchingExecution, setIsLaunchingExecution] = useState(false);
+  const [executionMessage, setExecutionMessage] = useState<string | null>(null);
 
   const selectedSuite = useMemo(
     () => suites.find((suite) => suite.id === selectedSuiteId) ?? suites[0] ?? null,
@@ -1928,6 +2032,31 @@ export function BenchmarkRunner() {
 
     return () => window.clearInterval(interval);
   }, [projectId, selectedSuite?.id, suiteRunStatusFilter, suiteRuns, userId]);
+
+  useEffect(() => {
+    if (!userId || !executionRun || !isActiveExecutionStatus(executionRun.status)) return;
+
+    const interval = window.setInterval(() => {
+      fetchExecutionRun(userId, executionRun.execution_run_id)
+        .then((next) => {
+          setExecutionRun(next);
+          if (!isActiveExecutionStatus(next.status)) {
+            const completed = next.progress.completed_conversations;
+            const total = next.progress.total_conversations;
+            setExecutionMessage(
+              next.status === 'failed'
+                ? `Execution failed${next.error ? `: ${next.error}` : '.'}`
+                : `Execution ${next.status}. Captured ${completed}/${total} conversations${
+                    next.inference_set_path ? ` → ${next.inference_set_path}` : ''
+                  }.`,
+            );
+          }
+        })
+        .catch(() => undefined);
+    }, 1200);
+
+    return () => window.clearInterval(interval);
+  }, [executionRun, userId]);
 
   function signInDemo() {
     const nextUser = `demo-user-${Math.random().toString(36).slice(2, 8)}`;
@@ -2428,6 +2557,54 @@ export function BenchmarkRunner() {
       setRunError(err instanceof Error ? err.message : 'Scenario simulation failed');
     } finally {
       setIsSimulating(false);
+    }
+  }
+
+  async function onLaunchExecution() {
+    if (!selectedSuite) return;
+    if (!userId) {
+      setExecutionMessage('Sign up first to launch an execution run.');
+      return;
+    }
+
+    const scenarioIds =
+      executionMode === 'voice_fixture'
+        ? ['cancellation-rescue']
+        : executionScope === 'suite'
+          ? selectedSuite.scenarios.map((scenario) => scenario.id)
+          : selectedScenario
+            ? [selectedScenario.id]
+            : [];
+
+    if (!scenarioIds.length) {
+      setExecutionMessage('Select at least one scenario to execute.');
+      return;
+    }
+
+    setIsLaunchingExecution(true);
+    setExecutionMessage(null);
+    setRunError(null);
+
+    try {
+      const queued = await createExecutionRun({
+        suite_id: selectedSuite.id,
+        scenario_ids: scenarioIds,
+        mode: executionMode,
+        text_callable: executionMode === 'text_callable' ? executionTextCallable : undefined,
+        iterations: executionIterations,
+        user_id: userId,
+        project_id: projectId,
+        evaluate: true,
+      });
+      setExecutionRun(queued);
+      setExecutionMessage(
+        `Execution queued (${queued.mode}). Streaming conversations as inference_set rows are written.`,
+      );
+      listExecutionRuns(userId, projectId).catch(() => undefined);
+    } catch (err) {
+      setExecutionMessage(err instanceof Error ? err.message : 'Could not launch execution.');
+    } finally {
+      setIsLaunchingExecution(false);
     }
   }
 
@@ -3081,6 +3258,188 @@ export function BenchmarkRunner() {
           </div>
         ) : null}
       </form>
+
+      <section className="card" style={{ padding: 24, display: 'grid', gap: 16 }} aria-label="Launch evaluation">
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <div>
+            <p className="eyebrow" style={{ margin: '0 0 6px' }}>
+              Execute
+            </p>
+            <h2 style={{ margin: 0, fontSize: 26 }}>Launch evaluation</h2>
+            <p style={{ margin: '8px 0 0', color: 'var(--muted)', maxWidth: 640 }}>
+              Run the agent target, capture conversation traces as they finish, and stream an ASSERT-style{' '}
+              <code>inference_set.jsonl</code> while conversations append to the live list.
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={isLaunchingExecution || isRunning || isSimulating || !selectedSuite}
+            onClick={() => void onLaunchExecution()}
+            style={{
+              border: 0,
+              borderRadius: 8,
+              background: 'var(--accent)',
+              color: 'white',
+              padding: '12px 18px',
+              fontWeight: 800,
+              opacity: isLaunchingExecution || isRunning || isSimulating || !selectedSuite ? 0.65 : 1,
+            }}
+          >
+            {isLaunchingExecution
+              ? 'Launching...'
+              : executionRun && isActiveExecutionStatus(executionRun.status)
+                ? 'Execution running...'
+                : 'Launch evaluation'}
+          </button>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+          <label style={{ display: 'grid', gap: 8 }}>
+            <span style={{ fontWeight: 700 }}>Target mode</span>
+            <select
+              aria-label="Execution target mode"
+              value={executionMode}
+              onChange={(event) => setExecutionMode(event.target.value as 'text_callable' | 'voice_fixture')}
+              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
+            >
+              <option value="text_callable">Text callable</option>
+              <option value="voice_fixture">Voice fixture</option>
+            </select>
+          </label>
+
+          {executionMode === 'text_callable' ? (
+            <label style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontWeight: 700 }}>Text callable</span>
+              <select
+                aria-label="Text callable target"
+                value={executionTextCallable}
+                onChange={(event) => setExecutionTextCallable(event.target.value)}
+                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
+              >
+                <option value="mock_agent">mock_agent</option>
+                <option value="offline_acc_fixture">offline_acc_fixture</option>
+              </select>
+            </label>
+          ) : (
+            <div style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontWeight: 700 }}>Voice target</span>
+              <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }}>
+                Uses the ACC audio plan + cancellation-rescue fixture path from this PR (no live SIP/WebRTC).
+              </p>
+            </div>
+          )}
+
+          {executionMode === 'text_callable' ? (
+            <label style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontWeight: 700 }}>Scenario scope</span>
+              <select
+                aria-label="Execution scenario scope"
+                value={executionScope}
+                onChange={(event) => setExecutionScope(event.target.value as 'selected' | 'suite')}
+                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
+              >
+                <option value="selected">Selected scenario</option>
+                <option value="suite">Entire suite</option>
+              </select>
+            </label>
+          ) : null}
+
+          <label style={{ display: 'grid', gap: 8 }}>
+            <span style={{ fontWeight: 700 }}>Iterations</span>
+            <input
+              aria-label="Execution iterations"
+              type="number"
+              min={1}
+              max={20}
+              value={executionIterations}
+              onChange={(event) => setExecutionIterations(Math.max(1, Math.min(20, Number(event.target.value) || 1)))}
+              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
+            />
+          </label>
+        </div>
+
+        {executionMessage ? <p style={{ margin: 0, color: 'var(--muted)' }}>{executionMessage}</p> : null}
+
+        {executionRun ? (
+          <div style={{ display: 'grid', gap: 12 }}>
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 12,
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                borderTop: '1px solid var(--border)',
+                paddingTop: 12,
+              }}
+            >
+              <div>
+                <strong>{executionRun.execution_run_id}</strong>
+                <span style={{ marginLeft: 10, color: executionStatusColor(executionRun.status), fontWeight: 800, textTransform: 'capitalize' }}>
+                  {executionRun.status}
+                </span>
+              </div>
+              <div style={{ color: 'var(--muted)', fontSize: 14 }}>
+                {executionRun.progress.completed_conversations}/{executionRun.progress.total_conversations} conversations ·{' '}
+                {executionRun.progress.percent}%
+                {executionRun.inference_set_path ? ` · ${executionRun.inference_set_path}` : ''}
+              </div>
+            </div>
+
+            <div aria-label="Execution conversations" style={{ display: 'grid', gap: 8, maxHeight: 420, overflow: 'auto' }}>
+              {(executionRun.conversations || []).length ? (
+                [...executionRun.conversations].reverse().map((conversation) => {
+                  const turnCount = conversation.turns?.length ?? 0;
+                  const latencyCount = conversation.latency_marks?.length ?? 0;
+                  return (
+                    <article
+                      key={conversation.conversation_id}
+                      style={{
+                        border: '1px solid var(--border)',
+                        borderRadius: 10,
+                        padding: '12px 14px',
+                        background: conversation.status === 'running' ? 'var(--panel-alt)' : 'white',
+                        display: 'grid',
+                        gap: 6,
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                        <div>
+                          <strong>{conversation.scenario_title || conversation.scenario_id}</strong>
+                          <span style={{ marginLeft: 8, color: 'var(--muted)', fontSize: 13 }}>
+                            iter {conversation.iteration ?? 1} · {conversation.mode}
+                          </span>
+                        </div>
+                        <span style={{ color: executionStatusColor(conversation.status), fontWeight: 800, textTransform: 'capitalize' }}>
+                          {conversation.status}
+                        </span>
+                      </div>
+                      <div style={{ color: 'var(--muted)', fontSize: 13, display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                        <span>{turnCount} turns</span>
+                        {latencyCount ? <span>{latencyCount} latency marks</span> : null}
+                        {conversation.verdict ? (
+                          <span style={{ color: executionStatusColor(conversation.verdict), textTransform: 'capitalize' }}>
+                            {conversation.verdict}
+                            {typeof conversation.score === 'number' ? ` · ${conversation.score}` : ''}
+                          </span>
+                        ) : null}
+                        {conversation.error ? <span style={{ color: 'var(--error-text)' }}>{conversation.error}</span> : null}
+                      </div>
+                      {conversation.transcript ? (
+                        <p style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 13, color: 'var(--text)', maxHeight: 72, overflow: 'hidden' }}>
+                          {conversation.transcript}
+                        </p>
+                      ) : null}
+                    </article>
+                  );
+                })
+              ) : (
+                <p style={{ margin: 0, color: 'var(--muted)' }}>Waiting for the first conversation row…</p>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </section>
 
       {suiteSimulation ? (
         <section className="card" style={{ padding: 24, display: 'grid', gap: 16 }} aria-label="Suite simulation summary">

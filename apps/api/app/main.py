@@ -18,6 +18,7 @@ from app.routes.assert_sidecar import router as assert_sidecar_router
 from app.routes.benchmarks import router as benchmarks_router
 from app.routes.bootstrap import router as bootstrap_router
 from app.routes.decks import router as decks_router
+from app.routes.execution import router as execution_router
 from app.routes.product import router as product_router
 from app.routes.realtime import router as realtime_router
 from app.routes.sessions import router as sessions_router
@@ -112,6 +113,7 @@ app.include_router(sessions_router)
 app.include_router(realtime_router)
 app.include_router(bootstrap_router)
 app.include_router(benchmarks_router)
+app.include_router(execution_router)
 app.include_router(product_router)
 
 BASE_DIR = Path(__file__).resolve().parents[3]

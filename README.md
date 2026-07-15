@@ -19,7 +19,7 @@ There is one product and one supported evaluation path. Historical product varia
 - Platform-owned authentication, project lineage, retention, labels, retries, cancellation, quotas, billing hooks, and cost limits.
 - Durable ASSERT artifact manifests with searchable platform metadata indexes.
 - Operator-facing QA reports, saved-run history, regression comparisons, and export workflows.
-- A focused benchmark runner at `/benchmarks`.
+- A focused benchmark runner at `/benchmarks`, including an Execute **Launch evaluation** panel that streams conversations into an `inference_set.jsonl` live list for text callables and voice fixtures.
 - Voice and WebRTC integration groundwork through the Pipecat service.
 
 ASSERT artifacts remain the canonical evaluation results. The application database stores product metadata and indexes; it does not replace ASSERT's result model.
