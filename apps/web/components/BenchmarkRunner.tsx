@@ -906,16 +906,35 @@ async function createExecutionRun(payload: {
   );
 }
 
-async function listAgents(): Promise<Array<{
+type ScoreAgentOption = {
   id: string;
   name: string;
   channel: string;
   target: string;
-}>> {
-  const payload = await handleJson<{ agents?: Array<{ id: string; name: string; channel: string; target: string }> }>(
+  metadata?: {
+    model_name?: string | null;
+    prompt_version?: string | null;
+  };
+};
+
+async function listAgents(): Promise<ScoreAgentOption[]> {
+  const payload = await handleJson<{ agents?: ScoreAgentOption[] }>(
     await fetch(`${getApiBase()}/api/agents`, { cache: 'no-store' }),
   );
   return payload.agents ?? [];
+}
+
+function applyAgentProfileDefaults(
+  agent: ScoreAgentOption,
+  setters: {
+    setAgentProfile: (value: string) => void;
+    setModelName: (value: string) => void;
+    setPromptVersion: (value: string) => void;
+  },
+) {
+  setters.setAgentProfile(agent.name);
+  if (agent.metadata?.model_name) setters.setModelName(agent.metadata.model_name);
+  if (agent.metadata?.prompt_version) setters.setPromptVersion(agent.metadata.prompt_version);
 }
 
 async function fetchExecutionRun(userId: string, executionRunId: string) {
@@ -2029,8 +2048,12 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   const [executionRun, setExecutionRun] = useState<ExecutionRunRecord | null>(null);
   const [isLaunchingExecution, setIsLaunchingExecution] = useState(false);
   const [executionMessage, setExecutionMessage] = useState<string | null>(null);
-  const [agents, setAgents] = useState<Array<{ id: string; name: string; channel: string; target: string }>>([]);
+  const [agents, setAgents] = useState<ScoreAgentOption[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState('');
+  const selectedScoreAgent = useMemo(
+    () => agents.find((agent) => agent.id === selectedAgentId) ?? null,
+    [agents, selectedAgentId],
+  );
   const [showSimulateEvidenceOptions, setShowSimulateEvidenceOptions] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [catalogReloadKey, setCatalogReloadKey] = useState(0);
@@ -2119,8 +2142,12 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           setSelectedSuiteId(presetSuite.id);
           setSelectedScenarioId(presetScenario.id);
         } else {
-          setSelectedSuiteId(nextSuites[0]?.id ?? '');
-          setSelectedScenarioId(nextSuites[0]?.scenarios[0]?.id ?? '');
+          const preferred =
+            view === 'run'
+              ? nextSuites.find((suite) => suite.id === 'call-center-voice-ai') ?? nextSuites[0]
+              : nextSuites[0];
+          setSelectedSuiteId(preferred?.id ?? '');
+          setSelectedScenarioId(preferred?.scenarios[0]?.id ?? '');
         }
         if (!nextSuites.length) {
           setLoadError('No benchmark suites are available from the API yet.');
@@ -2177,8 +2204,13 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
         const fromQuery = params?.get('agent_id');
         const matched = fromQuery ? next.find((item) => item.id === fromQuery) : null;
-        const nextId = matched?.id || next.find((a) => a.id === 'mock-text-agent')?.id || next[0]?.id || '';
+        const fallback = next.find((a) => a.id === 'mock-text-agent') ?? next[0] ?? null;
+        const selected = matched ?? fallback;
+        const nextId = selected?.id || '';
         setSelectedAgentId(nextId);
+        if (selected) {
+          applyAgentProfileDefaults(selected, { setAgentProfile, setModelName, setPromptVersion });
+        }
         if (matched) {
           if (matched.channel === 'voice' || matched.target === 'voice_fixture') {
             setExecutionMode('voice_fixture');
@@ -3226,7 +3258,13 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         </ol>
       </section> : null}
 
-      <form onSubmit={onSubmit} className="card" style={{ padding: 24, display: 'grid', gap: 18 }}>
+      {/* /runs (view=run): omit suite/scenario contract panel — launch uses catalog defaults. */}
+      {view !== 'run' ? (
+      <form
+        onSubmit={onSubmit}
+        className="card"
+        style={{ padding: 24, display: 'grid', gap: 18 }}
+      >
         {loadError ? (
           <div style={{ border: '1px solid var(--error-border)', background: 'var(--error-bg)', color: 'var(--error-text)', borderRadius: 8, padding: 12, display: 'grid', gap: 8 }}>
             <span>{loadError}</span>
@@ -3323,7 +3361,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           </div>
         ) : null}
 
-        <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: view === 'run' ? 'none' : 'grid', gap: 14 }}>
+        <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) auto', gap: 16, alignItems: 'end' }}>
             <label style={{ display: 'grid', gap: 8 }}>
               <span style={{ fontWeight: 700 }}>Agent profile</span>
@@ -3448,7 +3486,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           </section>
         ) : null}
 
-        <details open={view === 'score' ? true : undefined} style={{ display: view === 'run' ? 'none' : undefined }}>
+        <details open={view === 'score' ? true : undefined}>
           <summary style={{ cursor: 'pointer', fontWeight: 800 }}>
             {view === 'score' ? 'Evidence payload (editable)' : 'Evidence payload'}
           </summary>
@@ -3521,7 +3559,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         </details>
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-          {view !== 'score' && view !== 'run' ? <button
+          {view !== 'score' ? <button
             type="button"
             disabled={isSimulating || isRunning || !selectedScenario}
             onClick={onSimulate}
@@ -3537,7 +3575,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           >
             {isSimulating ? 'Simulating scenario...' : 'Simulate scenario'}
           </button> : null}
-          {view !== 'score' && view !== 'run' ? <button
+          {view !== 'score' ? <button
             type="button"
             disabled={isSimulating || isRunning || isEnqueueingSuite || !selectedSuite?.scenarios.length}
             onClick={onSimulateSuite}
@@ -3553,7 +3591,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           >
             {isSimulating ? 'Simulating suite...' : 'Simulate suite'}
           </button> : null}
-          {view !== 'score' && view !== 'run' ? <button
+          {view !== 'score' ? <button
             type="button"
             disabled={isSimulating || isRunning || isEnqueueingSuite || !selectedSuite?.scenarios.length}
             onClick={onEnqueueSuiteSimulation}
@@ -3569,7 +3607,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           >
             {isEnqueueingSuite ? 'Queueing simulated suite...' : 'Queue simulated suite'}
           </button> : null}
-          {view !== 'simulate' && view !== 'run' ? <button
+          {view !== 'simulate' ? <button
             type="submit"
             disabled={isRunning || isSimulating || isEnqueueingSuite || !selectedScenario || !hasRunnableEvidence}
             style={{
@@ -3584,7 +3622,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           >
             {isRunning ? 'Scoring evidence...' : 'Score evidence'}
           </button> : null}
-          {view !== 'simulate' && view !== 'run' ? <button
+          {view !== 'simulate' ? <button
             type="button"
             disabled={!report}
             onClick={onSaveRun}
@@ -3600,7 +3638,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           >
             Save run
           </button> : null}
-          {view !== 'simulate' && view !== 'run' ? <button
+          {view !== 'simulate' ? <button
             type="button"
             disabled={!report}
             onClick={onJudge}
@@ -3637,6 +3675,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           </div>
         ) : null}
       </form>
+      ) : null}
 
       <section id="launch-agent" className="card" style={{ padding: 24, display: view === 'score' || view === 'simulate' ? 'none' : 'grid', gap: 16 }} aria-label="Launch agent run">
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
@@ -3671,6 +3710,25 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                 : 'Launch agent run'}
           </button>
         </div>
+
+        {view === 'run' && loadError ? (
+          <div style={{ border: '1px solid var(--error-border)', background: 'var(--error-bg)', color: 'var(--error-text)', borderRadius: 8, padding: 12, display: 'grid', gap: 8 }}>
+            <span>{loadError}</span>
+            <button type="button" className="secondary-link" onClick={() => setCatalogReloadKey((value) => value + 1)}>
+              Retry loading suites
+            </button>
+          </div>
+        ) : null}
+
+        {view === 'run' && selectedSuite && !loadError ? (
+          <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }} aria-label="Default scenario for launch">
+            {executionMode === 'voice_fixture' || executionMode === 'pipecat_webrtc'
+              ? 'Uses Call Center Voice AI / Cancellation Rescue for voice launches.'
+              : executionScope === 'suite'
+                ? `Exercises the full ${selectedSuite.title} suite.`
+                : `Exercises ${selectedScenario?.title ?? 'the default scenario'} (${selectedSuite.title}).`}
+          </p>
+        ) : null}
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
           <label style={{ display: 'grid', gap: 8 }}>

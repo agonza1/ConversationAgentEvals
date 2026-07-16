@@ -33,6 +33,11 @@ test('dedicated paths expose only their primary workflow', async ({ page }) => {
   await expect(page.getByLabel('Launch agent run')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Launch agent run' })).toBeVisible();
   await expect(page.getByLabel('Saved runs and e2e validation')).toHaveCount(0);
+  // /runs is execute/capture — not the simulate/score contract console
+  await expect(page.getByText('Benchmark suite')).toHaveCount(0);
+  await expect(page.getByText('Scenario rubric')).toHaveCount(0);
+  await expect(page.getByLabel('Suite contract manifest')).toHaveCount(0);
+  await expect(page.getByText('Required evidence:')).toHaveCount(0);
 });
 
 test('legacy benchmark route keeps the full console for history workflows', async ({ page }) => {
