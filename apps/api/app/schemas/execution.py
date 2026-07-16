@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-ExecutionMode = Literal['text_callable', 'voice_fixture']
+ExecutionMode = Literal['text_callable', 'voice_fixture', 'pipecat_webrtc']
+AudioTransportId = Literal['none', 'pipecat_small_webrtc', 'freeswitch_verto_sip']
 ConversationStatus = Literal['queued', 'running', 'completed', 'failed']
 ExecutionRunStatus = Literal['queued', 'running', 'completed', 'needs_review', 'failed']
 
@@ -25,6 +26,35 @@ class ExecutionRunCreateRequest(BaseModel):
     voice_fixture_path: str | None = None
     audio_plan_path: str | None = None
     agent_id: str | None = None
+    # Local Pipecat small WebRTC is the supported first slice; Verto SIP is rejected
+    # until FreeSwitchVertoSipTransport is implemented.
+    audio_transport: AudioTransportId = 'none'
+
+    @model_validator(mode='after')
+    def validate_audio_transport_for_mode(self) -> 'ExecutionRunCreateRequest':
+        if self.mode == 'pipecat_webrtc':
+            if self.audio_transport in {'none', 'pipecat_small_webrtc'}:
+                self.audio_transport = 'pipecat_small_webrtc'
+            elif self.audio_transport == 'freeswitch_verto_sip':
+                raise ValueError(
+                    'audio_transport=freeswitch_verto_sip is deferred (FreeSWITCH Verto outbound SIP). '
+                    'Use pipecat_small_webrtc for local execution audio hooks.'
+                )
+            else:
+                raise ValueError('pipecat_webrtc mode requires audio_transport=pipecat_small_webrtc')
+        elif self.audio_transport == 'freeswitch_verto_sip':
+            raise ValueError(
+                'audio_transport=freeswitch_verto_sip is deferred. '
+                'Use none, or mode=pipecat_webrtc with pipecat_small_webrtc.'
+            )
+        elif self.mode == 'voice_fixture' and self.audio_transport != 'none':
+            raise ValueError(
+                'voice_fixture mode uses AccAudioFixtureScheduler only; set audio_transport=none '
+                '(use mode=pipecat_webrtc for pipecat_small_webrtc hooks).'
+            )
+        elif self.mode == 'text_callable' and self.audio_transport != 'none':
+            raise ValueError('text_callable mode does not stream execution audio; set audio_transport=none')
+        return self
 
 
 class ConversationTurn(BaseModel):
@@ -90,6 +120,10 @@ class ConversationRecord(BaseModel):
     latency_marks: list[dict[str, Any]] = Field(default_factory=list)
     metrics_summary: ConversationMetricsSummary | None = None
     timeline: list[TimelineEvent] = Field(default_factory=list)
+    recording: dict[str, Any] | None = None
+    vcon_export: dict[str, Any] | None = None
+    vcon_export_summary: dict[str, Any] | None = None
+    audio_session: dict[str, Any] | None = None
     verdict: str | None = None
     score: float | None = None
     error: str | None = None

@@ -109,6 +109,7 @@ export default function HomePage() {
           <Link href="/runs">Run agent</Link>
           <Link href="/scenarios">Scenarios</Link>
           <Link href="/agents">Agents</Link>
+          <Link href="/voice">Voice eval</Link>
         </div>
       </nav>
 
