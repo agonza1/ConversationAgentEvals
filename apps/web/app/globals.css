@@ -601,6 +601,22 @@ select {
   font-size: 14px;
 }
 
+.first-run-error {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+  border: 1px solid var(--error-border);
+  background: var(--error-bg);
+  color: var(--error-text);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.first-run-error p {
+  margin: 0;
+  line-height: 1.45;
+}
+
 .onboarding-steps {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

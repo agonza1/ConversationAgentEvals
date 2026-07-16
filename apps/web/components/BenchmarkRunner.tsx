@@ -1851,6 +1851,7 @@ export function BenchmarkRunner() {
   const [executionRun, setExecutionRun] = useState<ExecutionRunRecord | null>(null);
   const [isLaunchingExecution, setIsLaunchingExecution] = useState(false);
   const [executionMessage, setExecutionMessage] = useState<string | null>(null);
+  const [catalogReloadKey, setCatalogReloadKey] = useState(0);
 
   const selectedSuite = useMemo(
     () => suites.find((suite) => suite.id === selectedSuiteId) ?? suites[0] ?? null,
@@ -1887,19 +1888,31 @@ export function BenchmarkRunner() {
 
       try {
         const nextSuites = await fetchBenchmarkSuites();
-        const nextConfig = await fetchProductConfig();
-        const nextOpenAI = await fetchOpenAIProviderStatus().catch(() => null);
         if (!isMounted) return;
         setSuites(nextSuites);
-        setProductConfig(nextConfig);
-        if (nextOpenAI) setOpenaiProvider(nextOpenAI);
         setSelectedSuiteId(nextSuites[0]?.id ?? '');
         setSelectedScenarioId(nextSuites[0]?.scenarios[0]?.id ?? '');
+        if (!nextSuites.length) {
+          setLoadError('No benchmark suites are available from the API yet.');
+        }
       } catch (err) {
         if (!isMounted) return;
+        setSuites([]);
+        setSelectedSuiteId('');
+        setSelectedScenarioId('');
         setLoadError(err instanceof Error ? err.message : 'Could not load benchmark suites');
       } finally {
         if (isMounted) setIsLoading(false);
+      }
+
+      try {
+        const nextConfig = await fetchProductConfig();
+        const nextOpenAI = await fetchOpenAIProviderStatus().catch(() => null);
+        if (!isMounted) return;
+        setProductConfig(nextConfig);
+        if (nextOpenAI) setOpenaiProvider(nextOpenAI);
+      } catch {
+        // Suites can still run without product config / OpenAI status.
       }
     }
 
@@ -1908,7 +1921,7 @@ export function BenchmarkRunner() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [catalogReloadKey]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -2909,6 +2922,9 @@ export function BenchmarkRunner() {
                 disabled={isLoading || !suites.length}
                 onChange={(event) => setSelectedSuiteId(event.target.value)}
               >
+                {!suites.length ? (
+                  <option value="">{isLoading ? 'Loading suites…' : 'No suites available'}</option>
+                ) : null}
                 {suites.map((suite) => (
                   <option key={suite.id} value={suite.id}>{suite.title}</option>
                 ))}
@@ -2922,6 +2938,15 @@ export function BenchmarkRunner() {
                 disabled={isLoading || !selectedSuite?.scenarios.length}
                 onChange={(event) => setSelectedScenarioId(event.target.value)}
               >
+                {!(selectedSuite?.scenarios.length) ? (
+                  <option value="">
+                    {isLoading
+                      ? 'Loading scenarios…'
+                      : selectedSuite
+                        ? 'No scenarios in this suite'
+                        : 'Select a suite first'}
+                  </option>
+                ) : null}
                 {(selectedSuite?.scenarios ?? []).map((scenario) => (
                   <option key={scenario.id} value={scenario.id}>{scenario.title}</option>
                 ))}
@@ -2938,6 +2963,23 @@ export function BenchmarkRunner() {
             </label>
           </div>
           {isLoading ? <p className="first-run-loading">Loading suites…</p> : null}
+          {!isLoading && loadError ? (
+            <div className="first-run-error" role="alert">
+              <p>{loadError}</p>
+              <button
+                type="button"
+                className="secondary-link"
+                onClick={() => setCatalogReloadKey((value) => value + 1)}
+              >
+                Retry loading suites
+              </button>
+            </div>
+          ) : null}
+          {!isLoading && !loadError && selectedSuite && !selectedSuite.scenarios.length ? (
+            <p className="first-run-loading" role="status">
+              {selectedSuite.title} has no scenarios yet. Create one under Scenarios or pick another suite.
+            </p>
+          ) : null}
         </header>
 
         <ol className="onboarding-steps">
