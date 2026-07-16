@@ -69,15 +69,15 @@ def describe_execution_audio_capabilities() -> ExecutionAudioCapabilities:
             ),
             ExecutionAudioTransportInfo(
                 id='pipecat_small_webrtc',
-                label='Local Pipecat small WebRTC',
+                label='Local Pipecat small WebRTC hooks (in-process mock)',
                 available=True,
                 status='available',
                 requires_freeswitch=False,
                 requires_live_pipecat=False,
                 notes=(
-                    'In-process send/receive + recording/transcription hooks used during '
-                    'execution mode pipecat_webrtc. No browser peer or live Pipecat process '
-                    'required for CI.'
+                    'In-process mock of Pipecat small WebRTC send/receive + recording/transcription '
+                    'hooks for execution mode pipecat_webrtc. No browser peer, live Pipecat process, '
+                    'or FreeSWITCH required. Emits vCon-shaped capture; not live media.'
                 ),
             ),
             ExecutionAudioTransportInfo(

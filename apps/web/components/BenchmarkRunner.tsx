@@ -843,6 +843,7 @@ interface ExecutionConversationRecord {
   recording?: JsonRecord | null;
   vcon_export?: JsonRecord | null;
   vcon_export_summary?: JsonRecord | null;
+  audio_session?: JsonRecord | null;
   verdict?: string | null;
   score?: number | null;
   error?: string | null;
@@ -917,6 +918,56 @@ function executionStatusColor(status?: string) {
 
 function isActiveExecutionStatus(status?: string) {
   return status === 'queued' || status === 'running';
+}
+
+function executionRecordingSummary(recording?: JsonRecord | null): string | null {
+  if (!recording || typeof recording !== 'object') return null;
+  const url = recording.recording_url ?? recording.uri;
+  if (typeof url !== 'string' || !url.trim()) return null;
+  const mime = typeof recording.mime_type === 'string' ? recording.mime_type : null;
+  return mime ? `${url} (${mime})` : url;
+}
+
+function executionVconSummary(
+  summary?: JsonRecord | null,
+  exportPayload?: JsonRecord | null,
+): string | null {
+  const source =
+    (typeof summary?.source_format === 'string' && summary.source_format) ||
+    (typeof exportPayload?.source_format === 'string' && exportPayload.source_format) ||
+    null;
+  const dialogTurns =
+    typeof summary?.dialog_turns === 'number'
+      ? summary.dialog_turns
+      : Array.isArray(exportPayload?.dialog)
+        ? exportPayload.dialog.length
+        : null;
+  const recordingAttached =
+    typeof summary?.recording_attached === 'boolean'
+      ? summary.recording_attached
+      : Boolean(
+          (exportPayload?.attachments && Array.isArray(exportPayload.attachments) && exportPayload.attachments.length) ||
+            exportPayload?.recording_url,
+        );
+  if (dialogTurns == null && !source && !recordingAttached) return null;
+  const parts = [
+    source ? `source ${source}` : null,
+    dialogTurns != null ? `${dialogTurns} dialog turns` : null,
+    recordingAttached ? 'recording attached' : 'no recording',
+  ].filter(Boolean);
+  return parts.join(' · ');
+}
+
+function executionAudioSessionSummary(session?: JsonRecord | null): string | null {
+  if (!session || typeof session !== 'object') return null;
+  const parts = [
+    typeof session.tester_status === 'string' ? `tester ${session.tester_status}` : null,
+    typeof session.frames_sent === 'number' ? `sent ${session.frames_sent}` : null,
+    typeof session.frames_received === 'number' ? `recv ${session.frames_received}` : null,
+    typeof session.bytes_sent === 'number' ? `${session.bytes_sent}B out` : null,
+    typeof session.bytes_received === 'number' ? `${session.bytes_received}B in` : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join(' · ') : null;
 }
 
 async function listSavedRuns(userId: string, projectId: string, suiteId?: string, scenarioId?: string) {
@@ -3240,7 +3291,7 @@ export function BenchmarkRunner() {
             >
               <option value="text_callable">Text callable</option>
               <option value="voice_fixture">Voice fixture</option>
-              <option value="pipecat_webrtc">Pipecat WebRTC (local)</option>
+              <option value="pipecat_webrtc">Pipecat hooks (in-process mock)</option>
             </select>
           </label>
 
@@ -3262,7 +3313,7 @@ export function BenchmarkRunner() {
               <span style={{ fontWeight: 700 }}>Voice target</span>
               <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }}>
                 {executionMode === 'pipecat_webrtc'
-                  ? 'Local Pipecat small WebRTC send/receive + recording/transcription captured as vCon (no FreeSWITCH/SIP). Runs call-center-voice-ai / cancellation-rescue.'
+                  ? 'In-process mock of Pipecat small WebRTC send/receive hooks — no browser peer, live Pipecat, or FreeSWITCH. Captures synthetic recording + dialog into vCon. Verdict/score stay fixture-backed for cancellation-rescue on call-center-voice-ai.'
                   : 'Uses the ACC audio plan + cancellation-rescue fixture path on call-center-voice-ai (no live SIP/WebRTC).'}
               </p>
             </div>
@@ -3330,6 +3381,12 @@ export function BenchmarkRunner() {
                 [...executionRun.conversations].reverse().map((conversation) => {
                   const turnCount = conversation.turns?.length ?? 0;
                   const latencyCount = conversation.latency_marks?.length ?? 0;
+                  const recordingSummary = executionRecordingSummary(conversation.recording);
+                  const vconSummary = executionVconSummary(
+                    conversation.vcon_export_summary,
+                    conversation.vcon_export,
+                  );
+                  const audioSessionSummary = executionAudioSessionSummary(conversation.audio_session);
                   return (
                     <article
                       key={conversation.conversation_id}
@@ -3360,10 +3417,26 @@ export function BenchmarkRunner() {
                           <span style={{ color: executionStatusColor(conversation.verdict), textTransform: 'capitalize' }}>
                             {conversation.verdict}
                             {typeof conversation.score === 'number' ? ` · ${conversation.score}` : ''}
+                            {conversation.mode === 'pipecat_webrtc' ? ' (fixture-backed)' : ''}
                           </span>
                         ) : null}
                         {conversation.error ? <span style={{ color: 'var(--error-text)' }}>{conversation.error}</span> : null}
                       </div>
+                      {recordingSummary ? (
+                        <p style={{ margin: 0, fontSize: 13, color: 'var(--text)' }}>
+                          <strong>Recording:</strong> {recordingSummary}
+                        </p>
+                      ) : null}
+                      {vconSummary ? (
+                        <p style={{ margin: 0, fontSize: 13, color: 'var(--text)' }}>
+                          <strong>vCon:</strong> {vconSummary}
+                        </p>
+                      ) : null}
+                      {audioSessionSummary ? (
+                        <p style={{ margin: 0, fontSize: 13, color: 'var(--muted)' }}>
+                          <strong>Audio session:</strong> {audioSessionSummary}
+                        </p>
+                      ) : null}
                       {conversation.transcript ? (
                         <p style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 13, color: 'var(--text)', maxHeight: 72, overflow: 'hidden' }}>
                           {conversation.transcript}

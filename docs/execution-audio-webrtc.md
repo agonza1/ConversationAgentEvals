@@ -20,10 +20,11 @@ Legacy names from earlier drafts (`voice_webrtc`, `local_pipecat_webrtc`, `sip_v
 
 | Piece | Status |
 | --- | --- |
-| Local Pipecat small WebRTC send/receive hooks | **Available** — in-process mockable transport; no browser/Pipecat process for CI |
-| `POST /api/execution/runs` mode `pipecat_webrtc` | **Available** — drives `PipecatTesterAgentRunner` over local WebRTC hooks |
-| Recording + transcription capture | **Available** — `AudioRecordingHandle` + dialog turns during the session |
-| vCon export on conversation rows | **Available** — reuses `benchmark_service._vcon_export` shape (dialog + analysis + recording attachment) |
+| Local Pipecat small WebRTC send/receive hooks | **Available** — in-process **mock** transport; no browser peer or live Pipecat process |
+| `POST /api/execution/runs` mode `pipecat_webrtc` | **Available** — drives `PipecatTesterAgentRunner` over local mock hooks |
+| Recording + transcription capture | **Available** — synthetic capture into `AudioRecordingHandle` + dialog turns (not live ASR/WAV) |
+| vCon export on conversation rows | **Available** — reuses `benchmark_service._vcon_export` shape; Launch UI shows summary |
+| Launch UI mode label | **Honest** — “Pipecat hooks (in-process mock)”; verdict marked fixture-backed |
 | `GET /api/execution/audio/capabilities` | **Available** — advertises transports, vCon capture, honesty boundary |
 | FreeSWITCH Verto outbound SIP | **Deferred** — `FreeSwitchVertoSipTransport` extension stub only |
 
