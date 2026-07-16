@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 
 import { SiteNav } from '@/components/SiteNav';
+import { BenchmarkRunner } from '@/components/BenchmarkRunner';
 import {
   demoProjectId,
   demoUserId,
@@ -44,10 +45,12 @@ export function RunsListPage() {
     <main className="page-shell compact-shell">
       <SiteNav current="runs" />
       <section className="minimal-hero" aria-labelledby="runs-title">
-        <p className="eyebrow">Execute → analyze</p>
-        <h1 id="runs-title">Runs</h1>
-        <p>Review execution runs with metric summaries, latency detail, and transcripts.</p>
+        <p className="eyebrow">Run agent → analyze</p>
+        <h1 id="runs-title">Run an agent</h1>
+        <p>Launch a configured agent target, then review execution metrics, latency detail, and transcripts.</p>
       </section>
+
+      <BenchmarkRunner view="run" />
 
       {loading ? <p className="scenarios-muted">Loading runs…</p> : null}
       {error ? <div className="scenarios-error" role="alert">{error}</div> : null}
@@ -55,8 +58,8 @@ export function RunsListPage() {
       {!loading && !runs.length ? (
         <section className="card scenarios-empty">
           <h2>No execution runs yet</h2>
-          <p className="scenarios-muted">Launch an evaluation from the Runner, then open it here for analysis.</p>
-          <Link className="primary-link" href="/benchmarks">Open runner</Link>
+          <p className="scenarios-muted">Launch an agent run above, then open it here for analysis.</p>
+          <a className="primary-link" href="#launch-agent">Launch agent run</a>
         </section>
       ) : null}
 

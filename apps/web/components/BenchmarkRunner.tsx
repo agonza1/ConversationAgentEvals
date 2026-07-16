@@ -1764,7 +1764,9 @@ async function copyText(text: string) {
   }
 }
 
-export function BenchmarkRunner() {
+export type BenchmarkRunnerView = 'all' | 'simulate' | 'score' | 'run';
+
+export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }) {
   const loadingSavedRunRef = useRef(false);
   const [suites, setSuites] = useState<BenchmarkSuite[]>([]);
   const [selectedSuiteId, setSelectedSuiteId] = useState('');
@@ -2763,7 +2765,7 @@ export function BenchmarkRunner() {
 
   return (
     <section style={{ display: 'grid', gap: 20 }}>
-      <section className="first-run-panel" aria-label="First run checklist">
+      {view === 'all' ? <section className="first-run-panel" aria-label="First run checklist">
         <div>
           <p className="eyebrow">First run checklist</p>
           <h2>Get from sample scenario to saved QA history.</h2>
@@ -2793,7 +2795,7 @@ export function BenchmarkRunner() {
             );
           })}
         </ol>
-      </section>
+      </section> : null}
 
       <form onSubmit={onSubmit} className="card" style={{ padding: 24, display: 'grid', gap: 18 }}>
         {loadError ? (
@@ -2889,7 +2891,7 @@ export function BenchmarkRunner() {
           </div>
         ) : null}
 
-        <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 14 }}>
+        <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: view === 'run' ? 'none' : 'grid', gap: 14 }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) auto', gap: 16, alignItems: 'end' }}>
             <label style={{ display: 'grid', gap: 8 }}>
               <span style={{ fontWeight: 700 }}>Agent profile</span>
@@ -2960,7 +2962,7 @@ export function BenchmarkRunner() {
           </div>
         </div>
 
-        <details>
+        <details style={{ display: view === 'run' ? 'none' : undefined }}>
           <summary style={{ cursor: 'pointer', fontWeight: 800 }}>Evidence payload</summary>
           <div style={{ display: 'grid', gap: 16, marginTop: 14 }}>
             <label style={{ display: 'grid', gap: 8 }}>
@@ -3031,7 +3033,7 @@ export function BenchmarkRunner() {
         </details>
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-          <button
+          {view !== 'score' && view !== 'run' ? <button
             type="button"
             disabled={isSimulating || isRunning || !selectedScenario}
             onClick={onSimulate}
@@ -3046,8 +3048,8 @@ export function BenchmarkRunner() {
             }}
           >
             {isSimulating ? 'Simulating scenario...' : 'Simulate scenario'}
-          </button>
-          <button
+          </button> : null}
+          {view !== 'score' && view !== 'run' ? <button
             type="button"
             disabled={isSimulating || isRunning || isEnqueueingSuite || !selectedSuite?.scenarios.length}
             onClick={onSimulateSuite}
@@ -3062,8 +3064,8 @@ export function BenchmarkRunner() {
             }}
           >
             {isSimulating ? 'Simulating suite...' : 'Simulate suite'}
-          </button>
-          <button
+          </button> : null}
+          {view !== 'score' && view !== 'run' ? <button
             type="button"
             disabled={isSimulating || isRunning || isEnqueueingSuite || !selectedSuite?.scenarios.length}
             onClick={onEnqueueSuiteSimulation}
@@ -3077,9 +3079,9 @@ export function BenchmarkRunner() {
               opacity: isSimulating || isRunning || isEnqueueingSuite || !selectedSuite?.scenarios.length ? 0.65 : 1,
             }}
           >
-            {isEnqueueingSuite ? 'Queueing suite...' : 'Queue suite run'}
-          </button>
-          <button
+            {isEnqueueingSuite ? 'Queueing simulated suite...' : 'Queue simulated suite'}
+          </button> : null}
+          {view !== 'simulate' && view !== 'run' ? <button
             type="submit"
             disabled={isRunning || isSimulating || isEnqueueingSuite || !selectedScenario || !hasRunnableEvidence}
             style={{
@@ -3092,9 +3094,9 @@ export function BenchmarkRunner() {
               opacity: isRunning || isSimulating || isEnqueueingSuite || !selectedScenario || !hasRunnableEvidence ? 0.65 : 1,
             }}
           >
-            {isRunning ? 'Running benchmark...' : 'Run benchmark'}
-          </button>
-          <button
+            {isRunning ? 'Scoring evidence...' : 'Score evidence'}
+          </button> : null}
+          {view !== 'simulate' && view !== 'run' ? <button
             type="button"
             disabled={!report}
             onClick={onSaveRun}
@@ -3109,8 +3111,8 @@ export function BenchmarkRunner() {
             }}
           >
             Save run
-          </button>
-          <button
+          </button> : null}
+          {view !== 'simulate' && view !== 'run' ? <button
             type="button"
             disabled={!report}
             onClick={onJudge}
@@ -3125,7 +3127,7 @@ export function BenchmarkRunner() {
             }}
           >
             Request LLM judge
-          </button>
+          </button> : null}
         </div>
 
         {runError ? <p style={{ color: 'var(--error-text)', margin: 0 }}>{runError}</p> : null}
@@ -3148,13 +3150,13 @@ export function BenchmarkRunner() {
         ) : null}
       </form>
 
-      <section className="card" style={{ padding: 24, display: 'grid', gap: 16 }} aria-label="Launch evaluation">
+      <section id="launch-agent" className="card" style={{ padding: 24, display: view === 'score' || view === 'simulate' ? 'none' : 'grid', gap: 16 }} aria-label="Launch agent run">
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
           <div>
             <p className="eyebrow" style={{ margin: '0 0 6px' }}>
               Execute
             </p>
-            <h2 style={{ margin: 0, fontSize: 26 }}>Launch evaluation</h2>
+            <h2 style={{ margin: 0, fontSize: 26 }}>Run agent</h2>
             <p style={{ margin: '8px 0 0', color: 'var(--muted)', maxWidth: 640 }}>
               Run the agent target, capture conversation traces as they finish, and stream an ASSERT-style{' '}
               <code>inference_set.jsonl</code> while conversations append to the live list.
@@ -3178,7 +3180,7 @@ export function BenchmarkRunner() {
               ? 'Launching...'
               : executionRun && isActiveExecutionStatus(executionRun.status)
                 ? 'Execution running...'
-                : 'Launch evaluation'}
+                : 'Launch agent run'}
           </button>
         </div>
 
@@ -3360,7 +3362,7 @@ export function BenchmarkRunner() {
         ) : null}
       </section>
 
-      {suiteSimulation ? (
+      {suiteSimulation && view !== 'score' && view !== 'run' ? (
         <section className="card" style={{ padding: 24, display: 'grid', gap: 16 }} aria-label="Suite simulation summary">
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
             <div>

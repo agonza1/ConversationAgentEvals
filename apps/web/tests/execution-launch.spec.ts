@@ -180,15 +180,15 @@ test('launch evaluation streams conversations into the live list', async ({ page
     window.localStorage.setItem('conversation-evals-demo-plan', 'free');
   });
 
-  await page.goto('/benchmarks');
-  await expect(page.getByLabel('Launch evaluation')).toBeVisible();
-  await expect(page.getByLabel('Launch evaluation').getByRole('button', { name: 'Launch evaluation' })).toBeEnabled({
+  await page.goto('/runs');
+  await expect(page.getByLabel('Launch agent run')).toBeVisible();
+  await expect(page.getByLabel('Launch agent run').getByRole('button', { name: 'Launch agent run' })).toBeEnabled({
     timeout: 30_000,
   });
 
-  const launch = page.getByLabel('Launch evaluation');
-  await launch.getByRole('button', { name: 'Launch evaluation' }).click();
-  await expect(launch.getByText('exec-ui-demo')).toBeVisible();
+  const launch = page.getByLabel('Launch agent run');
+  await launch.getByRole('button', { name: 'Launch agent run' }).click();
+  await expect(launch.getByText('exec-ui-demo', { exact: true })).toBeVisible();
   await expect(launch.getByLabel('Execution conversations')).toContainText('Billing Address Change');
   await expect(launch.getByLabel('Execution conversations')).toContainText(/pass/i, { timeout: 8000 });
 });

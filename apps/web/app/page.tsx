@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { BenchmarkRunner } from '@/components/BenchmarkRunner';
 
 const domains = [
   {
@@ -73,6 +72,30 @@ const proofRows = [
   ['Output', 'Pass/fail report with suggested fixes'],
 ];
 
+const workspacePaths = [
+  {
+    eyebrow: 'Generate fixtures',
+    title: 'Simulate',
+    copy: 'Create a scenario result, run the full suite, or queue a simulated suite for later.',
+    href: '/simulate?demo=angry-caller',
+    cta: 'Simulate scenario',
+  },
+  {
+    eyebrow: 'Evaluate artifacts',
+    title: 'Score evidence',
+    copy: 'Grade transcripts, action traces, final state, calls, and vCon records against a scenario contract.',
+    href: '/score?demo=sample-evidence',
+    cta: 'Score sample evidence',
+  },
+  {
+    eyebrow: 'Exercise targets',
+    title: 'Run agent',
+    copy: 'Launch a configured agent target, watch conversations complete, then inspect the run analysis.',
+    href: '/runs?launch=demo',
+    cta: 'Launch agent run',
+  },
+] as const;
+
 export default function HomePage() {
   return (
     <main className="saas-shell">
@@ -82,8 +105,9 @@ export default function HomePage() {
           <a href="#product">Product</a>
           <a href="#coverage">Coverage</a>
           <a href="#benchmarks">Benchmarks</a>
-          <Link href="/benchmarks">Runner</Link>
-          <Link href="/runs">Runs</Link>
+          <Link href="/simulate">Simulate</Link>
+          <Link href="/score">Score evidence</Link>
+          <Link href="/runs">Run agent</Link>
           <Link href="/agents">Agents</Link>
         </div>
       </nav>
@@ -97,7 +121,7 @@ export default function HomePage() {
             regression platform before agents reach production.
           </p>
           <div className="hero-cta">
-            <Link className="primary-link" href="/benchmarks">Open benchmark runner</Link>
+            <Link className="primary-link" href="/simulate?demo=angry-caller">Try a simulated scenario</Link>
             <a className="secondary-link" href="#product">See how it works</a>
           </div>
         </div>
@@ -169,14 +193,22 @@ export default function HomePage() {
 
       <section className="embedded-runner" aria-labelledby="homepage-runner-title">
         <div className="section-heading">
-          <p className="eyebrow">Runner</p>
-          <h2 id="homepage-runner-title">Simulate or score a benchmark now.</h2>
+          <p className="eyebrow">Workspace</p>
+          <h2 id="homepage-runner-title">Choose the workflow that fits your evidence.</h2>
           <p>
-            Use the same focused runner from the workspace: generate ASSERT-backed scenario artifacts, inspect the
-            action trace and final state, or paste your own transcript evidence for manifest-backed scoring.
+            Start with a clickable demo, then continue in a dedicated workspace without carrying unrelated controls.
           </p>
         </div>
-        <BenchmarkRunner />
+        <div className="surface-grid">
+          {workspacePaths.map((path) => (
+            <article className="surface-card" key={path.title}>
+              <p className="eyebrow">{path.eyebrow}</p>
+              <h3>{path.title}</h3>
+              <p>{path.copy}</p>
+              <Link className="primary-link" href={path.href}>{path.cta}</Link>
+            </article>
+          ))}
+        </div>
       </section>
 
       <section className="workflow-section" aria-labelledby="workflow-title">
@@ -216,7 +248,7 @@ export default function HomePage() {
           <h2>Run the first scenario benchmark.</h2>
           <p>Open the focused benchmark workspace for repeated scenario testing.</p>
         </div>
-        <Link className="primary-link" href="/benchmarks">Launch runner</Link>
+        <Link className="primary-link" href="/simulate">Open workspace</Link>
       </section>
     </main>
   );
