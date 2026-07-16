@@ -1,3 +1,5 @@
+import Link from 'next/link';
+
 import { BenchmarkRunner } from '@/components/BenchmarkRunner';
 import { SiteNav } from '@/components/SiteNav';
 
@@ -11,7 +13,8 @@ export default function BenchmarksPage() {
         <h1 id="benchmarks-title">Benchmark history and reports.</h1>
         <p>
           Saved runs, suite history, and report tooling. For day-to-day work use{' '}
-          <a href="/simulate">Simulate</a>, <a href="/score">Score evidence</a>, or <a href="/runs">Run agent</a>.
+          <Link href="/simulate">Simulate</Link>, <Link href="/score">Score evidence</Link>, or{' '}
+          <Link href="/runs">Run agent</Link>.
         </p>
       </section>
       <BenchmarkRunner view="all" />
