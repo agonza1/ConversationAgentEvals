@@ -31,3 +31,19 @@ test('legacy benchmark route redirects to simulate', async ({ page }) => {
   await page.goto('/benchmarks');
   await expect(page).toHaveURL(/\/simulate$/);
 });
+
+test('demo deep links preload the advertised scenario', async ({ page }) => {
+  await page.goto('/simulate?demo=angry-caller');
+  await expect(page.getByText('Loading benchmark suites...')).toHaveCount(0);
+  const simulateForm = page.locator('form').first();
+  await expect(simulateForm.locator('select').nth(0)).toHaveValue('call-center-voice-ai');
+  await expect(simulateForm.locator('select').nth(1)).toHaveValue('angry-outage-escalation');
+  await expect(simulateForm.locator('textarea').first()).not.toHaveValue('');
+
+  await page.goto('/score?demo=sample-evidence');
+  await expect(page.getByText('Loading benchmark suites...')).toHaveCount(0);
+  const scoreForm = page.locator('form').first();
+  await expect(scoreForm.locator('select').nth(0)).toHaveValue('call-center-voice-ai');
+  await expect(scoreForm.locator('select').nth(1)).toHaveValue('billing-address-change');
+  await expect(scoreForm.locator('textarea').first()).not.toHaveValue('');
+});

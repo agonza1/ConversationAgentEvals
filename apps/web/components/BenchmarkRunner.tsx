@@ -1766,6 +1766,18 @@ async function copyText(text: string) {
 
 export type BenchmarkRunnerView = 'all' | 'simulate' | 'score' | 'run';
 
+const WORKFLOW_DEMO_PRESETS: Record<string, { suiteId: string; scenarioId: string }> = {
+  'angry-caller': { suiteId: 'call-center-voice-ai', scenarioId: 'angry-outage-escalation' },
+  'sample-evidence': { suiteId: 'call-center-voice-ai', scenarioId: 'billing-address-change' },
+};
+
+function readWorkflowDemoPreset() {
+  if (typeof window === 'undefined') return null;
+  const demo = new URLSearchParams(window.location.search).get('demo');
+  if (!demo) return null;
+  return WORKFLOW_DEMO_PRESETS[demo] ?? null;
+}
+
 export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }) {
   const loadingSavedRunRef = useRef(false);
   const [suites, setSuites] = useState<BenchmarkSuite[]>([]);
@@ -1857,8 +1869,16 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         const nextSuites = await fetchBenchmarkSuites();
         if (!isMounted) return;
         setSuites(nextSuites);
-        setSelectedSuiteId(nextSuites[0]?.id ?? '');
-        setSelectedScenarioId(nextSuites[0]?.scenarios[0]?.id ?? '');
+        const preset = readWorkflowDemoPreset();
+        const presetSuite = preset ? nextSuites.find((suite) => suite.id === preset.suiteId) : null;
+        const presetScenario = presetSuite?.scenarios.find((scenario) => scenario.id === preset?.scenarioId) ?? null;
+        if (presetSuite && presetScenario) {
+          setSelectedSuiteId(presetSuite.id);
+          setSelectedScenarioId(presetScenario.id);
+        } else {
+          setSelectedSuiteId(nextSuites[0]?.id ?? '');
+          setSelectedScenarioId(nextSuites[0]?.scenarios[0]?.id ?? '');
+        }
       } catch (err) {
         if (!isMounted) return;
         setLoadError(err instanceof Error ? err.message : 'Could not load benchmark suites');
@@ -1890,6 +1910,12 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (view !== 'run' || typeof window === 'undefined') return;
+    if (new URLSearchParams(window.location.search).get('launch') !== 'demo') return;
+    document.getElementById('launch-agent')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [view]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
