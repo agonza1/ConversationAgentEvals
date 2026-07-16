@@ -679,8 +679,10 @@ function normalizeSuites(payload: unknown): BenchmarkSuite[] {
   });
 }
 
-async function fetchBenchmarkSuites(): Promise<BenchmarkSuite[]> {
-  const suites = await handleJson<unknown>(await fetch(`${getApiBase()}/api/benchmarks/suites`, { cache: 'no-store' }));
+async function fetchBenchmarkSuites(signal?: AbortSignal): Promise<BenchmarkSuite[]> {
+  const suites = await handleJson<unknown>(
+    await fetch(`${getApiBase()}/api/benchmarks/suites`, { cache: 'no-store', signal }),
+  );
   const normalizedSuites = normalizeSuites(suites);
 
   return Promise.all(
@@ -689,7 +691,10 @@ async function fetchBenchmarkSuites(): Promise<BenchmarkSuite[]> {
 
       try {
         const payload = await handleJson<unknown>(
-          await fetch(`${getApiBase()}/api/benchmarks/suites/${encodeURIComponent(suite.id)}/scenarios`, { cache: 'no-store' }),
+          await fetch(`${getApiBase()}/api/benchmarks/suites/${encodeURIComponent(suite.id)}/scenarios`, {
+            cache: 'no-store',
+            signal,
+          }),
         );
         const record = asRecord(payload);
         const rawScenarios = Array.isArray(payload) ? payload : Array.isArray(record.scenarios) ? record.scenarios : [];
@@ -1852,6 +1857,7 @@ export function BenchmarkRunner() {
   const [isLaunchingExecution, setIsLaunchingExecution] = useState(false);
   const [executionMessage, setExecutionMessage] = useState<string | null>(null);
   const [catalogReloadKey, setCatalogReloadKey] = useState(0);
+  const suiteLoadRequestRef = useRef(0);
 
   const selectedSuite = useMemo(
     () => suites.find((suite) => suite.id === selectedSuiteId) ?? suites[0] ?? null,
@@ -1880,15 +1886,18 @@ export function BenchmarkRunner() {
   }
 
   useEffect(() => {
-    let isMounted = true;
+    const requestId = suiteLoadRequestRef.current + 1;
+    suiteLoadRequestRef.current = requestId;
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeoutId = window.setTimeout(() => controller?.abort(), 12000);
 
     async function loadSuites() {
       setIsLoading(true);
       setLoadError(null);
 
       try {
-        const nextSuites = await fetchBenchmarkSuites();
-        if (!isMounted) return;
+        const nextSuites = await fetchBenchmarkSuites(controller?.signal);
+        if (suiteLoadRequestRef.current !== requestId) return;
         setSuites(nextSuites);
         setSelectedSuiteId(nextSuites[0]?.id ?? '');
         setSelectedScenarioId(nextSuites[0]?.scenarios[0]?.id ?? '');
@@ -1896,19 +1905,30 @@ export function BenchmarkRunner() {
           setLoadError('No benchmark suites are available from the API yet.');
         }
       } catch (err) {
-        if (!isMounted) return;
+        if (suiteLoadRequestRef.current !== requestId) return;
         setSuites([]);
         setSelectedSuiteId('');
         setSelectedScenarioId('');
-        setLoadError(err instanceof Error ? err.message : 'Could not load benchmark suites');
+        const aborted = typeof err === 'object' && err !== null && 'name' in err && (err as { name?: string }).name === 'AbortError';
+        setLoadError(
+          aborted
+            ? 'Timed out loading benchmark suites. Check that the API is running and reachable.'
+            : err instanceof Error
+              ? err.message
+              : 'Could not load benchmark suites',
+        );
       } finally {
-        if (isMounted) setIsLoading(false);
+        window.clearTimeout(timeoutId);
+        if (suiteLoadRequestRef.current === requestId) {
+          setIsLoading(false);
+        }
       }
 
+      if (suiteLoadRequestRef.current !== requestId) return;
       try {
         const nextConfig = await fetchProductConfig();
         const nextOpenAI = await fetchOpenAIProviderStatus().catch(() => null);
-        if (!isMounted) return;
+        if (suiteLoadRequestRef.current !== requestId) return;
         setProductConfig(nextConfig);
         if (nextOpenAI) setOpenaiProvider(nextOpenAI);
       } catch {
@@ -1919,7 +1939,11 @@ export function BenchmarkRunner() {
     void loadSuites();
 
     return () => {
-      isMounted = false;
+      controller?.abort();
+      window.clearTimeout(timeoutId);
+      if (suiteLoadRequestRef.current === requestId) {
+        suiteLoadRequestRef.current = requestId + 1;
+      }
     };
   }, [catalogReloadKey]);
 
