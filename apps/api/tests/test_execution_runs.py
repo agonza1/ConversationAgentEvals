@@ -121,6 +121,21 @@ def test_execution_run_rejects_unknown_scenario():
     assert response.status_code == 400
 
 
+def test_execution_run_rejects_unsupported_text_callable_before_queueing():
+    response = client.post(
+        '/api/execution/runs',
+        json={
+            'suite_id': 'call-center-voice-ai',
+            'scenario_ids': ['billing-address-change'],
+            'mode': 'text_callable',
+            'text_callable': 'not-a-supported-callable',
+            'user_id': 'exec-user',
+            'project_id': 'exec-project',
+        },
+    )
+    assert response.status_code == 422
+
+
 def test_execution_run_rejects_duplicate_scenario_ids():
     response = client.post(
         '/api/execution/runs',

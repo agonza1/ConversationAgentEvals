@@ -13,7 +13,9 @@ client = TestClient(app)
 
 def setup_function() -> None:
     execution_run_store.reset_execution_runs_for_tests()
-    agent_store.reset_agents_for_tests(clear_files=True)
+    # Keep real local registry files intact: this suite only needs to reset its
+    # in-memory view and removes every agent it creates itself.
+    agent_store.reset_agents_for_tests()
 
 
 def test_agent_crud_round_trip():
@@ -251,6 +253,35 @@ def test_agent_payload_honors_an_explicit_target_mode_override():
     assert resolved.audio_transport == 'pipecat_small_webrtc'
 
 
+def test_explicit_text_mode_uses_selected_text_agent_target_when_callable_is_omitted():
+    from app.services.execution_runner import _resolve_agent_payload
+
+    created = client.post(
+        '/api/agents',
+        json={
+            'name': 'Explicit live text target',
+            'channel': 'text',
+            'target': 'openai_codex',
+        },
+    )
+    assert created.status_code == 200
+
+    resolved = _resolve_agent_payload(
+        ExecutionRunCreateRequest(
+            suite_id='call-center-voice-ai',
+            scenario_ids=['billing-address-change'],
+            agent_id=created.json()['id'],
+            mode='text_callable',
+            user_id='agent-runs-user',
+            project_id='agent-runs-project',
+            iterations=1,
+        )
+    )
+
+    assert resolved.mode == 'text_callable'
+    assert resolved.text_callable == 'openai_codex'
+
+
 def test_openai_codex_agent_executes_a_real_provider_response_without_fake_tool_evidence():
     from app.services.llm_providers import set_provider_for_tests
 
@@ -295,6 +326,10 @@ def test_openai_codex_agent_executes_a_real_provider_response_without_fake_tool_
         )
         queued = start_execution_run(payload)
         assert queued['mode'] == 'text_callable'
+        # Queue-time settings remain executable even if a user removes the
+        # registry entry before the background worker begins.
+        deleted = client.delete(f'/api/agents/{agent_id}')
+        assert deleted.status_code == 200
         finished = execute_execution_run(queued['execution_run_id'], payload)
     finally:
         set_provider_for_tests('openai', None)

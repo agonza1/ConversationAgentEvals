@@ -81,6 +81,8 @@ def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
     now = datetime.now(UTC).isoformat()
     execution_run_id = f'exec-{uuid.uuid4().hex[:12]}'
     agent = get_agent(resolved.agent_id) if resolved.agent_id else None
+    if resolved.agent_id and agent is None:
+        raise ValueError(f'Unknown agent: {resolved.agent_id}')
     model_name = (resolved.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
     record = ExecutionRunRecord(
         execution_run_id=execution_run_id,
@@ -93,6 +95,10 @@ def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
         agent_id=resolved.agent_id,
         agent_name=(agent or {}).get('name'),
         model_name=model_name,
+        execution_snapshot={
+            'request': resolved.model_dump(mode='json'),
+            'agent': agent,
+        },
         progress=ExecutionRunProgress(
             phase='queued',
             completed_conversations=0,
@@ -107,10 +113,10 @@ def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
 
 def execute_execution_run(execution_run_id: str, payload: ExecutionRunCreateRequest) -> dict[str, Any]:
     register_builtin_benchmark_extensions()
-    resolved = _resolve_agent_payload(payload)
     run = execution_run_store.mark_execution_run_running(execution_run_id)
     if run is None:
         raise ValueError(f'Unknown execution run: {execution_run_id}')
+    resolved, agent_snapshot = _queued_execution_context(run, fallback=payload)
 
     output_dir = REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -145,6 +151,7 @@ def execute_execution_run(execution_run_id: str, payload: ExecutionRunCreateRequ
                 scenario_id=scenario_id,
                 iteration=iteration,
                 payload=resolved,
+                agent_snapshot=agent_snapshot,
             )
             execution_run_store.upsert_conversation(execution_run_id, conversation)
             if conversation.status != 'failed':
@@ -177,6 +184,7 @@ def _run_one_conversation(
     scenario_id: str,
     iteration: int,
     payload: ExecutionRunCreateRequest,
+    agent_snapshot: dict[str, Any] | None = None,
 ) -> ConversationRecord:
     started = datetime.now(UTC).isoformat()
     conversation_id = f'{execution_run_id}-{scenario_id}-{iteration}'
@@ -185,7 +193,12 @@ def _run_one_conversation(
 
     try:
         if payload.mode == 'text_callable':
-            result = _execute_text_callable(suite_id, scenario_id, payload)
+            result = _execute_text_callable(
+                suite_id,
+                scenario_id,
+                payload,
+                agent_snapshot=agent_snapshot,
+            )
         elif payload.mode == 'pipecat_webrtc':
             result = asyncio.run(
                 _execute_pipecat_webrtc(
@@ -261,11 +274,18 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
     # explicit per-run override.  Pydantic retains whether `mode` appeared in
     # the request, letting callers omit it to opt into the saved agent target.
     if 'mode' in payload.model_fields_set:
+        updates: dict[str, Any] = {
+            'agent_id': agent['id'],
+            'model_name': model_name,
+        }
+        if (
+            payload.mode == 'text_callable'
+            and 'text_callable' not in payload.model_fields_set
+            and str(agent.get('target') or '') in {'mock_agent', 'openai_codex', 'offline_acc_fixture'}
+        ):
+            updates['text_callable'] = str(agent['target'])
         return payload.model_copy(
-            update={
-                'agent_id': agent['id'],
-                'model_name': model_name,
-            }
+            update=updates
         )
     target = str(agent.get('target') or 'mock_agent')
     channel = str(agent.get('channel') or 'text')
@@ -286,12 +306,38 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
     )
 
 
-def _execute_text_callable(suite_id: str, scenario_id: str, payload: ExecutionRunCreateRequest) -> dict[str, Any]:
+def _queued_execution_context(
+    run: dict[str, Any],
+    *,
+    fallback: ExecutionRunCreateRequest,
+) -> tuple[ExecutionRunCreateRequest, dict[str, Any] | None]:
+    """Read the immutable request/agent snapshot saved before the run was queued."""
+    snapshot = run.get('execution_snapshot')
+    if isinstance(snapshot, dict) and isinstance(snapshot.get('request'), dict):
+        request = ExecutionRunCreateRequest.model_validate(snapshot['request'])
+        agent = snapshot.get('agent')
+        return request, agent if isinstance(agent, dict) else None
+    # Compatibility for a run queued before snapshots existed.
+    return _resolve_agent_payload(fallback), None
+
+
+def _execute_text_callable(
+    suite_id: str,
+    scenario_id: str,
+    payload: ExecutionRunCreateRequest,
+    *,
+    agent_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     callable_id = payload.text_callable
     if callable_id == 'offline_acc_fixture':
         return _evidence_from_offline_fixture(suite_id, scenario_id, payload, evaluate=payload.evaluate)
     if callable_id == 'openai_codex':
-        return _execute_openai_codex_text_agent(suite_id, scenario_id, payload)
+        return _execute_openai_codex_text_agent(
+            suite_id,
+            scenario_id,
+            payload,
+            agent_snapshot=agent_snapshot,
+        )
     if callable_id != 'mock_agent':
         raise ValueError(f'Unsupported text callable: {callable_id}')
 
@@ -339,6 +385,8 @@ def _execute_openai_codex_text_agent(
     suite_id: str,
     scenario_id: str,
     payload: ExecutionRunCreateRequest,
+    *,
+    agent_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run a connected OpenAI Codex text agent and persist only real model evidence.
 
@@ -347,7 +395,7 @@ def _execute_openai_codex_text_agent(
     """
     if not payload.agent_id:
         raise ValueError('openai_codex execution requires an agent_id.')
-    agent = get_agent(payload.agent_id)
+    agent = agent_snapshot or get_agent(payload.agent_id)
     if agent is None:
         raise ValueError(f'Unknown agent: {payload.agent_id}')
     scenario = _scenario_definition(suite_id, scenario_id)

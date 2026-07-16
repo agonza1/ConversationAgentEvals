@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ExecutionMode = Literal['text_callable', 'voice_fixture', 'pipecat_webrtc']
 AudioTransportId = Literal['none', 'pipecat_small_webrtc', 'freeswitch_verto_sip']
+TextCallableId = Literal['mock_agent', 'offline_acc_fixture', 'openai_codex']
 ConversationStatus = Literal['queued', 'running', 'completed', 'failed']
 ExecutionRunStatus = Literal['queued', 'running', 'completed', 'needs_review', 'failed']
 
@@ -22,7 +23,7 @@ class ExecutionRunCreateRequest(BaseModel):
     user_id: str = Field(default='execution-user', min_length=1)
     project_id: str = Field(default='conversation-agent-evals', min_length=1)
     evaluate: bool = True
-    text_callable: str = Field(default='mock_agent', min_length=1)
+    text_callable: TextCallableId = 'mock_agent'
     voice_fixture_path: str | None = None
     audio_plan_path: str | None = None
     agent_id: str | None = None
@@ -155,6 +156,9 @@ class ExecutionRunRecord(BaseModel):
     agent_id: str | None = None
     agent_name: str | None = None
     model_name: str | None = None
+    # Immutable request and agent settings captured at queue time. Execution uses
+    # this instead of re-reading the mutable agent registry in the background.
+    execution_snapshot: dict[str, Any] | None = None
     progress: ExecutionRunProgress
     conversations: list[ConversationRecord] = Field(default_factory=list)
     inference_set_path: str | None = None

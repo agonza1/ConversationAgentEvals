@@ -99,7 +99,7 @@ async function mockRunnerApis(page: import('@playwright/test').Page) {
       });
       return;
     }
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ runs: [] }) });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
   });
 }
 
