@@ -35,6 +35,7 @@ from app.services.execution_audio import (
     LocalPipecatSmallWebRtcTransport,
 )
 from app.services.execution_vcon import build_execution_vcon, vcon_summary
+from app.services.llm_providers import get_provider
 from app.services.pipecat_tester_agent import PipecatTesterAgentRunner
 
 
@@ -274,7 +275,7 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
         text_callable = payload.text_callable
     else:
         mode = 'text_callable'
-        text_callable = target if target in {'mock_agent', 'offline_acc_fixture'} else 'mock_agent'
+        text_callable = target if target in {'mock_agent', 'openai_codex', 'offline_acc_fixture'} else 'mock_agent'
     return payload.model_copy(
         update={
             'mode': mode,
@@ -289,6 +290,8 @@ def _execute_text_callable(suite_id: str, scenario_id: str, payload: ExecutionRu
     callable_id = payload.text_callable
     if callable_id == 'offline_acc_fixture':
         return _evidence_from_offline_fixture(suite_id, scenario_id, payload, evaluate=payload.evaluate)
+    if callable_id == 'openai_codex':
+        return _execute_openai_codex_text_agent(suite_id, scenario_id, payload)
     if callable_id != 'mock_agent':
         raise ValueError(f'Unsupported text callable: {callable_id}')
 
@@ -330,6 +333,103 @@ def _execute_text_callable(suite_id: str, scenario_id: str, payload: ExecutionRu
         'verdict': report.get('verdict'),
         'score': report.get('overall_score'),
     }
+
+
+def _execute_openai_codex_text_agent(
+    suite_id: str,
+    scenario_id: str,
+    payload: ExecutionRunCreateRequest,
+) -> dict[str, Any]:
+    """Run a connected OpenAI Codex text agent and persist only real model evidence.
+
+    There is no fake tool trace or completion state here: a model without connected
+    business tools must leave those claims unproven for the benchmark to surface.
+    """
+    if not payload.agent_id:
+        raise ValueError('openai_codex execution requires an agent_id.')
+    agent = get_agent(payload.agent_id)
+    if agent is None:
+        raise ValueError(f'Unknown agent: {payload.agent_id}')
+    scenario = _scenario_definition(suite_id, scenario_id)
+
+    provider = get_provider('openai')
+    status = provider.status()
+    if status.get('status') != 'connected':
+        raise ValueError(
+            status.get('message')
+            or 'Connect OpenAI (Codex OAuth) before launching an openai_codex agent.'
+        )
+    model_name = (payload.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
+    response_text = provider.complete(_openai_agent_prompt(agent, scenario), model_name=model_name).strip()
+    if not response_text:
+        raise RuntimeError('OpenAI Codex returned an empty agent response.')
+
+    caller_text = str(scenario.get('persona') or scenario.get('goal') or scenario_id).strip()
+    transcript = f'User: {caller_text}\nAgent: {response_text}'
+    final_state = {
+        'complete': False,
+        'outcome': 'model_response_recorded',
+        'runtime_provenance': {
+            'target': 'openai_codex',
+            'provider': status.get('provider') or 'openai_codex',
+            'model_name': model_name,
+            'fixture_backed': False,
+            'live_tool_execution': False,
+        },
+    }
+    report: dict[str, Any] = {}
+    if payload.evaluate:
+        report = run_scenario(
+            BenchmarkRunRequest(
+                suite_id=suite_id,
+                scenario_id=scenario_id,
+                transcript=transcript,
+                action_trace=[],
+                final_state=final_state,
+                user_id=payload.user_id,
+                project_id=payload.project_id,
+            )
+        )
+    return {
+        'turns': [
+            ConversationTurn(turn_index=1, speaker='user', text=caller_text),
+            ConversationTurn(turn_index=2, speaker='agent', text=response_text),
+        ],
+        'transcript': transcript,
+        'action_trace': [],
+        'final_state': final_state,
+        'latency_marks': [],
+        'verdict': report.get('verdict'),
+        'score': report.get('overall_score'),
+    }
+
+
+def _scenario_definition(suite_id: str, scenario_id: str) -> dict[str, Any]:
+    suite = get_suite(suite_id) or {}
+    for collection_name in ('scenarios', 'optional_scenarios'):
+        for candidate in suite.get(collection_name) or []:
+            if isinstance(candidate, dict) and candidate.get('id') == scenario_id:
+                return candidate
+    raise ValueError(f'Unknown scenario: {suite_id}/{scenario_id}')
+
+
+def _openai_agent_prompt(agent: dict[str, Any], scenario: dict[str, Any]) -> str:
+    name = str(agent.get('name') or 'Support agent').strip()
+    description = str(agent.get('description') or '').strip()
+    required_actions = ', '.join(str(item) for item in scenario.get('required_actions') or []) or 'none listed'
+    forbidden_actions = ', '.join(str(item) for item in scenario.get('forbidden_actions') or []) or 'none listed'
+    return (
+        f'You are {name}, a text support agent being evaluated.\n'
+        f'Agent description: {description or "No additional instructions provided."}\n\n'
+        f'Scenario: {scenario.get("title") or scenario.get("id")}\n'
+        f'Caller context: {scenario.get("persona") or "Not provided."}\n'
+        f'Goal: {scenario.get("goal") or "Not provided."}\n'
+        f'Required behavior to cover where possible: {required_actions}.\n'
+        f'Forbidden behavior: {forbidden_actions}.\n\n'
+        'Reply to the caller only. Be helpful and concise. Do not claim you performed a tool, '
+        'account, billing, or policy action unless the caller supplied evidence that it happened. '
+        'Ask for required verification or hand off when a live tool/action would be needed.'
+    )
 
 
 def _evidence_from_offline_fixture(

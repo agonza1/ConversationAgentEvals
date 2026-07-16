@@ -249,3 +249,62 @@ def test_agent_payload_honors_an_explicit_target_mode_override():
     assert resolved.agent_id == 'mock-text-agent'
     assert resolved.mode == 'pipecat_webrtc'
     assert resolved.audio_transport == 'pipecat_small_webrtc'
+
+
+def test_openai_codex_agent_executes_a_real_provider_response_without_fake_tool_evidence():
+    from app.services.llm_providers import set_provider_for_tests
+
+    class FakeOpenAIProvider:
+        provider_id = 'openai'
+
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+            self.model_names: list[str | None] = []
+
+        def status(self):
+            return {'status': 'connected', 'provider': 'openai_codex'}
+
+        def complete(self, prompt: str, *, model_name: str | None = None) -> str:
+            self.prompts.append(prompt)
+            self.model_names.append(model_name)
+            return 'I can help update that. Please confirm your account email and ZIP code first.'
+
+    created = client.post(
+        '/api/agents',
+        json={
+            'name': 'Live OpenAI support agent',
+            'channel': 'text',
+            'target': 'openai_codex',
+            'description': 'Verify the caller before account changes.',
+        },
+    )
+    assert created.status_code == 200, created.text
+    agent_id = created.json()['id']
+    fake = FakeOpenAIProvider()
+    set_provider_for_tests('openai', fake)
+    try:
+        payload = ExecutionRunCreateRequest(
+            suite_id='call-center-voice-ai',
+            scenario_ids=['billing-address-change'],
+            agent_id=agent_id,
+            model_name='gpt-5.4',
+            user_id='agent-runs-user',
+            project_id='agent-runs-project',
+            iterations=1,
+            evaluate=False,
+        )
+        queued = start_execution_run(payload)
+        assert queued['mode'] == 'text_callable'
+        finished = execute_execution_run(queued['execution_run_id'], payload)
+    finally:
+        set_provider_for_tests('openai', None)
+
+    assert finished['status'] == 'completed'
+    conversation = finished['conversations'][0]
+    assert conversation['transcript'].endswith('Please confirm your account email and ZIP code first.')
+    assert conversation['action_trace'] == []
+    assert conversation['final_state']['complete'] is False
+    assert conversation['final_state']['runtime_provenance']['fixture_backed'] is False
+    assert conversation['final_state']['runtime_provenance']['live_tool_execution'] is False
+    assert fake.model_names == ['gpt-5.4']
+    assert 'Verify the caller before account changes.' in fake.prompts[0]

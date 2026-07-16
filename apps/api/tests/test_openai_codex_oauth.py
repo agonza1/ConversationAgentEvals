@@ -12,6 +12,7 @@ from app.services.llm_providers.openai_codex import (
     OpenAICodexProvider,
     decode_chatgpt_identity,
     disconnect_marker_path,
+    _parse_responses_sse,
 )
 from app.services.product_service import reset_saved_runs_for_tests
 
@@ -175,6 +176,8 @@ def test_openai_codex_token_store_exchange_and_complete(tmp_path: Path, monkeypa
         assert url.endswith('/codex/responses')
         assert headers['Authorization'].startswith('Bearer ')
         assert headers['ChatGPT-Account-Id'] == 'acct_123'
+        assert body['store'] is False
+        assert body['stream'] is True
         assert body['input'][0]['content'][0]['text'] == 'judge me'
         return {'output_text': 'Judge says pass.'}
 
@@ -187,6 +190,31 @@ def test_openai_codex_token_store_exchange_and_complete(tmp_path: Path, monkeypa
     assert provider.status()['status'] == 'connected'
     assert provider.complete('judge me') == 'Judge says pass.'
     assert decode_chatgpt_identity(tokens['access_token'])['email'] == 'demo@example.com'
+
+
+def test_codex_responses_sse_parser_collects_text_deltas():
+    payload = _parse_responses_sse(
+        'event: response.output_text.delta\n'
+        'data: {"type":"response.output_text.delta","delta":"Hello"}\n\n'
+        'event: response.output_text.delta\n'
+        'data: {"type":"response.output_text.delta","delta":" world"}\n\n'
+        'event: response.completed\n'
+        'data: [DONE]\n'
+    )
+    assert payload == {'output_text': 'Hello world'}
+
+
+def test_codex_responses_sse_parser_uses_done_text_not_empty_created_response():
+    payload = _parse_responses_sse(
+        'event: response.created\n'
+        'data: {"type":"response.created","response":{"status":"in_progress","output":[]}}\n\n'
+        'event: response.output_text.done\n'
+        'data: {"type":"response.output_text.done","text":"Final answer"}\n\n'
+        'event: response.completed\n'
+        'data: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n'
+        'data: [DONE]\n'
+    )
+    assert payload == {'output_text': 'Final answer'}
 
 
 def test_openai_codex_refreshes_expired_access_token(tmp_path: Path):
@@ -314,6 +342,9 @@ def test_http_helpers_use_certifi_ssl_context(monkeypatch):
     seen: dict[str, object] = {}
 
     class _FakeResponse:
+        headers: dict[str, str] = {}
+        body = b'{"access_token":"t","ok":true}'
+
         def __enter__(self):
             return self
 
@@ -321,7 +352,7 @@ def test_http_helpers_use_certifi_ssl_context(monkeypatch):
             return False
 
         def read(self):
-            return b'{"access_token":"t","ok":true}'
+            return self.body
 
     def fake_urlopen(request, timeout=None, context=None):
         seen['context'] = context
@@ -344,6 +375,17 @@ def test_http_helpers_use_certifi_ssl_context(monkeypatch):
     ) == {'access_token': 't', 'ok': True}
     assert isinstance(seen['context'], ssl.SSLContext)
     assert seen['timeout'] == 90
+
+    _FakeResponse.body = (
+        b'event: response.output_text.delta\n'
+        b'data: {"type":"response.output_text.delta","delta":"streamed"}\n\n'
+        b'data: [DONE]\n'
+    )
+    assert mod._http_json_post(
+        'https://chatgpt.com/backend-api/codex/responses',
+        {'input': []},
+        headers={'Authorization': 'Bearer t'},
+    ) == {'output_text': 'streamed'}
 
 
 def test_openai_models_endpoint_requires_connection():

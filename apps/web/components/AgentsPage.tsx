@@ -33,6 +33,7 @@ function channelLabel(channel: AgentRecord['channel']) {
 
 function targetLabel(target: AgentRecord['target']) {
   if (target === 'mock_agent') return 'Mock agent';
+  if (target === 'openai_codex') return 'OpenAI Codex (live)';
   if (target === 'offline_acc_fixture') return 'ACC fixture';
   return 'Voice fixture';
 }
@@ -213,6 +214,7 @@ function AgentFormModal({
               onChange={(event) => setTarget(event.target.value as AgentRecord['target'])}
             >
               <option value="mock_agent">mock_agent</option>
+              <option value="openai_codex">openai_codex (requires OpenAI connection)</option>
               <option value="offline_acc_fixture">offline_acc_fixture</option>
               <option value="voice_fixture">voice_fixture</option>
             </select>

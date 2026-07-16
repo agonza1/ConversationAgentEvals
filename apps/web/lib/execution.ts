@@ -4,7 +4,7 @@ export interface AgentRecord {
   id: string;
   name: string;
   channel: 'text' | 'voice';
-  target: 'mock_agent' | 'offline_acc_fixture' | 'voice_fixture';
+  target: 'mock_agent' | 'openai_codex' | 'offline_acc_fixture' | 'voice_fixture';
   description?: string | null;
   metadata?: {
     model_name?: string | null;
@@ -150,7 +150,7 @@ export function applyAgentLaunchDefaults(
   }
   return {
     mode: 'text_callable',
-    textCallable: agent.target === 'mock_agent' || agent.target === 'offline_acc_fixture' ? agent.target : 'mock_agent',
+    textCallable: agent.target === 'mock_agent' || agent.target === 'openai_codex' || agent.target === 'offline_acc_fixture' ? agent.target : 'mock_agent',
   };
 }
 

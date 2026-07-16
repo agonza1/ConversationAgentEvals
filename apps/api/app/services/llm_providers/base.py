@@ -24,5 +24,5 @@ class LlmAuthProvider(Protocol):
     def ensure_access_token(self) -> str:
         """Refresh if needed and return a usable access token."""
 
-    def complete(self, prompt: str) -> str:
+    def complete(self, prompt: str, *, model_name: str | None = None) -> str:
         """Run a one-shot completion against the provider backend."""

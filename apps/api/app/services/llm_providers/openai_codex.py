@@ -327,16 +327,20 @@ class OpenAICodexProvider:
         self._save_tokens(refreshed)
         return str(refreshed['access_token'])
 
-    def complete(self, prompt: str) -> str:
+    def complete(self, prompt: str, *, model_name: str | None = None) -> str:
         access = self.ensure_access_token()
         tokens = self._load_tokens() or {}
         account_id = tokens.get('account_id')
         if not account_id:
             raise RuntimeError('Missing ChatGPT account id for Codex Responses.')
 
-        model = (os.getenv('LLM_JUDGE_MODEL') or DEFAULT_MODEL).strip()
+        model = (model_name or os.getenv('LLM_JUDGE_MODEL') or DEFAULT_MODEL).strip()
         body = {
             'model': model,
+            # The ChatGPT Codex Responses backend rejects persisted responses.
+            'store': False,
+            # The Codex backend only exposes its Responses surface as SSE.
+            'stream': True,
             'input': [
                 {
                     'role': 'user',
@@ -349,6 +353,7 @@ class OpenAICodexProvider:
             'ChatGPT-Account-Id': str(account_id),
             'OpenAI-Beta': 'responses=v1',
             'Content-Type': 'application/json',
+            'Accept': 'text/event-stream',
             'originator': ORIGINATOR,
         }
         try:
@@ -654,7 +659,18 @@ def _http_json_post(url: str, body: dict[str, Any], *, headers: dict[str, str]) 
             timeout=90,
             context=verified_ssl_context(),
         ) as response:
-            return json.loads(response.read().decode('utf-8'))
+            raw = response.read().decode('utf-8')
+            headers_map = getattr(response, 'headers', {})
+            content_type = headers_map.get('Content-Type', '')
+            # The Codex backend streams its response, but some proxy paths omit
+            # or rewrite Content-Type.  Trust the SSE framing too so a real
+            # streamed completion is not accidentally parsed as JSON.
+            if (
+                'text/event-stream' in content_type.lower()
+                or raw.lstrip().startswith(('event:', 'data:'))
+            ):
+                return _parse_responses_sse(raw)
+            return json.loads(raw)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode('utf-8', errors='replace')
         raise CodexResponseError(exc.code, detail, label='Codex Responses request') from exc
@@ -672,6 +688,48 @@ def _http_json_get(url: str, *, headers: dict[str, str]) -> dict[str, Any]:
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode('utf-8', errors='replace')
         raise CodexResponseError(exc.code, detail, label='OpenAI models request') from exc
+
+
+def _parse_responses_sse(raw: str) -> dict[str, Any]:
+    """Collect a Codex Responses SSE stream into the existing response shape."""
+    deltas: list[str] = []
+    completed_texts: list[str] = []
+    completed_response: dict[str, Any] | None = None
+    for line in raw.splitlines():
+        if not line.startswith('data:'):
+            continue
+        data = line.removeprefix('data:').strip()
+        if not data or data == '[DONE]':
+            continue
+        try:
+            event = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        event_type = str(event.get('type') or '')
+        response = event.get('response')
+        # A stream begins with response.created, whose output is intentionally
+        # empty.  Only retain an actual completed response; otherwise its empty
+        # initial envelope would mask text sent in later events.
+        if event_type == 'response.completed' and isinstance(response, dict):
+            completed_response = response
+        delta = event.get('delta')
+        if isinstance(delta, str):
+            deltas.append(delta)
+        # Codex sometimes emits the full value in output_text.done rather than
+        # individual delta events.  Prefer that authoritative final text below.
+        text = event.get('text')
+        if event_type.endswith('.done') and isinstance(text, str) and text:
+            completed_texts.append(text)
+
+    if completed_texts:
+        return {'output_text': ''.join(completed_texts)}
+    if deltas:
+        return {'output_text': ''.join(deltas)}
+    if completed_response is not None:
+        return completed_response
+    raise RuntimeError('Codex Responses stream did not include a completion payload.')
 
 
 def _is_chat_model_id(model_id: str) -> bool:

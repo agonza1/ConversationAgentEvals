@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 AgentChannel = Literal['text', 'voice']
-AgentTarget = Literal['mock_agent', 'offline_acc_fixture', 'voice_fixture']
+AgentTarget = Literal['mock_agent', 'openai_codex', 'offline_acc_fixture', 'voice_fixture']
 
 
 class AgentMetadata(BaseModel):

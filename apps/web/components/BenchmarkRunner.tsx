@@ -2295,7 +2295,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             setExecutionMode('voice_fixture');
           } else {
             setExecutionMode('text_callable');
-            if (matched.target === 'mock_agent' || matched.target === 'offline_acc_fixture') {
+            if (matched.target === 'mock_agent' || matched.target === 'openai_codex' || matched.target === 'offline_acc_fixture') {
               setExecutionTextCallable(matched.target);
             }
           }
@@ -3944,7 +3944,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                   setExecutionMode('voice_fixture');
                 } else {
                   setExecutionMode('text_callable');
-                  if (agent.target === 'mock_agent' || agent.target === 'offline_acc_fixture') {
+                  if (agent.target === 'mock_agent' || agent.target === 'openai_codex' || agent.target === 'offline_acc_fixture') {
                     setExecutionTextCallable(agent.target);
                   }
                 }
@@ -4032,6 +4032,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                   style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
                 >
                   <option value="mock_agent">mock_agent</option>
+                  <option value="openai_codex">openai_codex (live OpenAI model)</option>
                   <option value="offline_acc_fixture">offline_acc_fixture</option>
                 </select>
               </label>

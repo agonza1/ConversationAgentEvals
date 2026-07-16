@@ -20,6 +20,7 @@ There is one product and one supported evaluation path. Historical product varia
 - Durable ASSERT artifact manifests with searchable platform metadata indexes.
 - Operator-facing QA reports, saved-run history, regression comparisons, and export workflows.
 - A focused benchmark runner at `/benchmarks`, including an Execute **Launch evaluation** panel that streams conversations into an `inference_set.jsonl` live list for text callables and voice fixtures.
+- An opt-in `openai_codex` text target that uses connected local Codex OAuth to record a real model response. It does not invent tool events or completed-task state, so reports honestly show missing live-tool evidence.
 - Voice and WebRTC integration groundwork through the Pipecat service.
 
 ASSERT artifacts remain the canonical evaluation results. The application database stores product metadata and indexes; it does not replace ASSERT's result model.
