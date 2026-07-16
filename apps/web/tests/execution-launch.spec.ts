@@ -222,3 +222,138 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect(launch.getByLabel('Execution conversations')).toContainText('Billing Address Change');
   await expect(launch.getByLabel('Execution conversations')).toContainText(/pass/i, { timeout: 8000 });
 });
+
+test('offline ACC text fixture launches cancellation-rescue while staying text_callable', async ({ page }) => {
+  let posted: Record<string, unknown> | null = null;
+
+  await page.route('**/api/benchmarks/suites**', async (route) => {
+    if (route.request().url().includes('/contract-manifest')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+      return;
+    }
+    if (route.request().url().includes('/scenarios')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          scenarios: [{ id: 'billing-address-change', title: 'Billing Address Change', suite_id: 'call-center-voice-ai' }],
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          id: 'call-center-voice-ai',
+          title: 'Call Center Voice AI',
+          scenarios: [
+            {
+              id: 'billing-address-change',
+              title: 'Billing Address Change',
+              sample_transcript: 'Caller: hi',
+              sample_action_trace: [],
+              sample_final_state: {},
+            },
+          ],
+        },
+      ]),
+    });
+  });
+
+  await page.route('**/api/product/**', async (route) => {
+    const url = route.request().url();
+    if (url.includes('/config')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          pricing: [],
+          usage_rules: [],
+          auth: { enabled: false, mode: 'placeholder', providers: [], project_id: null, api_key_configured: false },
+          voice_status: 'gated',
+          llm_judge_status: 'gated',
+        }),
+      });
+      return;
+    }
+    if (url.includes('/providers/openai/status')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ status: 'disconnected', message: 'Connect OpenAI.' }),
+      });
+      return;
+    }
+    if (url.includes('/providers/openai/models')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          models: [{ id: 'gpt-5.4', label: 'gpt-5.4' }],
+          default_model: 'gpt-5.4',
+          source: 'fallback',
+        }),
+      });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+  });
+
+  await page.route('**/api/agents**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        agents: [
+          {
+            id: 'offline-text-fixture',
+            name: 'Offline text fixture',
+            channel: 'text',
+            target: 'offline_acc_fixture',
+            description: 'Text offline ACC fixture agent',
+            metadata: { model_name: 'gpt-5.4' },
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.route('**/api/execution/runs', async (route) => {
+    if (route.request().method() === 'POST') {
+      posted = route.request().postDataJSON() as Record<string, unknown>;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          execution_run_id: 'exec-offline-fixture',
+          status: 'queued',
+          mode: 'text_callable',
+          suite_id: 'call-center-voice-ai',
+          scenario_ids: ['cancellation-rescue'],
+          conversations: [],
+        }),
+      });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+  });
+
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user-offline');
+    window.localStorage.setItem('conversation-evals-demo-project', 'call-center-demo');
+  });
+
+  await page.goto('/runs?agent_id=offline-text-fixture');
+  const launch = page.getByLabel('Launch agent run');
+  await expect(launch.getByRole('button', { name: 'Launch agent run' })).toBeEnabled({ timeout: 30_000 });
+  await launch.getByRole('button', { name: 'Launch agent run' }).click();
+  await expect.poll(() => posted).not.toBeNull();
+  expect(posted).toMatchObject({
+    mode: 'text_callable',
+    text_callable: 'offline_acc_fixture',
+    suite_id: 'call-center-voice-ai',
+    scenario_ids: ['cancellation-rescue'],
+  });
+});

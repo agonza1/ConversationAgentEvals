@@ -3046,11 +3046,14 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     const identity = ensureDemoIdentity();
 
     const voiceModes = executionMode === 'voice_fixture' || executionMode === 'pipecat_webrtc';
-    // Voice fixture / Pipecat WebRTC currently require the optional cancellation-rescue
-    // scenario on call-center-voice-ai; do not post that id against other suites.
+    const offlineFixtureText =
+      executionMode === 'text_callable' && executionTextCallable === 'offline_acc_fixture';
+    // Voice fixture, Pipecat WebRTC, and text offline_acc_fixture require the optional
+    // cancellation-rescue scenario on call-center-voice-ai; do not post other scenario ids.
+    const fixtureBackedRun = voiceModes || offlineFixtureText;
     const voiceSuiteId = 'call-center-voice-ai';
-    const suiteForRun = voiceModes ? voiceSuiteId : selectedSuite.id;
-    const scenarioIds = voiceModes
+    const suiteForRun = fixtureBackedRun ? voiceSuiteId : selectedSuite.id;
+    const scenarioIds = fixtureBackedRun
       ? ['cancellation-rescue']
       : executionScope === 'suite'
         ? selectedSuite.scenarios.map((scenario) => scenario.id)
@@ -3064,8 +3067,8 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     }
 
     const suiteNote =
-      voiceModes && selectedSuite.id !== voiceSuiteId
-        ? `Using suite ${voiceSuiteId} / cancellation-rescue for voice execution. `
+      fixtureBackedRun && (selectedSuite.id !== voiceSuiteId || offlineFixtureText)
+        ? `Using suite ${voiceSuiteId} / cancellation-rescue for fixture-backed execution. `
         : '';
 
     setIsLaunchingExecution(true);
@@ -3918,9 +3921,11 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             Uses this agent&apos;s configured target
             {executionMode === 'voice_fixture' || executionMode === 'pipecat_webrtc'
               ? ' (Call Center Voice AI / Cancellation Rescue).'
-              : executionScope === 'suite'
-                ? ` for the full ${selectedSuite.title} suite.`
-                : ` for ${selectedScenario?.title ?? 'the default scenario'}.`}
+              : executionTextCallable === 'offline_acc_fixture'
+                ? ' (Call Center Voice AI / Cancellation Rescue via offline ACC fixture).'
+                : executionScope === 'suite'
+                  ? ` for the full ${selectedSuite.title} suite.`
+                  : ` for ${selectedScenario?.title ?? 'the default scenario'}.`}
           </p>
         ) : null}
 
