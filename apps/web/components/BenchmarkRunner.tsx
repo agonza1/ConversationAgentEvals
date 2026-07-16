@@ -1780,6 +1780,7 @@ function readWorkflowDemoPreset() {
 
 export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }) {
   const loadingSavedRunRef = useRef(false);
+  const autoLaunchDemoRef = useRef(false);
   const [suites, setSuites] = useState<BenchmarkSuite[]>([]);
   const [selectedSuiteId, setSelectedSuiteId] = useState('');
   const [selectedScenarioId, setSelectedScenarioId] = useState('');
@@ -1933,6 +1934,34 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   }, [view]);
 
   useEffect(() => {
+    if (view !== 'run' || typeof window === 'undefined') return;
+    if (autoLaunchDemoRef.current || isLoading || isLaunchingExecution || !selectedSuite) return;
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('launch') !== 'demo') return;
+
+    const wantedAgentId = params.get('agent_id');
+    if (wantedAgentId) {
+      if (!agents.length || selectedAgentId !== wantedAgentId) return;
+    }
+
+    if (executionMode === 'text_callable' && !selectedScenario) return;
+
+    autoLaunchDemoRef.current = true;
+    setExecutionMessage('Starting try-it-out run…');
+    void onLaunchExecution({ redirectToAnalysis: true });
+  }, [
+    view,
+    isLoading,
+    isLaunchingExecution,
+    selectedSuite,
+    selectedScenario,
+    selectedAgentId,
+    agents,
+    executionMode,
+  ]);
+
+  useEffect(() => {
     if (typeof window === 'undefined') return;
 
     const storedUser = window.localStorage.getItem('conversation-evals-demo-user');
@@ -2077,8 +2106,8 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         .then((next) => {
           setExecutionRun(next);
           if (!isActiveExecutionStatus(next.status)) {
-            const completed = next.progress.completed_conversations;
-            const total = next.progress.total_conversations;
+            const completed = next.progress?.completed_conversations ?? 0;
+            const total = next.progress?.total_conversations ?? 0;
             setExecutionMessage(
               next.status === 'failed'
                 ? `Execution failed${next.error ? `: ${next.error}` : '.'}`
@@ -2574,8 +2603,8 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     }
   }
 
-  async function onLaunchExecution() {
-    if (!selectedSuite) return;
+  async function onLaunchExecution(options?: { redirectToAnalysis?: boolean }) {
+    if (!selectedSuite) return null;
     const identity = ensureDemoIdentity();
 
     const scenarioIds =
@@ -2589,7 +2618,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
     if (!scenarioIds.length) {
       setExecutionMessage('Select at least one scenario to execute.');
-      return;
+      return null;
     }
 
     setIsLaunchingExecution(true);
@@ -2613,8 +2642,13 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         `Execution queued (${queued.mode}). Open /runs/${queued.execution_run_id} for analysis when complete.`,
       );
       listExecutionRuns(identity.userId, identity.projectId).catch(() => undefined);
+      if (options?.redirectToAnalysis && queued.execution_run_id) {
+        window.location.assign(`/runs/${queued.execution_run_id}`);
+      }
+      return queued;
     } catch (err) {
       setExecutionMessage(err instanceof Error ? err.message : 'Could not launch execution.');
+      return null;
     } finally {
       setIsLaunchingExecution(false);
     }
@@ -3342,8 +3376,8 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                 </a>
               </div>
               <div style={{ color: 'var(--muted)', fontSize: 14 }}>
-                {executionRun.progress.completed_conversations}/{executionRun.progress.total_conversations} conversations ·{' '}
-                {executionRun.progress.percent}%
+                {executionRun.progress?.completed_conversations ?? 0}/{executionRun.progress?.total_conversations ?? 0} conversations ·{' '}
+                {executionRun.progress?.percent ?? 0}%
                 {executionRun.inference_set_path ? ` · ${executionRun.inference_set_path}` : ''}
               </div>
             </div>

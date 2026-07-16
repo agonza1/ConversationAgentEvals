@@ -1323,6 +1323,12 @@ select {
   color: white;
   font-size: 15px;
   font-weight: 850;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.agents-try-button:hover {
+  filter: brightness(1.06);
 }
 
 .agents-try-icon {
