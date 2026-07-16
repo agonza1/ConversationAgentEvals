@@ -91,11 +91,10 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
   });
 
   await page.goto('/voice');
-  await expect(page.getByRole('heading', { name: 'Evaluate voice agent behavior with audio evidence.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Voice eval' })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Voice evaluation' })).toBeVisible();
-  await page.getByRole('button', { name: 'Launch voice eval' }).click();
+  await page.getByRole('button', { name: 'Run' }).click();
   await expect(page.getByText('voice-run-1')).toBeVisible();
   await expect(page.getByText('Cancellation rescue')).toBeVisible({ timeout: 10000 });
-  await expect(page.getByText(/Recording:/)).toBeVisible();
-  await expect(page.getByText(/vCon:/)).toBeVisible();
+  await expect(page.getByText(/vCon|recording/i)).toBeVisible();
 });

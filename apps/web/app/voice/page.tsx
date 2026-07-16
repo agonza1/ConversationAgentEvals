@@ -9,18 +9,14 @@ export default function VoicePage() {
         <Link className="brand" href="/">
           AgentBench
         </Link>
-        <Link href="/">Homepage</Link>
+        <Link href="/">Home</Link>
         <Link href="/benchmarks">Runner</Link>
-        <Link href={'/voice' as Route}>Voice eval</Link>
+        <Link href={'/voice' as Route}>Voice</Link>
       </nav>
 
       <section className="minimal-hero" aria-labelledby="voice-title">
-        <p className="eyebrow">Voice evaluation</p>
-        <h1 id="voice-title">Evaluate voice agent behavior with audio evidence.</h1>
-        <p>
-          Run Execute-stage voice scenarios, capture recording and transcription into vCon, and inspect results. Live
-          browser WebRTC and FreeSWITCH Verto SIP are follow-on; fixture and in-process Pipecat hooks ship today.
-        </p>
+        <h1 id="voice-title">Voice eval</h1>
+        <p>Run cancellation-rescue and inspect transcript, recording, and vCon.</p>
       </section>
 
       <VoiceEvalPage />
