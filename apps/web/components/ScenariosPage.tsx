@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -64,9 +64,9 @@ function normalizeScenario(value: unknown): ScenarioRecord {
   };
 }
 
-async function listScenarios(): Promise<ScenarioRecord[]> {
+async function listScenarios(signal?: AbortSignal): Promise<ScenarioRecord[]> {
   const payload = await handleJson<{ scenarios?: unknown[] }>(
-    await fetch(`${getApiBase()}/api/scenarios`, { cache: 'no-store' }),
+    await fetch(`${getApiBase()}/api/scenarios`, { cache: 'no-store', signal }),
   );
   return (payload.scenarios ?? []).map(normalizeScenario);
 }
@@ -171,6 +171,8 @@ export function ScenariosPage() {
   const [error, setError] = useState<string | null>(null);
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const loadRequestRef = useRef(0);
 
   const selected = useMemo(
     () => scenarios.find((item) => item.id === selectedId) ?? null,
@@ -178,27 +180,48 @@ export function ScenariosPage() {
   );
 
   useEffect(() => {
-    let mounted = true;
+    const requestId = loadRequestRef.current + 1;
+    loadRequestRef.current = requestId;
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeoutId = window.setTimeout(() => controller?.abort(), 12000);
+
     async function load() {
       setIsLoading(true);
       setError(null);
       try {
-        const next = await listScenarios();
-        if (!mounted) return;
+        const next = await listScenarios(controller?.signal);
+        if (loadRequestRef.current !== requestId) return;
         setScenarios(next);
         if (next[0]) setSelectedId(next[0].id);
+        setMode(next[0] ? 'view' : 'list');
       } catch (err) {
-        if (!mounted) return;
-        setError(err instanceof Error ? err.message : 'Could not load scenarios');
+        if (loadRequestRef.current !== requestId) return;
+        setScenarios([]);
+        const aborted = typeof err === 'object' && err !== null && 'name' in err && (err as { name?: string }).name === 'AbortError';
+        setError(
+          aborted
+            ? 'Timed out loading scenarios. Check that the API is running and reachable.'
+            : err instanceof Error
+              ? err.message
+              : 'Could not load scenarios',
+        );
       } finally {
-        if (mounted) setIsLoading(false);
+        window.clearTimeout(timeoutId);
+        if (loadRequestRef.current === requestId) {
+          setIsLoading(false);
+        }
       }
     }
+
     void load();
     return () => {
-      mounted = false;
+      controller?.abort();
+      window.clearTimeout(timeoutId);
+      if (loadRequestRef.current === requestId) {
+        loadRequestRef.current = requestId + 1;
+      }
     };
-  }, []);
+  }, [reloadKey]);
 
   useEffect(() => {
     if (mirrorPrompt && mode === 'create') {
@@ -266,7 +289,20 @@ export function ScenariosPage() {
           </div>
 
           {isLoading ? <p className="scenarios-muted">Loading scenarios…</p> : null}
-          {!isLoading && !scenarios.length ? (
+          {!isLoading && error ? (
+            <div className="scenarios-error" role="alert">
+              <p style={{ margin: 0 }}>{error}</p>
+              <button
+                type="button"
+                className="secondary-link"
+                style={{ marginTop: 10 }}
+                onClick={() => setReloadKey((value) => value + 1)}
+              >
+                Retry loading scenarios
+              </button>
+            </div>
+          ) : null}
+          {!isLoading && !error && !scenarios.length ? (
             <p className="scenarios-muted">No custom scenarios yet. Create one to see it here and in the runner.</p>
           ) : null}
 
@@ -296,7 +332,7 @@ export function ScenariosPage() {
         </aside>
 
         <div className="scenarios-main">
-          {error ? <div className="scenarios-error">{error}</div> : null}
+          {error && mode === 'create' ? <div className="scenarios-error" role="alert">{error}</div> : null}
           {saveMessage ? <p className="scenarios-muted">{saveMessage}</p> : null}
           {copyMessage ? <p className="scenarios-muted" role="status">{copyMessage}</p> : null}
 
@@ -312,18 +348,20 @@ export function ScenariosPage() {
 
               <ScenarioTypeBadge />
 
-              <label>
+              <label htmlFor="scenario-title">
                 <span>Title (optional)</span>
                 <input
+                  id="scenario-title"
                   value={title}
                   onChange={(event) => setTitle(event.target.value)}
                   placeholder="Account lockout handoff"
                 />
               </label>
 
-              <label>
+              <label htmlFor="scenario-prompt">
                 <span>Simulated User Prompt</span>
                 <textarea
+                  id="scenario-prompt"
                   required
                   rows={6}
                   value={simulatedUserPrompt}
@@ -332,9 +370,10 @@ export function ScenariosPage() {
                 />
               </label>
 
-              <label>
+              <label htmlFor="scenario-expected">
                 <span>Expected Output</span>
                 <textarea
+                  id="scenario-expected"
                   required
                   rows={5}
                   value={expectedOutput}
@@ -343,9 +382,10 @@ export function ScenariosPage() {
                 />
               </label>
 
-              <label>
+              <label htmlFor="scenario-description">
                 <span>Description</span>
                 <textarea
+                  id="scenario-description"
                   required
                   rows={5}
                   value={description}
@@ -357,8 +397,9 @@ export function ScenariosPage() {
                 />
               </label>
 
-              <label className="scenarios-checkbox">
+              <label className="scenarios-checkbox" htmlFor="scenario-mirror">
                 <input
+                  id="scenario-mirror"
                   type="checkbox"
                   checked={mirrorPrompt}
                   onChange={(event) => setMirrorPrompt(event.target.checked)}
