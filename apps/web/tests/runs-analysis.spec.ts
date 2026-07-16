@@ -84,7 +84,7 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
 
   await page.getByRole('link', { name: /ACC voice fixture agent/ }).click();
   await expect(page.getByRole('heading', { name: 'ACC voice fixture agent' })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Interruption Detection/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Interruption Detection/ }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: /Latency/ }).first()).toBeVisible();
   await expect(page.getByLabel('Stub dual-track waveform')).toBeVisible();
   await expect(page.getByLabel('Transcript')).toContainText('I want to cancel today.');
