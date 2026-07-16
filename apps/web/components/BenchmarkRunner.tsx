@@ -2100,6 +2100,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   const [executionModelOptions, setExecutionModelOptions] = useState<string[]>([DEFAULT_EXECUTION_MODEL]);
   const [executionModelsMessage, setExecutionModelsMessage] = useState<string | null>(null);
   const [agents, setAgents] = useState<ScoreAgentOption[]>([]);
+  const [agentsLoaded, setAgentsLoaded] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const selectedScoreAgent = useMemo(
     () => agents.find((agent) => agent.id === selectedAgentId) ?? null,
@@ -2276,6 +2277,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
   useEffect(() => {
     let active = true;
+    setAgentsLoaded(false);
     listAgents()
       .then((next) => {
         if (!active) return;
@@ -2300,10 +2302,12 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             }
           }
         }
+        setAgentsLoaded(true);
       })
       .catch(() => {
         if (!active) return;
         setAgents([]);
+        setAgentsLoaded(true);
       });
     return () => {
       active = false;
@@ -2319,15 +2323,13 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
   useEffect(() => {
     if (view !== 'run' || typeof window === 'undefined') return;
-    if (autoLaunchDemoRef.current || isLoading || isLaunchingExecution || !selectedSuite) return;
+    if (autoLaunchDemoRef.current || isLoading || isLaunchingExecution || !selectedSuite || !agentsLoaded) return;
 
     const params = new URLSearchParams(window.location.search);
     if (params.get('launch') !== 'demo') return;
 
     const wantedAgentId = params.get('agent_id');
-    if (wantedAgentId) {
-      if (!agents.length || selectedAgentId !== wantedAgentId) return;
-    }
+    if (!selectedAgentId || (wantedAgentId && selectedAgentId !== wantedAgentId)) return;
 
     if (executionMode === 'text_callable' && !selectedScenario) return;
 
@@ -2343,7 +2345,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     selectedSuite,
     selectedScenario,
     selectedAgentId,
-    agents,
+    agentsLoaded,
     executionMode,
   ]);
 
@@ -3094,7 +3096,11 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
       );
       listExecutionRuns(identity.userId, identity.projectId).catch(() => undefined);
       if (options?.redirectToAnalysis && queued.execution_run_id) {
-        window.location.assign(`/runs/${queued.execution_run_id}`);
+        const analysisParams = new URLSearchParams();
+        const apiBase = new URLSearchParams(window.location.search).get('api_base');
+        if (apiBase) analysisParams.set('api_base', apiBase);
+        const analysisQuery = analysisParams.toString();
+        window.location.assign(`/runs/${queued.execution_run_id}${analysisQuery ? `?${analysisQuery}` : ''}`);
       }
       return queued;
     } catch (err) {

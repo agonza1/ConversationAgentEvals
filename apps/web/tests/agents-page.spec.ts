@@ -1,6 +1,11 @@
 import { expect, test } from '@playwright/test';
 
-async function mockRunnerApis(page: import('@playwright/test').Page) {
+type MockRunnerOptions = {
+  agentsDelayMs?: number;
+  onExecutionLaunch?: (request: Record<string, unknown>) => void;
+};
+
+async function mockRunnerApis(page: import('@playwright/test').Page, options: MockRunnerOptions = {}) {
   await page.route('**/api/benchmarks/suites**', async (route) => {
     if (route.request().url().includes('/contract-manifest')) {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
@@ -35,6 +40,9 @@ async function mockRunnerApis(page: import('@playwright/test').Page) {
   });
 
   await page.route('**/api/agents**', async (route) => {
+    if (options.agentsDelayMs) {
+      await new Promise((resolve) => setTimeout(resolve, options.agentsDelayMs));
+    }
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -62,6 +70,15 @@ async function mockRunnerApis(page: import('@playwright/test').Page) {
   });
 
   await page.route('**/api/product/**', async (route) => {
+    const url = route.request().url();
+    if (url.includes('/runs') || url.includes('/audit-events')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+      return;
+    }
+    if (url.includes('/regression-summary')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: 'null' });
+      return;
+    }
     await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
   });
 
@@ -72,6 +89,7 @@ async function mockRunnerApis(page: import('@playwright/test').Page) {
   await page.route('**/api/execution/runs**', async (route) => {
     const url = route.request().url();
     if (route.request().method() === 'POST') {
+      options.onExecutionLaunch?.(route.request().postDataJSON() as Record<string, unknown>);
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -131,6 +149,28 @@ test('agents try-it-out auto-launches and opens run analysis', async ({ page }) 
   await page.goto('/agents');
   await page.getByRole('article').filter({ hasText: 'ACC voice fixture agent' }).getByRole('link', { name: 'Try it Out' }).click();
   await expect(page).toHaveURL(/\/runs\/exec-try-it-out/, { timeout: 20000 });
+});
+
+test('homepage demo waits for its default agent before auto-launching', async ({ page }) => {
+  const launches: Record<string, unknown>[] = [];
+  await mockRunnerApis(page, {
+    agentsDelayMs: 250,
+    onExecutionLaunch: (request) => launches.push(request),
+  });
+
+  await page.goto('/runs?launch=demo');
+  await expect(page).toHaveURL(/\/runs\/exec-try-it-out/, { timeout: 20000 });
+
+  expect(launches).toHaveLength(1);
+  expect(launches[0]?.agent_id).toBe('mock-text-agent');
+});
+
+test('demo analysis redirect preserves the api base override', async ({ page }) => {
+  await mockRunnerApis(page);
+  await page.goto('/runs?launch=demo&api_base=https%3A%2F%2Fapi.example.test');
+  await expect(page).toHaveURL(/\/runs\/exec-try-it-out/, { timeout: 20000 });
+
+  expect(new URL(page.url()).searchParams.get('api_base')).toBe('https://api.example.test');
 });
 
 test('add agent modal creates a registry entry', async ({ page }) => {
