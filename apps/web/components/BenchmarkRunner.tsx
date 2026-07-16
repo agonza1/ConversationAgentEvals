@@ -3306,7 +3306,20 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
         {isLoading ? <p style={{ margin: 0, color: 'var(--muted)' }}>Loading benchmark suites...</p> : null}
 
-        {selectedScenario ? (
+        {view === 'score' ? (
+          selectedScenario ? (
+            <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14, lineHeight: 1.45 }} aria-label="Selected scenario">
+              {selectedScenario.title}
+              {selectedScenario.user_goal || selectedScenario.user_persona
+                ? ` — ${selectedScenario.user_goal || selectedScenario.user_persona}`
+                : ''}
+            </p>
+          ) : selectedSuite && !isLoading ? (
+            <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }} aria-label="Suite setup guidance">
+              {selectedSuite.title} has no benchmark scenarios yet.
+            </p>
+          ) : null
+        ) : selectedScenario ? (
           <div
             aria-label="Selected scenario"
             style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, background: 'var(--panel-alt)', display: 'grid', gap: 10 }}
@@ -3361,76 +3374,166 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           </div>
         ) : null}
 
-        <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) auto', gap: 16, alignItems: 'end' }}>
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Agent profile</span>
-              <input
-                value={agentProfile}
-                onChange={(event) => setAgentProfile(event.target.value)}
-                placeholder="mock text agent"
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-              />
-            </label>
-            <label
-              style={{
-                minHeight: 46,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 10,
-                border: '1px solid var(--border)',
-                borderRadius: 8,
-                padding: '10px 12px',
-                fontWeight: 760,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={includeFailure}
-                onChange={(event) => setIncludeFailure(event.target.checked)}
-              />
-              Failure baseline
-            </label>
+        {view === 'score' ? (
+          <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 14 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+              <label style={{ display: 'grid', gap: 8 }}>
+                <span style={{ fontWeight: 700 }}>Agent</span>
+                <select
+                  aria-label="Scoring agent"
+                  value={selectedAgentId}
+                  onChange={(event) => {
+                    const agentId = event.target.value;
+                    setSelectedAgentId(agentId);
+                    const agent = agents.find((item) => item.id === agentId);
+                    if (agent) applyAgentProfileDefaults(agent, { setAgentProfile, setModelName, setPromptVersion });
+                  }}
+                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                >
+                  {!agents.length ? <option value="">No agents</option> : null}
+                  {agents.map((agent) => (
+                    <option key={agent.id} value={agent.id}>{agent.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: 'grid', gap: 8 }}>
+                <span style={{ fontWeight: 700 }}>Model</span>
+                <input
+                  aria-label="Model"
+                  value={modelName}
+                  onChange={(event) => setModelName(event.target.value)}
+                  placeholder={selectedScoreAgent?.metadata?.model_name || 'gpt-4.1-mini'}
+                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                />
+              </label>
+            </div>
+            <details>
+              <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Advanced details</summary>
+              <div style={{ display: 'grid', gap: 12, marginTop: 12 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+                  <label style={{ display: 'grid', gap: 8 }}>
+                    <span style={{ fontWeight: 700 }}>Agent version</span>
+                    <input
+                      value={agentVersion}
+                      onChange={(event) => setAgentVersion(event.target.value)}
+                      placeholder="agent-v12"
+                      style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                    />
+                  </label>
+                  <label style={{ display: 'grid', gap: 8 }}>
+                    <span style={{ fontWeight: 700 }}>Prompt version</span>
+                    <input
+                      value={promptVersion}
+                      onChange={(event) => setPromptVersion(event.target.value)}
+                      placeholder="prompt-2026-05-25"
+                      style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                    />
+                  </label>
+                  <label style={{ display: 'grid', gap: 8 }}>
+                    <span style={{ fontWeight: 700 }}>Notes</span>
+                    <input
+                      value={runNotes}
+                      onChange={(event) => setRunNotes(event.target.value)}
+                      placeholder="tightened escalation policy"
+                      style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                    />
+                  </label>
+                </div>
+                <label
+                  style={{
+                    minHeight: 46,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 10,
+                    border: '1px solid var(--border)',
+                    borderRadius: 8,
+                    padding: '10px 12px',
+                    fontWeight: 760,
+                    width: 'fit-content',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={includeFailure}
+                    onChange={(event) => setIncludeFailure(event.target.checked)}
+                  />
+                  Failure baseline
+                </label>
+              </div>
+            </details>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Agent version</span>
-              <input
-                value={agentVersion}
-                onChange={(event) => setAgentVersion(event.target.value)}
-                placeholder="agent-v12"
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-              />
-            </label>
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Prompt version</span>
-              <input
-                value={promptVersion}
-                onChange={(event) => setPromptVersion(event.target.value)}
-                placeholder="prompt-2026-05-25"
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-              />
-            </label>
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Model</span>
-              <input
-                value={modelName}
-                onChange={(event) => setModelName(event.target.value)}
-                placeholder="gpt-4.1-mini"
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-              />
-            </label>
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Notes</span>
-              <input
-                value={runNotes}
-                onChange={(event) => setRunNotes(event.target.value)}
-                placeholder="tightened escalation policy"
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-              />
-            </label>
+        ) : (
+          <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 14 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) auto', gap: 16, alignItems: 'end' }}>
+              <label style={{ display: 'grid', gap: 8 }}>
+                <span style={{ fontWeight: 700 }}>Agent profile</span>
+                <input
+                  value={agentProfile}
+                  onChange={(event) => setAgentProfile(event.target.value)}
+                  placeholder="mock text agent"
+                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                />
+              </label>
+              <label
+                style={{
+                  minHeight: 46,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                  fontWeight: 760,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={includeFailure}
+                  onChange={(event) => setIncludeFailure(event.target.checked)}
+                />
+                Failure baseline
+              </label>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+              <label style={{ display: 'grid', gap: 8 }}>
+                <span style={{ fontWeight: 700 }}>Agent version</span>
+                <input
+                  value={agentVersion}
+                  onChange={(event) => setAgentVersion(event.target.value)}
+                  placeholder="agent-v12"
+                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                />
+              </label>
+              <label style={{ display: 'grid', gap: 8 }}>
+                <span style={{ fontWeight: 700 }}>Prompt version</span>
+                <input
+                  value={promptVersion}
+                  onChange={(event) => setPromptVersion(event.target.value)}
+                  placeholder="prompt-2026-05-25"
+                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                />
+              </label>
+              <label style={{ display: 'grid', gap: 8 }}>
+                <span style={{ fontWeight: 700 }}>Model</span>
+                <input
+                  value={modelName}
+                  onChange={(event) => setModelName(event.target.value)}
+                  placeholder="gpt-4.1-mini"
+                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                />
+              </label>
+              <label style={{ display: 'grid', gap: 8 }}>
+                <span style={{ fontWeight: 700 }}>Notes</span>
+                <input
+                  value={runNotes}
+                  onChange={(event) => setRunNotes(event.target.value)}
+                  placeholder="tightened escalation policy"
+                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                />
+              </label>
+            </div>
           </div>
-        </div>
+        )}
 
         {view === 'score' ? (
           <section className="score-upload-panel" aria-label="Evidence upload">
