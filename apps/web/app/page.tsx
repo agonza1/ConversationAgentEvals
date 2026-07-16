@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import type { Route } from 'next';
 import { BenchmarkRunner } from '@/components/BenchmarkRunner';
 
 const domains = [
@@ -83,6 +84,7 @@ export default function HomePage() {
           <a href="#coverage">Coverage</a>
           <a href="#benchmarks">Benchmarks</a>
           <Link href="/benchmarks">Runner</Link>
+          <Link href={'/voice' as Route}>Voice eval</Link>
         </div>
       </nav>
 
@@ -96,7 +98,7 @@ export default function HomePage() {
           </p>
           <div className="hero-cta">
             <Link className="primary-link" href="/benchmarks">Open benchmark runner</Link>
-            <a className="secondary-link" href="#product">See how it works</a>
+            <Link className="secondary-link" href={'/voice' as Route}>Open voice eval</Link>
           </div>
         </div>
 

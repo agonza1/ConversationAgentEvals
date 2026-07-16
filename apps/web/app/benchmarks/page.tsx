@@ -1,5 +1,6 @@
 import { BenchmarkRunner } from '@/components/BenchmarkRunner';
 import Link from 'next/link';
+import type { Route } from 'next';
 
 export default function BenchmarksPage() {
   return (
@@ -7,6 +8,7 @@ export default function BenchmarksPage() {
       <nav className="top-nav compact-nav" aria-label="Benchmark navigation">
         <Link className="brand" href="/">AgentBench</Link>
         <Link href="/">Homepage</Link>
+        <Link href={'/voice' as Route}>Voice eval</Link>
       </nav>
 
       <section className="minimal-hero" aria-labelledby="benchmark-title">

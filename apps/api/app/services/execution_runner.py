@@ -21,10 +21,19 @@ from app.services.acc_realtime_target import (
     AccAudioFixtureScheduler,
     AccAudioPlan,
     AccAudioStep,
+    TesterAct,
+    TesterScenarioConfig,
 )
 from app.services.agentic_contact_center_example import build_benchmark_run_request, normalize_acc_run
 from app.services.benchmark_catalog_extensions import register_builtin_benchmark_extensions
 from app.services.benchmark_service import get_suite, run_scenario, simulate_scenario
+from app.services.execution_audio import (
+    DeterministicExecutionTtsRenderer,
+    ExecutionAudioTargetAdapter,
+    LocalPipecatSmallWebRtcTransport,
+)
+from app.services.execution_vcon import build_execution_vcon, vcon_summary
+from app.services.pipecat_tester_agent import PipecatTesterAgentRunner
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -48,7 +57,7 @@ def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
     if not scenario_ids:
         scenario_ids = [item['id'] for item in suite.get('scenarios') or []]
         optional = suite.get('optional_scenarios') or []
-        if payload.mode == 'voice_fixture' and optional:
+        if payload.mode in {'voice_fixture', 'pipecat_webrtc'} and optional:
             scenario_ids = [optional[0]['id']]
         elif not scenario_ids and optional:
             scenario_ids = [optional[0]['id']]
@@ -164,6 +173,16 @@ def _run_one_conversation(
     try:
         if payload.mode == 'text_callable':
             result = _execute_text_callable(suite_id, scenario_id, payload)
+        elif payload.mode == 'pipecat_webrtc':
+            result = asyncio.run(
+                _execute_pipecat_webrtc(
+                    execution_run_id=execution_run_id,
+                    conversation_id=conversation_id,
+                    suite_id=suite_id,
+                    scenario_id=scenario_id,
+                    payload=payload,
+                )
+            )
         else:
             result = asyncio.run(_execute_voice_fixture(suite_id, scenario_id, payload))
         return ConversationRecord(
@@ -173,17 +192,26 @@ def _run_one_conversation(
             scenario_id=scenario_id,
             scenario_title=scenario_title,
             mode=payload.mode,
-            status='completed',
+            status='failed' if result.get('verdict') in {'fail', 'failed'} else 'completed',
             iteration=iteration,
             turns=result['turns'],
             transcript=result.get('transcript'),
             action_trace=result.get('action_trace') or [],
             final_state=result.get('final_state') or {},
             latency_marks=result.get('latency_marks') or [],
+            recording=result.get('recording'),
+            vcon_export=result.get('vcon_export'),
+            vcon_export_summary=result.get('vcon_export_summary'),
+            audio_session=result.get('audio_session'),
             verdict=result.get('verdict'),
             score=result.get('score'),
             started_at=started,
             completed_at=datetime.now(UTC).isoformat(),
+            error=(
+                str((result.get('final_state') or {}).get('tester_error'))
+                if (result.get('final_state') or {}).get('tester_error')
+                else None
+            ),
         )
     except Exception as exc:
         return ConversationRecord(
@@ -288,6 +316,124 @@ def _evidence_from_offline_fixture(
         'latency_marks': (evidence.get('latency_evidence') or {}).get('marks') or [],
         'verdict': report.get('verdict'),
         'score': report.get('overall_score'),
+    }
+
+
+async def _execute_pipecat_webrtc(
+    *,
+    execution_run_id: str,
+    conversation_id: str,
+    suite_id: str,
+    scenario_id: str,
+    payload: ExecutionRunCreateRequest,
+) -> dict[str, Any]:
+    """Drive Pipecat tester over local small WebRTC hooks and emit vCon evidence."""
+    if payload.audio_transport != 'pipecat_small_webrtc':
+        raise ValueError(
+            'pipecat_webrtc execution currently supports audio_transport=pipecat_small_webrtc only; '
+            'freeswitch_verto_sip is deferred'
+        )
+
+    artifact_dir = REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id / 'audio'
+    transport = LocalPipecatSmallWebRtcTransport(artifact_dir=artifact_dir)
+    target = ExecutionAudioTargetAdapter(transport)
+    runner = PipecatTesterAgentRunner(
+        target=target,
+        tts_renderer=DeterministicExecutionTtsRenderer(),
+    )
+    tester_result = await runner.run(_pipecat_webrtc_tester_config(scenario_id))
+    session_id = str(tester_result.get('session_id') or '')
+    if not session_id:
+        raise RuntimeError('pipecat_webrtc execution did not produce a session id')
+
+    tester_status = str(tester_result.get('status') or '')
+    tester_error = tester_result.get('error')
+    tester_failed = tester_status in {'failed', 'needs_review'} or bool(tester_error)
+
+    transcription = transport.transcription_turns(session_id)
+    recording = transport.recording_handle(session_id)
+    if recording is None:
+        recording = await transport.stop_recording(session_id)
+
+    vcon_export = build_execution_vcon(
+        conversation_id=conversation_id,
+        execution_run_id=execution_run_id,
+        suite_id=suite_id,
+        scenario_id=scenario_id,
+        transport=transport.transport_id,
+        transcription_turns=transcription,
+        recording=recording,
+        termination_reason=tester_result.get('termination_reason'),
+        tester_provenance=tester_result.get('tester_provenance')
+        if isinstance(tester_result.get('tester_provenance'), dict)
+        else {},
+        extra_analysis_body={
+            'tester_status': tester_result.get('status'),
+            'tester_error': tester_result.get('error'),
+            'turn_count': len(tester_result.get('turns') or []),
+        },
+    )
+
+    turns = [
+        ConversationTurn(
+            turn_index=item.turn_index,
+            speaker=item.speaker.lower(),
+            text=item.text,
+            act_id=item.act_id,
+            event_types=list(item.event_types),
+        )
+        for item in transcription
+    ]
+    transcript = '\n'.join(
+        f'{item.speaker}: {item.text}' for item in transcription if item.text.strip()
+    )
+
+    # Scoring remains fixture-backed for cancellation-rescue until a live SUT proof
+    # path lands; capture (recording + dialog + vCon) comes from the WebRTC session.
+    # Do not let offline fixture pass mask a failed/needs_review tester run.
+    evidence = _evidence_from_offline_fixture(
+        suite_id,
+        scenario_id,
+        payload,
+        evaluate=payload.evaluate and not tester_failed,
+    )
+    if tester_failed:
+        verdict = 'fail' if tester_status == 'failed' else 'needs_review'
+        score = None
+    else:
+        verdict = evidence.get('verdict')
+        score = evidence.get('score')
+    return {
+        'turns': turns or evidence['turns'],
+        'transcript': transcript or evidence.get('transcript'),
+        'action_trace': evidence.get('action_trace') or [],
+        'final_state': {
+            **(evidence.get('final_state') or {}),
+            'audio_transport': transport.transport_id,
+            'tester_termination_reason': tester_result.get('termination_reason'),
+            'tester_error': tester_error,
+        },
+        'latency_marks': evidence.get('latency_marks') or [],
+        'recording': recording.as_call_media(),
+        'vcon_export': vcon_export,
+        'vcon_export_summary': vcon_summary(vcon_export),
+        'audio_session': {
+            **transport.session_proof(session_id),
+            'tester_status': tester_result.get('status'),
+            'tester_error': tester_error,
+            'proof': tester_result.get('proof'),
+            'extension_points': {
+                'freeswitch_verto_sip': {
+                    'status': 'deferred',
+                    'note': (
+                        'Attach FreeSWITCH Verto outbound SIP to the same Pipecat small WebRTC '
+                        'send/receive + recording/transcription/vCon surface. Not required for CI.'
+                    ),
+                }
+            },
+        },
+        'verdict': verdict,
+        'score': score,
     }
 
 
@@ -428,7 +574,10 @@ def _validate_scenarios(suite: dict[str, Any], scenario_ids: list[str]) -> None:
 
 
 def _validate_fixture_mode_scenarios(payload: ExecutionRunCreateRequest, scenario_ids: list[str]) -> None:
-    uses_fixture = payload.mode == 'voice_fixture' or payload.text_callable == 'offline_acc_fixture'
+    uses_fixture = (
+        payload.mode in {'voice_fixture', 'pipecat_webrtc'}
+        or payload.text_callable == 'offline_acc_fixture'
+    )
     if not uses_fixture:
         return
     unsupported = [scenario_id for scenario_id in scenario_ids if scenario_id not in FIXTURE_BACKED_SCENARIO_IDS]
@@ -437,6 +586,45 @@ def _validate_fixture_mode_scenarios(payload: ExecutionRunCreateRequest, scenari
             'Fixture-backed execution only supports cancellation-rescue; '
             f'unsupported: {", ".join(unsupported)}'
         )
+
+
+def _pipecat_webrtc_tester_config(scenario_id: str) -> TesterScenarioConfig:
+    return TesterScenarioConfig(
+        scenario_id=scenario_id,
+        goal='Drive local Pipecat small WebRTC audio in/out and capture vCon evidence.',
+        allowed_caller_acts=[
+            'request_cancellation',
+            'explain_renewal_increase',
+            'request_final_disposition',
+        ],
+        acts=[
+            TesterAct(
+                act_id='request_cancellation',
+                objective='Request cancellation.',
+                example_utterance='I want to cancel my policy today.',
+            ),
+            TesterAct(
+                act_id='explain_renewal_increase',
+                objective='Explain the renewal concern.',
+                example_utterance='The renewal increase is too high.',
+                metadata={'barge_in': True},
+            ),
+            TesterAct(
+                act_id='request_final_disposition',
+                objective='Request safe closeout.',
+                example_utterance='Please record the approved follow-up and close the call.',
+                terminal_after=True,
+            ),
+        ],
+        max_turns=3,
+        total_timeout_seconds=30,
+        terminal_event_types=['call_wrapped', 'human_handoff_started'],
+        terminal_final_states=['scripted_wrap_complete', 'human_handoff'],
+        observation_mode='semantic',
+        seed=20260715,
+        model_version='execution-caller-v1',
+        prompt_version='execution-caller-prompt-v1',
+    )
 
 
 def _scenario_title(suite: dict[str, Any], scenario_id: str) -> str | None:

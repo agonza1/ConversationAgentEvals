@@ -370,10 +370,15 @@ They do not prove:
 
 - live ASR;
 - live TTS;
-- full-duplex media;
-- barge-in;
-- WebRTC media;
-- SIP / FreeSWITCH media.
+- full-duplex media against a production bridge;
+- barge-in against a live media stack;
+- browser WebRTC against `apps/pipecat`;
+- SIP / FreeSWITCH Verto media.
+
+Local execution mode `pipecat_webrtc` is a separate, CI-safe path: in-process Pipecat small
+WebRTC send/receive hooks plus recording/transcription capture exported as CAE vCon.
+See [execution-audio-webrtc.md](execution-audio-webrtc.md). FreeSWITCH Verto outbound SIP
+remains deferred.
 
 The native benchmark run does execute the registered cancellation-rescue checks. The optional `/api/assert/runs` local sidecar remains evidence-ingestion validation and must not be represented as a complete semantic ASSERT judge result.
 
@@ -381,9 +386,9 @@ The native benchmark run does execute the registered cancellation-rescue checks.
 
 `/benchmarks` now includes a **Launch evaluation** panel that runs an execution stage:
 
-1. `POST /api/execution/runs` queues a run (`text_callable` or `voice_fixture`).
+1. `POST /api/execution/runs` queues a run (`text_callable`, `voice_fixture`, or `pipecat_webrtc`).
 2. Conversations upsert into the run record as they start (`running`) and finish (`completed` / `failed`).
 3. Completed rows are appended to `artifacts/execution-runs/{id}/inference_set.jsonl`.
 4. The panel polls the run and shows a live conversations list (scenario, status, turns, latency marks, verdict).
 
-Text mode uses the built-in `mock_agent` simulator (or `offline_acc_fixture`). Voice fixture mode drives the checked-in audio plan through `AccAudioFixtureScheduler` against a local fake target, then scores with the cancellation-rescue fixture path. Live LiveKit/SIP launch is still out of scope.
+Text mode uses the built-in `mock_agent` simulator (or `offline_acc_fixture`). Voice fixture mode drives the checked-in audio plan through `AccAudioFixtureScheduler` against a local fake target, then scores with the cancellation-rescue fixture path. `pipecat_webrtc` drives the Pipecat tester over local small WebRTC hooks and attaches recording + vCon capture. Live FreeSWITCH Verto / SIP launch is still out of scope.
