@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+import pytest
 
 from app.main import app
 from app.services import agent_store, execution_run_store
@@ -11,11 +12,15 @@ from app.schemas.execution import ExecutionRunCreateRequest
 client = TestClient(app)
 
 
-def setup_function() -> None:
+@pytest.fixture(autouse=True)
+def isolated_agent_registry(tmp_path, monkeypatch):
+    """Keep agent CRUD tests from reading or writing the local demo registry."""
+    monkeypatch.setattr(agent_store, 'AGENTS_DIR', tmp_path / 'agents')
     execution_run_store.reset_execution_runs_for_tests()
-    # Keep real local registry files intact: this suite only needs to reset its
-    # in-memory view and removes every agent it creates itself.
-    agent_store.reset_agents_for_tests()
+    agent_store.reset_agents_for_tests(clear_files=True)
+    yield
+    execution_run_store.reset_execution_runs_for_tests()
+    agent_store.reset_agents_for_tests(clear_files=True)
 
 
 def test_agent_crud_round_trip():
