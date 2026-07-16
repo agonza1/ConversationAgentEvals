@@ -114,3 +114,71 @@ def test_voice_fixture_agent_run_includes_latency_metrics():
     if conversation['status'] == 'completed':
         assert conversation['metrics_summary']['latency']['count'] >= 0
         assert isinstance(conversation['timeline'], list)
+
+
+def test_rejects_unsafe_agent_id_and_seed_delete():
+    bad = client.post(
+        '/api/agents',
+        json={'id': '../evil', 'name': 'Evil', 'channel': 'text', 'target': 'mock_agent'},
+    )
+    assert bad.status_code == 400
+
+    seed_delete = client.delete('/api/agents/mock-text-agent')
+    assert seed_delete.status_code == 400
+    assert 'Seed agent' in seed_delete.json()['detail']
+
+
+def test_rejects_null_patch_on_non_nullable_fields():
+    created = client.post(
+        '/api/agents',
+        json={'name': 'Nullable guard', 'channel': 'text', 'target': 'mock_agent', 'description': 'keep'},
+    )
+    assert created.status_code == 200
+    agent_id = created.json()['id']
+
+    null_name = client.patch(f'/api/agents/{agent_id}', json={'name': None})
+    assert null_name.status_code == 400
+
+    cleared = client.patch(f'/api/agents/{agent_id}', json={'description': None})
+    assert cleared.status_code == 200
+    assert cleared.json()['description'] is None
+
+
+def test_text_offline_acc_fixture_stays_text_callable():
+    from app.services.execution_runner import _resolve_agent_payload
+
+    created = client.post(
+        '/api/agents',
+        json={
+            'name': 'Offline text fixture',
+            'channel': 'text',
+            'target': 'offline_acc_fixture',
+        },
+    )
+    assert created.status_code == 200
+    agent_id = created.json()['id']
+
+    resolved = _resolve_agent_payload(
+        ExecutionRunCreateRequest(
+            suite_id='call-center-voice-ai',
+            scenario_ids=['cancellation-rescue'],
+            agent_id=agent_id,
+            user_id='agent-runs-user',
+            project_id='agent-runs-project',
+            iterations=1,
+        )
+    )
+    assert resolved.mode == 'text_callable'
+    assert resolved.text_callable == 'offline_acc_fixture'
+
+    queued = start_execution_run(
+        ExecutionRunCreateRequest(
+            suite_id='call-center-voice-ai',
+            scenario_ids=['cancellation-rescue'],
+            agent_id=agent_id,
+            user_id='agent-runs-user',
+            project_id='agent-runs-project',
+            iterations=1,
+        )
+    )
+    assert queued['mode'] == 'text_callable'

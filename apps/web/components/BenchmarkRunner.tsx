@@ -2177,10 +2177,10 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
         const fromQuery = params?.get('agent_id');
         const matched = fromQuery ? next.find((item) => item.id === fromQuery) : null;
-        const nextId = matched?.id || next[0]?.id || '';
+        const nextId = matched?.id || next.find((a) => a.id === 'mock-text-agent')?.id || next[0]?.id || '';
         setSelectedAgentId(nextId);
         if (matched) {
-          if (matched.channel === 'voice' || matched.target === 'voice_fixture' || matched.target === 'offline_acc_fixture') {
+          if (matched.channel === 'voice' || matched.target === 'voice_fixture') {
             setExecutionMode('voice_fixture');
           } else {
             setExecutionMode('text_callable');
@@ -3681,7 +3681,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                 setSelectedAgentId(agentId);
                 const agent = agents.find((item) => item.id === agentId);
                 if (!agent) return;
-                if (agent.channel === 'voice' || agent.target === 'voice_fixture' || agent.target === 'offline_acc_fixture') {
+                if (agent.channel === 'voice' || agent.target === 'voice_fixture') {
                   setExecutionMode('voice_fixture');
                 } else {
                   setExecutionMode('text_callable');

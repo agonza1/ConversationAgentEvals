@@ -6,7 +6,7 @@ test('product eval API journey works end to end', async ({ request, baseURL }) =
 
   const pageResponse = await request.get('/benchmarks');
   expect(pageResponse.ok()).toBeTruthy();
-  await expect(pageResponse.text()).resolves.toContain('Simulate a scenario or suite.');
+  await expect(pageResponse.text()).resolves.toContain('Benchmark history and reports.');
 
   const configResponse = await request.get('/api/product/config');
   expect(configResponse.ok()).toBeTruthy();

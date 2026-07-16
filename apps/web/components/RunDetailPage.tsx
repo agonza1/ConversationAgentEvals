@@ -30,21 +30,41 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
 
   useEffect(() => {
     let active = true;
+    let timer: ReturnType<typeof setInterval> | undefined;
+
     async function load() {
       setError(null);
       try {
         const next = await getExecutionRun(userId, executionRunId);
         if (!active) return;
         setRun(next);
-        setConversationId(next.conversations?.[0]?.conversation_id || '');
+        setConversationId((current) => current || next.conversations?.[0]?.conversation_id || '');
+        return next.status;
       } catch (err) {
-        if (!active) return;
+        if (!active) return undefined;
         setError(err instanceof Error ? err.message : 'Could not load run');
+        return undefined;
       }
     }
-    void load();
+
+    void load().then((status) => {
+      if (!active) return;
+      if (status === 'queued' || status === 'running') {
+        timer = setInterval(() => {
+          void load().then((nextStatus) => {
+            if (!active) return;
+            if (nextStatus !== 'queued' && nextStatus !== 'running' && timer) {
+              clearInterval(timer);
+              timer = undefined;
+            }
+          });
+        }, 1500);
+      }
+    });
+
     return () => {
       active = false;
+      if (timer) clearInterval(timer);
     };
   }, [executionRunId, userId]);
 
@@ -237,7 +257,7 @@ function MetricDetail({
       </p>
       <div className="latency-bars" aria-label="Per-mark latency bars">
         {(marks.length ? marks : conversation.timeline || []).map((mark, index) => {
-          const ms = Number((mark as { latency_ms?: number }).latency_ms || 0);
+          const ms = markLatencyMs(mark);
           const max = Math.max(latency.max_ms || 1, 1);
           return (
             <div key={index} className="latency-bar-row">
@@ -314,7 +334,7 @@ function aggregateRunMetrics(run: ExecutionRunRecord | null) {
   const resolutions = conversations.map((item) => Number(item.metrics_summary?.call_resolution_success || 0));
   const latencyBars = (conversations[0]?.timeline || [])
     .slice(0, 12)
-    .map((item) => Math.min(100, (Number(item.latency_ms || 0) / 1000) * 100));
+    .map((item) => Math.min(100, (markLatencyMs(item) / 1000) * 100));
   return {
     interruptionCount,
     avgLatency: latencies.length ? latencies.reduce((a, b) => a + b, 0) / latencies.length : null,
@@ -322,6 +342,16 @@ function aggregateRunMetrics(run: ExecutionRunRecord | null) {
     resolutionRate: resolutions.length ? resolutions.reduce((a, b) => a + b, 0) / resolutions.length : 0,
     latencyBars,
   };
+}
+
+function markLatencyMs(mark: unknown): number {
+  if (!mark || typeof mark !== 'object') return 0;
+  const record = mark as Record<string, unknown>;
+  for (const key of ['latency_ms', 'elapsed_ms', 'ms', 'duration_ms']) {
+    const value = Number(record[key]);
+    if (Number.isFinite(value) && value >= 0) return value;
+  }
+  return 0;
 }
 
 function fmtMs(value?: number | null) {

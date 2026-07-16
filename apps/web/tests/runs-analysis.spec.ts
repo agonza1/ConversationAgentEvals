@@ -79,7 +79,7 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
   });
 
   await page.goto('/runs');
-  await expect(page.getByRole('heading', { name: 'Runs' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Run an agent' })).toBeVisible();
   await expect(page.getByText('ACC voice fixture agent')).toBeVisible();
 
   await page.getByRole('link', { name: /ACC voice fixture agent/ }).click();

@@ -254,7 +254,8 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
         raise ValueError(f'Unknown agent: {payload.agent_id}')
     target = str(agent.get('target') or 'mock_agent')
     channel = str(agent.get('channel') or 'text')
-    if target in {'voice_fixture', 'offline_acc_fixture'} or channel == 'voice':
+    # Text + offline_acc_fixture stays text_callable; only force voice for voice channel or voice_fixture target.
+    if channel == 'voice' or target == 'voice_fixture':
         mode = 'voice_fixture'
         text_callable = payload.text_callable
     else:

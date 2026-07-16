@@ -32,7 +32,10 @@ def get_agent(agent_id: str):
 
 @router.patch('/{agent_id}')
 def update_agent(agent_id: str, payload: AgentUpdateRequest):
-    agent = agent_store.update_agent(agent_id, payload)
+    try:
+        agent = agent_store.update_agent(agent_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if agent is None:
         raise HTTPException(status_code=404, detail='Agent not found.')
     return agent
@@ -40,6 +43,10 @@ def update_agent(agent_id: str, payload: AgentUpdateRequest):
 
 @router.delete('/{agent_id}')
 def delete_agent(agent_id: str):
-    if not agent_store.delete_agent(agent_id):
+    try:
+        deleted = agent_store.delete_agent(agent_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not deleted:
         raise HTTPException(status_code=404, detail='Agent not found.')
     return {'ok': True, 'id': agent_id}

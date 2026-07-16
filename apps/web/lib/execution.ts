@@ -164,7 +164,7 @@ export async function createAgent(payload: {
   name: string;
   channel: AgentRecord['channel'];
   target: AgentRecord['target'];
-  description?: string;
+  description?: string | null;
 }): Promise<AgentRecord> {
   return handleJson(
     await fetch(`${getApiBase()}/api/agents`, {

@@ -39,6 +39,10 @@ SEED_AGENTS: list[dict[str, Any]] = [
     },
 ]
 
+SEED_AGENT_IDS = {str(seed['id']) for seed in SEED_AGENTS}
+_SAFE_AGENT_ID_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$')
+_NON_NULLABLE_UPDATE_FIELDS = frozenset({'name', 'channel', 'target', 'metadata'})
+
 
 def reset_agents_for_tests(*, clear_files: bool = False) -> None:
     global _LOADED
@@ -91,9 +95,7 @@ def get_agent(agent_id: str) -> dict[str, Any] | None:
 def create_agent(payload: AgentCreateRequest) -> dict[str, Any]:
     _ensure_loaded()
     now = _now()
-    agent_id = (payload.id or _slug_id(payload.name)).strip()
-    if not agent_id:
-        raise ValueError('Agent id is required.')
+    agent_id = _validate_agent_id((payload.id or _slug_id(payload.name)).strip())
     record = AgentRecord(
         id=agent_id,
         name=payload.name.strip(),
@@ -122,6 +124,8 @@ def update_agent(agent_id: str, payload: AgentUpdateRequest) -> dict[str, Any] |
         next_value = dict(current)
         updates = payload.model_dump(mode='json', exclude_unset=True)
         for key, value in updates.items():
+            if value is None and key in _NON_NULLABLE_UPDATE_FIELDS:
+                raise ValueError(f'Field "{key}" cannot be null.')
             next_value[key] = value
         next_value['updated_at'] = _now()
         record = AgentRecord.model_validate(next_value)
@@ -133,11 +137,14 @@ def update_agent(agent_id: str, payload: AgentUpdateRequest) -> dict[str, Any] |
 
 def delete_agent(agent_id: str) -> bool:
     ensure_seeded()
+    safe_id = _validate_agent_id(agent_id)
+    if safe_id in SEED_AGENT_IDS:
+        raise ValueError(f'Seed agent cannot be deleted: {safe_id}')
     with _LOCK:
-        if agent_id not in _AGENTS:
+        if safe_id not in _AGENTS:
             return False
-        del _AGENTS[agent_id]
-        path = AGENTS_DIR / f'{agent_id}.json'
+        del _AGENTS[safe_id]
+        path = AGENTS_DIR / f'{safe_id}.json'
         path.unlink(missing_ok=True)
         return True
 
@@ -164,9 +171,24 @@ def _ensure_loaded() -> None:
 
 
 def _persist_unlocked(record: dict[str, Any]) -> None:
+    agent_id = _validate_agent_id(str(record.get('id') or ''))
     AGENTS_DIR.mkdir(parents=True, exist_ok=True)
-    path = AGENTS_DIR / f'{record["id"]}.json'
+    path = AGENTS_DIR / f'{agent_id}.json'
     path.write_text(json.dumps(record, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+
+
+def _validate_agent_id(agent_id: str) -> str:
+    value = (agent_id or '').strip()
+    if not value:
+        raise ValueError('Agent id is required.')
+    if '..' in value or '/' in value or '\\' in value:
+        raise ValueError('Agent id contains invalid path characters.')
+    if not _SAFE_AGENT_ID_RE.fullmatch(value):
+        raise ValueError(
+            'Agent id must start with an alphanumeric character and use only '
+            'letters, digits, ".", "_", or "-" (max 64 chars).'
+        )
+    return value
 
 
 def _slug_id(name: str) -> str:

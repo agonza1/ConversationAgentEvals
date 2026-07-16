@@ -276,7 +276,7 @@ export function AgentsPage() {
         name: values.name.trim(),
         channel: values.channel,
         target: values.target,
-        description: values.description.trim() || undefined,
+        description: values.description.trim() || null,
       });
       setShowCreate(false);
       setMessage('Agent created.');
@@ -297,7 +297,7 @@ export function AgentsPage() {
         name: values.name.trim(),
         channel: values.channel,
         target: values.target,
-        description: values.description.trim() || undefined,
+        description: values.description.trim() || null,
       });
       setEditingAgent(null);
       setMessage('Agent updated.');
