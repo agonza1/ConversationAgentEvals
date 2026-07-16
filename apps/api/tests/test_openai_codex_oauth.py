@@ -8,7 +8,11 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.services.llm_providers import set_provider_for_tests
-from app.services.llm_providers.openai_codex import OpenAICodexProvider, decode_chatgpt_identity
+from app.services.llm_providers.openai_codex import (
+    OpenAICodexProvider,
+    decode_chatgpt_identity,
+    disconnect_marker_path,
+)
 from app.services.product_service import reset_saved_runs_for_tests
 
 
@@ -248,6 +252,41 @@ def test_openai_codex_imports_codex_home_auth(tmp_path: Path, monkeypatch):
     assert status['status'] == 'connected'
     assert status['account_id'] == 'acct_home'
     assert token_path.is_file()
+
+
+def test_disconnect_suppresses_codex_home_reimport(tmp_path: Path, monkeypatch):
+    token_path = tmp_path / 'cae-oauth.json'
+    home_auth = tmp_path / 'codex-auth.json'
+    access = _fake_jwt(
+        {
+            'https://api.openai.com/auth': {'chatgpt_account_id': 'acct_home', 'chatgpt_plan_type': 'pro'},
+            'https://api.openai.com/profile': {'email': 'home@example.com'},
+        }
+    )
+    home_auth.write_text(
+        json.dumps(
+            {
+                'tokens': {
+                    'access_token': access,
+                    'refresh_token': 'refresh-home',
+                    'account_id': 'acct_home',
+                    'expires_at': 9_999_999_999,
+                }
+            }
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setattr('app.services.llm_providers.openai_codex.codex_home_auth_path', lambda: home_auth)
+    provider = OpenAICodexProvider(token_path=token_path, now=lambda: 1_700_000_000)
+
+    assert provider.status()['status'] == 'connected'
+    assert provider.disconnect()['status'] == 'disconnected'
+    assert not token_path.is_file()
+    assert disconnect_marker_path(token_path).is_file()
+
+    # Home auth still present, but Disconnect must stick across status polls.
+    assert provider.status()['status'] == 'disconnected'
+    assert not token_path.is_file()
 
 
 def _fake_jwt(payload: dict) -> str:

@@ -55,6 +55,11 @@ def default_token_path() -> Path:
     return _repo_root() / '.local' / 'openai-codex-oauth.json'
 
 
+def disconnect_marker_path(token_path: Path) -> Path:
+    """Tombstone that suppresses ~/.codex/auth.json auto-import after Disconnect."""
+    return token_path.with_suffix(token_path.suffix + '.disconnected')
+
+
 def codex_home_auth_path() -> Path:
     return Path.home() / '.codex' / 'auth.json'
 
@@ -157,6 +162,23 @@ class OpenAICodexProvider:
             self._pending = None
             if self._token_path.is_file():
                 self._token_path.unlink()
+            # Suppress ~/.codex/auth.json re-import until the user explicitly reconnects.
+            marker = disconnect_marker_path(self._token_path)
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(
+                json.dumps(
+                    {
+                        'disconnected_at': datetime.now(UTC).isoformat(),
+                        'suppress_codex_home_import': True,
+                    },
+                    indent=2,
+                ),
+                encoding='utf-8',
+            )
+            try:
+                marker.chmod(0o600)
+            except OSError:
+                pass
             self._last_error = None
         return {'status': 'disconnected', 'provider': 'openai_codex'}
 
@@ -386,9 +408,17 @@ class OpenAICodexProvider:
             path.chmod(0o600)
         except OSError:
             pass
+        marker = disconnect_marker_path(path)
+        if marker.is_file():
+            try:
+                marker.unlink()
+            except OSError:
+                pass
 
     def _maybe_import_codex_home(self) -> None:
         if self._token_path.is_file():
+            return
+        if disconnect_marker_path(self._token_path).is_file():
             return
         if (os.getenv('OPENAI_CODEX_IMPORT_HOME') or '1').strip().lower() in {'0', 'false', 'no', 'off'}:
             return
