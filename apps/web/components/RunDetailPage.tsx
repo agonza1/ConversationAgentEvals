@@ -134,7 +134,9 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
 
             <section className="card runs-metric-detail" aria-label="Metric detail">
               <MetricDetail metric={metric} conversation={conversation} />
-              <StubWaveform timeline={conversation?.timeline || []} />
+              {run.mode === 'voice_fixture' ? (
+                <StubWaveform timeline={conversation?.timeline || []} />
+              ) : null}
             </section>
 
             <section className="card runs-transcript" aria-label="Transcript">

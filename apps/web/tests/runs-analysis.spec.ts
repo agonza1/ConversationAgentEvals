@@ -89,3 +89,40 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
   await expect(page.getByLabel('Stub dual-track waveform')).toBeVisible();
   await expect(page.getByLabel('Transcript')).toContainText('I want to cancel today.');
 });
+
+test('text agent analysis hides the stub waveform', async ({ page }) => {
+  const textRun = {
+    ...runFixture,
+    execution_run_id: 'exec-text-demo',
+    mode: 'text_callable',
+    agent_id: 'mock-text-agent',
+    agent_name: 'Mock text agent',
+    conversations: [
+      {
+        ...runFixture.conversations[0],
+        conversation_id: 'exec-text-demo-1',
+        execution_run_id: 'exec-text-demo',
+        mode: 'text_callable',
+      },
+    ],
+  };
+
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    window.localStorage.setItem('conversation-evals-demo-project', 'call-center-demo');
+  });
+
+  await page.route('**/api/execution/runs**', async (route) => {
+    const url = route.request().url();
+    if (url.includes('/exec-text-demo')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(textRun) });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([textRun]) });
+  });
+
+  await page.goto('/runs/exec-text-demo');
+  await expect(page.getByRole('heading', { name: 'Mock text agent' })).toBeVisible();
+  await expect(page.getByLabel('Stub dual-track waveform')).toHaveCount(0);
+  await expect(page.getByLabel('Transcript')).toContainText('I want to cancel today.');
+});
