@@ -289,6 +289,53 @@ def test_disconnect_suppresses_codex_home_reimport(tmp_path: Path, monkeypatch):
     assert not token_path.is_file()
 
 
+def test_http_helpers_use_certifi_ssl_context(monkeypatch):
+    import ssl
+    from pathlib import Path
+
+    import certifi
+
+    from app.services.llm_providers import openai_codex as mod
+    from app.services.ssl_util import verified_ssl_context
+
+    assert Path(certifi.where()).is_file()
+    assert isinstance(verified_ssl_context(), ssl.SSLContext)
+
+    seen: dict[str, object] = {}
+
+    class _FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return b'{"access_token":"t","ok":true}'
+
+    def fake_urlopen(request, timeout=None, context=None):
+        seen['context'] = context
+        seen['timeout'] = timeout
+        return _FakeResponse()
+
+    monkeypatch.setattr(mod.urllib.request, 'urlopen', fake_urlopen)
+    assert mod._http_form_post('https://auth.openai.com/oauth/token', {'grant_type': 'refresh_token'}) == {
+        'access_token': 't',
+        'ok': True,
+    }
+    assert isinstance(seen['context'], ssl.SSLContext)
+    assert seen['timeout'] == 30
+
+    seen.clear()
+    assert mod._http_json_post(
+        'https://chatgpt.com/backend-api/codex/responses',
+        {'input': []},
+        headers={'Authorization': 'Bearer t'},
+    ) == {'access_token': 't', 'ok': True}
+    assert isinstance(seen['context'], ssl.SSLContext)
+    assert seen['timeout'] == 90
+
+
 def _fake_jwt(payload: dict) -> str:
     header = base64.urlsafe_b64encode(b'{"alg":"none"}').decode().rstrip('=')
     body = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip('=')

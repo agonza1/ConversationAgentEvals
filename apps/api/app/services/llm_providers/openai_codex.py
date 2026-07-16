@@ -15,6 +15,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any
 
+from app.services.ssl_util import verified_ssl_context
+
 
 CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
 AUTHORIZE_URL = 'https://auth.openai.com/oauth/authorize'
@@ -508,7 +510,11 @@ def _http_form_post(url: str, form: dict[str, str]) -> dict[str, Any]:
         method='POST',
     )
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310 - intentional HTTPS OAuth
+        with urllib.request.urlopen(  # noqa: S310 - intentional HTTPS OAuth
+            request,
+            timeout=30,
+            context=verified_ssl_context(),
+        ) as response:
             return json.loads(response.read().decode('utf-8'))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode('utf-8', errors='replace')
@@ -523,7 +529,11 @@ def _http_json_post(url: str, body: dict[str, Any], *, headers: dict[str, str]) 
         method='POST',
     )
     try:
-        with urllib.request.urlopen(request, timeout=90) as response:  # noqa: S310
+        with urllib.request.urlopen(  # noqa: S310
+            request,
+            timeout=90,
+            context=verified_ssl_context(),
+        ) as response:
             return json.loads(response.read().decode('utf-8'))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode('utf-8', errors='replace')

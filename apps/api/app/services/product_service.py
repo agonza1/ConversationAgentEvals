@@ -1083,6 +1083,8 @@ def _complete_with_openai_api_key(prompt: str, *, api_key: str) -> str:
     import urllib.error
     import urllib.request
 
+    from app.services.ssl_util import verified_ssl_context
+
     model = (os.getenv('LLM_JUDGE_MODEL') or 'gpt-4.1-mini').strip()
     body = {
         'model': model,
@@ -1102,7 +1104,11 @@ def _complete_with_openai_api_key(prompt: str, *, api_key: str) -> str:
         method='POST',
     )
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310
+        with urllib.request.urlopen(  # noqa: S310
+            request,
+            timeout=60,
+            context=verified_ssl_context(),
+        ) as response:
             payload = json.loads(response.read().decode('utf-8'))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode('utf-8', errors='replace')
