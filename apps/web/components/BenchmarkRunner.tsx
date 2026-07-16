@@ -2812,11 +2812,13 @@ export function BenchmarkRunner() {
       actionVariant: 'secondary' as const,
     },
     {
-      title: 'Run evidence check',
-      detail: report ? `Latest verdict: ${verdict ?? 'complete'}${score !== undefined ? ` at ${score}` : ''}.` : 'Simulate the scenario or run the benchmark against pasted evidence.',
+      title: 'Simulate the scenario',
+      detail: report
+        ? `Latest verdict: ${verdict ?? 'complete'}${score !== undefined ? ` at ${score}` : ''}.`
+        : 'Run a deterministic sample check on the selected scenario (starter transcript + action trace).',
       done: Boolean(report),
       ready: hasRunnableEvidence && !isRunning && !isSimulating,
-      actionLabel: report ? 'Run again' : hasRunnableEvidence ? 'Run sample now' : selectedScenario ? 'Load starter data first' : null,
+      actionLabel: report ? 'Simulate again' : hasRunnableEvidence ? 'Simulate sample scenario' : selectedScenario ? 'Load starter data first' : null,
       action: hasRunnableEvidence || report
         ? () => void onSimulate()
         : selectedScenario
@@ -2907,9 +2909,43 @@ export function BenchmarkRunner() {
       ) : null}
 
       <section className="first-run-panel" aria-label="First run checklist">
-        <div>
+        <div className="first-run-intro">
           <p className="eyebrow">First run checklist</p>
           <h2>Get from sample scenario to saved QA history.</h2>
+          <p className="first-run-lead">
+            Pick a suite and scenario, simulate a sample check, then save the result for regression history.
+          </p>
+          <div className="first-run-selectors" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, marginTop: 14 }}>
+            <label style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontWeight: 700 }}>Benchmark suite</span>
+              <select
+                aria-label="Benchmark suite"
+                value={selectedSuite?.id ?? ''}
+                disabled={isLoading || !suites.length}
+                onChange={(event) => setSelectedSuiteId(event.target.value)}
+                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+              >
+                {suites.map((suite) => (
+                  <option key={suite.id} value={suite.id}>{suite.title}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontWeight: 700 }}>Scenario</span>
+              <select
+                aria-label="Scenario"
+                value={selectedScenario?.id ?? ''}
+                disabled={isLoading || !selectedSuite?.scenarios.length}
+                onChange={(event) => setSelectedScenarioId(event.target.value)}
+                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+              >
+                {(selectedSuite?.scenarios ?? []).map((scenario) => (
+                  <option key={scenario.id} value={scenario.id}>{scenario.title}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {isLoading ? <p style={{ margin: '10px 0 0', color: 'var(--muted)' }}>Loading benchmark suites...</p> : null}
         </div>
         <ol className="onboarding-steps">
           {onboardingSteps.map((step, index) => {
@@ -2944,38 +2980,6 @@ export function BenchmarkRunner() {
             {loadError}
           </div>
         ) : null}
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16 }}>
-          <label style={{ display: 'grid', gap: 8 }}>
-            <span style={{ fontWeight: 700 }}>Benchmark suite</span>
-            <select
-              value={selectedSuite?.id ?? ''}
-              disabled={isLoading || !suites.length}
-              onChange={(event) => setSelectedSuiteId(event.target.value)}
-              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-            >
-              {suites.map((suite) => (
-                <option key={suite.id} value={suite.id}>{suite.title}</option>
-              ))}
-            </select>
-          </label>
-
-          <label style={{ display: 'grid', gap: 8 }}>
-            <span style={{ fontWeight: 700 }}>Scenario</span>
-            <select
-              value={selectedScenario?.id ?? ''}
-              disabled={isLoading || !selectedSuite?.scenarios.length}
-              onChange={(event) => setSelectedScenarioId(event.target.value)}
-              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-            >
-              {(selectedSuite?.scenarios ?? []).map((scenario) => (
-                <option key={scenario.id} value={scenario.id}>{scenario.title}</option>
-              ))}
-            </select>
-          </label>
-        </div>
-
-        {isLoading ? <p style={{ margin: 0, color: 'var(--muted)' }}>Loading benchmark suites...</p> : null}
 
         {selectedScenario ? (
           <div

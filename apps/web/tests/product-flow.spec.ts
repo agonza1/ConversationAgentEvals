@@ -10,15 +10,15 @@ test('free-to-paid eval journey works end to end', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Sign up to save' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Create demo project' })).toHaveCount(0);
   await expect(page.getByLabel('Pick a scenario: Done')).toBeVisible();
-  await expect(page.getByLabel('Run evidence check: Ready')).toBeVisible();
+  await expect(page.getByLabel('Simulate the scenario: Ready')).toBeVisible();
   await expect(page.getByLabel('Save repeatable history: Next')).toBeVisible();
   await expect(page.getByText('Starter evidence ready: transcript, action trace, final state.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Reload starter data' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Run sample now' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Simulate sample scenario' })).toBeVisible();
   await expect(page.getByLabel('Pricing and upgrade gates')).toHaveCount(0);
   await expect(page.getByLabel('Demo plan')).toHaveValue('free');
 
-  await page.getByRole('button', { name: 'Run sample now' }).click();
+  await page.getByRole('button', { name: 'Simulate sample scenario' }).click();
   await expect(page.getByRole('heading', { name: /pass|needs_review/i })).toBeVisible();
   await expect(page.getByText('Benchmark report').last()).toBeVisible();
   const actionPlan = page.getByLabel('Operator action plan');
@@ -29,7 +29,7 @@ test('free-to-paid eval journey works end to end', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Contract evidence' })).toBeVisible();
   await expect(page.getByText('Suite manifest')).toBeVisible();
   await expect(page.getByText('Scenario contract', { exact: true })).toBeVisible();
-  await expect(page.getByLabel('Run evidence check: Done')).toBeVisible();
+  await expect(page.getByLabel('Simulate the scenario: Done')).toBeVisible();
 
   const reportDownload = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Download report JSON' }).click();

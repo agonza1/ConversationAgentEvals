@@ -546,8 +546,8 @@ select {
 
 .first-run-panel {
   display: grid;
-  grid-template-columns: minmax(0, 0.75fr) minmax(0, 1.25fr);
-  gap: 16px;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 18px;
   align-items: start;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -560,6 +560,13 @@ select {
   margin: 6px 0 0;
   font-size: 24px;
   line-height: 1.15;
+}
+
+.first-run-lead {
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+  max-width: 36rem;
 }
 
 .onboarding-steps {

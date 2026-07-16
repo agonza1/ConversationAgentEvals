@@ -168,11 +168,11 @@ export default function HomePage() {
 
       <section className="embedded-runner" aria-labelledby="homepage-runner-title">
         <div className="section-heading">
-          <p className="eyebrow">Runner</p>
-          <h2 id="homepage-runner-title">Simulate or score a benchmark now.</h2>
+          <p className="eyebrow">First run</p>
+          <h2 id="homepage-runner-title">Try a sample scenario check on this page.</h2>
           <p>
-            Use the same focused runner from the workspace: generate ASSERT-backed scenario artifacts, inspect the
-            action trace and final state, or paste your own transcript evidence for manifest-backed scoring.
+            Use the checklist below to pick a suite, simulate a sample run, and save QA history — same runner as the
+            full workspace.
           </p>
         </div>
         <BenchmarkRunner />
