@@ -234,27 +234,6 @@ interface PricingPlan {
   features: string[];
 }
 
-interface UsageRule {
-  id: string;
-  label: string;
-  credits: number;
-  gated_plan?: PricingPlan['id'] | null;
-}
-
-interface ProductConfig {
-  pricing: PricingPlan[];
-  usage_rules: UsageRule[];
-  auth: {
-    enabled: boolean;
-    mode: 'configured' | 'placeholder';
-    providers: string[];
-    project_id?: string | null;
-    api_key_configured: boolean;
-  };
-  voice_status: 'planned' | 'gated' | 'enabled';
-  llm_judge_status: 'planned' | 'gated' | 'enabled';
-}
-
 interface SavedRun {
   id: string;
   project_id: string;
@@ -781,10 +760,6 @@ async function enqueueBenchmarkSuiteSimulation(payload: {
       body: JSON.stringify(payload),
     }),
   );
-}
-
-async function fetchProductConfig(): Promise<ProductConfig> {
-  return handleJson<ProductConfig>(await fetch(`${getApiBase()}/api/product/config`, { cache: 'no-store' }));
 }
 
 async function saveBenchmarkRun(payload: {
@@ -1792,7 +1767,6 @@ async function copyText(text: string) {
 export function BenchmarkRunner() {
   const loadingSavedRunRef = useRef(false);
   const [suites, setSuites] = useState<BenchmarkSuite[]>([]);
-  const [productConfig, setProductConfig] = useState<ProductConfig | null>(null);
   const [selectedSuiteId, setSelectedSuiteId] = useState('');
   const [selectedScenarioId, setSelectedScenarioId] = useState('');
   const [transcript, setTranscript] = useState('');
@@ -1879,10 +1853,8 @@ export function BenchmarkRunner() {
 
       try {
         const nextSuites = await fetchBenchmarkSuites();
-        const nextConfig = await fetchProductConfig();
         if (!isMounted) return;
         setSuites(nextSuites);
-        setProductConfig(nextConfig);
         setSelectedSuiteId(nextSuites[0]?.id ?? '');
         setSelectedScenarioId(nextSuites[0]?.scenarios[0]?.id ?? '');
       } catch (err) {
@@ -2100,13 +2072,6 @@ export function BenchmarkRunner() {
     if (nextProject !== projectId) setProjectId(nextProject);
     if (nextPlan !== plan) setPlan(nextPlan);
     return { userId: nextUser, projectId: nextProject, plan: nextPlan };
-  }
-
-  function updatePlan(nextPlan: PricingPlan['id']) {
-    setPlan(nextPlan);
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('conversation-evals-demo-plan', nextPlan);
-    }
   }
 
   async function refreshAuditTrail(overrideUserId = userId, overrideProjectId = projectId) {
@@ -2723,9 +2688,6 @@ export function BenchmarkRunner() {
     ? report.suite_contract_manifest_sha256.slice(0, 12)
     : suiteManifestFingerprint ?? 'Not captured';
   const scenarioContractFingerprint = report?.scenario_contract_sha256 ? report.scenario_contract_sha256.slice(0, 12) : selectedScenarioManifestFingerprint ?? 'Not captured';
-  const deterministicRule = productConfig?.usage_rules.find((rule) => rule.id === 'deterministic_eval');
-  const judgeRule = productConfig?.usage_rules.find((rule) => rule.id === 'llm_judge');
-  const voiceRule = productConfig?.usage_rules.find((rule) => rule.id === 'voice_webrtc_minute');
   const hasRunnableEvidence = Boolean(
     transcript.trim() || actionTrace.trim() || finalState.trim() || callEvidence.trim() || groupCall.trim() || vconEvidence.trim(),
   );
@@ -2801,37 +2763,6 @@ export function BenchmarkRunner() {
 
   return (
     <section style={{ display: 'grid', gap: 20 }}>
-      {productConfig ? (
-        <section className="product-console product-console-compact" aria-label="Product plan controls">
-          <div className="console-panel">
-            <p className="eyebrow">Free browser eval</p>
-            <h2>Run deterministic checks now. Save runs and request LLM judge when ready.</h2>
-            <p>
-              This path is real: the browser sends transcript, action trace, and final state evidence to the benchmark API.
-              Paid gates control persistence, LLM judging, CI/API, and voice minutes. A demo identity is stored locally so save and history work without signup.
-            </p>
-            <div className="usage-strip">
-              <span>{deterministicRule?.credits ?? 1} credit browser eval</span>
-              <span>{judgeRule?.credits ?? 10} credits LLM judge</span>
-              <span>{voiceRule?.credits ?? 5} credits voice minute</span>
-            </div>
-            <label className="demo-plan-control">
-              <span>Demo plan</span>
-              <select
-                aria-label="Demo plan"
-                value={plan}
-                onChange={(event) => updatePlan(event.target.value as PricingPlan['id'])}
-              >
-                <option value="free">Free</option>
-                <option value="starter">Starter</option>
-                <option value="team">Team</option>
-                <option value="business">Business</option>
-              </select>
-            </label>
-          </div>
-        </section>
-      ) : null}
-
       <section className="first-run-panel" aria-label="First run checklist">
         <div>
           <p className="eyebrow">First run checklist</p>
