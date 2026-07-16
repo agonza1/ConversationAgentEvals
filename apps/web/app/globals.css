@@ -1122,23 +1122,379 @@ select {
   line-height: 1.45;
 }
 
-.agent-list-card {
-  display: grid;
-  gap: 8px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel-alt);
-  padding: 12px;
+.agents-shell {
+  width: min(1180px, calc(100% - 40px));
+  gap: 24px;
 }
 
-.agent-list-card span {
+.agents-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding-top: 8px;
+}
+
+.agents-page-header h1 {
+  margin: 6px 0 0;
+  font-size: clamp(32px, 5vw, 48px);
+  line-height: 1.02;
+}
+
+.agents-page-lede {
+  max-width: 640px;
+  margin: 10px 0 0;
   color: var(--muted);
+  font-size: 17px;
+  line-height: 1.55;
+}
+
+.agents-add-button {
+  flex-shrink: 0;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--text);
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 820;
+  box-shadow: 0 8px 24px rgba(24, 36, 45, 0.06);
+}
+
+.agents-add-button span {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.agents-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 20px;
+}
+
+.agents-card {
+  display: grid;
+  gap: 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--panel);
+  padding: 22px;
+  box-shadow: 0 16px 44px rgba(24, 36, 45, 0.08);
+}
+
+.agents-card-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agents-card-identity {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.agents-avatar {
+  flex-shrink: 0;
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-alt);
+  font-size: 15px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
+.agents-avatar.is-voice {
+  background: color-mix(in srgb, var(--accent) 12%, white);
+  color: var(--accent);
+}
+
+.agents-avatar.is-text {
+  background: color-mix(in srgb, var(--accent-3) 10%, white);
+  color: var(--accent-3);
+}
+
+.agents-card-title-block {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.agents-card-title-block h2 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.agents-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.agents-badge {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.agents-badge-channel {
+  border: 1px solid var(--border);
+  background: var(--panel-alt);
+  color: var(--muted);
+}
+
+.agents-badge-builtin {
+  border: 1px solid color-mix(in srgb, var(--accent-2) 24%, transparent);
+  background: color-mix(in srgb, var(--accent-2) 12%, white);
+  color: var(--accent-2);
+}
+
+.agents-card-menu {
+  position: relative;
+}
+
+.agents-card-menu-trigger {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: white;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.agents-card-menu-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 4;
+  min-width: 132px;
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: white;
+  padding: 6px;
+  box-shadow: 0 16px 36px rgba(24, 36, 45, 0.12);
+}
+
+.agents-card-menu-panel button {
+  text-align: left;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  padding: 8px 10px;
+  font-size: 14px;
+  font-weight: 760;
+}
+
+.agents-card-menu-panel button:hover {
+  background: var(--panel-alt);
+}
+
+.agents-card-menu-panel button.is-danger {
+  color: var(--danger);
+}
+
+.agents-try-button {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 82%, white);
+  color: white;
+  font-size: 15px;
+  font-weight: 850;
+}
+
+.agents-try-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.agents-card-section h3 {
+  margin: 0 0 8px;
   font-size: 13px;
+  font-weight: 850;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.agents-card-section p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.agents-card-divider {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.agents-config-list {
+  margin: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.agents-config-row {
+  display: grid;
+  gap: 4px;
+}
+
+.agents-config-row dt {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.agents-config-row dd {
+  margin: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.agents-config-row dd span {
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.agents-config-row dd small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.agents-empty {
+  display: grid;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+}
+
+.agents-empty h2 {
+  margin: 0;
+}
+
+.agents-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(24, 36, 45, 0.42);
+}
+
+.agents-modal {
+  width: min(520px, 100%);
+  display: grid;
+  gap: 18px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--panel);
+  padding: 22px;
+  box-shadow: 0 24px 54px rgba(24, 36, 45, 0.18);
+}
+
+.agents-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agents-modal-header h2 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.agents-modal-close {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: white;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.agents-modal-form {
+  display: grid;
+  gap: 14px;
+}
+
+.agents-modal-form label {
+  display: grid;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 760;
+}
+
+.agents-modal-form input,
+.agents-modal-form textarea,
+.agents-modal-form select {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: white;
+  padding: 10px 12px;
+}
+
+.agents-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.scenarios-error {
+  border: 1px solid var(--error-border);
+  border-radius: 10px;
+  background: var(--error-bg);
+  color: var(--error-text);
+  padding: 12px 14px;
+  font-size: 14px;
+  font-weight: 760;
+}
+
+.scenarios-muted {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
 }
 
 @media (max-width: 900px) {
   .metric-summary-grid,
   .runs-analysis-layout {
     grid-template-columns: 1fr;
+  }
+
+  .agents-page-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .agents-add-button {
+    justify-content: center;
   }
 }

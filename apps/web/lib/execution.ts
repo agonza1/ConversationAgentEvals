@@ -127,6 +127,32 @@ async function handleJson<T>(response: Response): Promise<T> {
   return (text ? JSON.parse(text) : {}) as T;
 }
 
+const BUILT_IN_AGENT_IDS = new Set(['mock-text-agent', 'acc-voice-fixture-agent']);
+
+export function isBuiltInAgent(agent: Pick<AgentRecord, 'id'>) {
+  return BUILT_IN_AGENT_IDS.has(agent.id);
+}
+
+export function agentTryItOutHref(agentId: string) {
+  const params = new URLSearchParams({ launch: 'demo', agent_id: agentId });
+  return `/runs?${params.toString()}`;
+}
+
+export function applyAgentLaunchDefaults(
+  agent: Pick<AgentRecord, 'channel' | 'target'>,
+): {
+  mode: ExecutionMode;
+  textCallable?: AgentRecord['target'];
+} {
+  if (agent.channel === 'voice' || agent.target === 'voice_fixture' || agent.target === 'offline_acc_fixture') {
+    return { mode: 'voice_fixture' };
+  }
+  return {
+    mode: 'text_callable',
+    textCallable: agent.target === 'mock_agent' || agent.target === 'offline_acc_fixture' ? agent.target : 'mock_agent',
+  };
+}
+
 export async function listAgents(): Promise<AgentRecord[]> {
   const payload = await handleJson<{ agents?: AgentRecord[] }>(
     await fetch(`${getApiBase()}/api/agents`, { cache: 'no-store' }),

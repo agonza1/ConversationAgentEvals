@@ -1900,7 +1900,21 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
       .then((next) => {
         if (!active) return;
         setAgents(next);
-        setSelectedAgentId((current) => current || next[0]?.id || '');
+        const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+        const fromQuery = params?.get('agent_id');
+        const matched = fromQuery ? next.find((item) => item.id === fromQuery) : null;
+        const nextId = matched?.id || next[0]?.id || '';
+        setSelectedAgentId(nextId);
+        if (matched) {
+          if (matched.channel === 'voice' || matched.target === 'voice_fixture' || matched.target === 'offline_acc_fixture') {
+            setExecutionMode('voice_fixture');
+          } else {
+            setExecutionMode('text_callable');
+            if (matched.target === 'mock_agent' || matched.target === 'offline_acc_fixture') {
+              setExecutionTextCallable(matched.target);
+            }
+          }
+        }
       })
       .catch(() => {
         if (!active) return;
@@ -1913,7 +1927,8 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
   useEffect(() => {
     if (view !== 'run' || typeof window === 'undefined') return;
-    if (new URLSearchParams(window.location.search).get('launch') !== 'demo') return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('launch') !== 'demo' && !params.get('agent_id')) return;
     document.getElementById('launch-agent')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [view]);
 
