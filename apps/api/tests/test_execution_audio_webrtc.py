@@ -84,6 +84,16 @@ def test_pipecat_webrtc_mode_defaults_transport_and_rejects_verto():
         )
     assert 'deferred' in str(exc.value)
 
+    with pytest.raises(ValidationError) as voice_exc:
+        ExecutionRunCreateRequest(
+            mode='voice_fixture',
+            audio_transport='pipecat_small_webrtc',
+            scenario_ids=['cancellation-rescue'],
+            user_id='u',
+            project_id='p',
+        )
+    assert 'voice_fixture' in str(voice_exc.value)
+
 
 def test_local_webrtc_transport_send_receive_records_and_transcribes():
     async def run() -> None:

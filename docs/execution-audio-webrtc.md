@@ -25,6 +25,7 @@ Legacy names from earlier drafts (`voice_webrtc`, `local_pipecat_webrtc`, `sip_v
 | Recording + transcription capture | **Available** — synthetic capture into `AudioRecordingHandle` + dialog turns (not live ASR/WAV) |
 | vCon export on conversation rows | **Available** — reuses `benchmark_service._vcon_export` shape; Launch UI shows summary |
 | Launch UI mode label | **Honest** — “Pipecat hooks (in-process mock)”; verdict marked fixture-backed |
+| First-class **`/voice`** page | **Available** — dedicated Voice eval launch + conversation/vCon/recording results |
 | `GET /api/execution/audio/capabilities` | **Available** — advertises transports, vCon capture, honesty boundary |
 | FreeSWITCH Verto outbound SIP | **Deferred** — `FreeSwitchVertoSipTransport` extension stub only |
 

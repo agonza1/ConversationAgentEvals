@@ -46,6 +46,11 @@ class ExecutionRunCreateRequest(BaseModel):
                 'audio_transport=freeswitch_verto_sip is deferred. '
                 'Use none, or mode=pipecat_webrtc with pipecat_small_webrtc.'
             )
+        elif self.mode == 'voice_fixture' and self.audio_transport != 'none':
+            raise ValueError(
+                'voice_fixture mode uses AccAudioFixtureScheduler only; set audio_transport=none '
+                '(use mode=pipecat_webrtc for pipecat_small_webrtc hooks).'
+            )
         elif self.mode == 'text_callable' and self.audio_transport != 'none':
             raise ValueError('text_callable mode does not stream execution audio; set audio_transport=none')
         return self
