@@ -158,7 +158,7 @@ def test_execution_persists_model_name_default_and_override():
     assert via_api.json()['model_name'] == 'gpt-4.1'
 
 
-def test_rejects_unsafe_agent_id_and_seed_delete():
+def test_rejects_unsafe_agent_id_and_seed_mutations():
     bad = client.post(
         '/api/agents',
         json={'id': '../evil', 'name': 'Evil', 'channel': 'text', 'target': 'mock_agent'},
@@ -168,6 +168,11 @@ def test_rejects_unsafe_agent_id_and_seed_delete():
     seed_delete = client.delete('/api/agents/mock-text-agent')
     assert seed_delete.status_code == 400
     assert 'Seed agent' in seed_delete.json()['detail']
+
+    seed_edit = client.patch('/api/agents/mock-text-agent', json={'target': 'offline_acc_fixture'})
+    assert seed_edit.status_code == 400
+    assert 'Seed agent' in seed_edit.json()['detail']
+    assert client.get('/api/agents/mock-text-agent').json()['target'] == 'mock_agent'
 
 
 def test_rejects_null_patch_on_non_nullable_fields():
@@ -224,3 +229,23 @@ def test_text_offline_acc_fixture_stays_text_callable():
         )
     )
     assert queued['mode'] == 'text_callable'
+
+
+def test_agent_payload_honors_an_explicit_target_mode_override():
+    from app.services.execution_runner import _resolve_agent_payload
+
+    resolved = _resolve_agent_payload(
+        ExecutionRunCreateRequest(
+            suite_id='call-center-voice-ai',
+            scenario_ids=['cancellation-rescue'],
+            agent_id='mock-text-agent',
+            mode='pipecat_webrtc',
+            user_id='agent-runs-user',
+            project_id='agent-runs-project',
+            iterations=1,
+        )
+    )
+
+    assert resolved.agent_id == 'mock-text-agent'
+    assert resolved.mode == 'pipecat_webrtc'
+    assert resolved.audio_transport == 'pipecat_small_webrtc'

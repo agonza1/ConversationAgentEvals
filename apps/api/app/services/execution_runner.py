@@ -256,6 +256,16 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
     agent = get_agent(payload.agent_id)
     if agent is None:
         raise ValueError(f'Unknown agent: {payload.agent_id}')
+    # An agent supplies defaults, but the advanced target-mode control is an
+    # explicit per-run override.  Pydantic retains whether `mode` appeared in
+    # the request, letting callers omit it to opt into the saved agent target.
+    if 'mode' in payload.model_fields_set:
+        return payload.model_copy(
+            update={
+                'agent_id': agent['id'],
+                'model_name': model_name,
+            }
+        )
     target = str(agent.get('target') or 'mock_agent')
     channel = str(agent.get('channel') or 'text')
     # Text + offline_acc_fixture stays text_callable; only force voice for voice channel or voice_fixture target.

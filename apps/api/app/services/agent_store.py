@@ -117,8 +117,11 @@ def create_agent(payload: AgentCreateRequest) -> dict[str, Any]:
 
 def update_agent(agent_id: str, payload: AgentUpdateRequest) -> dict[str, Any] | None:
     ensure_seeded()
+    safe_id = _validate_agent_id(agent_id)
+    if safe_id in SEED_AGENT_IDS:
+        raise ValueError(f'Seed agent cannot be edited: {safe_id}')
     with _LOCK:
-        current = _AGENTS.get(agent_id)
+        current = _AGENTS.get(safe_id)
         if current is None:
             return None
         next_value = dict(current)
@@ -130,7 +133,7 @@ def update_agent(agent_id: str, payload: AgentUpdateRequest) -> dict[str, Any] |
         next_value['updated_at'] = _now()
         record = AgentRecord.model_validate(next_value)
         data = record.model_dump(mode='json')
-        _AGENTS[agent_id] = data
+        _AGENTS[safe_id] = data
         _persist_unlocked(data)
         return deepcopy(data)
 
