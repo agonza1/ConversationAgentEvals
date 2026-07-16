@@ -212,6 +212,10 @@ test('launch evaluation streams conversations into the live list', async ({ page
   const launch = page.getByLabel('Launch agent run');
   await expect(launch.getByLabel('Execution model')).toHaveValue('gpt-5.4');
   await expect(launch.getByText('Connect OpenAI to load models.')).toBeVisible();
+  await expect(launch.getByText('Advanced')).toBeVisible();
+  await expect(launch.getByLabel('Execution target mode')).toHaveCount(0);
+  await launch.getByText('Advanced').click();
+  await expect(launch.getByLabel('Execution target mode')).toBeVisible();
   await launch.getByRole('button', { name: 'Launch agent run' }).click();
   await expect(launch.getByText('exec-ui-demo', { exact: true })).toBeVisible();
   await expect.poll(() => postedModel).toBe('gpt-5.4');

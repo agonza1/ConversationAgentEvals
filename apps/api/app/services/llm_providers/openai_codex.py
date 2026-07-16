@@ -22,11 +22,26 @@ CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
 AUTHORIZE_URL = 'https://auth.openai.com/oauth/authorize'
 TOKEN_URL = 'https://auth.openai.com/oauth/token'
 CODEX_RESPONSES_URL = 'https://chatgpt.com/backend-api/codex/responses'
-OPENAI_MODELS_URL = 'https://api.openai.com/v1/models'
+# Prefer Codex backend models (works with ChatGPT OAuth). Platform /v1/models needs api.model.read.
+CODEX_MODELS_URL = 'https://chatgpt.com/backend-api/codex/models'
+CODEX_MODELS_CLIENT_VERSION = '0.99.0'
+OPENAI_PLATFORM_MODELS_URL = 'https://api.openai.com/v1/models'
 CALLBACK_REDIRECT_HOST = 'localhost'
 CALLBACK_PORT = 1455
 REDIRECT_URI = f'http://{CALLBACK_REDIRECT_HOST}:{CALLBACK_PORT}/auth/callback'
 DEFAULT_EXECUTION_MODEL = 'gpt-5.4'
+FALLBACK_CHAT_MODELS = (
+    'gpt-5.4',
+    'gpt-5.4-mini',
+    'gpt-5.2',
+    'gpt-4.1',
+    'gpt-4.1-mini',
+    'gpt-4o',
+    'o3',
+    'o3-mini',
+    'o4-mini',
+)
+SCOPE_MISSING_MODELS_HINT = 'Using built-in model list. Re-connect OpenAI to refresh.'
 _CHAT_MODEL_PREFIXES = ('gpt-', 'o1', 'o3', 'o4', 'chatgpt-', 'codex-')
 _CHAT_MODEL_EXCLUDE_PARTS = (
     'instruct',
@@ -57,16 +72,20 @@ def _callback_bind_host() -> str:
     listening on 0.0.0.0 inside the API container.
     """
     return os.getenv('OPENAI_CODEX_CALLBACK_BIND_HOST', '0.0.0.0')
-SCOPE = 'openid profile email offline_access'
+
+
+# api.model.read unlocks platform GET /v1/models for newly authorized sessions.
+SCOPE = 'openid profile email offline_access api.model.read'
 ORIGINATOR = 'conversation-agent-evals'
 DEFAULT_MODEL = 'gpt-5.4-mini'
 TOKEN_REFRESH_THRESHOLD_SECONDS = 60
 
 
 class CodexResponseError(RuntimeError):
-    def __init__(self, status_code: int, detail: str) -> None:
-        super().__init__(f'Codex Responses request failed ({status_code}): {detail}')
+    def __init__(self, status_code: int, detail: str, *, label: str = 'OpenAI request') -> None:
+        super().__init__(f'{label} failed ({status_code}): {detail}')
         self.status_code = status_code
+        self.detail = detail
 
 
 def _repo_root() -> Path:
@@ -217,7 +236,12 @@ class OpenAICodexProvider:
         return self._refresh_access_token(tokens)
 
     def list_models(self, *, http_get: Any | None = None) -> dict[str, Any]:
-        """List chat-oriented models for the connected OpenAI/Codex OAuth account."""
+        """List chat-oriented models for the connected OpenAI/Codex OAuth account.
+
+        Tries the Codex backend models list first (works with ChatGPT OAuth), then
+        platform GET /v1/models (needs api.model.read). On 403/empty/errors, returns a
+        curated fallback list with a soft reconnect hint instead of failing hard.
+        """
         status = self.status()
         if status.get('status') != 'connected':
             raise PermissionError(
@@ -235,22 +259,58 @@ class OpenAICodexProvider:
         if account_id:
             headers['ChatGPT-Account-Id'] = str(account_id)
         getter = http_get or _http_json_get
-        try:
-            payload = getter(OPENAI_MODELS_URL, headers=headers)
-        except CodexResponseError as exc:
-            if exc.status_code != 401:
-                raise
-            access = self._refresh_access_token(tokens)
-            headers['Authorization'] = f'Bearer {access}'
-            payload = getter(OPENAI_MODELS_URL, headers=headers)
-        model_ids = _filter_chat_model_ids(payload)
-        if DEFAULT_EXECUTION_MODEL not in model_ids:
-            model_ids.insert(0, DEFAULT_EXECUTION_MODEL)
+        last_error: str | None = None
+
+        candidate_urls = (
+            f'{CODEX_MODELS_URL}?client_version={CODEX_MODELS_CLIENT_VERSION}',
+            OPENAI_PLATFORM_MODELS_URL,
+        )
+        for models_url in candidate_urls:
+            try:
+                payload = getter(models_url, headers=headers)
+            except CodexResponseError as exc:
+                if exc.status_code == 401:
+                    try:
+                        access = self._refresh_access_token(tokens)
+                        headers['Authorization'] = f'Bearer {access}'
+                        payload = getter(models_url, headers=headers)
+                    except Exception as refresh_exc:  # noqa: BLE001
+                        last_error = str(refresh_exc)
+                        continue
+                else:
+                    last_error = str(exc.detail if hasattr(exc, 'detail') else exc)
+                    continue
+            except Exception as exc:  # noqa: BLE001 - fall back to curated list
+                last_error = str(exc)
+                continue
+
+            model_ids = _filter_chat_model_ids(payload)
+            if not model_ids:
+                last_error = 'Models response did not include usable chat models.'
+                continue
+            if DEFAULT_EXECUTION_MODEL not in model_ids:
+                model_ids.insert(0, DEFAULT_EXECUTION_MODEL)
+            return {
+                'provider': 'openai_codex',
+                'status': 'connected',
+                'default_model': DEFAULT_EXECUTION_MODEL,
+                'source': 'live',
+                'message': None,
+                'models': [{'id': model_id} for model_id in model_ids],
+            }
+
+        del last_error
+        fallback_ids = list(FALLBACK_CHAT_MODELS)
+        if DEFAULT_EXECUTION_MODEL not in fallback_ids:
+            fallback_ids.insert(0, DEFAULT_EXECUTION_MODEL)
         return {
             'provider': 'openai_codex',
             'status': 'connected',
             'default_model': DEFAULT_EXECUTION_MODEL,
-            'models': [{'id': model_id} for model_id in model_ids],
+            'source': 'fallback',
+            'message': SCOPE_MISSING_MODELS_HINT,
+            'warning': SCOPE_MISSING_MODELS_HINT,
+            'models': [{'id': model_id} for model_id in fallback_ids],
         }
 
     def _refresh_access_token(self, tokens: dict[str, Any] | None = None) -> str:
@@ -597,7 +657,7 @@ def _http_json_post(url: str, body: dict[str, Any], *, headers: dict[str, str]) 
             return json.loads(response.read().decode('utf-8'))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode('utf-8', errors='replace')
-        raise CodexResponseError(exc.code, detail) from exc
+        raise CodexResponseError(exc.code, detail, label='Codex Responses request') from exc
 
 
 def _http_json_get(url: str, *, headers: dict[str, str]) -> dict[str, Any]:
@@ -611,7 +671,7 @@ def _http_json_get(url: str, *, headers: dict[str, str]) -> dict[str, Any]:
             return json.loads(response.read().decode('utf-8'))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode('utf-8', errors='replace')
-        raise CodexResponseError(exc.code, detail) from exc
+        raise CodexResponseError(exc.code, detail, label='OpenAI models request') from exc
 
 
 def _is_chat_model_id(model_id: str) -> bool:
@@ -620,11 +680,28 @@ def _is_chat_model_id(model_id: str) -> bool:
         return False
     if any(part in lowered for part in _CHAT_MODEL_EXCLUDE_PARTS):
         return False
+    if 'auto-review' in lowered or lowered.endswith('-review'):
+        return False
     return any(lowered.startswith(prefix) for prefix in _CHAT_MODEL_PREFIXES)
 
 
+def _model_id_from_item(item: dict[str, Any]) -> str | None:
+    for key in ('id', 'slug', 'model', 'name'):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def _filter_chat_model_ids(payload: dict[str, Any]) -> list[str]:
-    raw_items = payload.get('data') if isinstance(payload, dict) else None
+    raw_items = None
+    if isinstance(payload, dict):
+        # Codex backend returns {models:[...]} with slug; platform API returns {data:[...]}.
+        for key in ('models', 'data'):
+            candidate = payload.get(key)
+            if isinstance(candidate, list):
+                raw_items = candidate
+                break
     if not isinstance(raw_items, list):
         raw_items = []
     ids: list[str] = []
@@ -632,8 +709,10 @@ def _filter_chat_model_ids(payload: dict[str, Any]) -> list[str]:
     for item in raw_items:
         if not isinstance(item, dict):
             continue
-        model_id = item.get('id')
-        if not isinstance(model_id, str) or not _is_chat_model_id(model_id):
+        if item.get('supported_in_api') is False:
+            continue
+        model_id = _model_id_from_item(item)
+        if not model_id or not _is_chat_model_id(model_id):
             continue
         if model_id in seen:
             continue

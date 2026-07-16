@@ -387,24 +387,69 @@ def test_openai_codex_list_models_filters_and_uses_ssl_get(tmp_path: Path):
         captured['url'] = url
         captured['headers'] = headers
         return {
-            'data': [
-                {'id': 'gpt-5.4'},
-                {'id': 'gpt-4.1-mini'},
+            'models': [
+                {'slug': 'gpt-5.4', 'display_name': 'GPT-5.4', 'supported_in_api': True},
+                {'slug': 'gpt-5.4-mini', 'display_name': 'GPT-5.4-Mini', 'supported_in_api': True},
+                {'slug': 'codex-auto-review', 'display_name': 'Codex Auto Review', 'supported_in_api': True},
                 {'id': 'text-embedding-3-large'},
                 {'id': 'whisper-1'},
-                {'id': 'o3-mini'},
+                {'slug': 'o3-mini', 'supported_in_api': True},
             ]
         }
 
     payload = provider.list_models(http_get=fake_get)
-    assert captured['url'] == mod.OPENAI_MODELS_URL
+    assert str(captured['url']).startswith(mod.CODEX_MODELS_URL)
+    assert f'client_version={mod.CODEX_MODELS_CLIENT_VERSION}' in str(captured['url'])
     assert captured['headers']['Authorization'] == 'Bearer access'
+    assert captured['headers']['ChatGPT-Account-Id'] == 'acct_1'
     ids = [item['id'] for item in payload['models']]
     assert ids[0] == 'gpt-5.4'
-    assert 'gpt-4.1-mini' in ids
+    assert 'gpt-5.4-mini' in ids
     assert 'o3-mini' in ids
+    assert 'codex-auto-review' not in ids
     assert 'text-embedding-3-large' not in ids
     assert 'whisper-1' not in ids
+    assert payload.get('source') == 'live'
+
+
+def test_openai_codex_list_models_falls_back_on_403(tmp_path: Path):
+    from app.services.llm_providers import openai_codex as mod
+
+    token_path = tmp_path / 'oauth.json'
+    token_path.write_text(
+        json.dumps(
+            {
+                'access_token': 'access',
+                'refresh_token': 'refresh',
+                'expires_at': 9_999_999_999,
+                'account_id': 'acct_1',
+                'email': 'user@example.com',
+            }
+        ),
+        encoding='utf-8',
+    )
+    provider = OpenAICodexProvider(token_path=token_path, now=lambda: 1_000)
+    calls: list[str] = []
+
+    def fake_get(url: str, *, headers: dict[str, str]):
+        calls.append(url)
+        raise mod.CodexResponseError(403, '{"error":{"message":"Missing scopes: api.model.read"}}')
+
+    payload = provider.list_models(http_get=fake_get)
+    assert len(calls) == 2
+    assert payload['source'] == 'fallback'
+    assert 'api.model.read' not in (payload.get('message') or '')
+    assert 'Missing scopes' not in (payload.get('message') or '')
+    assert 'Could not list OpenAI models' not in (payload.get('message') or '')
+    ids = [item['id'] for item in payload['models']]
+    assert ids[0] == 'gpt-5.4'
+    assert 'gpt-4o' in ids
+
+
+def test_oauth_authorize_requests_model_read_scope():
+    from app.services.llm_providers import openai_codex as mod
+
+    assert 'api.model.read' in mod.SCOPE
 
 
 def _fake_jwt(payload: dict) -> str:

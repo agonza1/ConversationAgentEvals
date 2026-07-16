@@ -301,12 +301,31 @@ def get_openai_provider_status():
 
 @router.get('/providers/openai/models')
 def get_openai_provider_models():
+    """Return available models for the connected OpenAI account.
+
+    Always returns HTTP 200 when connected (or falls back to a curated list).
+    Never surfaces raw upstream 403/scope JSON to the UI.
+    """
+    from app.services.llm_providers.openai_codex import (
+        DEFAULT_EXECUTION_MODEL,
+        FALLBACK_CHAT_MODELS,
+        SCOPE_MISSING_MODELS_HINT,
+    )
+
     try:
         return list_openai_models()
     except PermissionError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001 - surface provider/API failures to the UI
-        raise HTTPException(status_code=502, detail=f'Could not list OpenAI models: {exc}') from exc
+    except Exception:  # noqa: BLE001 - curated fallback beats a scary 502 banner
+        return {
+            'provider': 'openai_codex',
+            'status': 'connected',
+            'default_model': DEFAULT_EXECUTION_MODEL,
+            'source': 'fallback',
+            'message': SCOPE_MISSING_MODELS_HINT,
+            'warning': SCOPE_MISSING_MODELS_HINT,
+            'models': [{'id': model_id} for model_id in FALLBACK_CHAT_MODELS],
+        }
 
 
 @router.post('/providers/openai/disconnect')

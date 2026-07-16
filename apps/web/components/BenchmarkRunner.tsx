@@ -267,13 +267,36 @@ interface OpenAIProviderStatus {
 }
 
 const DEFAULT_EXECUTION_MODEL = 'gpt-5.4';
+const FALLBACK_EXECUTION_MODELS = [
+  'gpt-5.4',
+  'gpt-5.4-mini',
+  'gpt-5.2',
+  'gpt-4.1',
+  'gpt-4.1-mini',
+  'gpt-4o',
+  'o3',
+  'o3-mini',
+  'o4-mini',
+];
 
-async function fetchOpenAIModels(): Promise<string[]> {
+async function fetchOpenAIModels(): Promise<{ models: string[]; message: string | null }> {
   const response = await fetch(`${getApiBase()}/api/product/providers/openai/models`, { cache: 'no-store' });
   if (response.status === 401) {
-    return [DEFAULT_EXECUTION_MODEL];
+    return { models: [DEFAULT_EXECUTION_MODEL], message: 'Connect OpenAI to load models' };
   }
-  const payload = await handleJson<{ models?: Array<{ id?: string } | string>; default_model?: string }>(response);
+  if (!response.ok) {
+    // Never leave the dropdown empty on transient API failures.
+    return {
+      models: FALLBACK_EXECUTION_MODELS,
+      message: 'Using built-in model list. Re-connect OpenAI to refresh.',
+    };
+  }
+  const payload = await handleJson<{
+    models?: Array<{ id?: string } | string>;
+    default_model?: string;
+    message?: string | null;
+    source?: string;
+  }>(response);
   const ids = (payload.models ?? [])
     .map((item) => (typeof item === 'string' ? item : item.id))
     .filter((id): id is string => Boolean(id && id.trim()));
@@ -283,7 +306,10 @@ async function fetchOpenAIModels(): Promise<string[]> {
     if (b === DEFAULT_EXECUTION_MODEL) return 1;
     return a.localeCompare(b);
   });
-  return merged.length ? merged : [DEFAULT_EXECUTION_MODEL];
+  return {
+    models: merged.length ? merged : FALLBACK_EXECUTION_MODELS,
+    message: typeof payload.message === 'string' && payload.message.trim() ? payload.message : null,
+  };
 }
 
 interface SavedRun {
@@ -2224,21 +2250,21 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     let active = true;
     async function loadExecutionModels() {
       if (openaiProvider?.status !== 'connected') {
-        setExecutionModelOptions([DEFAULT_EXECUTION_MODEL]);
+        setExecutionModelOptions([DEFAULT_EXECUTION_MODEL, ...FALLBACK_EXECUTION_MODELS.filter((id) => id !== DEFAULT_EXECUTION_MODEL)]);
         setExecutionModelsMessage('Connect OpenAI to load models');
         setExecutionModelName((current) => current || DEFAULT_EXECUTION_MODEL);
         return;
       }
       try {
-        const models = await fetchOpenAIModels();
+        const { models, message } = await fetchOpenAIModels();
         if (!active) return;
         setExecutionModelOptions(models);
-        setExecutionModelsMessage(null);
+        setExecutionModelsMessage(message);
         setExecutionModelName((current) => (models.includes(current) ? current : DEFAULT_EXECUTION_MODEL));
-      } catch (err) {
+      } catch {
         if (!active) return;
-        setExecutionModelOptions([DEFAULT_EXECUTION_MODEL]);
-        setExecutionModelsMessage(err instanceof Error ? err.message : 'Could not load OpenAI models');
+        setExecutionModelOptions(FALLBACK_EXECUTION_MODELS);
+        setExecutionModelsMessage('Using built-in model list. Re-connect OpenAI to refresh.');
         setExecutionModelName((current) => current || DEFAULT_EXECUTION_MODEL);
       }
     }
@@ -2595,9 +2621,12 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           setOpenaiProviderMessage(`Connected as ${status.email || status.account_id || 'OpenAI account'}.`);
           const nextConfig = await fetchProductConfig().catch(() => null);
           if (nextConfig) setProductConfig(nextConfig);
-          const models = await fetchOpenAIModels().catch(() => [DEFAULT_EXECUTION_MODEL]);
+          const { models, message } = await fetchOpenAIModels().catch(() => ({
+            models: FALLBACK_EXECUTION_MODELS,
+            message: 'Using built-in model list. Re-connect OpenAI to refresh.',
+          }));
           setExecutionModelOptions(models);
-          setExecutionModelsMessage(null);
+          setExecutionModelsMessage(message);
           setExecutionModelName((current) => (models.includes(current) ? current : DEFAULT_EXECUTION_MODEL));
           break;
         }
@@ -3886,11 +3915,12 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
         {view === 'run' && selectedSuite && !loadError ? (
           <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }} aria-label="Default scenario for launch">
+            Uses this agent&apos;s configured target
             {executionMode === 'voice_fixture' || executionMode === 'pipecat_webrtc'
-              ? 'Uses Call Center Voice AI / Cancellation Rescue for voice launches.'
+              ? ' (Call Center Voice AI / Cancellation Rescue).'
               : executionScope === 'suite'
-                ? `Exercises the full ${selectedSuite.title} suite.`
-                : `Exercises ${selectedScenario?.title ?? 'the default scenario'} (${selectedSuite.title}).`}
+                ? ` for the full ${selectedSuite.title} suite.`
+                : ` for ${selectedScenario?.title ?? 'the default scenario'}.`}
           </p>
         ) : null}
 
@@ -3955,61 +3985,6 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             ) : null}
           </label>
           <label style={{ display: 'grid', gap: 8 }}>
-            <span style={{ fontWeight: 700 }}>Target mode</span>
-            <select
-              aria-label="Execution target mode"
-              value={executionMode}
-              onChange={(event) =>
-                setExecutionMode(event.target.value as 'text_callable' | 'voice_fixture' | 'pipecat_webrtc')
-              }
-              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
-            >
-              <option value="text_callable">Text callable</option>
-              <option value="voice_fixture">Voice fixture</option>
-              <option value="pipecat_webrtc">Pipecat hooks (in-process mock)</option>
-            </select>
-          </label>
-
-          {executionMode === 'text_callable' ? (
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Text callable</span>
-              <select
-                aria-label="Text callable target"
-                value={executionTextCallable}
-                onChange={(event) => setExecutionTextCallable(event.target.value)}
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
-              >
-                <option value="mock_agent">mock_agent</option>
-                <option value="offline_acc_fixture">offline_acc_fixture</option>
-              </select>
-            </label>
-          ) : (
-            <div style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Voice target</span>
-              <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }}>
-                {executionMode === 'pipecat_webrtc'
-                  ? 'In-process mock of Pipecat small WebRTC send/receive hooks — no browser peer, live Pipecat, or FreeSWITCH. Captures synthetic recording + dialog into vCon. Verdict/score stay fixture-backed for cancellation-rescue on call-center-voice-ai.'
-                  : 'Uses the ACC audio plan + cancellation-rescue fixture path on call-center-voice-ai (no live SIP/WebRTC).'}
-              </p>
-            </div>
-          )}
-
-          {executionMode === 'text_callable' ? (
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Scenario scope</span>
-              <select
-                aria-label="Execution scenario scope"
-                value={executionScope}
-                onChange={(event) => setExecutionScope(event.target.value as 'selected' | 'suite')}
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
-              >
-                <option value="selected">Selected scenario</option>
-                <option value="suite">Entire suite</option>
-              </select>
-            </label>
-          ) : null}
-
-          <label style={{ display: 'grid', gap: 8 }}>
             <span style={{ fontWeight: 700 }}>Iterations</span>
             <input
               aria-label="Execution iterations"
@@ -4022,6 +3997,66 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             />
           </label>
         </div>
+
+        <details>
+          <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Advanced</summary>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginTop: 12 }}>
+            <label style={{ display: 'grid', gap: 8 }}>
+              <span style={{ fontWeight: 700 }}>Target mode</span>
+              <select
+                aria-label="Execution target mode"
+                value={executionMode}
+                onChange={(event) =>
+                  setExecutionMode(event.target.value as 'text_callable' | 'voice_fixture' | 'pipecat_webrtc')
+                }
+                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
+              >
+                <option value="text_callable">Text callable</option>
+                <option value="voice_fixture">Voice fixture</option>
+                <option value="pipecat_webrtc">Pipecat hooks (in-process mock)</option>
+              </select>
+            </label>
+
+            {executionMode === 'text_callable' ? (
+              <label style={{ display: 'grid', gap: 8 }}>
+                <span style={{ fontWeight: 700 }}>Text callable</span>
+                <select
+                  aria-label="Text callable target"
+                  value={executionTextCallable}
+                  onChange={(event) => setExecutionTextCallable(event.target.value)}
+                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
+                >
+                  <option value="mock_agent">mock_agent</option>
+                  <option value="offline_acc_fixture">offline_acc_fixture</option>
+                </select>
+              </label>
+            ) : (
+              <div style={{ display: 'grid', gap: 8 }}>
+                <span style={{ fontWeight: 700 }}>Voice target</span>
+                <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }}>
+                  {executionMode === 'pipecat_webrtc'
+                    ? 'In-process mock of Pipecat small WebRTC hooks (no live peer).'
+                    : 'ACC audio plan + cancellation-rescue fixture (no live SIP/WebRTC).'}
+                </p>
+              </div>
+            )}
+
+            {executionMode === 'text_callable' ? (
+              <label style={{ display: 'grid', gap: 8 }}>
+                <span style={{ fontWeight: 700 }}>Scenario scope</span>
+                <select
+                  aria-label="Execution scenario scope"
+                  value={executionScope}
+                  onChange={(event) => setExecutionScope(event.target.value as 'selected' | 'suite')}
+                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
+                >
+                  <option value="selected">Selected scenario</option>
+                  <option value="suite">Entire suite</option>
+                </select>
+              </label>
+            ) : null}
+          </div>
+        </details>
 
         {executionMessage ? <p style={{ margin: 0, color: 'var(--muted)' }}>{executionMessage}</p> : null}
 
