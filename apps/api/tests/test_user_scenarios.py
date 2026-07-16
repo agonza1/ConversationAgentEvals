@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from app.services.benchmark_service import get_suite, list_suites, simulate_scen
 from app.services.user_scenario_store import (
     USER_SCENARIOS_SUITE_ID,
     configure_store_path,
+    default_store_path,
     reset_user_scenarios_for_tests,
 )
 
@@ -136,3 +138,47 @@ def test_created_scenarios_persist_across_store_reload(tmp_path: Path):
     reloaded = client.get(f'/api/scenarios/{scenario_id}')
     assert reloaded.status_code == 200, reloaded.text
     assert reloaded.json()['title'] == 'Persisted scenario'
+
+
+def test_default_store_path_uses_storage_volume(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    monkeypatch.delenv('USER_SCENARIOS_PATH', raising=False)
+    path = default_store_path()
+    assert path.name == 'user_scenarios.json'
+    assert path.parent.name == 'storage'
+
+    override = tmp_path / 'custom' / 'scenarios.json'
+    monkeypatch.setenv('USER_SCENARIOS_PATH', str(override))
+    assert default_store_path() == override
+
+
+def test_legacy_store_migrates_into_storage_path(tmp_path: Path):
+    legacy = tmp_path / 'legacy' / 'user_scenarios.json'
+    durable = tmp_path / 'storage' / 'user_scenarios.json'
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(
+        json.dumps(
+            {
+                'version': 1,
+                'suite_id': USER_SCENARIOS_SUITE_ID,
+                'scenarios': [
+                    {
+                        'id': 'legacy-scenario',
+                        'title': 'Legacy scenario',
+                        'simulated_user_prompt': SAMPLE_PROMPT,
+                        'expected_output': SAMPLE_EXPECTED,
+                        'description': SAMPLE_PROMPT,
+                    }
+                ],
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    import app.services.user_scenario_store as store
+
+    store._LEGACY_STORE_PATH = legacy
+    configure_store_path(durable)
+    listed = client.get('/api/scenarios')
+    assert listed.status_code == 200, listed.text
+    assert any(item['id'] == 'legacy-scenario' for item in listed.json()['scenarios'])
+    assert durable.exists()

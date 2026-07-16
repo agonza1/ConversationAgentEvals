@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 import threading
 import uuid
 from copy import deepcopy
@@ -16,7 +18,23 @@ USER_SCENARIOS_SUITE_NAME = 'User Scenarios'
 STORE_VERSION = 1
 
 _API_DIR = Path(__file__).resolve().parents[2]
-_DEFAULT_STORE_PATH = _API_DIR / 'data' / 'user_scenarios.json'
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+_LEGACY_STORE_PATH = _API_DIR / 'data' / 'user_scenarios.json'
+
+
+def default_store_path() -> Path:
+    """Durable store under the Compose-mounted `storage/` volume.
+
+    Docker only bind-mounts `/workspace/storage` and `/.local`, so keeping the
+    library under `apps/api/data/` loses scenarios on container recreate.
+    """
+    override = os.getenv('USER_SCENARIOS_PATH')
+    if override:
+        return Path(override).expanduser()
+    return _REPO_ROOT / 'storage' / 'user_scenarios.json'
+
+
+_DEFAULT_STORE_PATH = default_store_path()
 
 _LOCK = threading.Lock()
 _STORE_PATH = _DEFAULT_STORE_PATH
@@ -28,7 +46,7 @@ def configure_store_path(path: Path | None) -> None:
     """Point persistence at a temp file (tests) or restore the default path."""
     global _STORE_PATH, _LOADED
     with _LOCK:
-        _STORE_PATH = path or _DEFAULT_STORE_PATH
+        _STORE_PATH = path or default_store_path()
         _LOADED = False
         _RECORDS.clear()
     _ensure_loaded()
@@ -123,6 +141,7 @@ def _ensure_loaded() -> None:
         if _LOADED:
             return
         _RECORDS.clear()
+        _maybe_migrate_legacy_store_unlocked()
         if _STORE_PATH.exists():
             try:
                 payload = json.loads(_STORE_PATH.read_text(encoding='utf-8'))
@@ -134,6 +153,20 @@ def _ensure_loaded() -> None:
                     if isinstance(item, dict) and item.get('id'):
                         _RECORDS[str(item['id'])] = _to_catalog_scenario(item)
         _LOADED = True
+
+
+def _maybe_migrate_legacy_store_unlocked() -> None:
+    """Copy apps/api/data/user_scenarios.json into storage/ once if needed."""
+    if _STORE_PATH.exists() or not _LEGACY_STORE_PATH.exists():
+        return
+    if _STORE_PATH.resolve() == _LEGACY_STORE_PATH.resolve():
+        return
+    try:
+        _STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(_LEGACY_STORE_PATH, _STORE_PATH)
+    except OSError:
+        # Fall through: load may still succeed from an empty store.
+        return
 
 
 def _persist_unlocked() -> None:

@@ -1764,22 +1764,6 @@ function onboardingStatusLabel(done: boolean, ready: boolean) {
   return 'Next';
 }
 
-function starterDataSummary(scenario?: BenchmarkScenario | null) {
-  if (!scenario) return 'Choose a sample scenario to preload starter evidence.';
-
-  const available = [
-    scenario.sample_transcript ? 'transcript' : null,
-    scenario.sample_action_trace ? 'action trace' : null,
-    scenario.sample_final_state ?? scenario.expected_final_state ? 'final state' : null,
-  ].filter(Boolean) as string[];
-
-  if (!available.length) {
-    return 'No starter evidence is attached to this scenario yet.';
-  }
-
-  return `Starter evidence ready: ${available.join(', ')}.`;
-}
-
 async function copyText(text: string) {
   if (navigator.clipboard?.writeText) {
     try {
@@ -2795,30 +2779,28 @@ export function BenchmarkRunner() {
     : '';
   const onboardingSteps = [
     {
-      title: 'Pick a scenario',
+      title: 'Choose',
       detail: selectedScenario
-        ? `${selectedScenario.title}. ${starterDataSummary(selectedScenario)}`
+        ? selectedScenario.title
         : selectedSuite && !selectedSuite.scenarios.length
-          ? `${selectedSuite.title} needs at least one scenario before you can run evidence checks.`
-          : 'Choose the benchmark suite and scenario to test.',
+          ? `${selectedSuite.title} has no scenarios yet.`
+          : 'Select a suite and scenario above.',
       done: Boolean(selectedScenario),
       ready: Boolean(selectedScenario || (selectedSuite && !selectedSuite.scenarios.length)),
-      actionLabel: selectedScenario ? 'Reload starter data' : selectedSuite?.scenarios[0] ? 'Pick first scenario' : null,
-      action: selectedScenario
-        ? () => loadScenarioStarterData()
-        : selectedSuite?.scenarios[0]
-          ? () => setSelectedScenarioId(selectedSuite.scenarios[0].id)
-          : undefined,
+      actionLabel: selectedScenario ? 'Reload starter data' : null,
+      action: selectedScenario ? () => loadScenarioStarterData() : undefined,
       actionVariant: 'secondary' as const,
     },
     {
-      title: 'Simulate the scenario',
+      title: 'Simulate',
       detail: report
-        ? `Latest verdict: ${verdict ?? 'complete'}${score !== undefined ? ` at ${score}` : ''}.`
-        : 'Run a deterministic sample check on the selected scenario (starter transcript + action trace).',
+        ? `Verdict: ${verdict ?? 'complete'}${score !== undefined ? ` · ${score}` : ''}`
+        : hasRunnableEvidence
+          ? 'Run a sample check on the starter evidence.'
+          : 'Load starter data, then simulate.',
       done: Boolean(report),
       ready: hasRunnableEvidence && !isRunning && !isSimulating,
-      actionLabel: report ? 'Simulate again' : hasRunnableEvidence ? 'Simulate sample scenario' : selectedScenario ? 'Load starter data first' : null,
+      actionLabel: report ? 'Simulate again' : hasRunnableEvidence ? 'Simulate sample' : selectedScenario ? 'Load starter data' : null,
       action: hasRunnableEvidence || report
         ? () => void onSimulate()
         : selectedScenario
@@ -2828,18 +2810,20 @@ export function BenchmarkRunner() {
       disabled: Boolean((hasRunnableEvidence || report) && (isRunning || isSimulating)),
     },
     {
-      title: 'Save repeatable history',
+      title: 'Save',
       detail: hasSavedCurrentScenario
-        ? `Focused history is tracking ${selectedScenario?.title ?? 'this scenario'}.`
-        : 'Save the result to compare future prompt, model, and agent changes.',
+        ? 'Saved for regression history.'
+        : report
+          ? 'Keep this result for later comparisons.'
+          : 'Available after a sample check.',
       done: hasSavedCurrentScenario,
       ready: Boolean(report && userId),
       actionLabel: report && !hasSavedCurrentScenario
-        ? 'Save this run'
+        ? 'Save result'
         : hasSavedCurrentScenario && savedRuns.length
-          ? 'Export saved history'
+          ? 'Export history'
           : report
-            ? 'Save this run'
+            ? 'Save result'
             : null,
       action: report && !hasSavedCurrentScenario
         ? () => void onSaveRun()
@@ -2852,6 +2836,7 @@ export function BenchmarkRunner() {
       disabled: Boolean(!report || !userId),
     },
   ];
+  const nextStepIndex = onboardingSteps.findIndex((step) => !step.done && Boolean(step.actionLabel && step.action));
 
   return (
     <section style={{ display: 'grid', gap: 20 }}>
@@ -2909,57 +2894,75 @@ export function BenchmarkRunner() {
       ) : null}
 
       <section className="first-run-panel" aria-label="First run checklist">
-        <div className="first-run-intro">
-          <p className="eyebrow">First run checklist</p>
-          <h2>Get from sample scenario to saved QA history.</h2>
-          <p className="first-run-lead">
-            Pick a suite and scenario, simulate a sample check, then save the result for regression history.
-          </p>
-          <div className="first-run-selectors" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, marginTop: 14 }}>
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Benchmark suite</span>
+        <header className="first-run-header">
+          <div>
+            <p className="eyebrow">First run</p>
+            <h2>Try a sample scenario check</h2>
+            <p className="first-run-lead">Choose → simulate → save. One path from a sample scenario to QA history.</p>
+          </div>
+          <div className="first-run-selectors">
+            <label>
+              <span>Suite</span>
               <select
                 aria-label="Benchmark suite"
                 value={selectedSuite?.id ?? ''}
                 disabled={isLoading || !suites.length}
                 onChange={(event) => setSelectedSuiteId(event.target.value)}
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
               >
                 {suites.map((suite) => (
                   <option key={suite.id} value={suite.id}>{suite.title}</option>
                 ))}
               </select>
             </label>
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Scenario</span>
+            <label>
+              <span>Scenario</span>
               <select
                 aria-label="Scenario"
                 value={selectedScenario?.id ?? ''}
                 disabled={isLoading || !selectedSuite?.scenarios.length}
                 onChange={(event) => setSelectedScenarioId(event.target.value)}
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
               >
                 {(selectedSuite?.scenarios ?? []).map((scenario) => (
                   <option key={scenario.id} value={scenario.id}>{scenario.title}</option>
                 ))}
               </select>
             </label>
+            <label>
+              <span>Simulated agent label</span>
+              <input
+                aria-label="Simulated agent label"
+                value={agentProfile}
+                onChange={(event) => setAgentProfile(event.target.value)}
+                placeholder="mock text agent"
+              />
+            </label>
           </div>
-          {isLoading ? <p style={{ margin: '10px 0 0', color: 'var(--muted)' }}>Loading benchmark suites...</p> : null}
-        </div>
+          {isLoading ? <p className="first-run-loading">Loading suites…</p> : null}
+        </header>
+
         <ol className="onboarding-steps">
           {onboardingSteps.map((step, index) => {
             const status = onboardingStatusLabel(step.done, step.ready);
+            const isNext = index === nextStepIndex;
+            const showAction = Boolean(step.actionLabel && step.action && (isNext || step.done));
             return (
-              <li key={step.title} data-state={step.done ? 'done' : step.ready ? 'ready' : 'next'}>
+              <li
+                key={step.title}
+                data-state={step.done ? 'done' : isNext ? 'ready' : 'next'}
+                data-active={isNext ? 'true' : 'false'}
+              >
                 <span aria-hidden="true">{index + 1}</span>
                 <div className="onboarding-step-copy">
                   <strong>{step.title}</strong>
                   <p>{step.detail}</p>
-                  {step.actionLabel && step.action ? (
+                  {showAction ? (
                     <button
                       type="button"
-                      className={step.actionVariant === 'primary' ? 'primary-link onboarding-step-action' : 'secondary-link onboarding-step-action'}
+                      className={
+                        isNext || step.actionVariant === 'primary'
+                          ? 'primary-link onboarding-step-action'
+                          : 'secondary-link onboarding-step-action'
+                      }
                       onClick={step.action}
                       disabled={step.disabled}
                     >
@@ -3037,36 +3040,27 @@ export function BenchmarkRunner() {
         ) : null}
 
         <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) auto', gap: 16, alignItems: 'end' }}>
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Agent profile</span>
-              <input
-                value={agentProfile}
-                onChange={(event) => setAgentProfile(event.target.value)}
-                placeholder="mock text agent"
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-              />
-            </label>
-            <label
-              style={{
-                minHeight: 46,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 10,
-                border: '1px solid var(--border)',
-                borderRadius: 8,
-                padding: '10px 12px',
-                fontWeight: 760,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={includeFailure}
-                onChange={(event) => setIncludeFailure(event.target.checked)}
-              />
-              Failure baseline
-            </label>
-          </div>
+          <label
+            style={{
+              width: 'fit-content',
+              minHeight: 46,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 10,
+              border: '1px solid var(--border)',
+              borderRadius: 8,
+              padding: '10px 12px',
+              fontWeight: 760,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={includeFailure}
+              onChange={(event) => setIncludeFailure(event.target.checked)}
+              aria-label="Failure baseline"
+            />
+            Failure baseline
+          </label>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
             <label style={{ display: 'grid', gap: 8 }}>
               <span style={{ fontWeight: 700 }}>Agent version</span>
@@ -4356,14 +4350,6 @@ export function BenchmarkRunner() {
           ) : (
             <p style={{ margin: 0, color: 'var(--muted)' }}>Run a suite while signed in to retain suite-level history and child report links.</p>
           )}
-        </div>
-
-        <div className="card" style={{ padding: 20, display: 'grid', gap: 12 }}>
-          <p className="eyebrow">Voice path</p>
-          <h3 style={{ margin: 0 }}>Team-gated WebRTC evals</h3>
-          <p style={{ margin: 0, color: 'var(--muted)' }}>
-            Voice minutes are modeled in credits now. The visible gate keeps the product honest while the WebRTC/SIP runner is wired to real call evidence.
-          </p>
         </div>
       </section>
     </section>

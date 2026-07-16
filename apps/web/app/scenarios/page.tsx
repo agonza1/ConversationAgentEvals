@@ -3,10 +3,11 @@ import Link from 'next/link';
 
 export default function ScenariosRoutePage() {
   return (
-    <main className="page-shell compact-shell">
+    <main className="page-shell scenarios-page">
       <nav className="top-nav compact-nav" aria-label="Scenarios navigation">
         <Link className="brand" href="/">AgentBench</Link>
         <div>
+          <Link href="/">Homepage</Link>
           <Link href="/benchmarks">Runner</Link>
           <Link href="/scenarios">Scenarios</Link>
         </div>

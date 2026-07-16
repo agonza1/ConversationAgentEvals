@@ -290,7 +290,7 @@ export function ScenariosPage() {
           </ul>
 
           <p className="scenarios-muted scenarios-note">
-            Persistence: file-backed JSON under <code>apps/api/data/user_scenarios.json</code>, registered into the
+            Persistence: file-backed JSON under <code>storage/user_scenarios.json</code>, registered into the
             existing benchmark catalog as suite <strong>User Scenarios</strong>.
           </p>
         </aside>
@@ -382,7 +382,7 @@ export function ScenariosPage() {
           ) : null}
 
           {mode !== 'create' && selected ? (
-            <section className="scenarios-detail" aria-label="Selected scenario">
+            <section className="card scenarios-detail" aria-label="Selected scenario">
               <div className="scenarios-detail-header">
                 <div>
                   <p className="eyebrow">View</p>

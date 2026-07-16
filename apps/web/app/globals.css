@@ -546,19 +546,22 @@ select {
 
 .first-run-panel {
   display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-  gap: 18px;
-  align-items: start;
+  gap: 16px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 12px;
   background: var(--panel);
-  padding: 18px;
+  padding: 20px;
   box-shadow: 0 12px 32px rgba(24, 36, 45, 0.06);
 }
 
+.first-run-header {
+  display: grid;
+  gap: 14px;
+}
+
 .first-run-panel h2 {
-  margin: 6px 0 0;
-  font-size: 24px;
+  margin: 4px 0 0;
+  font-size: 26px;
   line-height: 1.15;
 }
 
@@ -566,11 +569,41 @@ select {
   margin: 8px 0 0;
   color: var(--muted);
   line-height: 1.45;
-  max-width: 36rem;
+  max-width: 40rem;
+}
+
+.first-run-selectors {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.first-run-selectors label {
+  display: grid;
+  gap: 6px;
+}
+
+.first-run-selectors span {
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.first-run-selectors select {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 11px 12px;
+  background: white;
+}
+
+.first-run-loading {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
 }
 
 .onboarding-steps {
   display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin: 0;
   padding: 0;
@@ -579,13 +612,15 @@ select {
 
 .onboarding-steps li {
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) auto;
-  gap: 12px;
-  align-items: start;
+  grid-template-columns: 28px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  gap: 8px 10px;
+  align-content: start;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--panel-alt);
   padding: 12px;
+  min-height: 132px;
 }
 
 .onboarding-steps li[data-state="done"] {
@@ -593,36 +628,50 @@ select {
   background: var(--success-bg);
 }
 
+.onboarding-steps li[data-active="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
 .onboarding-steps li > span {
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
   background: var(--accent);
   color: white;
-  font-weight: 900;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.onboarding-steps li[data-state="next"] > span {
+  background: color-mix(in srgb, var(--muted) 55%, white);
 }
 
 .onboarding-steps strong {
   display: block;
-  margin-bottom: 4px;
+  margin: 0;
+  font-size: 15px;
 }
 
 .onboarding-step-copy {
   display: grid;
-  gap: 10px;
+  gap: 8px;
+  grid-column: 2;
 }
 
 .onboarding-steps p {
   margin: 0;
   color: var(--muted);
-  line-height: 1.45;
+  line-height: 1.4;
+  font-size: 13px;
 }
 
 .onboarding-step-action {
   width: fit-content;
+  margin-top: 2px;
 }
 
 .onboarding-step-action:disabled {
@@ -631,17 +680,26 @@ select {
 }
 
 .onboarding-steps em {
-  align-self: center;
-  min-width: 58px;
+  grid-column: 1 / -1;
+  justify-self: start;
+  min-width: 52px;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.76);
-  padding: 5px 8px;
+  padding: 4px 8px;
   color: var(--text);
-  font-size: 12px;
+  font-size: 11px;
   font-style: normal;
-  font-weight: 850;
+  font-weight: 750;
   text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+@media (max-width: 860px) {
+  .onboarding-steps {
+    grid-template-columns: 1fr;
+  }
 }
 
 .validation-grid {
@@ -847,8 +905,7 @@ select {
   }
 
   .product-console,
-  .validation-grid,
-  .first-run-panel {
+  .validation-grid {
     grid-template-columns: 1fr;
   }
 
@@ -939,21 +996,28 @@ select {
   gap: 18px;
 }
 
+.scenarios-page {
+  width: min(1120px, calc(100% - 40px));
+}
+
 .scenarios-layout {
   display: grid;
-  grid-template-columns: minmax(260px, 0.9fr) minmax(0, 1.4fr);
+  grid-template-columns: minmax(280px, 0.85fr) minmax(0, 1.35fr);
   gap: 18px;
   align-items: start;
 }
 
 .scenarios-sidebar {
-  padding: 18px;
+  padding: 20px;
   display: grid;
   gap: 14px;
 }
 
 .scenarios-sidebar-header {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 12px;
 }
 
@@ -988,9 +1052,9 @@ select {
 }
 
 .scenarios-list button.is-active {
-  border-color: rgba(15, 118, 110, 0.35);
+  border-color: rgba(15, 118, 110, 0.45);
   background: white;
-  box-shadow: 0 8px 20px rgba(24, 36, 45, 0.06);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 .scenarios-list strong {
@@ -1006,6 +1070,7 @@ select {
 .scenarios-main {
   display: grid;
   gap: 14px;
+  min-width: 0;
 }
 
 .scenarios-detail,
@@ -1013,17 +1078,15 @@ select {
 .scenarios-empty {
   display: grid;
   gap: 14px;
-}
-
-.scenarios-detail-header,
-.scenarios-empty {
-  display: grid;
-  gap: 10px;
-}
-
-.scenarios-create-form,
-.scenarios-empty {
   padding: 20px;
+}
+
+.scenarios-detail-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .scenarios-create-form label {
@@ -1033,14 +1096,19 @@ select {
 }
 
 .scenarios-create-form input,
-.scenarios-create-form textarea {
+.scenarios-create-form textarea,
+.first-run-selectors input {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: white;
-  padding: 12px;
+  padding: 11px 12px;
   font: inherit;
   color: inherit;
+}
+
+.scenarios-create-form textarea {
   resize: vertical;
+  min-height: 96px;
 }
 
 .scenarios-checkbox {
@@ -1093,9 +1161,10 @@ select {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  border-radius: 999px;
-  background: #e8ecef;
-  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+  border-radius: 8px;
+  background: var(--panel-alt);
+  color: var(--accent);
   padding: 6px 12px;
   font-size: 13px;
   font-weight: 820;
@@ -1103,9 +1172,8 @@ select {
 
 .scenario-field-card {
   border: 1px solid var(--border);
-  border-radius: 10px;
-  background: white;
-  box-shadow: 0 10px 28px rgba(24, 36, 45, 0.06);
+  border-radius: 8px;
+  background: var(--panel-alt);
   padding: 16px 18px;
   display: grid;
   gap: 10px;
@@ -1146,12 +1214,17 @@ select {
 
 .scenario-copy-button:hover {
   border-color: var(--border);
-  background: var(--panel-alt);
+  background: white;
   color: var(--text);
 }
 
 @media (max-width: 900px) {
   .scenarios-layout {
     grid-template-columns: 1fr;
+  }
+
+  .scenarios-sidebar-header,
+  .scenarios-detail-header {
+    flex-direction: column;
   }
 }
