@@ -149,6 +149,12 @@ def disconnect_openai_provider() -> dict[str, Any]:
     return get_provider('openai').disconnect()
 
 
+def list_openai_models() -> dict[str, Any]:
+    from app.services.llm_providers import get_provider
+
+    return get_provider('openai').list_models()
+
+
 def _openai_provider_status() -> dict[str, Any]:
     from app.services.llm_providers import get_provider
 

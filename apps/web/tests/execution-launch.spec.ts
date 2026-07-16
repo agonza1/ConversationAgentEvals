@@ -61,6 +61,25 @@ test('launch evaluation streams conversations into the live list', async ({ page
       });
       return;
     }
+    if (url.includes('/providers/openai/status')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          status: 'disconnected',
+          message: 'Connect OpenAI (Codex OAuth) to unlock the local LLM judge.',
+        }),
+      });
+      return;
+    }
+    if (url.includes('/providers/openai/models')) {
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'Connect OpenAI (Codex OAuth) to load models.' }),
+      });
+      return;
+    }
     if (url.includes('/runs') || url.includes('/audit-events') || url.includes('/regression-summary') || url.includes('/export')) {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
       return;
@@ -68,12 +87,15 @@ test('launch evaluation streams conversations into the live list', async ({ page
     await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
   });
 
+  let postedModel: string | null = null;
   await page.route('**/api/benchmarks/suite-runs**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
   });
 
   await page.route('**/api/execution/runs', async (route) => {
     if (route.request().method() === 'POST') {
+      const body = route.request().postDataJSON() as { model_name?: string };
+      postedModel = body.model_name ?? null;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -85,6 +107,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
           scenario_ids: ['billing-address-change'],
           user_id: 'demo-user',
           project_id: 'call-center-demo',
+          model_name: body.model_name ?? 'gpt-5.4',
           progress: {
             phase: 'queued',
             completed_conversations: 0,
@@ -187,8 +210,11 @@ test('launch evaluation streams conversations into the live list', async ({ page
   });
 
   const launch = page.getByLabel('Launch agent run');
+  await expect(launch.getByLabel('Execution model')).toHaveValue('gpt-5.4');
+  await expect(launch.getByText('Connect OpenAI to load models.')).toBeVisible();
   await launch.getByRole('button', { name: 'Launch agent run' }).click();
   await expect(launch.getByText('exec-ui-demo', { exact: true })).toBeVisible();
+  await expect.poll(() => postedModel).toBe('gpt-5.4');
   await expect(launch.getByLabel('Execution conversations')).toContainText('Billing Address Change');
   await expect(launch.getByLabel('Execution conversations')).toContainText(/pass/i, { timeout: 8000 });
 });

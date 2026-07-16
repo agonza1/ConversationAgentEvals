@@ -116,6 +116,48 @@ def test_voice_fixture_agent_run_includes_latency_metrics():
         assert isinstance(conversation['timeline'], list)
 
 
+def test_execution_persists_model_name_default_and_override():
+    queued_default = start_execution_run(
+        ExecutionRunCreateRequest(
+            suite_id='call-center-voice-ai',
+            scenario_ids=['billing-address-change'],
+            agent_id='mock-text-agent',
+            user_id='agent-runs-user',
+            project_id='agent-runs-project',
+            iterations=1,
+        )
+    )
+    assert queued_default['model_name'] == 'gpt-5.4'
+
+    queued = start_execution_run(
+        ExecutionRunCreateRequest(
+            suite_id='call-center-voice-ai',
+            scenario_ids=['billing-address-change'],
+            agent_id='mock-text-agent',
+            user_id='agent-runs-user',
+            project_id='agent-runs-project',
+            iterations=1,
+            model_name='gpt-5.4-mini',
+        )
+    )
+    assert queued['model_name'] == 'gpt-5.4-mini'
+
+    via_api = client.post(
+        '/api/execution/runs',
+        json={
+            'suite_id': 'call-center-voice-ai',
+            'scenario_ids': ['billing-address-change'],
+            'agent_id': 'mock-text-agent',
+            'user_id': 'agent-runs-user',
+            'project_id': 'agent-runs-project',
+            'model_name': 'gpt-4.1',
+            'iterations': 1,
+        },
+    )
+    assert via_api.status_code == 200, via_api.text
+    assert via_api.json()['model_name'] == 'gpt-4.1'
+
+
 def test_rejects_unsafe_agent_id_and_seed_delete():
     bad = client.post(
         '/api/agents',

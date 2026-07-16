@@ -77,6 +77,7 @@ export interface ExecutionRunRecord {
   project_id: string;
   agent_id?: string | null;
   agent_name?: string | null;
+  model_name?: string | null;
   progress: {
     phase: string;
     completed_conversations: number;
@@ -220,6 +221,7 @@ export async function createExecutionRun(payload: {
   project_id: string;
   agent_id?: string;
   text_callable?: string;
+  model_name?: string;
 }): Promise<ExecutionRunRecord> {
   return handleJson(
     await fetch(`${getApiBase()}/api/execution/runs`, {

@@ -42,6 +42,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_VOICE_FIXTURE = 'docs/examples/agentic-contact-center-run-fixture.json'
 DEFAULT_AUDIO_PLAN = 'docs/examples/agentic-contact-center-audio-plan.json'
 DEFAULT_CANCELLATION_SCENARIO = 'docs/examples/agentic-contact-center-cancellation-rescue.json'
+DEFAULT_EXECUTION_MODEL = 'gpt-5.4'
 FIXTURE_BACKED_SCENARIO_IDS = frozenset({'cancellation-rescue'})
 ALLOWED_FIXTURE_ROOTS = (
     REPO_ROOT / 'docs' / 'examples',
@@ -79,6 +80,7 @@ def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
     now = datetime.now(UTC).isoformat()
     execution_run_id = f'exec-{uuid.uuid4().hex[:12]}'
     agent = get_agent(resolved.agent_id) if resolved.agent_id else None
+    model_name = (resolved.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
     record = ExecutionRunRecord(
         execution_run_id=execution_run_id,
         status='queued',
@@ -89,6 +91,7 @@ def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
         project_id=resolved.project_id,
         agent_id=resolved.agent_id,
         agent_name=(agent or {}).get('name'),
+        model_name=model_name,
         progress=ExecutionRunProgress(
             phase='queued',
             completed_conversations=0,
@@ -247,8 +250,9 @@ def _run_one_conversation(
 
 
 def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCreateRequest:
+    model_name = (payload.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
     if not payload.agent_id:
-        return payload
+        return payload.model_copy(update={'model_name': model_name})
     agent = get_agent(payload.agent_id)
     if agent is None:
         raise ValueError(f'Unknown agent: {payload.agent_id}')
@@ -266,6 +270,7 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
             'mode': mode,
             'text_callable': text_callable,
             'agent_id': agent['id'],
+            'model_name': model_name,
         }
     )
 

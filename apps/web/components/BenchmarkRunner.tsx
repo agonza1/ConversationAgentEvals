@@ -266,6 +266,26 @@ interface OpenAIProviderStatus {
   last_error?: string | null;
 }
 
+const DEFAULT_EXECUTION_MODEL = 'gpt-5.4';
+
+async function fetchOpenAIModels(): Promise<string[]> {
+  const response = await fetch(`${getApiBase()}/api/product/providers/openai/models`, { cache: 'no-store' });
+  if (response.status === 401) {
+    return [DEFAULT_EXECUTION_MODEL];
+  }
+  const payload = await handleJson<{ models?: Array<{ id?: string } | string>; default_model?: string }>(response);
+  const ids = (payload.models ?? [])
+    .map((item) => (typeof item === 'string' ? item : item.id))
+    .filter((id): id is string => Boolean(id && id.trim()));
+  const merged = Array.from(new Set([DEFAULT_EXECUTION_MODEL, ...ids]));
+  merged.sort((a, b) => {
+    if (a === DEFAULT_EXECUTION_MODEL) return -1;
+    if (b === DEFAULT_EXECUTION_MODEL) return 1;
+    return a.localeCompare(b);
+  });
+  return merged.length ? merged : [DEFAULT_EXECUTION_MODEL];
+}
+
 interface SavedRun {
   id: string;
   project_id: string;
@@ -880,6 +900,7 @@ interface ExecutionRunRecord {
   run_snapshot_path?: string | null;
   agent_id?: string | null;
   agent_name?: string | null;
+  model_name?: string | null;
   error?: string | null;
   created_at: string;
   updated_at: string;
@@ -896,6 +917,7 @@ async function createExecutionRun(payload: {
   project_id: string;
   evaluate?: boolean;
   agent_id?: string;
+  model_name?: string;
 }) {
   return handleJson<ExecutionRunRecord>(
     await fetch(`${getApiBase()}/api/execution/runs`, {
@@ -2048,6 +2070,9 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   const [executionRun, setExecutionRun] = useState<ExecutionRunRecord | null>(null);
   const [isLaunchingExecution, setIsLaunchingExecution] = useState(false);
   const [executionMessage, setExecutionMessage] = useState<string | null>(null);
+  const [executionModelName, setExecutionModelName] = useState(DEFAULT_EXECUTION_MODEL);
+  const [executionModelOptions, setExecutionModelOptions] = useState<string[]>([DEFAULT_EXECUTION_MODEL]);
+  const [executionModelsMessage, setExecutionModelsMessage] = useState<string | null>(null);
   const [agents, setAgents] = useState<ScoreAgentOption[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const selectedScoreAgent = useMemo(
@@ -2194,6 +2219,34 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
       }
     };
   }, [catalogReloadKey]);
+
+  useEffect(() => {
+    let active = true;
+    async function loadExecutionModels() {
+      if (openaiProvider?.status !== 'connected') {
+        setExecutionModelOptions([DEFAULT_EXECUTION_MODEL]);
+        setExecutionModelsMessage('Connect OpenAI to load models');
+        setExecutionModelName((current) => current || DEFAULT_EXECUTION_MODEL);
+        return;
+      }
+      try {
+        const models = await fetchOpenAIModels();
+        if (!active) return;
+        setExecutionModelOptions(models);
+        setExecutionModelsMessage(null);
+        setExecutionModelName((current) => (models.includes(current) ? current : DEFAULT_EXECUTION_MODEL));
+      } catch (err) {
+        if (!active) return;
+        setExecutionModelOptions([DEFAULT_EXECUTION_MODEL]);
+        setExecutionModelsMessage(err instanceof Error ? err.message : 'Could not load OpenAI models');
+        setExecutionModelName((current) => current || DEFAULT_EXECUTION_MODEL);
+      }
+    }
+    void loadExecutionModels();
+    return () => {
+      active = false;
+    };
+  }, [openaiProvider?.status]);
 
   useEffect(() => {
     let active = true;
@@ -2542,6 +2595,10 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           setOpenaiProviderMessage(`Connected as ${status.email || status.account_id || 'OpenAI account'}.`);
           const nextConfig = await fetchProductConfig().catch(() => null);
           if (nextConfig) setProductConfig(nextConfig);
+          const models = await fetchOpenAIModels().catch(() => [DEFAULT_EXECUTION_MODEL]);
+          setExecutionModelOptions(models);
+          setExecutionModelsMessage(null);
+          setExecutionModelName((current) => (models.includes(current) ? current : DEFAULT_EXECUTION_MODEL));
           break;
         }
       }
@@ -2558,6 +2615,9 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
       await disconnectOpenAIProvider();
       const status = await fetchOpenAIProviderStatus();
       setOpenaiProvider(status);
+      setExecutionModelOptions([DEFAULT_EXECUTION_MODEL]);
+      setExecutionModelsMessage('Connect OpenAI to load models');
+      setExecutionModelName(DEFAULT_EXECUTION_MODEL);
       const nextConfig = await fetchProductConfig().catch(() => null);
       if (nextConfig) setProductConfig(nextConfig);
       setOpenaiProviderMessage('OpenAI disconnected.');
@@ -2994,6 +3054,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         project_id: identity.projectId,
         evaluate: true,
         agent_id: selectedAgentId || undefined,
+        model_name: executionModelName || DEFAULT_EXECUTION_MODEL,
       });
       setExecutionRun(queued);
       setExecutionMessage(
@@ -3860,6 +3921,38 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                 <option key={agent.id} value={agent.id}>{agent.name}</option>
               ))}
             </select>
+          </label>
+          <label style={{ display: 'grid', gap: 8 }}>
+            <span style={{ fontWeight: 700 }}>Model</span>
+            <select
+              aria-label="Execution model"
+              value={executionModelName}
+              onChange={(event) => setExecutionModelName(event.target.value)}
+              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
+            >
+              {(executionModelOptions.includes(executionModelName)
+                ? executionModelOptions
+                : [executionModelName, ...executionModelOptions]
+              ).map((modelId) => (
+                <option key={modelId} value={modelId}>{modelId}</option>
+              ))}
+            </select>
+            {openaiProvider?.status !== 'connected' ? (
+              <span style={{ color: 'var(--muted)', fontSize: 13 }}>
+                Connect OpenAI to load models.{' '}
+                <button
+                  type="button"
+                  className="secondary-link"
+                  disabled={isConnectingOpenAI}
+                  onClick={() => void onConnectOpenAI()}
+                  style={{ padding: 0, border: 0, background: 'transparent', color: 'var(--accent)', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  {isConnectingOpenAI ? 'Connecting…' : 'Connect OpenAI'}
+                </button>
+              </span>
+            ) : executionModelsMessage ? (
+              <span style={{ color: 'var(--muted)', fontSize: 13 }}>{executionModelsMessage}</span>
+            ) : null}
           </label>
           <label style={{ display: 'grid', gap: 8 }}>
             <span style={{ fontWeight: 700 }}>Target mode</span>

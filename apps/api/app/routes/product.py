@@ -27,6 +27,7 @@ from app.services.product_service import (
     invite_workspace_member,
     judge_gate,
     list_llm_providers,
+    list_openai_models,
     list_projects,
     list_saved_runs,
     list_workspaces,
@@ -296,6 +297,16 @@ def start_openai_provider_oauth():
 @router.get('/providers/openai/status')
 def get_openai_provider_status():
     return openai_provider_status()
+
+
+@router.get('/providers/openai/models')
+def get_openai_provider_models():
+    try:
+        return list_openai_models()
+    except PermissionError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - surface provider/API failures to the UI
+        raise HTTPException(status_code=502, detail=f'Could not list OpenAI models: {exc}') from exc
 
 
 @router.post('/providers/openai/disconnect')

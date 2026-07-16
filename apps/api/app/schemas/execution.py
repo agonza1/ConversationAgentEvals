@@ -26,6 +26,7 @@ class ExecutionRunCreateRequest(BaseModel):
     voice_fixture_path: str | None = None
     audio_plan_path: str | None = None
     agent_id: str | None = None
+    model_name: str | None = Field(default=None, min_length=1)
     # Local Pipecat small WebRTC is the supported first slice; Verto SIP is rejected
     # until FreeSwitchVertoSipTransport is implemented.
     audio_transport: AudioTransportId = 'none'
@@ -153,6 +154,7 @@ class ExecutionRunRecord(BaseModel):
     project_id: str
     agent_id: str | None = None
     agent_name: str | None = None
+    model_name: str | None = None
     progress: ExecutionRunProgress
     conversations: list[ConversationRecord] = Field(default_factory=list)
     inference_set_path: str | None = None

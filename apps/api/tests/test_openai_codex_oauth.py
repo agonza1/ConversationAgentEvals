@@ -68,6 +68,16 @@ class FakeOpenAIProvider:
             raise RuntimeError('not connected')
         return 'access-token'
 
+    def list_models(self) -> dict:
+        if not self.connected:
+            raise PermissionError('Connect OpenAI (Codex OAuth) to load models.')
+        return {
+            'provider': 'openai_codex',
+            'status': 'connected',
+            'default_model': 'gpt-5.4',
+            'models': [{'id': 'gpt-5.4'}, {'id': 'gpt-4.1-mini'}],
+        }
+
     def complete(self, prompt: str) -> str:
         if not self.connected:
             raise RuntimeError('not connected')
@@ -334,6 +344,67 @@ def test_http_helpers_use_certifi_ssl_context(monkeypatch):
     ) == {'access_token': 't', 'ok': True}
     assert isinstance(seen['context'], ssl.SSLContext)
     assert seen['timeout'] == 90
+
+
+def test_openai_models_endpoint_requires_connection():
+    set_provider_for_tests('openai', FakeOpenAIProvider(connected=False))
+    response = client.get('/api/product/providers/openai/models')
+    assert response.status_code == 401
+    assert 'Connect OpenAI' in response.json()['detail']
+
+
+def test_openai_models_endpoint_lists_when_connected():
+    set_provider_for_tests('openai', FakeOpenAIProvider(connected=True))
+    response = client.get('/api/product/providers/openai/models')
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['status'] == 'connected'
+    assert payload['default_model'] == 'gpt-5.4'
+    assert {'id': 'gpt-5.4'} in payload['models']
+
+
+def test_openai_codex_list_models_filters_and_uses_ssl_get(tmp_path: Path):
+    from app.services.llm_providers import openai_codex as mod
+
+    token_path = tmp_path / 'oauth.json'
+    token_path.write_text(
+        json.dumps(
+            {
+                'access_token': 'access',
+                'refresh_token': 'refresh',
+                'expires_at': 9_999_999_999,
+                'account_id': 'acct_1',
+                'email': 'user@example.com',
+            }
+        ),
+        encoding='utf-8',
+    )
+    provider = OpenAICodexProvider(token_path=token_path, now=lambda: 1_000)
+
+    captured: dict[str, object] = {}
+
+    def fake_get(url: str, *, headers: dict[str, str]):
+        captured['url'] = url
+        captured['headers'] = headers
+        return {
+            'data': [
+                {'id': 'gpt-5.4'},
+                {'id': 'gpt-4.1-mini'},
+                {'id': 'text-embedding-3-large'},
+                {'id': 'whisper-1'},
+                {'id': 'o3-mini'},
+            ]
+        }
+
+    payload = provider.list_models(http_get=fake_get)
+    assert captured['url'] == mod.OPENAI_MODELS_URL
+    assert captured['headers']['Authorization'] == 'Bearer access'
+    ids = [item['id'] for item in payload['models']]
+    assert ids[0] == 'gpt-5.4'
+    assert 'gpt-4.1-mini' in ids
+    assert 'o3-mini' in ids
+    assert 'text-embedding-3-large' not in ids
+    assert 'whisper-1' not in ids
 
 
 def _fake_jwt(payload: dict) -> str:
