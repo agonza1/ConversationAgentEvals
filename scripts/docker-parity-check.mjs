@@ -83,6 +83,8 @@ requireIncludes('seed service', seed, 'restart: "no"');
 
 const api = serviceBlock('api');
 requireIncludes('api service', api, '"${API_PORT:-8025}:8000"');
+requireIncludes('api service', api, '"1455:1455"');
+requireNotIncludes('api service', api, 'OPENAI_CODEX_CALLBACK_PORT');
 requireIncludes('api service', api, 'PORT: 8000');
 requireIncludes('api service', api, 'DATABASE_URL: ${COMPOSE_DATABASE_URL:-sqlite:////workspace/storage/conversation_agent_evals.db}');
 requireNotIncludes('api service', api, 'profiles:');
