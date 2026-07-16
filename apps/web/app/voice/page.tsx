@@ -16,7 +16,7 @@ export default function VoicePage() {
 
       <section className="minimal-hero" aria-labelledby="voice-title">
         <h1 id="voice-title">Voice eval</h1>
-        <p>Run cancellation-rescue and inspect transcript, recording, and vCon.</p>
+        <p>Run cancellation-rescue with Pipecat hooks or fixtures.</p>
       </section>
 
       <VoiceEvalPage />

@@ -16,6 +16,7 @@ interface ExecutionConversation {
   transcript?: string | null;
   recording?: JsonRecord | null;
   vcon_export_summary?: JsonRecord | null;
+  audio_session?: JsonRecord | null;
   verdict?: string | null;
   score?: number | null;
   error?: string | null;
@@ -82,16 +83,21 @@ function statusColor(status?: string | null) {
 
 function evidenceLine(conversation: ExecutionConversation) {
   const parts: string[] = [];
+  if (conversation.mode === 'pipecat_webrtc') parts.push('Pipecat hooks');
   const url = conversation.recording?.recording_url ?? conversation.recording?.uri;
   if (typeof url === 'string' && url.trim()) parts.push('recording');
   const summary = conversation.vcon_export_summary;
   if (typeof summary?.dialog_turns === 'number') parts.push(`vCon · ${summary.dialog_turns} turns`);
   else if (summary) parts.push('vCon');
+  const session = conversation.audio_session;
+  if (typeof session?.frames_sent === 'number' || typeof session?.frames_received === 'number') {
+    parts.push(`frames ${session.frames_sent ?? 0}/${session.frames_received ?? 0}`);
+  }
   return parts.length ? parts.join(' · ') : null;
 }
 
 export function VoiceEvalPage() {
-  const [mode, setMode] = useState<VoiceMode>('voice_fixture');
+  const [mode, setMode] = useState<VoiceMode>('pipecat_webrtc');
   const [error, setError] = useState<string | null>(null);
   const [isLaunching, setIsLaunching] = useState(false);
   const [run, setRun] = useState<ExecutionRun | null>(null);
@@ -148,18 +154,38 @@ export function VoiceEvalPage() {
   return (
     <section className="card" style={{ padding: 24, display: 'grid', gap: 16 }} aria-label="Voice evaluation">
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'end' }}>
-        <label style={{ display: 'grid', gap: 6, minWidth: 220, flex: 1 }}>
+        <div style={{ display: 'grid', gap: 6, flex: 1, minWidth: 260 }}>
           <span style={{ fontWeight: 700 }}>Mode</span>
-          <select
-            aria-label="Voice evaluation mode"
-            value={mode}
-            onChange={(event) => setMode(event.target.value as VoiceMode)}
-            style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
-          >
-            <option value="voice_fixture">Fixture</option>
-            <option value="pipecat_webrtc">Pipecat mock</option>
-          </select>
-        </label>
+          <div role="group" aria-label="Voice evaluation mode" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {(
+              [
+                { id: 'pipecat_webrtc', label: 'Pipecat hooks' },
+                { id: 'voice_fixture', label: 'Fixture' },
+              ] as const
+            ).map((option) => {
+              const selected = mode === option.id;
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => setMode(option.id)}
+                  style={{
+                    border: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`,
+                    borderRadius: 8,
+                    padding: '10px 14px',
+                    background: selected ? 'var(--accent)' : 'white',
+                    color: selected ? 'white' : 'var(--text)',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
         <button
           type="button"
           onClick={onLaunch}
@@ -180,7 +206,9 @@ export function VoiceEvalPage() {
       </div>
 
       <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }}>
-        {mode === 'pipecat_webrtc' ? 'Local mock hooks + vCon. Not live WebRTC.' : 'Offline audio fixture. No live call.'}
+        {mode === 'pipecat_webrtc'
+          ? 'In-process send/receive hooks + vCon capture.'
+          : 'Offline audio fixture path.'}
       </p>
 
       {error ? <p style={{ margin: 0, color: 'var(--error-text)' }}>{error}</p> : null}
