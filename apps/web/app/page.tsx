@@ -103,7 +103,6 @@ export default function HomePage() {
         <Link className="brand" href="/">AgentBench</Link>
         <div>
           <a href="#product">Product</a>
-          <a href="#coverage">Coverage</a>
           <a href="#benchmarks">Benchmarks</a>
           <Link href="/simulate">Simulate</Link>
           <Link href="/score">Score evidence</Link>

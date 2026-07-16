@@ -1778,6 +1778,83 @@ function readWorkflowDemoPreset() {
   return WORKFLOW_DEMO_PRESETS[demo] ?? null;
 }
 
+function transcriptFromVcon(vcon: JsonRecord): string {
+  const parties = Array.isArray(vcon.parties) ? vcon.parties : [];
+  const dialog = Array.isArray(vcon.dialog) ? vcon.dialog : [];
+  return dialog
+    .map((item) => {
+      const record = asRecord(item);
+      const partyIndex = Number(record.party ?? 0);
+      const party = asRecord(parties[partyIndex]);
+      const name = String(party.name ?? party.role ?? `party-${partyIndex}`);
+      const body = String(record.body ?? record.text ?? '').trim();
+      return body ? `${name}: ${body}` : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function sampleVconFromTranscript(transcriptText: string): string {
+  const lines = transcriptText
+    .split(/\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const parties = [{ name: 'Caller' }, { name: 'Agent' }];
+  const dialog = lines.map((line) => {
+    const matched = line.match(/^(caller|agent|user|customer)\s*:\s*(.*)$/i);
+    if (matched) {
+      const speaker = matched[1].toLowerCase();
+      const party = speaker === 'agent' ? 1 : 0;
+      return { party, body: matched[2] };
+    }
+    return { party: 0, body: line };
+  });
+  return JSON.stringify({ vcon: '0.0.1', parties, dialog }, null, 2);
+}
+
+function describeUploadedEvidence(filename: string, text: string): {
+  kind: 'vcon' | 'transcript';
+  transcript?: string;
+  vcon?: string;
+  message: string;
+} {
+  const trimmed = text.trim();
+  const lower = filename.toLowerCase();
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const record = asRecord(parsed);
+      const looksVcon =
+        lower.endsWith('.vcon')
+        || typeof record.vcon === 'string'
+        || (Array.isArray(record.parties) && Array.isArray(record.dialog));
+      if (looksVcon) {
+        const derived = transcriptFromVcon(record);
+        return {
+          kind: 'vcon',
+          vcon: JSON.stringify(parsed, null, 2),
+          transcript: derived || undefined,
+          message: `Loaded vCon from ${filename}.`,
+        };
+      }
+      if (typeof record.transcript === 'string') {
+        return {
+          kind: 'transcript',
+          transcript: record.transcript,
+          message: `Loaded transcript from ${filename}.`,
+        };
+      }
+    }
+  } catch {
+    // Plain text transcript.
+  }
+  return {
+    kind: 'transcript',
+    transcript: trimmed,
+    message: `Loaded transcript from ${filename}.`,
+  };
+}
+
 export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }) {
   const loadingSavedRunRef = useRef(false);
   const autoLaunchDemoRef = useRef(false);
@@ -1832,6 +1909,8 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   const [executionMessage, setExecutionMessage] = useState<string | null>(null);
   const [agents, setAgents] = useState<Array<{ id: string; name: string; channel: string; target: string }>>([]);
   const [selectedAgentId, setSelectedAgentId] = useState('');
+  const [showSimulateEvidenceOptions, setShowSimulateEvidenceOptions] = useState(false);
+  const [uploadMessage, setUploadMessage] = useState<string | null>(null);
 
   const selectedSuite = useMemo(
     () => suites.find((suite) => suite.id === selectedSuiteId) ?? suites[0] ?? null,
@@ -1841,22 +1920,58 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     () => selectedSuite?.scenarios.find((scenario) => scenario.id === selectedScenarioId) ?? selectedSuite?.scenarios[0] ?? null,
     [selectedScenarioId, selectedSuite],
   );
+  const callCenterScenarios = useMemo(
+    () => suites.find((suite) => suite.id === 'call-center-voice-ai')?.scenarios ?? [],
+    [suites],
+  );
 
   function loadScenarioStarterData(nextScenario = selectedScenario) {
     if (!nextScenario) return;
 
-    setTranscript(nextScenario.sample_transcript ?? '');
+    const nextTranscript = nextScenario.sample_transcript ?? '';
+    setTranscript(nextTranscript);
     setActionTrace(stringifyEditable(nextScenario.sample_action_trace, '[]'));
     setFinalState(stringifyEditable(nextScenario.sample_final_state ?? nextScenario.expected_final_state, '{}'));
     setCallEvidence('');
     setGroupCall('');
-    setVconEvidence('');
+    setVconEvidence(nextTranscript ? sampleVconFromTranscript(nextTranscript) : '');
     setReport(null);
     setSuiteSimulation(null);
     setSaveMessage(null);
     setJudgeGate(null);
     setCopyMessage(null);
     setRunError(null);
+    setUploadMessage(null);
+  }
+
+  function onSimulateCallCenterEvidence(scenario: BenchmarkScenario) {
+    setSelectedSuiteId('call-center-voice-ai');
+    setSelectedScenarioId(scenario.id);
+    loadScenarioStarterData(scenario);
+    setShowSimulateEvidenceOptions(false);
+    setUploadMessage(`Loaded simulated Call Center Voice AI evidence: ${scenario.title}.`);
+  }
+
+  async function onUploadEvidenceFile(file: File | null) {
+    if (!file) return;
+    setUploadMessage(null);
+    setRunError(null);
+    try {
+      const text = await file.text();
+      const loaded = describeUploadedEvidence(file.name, text);
+      if (loaded.kind === 'vcon') {
+        setVconEvidence(loaded.vcon || '');
+        if (loaded.transcript) setTranscript(loaded.transcript);
+        setCallEvidence('');
+      } else {
+        setTranscript(loaded.transcript || '');
+        setVconEvidence('');
+      }
+      setReport(null);
+      setUploadMessage(loaded.message);
+    } catch (err) {
+      setRunError(err instanceof Error ? err.message : 'Could not read the uploaded file.');
+    }
   }
 
   useEffect(() => {
@@ -3037,8 +3152,64 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           </div>
         </div>
 
-        <details style={{ display: view === 'run' ? 'none' : undefined }}>
-          <summary style={{ cursor: 'pointer', fontWeight: 800 }}>Evidence payload</summary>
+        {view === 'score' ? (
+          <section className="score-upload-panel" aria-label="Evidence upload">
+            <div className="score-upload-copy">
+              <p className="eyebrow">Evidence intake</p>
+              <h2>Upload a vCon or transcript</h2>
+              <p>Drop in your own conversation artifact, or load a simulated Call Center Voice AI sample.</p>
+            </div>
+            <div className="score-upload-actions">
+              <label className="score-upload-drop">
+                <span>Upload vCon or transcript</span>
+                <small>Accepts .vcon, .json, .txt, .md</small>
+                <input
+                  type="file"
+                  accept=".vcon,.json,.txt,.md,application/json,text/plain,text/markdown"
+                  aria-label="Upload vCon or transcript file"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0] ?? null;
+                    void onUploadEvidenceFile(file);
+                    event.currentTarget.value = '';
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                className="score-upload-simulate"
+                onClick={() => setShowSimulateEvidenceOptions((current) => !current)}
+              >
+                {showSimulateEvidenceOptions ? 'Hide simulate options' : 'Simulate evidence upload'}
+              </button>
+            </div>
+            {showSimulateEvidenceOptions ? (
+              <div className="score-simulate-options" aria-label="Call Center Voice AI simulate options">
+                <p>Call Center Voice AI scenarios</p>
+                <div className="score-simulate-option-list">
+                  {callCenterScenarios.length ? (
+                    callCenterScenarios.map((scenario) => (
+                      <button
+                        key={scenario.id}
+                        type="button"
+                        onClick={() => onSimulateCallCenterEvidence(scenario)}
+                      >
+                        {scenario.title}
+                      </button>
+                    ))
+                  ) : (
+                    <p className="scenarios-muted">Load suites to see Call Center Voice AI options.</p>
+                  )}
+                </div>
+              </div>
+            ) : null}
+            {uploadMessage ? <p className="score-upload-message">{uploadMessage}</p> : null}
+          </section>
+        ) : null}
+
+        <details open={view === 'score' ? true : undefined} style={{ display: view === 'run' ? 'none' : undefined }}>
+          <summary style={{ cursor: 'pointer', fontWeight: 800 }}>
+            {view === 'score' ? 'Evidence payload (editable)' : 'Evidence payload'}
+          </summary>
           <div style={{ display: 'grid', gap: 16, marginTop: 14 }}>
             <label style={{ display: 'grid', gap: 8 }}>
               <span style={{ fontWeight: 700 }}>Transcript</span>

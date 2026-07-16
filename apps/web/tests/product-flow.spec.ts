@@ -19,9 +19,13 @@ test('dedicated paths expose only their primary workflow', async ({ page }) => {
   await expect(page.getByText('Team-gated WebRTC evals')).toHaveCount(0);
 
   await page.goto('/score');
-  await expect(page.getByRole('heading', { name: 'Score transcript and execution evidence.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Upload evidence and score it.' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Score evidence' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Simulate scenario' })).toHaveCount(0);
+  await expect(page.getByLabel('Evidence upload')).toBeVisible();
+  await expect(page.getByLabel('Upload vCon or transcript file')).toBeVisible();
+  await page.getByRole('button', { name: 'Simulate evidence upload' }).click();
+  await expect(page.getByLabel('Call Center Voice AI simulate options')).toBeVisible();
   await expect(page.getByLabel('Saved runs and e2e validation')).toBeVisible();
 
   await page.goto('/runs');

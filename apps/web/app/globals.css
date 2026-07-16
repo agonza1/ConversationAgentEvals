@@ -1198,6 +1198,101 @@ select {
   line-height: 1.45;
 }
 
+.score-upload-panel {
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-alt);
+  padding: 16px;
+}
+
+.score-upload-copy h2 {
+  margin: 4px 0 0;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.score-upload-copy p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.score-upload-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.score-upload-drop {
+  display: grid;
+  gap: 4px;
+  align-content: center;
+  min-height: 96px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 10px;
+  background: white;
+  padding: 14px 16px;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.score-upload-drop small {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.score-upload-drop input {
+  margin-top: 8px;
+  width: 100%;
+}
+
+.score-upload-simulate {
+  min-height: 96px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: white;
+  padding: 14px 16px;
+  font-weight: 820;
+  text-align: left;
+}
+
+.score-simulate-options {
+  display: grid;
+  gap: 10px;
+}
+
+.score-simulate-options > p {
+  margin: 0;
+  font-weight: 800;
+}
+
+.score-simulate-option-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 8px;
+}
+
+.score-simulate-option-list button {
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: white;
+  padding: 10px 12px;
+  font-weight: 760;
+}
+
+.score-simulate-option-list button:hover {
+  border-color: var(--accent);
+}
+
+.score-upload-message {
+  margin: 0;
+  color: var(--success-text);
+  font-weight: 700;
+}
+
 .agents-shell {
   width: min(1180px, calc(100% - 40px));
   gap: 24px;
