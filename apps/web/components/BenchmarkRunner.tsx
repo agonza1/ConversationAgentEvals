@@ -864,6 +864,9 @@ interface ExecutionRunRecord {
   };
   conversations: ExecutionConversationRecord[];
   inference_set_path?: string | null;
+  run_snapshot_path?: string | null;
+  agent_id?: string | null;
+  agent_name?: string | null;
   error?: string | null;
   created_at: string;
   updated_at: string;
@@ -879,6 +882,7 @@ async function createExecutionRun(payload: {
   user_id: string;
   project_id: string;
   evaluate?: boolean;
+  agent_id?: string;
 }) {
   return handleJson<ExecutionRunRecord>(
     await fetch(`${getApiBase()}/api/execution/runs`, {
@@ -887,6 +891,18 @@ async function createExecutionRun(payload: {
       body: JSON.stringify(payload),
     }),
   );
+}
+
+async function listAgents(): Promise<Array<{
+  id: string;
+  name: string;
+  channel: string;
+  target: string;
+}>> {
+  const payload = await handleJson<{ agents?: Array<{ id: string; name: string; channel: string; target: string }> }>(
+    await fetch(`${getApiBase()}/api/agents`, { cache: 'no-store' }),
+  );
+  return payload.agents ?? [];
 }
 
 async function fetchExecutionRun(userId: string, executionRunId: string) {
@@ -1825,6 +1841,8 @@ export function BenchmarkRunner() {
   const [executionRun, setExecutionRun] = useState<ExecutionRunRecord | null>(null);
   const [isLaunchingExecution, setIsLaunchingExecution] = useState(false);
   const [executionMessage, setExecutionMessage] = useState<string | null>(null);
+  const [agents, setAgents] = useState<Array<{ id: string; name: string; channel: string; target: string }>>([]);
+  const [selectedAgentId, setSelectedAgentId] = useState('');
 
   const selectedSuite = useMemo(
     () => suites.find((suite) => suite.id === selectedSuiteId) ?? suites[0] ?? null,
@@ -1879,6 +1897,23 @@ export function BenchmarkRunner() {
 
     return () => {
       isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    listAgents()
+      .then((next) => {
+        if (!active) return;
+        setAgents(next);
+        setSelectedAgentId((current) => current || next[0]?.id || '');
+      })
+      .catch(() => {
+        if (!active) return;
+        setAgents([]);
+      });
+    return () => {
+      active = false;
     };
   }, []);
 
@@ -2563,10 +2598,11 @@ export function BenchmarkRunner() {
         user_id: identity.userId,
         project_id: identity.projectId,
         evaluate: true,
+        agent_id: selectedAgentId || undefined,
       });
       setExecutionRun(queued);
       setExecutionMessage(
-        `Execution queued (${queued.mode}). Streaming conversations as inference_set rows are written.`,
+        `Execution queued (${queued.mode}). Open /runs/${queued.execution_run_id} for analysis when complete.`,
       );
       listExecutionRuns(identity.userId, identity.projectId).catch(() => undefined);
     } catch (err) {
@@ -3217,6 +3253,33 @@ export function BenchmarkRunner() {
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
           <label style={{ display: 'grid', gap: 8 }}>
+            <span style={{ fontWeight: 700 }}>Agent</span>
+            <select
+              aria-label="Execution agent"
+              value={selectedAgentId}
+              onChange={(event) => {
+                const agentId = event.target.value;
+                setSelectedAgentId(agentId);
+                const agent = agents.find((item) => item.id === agentId);
+                if (!agent) return;
+                if (agent.channel === 'voice' || agent.target === 'voice_fixture' || agent.target === 'offline_acc_fixture') {
+                  setExecutionMode('voice_fixture');
+                } else {
+                  setExecutionMode('text_callable');
+                  if (agent.target === 'mock_agent' || agent.target === 'offline_acc_fixture') {
+                    setExecutionTextCallable(agent.target);
+                  }
+                }
+              }}
+              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
+            >
+              {!agents.length ? <option value="">No agents</option> : null}
+              {agents.map((agent) => (
+                <option key={agent.id} value={agent.id}>{agent.name}</option>
+              ))}
+            </select>
+          </label>
+          <label style={{ display: 'grid', gap: 8 }}>
             <span style={{ fontWeight: 700 }}>Target mode</span>
             <select
               aria-label="Execution target mode"
@@ -3300,6 +3363,9 @@ export function BenchmarkRunner() {
                 <span style={{ marginLeft: 10, color: executionStatusColor(executionRun.status), fontWeight: 800, textTransform: 'capitalize' }}>
                   {executionRun.status}
                 </span>
+                <a href={`/runs/${executionRun.execution_run_id}`} style={{ marginLeft: 12, fontWeight: 760 }}>
+                  Open analysis
+                </a>
               </div>
               <div style={{ color: 'var(--muted)', fontSize: 14 }}>
                 {executionRun.progress.completed_conversations}/{executionRun.progress.total_conversations} conversations ·{' '}

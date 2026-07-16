@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import threading
 from copy import deepcopy
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from app.schemas.execution import (
@@ -11,6 +13,9 @@ from app.schemas.execution import (
     ExecutionRunRecord,
 )
 
+
+REPO_ROOT = Path(__file__).resolve().parents[4]
+RUNS_DIR = REPO_ROOT / 'artifacts' / 'execution-runs'
 
 _LOCK = threading.Lock()
 _RUNS: dict[str, dict[str, Any]] = {}
@@ -25,13 +30,31 @@ def create_execution_run(record: ExecutionRunRecord) -> dict[str, Any]:
     payload = record.model_dump(mode='json')
     with _LOCK:
         _RUNS[payload['execution_run_id']] = payload
+        _persist_unlocked(payload)
     return deepcopy(payload)
 
 
 def get_execution_run(execution_run_id: str) -> dict[str, Any] | None:
     with _LOCK:
         value = _RUNS.get(execution_run_id)
-        return deepcopy(value) if value is not None else None
+        if value is not None:
+            return deepcopy(value)
+    loaded = _load_from_disk(execution_run_id)
+    if loaded is None:
+        return None
+    with _LOCK:
+        _RUNS[execution_run_id] = loaded
+        return deepcopy(loaded)
+
+
+def get_conversation(execution_run_id: str, conversation_id: str) -> dict[str, Any] | None:
+    run = get_execution_run(execution_run_id)
+    if run is None:
+        return None
+    for item in run.get('conversations') or []:
+        if item.get('conversation_id') == conversation_id:
+            return deepcopy(item)
+    return None
 
 
 def list_execution_runs(
@@ -40,6 +63,7 @@ def list_execution_runs(
     project_id: str | None = None,
     status: str | None = None,
 ) -> list[dict[str, Any]]:
+    _hydrate_from_disk()
     with _LOCK:
         rows = [deepcopy(item) for item in _RUNS.values() if item.get('user_id') == user_id]
     if project_id:
@@ -72,7 +96,11 @@ def upsert_conversation(execution_run_id: str, conversation: ConversationRecord)
     with _LOCK:
         run = _RUNS.get(execution_run_id)
         if run is None:
-            return None
+            loaded = _load_from_disk(execution_run_id)
+            if loaded is None:
+                return None
+            _RUNS[execution_run_id] = loaded
+            run = loaded
         conversations = list(run.get('conversations') or [])
         payload = conversation.model_dump(mode='json')
         replaced = False
@@ -100,6 +128,7 @@ def upsert_conversation(execution_run_id: str, conversation: ConversationRecord)
             percent=percent,
             active_conversation_id=active_id,
         ).model_dump(mode='json')
+        _persist_unlocked(run)
         return deepcopy(run)
 
 
@@ -112,11 +141,13 @@ def complete_execution_run(
     *,
     status: str,
     inference_set_path: str | None = None,
+    run_snapshot_path: str | None = None,
 ) -> dict[str, Any] | None:
     return _update_run(
         execution_run_id,
         status=status,
         inference_set_path=inference_set_path,
+        run_snapshot_path=run_snapshot_path,
         progress_phase='completed' if status != 'failed' else 'failed',
         completed=True,
     )
@@ -128,13 +159,18 @@ def _update_run(
     status: str | None = None,
     error: str | None = None,
     inference_set_path: str | None = None,
+    run_snapshot_path: str | None = None,
     progress_phase: str | None = None,
     completed: bool = False,
 ) -> dict[str, Any] | None:
     with _LOCK:
         run = _RUNS.get(execution_run_id)
         if run is None:
-            return None
+            loaded = _load_from_disk(execution_run_id)
+            if loaded is None:
+                return None
+            _RUNS[execution_run_id] = loaded
+            run = loaded
         now = _now()
         if status is not None:
             run['status'] = status
@@ -142,6 +178,8 @@ def _update_run(
             run['error'] = error
         if inference_set_path is not None:
             run['inference_set_path'] = inference_set_path
+        if run_snapshot_path is not None:
+            run['run_snapshot_path'] = run_snapshot_path
         progress = dict(run.get('progress') or {})
         if progress_phase is not None:
             progress['phase'] = progress_phase
@@ -151,7 +189,43 @@ def _update_run(
             run['completed_at'] = now
             progress['active_conversation_id'] = None
             run['progress'] = progress
+        _persist_unlocked(run)
         return deepcopy(run)
+
+
+def _persist_unlocked(run: dict[str, Any]) -> None:
+    execution_run_id = str(run.get('execution_run_id') or '')
+    if not execution_run_id:
+        return
+    output_dir = RUNS_DIR / execution_run_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / 'run.json'
+    path.write_text(json.dumps(run, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+    run['run_snapshot_path'] = str(path.relative_to(REPO_ROOT))
+
+
+def _load_from_disk(execution_run_id: str) -> dict[str, Any] | None:
+    path = RUNS_DIR / execution_run_id / 'run.json'
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _hydrate_from_disk() -> None:
+    if not RUNS_DIR.exists():
+        return
+    with _LOCK:
+        for path in RUNS_DIR.glob('*/run.json'):
+            execution_run_id = path.parent.name
+            if execution_run_id in _RUNS:
+                continue
+            loaded = _load_from_disk(execution_run_id)
+            if loaded is not None:
+                _RUNS[execution_run_id] = loaded
 
 
 def _now() -> str:

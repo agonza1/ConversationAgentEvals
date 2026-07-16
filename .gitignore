@@ -36,3 +36,4 @@ storage/decks/*
 artifacts/voice-lab/
 artifacts/voice-lab-private-site/
 artifacts/execution-runs/
+artifacts/agents/

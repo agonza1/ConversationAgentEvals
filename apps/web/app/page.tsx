@@ -83,6 +83,8 @@ export default function HomePage() {
           <a href="#coverage">Coverage</a>
           <a href="#benchmarks">Benchmarks</a>
           <Link href="/benchmarks">Runner</Link>
+          <Link href="/runs">Runs</Link>
+          <Link href="/agents">Agents</Link>
         </div>
       </nav>
 

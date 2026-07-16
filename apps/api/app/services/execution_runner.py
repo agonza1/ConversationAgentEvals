@@ -16,6 +16,8 @@ from app.schemas.execution import (
     ExecutionRunRecord,
 )
 from app.services import execution_run_store
+from app.services.agent_store import get_agent
+from app.services.execution_metrics import build_metrics_and_timeline
 from app.services.acc_realtime_target import (
     AccAudioFixture,
     AccAudioFixtureScheduler,
@@ -40,15 +42,16 @@ ALLOWED_FIXTURE_ROOTS = (
 
 def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
     register_builtin_benchmark_extensions()
-    suite = get_suite(payload.suite_id)
+    resolved = _resolve_agent_payload(payload)
+    suite = get_suite(resolved.suite_id)
     if suite is None:
-        raise ValueError(f'Unknown suite: {payload.suite_id}')
+        raise ValueError(f'Unknown suite: {resolved.suite_id}')
 
-    scenario_ids = list(payload.scenario_ids)
+    scenario_ids = list(resolved.scenario_ids)
     if not scenario_ids:
         scenario_ids = [item['id'] for item in suite.get('scenarios') or []]
         optional = suite.get('optional_scenarios') or []
-        if payload.mode == 'voice_fixture' and optional:
+        if resolved.mode == 'voice_fixture' and optional:
             scenario_ids = [optional[0]['id']]
         elif not scenario_ids and optional:
             scenario_ids = [optional[0]['id']]
@@ -58,22 +61,25 @@ def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
         raise ValueError('Duplicate scenario ids are not allowed.')
 
     _validate_scenarios(suite, scenario_ids)
-    _validate_fixture_mode_scenarios(payload, scenario_ids)
-    if payload.voice_fixture_path:
-        _repo_path(payload.voice_fixture_path)
-    if payload.audio_plan_path:
-        _repo_path(payload.audio_plan_path)
-    total = len(scenario_ids) * payload.iterations
+    _validate_fixture_mode_scenarios(resolved, scenario_ids)
+    if resolved.voice_fixture_path:
+        _repo_path(resolved.voice_fixture_path)
+    if resolved.audio_plan_path:
+        _repo_path(resolved.audio_plan_path)
+    total = len(scenario_ids) * resolved.iterations
     now = datetime.now(UTC).isoformat()
     execution_run_id = f'exec-{uuid.uuid4().hex[:12]}'
+    agent = get_agent(resolved.agent_id) if resolved.agent_id else None
     record = ExecutionRunRecord(
         execution_run_id=execution_run_id,
         status='queued',
-        mode=payload.mode,
-        suite_id=payload.suite_id,
+        mode=resolved.mode,
+        suite_id=resolved.suite_id,
         scenario_ids=scenario_ids,
-        user_id=payload.user_id,
-        project_id=payload.project_id,
+        user_id=resolved.user_id,
+        project_id=resolved.project_id,
+        agent_id=resolved.agent_id,
+        agent_name=(agent or {}).get('name'),
         progress=ExecutionRunProgress(
             phase='queued',
             completed_conversations=0,
@@ -88,6 +94,7 @@ def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
 
 def execute_execution_run(execution_run_id: str, payload: ExecutionRunCreateRequest) -> dict[str, Any]:
     register_builtin_benchmark_extensions()
+    resolved = _resolve_agent_payload(payload)
     run = execution_run_store.mark_execution_run_running(execution_run_id)
     if run is None:
         raise ValueError(f'Unknown execution run: {execution_run_id}')
@@ -99,21 +106,21 @@ def execute_execution_run(execution_run_id: str, payload: ExecutionRunCreateRequ
     try:
         jobs = [
             (scenario_id, iteration)
-            for iteration in range(1, payload.iterations + 1)
+            for iteration in range(1, resolved.iterations + 1)
             for scenario_id in run['scenario_ids']
         ]
         for scenario_id, iteration in jobs:
             conversation_id = f'{execution_run_id}-{scenario_id}-{iteration}'
-            suite = get_suite(payload.suite_id) or {}
+            suite = get_suite(resolved.suite_id) or {}
             execution_run_store.upsert_conversation(
                 execution_run_id,
                 ConversationRecord(
                     conversation_id=conversation_id,
                     execution_run_id=execution_run_id,
-                    suite_id=payload.suite_id,
+                    suite_id=resolved.suite_id,
                     scenario_id=scenario_id,
                     scenario_title=_scenario_title(suite, scenario_id),
-                    mode=payload.mode,
+                    mode=resolved.mode,
                     status='running',
                     iteration=iteration,
                     started_at=datetime.now(UTC).isoformat(),
@@ -121,10 +128,10 @@ def execute_execution_run(execution_run_id: str, payload: ExecutionRunCreateRequ
             )
             conversation = _run_one_conversation(
                 execution_run_id=execution_run_id,
-                suite_id=payload.suite_id,
+                suite_id=resolved.suite_id,
                 scenario_id=scenario_id,
                 iteration=iteration,
-                payload=payload,
+                payload=resolved,
             )
             execution_run_store.upsert_conversation(execution_run_id, conversation)
             if conversation.status != 'failed':
@@ -135,10 +142,12 @@ def execute_execution_run(execution_run_id: str, payload: ExecutionRunCreateRequ
         failed = any(item.get('status') == 'failed' for item in latest.get('conversations') or [])
         reviewed = any(item.get('verdict') == 'needs_review' for item in latest.get('conversations') or [])
         status = 'failed' if failed else 'needs_review' if reviewed else 'completed'
+        snapshot_rel = str((output_dir / 'run.json').relative_to(REPO_ROOT))
         return execution_run_store.complete_execution_run(
             execution_run_id,
             status=status,
             inference_set_path=str(inference_path.relative_to(REPO_ROOT)),
+            run_snapshot_path=snapshot_rel,
         ) or latest
     except Exception as exc:
         return execution_run_store.mark_execution_run_failed(execution_run_id, str(exc)) or {
@@ -166,6 +175,12 @@ def _run_one_conversation(
             result = _execute_text_callable(suite_id, scenario_id, payload)
         else:
             result = asyncio.run(_execute_voice_fixture(suite_id, scenario_id, payload))
+        metrics_summary, timeline = build_metrics_and_timeline(
+            turns=result['turns'],
+            latency_marks=result.get('latency_marks') or [],
+            verdict=result.get('verdict'),
+            score=result.get('score'),
+        )
         return ConversationRecord(
             conversation_id=conversation_id,
             execution_run_id=execution_run_id,
@@ -180,6 +195,8 @@ def _run_one_conversation(
             action_trace=result.get('action_trace') or [],
             final_state=result.get('final_state') or {},
             latency_marks=result.get('latency_marks') or [],
+            metrics_summary=metrics_summary,
+            timeline=timeline,
             verdict=result.get('verdict'),
             score=result.get('score'),
             started_at=started,
@@ -199,6 +216,29 @@ def _run_one_conversation(
             started_at=started,
             completed_at=datetime.now(UTC).isoformat(),
         )
+
+
+def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCreateRequest:
+    if not payload.agent_id:
+        return payload
+    agent = get_agent(payload.agent_id)
+    if agent is None:
+        raise ValueError(f'Unknown agent: {payload.agent_id}')
+    target = str(agent.get('target') or 'mock_agent')
+    channel = str(agent.get('channel') or 'text')
+    if target in {'voice_fixture', 'offline_acc_fixture'} or channel == 'voice':
+        mode = 'voice_fixture'
+        text_callable = payload.text_callable
+    else:
+        mode = 'text_callable'
+        text_callable = target if target in {'mock_agent', 'offline_acc_fixture'} else 'mock_agent'
+    return payload.model_copy(
+        update={
+            'mode': mode,
+            'text_callable': text_callable,
+            'agent_id': agent['id'],
+        }
+    )
 
 
 def _execute_text_callable(suite_id: str, scenario_id: str, payload: ExecutionRunCreateRequest) -> dict[str, Any]:

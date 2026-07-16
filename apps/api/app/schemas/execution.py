@@ -24,6 +24,7 @@ class ExecutionRunCreateRequest(BaseModel):
     text_callable: str = Field(default='mock_agent', min_length=1)
     voice_fixture_path: str | None = None
     audio_plan_path: str | None = None
+    agent_id: str | None = None
 
 
 class ConversationTurn(BaseModel):
@@ -35,6 +36,38 @@ class ConversationTurn(BaseModel):
     act_id: str | None = None
     event_types: list[str] = Field(default_factory=list)
     latency_ms: float | None = None
+
+
+class LatencyStats(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    count: int = 0
+    avg_ms: float | None = None
+    median_ms: float | None = None
+    p90_ms: float | None = None
+    min_ms: float | None = None
+    max_ms: float | None = None
+    outlier_count: int = 0
+
+
+class ConversationMetricsSummary(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    verdict: str | None = None
+    score: float | None = None
+    turn_count: int = 0
+    latency: LatencyStats = Field(default_factory=LatencyStats)
+    interruption_count: int = 0
+    call_resolution_success: float = 0.0
+
+
+class TimelineEvent(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    t_ms: float | None = None
+    label: str
+    latency_ms: float | None = None
+    kind: str = 'mark'
 
 
 class ConversationRecord(BaseModel):
@@ -55,6 +88,8 @@ class ConversationRecord(BaseModel):
     action_trace: list[dict[str, Any]] = Field(default_factory=list)
     final_state: dict[str, Any] = Field(default_factory=dict)
     latency_marks: list[dict[str, Any]] = Field(default_factory=list)
+    metrics_summary: ConversationMetricsSummary | None = None
+    timeline: list[TimelineEvent] = Field(default_factory=list)
     verdict: str | None = None
     score: float | None = None
     error: str | None = None
@@ -82,9 +117,12 @@ class ExecutionRunRecord(BaseModel):
     scenario_ids: list[str]
     user_id: str
     project_id: str
+    agent_id: str | None = None
+    agent_name: str | None = None
     progress: ExecutionRunProgress
     conversations: list[ConversationRecord] = Field(default_factory=list)
     inference_set_path: str | None = None
+    run_snapshot_path: str | None = None
     error: str | None = None
     created_at: str
     updated_at: str
