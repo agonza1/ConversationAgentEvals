@@ -15,21 +15,28 @@ test('dedicated paths expose only their primary workflow', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Simulate scenario' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Queue simulated suite' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Score evidence' })).toHaveCount(0);
+  await expect(page.getByLabel('Saved runs and e2e validation')).toHaveCount(0);
+  await expect(page.getByText('Team-gated WebRTC evals')).toHaveCount(0);
 
   await page.goto('/score');
   await expect(page.getByRole('heading', { name: 'Score transcript and execution evidence.' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Score evidence' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Simulate scenario' })).toHaveCount(0);
+  await expect(page.getByLabel('Saved runs and e2e validation')).toBeVisible();
 
   await page.goto('/runs');
   await expect(page.getByRole('heading', { name: 'Run an agent' })).toBeVisible();
   await expect(page.getByLabel('Launch agent run')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Launch agent run' })).toBeVisible();
+  await expect(page.getByLabel('Saved runs and e2e validation')).toHaveCount(0);
 });
 
-test('legacy benchmark route redirects to simulate', async ({ page }) => {
+test('legacy benchmark route keeps the full console for history workflows', async ({ page }) => {
   await page.goto('/benchmarks');
-  await expect(page).toHaveURL(/\/simulate$/);
+  await expect(page.getByRole('heading', { name: 'Benchmark history and reports.' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Simulate scenario' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Score evidence' })).toBeVisible();
+  await expect(page.getByLabel('Saved runs and e2e validation')).toBeVisible();
 });
 
 test('demo deep links preload the advertised scenario', async ({ page }) => {

@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test';
 test('benchmark report includes a share-ready brief', async ({ page }) => {
   await page.goto('/benchmarks');
 
-  await expect(page.getByRole('heading', { name: 'Run an agentic scenario test.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Benchmark history and reports.' })).toBeVisible();
   await expect(page.getByLabel('Suite contract manifest')).toContainText('Required evidence: transcript, action_trace, final_state');
   await expect(page.getByLabel(/Scenario contract: [a-f0-9]{12}/)).toBeVisible();
   await expect(page.getByLabel(/Suite manifest: [a-f0-9]{12}/)).toBeVisible();

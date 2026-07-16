@@ -3795,6 +3795,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         </section>
       ) : null}
 
+      {view === 'score' || view === 'all' ? (
       <section className="validation-grid" aria-label="Saved runs and e2e validation">
         <div className="card" style={{ padding: 20, display: 'grid', gap: 12 }}>
           <p className="eyebrow">Saved runs</p>
@@ -4294,15 +4295,8 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             <p style={{ margin: 0, color: 'var(--muted)' }}>Run a suite while signed in to retain suite-level history and child report links.</p>
           )}
         </div>
-
-        <div className="card" style={{ padding: 20, display: 'grid', gap: 12 }}>
-          <p className="eyebrow">Voice path</p>
-          <h3 style={{ margin: 0 }}>Team-gated WebRTC evals</h3>
-          <p style={{ margin: 0, color: 'var(--muted)' }}>
-            Voice minutes are modeled in credits now. The visible gate keeps the product honest while the WebRTC/SIP runner is wired to real call evidence.
-          </p>
-        </div>
       </section>
+      ) : null}
     </section>
   );
 }
