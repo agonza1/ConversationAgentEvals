@@ -134,8 +134,9 @@ export function isBuiltInAgent(agent: Pick<AgentRecord, 'id'>) {
   return BUILT_IN_AGENT_IDS.has(agent.id);
 }
 
-export function agentTryItOutHref(agentId: string) {
+export function agentTryItOutHref(agentId: string, apiBase?: string | null) {
   const params = new URLSearchParams({ launch: 'demo', agent_id: agentId });
+  if (apiBase) params.set('api_base', apiBase);
   return `/runs?${params.toString()}`;
 }
 

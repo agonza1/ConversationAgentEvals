@@ -27,6 +27,15 @@ const EMPTY_FORM: AgentFormState = {
   description: '',
 };
 
+const TARGET_OPTIONS: Record<AgentRecord['channel'], Array<{ value: AgentRecord['target']; label: string }>> = {
+  text: [
+    { value: 'mock_agent', label: 'mock_agent' },
+    { value: 'openai_codex', label: 'openai_codex (requires OpenAI connection)' },
+    { value: 'offline_acc_fixture', label: 'offline_acc_fixture' },
+  ],
+  voice: [{ value: 'voice_fixture', label: 'voice_fixture' }],
+};
+
 function channelLabel(channel: AgentRecord['channel']) {
   return channel === 'voice' ? 'Inbound Voice' : 'Text chat';
 }
@@ -175,6 +184,13 @@ function AgentFormModal({
     await onSubmit({ name, channel, target, description });
   }
 
+  function onChannelChange(nextChannel: AgentRecord['channel']) {
+    setChannel(nextChannel);
+    if (!TARGET_OPTIONS[nextChannel].some((option) => option.value === target)) {
+      setTarget(TARGET_OPTIONS[nextChannel][0].value);
+    }
+  }
+
   return (
     <div className="agents-modal-backdrop" role="presentation" onClick={onClose}>
       <div
@@ -200,7 +216,7 @@ function AgentFormModal({
             <select
               aria-label="Agent channel"
               value={channel}
-              onChange={(event) => setChannel(event.target.value as AgentRecord['channel'])}
+              onChange={(event) => onChannelChange(event.target.value as AgentRecord['channel'])}
             >
               <option value="text">Text chat</option>
               <option value="voice">Inbound voice</option>
@@ -213,10 +229,9 @@ function AgentFormModal({
               value={target}
               onChange={(event) => setTarget(event.target.value as AgentRecord['target'])}
             >
-              <option value="mock_agent">mock_agent</option>
-              <option value="openai_codex">openai_codex (requires OpenAI connection)</option>
-              <option value="offline_acc_fixture">offline_acc_fixture</option>
-              <option value="voice_fixture">voice_fixture</option>
+              {TARGET_OPTIONS[channel].map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
             </select>
           </label>
           <label>
@@ -249,6 +264,7 @@ export function AgentsPage() {
   const [saving, setSaving] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [editingAgent, setEditingAgent] = useState<AgentRecord | null>(null);
+  const [apiBaseOverride, setApiBaseOverride] = useState<string | null>(null);
 
   async function reload() {
     const next = await listAgents();
@@ -267,6 +283,10 @@ export function AgentsPage() {
     return () => {
       active = false;
     };
+  }, []);
+
+  useEffect(() => {
+    setApiBaseOverride(new URLSearchParams(window.location.search).get('api_base'));
   }, []);
 
   async function onCreate(values: AgentFormState) {
@@ -368,7 +388,7 @@ export function AgentsPage() {
               />
             </div>
 
-            <a className="agents-try-button" href={agentTryItOutHref(agent.id)}>
+            <a className="agents-try-button" href={agentTryItOutHref(agent.id, apiBaseOverride)}>
               <span className="agents-try-icon" aria-hidden="true">
                 {agent.channel === 'voice' ? '☎' : '✎'}
               </span>

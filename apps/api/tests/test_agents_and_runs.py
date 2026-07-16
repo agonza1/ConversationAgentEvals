@@ -198,6 +198,36 @@ def test_rejects_null_patch_on_non_nullable_fields():
     assert cleared.json()['description'] is None
 
 
+@pytest.mark.parametrize(
+    ('channel', 'target'),
+    [
+        ('text', 'voice_fixture'),
+        ('voice', 'mock_agent'),
+        ('voice', 'openai_codex'),
+    ],
+)
+def test_rejects_incompatible_agent_channel_target_pairs(channel: str, target: str):
+    created = client.post(
+        '/api/agents',
+        json={'name': 'Incompatible agent', 'channel': channel, 'target': target},
+    )
+    assert created.status_code == 422
+    assert 'requires one of' in created.text
+
+    valid = client.post(
+        '/api/agents',
+        json={'name': 'Text agent', 'channel': 'text', 'target': 'mock_agent'},
+    )
+    assert valid.status_code == 200
+
+    patched = client.patch(
+        f"/api/agents/{valid.json()['id']}",
+        json={'target': 'voice_fixture'},
+    )
+    assert patched.status_code == 400
+    assert 'requires one of' in patched.json()['detail']
+
+
 def test_text_offline_acc_fixture_stays_text_callable():
     from app.services.execution_runner import _resolve_agent_payload
 

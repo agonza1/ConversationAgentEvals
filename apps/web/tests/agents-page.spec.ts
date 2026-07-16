@@ -144,6 +144,17 @@ test('agents page shows persona cards and try-it-out deep links', async ({ page 
   );
 });
 
+test('agents try-it-out links preserve the api base override', async ({ page }) => {
+  await mockRunnerApis(page);
+  await page.goto('/agents?api_base=https%3A%2F%2Fapi.example.test');
+
+  const mockCard = page.getByRole('article').filter({ hasText: 'Mock text agent' });
+  await expect(mockCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
+    'href',
+    '/runs?launch=demo&agent_id=mock-text-agent&api_base=https%3A%2F%2Fapi.example.test',
+  );
+});
+
 test('agents try-it-out auto-launches and opens run analysis', async ({ page }) => {
   await mockRunnerApis(page);
   await page.goto('/agents');
@@ -221,4 +232,19 @@ test('add agent modal creates a registry entry', async ({ page }) => {
   await page.getByRole('button', { name: 'Create agent' }).click();
 
   await expect(page.getByRole('article').filter({ hasText: 'Playwright agent created' })).toBeVisible();
+});
+
+test('agent form only offers targets compatible with its selected channel', async ({ page }) => {
+  await mockRunnerApis(page);
+  await page.goto('/agents');
+  await page.locator('.agents-page-header').getByRole('button', { name: 'Add a new Agent' }).click();
+
+  const channel = page.getByLabel('Agent channel');
+  const target = page.getByLabel('Agent target');
+  await expect(target.getByRole('option')).toHaveCount(3);
+
+  await channel.selectOption('voice');
+  await expect(target).toHaveValue('voice_fixture');
+  await expect(target.getByRole('option')).toHaveCount(1);
+  await expect(target.locator('option')).toHaveText('voice_fixture');
 });
