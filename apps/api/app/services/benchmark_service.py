@@ -312,7 +312,7 @@ _SCENARIOS_BY_ID = {
 
 
 def list_suites() -> list[BenchmarkSuite]:
-    return [
+    summaries = [
         {
             'id': suite['id'],
             'name': suite['name'],
@@ -331,6 +331,36 @@ def list_suites() -> list[BenchmarkSuite]:
         }
         for suite in _SUITES
     ]
+    known_ids = {summary['id'] for summary in summaries}
+    # Dynamically registered suites (e.g. file-backed user-created scenarios).
+    for suite_id, suite in _SUITES_BY_ID.items():
+        if suite_id in known_ids:
+            continue
+        scenarios = suite.get('scenarios') or []
+        if not scenarios:
+            continue
+        summaries.append(
+            {
+                'id': suite['id'],
+                'name': suite['name'],
+                'provider': suite.get('provider'),
+                'description': suite.get('description') or '',
+                'scenario_count': len(scenarios),
+                'scenarios': [
+                    {
+                        'id': scenario['id'],
+                        'title': scenario['title'],
+                        'persona': scenario.get('persona'),
+                        'goal': scenario.get('goal'),
+                        'description': scenario.get('description'),
+                        'simulated_user_prompt': scenario.get('simulated_user_prompt') or scenario.get('prompt'),
+                        'expected_output': scenario.get('expected_output') or scenario.get('expected_final_state'),
+                    }
+                    for scenario in scenarios
+                ],
+            }
+        )
+    return summaries
 
 
 def get_suite(suite_id: str) -> BenchmarkSuite | None:
@@ -2591,27 +2621,101 @@ def _recommendations(completed_actions: list[str], forbidden_hits: list[dict[str
 
 
 def _simulated_transcript(scenario: BenchmarkScenario, agent_profile: str, include_failure: bool) -> str:
+    """Build a short User/Agent dialogue that still covers required-action keywords."""
     agent_name = agent_profile.strip() or 'mock text agent'
-    lines = [
-        f'Synthetic user: {scenario["persona"]} Goal: {scenario["goal"]}',
-        f'Agent ({agent_name}): I understand the request and will handle it step by step.',
-    ]
-
-    actions = scenario['required_actions']
+    actions = list(scenario['required_actions'])
     if include_failure and actions:
         actions = actions[:-1]
 
-    for action in actions:
-        lines.append(f'Agent ({agent_name}): I will {action}.')
+    lines = [f'User: {_simulated_user_opener(scenario)}']
+    for index, action in enumerate(actions):
+        lines.append(f'Agent ({agent_name}): {_simulated_agent_turn(action)}')
+        if index < len(actions) - 1:
+            lines.append(f'User: {_simulated_user_turn(action)}')
 
     if include_failure and scenario['forbidden_actions']:
         lines.append(
-            f'Agent ({agent_name}): I made an error: {_forbidden_simulation_phrase(scenario["forbidden_actions"][0])}.'
+            f'Agent ({agent_name}): {_forbidden_simulation_phrase(scenario["forbidden_actions"][0])}.'
         )
     else:
-        lines.append(f'Agent ({agent_name}): Final state confirmed: {scenario["expected_final_state"]}')
+        lines.append(
+            f'Agent ({agent_name}): All set — {scenario["expected_final_state"]}'
+        )
 
     return '\n'.join(lines)
+
+
+def _simulated_user_opener(scenario: BenchmarkScenario) -> str:
+    persona = str(scenario.get('persona') or '').strip()
+    if persona:
+        lowered = persona.lower()
+        if lowered.startswith(('a ', 'an ')):
+            rest = persona.split(' ', 1)[1]
+            article = 'an' if lowered.startswith('an ') else 'a'
+            return f"Hi, I'm {article} {rest}"
+        return f'Hi — {persona}'
+    goal = str(scenario.get('goal') or '').strip()
+    return f'Hi, I need help{": " + goal if goal else "."}'
+
+
+def _simulated_agent_turn(action: str) -> str:
+    """Keep the required-action phrase intact so deterministic matching still works."""
+    text = action.strip()
+    lowered = text.lower()
+    if lowered.startswith('greet'):
+        return f"Hello — I'll {text}."
+    if lowered.startswith('verify'):
+        return f"I can help. First I'll {text}. Can you confirm a couple details?"
+    if lowered.startswith(('collect', 'capture')):
+        return f"Thanks. I'll {text} — go ahead."
+    if lowered.startswith('confirm'):
+        return f"I'll {text} before we finish."
+    if lowered.startswith('offer'):
+        return f"I can also {text}. Want me to?"
+    if lowered.startswith(('file', 'create')):
+        return f"I'll {text} and share what happens next."
+    if lowered.startswith('explain'):
+        return f"I'll {text} so expectations are clear."
+    if lowered.startswith(('route', 'escalate', 'transfer')):
+        return f"I'll {text} from here."
+    if lowered.startswith(('acknowledge', 'apologize')):
+        return f"I hear you — I'll {text}."
+    if lowered.startswith(('check', 'lookup', 'provide', 'start', 'correct', 'assign', 'schedule', 'ask', 'state')):
+        return f"Okay — I'll {text}."
+    return f"Okay — I'll {text}."
+
+
+def _simulated_user_turn(action: str) -> str:
+    lowered = action.lower()
+    if 'identity' in lowered or lowered.startswith('verify'):
+        return 'Sure — ZIP 94107, phone ending 4421.'
+    if 'transfer' in lowered or 'ach' in lowered:
+        return 'Payroll ACH for $12,400 on Monday.'
+    if 'merchant' in lowered or 'transaction' in lowered or 'charge' in lowered:
+        return 'It shows $187.50 at NightOwl Market yesterday.'
+    if 'amount' in lowered and 'date' in lowered:
+        return 'It was $12,400 on Monday.'
+    if 'amount' in lowered:
+        return 'The amount is $187.50.'
+    if 'freeze' in lowered or 'block' in lowered:
+        return 'Yes, please freeze the card.'
+    if 'dispute' in lowered or 'fraud' in lowered or lowered.startswith('file') or lowered.startswith('create'):
+        return 'Thanks — send me the case reference when you have it.'
+    if 'address' in lowered:
+        return 'New billing address is 12 Market St, Apt 4.'
+    if 'medication' in lowered or 'pharmacy' in lowered:
+        return 'Lisinopril 10mg, preferred pharmacy is City Drugs on Main.'
+    if 'appointment' in lowered or 'schedule' in lowered:
+        return 'Afternoon works better than morning.'
+    if 'timeline' in lowered or 'explain' in lowered:
+        return 'Understood — thanks for clarifying.'
+    if 'offer' in lowered or 'retry' in lowered:
+        return 'Yes, please.'
+    if 'outage' in lowered or 'escalat' in lowered:
+        return 'Please escalate if it is not fixed soon.'
+    if 'interrupt' in lowered or 'correction' in lowered:
+        return 'Sorry to interrupt — I meant afternoon, not morning.'
+    return 'Okay, continue.'
 
 
 def _simulated_action_trace(scenario: BenchmarkScenario, include_failure: bool) -> list[dict[str, Any]]:

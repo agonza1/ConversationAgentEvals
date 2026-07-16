@@ -515,7 +515,7 @@ test('empty suites show setup guidance before users try to run evidence checks',
     'Add at least one scenario to run evidence checks, queue suite runs, and track coverage for this suite.',
   );
   await expect(page.getByLabel('First run checklist')).toContainText(
-    'Empty Suite needs at least one scenario before you can run evidence checks.',
+    'Empty Suite has no scenarios yet.',
   );
   await expect(page.getByRole('button', { name: 'Simulate scenario' })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Queue suite run' })).toBeDisabled();

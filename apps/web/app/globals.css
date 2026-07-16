@@ -1293,6 +1293,18 @@ select {
   font-weight: 700;
 }
 
+.openai-provider-panel {
+  padding: 16px 18px;
+}
+
+.openai-provider-control {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
 .agents-shell {
   width: min(1180px, calc(100% - 40px));
   gap: 24px;
@@ -1723,5 +1735,244 @@ select {
   .runs-metric-detail,
   .runs-transcript {
     padding: 14px;
+  }
+}
+
+/* Scenarios page (from OAuth/scenarios branch) */
+.scenarios-shell {
+  display: grid;
+  gap: 18px;
+}
+
+.scenarios-page {
+  width: min(1120px, calc(100% - 40px));
+}
+
+.scenarios-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.85fr) minmax(0, 1.35fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.scenarios-sidebar {
+  padding: 20px;
+  display: grid;
+  gap: 14px;
+}
+
+.scenarios-sidebar-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.scenarios-sidebar-header h2,
+.scenarios-detail-header h2,
+.scenarios-create-form h2,
+.scenarios-empty h2 {
+  margin: 6px 0 0;
+  font-size: 24px;
+  line-height: 1.15;
+}
+
+.scenarios-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.scenarios-list button {
+  width: 100%;
+  text-align: left;
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-alt);
+  padding: 12px;
+  color: inherit;
+  cursor: pointer;
+}
+
+.scenarios-list button.is-active {
+  border-color: rgba(15, 118, 110, 0.45);
+  background: white;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.scenarios-list strong {
+  font-size: 14px;
+}
+
+.scenarios-list span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.scenarios-main {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+
+.scenarios-detail,
+.scenarios-create-form,
+.scenarios-empty {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+}
+
+.scenarios-detail-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.scenarios-create-form label {
+  display: grid;
+  gap: 8px;
+  font-weight: 780;
+}
+
+.scenarios-create-form input,
+.scenarios-create-form textarea,
+.first-run-selectors input {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: white;
+  padding: 11px 12px;
+  font: inherit;
+  color: inherit;
+}
+
+.scenarios-create-form textarea {
+  resize: vertical;
+  min-height: 96px;
+}
+
+.scenarios-checkbox {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 10px;
+  font-weight: 720 !important;
+  color: var(--muted);
+}
+
+.scenarios-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.scenarios-muted {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.scenarios-note {
+  font-size: 13px;
+}
+
+.scenarios-error {
+  border: 1px solid var(--error-border);
+  background: var(--error-bg);
+  color: var(--error-text);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.scenario-type-block {
+  display: grid;
+  gap: 6px;
+}
+
+.scenario-type-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 780;
+}
+
+.scenario-type-badge {
+  width: fit-content;
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+  border-radius: 8px;
+  background: var(--panel-alt);
+  color: var(--accent);
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 820;
+}
+
+.scenario-field-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-alt);
+  padding: 16px 18px;
+  display: grid;
+  gap: 10px;
+}
+
+.scenario-field-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.scenario-field-card-header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 860;
+}
+
+.scenario-field-card p {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.scenario-copy-button {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.scenario-copy-button:hover {
+  border-color: var(--border);
+  background: white;
+  color: var(--text);
+}
+
+@media (max-width: 900px) {
+  .scenarios-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .scenarios-sidebar-header,
+  .scenarios-detail-header {
+    flex-direction: column;
   }
 }

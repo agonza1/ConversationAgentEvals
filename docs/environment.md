@@ -83,6 +83,13 @@ These are not needed for the minimal local demo. Set them only when working on t
 OPENAI_API_KEY=
 OPENAI_REALTIME_MODEL=gpt-realtime-mini
 OPENAI_RESPONSES_MODEL=gpt-4.1-mini
+LLM_JUDGE_PROVIDER=openai_codex
+LLM_JUDGE_MODEL=gpt-5.4-mini
+LLM_JUDGE_API_KEY=
+OPENAI_CODEX_OAUTH_PATH=
+OPENAI_CODEX_IMPORT_HOME=1
+LLM_JUDGE_DAILY_CREDIT_LIMIT=200
+LLM_JUDGE_RESERVED_DAILY_CREDITS=0
 HEYGEN_LIVE_AVATAR_API_KEY=
 HEYGEN_API_KEY=
 HEYGEN_AVATAR_ID=
@@ -105,3 +112,13 @@ BUSINESS_CONTACT_URL=
 REALTIME_REQUEST_TIMEOUT_MS=5000
 ASSERT_LOCAL_SIDECAR_ENABLED=
 ```
+
+### Local OpenAI Codex OAuth judge
+
+`LLM_JUDGE_PROVIDER=openai_codex` uses the Connect OpenAI control in the benchmark runner. OAuth tokens are stored in the gitignored `.local/openai-codex-oauth.json` file by default; set `OPENAI_CODEX_OAUTH_PATH` only to move that local store. An existing `~/.codex/auth.json` is imported when the local store is empty unless `OPENAI_CODEX_IMPORT_HOME=0`. `LLM_JUDGE_API_KEY` remains an optional API-key fallback for CI.
+
+This Codex-style ChatGPT OAuth integration is unofficial, brittle, local-only, and OpenAI-only. It is not a hosted OAuth flow. Claude is not implemented yet, but can be added later through the same provider interface.
+
+For Docker Compose, the API service publishes port `1455` so the browser redirect to `http://localhost:1455/auth/callback` reaches the ephemeral callback listener inside the container. OAuth tokens persist through the `./.local:/workspace/.local` bind mount. Override the listener bind address with `OPENAI_CODEX_CALLBACK_BIND_HOST` only if you need a non-default host interface.
+
+User-created scenarios persist under `storage/user_scenarios.json` (Compose-mounted at `/workspace/storage`). Override with `USER_SCENARIOS_PATH` if needed. A one-time copy from the legacy `apps/api/data/user_scenarios.json` path runs when the new file is missing.

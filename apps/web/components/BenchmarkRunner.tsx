@@ -234,6 +234,38 @@ interface PricingPlan {
   features: string[];
 }
 
+interface UsageRule {
+  id: string;
+  label: string;
+  credits: number;
+  gated_plan?: PricingPlan['id'] | null;
+}
+
+interface ProductConfig {
+  pricing: PricingPlan[];
+  usage_rules: UsageRule[];
+  auth: {
+    enabled: boolean;
+    mode: 'configured' | 'placeholder';
+    providers: string[];
+    project_id?: string | null;
+    api_key_configured: boolean;
+  };
+  voice_status: 'planned' | 'gated' | 'enabled';
+  llm_judge_status: 'planned' | 'gated' | 'enabled';
+}
+
+interface OpenAIProviderStatus {
+  id?: string;
+  provider?: string;
+  status: 'connected' | 'disconnected' | 'expired' | string;
+  email?: string | null;
+  account_id?: string | null;
+  plan_type?: string | null;
+  message?: string | null;
+  last_error?: string | null;
+}
+
 interface SavedRun {
   id: string;
   project_id: string;
@@ -645,8 +677,10 @@ function normalizeSuites(payload: unknown): BenchmarkSuite[] {
   });
 }
 
-async function fetchBenchmarkSuites(): Promise<BenchmarkSuite[]> {
-  const suites = await handleJson<unknown>(await fetch(`${getApiBase()}/api/benchmarks/suites`, { cache: 'no-store' }));
+async function fetchBenchmarkSuites(signal?: AbortSignal): Promise<BenchmarkSuite[]> {
+  const suites = await handleJson<unknown>(
+    await fetch(`${getApiBase()}/api/benchmarks/suites`, { cache: 'no-store', signal }),
+  );
   const normalizedSuites = normalizeSuites(suites);
 
   return Promise.all(
@@ -1041,6 +1075,36 @@ function downloadJson(filename: string, payload: unknown) {
   link.click();
   link.remove();
   URL.revokeObjectURL(href);
+}
+
+async function fetchProductConfig(): Promise<ProductConfig> {
+  return handleJson<ProductConfig>(await fetch(`${getApiBase()}/api/product/config`, { cache: 'no-store' }));
+}
+
+async function fetchOpenAIProviderStatus() {
+  return handleJson<OpenAIProviderStatus>(
+    await fetch(`${getApiBase()}/api/product/providers/openai/status`, { cache: 'no-store' }),
+  );
+}
+
+async function startOpenAIProviderOAuth() {
+  return handleJson<{ authorize_url: string; redirect_uri: string; provider?: string }>(
+    await fetch(`${getApiBase()}/api/product/providers/openai/oauth/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    }),
+  );
+}
+
+async function disconnectOpenAIProvider() {
+  return handleJson<OpenAIProviderStatus>(
+    await fetch(`${getApiBase()}/api/product/providers/openai/disconnect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    }),
+  );
 }
 
 async function requestJudge(payload: { plan: PricingPlan['id']; report: BenchmarkReport; transcript: string; user_id?: string; project_id?: string }) {
@@ -1880,6 +1944,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   const [userId, setUserId] = useState('');
   const [projectId, setProjectId] = useState('call-center-demo');
   const [plan, setPlan] = useState<PricingPlan['id']>('free');
+  const [productConfig, setProductConfig] = useState<ProductConfig | null>(null);
   const [savedRuns, setSavedRuns] = useState<SavedRun[]>([]);
   const [suiteSavedRuns, setSuiteSavedRuns] = useState<SavedRun[]>([]);
   const [auditEvents, setAuditEvents] = useState<ProductAuditEvent[]>([]);
@@ -1893,6 +1958,9 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [judgeGate, setJudgeGate] = useState<JudgeGate | null>(null);
+  const [openaiProvider, setOpenaiProvider] = useState<OpenAIProviderStatus | null>(null);
+  const [openaiProviderMessage, setOpenaiProviderMessage] = useState<string | null>(null);
+  const [isConnectingOpenAI, setIsConnectingOpenAI] = useState(false);
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
@@ -1911,6 +1979,8 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const [showSimulateEvidenceOptions, setShowSimulateEvidenceOptions] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+  const [catalogReloadKey, setCatalogReloadKey] = useState(0);
+  const suiteLoadRequestRef = useRef(0);
 
   const selectedSuite = useMemo(
     () => suites.find((suite) => suite.id === selectedSuiteId) ?? suites[0] ?? null,
@@ -1975,15 +2045,18 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   }
 
   useEffect(() => {
-    let isMounted = true;
+    const requestId = suiteLoadRequestRef.current + 1;
+    suiteLoadRequestRef.current = requestId;
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeoutId = window.setTimeout(() => controller?.abort(), 12000);
 
     async function loadSuites() {
       setIsLoading(true);
       setLoadError(null);
 
       try {
-        const nextSuites = await fetchBenchmarkSuites();
-        if (!isMounted) return;
+        const nextSuites = await fetchBenchmarkSuites(controller?.signal);
+        if (suiteLoadRequestRef.current !== requestId) return;
         setSuites(nextSuites);
         const preset = readWorkflowDemoPreset();
         const presetSuite = preset ? nextSuites.find((suite) => suite.id === preset.suiteId) : null;
@@ -1995,20 +2068,51 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           setSelectedSuiteId(nextSuites[0]?.id ?? '');
           setSelectedScenarioId(nextSuites[0]?.scenarios[0]?.id ?? '');
         }
+        if (!nextSuites.length) {
+          setLoadError('No benchmark suites are available from the API yet.');
+        }
       } catch (err) {
-        if (!isMounted) return;
-        setLoadError(err instanceof Error ? err.message : 'Could not load benchmark suites');
+        if (suiteLoadRequestRef.current !== requestId) return;
+        setSuites([]);
+        setSelectedSuiteId('');
+        setSelectedScenarioId('');
+        const aborted = typeof err === 'object' && err !== null && 'name' in err && (err as { name?: string }).name === 'AbortError';
+        setLoadError(
+          aborted
+            ? 'Timed out loading benchmark suites. Check that the API is running and reachable.'
+            : err instanceof Error
+              ? err.message
+              : 'Could not load benchmark suites',
+        );
       } finally {
-        if (isMounted) setIsLoading(false);
+        window.clearTimeout(timeoutId);
+        if (suiteLoadRequestRef.current === requestId) {
+          setIsLoading(false);
+        }
+      }
+
+      if (suiteLoadRequestRef.current !== requestId) return;
+      try {
+        const nextConfig = await fetchProductConfig();
+        const nextOpenAI = await fetchOpenAIProviderStatus().catch(() => null);
+        if (suiteLoadRequestRef.current !== requestId) return;
+        setProductConfig(nextConfig);
+        if (nextOpenAI) setOpenaiProvider(nextOpenAI);
+      } catch {
+        // Suites can still run without product config / OpenAI status.
       }
     }
 
     void loadSuites();
 
     return () => {
-      isMounted = false;
+      controller?.abort();
+      window.clearTimeout(timeoutId);
+      if (suiteLoadRequestRef.current === requestId) {
+        suiteLoadRequestRef.current = requestId + 1;
+      }
     };
-  }, []);
+  }, [catalogReloadKey]);
 
   useEffect(() => {
     let active = true;
@@ -2329,6 +2433,48 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
       setSaveMessage(`Saved ${saved.length} suite runs to ${identity.projectId}.`);
     } catch (err) {
       setSaveMessage(err instanceof Error ? err.message : 'Could not save this suite.');
+    }
+  }
+
+  async function onConnectOpenAI() {
+    setIsConnectingOpenAI(true);
+    setOpenaiProviderMessage(null);
+    try {
+      const started = await startOpenAIProviderOAuth();
+      if (started.authorize_url && typeof window !== 'undefined') {
+        window.open(started.authorize_url, '_blank', 'noopener,noreferrer');
+      }
+      setOpenaiProviderMessage('Complete OpenAI login in the opened browser tab. This page will refresh when connected.');
+      const deadline = Date.now() + 120_000;
+      while (Date.now() < deadline) {
+        await delay(2000);
+        const status = await fetchOpenAIProviderStatus();
+        setOpenaiProvider(status);
+        if (status.status === 'connected') {
+          setOpenaiProviderMessage(`Connected as ${status.email || status.account_id || 'OpenAI account'}.`);
+          const nextConfig = await fetchProductConfig().catch(() => null);
+          if (nextConfig) setProductConfig(nextConfig);
+          break;
+        }
+      }
+    } catch (err) {
+      setOpenaiProviderMessage(err instanceof Error ? err.message : 'Could not start OpenAI OAuth.');
+    } finally {
+      setIsConnectingOpenAI(false);
+    }
+  }
+
+  async function onDisconnectOpenAI() {
+    setOpenaiProviderMessage(null);
+    try {
+      await disconnectOpenAIProvider();
+      const status = await fetchOpenAIProviderStatus();
+      setOpenaiProvider(status);
+      const nextConfig = await fetchProductConfig().catch(() => null);
+      if (nextConfig) setProductConfig(nextConfig);
+      setOpenaiProviderMessage('OpenAI disconnected.');
+    } catch (err) {
+      setOpenaiProviderMessage(err instanceof Error ? err.message : 'Could not disconnect OpenAI.');
     }
   }
 
@@ -2955,6 +3101,34 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
   return (
     <section style={{ display: 'grid', gap: 20 }}>
+      {(view === 'score' || view === 'all') ? (
+        <section className="card openai-provider-panel" aria-label="OpenAI judge provider">
+          <div className="openai-provider-control">
+            <div>
+              <p className="eyebrow">LLM judge</p>
+              <h2 style={{ margin: '4px 0 0', fontSize: 22 }}>Connect OpenAI for the local judge</h2>
+              <p style={{ margin: '8px 0 0', color: 'var(--muted)' }}>
+                {openaiProvider?.status === 'connected'
+                  ? `Connected${openaiProvider.email ? ` as ${openaiProvider.email}` : ''}${openaiProvider.plan_type ? ` (${openaiProvider.plan_type})` : ''}.`
+                  : openaiProvider?.message || `Connect Codex-style OpenAI OAuth to unlock LLM judging on scored evidence${productConfig?.llm_judge_status ? ` (${productConfig.llm_judge_status})` : ''}.`}
+              </p>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {openaiProvider?.status === 'connected' ? (
+                <button type="button" className="secondary-link" onClick={() => void onDisconnectOpenAI()}>
+                  Disconnect OpenAI
+                </button>
+              ) : (
+                <button type="button" className="primary-link" disabled={isConnectingOpenAI} onClick={() => void onConnectOpenAI()}>
+                  {isConnectingOpenAI ? 'Waiting for OpenAI…' : 'Connect OpenAI'}
+                </button>
+              )}
+            </div>
+            {openaiProviderMessage ? <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13 }}>{openaiProviderMessage}</p> : null}
+          </div>
+        </section>
+      ) : null}
+
       {view === 'all' ? <section className="first-run-panel" aria-label="First run checklist">
         <div>
           <p className="eyebrow">First run checklist</p>
@@ -2989,8 +3163,11 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
       <form onSubmit={onSubmit} className="card" style={{ padding: 24, display: 'grid', gap: 18 }}>
         {loadError ? (
-          <div style={{ border: '1px solid var(--error-border)', background: 'var(--error-bg)', color: 'var(--error-text)', borderRadius: 8, padding: 12 }}>
-            {loadError}
+          <div style={{ border: '1px solid var(--error-border)', background: 'var(--error-bg)', color: 'var(--error-text)', borderRadius: 8, padding: 12, display: 'grid', gap: 8 }}>
+            <span>{loadError}</span>
+            <button type="button" className="secondary-link" onClick={() => setCatalogReloadKey((value) => value + 1)}>
+              Retry loading suites
+            </button>
           </div>
         ) : null}
 

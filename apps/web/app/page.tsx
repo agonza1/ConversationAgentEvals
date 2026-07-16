@@ -107,6 +107,7 @@ export default function HomePage() {
           <Link href="/simulate">Simulate</Link>
           <Link href="/score">Score evidence</Link>
           <Link href="/runs">Run agent</Link>
+          <Link href="/scenarios">Scenarios</Link>
           <Link href="/agents">Agents</Link>
         </div>
       </nav>

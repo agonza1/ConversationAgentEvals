@@ -48,6 +48,8 @@ npm run dev
 
 Open the printed web URL and visit `/benchmarks`. The basic demo uses transcript, action-trace, and final-state evidence, so it does not require live microphone ASR or any external target application. Advanced environment settings are documented in [docs/environment.md](docs/environment.md).
 
+Local LLM judge auth (Codex-style OpenAI OAuth, Claude later): [docs/openai-codex-oauth-plan.md](docs/openai-codex-oauth-plan.md).
+
 For the shortest standalone end-to-end walkthrough, see [docs/assert-flow-demo.md](docs/assert-flow-demo.md) or its [machine-readable example](docs/examples/assert-flow-demo.json).
 
 For an **optional external-target example**, see [docs/agentic-contact-center-example.md](docs/agentic-contact-center-example.md). The cancellation-rescue scenario is registered as an optional, individually runnable scenario under `call-center-voice-ai`; it is excluded from the default suite coverage denominator. The example can run entirely offline from a checked-in response fixture or against a separately running Agentic Contact Center service.

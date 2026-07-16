@@ -1,6 +1,10 @@
 import Link from 'next/link';
 
-export function SiteNav({ current }: { current?: 'home' | 'simulate' | 'score' | 'runs' | 'agents' }) {
+export function SiteNav({
+  current,
+}: {
+  current?: 'home' | 'simulate' | 'score' | 'runs' | 'agents' | 'scenarios';
+}) {
   return (
     <nav className="top-nav compact-nav" aria-label="Primary">
       <Link className="brand" href="/">AgentBench</Link>
@@ -10,6 +14,7 @@ export function SiteNav({ current }: { current?: 'home' | 'simulate' | 'score' |
         <Link href="/score" aria-current={current === 'score' ? 'page' : undefined}>Score evidence</Link>
         <Link href="/runs" aria-current={current === 'runs' ? 'page' : undefined}>Run agent</Link>
         <Link href="/agents" aria-current={current === 'agents' ? 'page' : undefined}>Agents</Link>
+        <Link href="/scenarios" aria-current={current === 'scenarios' ? 'page' : undefined}>Scenarios</Link>
       </div>
     </nav>
   );
