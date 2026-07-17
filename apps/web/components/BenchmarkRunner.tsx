@@ -2138,11 +2138,6 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     () => selectedSuite?.scenarios.find((scenario) => scenario.id === selectedScenarioId) ?? selectedSuite?.scenarios[0] ?? null,
     [selectedScenarioId, selectedSuite],
   );
-  const callCenterScenarios = useMemo(
-    () => suites.find((suite) => suite.id === 'call-center-voice-ai')?.scenarios ?? [],
-    [suites],
-  );
-
   function loadScenarioStarterData(nextScenario = selectedScenario) {
     if (!nextScenario) return;
 
@@ -2162,12 +2157,11 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     setUploadMessage(null);
   }
 
-  function onLoadCallCenterSampleEvidence(scenario: BenchmarkScenario) {
-    setSelectedSuiteId('call-center-voice-ai');
+  function onLoadSampleEvidence(scenario: BenchmarkScenario) {
     setSelectedScenarioId(scenario.id);
     loadScenarioStarterData(scenario);
     setShowSimulateEvidenceOptions(false);
-    setUploadMessage(`Loaded sample Call Center Voice AI evidence: ${scenario.title}. This evidence is synthetic.`);
+    setUploadMessage(`Loaded sample evidence: ${scenario.title}. This evidence is synthetic.`);
   }
 
   async function onUploadEvidenceFile(file: File | null) {
@@ -3423,7 +3417,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           </div>
         ) : null}
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16 }}>
+        {view !== 'score' ? <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16 }}>
           <label style={{ display: 'grid', gap: 8 }}>
             <span style={{ fontWeight: 700 }}>Benchmark suite</span>
             <select
@@ -3451,24 +3445,11 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
               ))}
             </select>
           </label>
-        </div>
+        </div> : null}
 
-        {isLoading ? <p style={{ margin: 0, color: 'var(--muted)' }}>Loading benchmark suites...</p> : null}
+        {view !== 'score' && isLoading ? <p style={{ margin: 0, color: 'var(--muted)' }}>Loading benchmark suites...</p> : null}
 
-        {view === 'score' ? (
-          selectedScenario ? (
-            <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14, lineHeight: 1.45 }} aria-label="Selected scenario">
-              {selectedScenario.title}
-              {selectedScenario.user_goal || selectedScenario.user_persona
-                ? ` — ${selectedScenario.user_goal || selectedScenario.user_persona}`
-                : ''}
-            </p>
-          ) : selectedSuite && !isLoading ? (
-            <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }} aria-label="Suite setup guidance">
-              {selectedSuite.title} has no benchmark scenarios yet.
-            </p>
-          ) : null
-        ) : selectedScenario ? (
+        {view === 'score' ? null : selectedScenario ? (
           <div
             aria-label="Selected scenario"
             style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, background: 'var(--panel-alt)', display: 'grid', gap: 10 }}
@@ -3715,23 +3696,52 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
               </button>
             </div>
             {showSimulateEvidenceOptions ? (
-              <div className="score-simulate-options" aria-label="Call Center Voice AI sample evidence options">
-                <p>Call Center Voice AI scenarios</p>
-                <div className="score-simulate-option-list">
-                  {callCenterScenarios.length ? (
-                    callCenterScenarios.map((scenario) => (
-                      <button
-                        key={scenario.id}
-                        type="button"
-                        onClick={() => onLoadCallCenterSampleEvidence(scenario)}
-                      >
-                        {scenario.title}
-                      </button>
-                    ))
-                  ) : (
-                    <p className="scenarios-muted">Load suites to see Call Center Voice AI options.</p>
-                  )}
+              <div className="score-simulate-options" aria-label="Sample evidence options">
+                <p>Choose the contract for the synthetic evidence.</p>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+                  <label style={{ display: 'grid', gap: 8 }}>
+                    <span style={{ fontWeight: 700 }}>Benchmark suite</span>
+                    <select
+                      value={selectedSuite?.id ?? ''}
+                      disabled={isLoading || !suites.length}
+                      onChange={(event) => setSelectedSuiteId(event.target.value)}
+                      style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                    >
+                      {suites.map((suite) => (
+                        <option key={suite.id} value={suite.id}>{suite.title}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label style={{ display: 'grid', gap: 8 }}>
+                    <span style={{ fontWeight: 700 }}>Scenario</span>
+                    <select
+                      value={selectedScenario?.id ?? ''}
+                      disabled={isLoading || !selectedSuite?.scenarios.length}
+                      onChange={(event) => setSelectedScenarioId(event.target.value)}
+                      style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                    >
+                      {(selectedSuite?.scenarios ?? []).map((scenario) => (
+                        <option key={scenario.id} value={scenario.id}>{scenario.title}</option>
+                      ))}
+                    </select>
+                  </label>
                 </div>
+                {selectedScenario ? (
+                  <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14, lineHeight: 1.45 }} aria-label="Selected sample scenario">
+                    {selectedScenario.title}
+                    {selectedScenario.user_goal || selectedScenario.user_persona
+                      ? ` — ${selectedScenario.user_goal || selectedScenario.user_persona}`
+                      : ''}
+                  </p>
+                ) : null}
+                <button
+                  type="button"
+                  className="secondary-link"
+                  disabled={!selectedScenario}
+                  onClick={() => selectedScenario && onLoadSampleEvidence(selectedScenario)}
+                >
+                  Load selected sample evidence
+                </button>
               </div>
             ) : null}
             {uploadMessage ? <p className="score-upload-message">{uploadMessage}</p> : null}

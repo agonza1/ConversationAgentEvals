@@ -47,8 +47,13 @@ test('dedicated paths expose only their primary workflow', async ({ page }) => {
   await expect(page.locator('form').first().locator('textarea').first()).toHaveValue('');
   await expect(page.getByRole('button', { name: 'Evaluate evidence' })).toBeDisabled();
   await expect(page.getByText(/This evidence is synthetic/)).toHaveCount(0);
+  await expect(page.getByText('Benchmark suite')).toHaveCount(0);
+  await expect(page.getByText('Scenario', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Load sample evidence' }).click();
-  await expect(page.getByLabel('Call Center Voice AI sample evidence options')).toBeVisible();
+  const sampleOptions = page.getByLabel('Sample evidence options');
+  await expect(sampleOptions).toBeVisible();
+  await expect(sampleOptions.getByText('Benchmark suite')).toBeVisible();
+  await expect(sampleOptions.getByText('Scenario', { exact: true })).toBeVisible();
   await expect(page.getByLabel('Saved runs and e2e validation')).toHaveCount(0);
 
   await page.goto('/runs');
@@ -81,8 +86,8 @@ test('scenario and eval deep links preload the advertised scenario', async ({ pa
   await page.goto('/eval?demo=sample-evidence');
   await expect(page.getByText('Loading benchmark suites...')).toHaveCount(0);
   const evalForm = page.locator('form').first();
-  await expect(evalForm.locator('select').nth(0)).toHaveValue('call-center-voice-ai');
-  await expect(evalForm.locator('select').nth(1)).toHaveValue('billing-address-change');
+  await expect(evalForm.getByText('Benchmark suite')).toHaveCount(0);
+  await expect(evalForm.getByText('Scenario', { exact: true })).toHaveCount(0);
   await expect(evalForm.locator('textarea').first()).not.toHaveValue('');
 });
 
