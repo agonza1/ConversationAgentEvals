@@ -90,6 +90,23 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
   await expect(page.getByLabel('Transcript')).toContainText('I want to cancel today.');
 });
 
+test('runs list preserves an API base override in analysis links', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    window.localStorage.setItem('conversation-evals-demo-project', 'call-center-demo');
+  });
+
+  await page.route('http://api.example.test/api/execution/runs**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([runFixture]) });
+  });
+
+  await page.goto('/runs?api_base=http%3A%2F%2Fapi.example.test');
+  await expect(page.getByRole('link', { name: /ACC voice fixture agent/ })).toHaveAttribute(
+    'href',
+    '/runs/exec-demo123?api_base=http%3A%2F%2Fapi.example.test',
+  );
+});
+
 test('text agent analysis hides the stub waveform', async ({ page }) => {
   const textRun = {
     ...runFixture,

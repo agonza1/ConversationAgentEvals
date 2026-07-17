@@ -94,6 +94,7 @@ requireIncludes('api service', api, 'required: false');
 requireIncludes('api service', api, 'http://localhost:8000/health');
 requireNotIncludes('api service', api, './apps/api:/workspace/apps/api');
 requireNotIncludes('api service', api, './apps/api/sales_presenter.db:/workspace/apps/api/sales_presenter.db');
+requireIncludes('api service', api, './artifacts:/workspace/artifacts');
 
 const worker = serviceBlock('worker');
 requireProfile('worker service', worker, 'persistence');

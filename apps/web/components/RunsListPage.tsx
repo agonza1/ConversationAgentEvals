@@ -16,8 +16,13 @@ export function RunsListPage() {
   const [runs, setRuns] = useState<ExecutionRunRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [apiBase, setApiBase] = useState('');
   const userId = useMemo(() => demoUserId(), []);
   const projectId = useMemo(() => demoProjectId(), []);
+
+  useEffect(() => {
+    setApiBase(new URLSearchParams(window.location.search).get('api_base') || '');
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -69,8 +74,9 @@ export function RunsListPage() {
             .map((item) => item.score)
             .filter((value): value is number => typeof value === 'number');
           const avg = scores.length ? Math.round(scores.reduce((sum, value) => sum + value, 0) / scores.length) : null;
+          const detailQuery = apiBase ? `?api_base=${encodeURIComponent(apiBase)}` : '';
           return (
-            <Link key={run.execution_run_id} className="card runs-list-item" href={`/runs/${run.execution_run_id}`}>
+            <Link key={run.execution_run_id} className="card runs-list-item" href={`/runs/${run.execution_run_id}${detailQuery}`}>
               <div>
                 <strong>{run.agent_name || run.agent_id || run.mode}</strong>
                 <p>{run.execution_run_id}</p>
