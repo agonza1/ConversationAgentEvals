@@ -3,9 +3,58 @@ import { expect, test } from '@playwright/test';
 test('voice eval page launches and shows conversation evidence', async ({ page }) => {
   let polled = 0;
 
+  await page.route('**/api/agents', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        agents: [
+          {
+            id: 'acc-voice-fixture-agent',
+            name: 'ACC voice fixture target',
+            channel: 'voice',
+            target: 'voice_fixture',
+            description: 'Built-in target for cancellation-rescue voice evaluation.',
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.route('**/api/execution/health', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        surface: 'execution',
+        audio: {
+          transports: [
+            { id: 'none', label: 'No audio transport', available: true },
+            {
+              id: 'pipecat_small_webrtc',
+              label: 'Local Pipecat small WebRTC hooks',
+              available: true,
+              default_execution_mode: 'pipecat_webrtc',
+              notes: ['In-process hooks; no live browser peer.'],
+            },
+          ],
+        },
+      }),
+    });
+  });
+
   await page.route('**/api/execution/runs**', async (route) => {
     const url = route.request().url();
     if (route.request().method() === 'POST' && url.endsWith('/api/execution/runs')) {
+      expect(JSON.parse(route.request().postData() ?? '{}')).toMatchObject({
+        suite_id: 'call-center-voice-ai',
+        scenario_ids: ['cancellation-rescue'],
+        mode: 'pipecat_webrtc',
+        agent_id: 'acc-voice-fixture-agent',
+        audio_transport: 'pipecat_small_webrtc',
+        evaluate: true,
+      });
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -70,7 +119,23 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
                       source_format: 'pipecat_execution',
                       recording_attached: true,
                     },
-                    audio_session: { frames_sent: 3, frames_received: 3, tester_status: 'completed' },
+                    audio_session: {
+                      frames_sent: 3,
+                      frames_received: 3,
+                      tester_status: 'completed',
+                      runtime_provenance: {
+                        execution_engine: 'run_agent',
+                        live_media: false,
+                        browser_peer: false,
+                        fixture_backed_scoring: true,
+                      },
+                      real_call_readiness: {
+                        run_agent_execution: 'proven',
+                        pipecat_capture_hooks: 'proven',
+                        browser_webrtc_peer: 'not_connected',
+                        scoring: 'fixture_backed',
+                      },
+                    },
                     verdict: 'pass',
                     score: 88,
                   },
@@ -89,12 +154,17 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
   await page.goto('/voice');
   await expect(page.getByRole('heading', { name: 'Voice eval' })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Voice evaluation' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Pipecat hooks' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Fixture' })).toBeVisible();
-  await page.getByRole('button', { name: 'Run' }).click();
+  await expect(page.getByLabel('Voice target')).toHaveValue('acc-voice-fixture-agent');
+  await expect(page.getByRole('heading', { name: 'Pick the Run Agent target' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Pipecat capture proof' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Offline fixture smoke' })).toBeVisible();
+  await expect(page.getByText('Browser mic peer')).toBeVisible();
+  await expect(page.getByText('Not connected in this slice')).toBeVisible();
+  await page.getByRole('button', { name: 'Run through Run Agent' }).click();
   const results = page.getByRole('region', { name: 'Run results' });
   await expect(results.getByText('voice-run-1')).toBeVisible();
+  await expect(results.getByRole('link', { name: 'Open Run Agent detail' })).toHaveAttribute('href', '/runs/voice-run-1');
   await expect(results.getByText('Cancellation rescue', { exact: true })).toBeVisible({ timeout: 10000 });
-  await expect(results.getByText(/vCon|recording|Pipecat hooks/i).first()).toBeVisible();
+  await expect(results.getByText(/vCon|recording metadata|Pipecat capture proof|fixture-backed score/i).first()).toBeVisible();
   await expect(results.getByRole('progressbar', { name: 'Voice evaluation progress' })).toHaveAttribute('aria-valuenow', '100');
 });

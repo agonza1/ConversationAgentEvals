@@ -1,4 +1,5 @@
-export type ExecutionMode = 'text_callable' | 'voice_fixture';
+export type ExecutionMode = 'text_callable' | 'voice_fixture' | 'pipecat_webrtc';
+export type AudioTransportId = 'none' | 'pipecat_small_webrtc' | 'freeswitch_verto_sip';
 
 export interface AgentRecord {
   id: string;
@@ -223,6 +224,8 @@ export async function createExecutionRun(payload: {
   agent_id?: string;
   text_callable?: string;
   model_name?: string;
+  evaluate?: boolean;
+  audio_transport?: AudioTransportId;
 }): Promise<ExecutionRunRecord> {
   return handleJson(
     await fetch(`${getApiBase()}/api/execution/runs`, {

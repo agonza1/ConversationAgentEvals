@@ -298,6 +298,16 @@ def test_pipecat_webrtc_execution_run_emits_vcon_without_live_sip():
     audio_session = conversation.get('audio_session') or {}
     assert audio_session.get('frames_sent', 0) >= 1
     assert audio_session.get('frames_received', 0) >= 1
+    provenance = audio_session.get('runtime_provenance') or {}
+    assert provenance.get('execution_engine') == 'run_agent'
+    assert provenance.get('live_media') is False
+    assert provenance.get('browser_peer') is False
+    assert provenance.get('fixture_backed_scoring') is True
+    readiness = audio_session.get('real_call_readiness') or {}
+    assert readiness.get('run_agent_execution') == 'proven'
+    assert readiness.get('pipecat_capture_hooks') == 'proven'
+    assert readiness.get('browser_webrtc_peer') == 'not_connected'
+    assert readiness.get('sip_pstn') == 'deferred'
 
 
 def test_pipecat_webrtc_propagates_tester_needs_review(monkeypatch, tmp_path):
