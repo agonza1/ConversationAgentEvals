@@ -203,7 +203,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
     window.localStorage.setItem('conversation-evals-demo-plan', 'free');
   });
 
-  await page.goto('/runs');
+  await page.goto('/runs?api_base=http%3A%2F%2Fapi.example.test');
   await expect(page.getByLabel('Launch agent run')).toBeVisible();
   await expect(page.getByLabel('Launch agent run').getByRole('button', { name: 'Launch agent run' })).toBeEnabled({
     timeout: 30_000,
@@ -213,11 +213,15 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect(launch.getByLabel('Execution model')).toHaveValue('gpt-5.4');
   await expect(launch.getByText('Connect OpenAI to load models.')).toBeVisible();
   await expect(launch.getByText('Advanced')).toBeVisible();
-  await expect(launch.getByLabel('Execution target mode')).toHaveCount(0);
+  await expect(launch.getByLabel('Execution target mode')).not.toBeVisible();
   await launch.getByText('Advanced').click();
   await expect(launch.getByLabel('Execution target mode')).toBeVisible();
   await launch.getByRole('button', { name: 'Launch agent run' }).click();
   await expect(launch.getByText('exec-ui-demo', { exact: true })).toBeVisible();
+  await expect(launch.getByRole('link', { name: 'Open analysis' })).toHaveAttribute(
+    'href',
+    '/runs/exec-ui-demo?api_base=http%3A%2F%2Fapi.example.test',
+  );
   await expect.poll(() => postedModel).toBe('gpt-5.4');
   await expect(launch.getByLabel('Execution conversations')).toContainText('Billing Address Change');
   await expect(launch.getByLabel('Execution conversations')).toContainText(/pass/i, { timeout: 8000 });

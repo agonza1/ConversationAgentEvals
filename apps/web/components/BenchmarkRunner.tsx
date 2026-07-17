@@ -636,6 +636,16 @@ function getApiBase() {
   return '';
 }
 
+function executionAnalysisHref(executionRunId: string) {
+  const params = new URLSearchParams();
+  if (typeof window !== 'undefined') {
+    const apiBase = new URLSearchParams(window.location.search).get('api_base');
+    if (apiBase) params.set('api_base', apiBase);
+  }
+  const query = params.toString();
+  return `/runs/${executionRunId}${query ? `?${query}` : ''}`;
+}
+
 async function handleJson<T>(response: Response): Promise<T> {
   const text = await response.text();
 
@@ -3118,11 +3128,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
       );
       listExecutionRuns(identity.userId, identity.projectId).catch(() => undefined);
       if (options?.redirectToAnalysis && queued.execution_run_id) {
-        const analysisParams = new URLSearchParams();
-        const apiBase = new URLSearchParams(window.location.search).get('api_base');
-        if (apiBase) analysisParams.set('api_base', apiBase);
-        const analysisQuery = analysisParams.toString();
-        window.location.assign(`/runs/${queued.execution_run_id}${analysisQuery ? `?${analysisQuery}` : ''}`);
+        window.location.assign(executionAnalysisHref(queued.execution_run_id));
       }
       return queued;
     } catch (err) {
@@ -4088,7 +4094,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                 <span style={{ marginLeft: 10, color: executionStatusColor(executionRun.status), fontWeight: 800, textTransform: 'capitalize' }}>
                   {executionRun.status}
                 </span>
-                <a href={`/runs/${executionRun.execution_run_id}`} style={{ marginLeft: 12, fontWeight: 760 }}>
+                <a href={executionAnalysisHref(executionRun.execution_run_id)} style={{ marginLeft: 12, fontWeight: 760 }}>
                   Open analysis
                 </a>
               </div>
