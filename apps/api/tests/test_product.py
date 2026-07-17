@@ -1,4 +1,6 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
@@ -1544,6 +1546,73 @@ def test_llm_judge_spend_control_respects_budget_env(monkeypatch, tmp_path):
         assert payload['spend_control']['provider_configured'] is True
         assert payload['spend_control']['within_budget'] is False
         assert payload['spend_control']['remaining_daily_credits'] == 7
+    finally:
+        set_provider_for_tests('openai', None)
+
+
+def test_llm_judge_spend_reservation_is_atomic(monkeypatch, tmp_path):
+    from app.services import product_service
+    from app.services.llm_providers import set_provider_for_tests
+
+    class _Connected:
+        provider_id = 'openai'
+
+        def __init__(self):
+            self.calls = 0
+            self._lock = Lock()
+
+        def status(self):
+            return {
+                'id': 'openai',
+                'provider': 'openai_codex',
+                'status': 'connected',
+                'email': 'judge@example.com',
+                'account_id': 'acct',
+                'message': 'connected',
+                'last_error': None,
+            }
+
+        def start_oauth(self):
+            return {}
+
+        def disconnect(self):
+            return {'status': 'disconnected'}
+
+        def ensure_access_token(self):
+            return 'token'
+
+        def complete(self, prompt: str):
+            del prompt
+            with self._lock:
+                self.calls += 1
+            return '{"agrees": true, "rationale": "Looks consistent.", "next_action": "Keep it."}'
+
+    provider = _Connected()
+    monkeypatch.setattr(product_service, '_judge_spend_path', lambda: tmp_path / 'llm_judge_spend.json')
+    monkeypatch.setenv('LLM_JUDGE_PROVIDER', 'openai_codex')
+    monkeypatch.setenv('LLM_JUDGE_DAILY_CREDIT_LIMIT', '10')
+    monkeypatch.setenv('LLM_JUDGE_RESERVED_DAILY_CREDITS', '0')
+    set_provider_for_tests('openai', provider)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(
+                executor.map(
+                    lambda _: product_service.judge_gate(
+                        plan='starter',
+                        report={
+                            'suite_id': 'call-center-voice-ai',
+                            'scenario_id': 'billing-address-change',
+                            'overall_score': 91,
+                        },
+                        transcript='Agent: verified customer identity.',
+                    ),
+                    range(2),
+                )
+            )
+        assert sorted(response.status for response in responses) == ['blocked', 'ready']
+        assert [response.block_reason for response in responses].count('budget') == 1
+        assert provider.calls == 1
+        assert json.loads((tmp_path / 'llm_judge_spend.json').read_text(encoding='utf-8'))['spent'] == 10
     finally:
         set_provider_for_tests('openai', None)
 

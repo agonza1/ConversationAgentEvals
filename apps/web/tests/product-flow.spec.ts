@@ -47,20 +47,22 @@ test('dedicated paths expose only their primary workflow', async ({ page }) => {
   await expect(page.getByText('Advanced details')).toHaveCount(0);
   await expect(page.getByLabel('Evaluation contract')).toBeVisible();
   await expect(page.getByLabel('Evaluation suite')).toBeVisible();
-  await expect(page.getByLabel('Evaluation scenario')).toBeVisible();
+  await expect(page.getByLabel('Evaluation scenario', { exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Create new scenario' })).toHaveAttribute('href', '/scenarios?create=1');
   await expect(page.getByText('What this scenario checks')).toBeVisible();
   await expect(page.getByText('Attribute this score')).toBeVisible();
-  await expect(page.getByLabel('Attributed agent')).toHaveCount(0);
-  await expect(page.getByLabel('Attributed agent target')).toHaveCount(0);
+  await expect(page.getByLabel('Attributed agent', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Attributed agent target')).toBeHidden();
   await page.getByText('Attribute this score').click();
   await expect(page.getByLabel('Attributed agent target')).toBeVisible();
+  await expect(page.getByLabel('Attributed agent target')).toHaveValue('');
   await expect(page.getByLabel('Attributed model')).toBeVisible();
   await expect(page.getByText(/do not change how evidence is scored/i)).toBeVisible();
   await expect(page.locator('form').first().locator('textarea').first()).toHaveValue('');
   await expect(page.getByRole('button', { name: 'Evaluate evidence' })).toBeDisabled();
   await expect(page.getByText(/This evidence is synthetic/)).toHaveCount(0);
   await expect(page.getByLabel('LLM judge controls')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Connect OpenAI' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Request LLM judge' })).toBeDisabled();
   await page.getByRole('button', { name: 'Load sample evidence' }).click();
   const sampleOptions = page.getByLabel('Sample evidence options');
   await expect(sampleOptions).toBeVisible();
@@ -98,7 +100,7 @@ test('scenario and eval deep links preload the advertised scenario', async ({ pa
   await expect(page.getByText('Loading benchmark suites...')).toHaveCount(0);
   const evalForm = page.locator('form').first();
   await expect(evalForm.getByLabel('Evaluation contract')).toBeVisible();
-  await expect(evalForm.getByLabel('Evaluation scenario')).toBeVisible();
+  await expect(evalForm.getByLabel('Evaluation scenario', { exact: true })).toBeVisible();
   await expect(evalForm.locator('textarea').first()).not.toHaveValue('');
 });
 

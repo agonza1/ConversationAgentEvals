@@ -163,6 +163,13 @@ test('targets try-it-out links preserve the api base override', async ({ page })
   );
 });
 
+test('legacy agents redirect preserves the api base override', async ({ page }) => {
+  await mockRunnerApis(page);
+  await page.goto('/agents?api_base=https%3A%2F%2Fapi.example.test');
+
+  await expect(page).toHaveURL(/\/targets\?api_base=https%3A%2F%2Fapi\.example\.test$/);
+});
+
 test('targets try-it-out auto-launches and opens run analysis', async ({ page }) => {
   const launches: Record<string, unknown>[] = [];
   await mockRunnerApis(page, {

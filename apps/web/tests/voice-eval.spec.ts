@@ -151,9 +151,13 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
     await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
   });
 
-  await page.goto('/voice');
+  await page.goto('/voice?api_base=http%3A%2F%2Fapi.example.test');
   await expect(page.getByRole('heading', { name: 'Voice eval' })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Voice evaluation' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Manage targets' })).toHaveAttribute(
+    'href',
+    '/targets?api_base=http%3A%2F%2Fapi.example.test',
+  );
   await expect(page.getByLabel('Voice target')).toHaveValue('acc-voice-fixture-agent');
   await expect(page.getByRole('heading', { name: 'Pick the Run Agent target' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Pipecat capture proof' })).toBeVisible();
@@ -163,7 +167,10 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
   await page.getByRole('button', { name: 'Run through Run Agent' }).click();
   const results = page.getByRole('region', { name: 'Run results' });
   await expect(results.getByText('voice-run-1')).toBeVisible();
-  await expect(results.getByRole('link', { name: 'Open Run Agent detail' })).toHaveAttribute('href', '/runs/voice-run-1');
+  await expect(results.getByRole('link', { name: 'Open Run Agent detail' })).toHaveAttribute(
+    'href',
+    '/runs/voice-run-1?api_base=http%3A%2F%2Fapi.example.test',
+  );
   await expect(results.getByText('Cancellation rescue', { exact: true })).toBeVisible({ timeout: 10000 });
   await expect(results.getByText(/vCon|recording metadata|Pipecat capture proof|fixture-backed score/i).first()).toBeVisible();
   await expect(results.getByRole('progressbar', { name: 'Voice evaluation progress' })).toHaveAttribute('aria-valuenow', '100');

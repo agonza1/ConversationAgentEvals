@@ -28,15 +28,25 @@ test('eval page uploads vCon and loads sample call-center evidence', async ({ pa
   await page.getByRole('button', { name: 'Load sample evidence' }).click();
   const sampleOptions = page.getByLabel('Sample evidence options');
   await expect(sampleOptions).toBeVisible();
-  await expect(sampleOptions.locator('select').nth(0)).toHaveValue('call-center-voice-ai');
-  await expect(sampleOptions.locator('select').nth(1)).toHaveValue('billing-address-change');
+  await expect(sampleOptions.getByRole('button', { name: 'Load selected sample evidence' })).toBeVisible();
   await sampleOptions.getByRole('button', { name: 'Load selected sample evidence' }).click();
-  await expect(page.getByText(/Loaded sample evidence: Billing Address Change.*synthetic/)).toBeVisible();
+  await expect(page.getByText(/Loaded sample transcript: Billing Address Change/)).toBeVisible();
   await page.getByRole('button', { name: 'Evaluate evidence' }).click();
   await expect(page.getByText('Benchmark report', { exact: true })).toBeVisible();
   await expect(page.getByText('Task completion', { exact: true })).toBeVisible();
-  await expect(page.getByLabel('OpenAI judge provider')).toBeVisible();
+  await expect(page.getByLabel('LLM judge controls')).toBeVisible();
   await expect(page.getByLabel('Saved runs and e2e validation')).toBeVisible();
+  await expect(page.getByLabel('Evaluation contract')).toBeVisible();
   await expect(page.getByText('Benchmark suite')).toHaveCount(0);
-  await expect(page.getByText('Scenario', { exact: true })).toHaveCount(0);
+
+  await page.getByLabel('Evidence transcript').fill('hello this transcript has none of the required call-center actions');
+  await page.getByRole('button', { name: 'Evaluate evidence' }).click();
+  await expect(page.getByText('Benchmark report', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /needs_review/i })).toBeVisible();
+  const requiredActionsTile = page.getByLabel('Required actions score');
+  await expect(requiredActionsTile).toBeVisible();
+  await expect(requiredActionsTile).toContainText('0');
+
+  await page.getByLabel('Evidence transcript').fill('');
+  await expect(page.getByRole('button', { name: 'Evaluate evidence' })).toBeDisabled();
 });

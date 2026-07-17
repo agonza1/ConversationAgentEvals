@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from datetime import UTC, datetime
+from threading import Lock
 from typing import Any
 from urllib.parse import urlencode
 
@@ -107,6 +108,8 @@ PRICING = [
         ],
     ),
 ]
+
+_JUDGE_SPEND_LOCK = Lock()
 
 USAGE_RULES = [
     UsageRule(id='deterministic_eval', label='Deterministic browser eval', credits=1),
@@ -985,11 +988,26 @@ def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> Jud
             block_reason='provider',
         )
 
+    reserved, spend_control = _reserve_judge_credits(spend_control, credits=10)
+    if not reserved:
+        return JudgeResponse(
+            status='blocked',
+            required_plan='starter',
+            credits=10,
+            message='LLM judge daily credit budget is exhausted. Increase the limit or wait for the next budget window.',
+            evidence_citations=citations,
+            spend_control=spend_control,
+            provider=spend_control.get('provider'),
+            model=model_name,
+            block_reason='budget',
+        )
+
     prompt = _build_judge_prompt(report=report, transcript=transcript, citations=citations)
     started = datetime.now(UTC)
     try:
         raw_output = _execute_judge_completion(prompt)
     except Exception as exc:  # noqa: BLE001
+        spend_control = _refund_judge_credits(spend_control, credits=10)
         return JudgeResponse(
             status='blocked',
             required_plan='starter',
@@ -1005,7 +1023,6 @@ def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> Jud
 
     latency_ms = int((datetime.now(UTC) - started).total_seconds() * 1000)
     structured = _parse_judge_output(raw_output)
-    spend_control = _consume_judge_credits(spend_control, credits=10)
     agrees_label = (
         'agrees' if structured.agrees is True else 'disagrees' if structured.agrees is False else 'reviewed'
     )
@@ -1149,9 +1166,10 @@ def _judge_spend_path():
 
 
 def _reset_judge_spend_for_tests() -> None:
-    path = _judge_spend_path()
-    if path.exists():
-        path.unlink(missing_ok=True)
+    with _JUDGE_SPEND_LOCK:
+        path = _judge_spend_path()
+        if path.exists():
+            path.unlink(missing_ok=True)
 
 
 def _load_judge_spend() -> dict[str, Any]:
@@ -1175,7 +1193,9 @@ def _load_judge_spend() -> dict[str, Any]:
 def _save_judge_spend(payload: dict[str, Any]) -> None:
     path = _judge_spend_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+    temp_path = path.with_name(f'{path.name}.tmp')
+    temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+    os.replace(temp_path, path)
 
 
 def _judge_spend_control() -> dict[str, Any]:
@@ -1206,17 +1226,38 @@ def _judge_spend_control() -> dict[str, Any]:
     }
 
 
-def _consume_judge_credits(spend_control: dict[str, Any], *, credits: int) -> dict[str, Any]:
-    state = _load_judge_spend()
-    state['spent'] = int(state.get('spent') or 0) + credits
-    _save_judge_spend(state)
+def _with_spend_totals(spend_control: dict[str, Any], spent_credits: int, *, credits: int) -> dict[str, Any]:
     updated = dict(spend_control)
-    updated['spent_daily_credits'] = state['spent']
+    updated['spent_daily_credits'] = spent_credits
     daily_limit = int(updated.get('daily_credit_limit') or 200)
     reserved = int(updated.get('reserved_daily_credits') or 0)
-    updated['remaining_daily_credits'] = max(daily_limit - reserved - state['spent'], 0)
+    updated['remaining_daily_credits'] = max(daily_limit - reserved - spent_credits, 0)
     updated['within_budget'] = updated['remaining_daily_credits'] >= credits
     return updated
+
+
+def _reserve_judge_credits(spend_control: dict[str, Any], *, credits: int) -> tuple[bool, dict[str, Any]]:
+    with _JUDGE_SPEND_LOCK:
+        state = _load_judge_spend()
+        spent = int(state.get('spent') or 0)
+        daily_limit = int(spend_control.get('daily_credit_limit') or 200)
+        reserved = int(spend_control.get('reserved_daily_credits') or 0)
+        remaining = max(daily_limit - reserved - spent, 0)
+        if remaining < credits:
+            return False, _with_spend_totals(spend_control, spent, credits=credits)
+        next_spent = spent + credits
+        state['spent'] = next_spent
+        _save_judge_spend(state)
+        return True, _with_spend_totals(spend_control, next_spent, credits=credits)
+
+
+def _refund_judge_credits(spend_control: dict[str, Any], *, credits: int) -> dict[str, Any]:
+    with _JUDGE_SPEND_LOCK:
+        state = _load_judge_spend()
+        next_spent = max(int(state.get('spent') or 0) - credits, 0)
+        state['spent'] = next_spent
+        _save_judge_spend(state)
+        return _with_spend_totals(spend_control, next_spent, credits=credits)
 
 
 def _judge_model_name(spend_control: dict[str, Any]) -> str:

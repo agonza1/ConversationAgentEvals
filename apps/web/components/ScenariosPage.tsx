@@ -237,6 +237,13 @@ export function ScenariosPage() {
   }, [selectedKey, suites]);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('create') === '1') {
+      setMode('create');
+    }
+  }, []);
+
+  useEffect(() => {
     const requestId = loadRequestRef.current + 1;
     loadRequestRef.current = requestId;
     const controller = new AbortController();

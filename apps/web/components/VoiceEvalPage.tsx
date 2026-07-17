@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 
+import { ApiAwareLink } from './ApiAwareLink';
+
 type VoiceMode = 'voice_fixture' | 'pipecat_webrtc';
 type JsonRecord = Record<string, unknown>;
 
@@ -299,7 +301,7 @@ export function VoiceEvalPage() {
               <p className="eyebrow">Target under test</p>
               <h2 id="voice-target-title">Pick the Run Agent target</h2>
             </div>
-            <a className="voice-inline-link" href="/targets">Manage targets</a>
+            <ApiAwareLink className="voice-inline-link" href="/targets">Manage targets</ApiAwareLink>
           </div>
 
           <div className="voice-target-grid">
@@ -433,9 +435,9 @@ export function VoiceEvalPage() {
                   <span>Progress</span>
                   <strong>{run.progress.completed_conversations}/{run.progress.total_conversations} conversations</strong>
                 </div>
-                <a className="voice-inline-link" href={`/runs/${encodeURIComponent(run.execution_run_id)}`}>
+                <ApiAwareLink className="voice-inline-link" href={`/runs/${encodeURIComponent(run.execution_run_id)}`}>
                   Open Run Agent detail
-                </a>
+                </ApiAwareLink>
               </div>
               <div
                 className="voice-progress-track"

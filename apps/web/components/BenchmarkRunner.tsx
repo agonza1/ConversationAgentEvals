@@ -2,6 +2,8 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
+import { ApiAwareLink } from './ApiAwareLink';
+
 type JsonRecord = Record<string, unknown>;
 
 interface BenchmarkSuite {
@@ -701,6 +703,20 @@ function stringifyEditable(value: unknown, fallback = '') {
   return JSON.stringify(value, null, 2);
 }
 
+function isBlankJsonField(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (parsed === null) return true;
+    if (Array.isArray(parsed)) return parsed.length === 0;
+    if (typeof parsed === 'object') return Object.keys(parsed as JsonRecord).length === 0;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 function parseMaybeJson(value: string): string | JsonRecord | unknown[] {
   try {
     return JSON.parse(value) as JsonRecord | unknown[];
@@ -789,8 +805,8 @@ async function runBenchmark(payload: {
   suite_id: string;
   scenario_id: string;
   transcript: string;
-  action_trace: unknown;
-  final_state: unknown;
+  action_trace?: unknown;
+  final_state?: unknown;
   call?: string | JsonRecord | unknown[];
   group_call?: string | JsonRecord | unknown[];
   vcon?: JsonRecord;
@@ -2099,6 +2115,7 @@ function describeUploadedEvidence(filename: string, text: string): {
 export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }) {
   const loadingSavedRunRef = useRef(false);
   const autoLaunchDemoRef = useRef(false);
+  const preserveScoreEvidenceRef = useRef(false);
   const [suites, setSuites] = useState<BenchmarkSuite[]>([]);
   const [selectedSuiteId, setSelectedSuiteId] = useState('');
   const [selectedScenarioId, setSelectedScenarioId] = useState('');
@@ -2108,7 +2125,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   const [callEvidence, setCallEvidence] = useState('');
   const [groupCall, setGroupCall] = useState('');
   const [vconEvidence, setVconEvidence] = useState('');
-  const [agentProfile, setAgentProfile] = useState('mock text agent');
+  const [agentProfile, setAgentProfile] = useState('');
   const [agentVersion, setAgentVersion] = useState('');
   const [promptVersion, setPromptVersion] = useState('');
   const [modelName, setModelName] = useState('');
@@ -2164,6 +2181,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     [agents, selectedAgentId],
   );
   const [showSimulateEvidenceOptions, setShowSimulateEvidenceOptions] = useState(false);
+  const [includeStructuredEvidence, setIncludeStructuredEvidence] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [catalogReloadKey, setCatalogReloadKey] = useState(0);
   const suiteLoadRequestRef = useRef(0);
@@ -2176,16 +2194,66 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     () => selectedSuite?.scenarios.find((scenario) => scenario.id === selectedScenarioId) ?? selectedSuite?.scenarios[0] ?? null,
     [selectedScenarioId, selectedSuite],
   );
+  function clearStructuredEvidenceFields() {
+    setActionTrace('');
+    setFinalState('');
+    setCallEvidence('');
+    setGroupCall('');
+    setVconEvidence('');
+    setIncludeStructuredEvidence(false);
+  }
+
+  function onTranscriptChange(nextValue: string) {
+    preserveScoreEvidenceRef.current = true;
+    setTranscript(nextValue);
+    if (view !== 'score') return;
+    setReport(null);
+    setJudgeGate(null);
+
+    const hadStructured =
+      !isBlankJsonField(actionTrace)
+      || !isBlankJsonField(finalState)
+      || Boolean(callEvidence.trim())
+      || Boolean(groupCall.trim())
+      || Boolean(vconEvidence.trim())
+      || includeStructuredEvidence;
+    if (!hadStructured) {
+      if (!nextValue.trim()) {
+        setUploadMessage('Transcript cleared. Paste a transcript or load sample evidence to score again.');
+      }
+      return;
+    }
+
+    clearStructuredEvidenceFields();
+    setUploadMessage(
+      nextValue.trim()
+        ? 'Cleared structured sample evidence after the transcript changed, so Evaluate scores your edited transcript.'
+        : 'Cleared structured sample evidence because the transcript is empty. Reload sample evidence or paste a transcript to score again.',
+    );
+  }
+
   function loadScenarioStarterData(nextScenario = selectedScenario) {
     if (!nextScenario) return;
 
     const nextTranscript = nextScenario.sample_transcript ?? '';
     setTranscript(nextTranscript);
-    setActionTrace(stringifyEditable(nextScenario.sample_action_trace, '[]'));
-    setFinalState(stringifyEditable(nextScenario.sample_final_state ?? nextScenario.expected_final_state, '{}'));
-    setCallEvidence('');
-    setGroupCall('');
-    setVconEvidence(nextTranscript ? sampleVconFromTranscript(nextTranscript) : '');
+    // On /eval, starter structured traces silently force a pass even after transcript edits.
+    // Keep the visible transcript as the scorable evidence; leave optional structured empty.
+    if (view === 'score') {
+      setActionTrace('');
+      setFinalState('');
+      setCallEvidence('');
+      setGroupCall('');
+      setVconEvidence('');
+      setIncludeStructuredEvidence(false);
+    } else {
+      setActionTrace(stringifyEditable(nextScenario.sample_action_trace, '[]'));
+      setFinalState(stringifyEditable(nextScenario.sample_final_state ?? nextScenario.expected_final_state, '{}'));
+      setCallEvidence('');
+      setGroupCall('');
+      setVconEvidence(nextTranscript ? sampleVconFromTranscript(nextTranscript) : '');
+      setIncludeStructuredEvidence(false);
+    }
     setReport(null);
     setSuiteSimulation(null);
     setSaveMessage(null);
@@ -2196,14 +2264,20 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   }
 
   function onLoadSampleEvidence(scenario: BenchmarkScenario) {
+    preserveScoreEvidenceRef.current = true;
     setSelectedScenarioId(scenario.id);
     loadScenarioStarterData(scenario);
     setShowSimulateEvidenceOptions(false);
-    setUploadMessage(`Loaded sample evidence: ${scenario.title}. This evidence is synthetic.`);
+    setUploadMessage(
+      view === 'score'
+        ? `Loaded sample transcript: ${scenario.title}. Edit it and Evaluate — scores follow the transcript, not hidden sample traces.`
+        : `Loaded sample evidence: ${scenario.title}. This evidence is synthetic.`,
+    );
   }
 
   async function onUploadEvidenceFile(file: File | null) {
     if (!file) return;
+    preserveScoreEvidenceRef.current = true;
     setUploadMessage(null);
     setRunError(null);
     try {
@@ -2340,7 +2414,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         const selected = matched ?? fallback;
         const nextId = selected?.id || '';
         setSelectedAgentId(nextId);
-        if (selected) {
+        if (selected && (view !== 'score' || matched)) {
           applyAgentProfileDefaults(selected, { setAgentProfile, setModelName, setPromptVersion });
         }
         if (matched) {
@@ -2360,7 +2434,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     return () => {
       active = false;
     };
-  }, []);
+  }, [view]);
 
   useEffect(() => {
     if (view !== 'run' || typeof window === 'undefined') return;
@@ -2513,9 +2587,18 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     }
 
     const preloadSample = view !== 'score' || shouldPreloadSampleEvidence();
+    if (view === 'score' && !preloadSample && preserveScoreEvidenceRef.current) return;
     setTranscript(preloadSample ? selectedScenario.sample_transcript ?? '' : '');
-    setActionTrace(preloadSample ? stringifyEditable(selectedScenario.sample_action_trace, '[]') : '');
-    setFinalState(preloadSample ? stringifyEditable(selectedScenario.sample_final_state ?? selectedScenario.expected_final_state, '{}') : '');
+    // /eval scores the transcript by default. Do not preload sample action/final-state traces —
+    // they complete every required action and keep scores at 100 after transcript edits.
+    if (view === 'score') {
+      setActionTrace('');
+      setFinalState('');
+      setIncludeStructuredEvidence(false);
+    } else {
+      setActionTrace(preloadSample ? stringifyEditable(selectedScenario.sample_action_trace, '[]') : '');
+      setFinalState(preloadSample ? stringifyEditable(selectedScenario.sample_final_state ?? selectedScenario.expected_final_state, '{}') : '');
+    }
     setCallEvidence('');
     setGroupCall('');
     setVconEvidence('');
@@ -2526,7 +2609,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     setCopyMessage(null);
     setRunError(null);
     setUploadMessage(preloadSample && view === 'score'
-      ? `Loaded sample evidence for ${selectedScenario.title}. This evidence is synthetic.`
+      ? `Loaded sample transcript for ${selectedScenario.title}. This evidence is synthetic.`
       : null);
   }, [selectedScenario, view]);
 
@@ -3083,6 +3166,12 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   async function evaluateEvidence() {
     if (!selectedSuite || !selectedScenario) return;
 
+    if (view === 'score' && !transcript.trim()) {
+      setRunError('Add a transcript before evaluating. Clearing or editing the transcript also clears structured sample evidence so leftover traces cannot score a pass.');
+      setReport(null);
+      return;
+    }
+
     setIsRunning(true);
     setRunError(null);
     setReport(null);
@@ -3101,14 +3190,15 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         user_id: userId || undefined,
         project_id: projectId || undefined,
       });
+      const useStructured = view !== 'score' || includeStructuredEvidence;
       const nextReport = await runBenchmark({
         suite_id: selectedSuite.id,
         scenario_id: selectedScenario.id,
         transcript,
-        final_state: parseMaybeJson(finalState),
-        action_trace: parseMaybeJson(actionTrace),
-        call: callEvidence.trim() ? parseMaybeJson(callEvidence) : undefined,
-        group_call: groupCall.trim() ? parseMaybeJson(groupCall) : undefined,
+        final_state: useStructured && !isBlankJsonField(finalState) ? parseMaybeJson(finalState) : undefined,
+        action_trace: useStructured && !isBlankJsonField(actionTrace) ? parseMaybeJson(actionTrace) : undefined,
+        call: useStructured && callEvidence.trim() ? parseMaybeJson(callEvidence) : undefined,
+        group_call: useStructured && groupCall.trim() ? parseMaybeJson(groupCall) : undefined,
         vcon: vconEvidence.trim() ? parseMaybeJson(vconEvidence) as JsonRecord : undefined,
         ...runMetadata,
       });
@@ -3362,9 +3452,19 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     ? report.suite_contract_manifest_sha256.slice(0, 12)
     : suiteManifestFingerprint ?? 'Not captured';
   const scenarioContractFingerprint = report?.scenario_contract_sha256 ? report.scenario_contract_sha256.slice(0, 12) : selectedScenarioManifestFingerprint ?? 'Not captured';
-  const hasRunnableEvidence = Boolean(
-    transcript.trim() || actionTrace.trim() || finalState.trim() || callEvidence.trim() || groupCall.trim() || vconEvidence.trim(),
+  const hasTranscriptEvidence = Boolean(transcript.trim());
+  const hasStructuredEvidence = Boolean(
+    !isBlankJsonField(actionTrace)
+    || !isBlankJsonField(finalState)
+    || callEvidence.trim()
+    || groupCall.trim()
+    || vconEvidence.trim(),
   );
+  // On /eval, transcript is the primary evidence. Structured sample fields alone must not
+  // keep Evaluate enabled after the user clears the visible conversation.
+  const hasRunnableEvidence = view === 'score'
+    ? hasTranscriptEvidence
+    : Boolean(hasTranscriptEvidence || hasStructuredEvidence);
   const hasSavedCurrentScenario = Boolean(
     selectedScenario?.id && savedRuns.some((run) => run.report.scenario_id === selectedScenario.id),
   );
@@ -3523,11 +3623,20 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             aria-label="Evaluation contract"
             style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 12, background: 'var(--panel-alt)' }}
           >
-            <div>
-              <p className="eyebrow" style={{ margin: 0 }}>Evaluation contract</p>
-              <p style={{ margin: '6px 0 0', color: 'var(--muted)', fontSize: 14, lineHeight: 1.45 }}>
-                Evidence is scored against this scenario&apos;s required actions, forbidden actions, and rubric — not against the optional structured fields below.
-              </p>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+              <div style={{ minWidth: 0, flex: '1 1 240px' }}>
+                <p className="eyebrow" style={{ margin: 0 }}>Evaluation contract</p>
+                <p style={{ margin: '6px 0 0', color: 'var(--muted)', fontSize: 14, lineHeight: 1.45 }}>
+                  Evidence is scored against this scenario&apos;s required actions, forbidden actions, and rubric — not against the optional structured fields below.
+                </p>
+              </div>
+              <ApiAwareLink
+                href="/scenarios?create=1"
+                className="secondary-link"
+                style={{ flex: '0 0 auto', whiteSpace: 'nowrap' }}
+              >
+                Create new scenario
+              </ApiAwareLink>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
               <label style={{ display: 'grid', gap: 8 }}>
@@ -3773,8 +3882,9 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             {showSimulateEvidenceOptions ? (
               <div className="score-simulate-options" aria-label="Sample evidence options">
                 <p>
-                  Loads starter transcript / traces for{' '}
+                  Loads a starter transcript for{' '}
                   <strong>{selectedScenario?.title ?? 'the selected scenario'}</strong>. Synthetic sample — not a live agent run.
+                  On Eval, structured traces are left empty so editing the transcript changes the score.
                 </p>
                 <button
                   type="button"
@@ -3863,16 +3973,40 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             <label style={{ display: 'grid', gap: 8 }}>
               <span style={{ fontWeight: 700 }}>Transcript</span>
               <textarea
+                aria-label="Evidence transcript"
                 value={transcript}
-                onChange={(event) => setTranscript(event.target.value)}
+                onChange={(event) => onTranscriptChange(event.target.value)}
                 rows={7}
                 style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }}
               />
+              {view === 'score' && !hasTranscriptEvidence ? (
+                <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13, lineHeight: 1.4 }}>
+                  Paste a transcript or load sample evidence to evaluate. Structured traces alone are not enough here.
+                </p>
+              ) : null}
             </label>
 
             <details className="eval-structured-evidence">
               <summary>Structured and channel evidence (optional)</summary>
-              <p>Expand when you have tool traces, final-state data, voice/group-call artifacts, or a full vCon record.</p>
+              <p>
+                {view === 'score'
+                  ? 'Hidden by default from Evaluate on this page. Sample transcript scoring ignores these unless you opt in below — otherwise leftover tool traces can keep every score at 100.'
+                  : 'Expand when you have tool traces, final-state data, voice/group-call artifacts, or a full vCon record.'}
+              </p>
+              {view === 'score' ? (
+                <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', margin: '0 0 12px' }}>
+                  <input
+                    type="checkbox"
+                    aria-label="Include structured evidence in Evaluate"
+                    checked={includeStructuredEvidence}
+                    onChange={(event) => setIncludeStructuredEvidence(event.target.checked)}
+                    style={{ marginTop: 3 }}
+                  />
+                  <span style={{ fontSize: 14, lineHeight: 1.4 }}>
+                    Include structured evidence when evaluating (action/tool trace, final state, and channel artifacts below).
+                  </span>
+                </label>
+              ) : null}
               <div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
                   <label style={{ display: 'grid', gap: 8 }}>
@@ -5293,7 +5427,7 @@ function ScenarioList({ title, items }: { title: string; items: string[] }) {
 
 function ScoreTile({ label, score }: { label: string; score?: number }) {
   return (
-    <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14 }}>
+    <div aria-label={`${label} score`} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14 }}>
       <p style={{ margin: '0 0 6px', color: 'var(--muted)', fontSize: 13 }}>{label}</p>
       <p style={{ margin: 0, fontSize: 24, fontWeight: 900, color: scoreColor(score) }}>{score ?? 'n/a'}</p>
     </div>
