@@ -3895,7 +3895,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           {view !== 'simulate' ? (
             <div
               aria-label="LLM judge controls"
-              style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}
+              style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}
             >
               <button
                 type="button"
@@ -3913,23 +3913,36 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
               >
                 Request LLM judge
               </button>
-              <span style={{ color: 'var(--muted)', fontSize: 13, maxWidth: 360, lineHeight: 1.4 }}>
-                {openaiProvider?.status === 'connected'
-                  ? `Auth: OpenAI Codex${openaiProvider.email ? ` (${openaiProvider.email})` : ''}${openaiProvider.plan_type ? ` · ${openaiProvider.plan_type}` : ''}`
-                  : 'Auth: not connected — LLM judge needs OpenAI Codex OAuth.'}
-              </span>
               {openaiProvider?.status === 'connected' ? (
-                <button type="button" className="secondary-link" onClick={() => void onDisconnectOpenAI()}>
-                  Disconnect
-                </button>
+                <span style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.3 }}>
+                  {openaiProvider.email || 'OpenAI Codex'}
+                  {openaiProvider.plan_type ? ` · ${openaiProvider.plan_type}` : ''}
+                  {' · '}
+                  <button
+                    type="button"
+                    onClick={() => void onDisconnectOpenAI()}
+                    style={{
+                      border: 0,
+                      padding: 0,
+                      background: 'transparent',
+                      color: 'var(--muted)',
+                      fontSize: 12,
+                      textDecoration: 'underline',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Disconnect
+                  </button>
+                </span>
               ) : (
                 <button
                   type="button"
-                  className="primary-link"
+                  className="secondary-link"
                   disabled={isConnectingOpenAI}
                   onClick={() => void onConnectOpenAI()}
+                  style={{ padding: '6px 10px', fontSize: 13, fontWeight: 600 }}
                 >
-                  {isConnectingOpenAI ? 'Waiting for OpenAI…' : 'Connect OpenAI'}
+                  {isConnectingOpenAI ? 'Connecting…' : 'Connect OpenAI'}
                 </button>
               )}
             </div>
