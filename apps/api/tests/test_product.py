@@ -1590,6 +1590,8 @@ def test_product_audit_events_track_saved_runs_exports_and_judge_requests():
         'plan': 'starter',
         'status': judge_response.json()['status'],
         'credits': 10,
+        'provider': judge_response.json()['provider'],
+        'model': judge_response.json()['model'],
     }
     assert events[1]['payload'] == {'run_id': saved['id'], 'export_type': 'single_run'}
     assert events[2]['payload'] == {
