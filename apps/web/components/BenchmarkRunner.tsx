@@ -81,6 +81,7 @@ interface BenchmarkReport {
   vcon_analysis?: JsonRecord;
   vcon_export?: JsonRecord;
   simulation_validation?: SimulationValidation;
+  llm_judge?: JsonRecord;
 }
 
 interface SimulationValidation {
@@ -493,19 +494,36 @@ interface BenchmarkSuiteVconBundleExport {
   exported_at: string;
 }
 
+interface JudgeStructuredResult {
+  agrees?: boolean | null;
+  rationale?: string | null;
+  next_action?: string | null;
+  raw_output?: string | null;
+}
+
 interface JudgeGate {
   status: 'blocked' | 'ready';
   required_plan: PricingPlan['id'];
   credits: number;
   message: string;
   evidence_citations: string[];
+  judge_output?: string | null;
+  judge_result?: JudgeStructuredResult | null;
+  provider?: string | null;
+  model?: string | null;
+  prompt_preview?: string | null;
+  latency_ms?: number | null;
+  block_reason?: 'provider' | 'budget' | 'provider_error' | null;
   spend_control?: {
     estimated_credits?: number;
     daily_credit_limit?: number;
     reserved_daily_credits?: number;
+    spent_daily_credits?: number;
     remaining_daily_credits?: number;
     provider?: string;
     provider_configured?: boolean;
+    oauth_connected?: boolean;
+    api_key_configured?: boolean;
     within_budget?: boolean;
   };
 }
@@ -1272,11 +1290,25 @@ function formatJudgeSpend(spendControl: JudgeGate['spend_control']) {
 
   const estimated = spendControl.estimated_credits ?? 10;
   const remaining = spendControl.remaining_daily_credits;
+  const spent = spendControl.spent_daily_credits;
   const limit = spendControl.daily_credit_limit;
   const provider = spendControl.provider ?? 'judge provider';
   const providerStatus = spendControl.provider_configured ? 'configured' : 'not configured';
+  const spentLabel = spent === undefined ? '' : ` ${spent} spent;`;
 
-  return `${estimated} credits estimated; ${remaining ?? 'unknown'} of ${limit ?? 'unknown'} daily credits available; ${provider} ${providerStatus}.`;
+  return `${estimated} credits estimated;${spentLabel} ${remaining ?? 'unknown'} of ${limit ?? 'unknown'} daily credits remaining; ${provider} ${providerStatus}.`;
+}
+
+function judgeBannerTitle(judgeGate: JudgeGate) {
+  if (judgeGate.status === 'ready') {
+    if (judgeGate.judge_result?.agrees === true) return 'LLM judge agrees';
+    if (judgeGate.judge_result?.agrees === false) return 'LLM judge disagrees';
+    return 'LLM judge complete';
+  }
+  if (judgeGate.block_reason === 'budget') return 'Judge budget exhausted';
+  if (judgeGate.block_reason === 'provider_error') return 'Judge provider error';
+  if (judgeGate.block_reason === 'provider') return 'Judge provider required';
+  return 'Judge unavailable';
 }
 
 function EvidenceItem({ item }: { item: string | JsonRecord }) {
@@ -2103,6 +2135,8 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [judgeGate, setJudgeGate] = useState<JudgeGate | null>(null);
+  const [isJudging, setIsJudging] = useState(false);
+  const [showJudgePrompt, setShowJudgePrompt] = useState(false);
   const [openaiProvider, setOpenaiProvider] = useState<OpenAIProviderStatus | null>(null);
   const [openaiProviderMessage, setOpenaiProviderMessage] = useState<string | null>(null);
   const [isConnectingOpenAI, setIsConnectingOpenAI] = useState(false);
@@ -2572,15 +2606,35 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   async function onSaveRun() {
     if (!report) return;
     const identity = ensureDemoIdentity();
+    const reportToSave =
+      judgeGate?.status === 'ready'
+        ? {
+            ...report,
+            llm_judge: {
+              status: judgeGate.status,
+              provider: judgeGate.provider ?? null,
+              model: judgeGate.model ?? null,
+              message: judgeGate.message,
+              credits: judgeGate.credits,
+              latency_ms: judgeGate.latency_ms ?? null,
+              evidence_citations: judgeGate.evidence_citations,
+              judge_output: judgeGate.judge_output ?? null,
+              judge_result: judgeGate.judge_result ?? null,
+              spend_control: judgeGate.spend_control ?? null,
+              requested_at: new Date().toISOString(),
+            },
+          }
+        : report;
 
     try {
       const saved = await saveBenchmarkRun({
         user_id: identity.userId,
         project_id: identity.projectId,
         plan: identity.plan,
-        report,
+        report: reportToSave,
         transcript,
       });
+      setReport(reportToSave);
       setSavedRuns((current) => [saved, ...current.filter((run) => run.id !== saved.id)]);
       fetchProjectRegressionSummary(identity.userId, identity.projectId)
         .then(setProjectRegressionSummary)
@@ -2589,7 +2643,11 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         .then(setScenarioRegressionSummary)
         .catch(() => setScenarioRegressionSummary(null));
       await refreshAuditTrail(identity.userId, identity.projectId);
-      setSaveMessage(`Saved run ${saved.id} to ${identity.projectId}.`);
+      setSaveMessage(
+        judgeGate?.status === 'ready'
+          ? `Saved run ${saved.id} to ${identity.projectId} (with LLM judge).`
+          : `Saved run ${saved.id} to ${identity.projectId}.`,
+      );
     } catch (err) {
       setSaveMessage(err instanceof Error ? err.message : 'Could not save this run.');
     }
@@ -2685,8 +2743,33 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
   async function onJudge() {
     if (!report) return;
+    setIsJudging(true);
+    setShowJudgePrompt(false);
     try {
-      setJudgeGate(await requestJudge({ plan, report, transcript, user_id: userId || undefined, project_id: userId ? projectId : undefined }));
+      const next = await requestJudge({ plan, report, transcript, user_id: userId || undefined, project_id: userId ? projectId : undefined });
+      setJudgeGate(next);
+      if (next.status === 'ready') {
+        setReport((current) =>
+          current
+            ? {
+                ...current,
+                llm_judge: {
+                  status: next.status,
+                  provider: next.provider ?? null,
+                  model: next.model ?? null,
+                  message: next.message,
+                  credits: next.credits,
+                  latency_ms: next.latency_ms ?? null,
+                  evidence_citations: next.evidence_citations,
+                  judge_output: next.judge_output ?? null,
+                  judge_result: next.judge_result ?? null,
+                  spend_control: next.spend_control ?? null,
+                  requested_at: new Date().toISOString(),
+                },
+              }
+            : current,
+        );
+      }
       await refreshAuditTrail();
     } catch (err) {
       setJudgeGate({
@@ -2695,7 +2778,10 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         credits: 10,
         message: err instanceof Error ? err.message : 'Judge request failed.',
         evidence_citations: [],
+        block_reason: 'provider_error',
       });
+    } finally {
+      setIsJudging(false);
     }
   }
 
@@ -3351,6 +3437,9 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     },
   ];
 
+  const judgeProviderReady =
+    openaiProvider?.status === 'connected' || productConfig?.llm_judge_status === 'enabled';
+
   return (
     <section style={{ display: 'grid', gap: 20 }}>
       {(view === 'all') ? (
@@ -3899,19 +3988,19 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             >
               <button
                 type="button"
-                disabled={!report || openaiProvider?.status !== 'connected'}
-                onClick={onJudge}
+                disabled={!report || !judgeProviderReady || isJudging}
+                onClick={() => void onJudge()}
                 style={{
                   border: '1px solid var(--border)',
                   borderRadius: 8,
-                  background: plan === 'free' ? 'var(--panel-alt)' : 'white',
+                  background: judgeProviderReady ? 'white' : 'var(--panel-alt)',
                   color: 'var(--text)',
                   padding: '12px 18px',
                   fontWeight: 800,
-                  opacity: report && openaiProvider?.status === 'connected' ? 1 : 0.65,
+                  opacity: report && judgeProviderReady && !isJudging ? 1 : 0.65,
                 }}
               >
-                Request LLM judge
+                {isJudging ? 'Requesting LLM judge…' : 'Request LLM judge'}
               </button>
               {openaiProvider?.status === 'connected' ? (
                 <span style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.3 }}>
@@ -3933,6 +4022,10 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                   >
                     Disconnect
                   </button>
+                </span>
+              ) : productConfig?.llm_judge_status === 'enabled' ? (
+                <span style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.3 }}>
+                  API key judge ready
                 </span>
               ) : (
                 <button
@@ -3957,17 +4050,93 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         {saveMessage ? <p style={{ color: 'var(--muted)', margin: 0 }}>{saveMessage}</p> : null}
         {judgeGate ? (
           <div
+            aria-label="LLM judge result"
             style={{
               border: `1px solid ${judgeGate.status === 'ready' ? 'var(--success-border)' : 'var(--error-border)'}`,
               background: judgeGate.status === 'ready' ? 'var(--success-bg)' : 'var(--error-bg)',
               color: judgeGate.status === 'ready' ? 'var(--success-text)' : 'var(--error-text)',
               borderRadius: 8,
               padding: 12,
+              display: 'grid',
+              gap: 8,
             }}
           >
-            <strong>{judgeGate.status === 'ready' ? 'Judge gate ready' : 'Upgrade required'}:</strong> {judgeGate.message}
+            <div>
+              <strong>{judgeBannerTitle(judgeGate)}:</strong> {judgeGate.message}
+            </div>
+            {(judgeGate.provider || judgeGate.model || judgeGate.latency_ms != null) ? (
+              <p style={{ margin: 0, color: 'inherit', fontSize: 13 }}>
+                {[
+                  judgeGate.provider ? `Provider: ${judgeGate.provider}` : null,
+                  judgeGate.model ? `Model: ${judgeGate.model}` : null,
+                  judgeGate.latency_ms != null ? `${judgeGate.latency_ms} ms` : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </p>
+            ) : null}
+            {judgeGate.judge_result?.rationale ? (
+              <p style={{ margin: 0, color: 'inherit' }}>
+                <strong>Rationale:</strong> {judgeGate.judge_result.rationale}
+              </p>
+            ) : null}
+            {judgeGate.judge_result?.next_action ? (
+              <p style={{ margin: 0, color: 'inherit' }}>
+                <strong>Next action:</strong> {judgeGate.judge_result.next_action}
+              </p>
+            ) : null}
+            {!judgeGate.judge_result?.rationale && judgeGate.judge_output ? (
+              <p style={{ margin: 0, color: 'inherit', whiteSpace: 'pre-wrap' }}>{judgeGate.judge_output}</p>
+            ) : null}
             {formatJudgeSpend(judgeGate.spend_control) ? (
-              <p style={{ margin: '8px 0 0', color: 'inherit' }}>{formatJudgeSpend(judgeGate.spend_control)}</p>
+              <p style={{ margin: 0, color: 'inherit', fontSize: 13 }}>{formatJudgeSpend(judgeGate.spend_control)}</p>
+            ) : null}
+            {judgeGate.evidence_citations.length ? (
+              <div>
+                <p style={{ margin: '0 0 4px', fontSize: 13, fontWeight: 700 }}>Citations sent to judge</p>
+                <ul style={{ margin: 0, paddingLeft: 18 }}>
+                  {judgeGate.evidence_citations.map((citation) => (
+                    <li key={citation} style={{ fontSize: 13 }}>{citation}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {judgeGate.prompt_preview ? (
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setShowJudgePrompt((current) => !current)}
+                  style={{
+                    border: 0,
+                    padding: 0,
+                    background: 'transparent',
+                    color: 'inherit',
+                    textDecoration: 'underline',
+                    cursor: 'pointer',
+                    fontSize: 13,
+                    fontWeight: 700,
+                  }}
+                >
+                  {showJudgePrompt ? 'Hide what the judge saw' : 'What the judge saw'}
+                </button>
+                {showJudgePrompt ? (
+                  <pre
+                    style={{
+                      margin: '8px 0 0',
+                      padding: 10,
+                      borderRadius: 6,
+                      background: 'rgba(0,0,0,0.06)',
+                      color: 'inherit',
+                      whiteSpace: 'pre-wrap',
+                      fontSize: 12,
+                      maxHeight: 280,
+                      overflow: 'auto',
+                    }}
+                  >
+                    {judgeGate.prompt_preview}
+                  </pre>
+                ) : null}
+              </div>
             ) : null}
           </div>
         ) : null}

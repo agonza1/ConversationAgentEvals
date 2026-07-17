@@ -1440,9 +1440,8 @@ def test_project_export_returns_owner_scoped_history_bundle():
     assert wrong_owner.status_code == 404
 
 
-def test_llm_judge_is_gated_for_free_and_ready_for_paid_plans():
+def test_llm_judge_is_gated_without_provider_regardless_of_plan():
     from app.services.llm_providers import set_provider_for_tests
-    from app.services.llm_providers.openai_codex import OpenAICodexProvider
 
     class _Disconnected:
         provider_id = 'openai'
@@ -1475,6 +1474,7 @@ def test_llm_judge_is_gated_for_free_and_ready_for_paid_plans():
         free_response = client.post('/api/product/judge', json={'plan': 'free', 'report': {'overall_score': 82}})
         assert free_response.status_code == 200
         assert free_response.json()['status'] == 'blocked'
+        assert free_response.json()['block_reason'] == 'provider'
         assert 'Connect OpenAI' in free_response.json()['message']
 
         paid_response = client.post(
@@ -1489,14 +1489,17 @@ def test_llm_judge_is_gated_for_free_and_ready_for_paid_plans():
         payload = paid_response.json()
         assert payload['status'] == 'blocked'
         assert payload['credits'] == 10
-        assert payload['spend_control']['provider'] in {'openai_codex', 'openai', 'vertex'}
+        assert payload['block_reason'] == 'provider'
+        assert payload['spend_control']['provider'] in {'openai_codex', 'openai', 'openai_api_key', 'vertex'}
         assert payload['spend_control']['provider_configured'] is False
         assert payload['spend_control']['within_budget'] is True
+        assert payload['spend_control']['spent_daily_credits'] == 0
     finally:
         set_provider_for_tests('openai', None)
 
 
-def test_llm_judge_spend_control_respects_budget_env(monkeypatch):
+def test_llm_judge_spend_control_respects_budget_env(monkeypatch, tmp_path):
+    from app.services import product_service
     from app.services.llm_providers import set_provider_for_tests
 
     class _Connected:
@@ -1525,6 +1528,7 @@ def test_llm_judge_spend_control_respects_budget_env(monkeypatch):
         def complete(self, prompt: str):
             return 'should not run'
 
+    monkeypatch.setattr(product_service, '_judge_spend_path', lambda: tmp_path / 'llm_judge_spend.json')
     monkeypatch.setenv('LLM_JUDGE_PROVIDER', 'openai_codex')
     monkeypatch.setenv('LLM_JUDGE_DAILY_CREDIT_LIMIT', '15')
     monkeypatch.setenv('LLM_JUDGE_RESERVED_DAILY_CREDITS', '8')
@@ -1534,6 +1538,7 @@ def test_llm_judge_spend_control_respects_budget_env(monkeypatch):
         assert response.status_code == 200
         payload = response.json()
         assert payload['status'] == 'blocked'
+        assert payload['block_reason'] == 'budget'
         assert payload['message'] == 'LLM judge daily credit budget is exhausted. Increase the limit or wait for the next budget window.'
         assert payload['spend_control']['provider'] == 'openai_codex'
         assert payload['spend_control']['provider_configured'] is True

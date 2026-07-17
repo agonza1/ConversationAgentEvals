@@ -48,6 +48,7 @@ test('product eval API journey works end to end', async ({ request, baseURL }) =
   await expect(freeJudgeResponse.json()).resolves.toEqual(expect.objectContaining({
     status: 'blocked',
     required_plan: 'starter',
+    block_reason: 'provider',
   }));
 
   const paidJudgeResponse = await request.post('/api/product/judge', {
@@ -59,8 +60,9 @@ test('product eval API journey works end to end', async ({ request, baseURL }) =
   });
   expect(paidJudgeResponse.ok()).toBeTruthy();
   await expect(paidJudgeResponse.json()).resolves.toEqual(expect.objectContaining({
-    status: 'ready',
+    status: 'blocked',
     credits: 10,
+    block_reason: 'provider',
   }));
 
   const saveResponse = await request.post('/api/product/runs', {
