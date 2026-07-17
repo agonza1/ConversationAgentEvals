@@ -2152,18 +2152,7 @@ export function BenchmarkRunner({
   onExecutionCreated,
 }: {
   view?: BenchmarkRunnerView;
-  onExecutionCreated?: (run: {
-    execution_run_id: string;
-    status?: string;
-    mode?: string;
-    suite_id?: string;
-    scenario_ids?: string[];
-    agent_id?: string;
-    agent_name?: string;
-    tester_id?: string;
-    executor_id?: string;
-    [key: string]: unknown;
-  }) => void;
+  onExecutionCreated?: (run: ExecutionRunRecord) => void;
 }) {
   const loadingSavedRunRef = useRef(false);
   const autoLaunchDemoRef = useRef(false);
@@ -3366,7 +3355,7 @@ export function BenchmarkRunner({
           : selectedScoreAgent?.target === 'http_endpoint'
             ? 'http_endpoint'
           : 'mock_agent';
-    const runTesterId = runMode === 'pipecat_webrtc'
+    const runTesterId: NonNullable<ExecutionRunRecord['tester_id']> = runMode === 'pipecat_webrtc'
       ? 'pipecat_tester'
       : runMode === 'voice_fixture'
         ? 'fixture_replay'
@@ -3419,8 +3408,8 @@ export function BenchmarkRunner({
       });
       const queuedWithLaunchContext = {
         ...queued,
-        agent_id: selectedAgentId || queued.agent_id,
-        agent_name: selectedScoreAgent?.name || queued.agent_name,
+        agent_id: selectedAgentId || queued.agent_id || undefined,
+        agent_name: selectedScoreAgent?.name || queued.agent_name || undefined,
         tester_id: runTesterId || queued.tester_id,
         executor_id: queued.executor_id || 'local_async_runner',
       };
