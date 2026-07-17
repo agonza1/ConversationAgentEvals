@@ -80,7 +80,7 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
 
   await page.goto('/runs');
   await expect(page.getByRole('heading', { name: 'Run an agent' })).toBeVisible();
-  await expect(page.getByText('ACC voice fixture agent')).toBeVisible();
+  await expect(page.getByRole('link', { name: /ACC voice fixture agent/ })).toBeVisible();
 
   await page.getByRole('link', { name: /ACC voice fixture agent/ }).click();
   await expect(page.getByRole('heading', { name: 'ACC voice fixture agent' })).toBeVisible();
@@ -88,6 +88,35 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
   await expect(page.getByRole('button', { name: /Latency/ }).first()).toBeVisible();
   await expect(page.getByLabel('Stub dual-track waveform')).toBeVisible();
   await expect(page.getByLabel('Transcript')).toContainText('I want to cancel today.');
+});
+
+test('active run analysis recovers after a transient polling error', async ({ page }) => {
+  let requests = 0;
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+  });
+
+  await page.route('**/api/execution/runs/exec-demo123**', async (route) => {
+    requests += 1;
+    if (requests === 1) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ...runFixture, status: 'running', conversations: [] }),
+      });
+      return;
+    }
+    if (requests === 2) {
+      await route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ detail: 'temporary upstream error' }) });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(runFixture) });
+  });
+
+  await page.goto('/runs/exec-demo123');
+  await expect(page.getByLabel('Transcript')).toContainText('I want to cancel today.', { timeout: 10_000 });
+  expect(requests).toBeGreaterThanOrEqual(3);
+  await expect(page.locator('.scenarios-error')).toHaveCount(0);
 });
 
 test('runs list preserves an API base override in analysis links', async ({ page }) => {

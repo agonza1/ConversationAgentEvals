@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -50,6 +51,37 @@ def test_text_callable_execution_appends_conversations_and_writes_inference_set(
     assert inference_path.is_file()
     lines = [line for line in inference_path.read_text().splitlines() if line.strip()]
     assert len(lines) == 1
+
+
+def test_failed_conversation_is_preserved_in_inference_set(monkeypatch):
+    def fail_callable(*_args, **_kwargs):
+        raise RuntimeError('simulated provider disconnect')
+
+    monkeypatch.setattr('app.services.execution_runner._execute_text_callable', fail_callable)
+    queued = client.post(
+        '/api/execution/runs',
+        json={
+            'suite_id': 'call-center-voice-ai',
+            'scenario_ids': ['billing-address-change'],
+            'mode': 'text_callable',
+            'text_callable': 'mock_agent',
+            'iterations': 1,
+            'user_id': 'failed-evidence-user',
+            'project_id': 'failed-evidence-project',
+        },
+    )
+    assert queued.status_code == 200, queued.text
+
+    completed = _wait_for_terminal(queued.json()['execution_run_id'], user_id='failed-evidence-user')
+    assert completed['status'] == 'failed'
+    assert completed['conversations'][0]['status'] == 'failed'
+    inference_path = Path(completed['inference_set_path'])
+    if not inference_path.is_absolute():
+        inference_path = Path(__file__).resolve().parents[3] / inference_path
+    rows = [json.loads(line) for line in inference_path.read_text().splitlines() if line.strip()]
+    assert len(rows) == 1
+    assert rows[0]['status'] == 'failed'
+    assert 'simulated provider disconnect' in rows[0]['error']
 
 
 def test_voice_fixture_execution_runs_audio_plan_and_lists_mid_run():

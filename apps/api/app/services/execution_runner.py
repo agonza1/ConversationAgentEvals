@@ -163,9 +163,10 @@ def execute_execution_run(execution_run_id: str, payload: ExecutionRunCreateRequ
                 agent_snapshot=agent_snapshot,
             )
             execution_run_store.upsert_conversation(execution_run_id, conversation)
-            if conversation.status != 'failed':
-                with inference_path.open('a', encoding='utf-8') as handle:
-                    handle.write(json.dumps(conversation.model_dump(mode='json'), ensure_ascii=True) + '\n')
+            # Failed conversations are evaluation evidence too. Preserve them in
+            # the inference set so all-failed and mixed runs remain auditable.
+            with inference_path.open('a', encoding='utf-8') as handle:
+                handle.write(json.dumps(conversation.model_dump(mode='json'), ensure_ascii=True) + '\n')
 
         latest = execution_run_store.get_execution_run(execution_run_id) or {}
         failed = any(item.get('status') == 'failed' for item in latest.get('conversations') or [])

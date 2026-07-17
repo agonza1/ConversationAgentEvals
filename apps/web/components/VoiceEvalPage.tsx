@@ -258,7 +258,7 @@ export function VoiceEvalPage() {
           </div>
         </section>
 
-        <section className="card voice-results-panel" aria-labelledby="voice-results-title">
+        <section className="card voice-results-panel" aria-labelledby="voice-results-title" aria-live="polite">
           <div className="voice-panel-heading">
             <div>
               <span className="voice-step">3</span>
@@ -284,7 +284,15 @@ export function VoiceEvalPage() {
                   <strong>{run.progress.completed_conversations}/{run.progress.total_conversations} conversations</strong>
                 </div>
               </div>
-              <div className="voice-progress-track" aria-label={`Run progress ${run.progress.percent}%`}>
+              <div
+                className="voice-progress-track"
+                role="progressbar"
+                aria-label="Voice evaluation progress"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.max(0, Math.min(100, run.progress.percent))}
+                aria-valuetext={`${run.progress.completed_conversations} of ${run.progress.total_conversations} conversations complete`}
+              >
                 <span style={{ width: `${Math.max(0, Math.min(100, run.progress.percent))}%` }} />
               </div>
 

@@ -96,4 +96,5 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
   await expect(results.getByText('voice-run-1')).toBeVisible();
   await expect(results.getByText('Cancellation rescue', { exact: true })).toBeVisible({ timeout: 10000 });
   await expect(results.getByText(/vCon|recording|Pipecat hooks/i).first()).toBeVisible();
+  await expect(results.getByRole('progressbar', { name: 'Voice evaluation progress' })).toHaveAttribute('aria-valuenow', '100');
 });

@@ -30,7 +30,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
 
   useEffect(() => {
     let active = true;
-    let timer: ReturnType<typeof setInterval> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
 
     async function load() {
       setError(null);
@@ -47,24 +47,21 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
       }
     }
 
-    void load().then((status) => {
+    async function poll() {
+      const status = await load();
       if (!active) return;
-      if (status === 'queued' || status === 'running') {
-        timer = setInterval(() => {
-          void load().then((nextStatus) => {
-            if (!active) return;
-            if (nextStatus !== 'queued' && nextStatus !== 'running' && timer) {
-              clearInterval(timer);
-              timer = undefined;
-            }
-          });
-        }, 1500);
+      // A transient load failure returns undefined. Keep retrying so an active
+      // analysis page cannot get stranded on a stale queued/running snapshot.
+      if (status === undefined || status === 'queued' || status === 'running') {
+        timer = setTimeout(() => void poll(), 1500);
       }
-    });
+    }
+
+    void poll();
 
     return () => {
       active = false;
-      if (timer) clearInterval(timer);
+      if (timer) clearTimeout(timer);
     };
   }, [executionRunId, userId]);
 

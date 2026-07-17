@@ -1551,9 +1551,26 @@ select {
     padding-top: 20px;
   }
 
+  .top-nav a:not(.brand) {
+    min-height: 40px;
+    display: inline-flex;
+    align-items: center;
+    padding: 7px 0;
+  }
+
   .voice-mode-grid,
   .voice-scenario-facts {
     grid-template-columns: 1fr;
+  }
+
+  .voice-scenario-card {
+    gap: 12px;
+    padding: 18px;
+  }
+
+  .voice-scenario-card .voice-scenario-facts,
+  .voice-scenario-card .voice-evidence-list {
+    display: none;
   }
 
   .voice-panel-heading,

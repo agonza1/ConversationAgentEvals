@@ -34,6 +34,15 @@ test('launch evaluation streams conversations into the live list', async ({ page
               sample_final_state: {},
             },
           ],
+          optional_scenarios: [
+            {
+              id: 'cancellation-rescue',
+              title: 'Cancellation Rescue',
+              sample_transcript: 'Caller: I want to cancel.',
+              sample_action_trace: [],
+              sample_final_state: {},
+            },
+          ],
         },
       ]),
     });
@@ -226,7 +235,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
     window.localStorage.setItem('conversation-evals-demo-plan', 'free');
   });
 
-  await page.goto('/runs?api_base=http%3A%2F%2Fapi.example.test');
+  await page.goto('/runs?api_base=http%3A%2F%2Fapi.example.test&suite_id=call-center-voice-ai&scenario_id=cancellation-rescue');
   await expect(page.getByLabel('Launch agent run')).toBeVisible();
   await expect(page.getByLabel('Launch agent run').getByRole('button', { name: 'Launch agent run' })).toBeEnabled({
     timeout: 30_000,
@@ -251,6 +260,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
     text_callable: 'openai_codex',
     agent_id: 'mock-text-agent',
     model_name: 'gpt-5.4',
+    scenario_ids: ['cancellation-rescue'],
   });
   await expect(launch.getByLabel('Execution conversations')).toContainText('Billing Address Change');
   await expect(launch.getByLabel('Execution conversations')).toContainText(/pass/i, { timeout: 8000 });
