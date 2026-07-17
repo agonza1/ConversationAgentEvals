@@ -2345,7 +2345,10 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
     autoLaunchDemoRef.current = true;
     setExecutionMessage('Starting try-it-out run…');
-    void onLaunchExecution({ redirectToAnalysis: true });
+    void onLaunchExecution({
+      redirectToAnalysis: true,
+      target: 'configured',
+    });
     // Intentionally omit onLaunchExecution: including it retriggers auto-launch on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [

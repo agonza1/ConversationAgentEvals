@@ -156,10 +156,16 @@ test('agents try-it-out links preserve the api base override', async ({ page }) 
 });
 
 test('agents try-it-out auto-launches and opens run analysis', async ({ page }) => {
-  await mockRunnerApis(page);
+  const launches: Record<string, unknown>[] = [];
+  await mockRunnerApis(page, {
+    onExecutionLaunch: (request) => launches.push(request),
+  });
   await page.goto('/agents');
   await page.getByRole('article').filter({ hasText: 'ACC voice fixture agent' }).getByRole('link', { name: 'Try it Out' }).click();
   await expect(page).toHaveURL(/\/runs\/exec-try-it-out/, { timeout: 20000 });
+  expect(launches).toHaveLength(1);
+  expect(launches[0]?.agent_id).toBe('acc-voice-fixture-agent');
+  expect(launches[0]?.mode).toBe('voice_fixture');
 });
 
 test('homepage demo waits for its default agent before auto-launching', async ({ page }) => {

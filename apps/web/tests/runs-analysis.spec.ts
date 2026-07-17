@@ -111,6 +111,21 @@ test('runs list preserves an API base override in analysis links', async ({ page
   );
 });
 
+test('run analysis preserves an API base override on the All runs link', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+  });
+  await page.route('http://api.example.test/api/execution/runs/exec-demo123**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(runFixture) });
+  });
+
+  await page.goto('/runs/exec-demo123?api_base=http%3A%2F%2Fapi.example.test');
+  await expect(page.getByRole('link', { name: 'All runs' })).toHaveAttribute(
+    'href',
+    '/runs?api_base=http%3A%2F%2Fapi.example.test',
+  );
+});
+
 test('text agent analysis hides the stub waveform', async ({ page }) => {
   const textRun = {
     ...runFixture,

@@ -1,8 +1,8 @@
 'use client';
 
-import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 
+import { ApiAwareLink } from '@/components/ApiAwareLink';
 import { SiteNav } from '@/components/SiteNav';
 import {
   ConversationRecord,
@@ -82,7 +82,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
         <p className="eyebrow">Run analysis</p>
         <h1 id="run-title">{run?.agent_name || run?.agent_id || executionRunId}</h1>
         <p>
-          <Link href="/runs">All runs</Link>
+          <ApiAwareLink href="/runs">All runs</ApiAwareLink>
           {' · '}
           {executionRunId}
           {run ? ` · ${run.status}` : ''}
