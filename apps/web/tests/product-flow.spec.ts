@@ -45,6 +45,10 @@ test('dedicated paths expose only their primary workflow', async ({ page }) => {
   await expect(page.getByLabel('Suite contract manifest')).toHaveCount(0);
   await expect(page.getByText('Required evidence:')).toHaveCount(0);
   await expect(page.getByText('Advanced details')).toHaveCount(0);
+  await expect(page.getByLabel('Evaluation contract')).toBeVisible();
+  await expect(page.getByLabel('Evaluation suite')).toBeVisible();
+  await expect(page.getByLabel('Evaluation scenario')).toBeVisible();
+  await expect(page.getByText('What this scenario checks')).toBeVisible();
   await expect(page.getByText('Attribute this score')).toBeVisible();
   await expect(page.getByLabel('Attributed agent')).toHaveCount(0);
   await expect(page.getByLabel('Attributed agent target')).toHaveCount(0);
@@ -55,13 +59,12 @@ test('dedicated paths expose only their primary workflow', async ({ page }) => {
   await expect(page.locator('form').first().locator('textarea').first()).toHaveValue('');
   await expect(page.getByRole('button', { name: 'Evaluate evidence' })).toBeDisabled();
   await expect(page.getByText(/This evidence is synthetic/)).toHaveCount(0);
-  await expect(page.getByText('Benchmark suite')).toHaveCount(0);
-  await expect(page.getByText('Scenario', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('LLM judge controls')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Connect OpenAI' })).toBeVisible();
   await page.getByRole('button', { name: 'Load sample evidence' }).click();
   const sampleOptions = page.getByLabel('Sample evidence options');
   await expect(sampleOptions).toBeVisible();
-  await expect(sampleOptions.getByText('Benchmark suite')).toBeVisible();
-  await expect(sampleOptions.getByText('Scenario', { exact: true })).toBeVisible();
+  await expect(sampleOptions.getByRole('button', { name: 'Load selected sample evidence' })).toBeVisible();
   await expect(page.getByLabel('Saved runs and e2e validation')).toHaveCount(0);
 
   await page.goto('/runs');
@@ -94,8 +97,8 @@ test('scenario and eval deep links preload the advertised scenario', async ({ pa
   await page.goto('/eval?demo=sample-evidence');
   await expect(page.getByText('Loading benchmark suites...')).toHaveCount(0);
   const evalForm = page.locator('form').first();
-  await expect(evalForm.getByText('Benchmark suite')).toHaveCount(0);
-  await expect(evalForm.getByText('Scenario', { exact: true })).toHaveCount(0);
+  await expect(evalForm.getByLabel('Evaluation contract')).toBeVisible();
+  await expect(evalForm.getByLabel('Evaluation scenario')).toBeVisible();
   await expect(evalForm.locator('textarea').first()).not.toHaveValue('');
 });
 

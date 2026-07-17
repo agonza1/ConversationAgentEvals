@@ -3353,7 +3353,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
   return (
     <section style={{ display: 'grid', gap: 20 }}>
-      {(view === 'all' || (view === 'score' && Boolean(report))) ? (
+      {(view === 'all') ? (
         <section className="card openai-provider-panel" aria-label="OpenAI judge provider">
           <div className="openai-provider-control">
             <div>
@@ -3426,6 +3426,68 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             <button type="button" className="secondary-link" onClick={() => setCatalogReloadKey((value) => value + 1)}>
               Retry loading suites
             </button>
+          </div>
+        ) : null}
+
+        {view === 'score' ? (
+          <div
+            aria-label="Evaluation contract"
+            style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 12, background: 'var(--panel-alt)' }}
+          >
+            <div>
+              <p className="eyebrow" style={{ margin: 0 }}>Evaluation contract</p>
+              <p style={{ margin: '6px 0 0', color: 'var(--muted)', fontSize: 14, lineHeight: 1.45 }}>
+                Evidence is scored against this scenario&apos;s required actions, forbidden actions, and rubric — not against the optional structured fields below.
+              </p>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+              <label style={{ display: 'grid', gap: 8 }}>
+                <span style={{ fontWeight: 700 }}>Suite</span>
+                <select
+                  aria-label="Evaluation suite"
+                  value={selectedSuite?.id ?? ''}
+                  disabled={isLoading || !suites.length}
+                  onChange={(event) => setSelectedSuiteId(event.target.value)}
+                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                >
+                  {suites.map((suite) => (
+                    <option key={suite.id} value={suite.id}>{suite.title}</option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: 'grid', gap: 8 }}>
+                <span style={{ fontWeight: 700 }}>Scenario</span>
+                <select
+                  aria-label="Evaluation scenario"
+                  value={selectedScenario?.id ?? ''}
+                  disabled={isLoading || !selectedSuite?.scenarios.length}
+                  onChange={(event) => setSelectedScenarioId(event.target.value)}
+                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                >
+                  {(selectedSuite?.scenarios ?? []).map((scenario) => (
+                    <option key={scenario.id} value={scenario.id}>{scenario.title}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            {selectedScenario ? (
+              <div style={{ display: 'grid', gap: 8 }}>
+                <p style={{ margin: 0, fontSize: 14, lineHeight: 1.45 }} aria-label="Selected evaluation scenario">
+                  <strong>{selectedScenario.title}</strong>
+                  {selectedScenario.user_goal || selectedScenario.user_persona
+                    ? ` — ${selectedScenario.user_goal || selectedScenario.user_persona}`
+                    : ''}
+                </p>
+                <details>
+                  <summary style={{ cursor: 'pointer', fontWeight: 700, fontSize: 14 }}>What this scenario checks</summary>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginTop: 10 }}>
+                    <ScenarioList title="Required actions" items={toStringList(selectedScenario.required_actions)} />
+                    <ScenarioList title="Forbidden actions" items={toStringList(selectedScenario.forbidden_actions)} />
+                    <ScenarioList title="Constraints" items={toStringList(selectedScenario.constraints)} />
+                  </div>
+                </details>
+              </div>
+            ) : null}
           </div>
         ) : null}
 
@@ -3621,43 +3683,10 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             </div>
             {showSimulateEvidenceOptions ? (
               <div className="score-simulate-options" aria-label="Sample evidence options">
-                <p>Choose the contract for the synthetic evidence.</p>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-                  <label style={{ display: 'grid', gap: 8 }}>
-                    <span style={{ fontWeight: 700 }}>Benchmark suite</span>
-                    <select
-                      value={selectedSuite?.id ?? ''}
-                      disabled={isLoading || !suites.length}
-                      onChange={(event) => setSelectedSuiteId(event.target.value)}
-                      style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-                    >
-                      {suites.map((suite) => (
-                        <option key={suite.id} value={suite.id}>{suite.title}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label style={{ display: 'grid', gap: 8 }}>
-                    <span style={{ fontWeight: 700 }}>Scenario</span>
-                    <select
-                      value={selectedScenario?.id ?? ''}
-                      disabled={isLoading || !selectedSuite?.scenarios.length}
-                      onChange={(event) => setSelectedScenarioId(event.target.value)}
-                      style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-                    >
-                      {(selectedSuite?.scenarios ?? []).map((scenario) => (
-                        <option key={scenario.id} value={scenario.id}>{scenario.title}</option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-                {selectedScenario ? (
-                  <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14, lineHeight: 1.45 }} aria-label="Selected sample scenario">
-                    {selectedScenario.title}
-                    {selectedScenario.user_goal || selectedScenario.user_persona
-                      ? ` — ${selectedScenario.user_goal || selectedScenario.user_persona}`
-                      : ''}
-                  </p>
-                ) : null}
+                <p>
+                  Loads starter transcript / traces for{' '}
+                  <strong>{selectedScenario?.title ?? 'the selected scenario'}</strong>. Synthetic sample — not a live agent run.
+                </p>
                 <button
                   type="button"
                   className="secondary-link"
@@ -3863,23 +3892,53 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           >
             Save run
           </button> : null}
-          {view !== 'simulate' ? <button
-            type="button"
-            disabled={!report}
-            onClick={onJudge}
-            style={{
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              background: plan === 'free' ? 'var(--panel-alt)' : 'white',
-              color: 'var(--text)',
-              padding: '12px 18px',
-              fontWeight: 800,
-              opacity: report ? 1 : 0.65,
-            }}
-          >
-            Request LLM judge
-          </button> : null}
+          {view !== 'simulate' ? (
+            <div
+              aria-label="LLM judge controls"
+              style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}
+            >
+              <button
+                type="button"
+                disabled={!report || openaiProvider?.status !== 'connected'}
+                onClick={onJudge}
+                style={{
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  background: plan === 'free' ? 'var(--panel-alt)' : 'white',
+                  color: 'var(--text)',
+                  padding: '12px 18px',
+                  fontWeight: 800,
+                  opacity: report && openaiProvider?.status === 'connected' ? 1 : 0.65,
+                }}
+              >
+                Request LLM judge
+              </button>
+              <span style={{ color: 'var(--muted)', fontSize: 13, maxWidth: 360, lineHeight: 1.4 }}>
+                {openaiProvider?.status === 'connected'
+                  ? `Auth: OpenAI Codex${openaiProvider.email ? ` (${openaiProvider.email})` : ''}${openaiProvider.plan_type ? ` · ${openaiProvider.plan_type}` : ''}`
+                  : 'Auth: not connected — LLM judge needs OpenAI Codex OAuth.'}
+              </span>
+              {openaiProvider?.status === 'connected' ? (
+                <button type="button" className="secondary-link" onClick={() => void onDisconnectOpenAI()}>
+                  Disconnect
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="primary-link"
+                  disabled={isConnectingOpenAI}
+                  onClick={() => void onConnectOpenAI()}
+                >
+                  {isConnectingOpenAI ? 'Waiting for OpenAI…' : 'Connect OpenAI'}
+                </button>
+              )}
+            </div>
+          ) : null}
         </div>
+
+        {view === 'score' && openaiProviderMessage ? (
+          <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13 }}>{openaiProviderMessage}</p>
+        ) : null}
 
         {runError ? <p style={{ color: 'var(--error-text)', margin: 0 }}>{runError}</p> : null}
         {saveMessage ? <p style={{ color: 'var(--muted)', margin: 0 }}>{saveMessage}</p> : null}
