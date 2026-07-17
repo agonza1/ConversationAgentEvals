@@ -1354,7 +1354,7 @@ function cleanRunMetadata(metadata: RunMetadata): RunMetadata {
 
 function metadataEntries(metadata?: RunMetadata) {
   const labels: Record<keyof RunMetadata, string> = {
-    agent_version: 'Agent',
+    agent_version: 'Agent target',
     prompt_version: 'Prompt',
     model_name: 'Model',
     notes: 'Notes',
@@ -3005,10 +3005,13 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
     try {
       const runMetadata = cleanRunMetadata({
-        agent_version: agentVersion,
+        agent_version: agentVersion || agentProfile || undefined,
         prompt_version: promptVersion,
         model_name: modelName,
-        notes: runNotes,
+        notes: [
+          agentProfile.trim() ? `agent_target=${agentProfile.trim()}` : '',
+          runNotes.trim(),
+        ].filter(Boolean).join(' · ') || undefined,
         user_id: userId || undefined,
         project_id: projectId || undefined,
       });
@@ -3673,28 +3676,19 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           <details aria-label="Score attribution">
             <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Attribute this score</summary>
             <p style={{ margin: '10px 0 0', color: 'var(--muted)', fontSize: 14, lineHeight: 1.45 }}>
-              Optional labels for the saved report. These do not change how evidence is scored.
+              Optional labels for the saved report (which agent target produced this evidence). These do not change how evidence is scored.
             </p>
             <div style={{ display: 'grid', gap: 12, marginTop: 12 }}>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
                 <label style={{ display: 'grid', gap: 8 }}>
-                  <span style={{ fontWeight: 700 }}>Attributed agent</span>
-                  <select
-                    aria-label="Attributed agent"
-                    value={selectedAgentId}
-                    onChange={(event) => {
-                      const agentId = event.target.value;
-                      setSelectedAgentId(agentId);
-                      const agent = agents.find((item) => item.id === agentId);
-                      if (agent) applyAgentProfileDefaults(agent, { setAgentProfile, setModelName, setPromptVersion });
-                    }}
+                  <span style={{ fontWeight: 700 }}>Attributed agent target</span>
+                  <input
+                    aria-label="Attributed agent target"
+                    value={agentProfile}
+                    onChange={(event) => setAgentProfile(event.target.value)}
+                    placeholder="support-bot / mock text target"
                     style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-                  >
-                    {!agents.length ? <option value="">No agents</option> : null}
-                    {agents.map((agent) => (
-                      <option key={agent.id} value={agent.id}>{agent.name}</option>
-                    ))}
-                  </select>
+                  />
                 </label>
                 <label style={{ display: 'grid', gap: 8 }}>
                   <span style={{ fontWeight: 700 }}>Attributed model</span>
@@ -3702,16 +3696,16 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                     aria-label="Attributed model"
                     value={modelName}
                     onChange={(event) => setModelName(event.target.value)}
-                    placeholder={selectedScoreAgent?.metadata?.model_name || 'gpt-4.1-mini'}
+                    placeholder="gpt-4.1-mini"
                     style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
                   />
                 </label>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
                 <label style={{ display: 'grid', gap: 8 }}>
-                  <span style={{ fontWeight: 700 }}>Agent version</span>
+                  <span style={{ fontWeight: 700 }}>Target version</span>
                   <input
-                    aria-label="Attributed agent version"
+                    aria-label="Attributed target version"
                     value={agentVersion}
                     onChange={(event) => setAgentVersion(event.target.value)}
                     placeholder="agent-v12"
@@ -3973,16 +3967,16 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
         {view === 'run' && selectedSuite && !loadError ? (
           <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }} aria-label="Default scenario for launch">
-            Launch agent run uses {executionModelName || DEFAULT_EXECUTION_MODEL} through the connected OpenAI provider.
-            {' '}The secondary action uses the selected agent&apos;s configured mock or fixture target.
+            Launch uses {executionModelName || DEFAULT_EXECUTION_MODEL} through the connected OpenAI provider when available.
+            {' '}The secondary action uses the selected agent target&apos;s built-in mock or fixture connection.
           </p>
         ) : null}
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
           <label style={{ display: 'grid', gap: 8 }}>
-            <span style={{ fontWeight: 700 }}>Agent</span>
+            <span style={{ fontWeight: 700 }}>Agent target</span>
             <select
-              aria-label="Execution agent"
+              aria-label="Execution agent target"
               value={selectedAgentId}
               onChange={(event) => {
                 const agentId = event.target.value;
@@ -3997,7 +3991,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
               }}
               style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
             >
-              {!agents.length ? <option value="">No agents</option> : null}
+              {!agents.length ? <option value="">No targets</option> : null}
               {agents.map((agent) => (
                 <option key={agent.id} value={agent.id}>{agent.name}</option>
               ))}

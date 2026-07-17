@@ -129,32 +129,32 @@ async function mockRunnerApis(page: import('@playwright/test').Page, options: Mo
   });
 }
 
-test('agents page shows persona cards and try-it-out deep links', async ({ page }) => {
+test('targets page shows agent target cards and try-it-out deep links', async ({ page }) => {
   await mockRunnerApis(page);
-  await page.goto('/agents');
+  await page.goto('/targets');
 
-  await expect(page.getByRole('heading', { name: 'Agents', exact: true })).toBeVisible();
-  await expect(page.locator('.agents-page-header').getByRole('button', { name: 'Add a new Agent' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Targets', exact: true })).toBeVisible();
+  await expect(page.locator('.agents-page-header').getByRole('button', { name: 'Add agent target' })).toBeVisible();
 
   const mockCard = page.getByRole('article').filter({ hasText: 'Mock text agent' });
-  await expect(mockCard.locator('.agents-badge-channel')).toHaveText('Text chat');
-  await expect(mockCard.getByText('Built-in')).toBeVisible();
+  await expect(mockCard.locator('.agents-badge-channel').first()).toHaveText('Text');
+  await expect(mockCard.getByText('Built-in testing target')).toBeVisible();
   await expect(mockCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
     'href',
     '/runs?launch=demo&agent_id=mock-text-agent',
   );
 
   const voiceCard = page.getByRole('article').filter({ hasText: 'ACC voice fixture agent' });
-  await expect(voiceCard.locator('.agents-badge-channel')).toHaveText('Inbound Voice');
+  await expect(voiceCard.locator('.agents-badge-channel').first()).toHaveText('Voice');
   await expect(voiceCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
     'href',
     '/runs?launch=demo&agent_id=acc-voice-fixture-agent',
   );
 });
 
-test('agents try-it-out links preserve the api base override', async ({ page }) => {
+test('targets try-it-out links preserve the api base override', async ({ page }) => {
   await mockRunnerApis(page);
-  await page.goto('/agents?api_base=https%3A%2F%2Fapi.example.test');
+  await page.goto('/targets?api_base=https%3A%2F%2Fapi.example.test');
 
   const mockCard = page.getByRole('article').filter({ hasText: 'Mock text agent' });
   await expect(mockCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
@@ -163,12 +163,12 @@ test('agents try-it-out links preserve the api base override', async ({ page }) 
   );
 });
 
-test('agents try-it-out auto-launches and opens run analysis', async ({ page }) => {
+test('targets try-it-out auto-launches and opens run analysis', async ({ page }) => {
   const launches: Record<string, unknown>[] = [];
   await mockRunnerApis(page, {
     onExecutionLaunch: (request) => launches.push(request),
   });
-  await page.goto('/agents');
+  await page.goto('/targets');
   await page.getByRole('article').filter({ hasText: 'ACC voice fixture agent' }).getByRole('link', { name: 'Try it Out' }).click();
   await expect(page).toHaveURL(/\/runs\/exec-try-it-out/, { timeout: 20000 });
   expect(launches).toHaveLength(1);
@@ -181,7 +181,7 @@ test('OpenAI agent try-it-out launches its configured live target', async ({ pag
   await mockRunnerApis(page, {
     onExecutionLaunch: (request) => launches.push(request),
   });
-  await page.goto('/agents');
+  await page.goto('/targets');
   await page.getByRole('article').filter({ hasText: 'Live OpenAI agent' }).getByRole('link', { name: 'Try it Out' }).click();
   await expect(page).toHaveURL(/\/runs\/exec-try-it-out/, { timeout: 20000 });
   expect(launches).toHaveLength(1);
@@ -214,7 +214,7 @@ test('demo analysis redirect preserves the api base override', async ({ page }) 
   expect(new URL(page.url()).searchParams.get('api_base')).toBe('https://api.example.test');
 });
 
-test('add agent modal creates a registry entry', async ({ page }) => {
+test('add agent target modal creates a registry entry', async ({ page }) => {
   let created = false;
   await page.route('**/api/agents**', async (route) => {
     if (route.request().method() === 'POST') {
@@ -254,27 +254,27 @@ test('add agent modal creates a registry entry', async ({ page }) => {
     });
   });
 
-  await page.goto('/agents');
-  await page.locator('.agents-page-header').getByRole('button', { name: 'Add a new Agent' }).click();
-  await expect(page.getByRole('heading', { name: 'Add a new Agent' })).toBeVisible();
+  await page.goto('/targets');
+  await page.locator('.agents-page-header').getByRole('button', { name: 'Add agent target' }).click();
+  await expect(page.getByRole('heading', { name: 'Add agent target' })).toBeVisible();
 
-  await page.getByPlaceholder('Support bot v2').fill('Playwright agent created');
-  await page.getByRole('button', { name: 'Create agent' }).click();
+  await page.getByPlaceholder('Support bot endpoint').fill('Playwright agent created');
+  await page.getByRole('button', { name: 'Create target' }).click();
 
   await expect(page.getByRole('article').filter({ hasText: 'Playwright agent created' })).toBeVisible();
 });
 
-test('agent form only offers targets compatible with its selected channel', async ({ page }) => {
+test('agent target form only offers connections compatible with its selected channel', async ({ page }) => {
   await mockRunnerApis(page);
-  await page.goto('/agents');
-  await page.locator('.agents-page-header').getByRole('button', { name: 'Add a new Agent' }).click();
+  await page.goto('/targets');
+  await page.locator('.agents-page-header').getByRole('button', { name: 'Add agent target' }).click();
 
-  const channel = page.getByLabel('Agent channel');
-  const target = page.getByLabel('Agent target');
+  const channel = page.getByLabel('Target channel');
+  const target = page.getByLabel('Target connection');
   await expect(target.getByRole('option')).toHaveCount(3);
 
   await channel.selectOption('voice');
   await expect(target).toHaveValue('voice_fixture');
   await expect(target.getByRole('option')).toHaveCount(1);
-  await expect(target.locator('option')).toHaveText('voice_fixture');
+  await expect(target.locator('option')).toHaveText('Built-in: voice_fixture (voice testing target)');
 });

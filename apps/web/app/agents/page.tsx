@@ -1,5 +1,6 @@
-import { AgentsPage } from '@/components/AgentsPage';
+import { redirect } from 'next/navigation';
 
+/** Legacy path — agent targets live at /targets. */
 export default function AgentsRoutePage() {
-  return <AgentsPage />;
+  redirect('/targets');
 }

@@ -104,7 +104,7 @@ export default function HomePage() {
         <div>
           <a href="#product">Product</a>
           <ApiAwareLink href="/scenarios">Scenarios</ApiAwareLink>
-          <ApiAwareLink href="/agents">Agents</ApiAwareLink>
+          <ApiAwareLink href="/targets">Targets</ApiAwareLink>
           <ApiAwareLink href="/runs">Run agent</ApiAwareLink>
           <ApiAwareLink href="/eval">Eval</ApiAwareLink>
           <ApiAwareLink href="/voice">Voice eval</ApiAwareLink>

@@ -47,8 +47,9 @@ test('dedicated paths expose only their primary workflow', async ({ page }) => {
   await expect(page.getByText('Advanced details')).toHaveCount(0);
   await expect(page.getByText('Attribute this score')).toBeVisible();
   await expect(page.getByLabel('Attributed agent')).toHaveCount(0);
+  await expect(page.getByLabel('Attributed agent target')).toHaveCount(0);
   await page.getByText('Attribute this score').click();
-  await expect(page.getByLabel('Attributed agent')).toBeVisible();
+  await expect(page.getByLabel('Attributed agent target')).toBeVisible();
   await expect(page.getByLabel('Attributed model')).toBeVisible();
   await expect(page.getByText(/do not change how evidence is scored/i)).toBeVisible();
   await expect(page.locator('form').first().locator('textarea').first()).toHaveValue('');
