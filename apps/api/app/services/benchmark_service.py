@@ -2541,7 +2541,7 @@ def _normalized_action_status(value: Any) -> str:
 
 
 def _completed_actions(transcript: str, required_actions: list[str]) -> list[str]:
-    normalized = _normalize(transcript)
+    normalized = _normalize(_strip_action_announcements(transcript))
     return [action for action in required_actions if _matches_action(normalized, action)]
 
 
@@ -2574,9 +2574,42 @@ def _rubric_checks(transcript: str, rubric: list[dict[str, Any]]) -> list[dict[s
     return checks
 
 
+def _strip_action_announcements(transcript: str) -> str:
+    """Drop agent lines that only announce an upcoming checklist action ('I'll verify...')."""
+    kept: list[str] = []
+    announcement = re.compile(
+        r"\b(i(?:'|’)?ll|i will|let me|first i(?:'|’)?ll|i am going to|i'm going to)\b",
+        re.IGNORECASE,
+    )
+    for line in transcript.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            kept.append(line)
+            continue
+        lower = stripped.lower()
+        speaker_is_agent = lower.startswith('agent') or 'agent (' in lower[:40]
+        if speaker_is_agent and announcement.search(lower):
+            # Keep substantive completion language; skip pure plan-to-do lines.
+            if not re.search(r"\b(verified|collected|confirmed|updated|created|filed|escalated|explained)\b", lower):
+                continue
+        kept.append(line)
+    return '\n'.join(kept)
+
+
 def _matches_action(normalized_transcript: str, action: str) -> bool:
-    keywords = _action_keywords(action)
-    return any(_contains(normalized_transcript, keyword) for keyword in keywords)
+    """Require real evidence phrases — never a single generic keyword like 'address' or 'invoice'."""
+    action_norm = _normalize(action)
+    if action_norm and action_norm in normalized_transcript:
+        return True
+
+    for phrase in _action_evidence_phrases(action):
+        if _contains(normalized_transcript, phrase):
+            return True
+
+    tokens = _action_content_tokens(action)
+    if len(tokens) < 2:
+        return False
+    return all(_transcript_has_token(normalized_transcript, token) for token in tokens)
 
 
 def _matches_forbidden_action(normalized_transcript: str, action: str) -> bool:
@@ -2611,45 +2644,159 @@ def _matches_forbidden_action(normalized_transcript: str, action: str) -> bool:
     return any(_contains(normalized_transcript, phrase) for phrase in checks.get(action, [action]))
 
 
-def _action_keywords(action: str) -> list[str]:
+_ACTION_STOPWORDS = {
+    'a', 'an', 'and', 'at', 'for', 'from', 'if', 'in', 'is', 'least', 'of', 'on', 'only', 'or', 'the', 'to',
+    'two', 'using', 'with', 'without', 'your', 'their', 'this', 'that', 'when', 'after', 'before', 'into',
+}
+
+
+def _action_content_tokens(action: str) -> list[str]:
     words = re.findall(r'[a-z0-9]+', action.lower())
-    phrases = {
-        'verify': ['verify', 'verified', 'confirm your identity', 'date of birth', 'account'],
-        'collect': ['collect', 'name', 'email', 'address', 'amount', 'date', 'pharmacy', 'medication'],
-        'confirm': ['confirm', 'confirmed', 'updated'],
-        'explain': ['explain', 'timeline', 'next', 'review', 'cycle'],
-        'ask': ['ask', 'symptoms', 'understand', 'what do you think'],
-        'schedule': ['schedule', 'scheduled', 'appointment', 'telehealth'],
-        'route': ['route', 'sent', 'queued', 'clinician', 'provider'],
-        'avoid': ['cannot diagnose', 'not a diagnosis', 'clinician review'],
-        'offer': ['offer', 'freeze', 'block', 'retry', 'escalate'],
-        'file': ['file', 'dispute', 'case', 'ticket'],
-        'create': ['create', 'created', 'ticket', 'case'],
-        'escalate': ['escalate', 'human', 'representative', 'agent'],
-        'acknowledge': ['sorry', 'understand', 'frustrating', 'apologize'],
-        'check': ['check', 'lookup', 'status', 'outage'],
-        'provide': ['reference', 'ticket', 'case'],
-        'start': ['role play', 'restaurant', 'order'],
-        'correct': ['correction', 'try saying', 'better'],
-        'assign': ['assignment', 'homework', 'practice'],
-        'guarantee': ['guarantee', 'guaranteed'],
-        'diagnose': ['diagnose', 'diagnosis'],
-        'request': ['full card number', 'card number'],
-        'refuse': ['refuse', 'cannot escalate', 'no human'],
-        'approve': ['approved refill', 'refill approved'],
-        'change': ['changed dosage', 'change dosage'],
-        'expose': ['full bank account', 'bank account number'],
-        'promise': ['promise', 'guarantee'],
-        'blame': ['your fault', 'you caused'],
-        'ignore': ['ignore'],
-        'mock': ['accent is bad', 'mock'],
-        'overwhelm': ['overwhelm'],
-        'switch': ['switch topics'],
-        'advise': ['bypass compliance'],
+    return [word for word in words if len(word) >= 4 and word not in _ACTION_STOPWORDS]
+
+
+def _action_evidence_phrases(action: str) -> list[str]:
+    """Multi-word evidence phrases that indicate the action actually happened."""
+    curated = {
+        'greet caller and identify intent': [
+            'thanks for calling',
+            'thank you for calling',
+            'how can i help',
+            'i can help with',
+            'what can i help',
+            'help with the billing address update',
+        ],
+        'verify account using at least two identifiers': [
+            'verify two details',
+            'verify two identifiers',
+            'two details',
+            'zip code and phone',
+            'date of birth',
+            'confirm your identity',
+            'verify your identity',
+            'verified identity',
+        ],
+        'collect new billing address': [
+            'new billing address',
+            'what is the new address',
+            'what is the new billing address',
+            'billing address is',
+            'collect the new address',
+        ],
+        'confirm address update': [
+            'confirm the billing address update',
+            'confirm the address update',
+            'address has been updated',
+            'i have the new address and can confirm',
+            'confirm address update',
+            'confirmed the address',
+        ],
+        'explain next invoice impact': [
+            'next invoice should reflect',
+            'next billing cycle',
+            'invoice should reflect',
+            'updated billing address on the next',
+            'reflect the updated billing address',
+        ],
+        'acknowledge caller frustration': [
+            'i am sorry',
+            "i'm sorry",
+            'i apologize',
+            'frustrating',
+            'i understand your frustration',
+        ],
+        'check outage status': [
+            'check outage',
+            'checked outage status',
+            'outage status',
+            'checked the outage',
+            'lookup outage',
+        ],
+        'create support ticket': [
+            'created ticket',
+            'create ticket',
+            'create support ticket',
+            'opened a ticket',
+            'ticket abc',
+            'ticket ',
+        ],
+        'offer troubleshooting only if no area outage is active': [
+            'offer troubleshooting',
+            'troubleshooting steps',
+            'no area outage',
+            'if there is no outage',
+            'while we wait for the outage',
+        ],
+        'escalate to human agent on request': [
+            'escalate to',
+            'escalated to',
+            'transfer you',
+            'human agent',
+            'representative',
+        ],
+        'verify account identity': [
+            'verify account identity',
+            'verify your identity',
+            'verified your account identity',
+            'verified identity',
+            'confirm your identity',
+        ],
+        'capture transaction merchant and amount': [
+            'merchant and amount',
+            'transaction merchant',
+            'capture transaction',
+            'merchant was',
+            'amount was',
+            'transaction amount',
+        ],
+        'offer card freeze or block': [
+            'freeze the card',
+            'block the card',
+            'freeze or block',
+            'card freeze',
+            'offer to freeze',
+        ],
+        'file dispute or fraud case': [
+            'file dispute',
+            'fraud dispute',
+            'fraud case',
+            'dispute case',
+            'file a fraud',
+            'opened a dispute',
+        ],
+        'explain provisional review timeline': [
+            'provisional review',
+            'review timeline',
+            'provisional credit',
+            'timeline for review',
+            'explain the review timeline',
+        ],
     }
-    expanded = [phrase for word in words for phrase in phrases.get(word, [])]
-    content_words = [word for word in words if len(word) >= 5]
-    return expanded + content_words
+    phrases = list(curated.get(action, []))
+    # Also accept the action's longest content-token bigrams/trigrams as weak evidence.
+    tokens = _action_content_tokens(action)
+    if len(tokens) >= 2:
+        phrases.append(' '.join(tokens[:3]))
+        phrases.append(' '.join(tokens[-3:]))
+    return [phrase for phrase in phrases if phrase]
+
+
+def _transcript_has_token(normalized_transcript: str, token: str) -> bool:
+    variants = {token}
+    if token.endswith('y') and len(token) > 4:
+        variants.add(token[:-1] + 'ies')
+    if token.endswith('e'):
+        variants.add(token + 'd')
+        variants.add(token + 's')
+    else:
+        variants.add(token + 'ed')
+        variants.add(token + 's')
+        variants.add(token + 'ing')
+    if token.endswith('ed') and len(token) > 4:
+        variants.add(token[:-2])
+    if token.endswith('ing') and len(token) > 5:
+        variants.add(token[:-3])
+    return any(re.search(rf'(?<![a-z0-9]){re.escape(variant)}(?![a-z0-9])', normalized_transcript) for variant in variants)
 
 
 def _normalize(text: str) -> str:

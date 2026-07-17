@@ -777,7 +777,7 @@ def test_run_endpoint_accepts_vcon_record_evidence():
                 'parties': [{'name': 'Caller'}, {'name': 'Agent'}],
                 'dialog': [
                     {'party': 0, 'body': 'This outage is frustrating and I want a human.'},
-                    {'party': 1, 'body': 'I am sorry. I checked outage status, created ticket ABC, and will escalate to a representative.'},
+                    {'party': 1, 'body': 'I am sorry. I checked outage status, created ticket ABC, offered troubleshooting because there is no area outage, and will escalate to a representative.'},
                 ],
             },
         },
@@ -1200,10 +1200,11 @@ def test_run_scenario_scores_matching_transcript_deterministically():
         'suite_id': 'fintech-support-agent',
         'scenario_id': 'suspicious-card-charge',
         'transcript': (
-            'Agent: I will verify your account identity before looking at the charge. '
+            'Agent: I verified your account identity with ZIP and phone. '
             'Customer: The merchant was Quick Mart and the amount was $87.12. '
-            'Agent: I can freeze or block the card, file a fraud dispute case, '
-            'and explain the review timeline.'
+            'Agent: I captured the transaction merchant and amount. '
+            'I can freeze or block the card, file a fraud dispute case, '
+            'and explain the provisional review timeline.'
         ),
     }
 
@@ -1512,7 +1513,7 @@ def test_run_scenario_supports_vcon_payloads_and_rejects_unknown_scenarios():
             'vcon': {
                 'dialog': [
                     {'party': 0, 'body': 'This outage is frustrating and I want a human.'},
-                    {'party': 1, 'body': 'I am sorry. I checked outage status, created ticket ABC, and will escalate to a representative.'},
+                    {'party': 1, 'body': 'I am sorry. I checked outage status, created ticket ABC, offered troubleshooting because there is no area outage, and will escalate to a representative.'},
                 ]
             },
         }
@@ -1862,13 +1863,16 @@ def test_transcript_only_eval_does_not_invent_perfect_agentic_scores():
 
     assert result['scoring_mode'] == 'transcript'
     assert result['verdict'] == 'needs_review'
-    assert result['required_action_score'] == 20
+    # Announcing "I'll verify..." is not evidence the action completed.
+    assert result['required_action_score'] == 0
+    assert result['completed_actions'] == []
     assert result['task_completion_score'] is None
     assert result['final_state_score'] is None
     assert result['workflow_order_score'] is None
-    assert result['score_components']['required_actions'] == 20
+    assert result['score_components']['required_actions'] == 0
     assert 'rubric' in result['score_components']
     assert result['missing_actions'] == [
+        'verify account identity',
         'capture transaction merchant and amount',
         'offer card freeze or block',
         'file dispute or fraud case',
@@ -1881,6 +1885,36 @@ def test_transcript_only_eval_does_not_invent_perfect_agentic_scores():
     ]
     assert missing_citations
     assert all(citation.get('source') == 'transcript' for citation in missing_citations)
+
+
+def test_truncated_billing_transcript_does_not_pass_on_loose_keywords():
+    result = run_scenario(
+        {
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'billing-address-change',
+            'transcript': (
+                "User: Hi, I'm a busy customer who moved recently and wants the billing address updated before the next invoice.\n"
+                "Agent (starter sample agent): Hello — I'll greet caller and identify intent.\n"
+                'User: Okay, continue.\n'
+                "Agent (starter sample agent): I can help. First I'll verify account using at least two identifiers. "
+                'Can you confirm a couple details?\n'
+                'User: Sure, which details?'
+            ),
+        }
+    )
+
+    assert result['verdict'] == 'needs_review'
+    assert result['required_action_score'] == 0
+    assert result['completed_actions'] == []
+    assert result['missing_actions'] == [
+        'greet caller and identify intent',
+        'verify account using at least two identifiers',
+        'collect new billing address',
+        'confirm address update',
+        'explain next invoice impact',
+    ]
+    assert result['task_completion_score'] is None
+    assert result['final_state_score'] is None
 
 
 def test_run_scenario_ignores_failed_action_trace_events_for_required_actions():
@@ -1996,7 +2030,7 @@ def test_run_endpoint_accepts_vcon_without_duplicate_transcript_field():
             'vcon': {
                 'dialog': [
                     {'party': 0, 'body': 'This outage is frustrating and I want a human.'},
-                    {'party': 1, 'body': 'I am sorry. I checked outage status, created ticket ABC, and will escalate to a representative.'},
+                    {'party': 1, 'body': 'I am sorry. I checked outage status, created ticket ABC, offered troubleshooting because there is no area outage, and will escalate to a representative.'},
                 ]
             },
         },
@@ -2018,7 +2052,7 @@ def test_run_endpoint_accepts_group_call_artifacts():
             'groupCall': {
                 'messages': [
                     {'speaker': 'caller', 'text': 'This outage is frustrating and I want a human.'},
-                    {'speaker': 'agent', 'text': 'I am sorry. I checked outage status and created ticket ABC.'},
+                    {'speaker': 'agent', 'text': 'I am sorry. I checked outage status, created ticket ABC, and offered troubleshooting because there is no area outage.'},
                     {'speaker': 'supervisor', 'text': 'We will escalate to a representative now.'},
                 ],
                 'decisions': [{'description': 'Escalate to human agent on request'}],
