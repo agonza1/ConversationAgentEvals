@@ -91,6 +91,23 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
 
       {run ? (
         <>
+          <section className="card run-participants" aria-label="Run participants and executor">
+            <div>
+              <span>Target under test</span>
+              <strong>{run.agent_name || run.agent_id || 'Unattributed target'}</strong>
+              <small>{runTargetSummary(run)}</small>
+            </div>
+            <div>
+              <span>Tester</span>
+              <strong>{formatRuntimeId(run.tester_id || 'scenario_simulator')}</strong>
+              <small>Plays the scenario user/caller and supplies test turns.</small>
+            </div>
+            <div>
+              <span>Executor</span>
+              <strong>{formatRuntimeId(run.executor_id || 'local_async_runner')}</strong>
+              <small>Invokes the adapter and persists evidence; it is not scored.</small>
+            </div>
+          </section>
           <section className="metric-summary-grid" aria-label="Metric summaries">
             <MetricTile
               title="Interruption Detection"
@@ -177,6 +194,21 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
       ) : null}
     </main>
   );
+}
+
+function formatRuntimeId(value: string) {
+  return value.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function runTargetSummary(run: ExecutionRunRecord) {
+  const snapshot = run.execution_snapshot;
+  const agent = snapshot && typeof snapshot.agent === 'object' && snapshot.agent
+    ? snapshot.agent as Record<string, unknown>
+    : null;
+  const target = typeof agent?.target === 'string' ? agent.target : run.mode;
+  const environment = typeof agent?.environment === 'string' ? agent.environment : null;
+  const fixture = target === 'mock_agent' || target === 'offline_acc_fixture' || target === 'voice_fixture';
+  return `${formatRuntimeId(target)}${environment ? ` · ${environment}` : ''} · ${fixture ? 'fixture-backed evidence' : 'live adapter evidence'}`;
 }
 
 function MetricTile({

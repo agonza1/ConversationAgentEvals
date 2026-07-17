@@ -2374,7 +2374,9 @@ select {
 }
 
 .agents-modal {
-  width: min(520px, 100%);
+  width: min(680px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
   display: grid;
   gap: 18px;
   border: 1px solid var(--border);
@@ -2432,6 +2434,109 @@ select {
   justify-content: flex-end;
   gap: 10px;
   padding-top: 4px;
+}
+
+.agents-form-notice,
+.agents-connection-fields {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-alt);
+  padding: 12px;
+}
+
+.agents-form-notice span,
+.agents-connection-fields p,
+.agents-connection-fields small {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.agents-connection-fields legend {
+  padding: 0 5px;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.agents-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.run-executor-summary,
+.run-provenance-notice {
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-alt);
+  padding: 10px 12px;
+}
+
+.run-executor-summary > span,
+.run-provenance-notice > strong {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.run-executor-summary small,
+.run-provenance-notice > span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.run-provenance-notice.is-live {
+  border-color: var(--success-border);
+  background: var(--success-bg);
+}
+
+.run-participants {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.run-participants > div {
+  display: grid;
+  gap: 5px;
+}
+
+.run-participants span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.run-participants small {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+@media (max-width: 640px) {
+  .agents-modal-backdrop {
+    padding: 10px;
+  }
+
+  .agents-modal {
+    max-height: calc(100vh - 20px);
+    padding: 16px;
+  }
+
+  .agents-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .run-participants {
+    grid-template-columns: 1fr;
+  }
 }
 
 .scenarios-error {

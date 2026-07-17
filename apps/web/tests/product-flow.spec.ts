@@ -72,8 +72,9 @@ test('dedicated paths expose only their primary workflow', async ({ page }) => {
   await page.goto('/runs');
   await expect(page.getByRole('heading', { name: 'Run an agent' })).toBeVisible();
   await expect(page.getByLabel('Launch agent run')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Launch agent run' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Mock agent run' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Run fixture evaluation' })).toBeVisible();
+  await expect(page.getByLabel('Execution tester')).toHaveValue('scenario_simulator');
+  await expect(page.getByLabel('Execution runner')).toContainText('Local async runner');
   await expect(page.getByLabel('Saved runs and e2e validation')).toHaveCount(0);
   // /runs is execute/capture — not the evidence-eval contract console
   await expect(page.getByText('Benchmark suite')).toHaveCount(0);

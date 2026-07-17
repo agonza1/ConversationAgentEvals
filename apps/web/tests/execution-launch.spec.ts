@@ -237,18 +237,19 @@ test('launch evaluation streams conversations into the live list', async ({ page
 
   await page.goto('/runs?api_base=http%3A%2F%2Fapi.example.test&suite_id=call-center-voice-ai&scenario_id=cancellation-rescue');
   await expect(page.getByLabel('Launch agent run')).toBeVisible();
-  await expect(page.getByLabel('Launch agent run').getByRole('button', { name: 'Launch agent run' })).toBeEnabled({
+  await expect(page.getByLabel('Launch agent run').getByRole('button', { name: 'Run fixture evaluation' })).toBeEnabled({
     timeout: 30_000,
   });
 
   const launch = page.getByLabel('Launch agent run');
-  await expect(launch.getByLabel('Execution model')).toHaveValue('gpt-5.4');
-  await expect(launch.getByText(/uses gpt-5.4 through the connected OpenAI provider/i)).toBeVisible();
+  await expect(launch.getByLabel('Execution tester')).toHaveValue('scenario_simulator');
+  await expect(launch.getByLabel('Execution runner')).toContainText('Local async runner');
+  await expect(launch.getByText(/target is the system under test/i)).toBeVisible();
   await expect(launch.getByText('Advanced')).toBeVisible();
   await expect(launch.getByLabel('Execution scenario scope')).not.toBeVisible();
   await launch.getByText('Advanced').click();
   await expect(launch.getByLabel('Execution scenario scope')).toBeVisible();
-  await launch.getByRole('button', { name: 'Launch agent run' }).click();
+  await launch.getByRole('button', { name: 'Run fixture evaluation' }).click();
   await expect(launch.getByText('exec-ui-demo', { exact: true })).toBeVisible();
   await expect(launch.getByRole('link', { name: 'Open analysis' })).toHaveAttribute(
     'href',
@@ -257,9 +258,11 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect.poll(() => posted).not.toBeNull();
   expect(posted).toMatchObject({
     mode: 'text_callable',
-    text_callable: 'openai_codex',
+    text_callable: 'mock_agent',
     agent_id: 'mock-text-agent',
     model_name: 'gpt-5.4',
+    tester_id: 'scenario_simulator',
+    executor_id: 'local_async_runner',
     scenario_ids: ['cancellation-rescue'],
   });
   await expect(launch.getByLabel('Execution conversations')).toContainText('Billing Address Change');
@@ -409,9 +412,9 @@ test('offline ACC text fixture launches cancellation-rescue while staying text_c
 
   await page.goto('/runs?agent_id=offline-text-fixture');
   const launch = page.getByLabel('Launch agent run');
-  await expect(launch.getByRole('button', { name: 'Run fixture' })).toBeEnabled({ timeout: 30_000 });
+  await expect(launch.getByRole('button', { name: 'Run fixture evaluation' })).toBeEnabled({ timeout: 30_000 });
   expect(pageErrors).toEqual([]);
-  await launch.getByRole('button', { name: 'Run fixture' }).click({ force: true });
+  await launch.getByRole('button', { name: 'Run fixture evaluation' }).click({ force: true });
   await expect.poll(() => posted).not.toBeNull();
   expect(pageErrors).toEqual([]);
   expect(posted).toMatchObject({
@@ -419,5 +422,7 @@ test('offline ACC text fixture launches cancellation-rescue while staying text_c
     text_callable: 'offline_acc_fixture',
     suite_id: 'call-center-voice-ai',
     scenario_ids: ['cancellation-rescue'],
+    tester_id: 'scenario_simulator',
+    executor_id: 'local_async_runner',
   });
 });

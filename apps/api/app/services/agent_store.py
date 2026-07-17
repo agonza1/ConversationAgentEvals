@@ -26,6 +26,8 @@ SEED_AGENTS: list[dict[str, Any]] = [
         'name': 'Mock text target',
         'channel': 'text',
         'target': 'mock_agent',
+        'environment': 'local',
+        'connection': {},
         'description': 'Built-in testing target for text: deterministic mock callable for sample scenario checks.',
         'metadata': {'model_name': 'mock-text', 'prompt_version': 'seed'},
     },
@@ -34,6 +36,8 @@ SEED_AGENTS: list[dict[str, Any]] = [
         'name': 'ACC voice fixture target',
         'channel': 'voice',
         'target': 'voice_fixture',
+        'environment': 'local',
+        'connection': {},
         'description': 'Built-in testing target for voice: offline ACC fixture path for cancellation-rescue style runs.',
         'metadata': {'model_name': 'voice-fixture', 'prompt_version': 'seed'},
     },
@@ -41,7 +45,7 @@ SEED_AGENTS: list[dict[str, Any]] = [
 
 SEED_AGENT_IDS = {str(seed['id']) for seed in SEED_AGENTS}
 _SAFE_AGENT_ID_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$')
-_NON_NULLABLE_UPDATE_FIELDS = frozenset({'name', 'channel', 'target', 'metadata'})
+_NON_NULLABLE_UPDATE_FIELDS = frozenset({'name', 'channel', 'target', 'environment', 'connection', 'metadata'})
 
 
 def reset_agents_for_tests(*, clear_files: bool = False) -> None:
@@ -101,6 +105,8 @@ def create_agent(payload: AgentCreateRequest) -> dict[str, Any]:
         name=payload.name.strip(),
         channel=payload.channel,
         target=payload.target,
+        environment=payload.environment,
+        connection=payload.connection,
         description=(payload.description or None),
         metadata=payload.metadata or {},
         created_at=now,

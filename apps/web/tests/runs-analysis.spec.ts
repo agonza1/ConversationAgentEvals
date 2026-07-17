@@ -10,6 +10,11 @@ const runFixture = {
   project_id: 'call-center-demo',
   agent_id: 'acc-voice-fixture-agent',
   agent_name: 'ACC voice fixture agent',
+  tester_id: 'fixture_replay',
+  executor_id: 'local_async_runner',
+  execution_snapshot: {
+    agent: { target: 'voice_fixture', environment: 'local' },
+  },
   progress: {
     phase: 'completed',
     completed_conversations: 1,
@@ -84,6 +89,10 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
 
   await page.getByRole('link', { name: /ACC voice fixture agent/ }).click();
   await expect(page.getByRole('heading', { name: 'ACC voice fixture agent' })).toBeVisible();
+  const participants = page.getByLabel('Run participants and executor');
+  await expect(participants).toContainText('Fixture Replay');
+  await expect(participants).toContainText('Local Async Runner');
+  await expect(participants).toContainText('fixture-backed evidence');
   await expect(page.getByRole('button', { name: /Interruption Detection/ }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: /Latency/ }).first()).toBeVisible();
   await expect(page.getByLabel('Stub dual-track waveform')).toBeVisible();

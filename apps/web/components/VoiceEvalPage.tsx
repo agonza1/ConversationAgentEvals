@@ -155,7 +155,7 @@ function transportStatus(health: ExecutionHealth | null, id: string) {
 }
 
 function voiceTargets(agents: AgentRecord[]) {
-  return agents.filter((agent) => agent.channel === 'voice' || agent.target === 'voice_fixture' || agent.target === 'offline_acc_fixture');
+  return agents.filter((agent) => agent.channel === 'voice');
 }
 
 function targetBadge(agent?: AgentRecord | null) {

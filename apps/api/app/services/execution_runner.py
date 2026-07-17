@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from app.schemas.benchmarks import BenchmarkRunRequest, BenchmarkSimulationRequest
 from app.schemas.execution import (
@@ -56,10 +60,10 @@ def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
     resolved = _resolve_agent_payload(payload)
     if (
         resolved.mode == 'text_callable'
-        and resolved.text_callable == 'openai_codex'
+        and resolved.text_callable in {'openai_codex', 'http_endpoint'}
         and not resolved.agent_id
     ):
-        raise ValueError('openai_codex execution requires an agent_id.')
+        raise ValueError(f'{resolved.text_callable} execution requires an agent_id.')
     suite = get_suite(resolved.suite_id)
     if suite is None:
         raise ValueError(f'Unknown suite: {resolved.suite_id}')
@@ -104,6 +108,9 @@ def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
         agent_id=resolved.agent_id,
         agent_name=(agent or {}).get('name'),
         model_name=model_name,
+        tester_id=resolved.tester_id,
+        tester_model_name=resolved.tester_model_name,
+        executor_id=resolved.executor_id,
         execution_snapshot={
             'request': resolved.model_dump(mode='json'),
             'agent': agent,
@@ -284,16 +291,32 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
     # explicit per-run override.  Pydantic retains whether `mode` appeared in
     # the request, letting callers omit it to opt into the saved agent target.
     if 'mode' in payload.model_fields_set:
+        agent_channel = str(agent.get('channel') or 'text')
+        agent_target = str(agent.get('target') or '')
+        if agent_channel == 'text' and payload.mode != 'text_callable':
+            raise ValueError(
+                f'Selected text target {agent["id"]} requires mode=text_callable; '
+                f'mode={payload.mode} would execute a different adapter.'
+            )
+        if agent_channel == 'voice' and agent_target == 'voice_fixture' and payload.mode not in {
+            'voice_fixture', 'pipecat_webrtc'
+        }:
+            raise ValueError(
+                f'Selected voice fixture {agent["id"]} requires mode=voice_fixture or pipecat_webrtc.'
+            )
         updates: dict[str, Any] = {
             'agent_id': agent['id'],
             'model_name': model_name,
         }
-        if (
-            payload.mode == 'text_callable'
-            and 'text_callable' not in payload.model_fields_set
-            and str(agent.get('target') or '') in {'mock_agent', 'openai_codex', 'offline_acc_fixture'}
-        ):
-            updates['text_callable'] = str(agent['target'])
+        if payload.mode == 'text_callable' and agent_target in {
+            'mock_agent', 'openai_codex', 'offline_acc_fixture', 'http_endpoint'
+        }:
+            if 'text_callable' in payload.model_fields_set and payload.text_callable != agent_target:
+                raise ValueError(
+                    f'Selected target {agent["id"]} uses {agent_target}; '
+                    f'text_callable={payload.text_callable} would execute a different target.'
+                )
+            updates['text_callable'] = agent_target
         return payload.model_copy(
             update=updates
         )
@@ -303,13 +326,16 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
     if channel == 'voice' or target == 'voice_fixture':
         mode = 'voice_fixture'
         text_callable = payload.text_callable
+        tester_id = 'fixture_replay'
     else:
         mode = 'text_callable'
-        text_callable = target if target in {'mock_agent', 'openai_codex', 'offline_acc_fixture'} else 'mock_agent'
+        text_callable = target if target in {'mock_agent', 'openai_codex', 'offline_acc_fixture', 'http_endpoint'} else 'mock_agent'
+        tester_id = 'scenario_simulator'
     return payload.model_copy(
         update={
             'mode': mode,
             'text_callable': text_callable,
+            'tester_id': tester_id,
             'agent_id': agent['id'],
             'model_name': model_name,
         }
@@ -343,6 +369,13 @@ def _execute_text_callable(
         return _evidence_from_offline_fixture(suite_id, scenario_id, payload, evaluate=payload.evaluate)
     if callable_id == 'openai_codex':
         return _execute_openai_codex_text_agent(
+            suite_id,
+            scenario_id,
+            payload,
+            agent_snapshot=agent_snapshot,
+        )
+    if callable_id == 'http_endpoint':
+        return _execute_http_text_agent(
             suite_id,
             scenario_id,
             payload,
@@ -391,6 +424,128 @@ def _execute_text_callable(
     }
 
 
+def _execute_http_text_agent(
+    suite_id: str,
+    scenario_id: str,
+    payload: ExecutionRunCreateRequest,
+    *,
+    agent_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Invoke a black-box HTTP chat target using the documented ASSERT-style boundary."""
+    if not payload.agent_id:
+        raise ValueError('http_endpoint execution requires an agent_id.')
+    agent = agent_snapshot or get_agent(payload.agent_id)
+    if agent is None:
+        raise ValueError(f'Unknown agent: {payload.agent_id}')
+    connection = agent.get('connection') if isinstance(agent.get('connection'), dict) else {}
+    endpoint_url = str(connection.get('endpoint_url') or '').strip()
+    if not endpoint_url:
+        raise ValueError('HTTP target is missing connection.endpoint_url.')
+
+    scenario = _scenario_definition(suite_id, scenario_id)
+    caller_text = _scenario_user_opener(scenario)
+    request_payload = {
+        'message': caller_text,
+        'history': [{'role': 'user', 'content': caller_text}],
+        'scenario': {
+            'id': scenario_id,
+            'title': scenario.get('title'),
+            'goal': scenario.get('goal'),
+        },
+    }
+    headers = {'content-type': 'application/json', 'accept': 'application/json'}
+    auth_type = str(connection.get('auth_type') or 'none')
+    if auth_type != 'none':
+        secret_ref = str(connection.get('secret_ref') or '')
+        secret = os.getenv(secret_ref)
+        if not secret:
+            raise ValueError(f'HTTP target secret reference is not available: {secret_ref}')
+        if auth_type == 'bearer_secret':
+            headers['authorization'] = f'Bearer {secret}'
+        elif auth_type == 'api_key_secret':
+            headers[str(connection.get('api_key_header') or 'x-api-key')] = secret
+
+    timeout_seconds = max(0.5, min(120.0, float(connection.get('timeout_ms') or 15000) / 1000))
+    request = Request(
+        endpoint_url,
+        data=json.dumps(request_payload).encode('utf-8'),
+        headers=headers,
+        method='POST',
+    )
+    started = time.perf_counter()
+    try:
+        with urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310 - user-configured target is intentional
+            response_status = int(getattr(response, 'status', 200))
+            response_payload = json.loads(response.read().decode('utf-8'))
+    except HTTPError as exc:
+        raise RuntimeError(f'HTTP target returned {exc.code}.') from exc
+    except URLError as exc:
+        raise RuntimeError(f'HTTP target could not be reached: {exc.reason}') from exc
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError('HTTP target did not return valid JSON.') from exc
+    latency_ms = round((time.perf_counter() - started) * 1000, 2)
+
+    response_path = str(connection.get('response_path') or 'response')
+    response_text = _json_path_value(response_payload, response_path)
+    if not isinstance(response_text, str) or not response_text.strip():
+        raise RuntimeError(f'HTTP target response path "{response_path}" did not contain reply text.')
+    response_text = response_text.strip()
+    transcript = f'User: {caller_text}\nAgent: {response_text}'
+    final_state = {
+        'complete': False,
+        'outcome': 'http_response_recorded',
+        'runtime_provenance': {
+            'target': 'http_endpoint',
+            'adapter': 'http_json_chat',
+            'environment': agent.get('environment') or 'local',
+            'endpoint_origin': endpoint_url.split('?', 1)[0],
+            'http_status': response_status,
+            'fixture_backed': False,
+            'trace_visibility': 'black_box',
+            'tester_id': payload.tester_id,
+            'executor_id': payload.executor_id,
+        },
+    }
+    report: dict[str, Any] = {}
+    if payload.evaluate:
+        report = run_scenario(
+            BenchmarkRunRequest(
+                suite_id=suite_id,
+                scenario_id=scenario_id,
+                transcript=transcript,
+                action_trace=[],
+                final_state=final_state,
+                user_id=payload.user_id,
+                project_id=payload.project_id,
+            )
+        )
+    return {
+        'turns': [
+            ConversationTurn(turn_index=1, speaker='user', text=caller_text),
+            ConversationTurn(turn_index=2, speaker='agent', text=response_text, latency_ms=latency_ms),
+        ],
+        'transcript': transcript,
+        'action_trace': [],
+        'final_state': final_state,
+        'latency_marks': [{'label': 'http target response', 'latency_ms': latency_ms}],
+        'verdict': report.get('verdict'),
+        'score': report.get('overall_score'),
+    }
+
+
+def _json_path_value(payload: Any, path: str) -> Any:
+    current = payload
+    for part in path.split('.'):
+        if isinstance(current, dict):
+            current = current.get(part)
+        elif isinstance(current, list) and part.isdigit():
+            index = int(part)
+            current = current[index] if index < len(current) else None
+        else:
+            return None
+    return current
+
+
 def _execute_openai_codex_text_agent(
     suite_id: str,
     scenario_id: str,
@@ -422,7 +577,7 @@ def _execute_openai_codex_text_agent(
     if not response_text:
         raise RuntimeError('OpenAI Codex returned an empty agent response.')
 
-    caller_text = str(scenario.get('persona') or scenario.get('goal') or scenario_id).strip()
+    caller_text = _scenario_user_opener(scenario)
     transcript = f'User: {caller_text}\nAgent: {response_text}'
     final_state = {
         'complete': False,
@@ -469,6 +624,20 @@ def _scenario_definition(suite_id: str, scenario_id: str) -> dict[str, Any]:
             if isinstance(candidate, dict) and candidate.get('id') == scenario_id:
                 return candidate
     raise ValueError(f'Unknown scenario: {suite_id}/{scenario_id}')
+
+
+def _scenario_user_opener(scenario: dict[str, Any]) -> str:
+    """Return caller-facing speech, never the internal persona/checklist description."""
+    sample = str(scenario.get('sample_transcript') or '')
+    for line in sample.splitlines():
+        stripped = line.strip()
+        speaker, separator, text = stripped.partition(':')
+        if separator and speaker.strip().lower() in {'user', 'caller', 'customer', 'patient', 'learner'}:
+            opener = text.strip()
+            if opener:
+                return opener
+    title = str(scenario.get('title') or scenario.get('id') or 'this request').strip()
+    return f'Hi, I need help with {title.lower()}.'
 
 
 def _openai_agent_prompt(agent: dict[str, Any], scenario: dict[str, Any]) -> str:

@@ -980,6 +980,9 @@ interface ExecutionRunRecord {
   agent_id?: string | null;
   agent_name?: string | null;
   model_name?: string | null;
+  tester_id?: 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
+  tester_model_name?: string | null;
+  executor_id?: 'local_async_runner';
   error?: string | null;
   created_at: string;
   updated_at: string;
@@ -997,6 +1000,9 @@ async function createExecutionRun(payload: {
   evaluate?: boolean;
   agent_id?: string;
   model_name?: string;
+  tester_id?: 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
+  tester_model_name?: string;
+  executor_id?: 'local_async_runner';
 }) {
   return handleJson<ExecutionRunRecord>(
     await fetch(`${getApiBase()}/api/execution/runs`, {
@@ -1012,11 +1018,20 @@ type ScoreAgentOption = {
   name: string;
   channel: string;
   target: string;
+  environment?: 'local' | 'staging' | 'production';
+  connection?: {
+    endpoint_url?: string | null;
+    response_path?: string | null;
+  };
   metadata?: {
     model_name?: string | null;
     prompt_version?: string | null;
   };
 };
+
+function isFixtureTargetId(target?: string | null) {
+  return target === 'mock_agent' || target === 'offline_acc_fixture' || target === 'voice_fixture';
+}
 
 async function listAgents(): Promise<ScoreAgentOption[]> {
   const payload = await handleJson<{ agents?: ScoreAgentOption[] }>(
@@ -2187,6 +2202,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   const [executionMode, setExecutionMode] = useState<'text_callable' | 'voice_fixture' | 'pipecat_webrtc'>('text_callable');
   const [executionScope, setExecutionScope] = useState<'selected' | 'suite'>('selected');
   const [executionIterations, setExecutionIterations] = useState(1);
+  const [executionTesterId, setExecutionTesterId] = useState<'scenario_simulator' | 'fixture_replay' | 'pipecat_tester'>('scenario_simulator');
   const [executionRun, setExecutionRun] = useState<ExecutionRunRecord | null>(null);
   const [isLaunchingExecution, setIsLaunchingExecution] = useState(false);
   const [executionMessage, setExecutionMessage] = useState<string | null>(null);
@@ -2440,8 +2456,10 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         if (matched) {
           if (matched.channel === 'voice' || matched.target === 'voice_fixture') {
             setExecutionMode('voice_fixture');
+            setExecutionTesterId('fixture_replay');
           } else {
             setExecutionMode('text_callable');
+            setExecutionTesterId('scenario_simulator');
           }
         }
         setAgentsLoaded(true);
@@ -2479,7 +2497,6 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     setExecutionMessage('Starting try-it-out run…');
     void onLaunchExecution({
       redirectToAnalysis: true,
-      target: 'configured',
     });
     // Intentionally omit onLaunchExecution: including it retriggers auto-launch on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3219,8 +3236,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         action_trace: useStructured && !isBlankJsonField(actionTrace) ? parseMaybeJson(actionTrace) : undefined,
         call: useStructured && callEvidence.trim() ? parseMaybeJson(callEvidence) : undefined,
         group_call: useStructured && groupCall.trim() ? parseMaybeJson(groupCall) : undefined,
-        // Keep vCon behind the same opt-in on /eval so a leftover sample record cannot force a pass.
-        vcon: useStructured && vconEvidence.trim() ? parseMaybeJson(vconEvidence) as JsonRecord : undefined,
+        vcon: vconEvidence.trim() ? parseMaybeJson(vconEvidence) as JsonRecord : undefined,
         ...runMetadata,
       });
       setReport(nextReport);
@@ -3273,34 +3289,35 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     }
   }
 
-  async function onLaunchExecution(options?: { redirectToAnalysis?: boolean; target?: 'live' | 'configured' }) {
+  async function onLaunchExecution(options?: { redirectToAnalysis?: boolean }) {
     if (!selectedSuite) return null;
     const identity = ensureDemoIdentity();
 
-    const launchTarget = options?.target ?? 'live';
-    const liveModelRun = launchTarget === 'live';
-    if (liveModelRun && selectedScoreAgent?.channel !== 'text') {
-      setExecutionMessage('Live model execution currently supports text agents. Use Run fixture for this voice agent.');
+    if (!selectedScoreAgent) {
+      setExecutionMessage('Select an agent target before launching.');
       return null;
     }
-    if (liveModelRun && openaiProvider?.status !== 'connected') {
-      setExecutionMessage('Connect OpenAI before launching a live agent run.');
+    if (selectedScoreAgent.target === 'openai_codex' && openaiProvider?.status !== 'connected') {
+      setExecutionMessage('Connect OpenAI before running this target.');
       return null;
     }
 
     const fixtureBackedAgent = selectedScoreAgent?.target === 'voice_fixture' || selectedScoreAgent?.target === 'offline_acc_fixture';
-    const runMode = liveModelRun
-      ? 'text_callable'
-      : fixtureBackedAgent
+    const runMode = fixtureBackedAgent
         ? executionMode
         : 'text_callable';
-    const runTextCallable = liveModelRun
-      ? 'openai_codex'
-      : selectedScoreAgent?.target === 'offline_acc_fixture'
+    const runTextCallable = selectedScoreAgent?.target === 'offline_acc_fixture'
         ? 'offline_acc_fixture'
         : selectedScoreAgent?.target === 'openai_codex'
           ? 'openai_codex'
+          : selectedScoreAgent?.target === 'http_endpoint'
+            ? 'http_endpoint'
           : 'mock_agent';
+    const runTesterId = runMode === 'pipecat_webrtc'
+      ? 'pipecat_tester'
+      : runMode === 'voice_fixture'
+        ? 'fixture_replay'
+        : 'scenario_simulator';
 
     const voiceModes = runMode === 'voice_fixture' || runMode === 'pipecat_webrtc';
     const offlineFixtureText =
@@ -3344,10 +3361,12 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         evaluate: true,
         agent_id: selectedAgentId || undefined,
         model_name: executionModelName || DEFAULT_EXECUTION_MODEL,
+        tester_id: runTesterId,
+        executor_id: 'local_async_runner',
       });
       setExecutionRun(queued);
       setExecutionMessage(
-        `${suiteNote || ''}Execution queued (${queued.mode}). Open /runs/${queued.execution_run_id} for analysis when complete.`,
+        `${suiteNote || ''}Execution queued: ${selectedScoreAgent.name} driven by ${runTesterId.replace(/_/g, ' ')}. Open /runs/${queued.execution_run_id} for analysis when complete.`,
       );
       listExecutionRuns(identity.userId, identity.projectId).catch(() => undefined);
       if (options?.redirectToAnalysis && queued.execution_run_id) {
@@ -4319,10 +4338,9 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                 || isSimulating
                 || !selectedSuite
                 || !selectedScoreAgent
-                || selectedScoreAgent.channel !== 'text'
-                || openaiProvider?.status !== 'connected'
+                || (selectedScoreAgent.target === 'openai_codex' && openaiProvider?.status !== 'connected')
               }
-              onClick={() => void onLaunchExecution({ target: 'live' })}
+              onClick={() => void onLaunchExecution()}
               style={{
                 border: 0,
                 borderRadius: 8,
@@ -4330,24 +4348,16 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                 color: 'white',
                 padding: '12px 18px',
                 fontWeight: 800,
-                opacity: isLaunchingExecution || isRunning || isSimulating || !selectedSuite || !selectedScoreAgent || selectedScoreAgent.channel !== 'text' || openaiProvider?.status !== 'connected' ? 0.65 : 1,
+                opacity: isLaunchingExecution || isRunning || isSimulating || !selectedSuite || !selectedScoreAgent || (selectedScoreAgent.target === 'openai_codex' && openaiProvider?.status !== 'connected') ? 0.65 : 1,
               }}
             >
               {isLaunchingExecution
                 ? 'Launching...'
                 : executionRun && isActiveExecutionStatus(executionRun.status)
                   ? 'Execution running...'
-                  : 'Launch agent run'}
-            </button>
-            <button
-              type="button"
-              className="secondary-link"
-              disabled={isLaunchingExecution || isRunning || isSimulating || !selectedSuite || !selectedScoreAgent}
-              onClick={() => void onLaunchExecution({ target: 'configured' })}
-            >
-              {selectedScoreAgent?.target === 'voice_fixture' || selectedScoreAgent?.target === 'offline_acc_fixture'
-                ? 'Run fixture'
-                : 'Mock agent run'}
+                  : isFixtureTargetId(selectedScoreAgent?.target)
+                    ? 'Run fixture evaluation'
+                    : 'Run evaluation'}
             </button>
           </div>
         </div>
@@ -4363,8 +4373,8 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
         {view === 'run' && selectedSuite && !loadError ? (
           <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }} aria-label="Default scenario for launch">
-            Launch uses {executionModelName || DEFAULT_EXECUTION_MODEL} through the connected OpenAI provider when available.
-            {' '}The secondary action uses the selected agent target&apos;s built-in mock or fixture connection.
+            The target is the system under test. The tester plays the caller/user from the selected scenario;
+            the local executor records both identities and captured evidence on the run.
           </p>
         ) : null}
 
@@ -4381,8 +4391,10 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                 if (!agent) return;
                 if (agent.channel === 'voice' || agent.target === 'voice_fixture') {
                   setExecutionMode('voice_fixture');
+                  setExecutionTesterId('fixture_replay');
                 } else {
                   setExecutionMode('text_callable');
+                  setExecutionTesterId('scenario_simulator');
                 }
               }}
               style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
@@ -4394,7 +4406,43 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             </select>
           </label>
           <label style={{ display: 'grid', gap: 8 }}>
-            <span style={{ fontWeight: 700 }}>Model</span>
+            <span style={{ fontWeight: 700 }}>Tester</span>
+            <select
+              aria-label="Execution tester"
+              value={executionTesterId}
+              onChange={(event) => setExecutionTesterId(event.target.value as typeof executionTesterId)}
+              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
+            >
+              {selectedScoreAgent?.channel === 'voice' ? (
+                <option value="fixture_replay">Fixture replay (saved caller evidence)</option>
+              ) : (
+                <option value="scenario_simulator">Scenario simulator (scripted user opener)</option>
+              )}
+            </select>
+            <span style={{ color: 'var(--muted)', fontSize: 13 }}>Drives scenario turns; it is not the target being scored.</span>
+          </label>
+          <div className="run-executor-summary" aria-label="Execution runner">
+            <span>Executor</span>
+            <strong>Local async runner</strong>
+            <small>Queues iterations, invokes the target adapter, and writes the inference set.</small>
+          </div>
+          <label style={{ display: 'grid', gap: 8 }}>
+            <span style={{ fontWeight: 700 }}>Iterations</span>
+            <input
+              aria-label="Execution iterations"
+              type="number"
+              min={1}
+              max={20}
+              value={executionIterations}
+              onChange={(event) => setExecutionIterations(Math.max(1, Math.min(20, Number(event.target.value) || 1)))}
+              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
+            />
+          </label>
+        </div>
+
+        {selectedScoreAgent?.target === 'openai_codex' ? (
+          <label style={{ display: 'grid', gap: 8, maxWidth: 360 }}>
+            <span style={{ fontWeight: 700 }}>Target model</span>
             <select
               aria-label="Execution model"
               value={executionModelName}
@@ -4410,34 +4458,27 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             </select>
             {openaiProvider?.status !== 'connected' ? (
               <span style={{ color: 'var(--muted)', fontSize: 13 }}>
-                Connect OpenAI to load models.{' '}
-                <button
-                  type="button"
-                  className="secondary-link"
-                  disabled={isConnectingOpenAI}
-                  onClick={() => void onConnectOpenAI()}
-                  style={{ padding: 0, border: 0, background: 'transparent', color: 'var(--accent)', fontWeight: 700, cursor: 'pointer' }}
-                >
+                Connect OpenAI to run this target.{' '}
+                <button type="button" className="secondary-link" disabled={isConnectingOpenAI} onClick={() => void onConnectOpenAI()} style={{ padding: 0, border: 0, background: 'transparent', color: 'var(--accent)', fontWeight: 700, cursor: 'pointer' }}>
                   {isConnectingOpenAI ? 'Connecting…' : 'Connect OpenAI'}
                 </button>
               </span>
-            ) : executionModelsMessage ? (
-              <span style={{ color: 'var(--muted)', fontSize: 13 }}>{executionModelsMessage}</span>
-            ) : null}
+            ) : executionModelsMessage ? <span style={{ color: 'var(--muted)', fontSize: 13 }}>{executionModelsMessage}</span> : null}
           </label>
-          <label style={{ display: 'grid', gap: 8 }}>
-            <span style={{ fontWeight: 700 }}>Iterations</span>
-            <input
-              aria-label="Execution iterations"
-              type="number"
-              min={1}
-              max={20}
-              value={executionIterations}
-              onChange={(event) => setExecutionIterations(Math.max(1, Math.min(20, Number(event.target.value) || 1)))}
-              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
-            />
-          </label>
-        </div>
+        ) : null}
+
+        {selectedScoreAgent ? (
+          <div className={`run-provenance-notice ${isFixtureTargetId(selectedScoreAgent.target) ? 'is-fixture' : 'is-live'}`} role="note">
+            <strong>{isFixtureTargetId(selectedScoreAgent.target) ? 'Fixture-backed target' : 'Live target adapter'}</strong>
+            <span>
+              {selectedScoreAgent.target === 'http_endpoint'
+                ? `POSTs to ${selectedScoreAgent.connection?.endpoint_url || 'the configured endpoint'}; black-box response evidence only.`
+                : isFixtureTargetId(selectedScoreAgent.target)
+                  ? 'Replays generated or saved evidence and does not contact a deployed agent.'
+                  : 'Invokes the connected provider and records the returned response.'}
+            </span>
+          </div>
+        ) : null}
 
         <details>
           <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Advanced</summary>

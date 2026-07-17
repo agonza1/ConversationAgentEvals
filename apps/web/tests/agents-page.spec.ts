@@ -72,6 +72,16 @@ async function mockRunnerApis(page: import('@playwright/test').Page, options: Mo
             description: 'Live OpenAI text target.',
             metadata: { model_name: 'gpt-5.4', prompt_version: 'seed' },
           },
+          {
+            id: 'staging-http-agent',
+            name: 'Staging HTTP agent',
+            channel: 'text',
+            target: 'http_endpoint',
+            environment: 'staging',
+            connection: { endpoint_url: 'https://support.example.test/chat', response_path: 'response' },
+            description: 'Black-box HTTP target.',
+            metadata: {},
+          },
         ],
       }),
     });
@@ -79,6 +89,22 @@ async function mockRunnerApis(page: import('@playwright/test').Page, options: Mo
 
   await page.route('**/api/product/**', async (route) => {
     const url = route.request().url();
+    if (url.includes('/providers/openai/status')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ status: 'connected', provider: 'openai_codex' }),
+      });
+      return;
+    }
+    if (url.includes('/providers/openai/models')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ models: [{ id: 'gpt-5.4' }], default_model: 'gpt-5.4' }),
+      });
+      return;
+    }
     if (url.includes('/runs') || url.includes('/audit-events')) {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
       return;
@@ -181,6 +207,8 @@ test('targets try-it-out auto-launches and opens run analysis', async ({ page })
   expect(launches).toHaveLength(1);
   expect(launches[0]?.agent_id).toBe('acc-voice-fixture-agent');
   expect(launches[0]?.mode).toBe('voice_fixture');
+  expect(launches[0]?.tester_id).toBe('fixture_replay');
+  expect(launches[0]?.executor_id).toBe('local_async_runner');
 });
 
 test('OpenAI agent try-it-out launches its configured live target', async ({ page }) => {
@@ -196,6 +224,29 @@ test('OpenAI agent try-it-out launches its configured live target', async ({ pag
     agent_id: 'live-openai-agent',
     mode: 'text_callable',
     text_callable: 'openai_codex',
+    tester_id: 'scenario_simulator',
+    executor_id: 'local_async_runner',
+  });
+});
+
+test('HTTP agent try-it-out uses its configured adapter and explicit tester', async ({ page }) => {
+  const launches: Record<string, unknown>[] = [];
+  await mockRunnerApis(page, {
+    onExecutionLaunch: (request) => launches.push(request),
+  });
+  await page.goto('/targets');
+  const card = page.getByRole('article').filter({ hasText: 'Staging HTTP agent' });
+  await expect(card).toContainText('HTTP JSON endpoint (live)');
+  await expect(card).toContainText('Black-box response');
+  await card.getByRole('link', { name: 'Try it Out' }).click();
+  await expect(page).toHaveURL(/\/runs\/exec-try-it-out/, { timeout: 20000 });
+  expect(launches).toHaveLength(1);
+  expect(launches[0]).toMatchObject({
+    agent_id: 'staging-http-agent',
+    mode: 'text_callable',
+    text_callable: 'http_endpoint',
+    tester_id: 'scenario_simulator',
+    executor_id: 'local_async_runner',
   });
 });
 
@@ -223,10 +274,12 @@ test('demo analysis redirect preserves the api base override', async ({ page }) 
 
 test('add agent target modal creates a registry entry', async ({ page }) => {
   let created = false;
+  let createdBody: Record<string, unknown> | null = null;
   await page.route('**/api/agents**', async (route) => {
     if (route.request().method() === 'POST') {
       created = true;
       const body = route.request().postDataJSON() as { name: string };
+      createdBody = body as Record<string, unknown>;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -265,10 +318,19 @@ test('add agent target modal creates a registry entry', async ({ page }) => {
   await page.locator('.agents-page-header').getByRole('button', { name: 'Add agent target' }).click();
   await expect(page.getByRole('heading', { name: 'Add agent target' })).toBeVisible();
 
-  await page.getByPlaceholder('Support bot endpoint').fill('Playwright agent created');
+  await page.getByPlaceholder('Billing support — staging').fill('Playwright agent created');
+  await page.getByLabel('Endpoint URL').fill('https://staging.example.test/chat');
   await page.getByRole('button', { name: 'Create target' }).click();
 
   await expect(page.getByRole('article').filter({ hasText: 'Playwright agent created' })).toBeVisible();
+  expect(createdBody).toMatchObject({
+    target: 'http_endpoint',
+    environment: 'staging',
+    connection: {
+      endpoint_url: 'https://staging.example.test/chat',
+      response_path: 'response',
+    },
+  });
 });
 
 test('agent target form only offers connections compatible with its selected channel', async ({ page }) => {
@@ -278,10 +340,13 @@ test('agent target form only offers connections compatible with its selected cha
 
   const channel = page.getByLabel('Target channel');
   const target = page.getByLabel('Target connection');
-  await expect(target.getByRole('option')).toHaveCount(3);
+  await expect(target.getByRole('option')).toHaveCount(4);
+  await expect(target).toHaveValue('http_endpoint');
+  await expect(page.getByLabel('Endpoint URL')).toBeVisible();
 
   await channel.selectOption('voice');
   await expect(target).toHaveValue('voice_fixture');
   await expect(target.getByRole('option')).toHaveCount(1);
-  await expect(target.locator('option')).toHaveText('Built-in: voice_fixture (voice testing target)');
+  await expect(target.locator('option')).toHaveText('Offline ACC voice evidence replay');
+  await expect(page.getByText('Live voice adapters are not enabled yet')).toBeVisible();
 });
