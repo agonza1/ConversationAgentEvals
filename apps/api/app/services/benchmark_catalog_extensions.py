@@ -275,9 +275,9 @@ def _cancellation_rescue_sample_transcript() -> str:
             'Caller: I want to cancel my policy today.',
             'Agent (starter sample agent): I can help. What changed for you?',
             'Caller: The renewal increase is too high.',
-            'Agent (starter sample agent): I reached the retention boundary and paused for an approved safe path.',
+            'Agent (starter sample agent): I want to stay within approved options, so I am pausing for operator guidance before discussing any retention path.',
             'Operator: Approved safe follow-up only.',
-            'Agent (starter sample agent): I recorded the approved follow-up and preserved the cancellation request.',
+            'Agent (starter sample agent): I can set up that approved follow-up while keeping your cancellation request active.',
         ]
     )
 

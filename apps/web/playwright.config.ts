@@ -29,9 +29,10 @@ export default defineConfig({
     },
     {
       command: [
-        'rm -rf apps/web/.next;',
-        `API_BASE_URL=${apiBase} NEXT_PUBLIC_API_BASE_URL=${apiBase} npm --workspace apps/web run build &&`,
-        `PORT=${port} API_BASE_URL=${apiBase} NEXT_PUBLIC_API_BASE_URL=${apiBase} npm --workspace apps/web run start`,
+        'rm -rf apps/web/.next-build;',
+        `API_BASE_URL=${apiBase} NEXT_PUBLIC_API_BASE_URL=${apiBase} NEXT_DIST_DIR=.next-build npm --workspace apps/web run build &&`,
+        'node scripts/restore-web-next-env.mjs &&',
+        `PORT=${port} API_BASE_URL=${apiBase} NEXT_PUBLIC_API_BASE_URL=${apiBase} NEXT_DIST_DIR=.next-build npm --workspace apps/web run start`,
       ].join(' '),
       cwd: '../..',
       url: baseURL,

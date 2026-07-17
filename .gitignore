@@ -27,6 +27,7 @@ apps/api/artifacts/
 apps/api/data/user_scenarios.json
 apps/web/node_modules/
 apps/web/.next/
+apps/web/.next-build/
 apps/web/.next-dev/
 apps/web/test-results/
 storage/

@@ -97,7 +97,7 @@ def test_get_suite_includes_starter_evidence_for_onboarding():
     assert 'sample_transcript' in scenario
     assert 'sample_action_trace' in scenario
     assert 'sample_final_state' in scenario
-    assert 'collect new billing address' in scenario['sample_transcript']
+    assert 'What is the new billing address?' in scenario['sample_transcript']
     assert scenario['sample_action_trace'][0]['action'] == 'greet caller and identify intent'
     assert scenario['sample_final_state']['complete'] is True
 

@@ -427,7 +427,7 @@ export function ScenariosPage() {
                 </div>
                 <div className="scenarios-actions">
                   <Link className="primary-link" href={scenarioHref('/runs', selected.scenario)}>Run agent</Link>
-                  <Link className="secondary-link" href={scenarioHref('/eval', selected.scenario)}>Eval sample evidence</Link>
+                  <Link className="secondary-link" href={scenarioHref('/eval', selected.scenario)}>Eval evidence</Link>
                   {selected.scenario.suite_id === 'user-scenarios' ? (
                     <button
                       type="button"

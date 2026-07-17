@@ -4,7 +4,7 @@ test('homepage links to focused workflow demos', async ({ page }) => {
   await page.goto('/');
 
   await expect(page.getByRole('link', { name: 'Browse evaluation scenarios' })).toHaveAttribute('href', '/scenarios');
-  await expect(page.getByRole('link', { name: 'Eval sample evidence' })).toHaveAttribute('href', '/eval?demo=sample-evidence');
+  await expect(page.getByRole('link', { name: 'Eval evidence' })).toHaveAttribute('href', '/eval?demo=sample-evidence');
   await expect(page.getByRole('link', { name: 'Launch agent run' })).toHaveAttribute('href', '/runs?launch=demo');
   await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Benchmarks' })).toHaveCount(0);
 });
@@ -88,7 +88,7 @@ test('scenario and eval deep links preload the advertised scenario', async ({ pa
   await page.goto('/scenarios?suite_id=call-center-voice-ai&scenario_id=billing-address-change');
   await expect(page.getByRole('heading', { name: 'Billing Address Change' })).toBeVisible();
   await expect(page.getByLabel('Selected scenario').getByRole('link', { name: 'Run agent' })).toHaveAttribute('href', /suite_id=call-center-voice-ai&scenario_id=billing-address-change/);
-  await expect(page.getByLabel('Selected scenario').getByRole('link', { name: 'Eval sample evidence' })).toHaveAttribute('href', /sample=1/);
+  await expect(page.getByLabel('Selected scenario').getByRole('link', { name: 'Eval evidence' })).toHaveAttribute('href', /sample=1/);
 
   await page.goto('/eval?demo=sample-evidence');
   await expect(page.getByText('Loading benchmark suites...')).toHaveCount(0);
