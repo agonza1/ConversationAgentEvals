@@ -110,6 +110,19 @@ def create_user_scenario(payload: dict[str, Any]) -> dict[str, Any]:
     return deepcopy(_public_scenario(record))
 
 
+def delete_user_scenario(scenario_id: str) -> bool:
+    """Delete a user-created scenario from persistence and the live catalog."""
+    _ensure_loaded()
+    with _LOCK:
+        if scenario_id not in _RECORDS:
+            return False
+        del _RECORDS[scenario_id]
+        _persist_unlocked()
+
+    sync_catalog()
+    return True
+
+
 def sync_catalog() -> None:
     """Register the user-scenarios suite + scenarios into the live benchmark catalog."""
     _ensure_loaded()

@@ -78,6 +78,41 @@ def test_create_scenario_rejects_missing_fields():
     assert response.status_code == 422
 
 
+def test_delete_user_scenario_removes_it_from_store_and_benchmark_catalog(tmp_path: Path):
+    create = client.post(
+        '/api/scenarios',
+        json={
+            'title': 'Temporary scenario',
+            'simulated_user_prompt': SAMPLE_PROMPT,
+            'expected_output': SAMPLE_EXPECTED,
+            'description': SAMPLE_PROMPT,
+        },
+    )
+    assert create.status_code == 200, create.text
+    scenario_id = create.json()['id']
+
+    deleted = client.delete(f'/api/scenarios/{scenario_id}')
+
+    assert deleted.status_code == 204, deleted.text
+    assert client.get(f'/api/scenarios/{scenario_id}').status_code == 404
+    assert all(item['id'] != scenario_id for item in client.get('/api/scenarios').json()['scenarios'])
+    suite = get_suite(USER_SCENARIOS_SUITE_ID)
+    assert suite is not None
+    assert all(item['id'] != scenario_id for item in suite['scenarios'])
+
+    configure_store_path(tmp_path / 'user_scenarios.json')
+    assert client.get(f'/api/scenarios/{scenario_id}').status_code == 404
+
+
+def test_delete_scenario_rejects_built_in_and_unknown_ids():
+    built_in = client.delete('/api/scenarios/billing-address-change')
+    unknown = client.delete('/api/scenarios/does-not-exist')
+
+    assert built_in.status_code == 404
+    assert built_in.json()['detail'] == 'User-created scenario not found'
+    assert unknown.status_code == 404
+
+
 def test_created_scenario_is_selectable_in_benchmark_catalog_and_simulatable():
     create = client.post(
         '/api/scenarios',

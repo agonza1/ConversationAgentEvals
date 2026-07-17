@@ -1916,6 +1916,16 @@ select {
   gap: 10px;
 }
 
+.scenario-delete-button {
+  border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
+  color: var(--danger);
+}
+
+.scenario-delete-button:hover:not(:disabled) {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 7%, white);
+}
+
 .scenario-back-link {
   display: none;
   color: var(--accent);

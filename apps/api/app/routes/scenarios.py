@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 
 from app.schemas.scenarios import ScenarioCreateRequest
 from app.services.user_scenario_store import (
     USER_SCENARIOS_SUITE_ID,
     create_user_scenario,
+    delete_user_scenario,
     get_user_scenario,
     list_user_scenarios,
 )
@@ -35,3 +36,10 @@ def get_scenario(scenario_id: str):
     if record is None:
         raise HTTPException(status_code=404, detail='Scenario not found')
     return record
+
+
+@router.delete('/{scenario_id}', status_code=204)
+def delete_scenario(scenario_id: str):
+    if not delete_user_scenario(scenario_id):
+        raise HTTPException(status_code=404, detail='User-created scenario not found')
+    return Response(status_code=204)

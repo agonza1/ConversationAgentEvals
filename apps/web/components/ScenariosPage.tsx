@@ -18,6 +18,7 @@ interface ScenarioRecord {
   required_actions: string[];
   forbidden_actions: string[];
   expected_final_state: string;
+  source: string;
 }
 
 interface ScenarioSuite {
@@ -91,6 +92,7 @@ function normalizeScenario(value: unknown, suiteId: string): ScenarioRecord {
     required_actions: stringList(record.required_actions),
     forbidden_actions: stringList(record.forbidden_actions),
     expected_final_state: displayValue(record.expected_final_state ?? record.expected_output),
+    source: String(record.source ?? ''),
   };
 }
 
@@ -129,6 +131,19 @@ async function createScenario(payload: {
     }),
   );
   return normalizeScenario(value, 'user-scenarios');
+}
+
+async function deleteScenario(scenarioId: string): Promise<void> {
+  await handleJsonOrEmpty(
+    await fetch(`${getApiBase()}/api/scenarios/${encodeURIComponent(scenarioId)}`, {
+      method: 'DELETE',
+    }),
+  );
+}
+
+async function handleJsonOrEmpty(response: Response): Promise<void> {
+  if (response.ok) return;
+  await handleJson<unknown>(response);
 }
 
 async function copyText(text: string) {
@@ -200,6 +215,7 @@ export function ScenariosPage() {
   const [mirrorPrompt, setMirrorPrompt] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
@@ -298,6 +314,23 @@ export function ScenariosPage() {
     }
   }
 
+  async function onDelete(scenario: ScenarioRecord) {
+    if (!window.confirm(`Delete “${scenario.title}”? This cannot be undone.`)) return;
+    setIsDeleting(true);
+    setError(null);
+    setSaveMessage(null);
+    try {
+      await deleteScenario(scenario.id);
+      setSelectedKey('');
+      setSaveMessage('Scenario deleted.');
+      setReloadKey((value) => value + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not delete scenario');
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
   return (
     <section className="scenarios-shell" aria-label="Scenarios">
       <div className="scenarios-layout">
@@ -391,6 +424,16 @@ export function ScenariosPage() {
                 <div className="scenarios-actions">
                   <Link className="primary-link" href={scenarioHref('/runs', selected.scenario)}>Run agent</Link>
                   <Link className="secondary-link" href={scenarioHref('/eval', selected.scenario)}>Eval sample evidence</Link>
+                  {selected.scenario.suite_id === 'user-scenarios' && selected.scenario.source === 'user_created' ? (
+                    <button
+                      type="button"
+                      className="secondary-link scenario-delete-button"
+                      disabled={isDeleting}
+                      onClick={() => void onDelete(selected.scenario)}
+                    >
+                      {isDeleting ? 'Deleting…' : 'Delete scenario'}
+                    </button>
+                  ) : null}
                 </div>
               </div>
               <a className="scenario-back-link" href="#scenario-catalog">← Back to scenario catalog</a>

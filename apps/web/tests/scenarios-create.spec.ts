@@ -27,4 +27,16 @@ test('scenarios page can create and view a scenario', async ({ page }) => {
   await expect(selectedScenario.getByText(expected)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Copy User persona / starting prompt' })).toBeVisible();
   await expect(page.getByText(/Scenario created in the User Scenarios evaluation suite/i)).toBeVisible();
+
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name: 'Delete scenario' }).click();
+  await expect(page.getByText('Scenario deleted.')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Account access issue' })).not.toBeVisible();
+});
+
+test('built-in scenarios cannot be deleted', async ({ page }) => {
+  await page.goto('/scenarios?suite_id=call-center-voice-ai&scenario_id=billing-address-change');
+
+  await expect(page.getByRole('heading', { name: 'Billing Address Change' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Delete scenario' })).toHaveCount(0);
 });
