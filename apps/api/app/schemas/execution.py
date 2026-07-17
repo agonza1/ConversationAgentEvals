@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ExecutionMode = Literal['text_callable', 'voice_fixture', 'pipecat_webrtc']
 AudioTransportId = Literal['none', 'pipecat_small_webrtc', 'freeswitch_verto_sip']
+TextCallableId = Literal['mock_agent', 'offline_acc_fixture', 'openai_codex']
 ConversationStatus = Literal['queued', 'running', 'completed', 'failed']
 ExecutionRunStatus = Literal['queued', 'running', 'completed', 'needs_review', 'failed']
 
@@ -22,9 +23,11 @@ class ExecutionRunCreateRequest(BaseModel):
     user_id: str = Field(default='execution-user', min_length=1)
     project_id: str = Field(default='conversation-agent-evals', min_length=1)
     evaluate: bool = True
-    text_callable: str = Field(default='mock_agent', min_length=1)
+    text_callable: TextCallableId = 'mock_agent'
     voice_fixture_path: str | None = None
     audio_plan_path: str | None = None
+    agent_id: str | None = None
+    model_name: str | None = Field(default=None, min_length=1)
     # Local Pipecat small WebRTC is the supported first slice; Verto SIP is rejected
     # until FreeSwitchVertoSipTransport is implemented.
     audio_transport: AudioTransportId = 'none'
@@ -67,6 +70,38 @@ class ConversationTurn(BaseModel):
     latency_ms: float | None = None
 
 
+class LatencyStats(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    count: int = 0
+    avg_ms: float | None = None
+    median_ms: float | None = None
+    p90_ms: float | None = None
+    min_ms: float | None = None
+    max_ms: float | None = None
+    outlier_count: int = 0
+
+
+class ConversationMetricsSummary(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    verdict: str | None = None
+    score: float | None = None
+    turn_count: int = 0
+    latency: LatencyStats = Field(default_factory=LatencyStats)
+    interruption_count: int = 0
+    call_resolution_success: float = 0.0
+
+
+class TimelineEvent(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    t_ms: float | None = None
+    label: str
+    latency_ms: float | None = None
+    kind: str = 'mark'
+
+
 class ConversationRecord(BaseModel):
     """One inference_set.jsonl-shaped conversation row produced during Execute."""
 
@@ -85,6 +120,8 @@ class ConversationRecord(BaseModel):
     action_trace: list[dict[str, Any]] = Field(default_factory=list)
     final_state: dict[str, Any] = Field(default_factory=dict)
     latency_marks: list[dict[str, Any]] = Field(default_factory=list)
+    metrics_summary: ConversationMetricsSummary | None = None
+    timeline: list[TimelineEvent] = Field(default_factory=list)
     recording: dict[str, Any] | None = None
     vcon_export: dict[str, Any] | None = None
     vcon_export_summary: dict[str, Any] | None = None
@@ -116,9 +153,16 @@ class ExecutionRunRecord(BaseModel):
     scenario_ids: list[str]
     user_id: str
     project_id: str
+    agent_id: str | None = None
+    agent_name: str | None = None
+    model_name: str | None = None
+    # Immutable request and agent settings captured at queue time. Execution uses
+    # this instead of re-reading the mutable agent registry in the background.
+    execution_snapshot: dict[str, Any] | None = None
     progress: ExecutionRunProgress
     conversations: list[ConversationRecord] = Field(default_factory=list)
     inference_set_path: str | None = None
+    run_snapshot_path: str | None = None
     error: str | None = None
     created_at: str
     updated_at: str

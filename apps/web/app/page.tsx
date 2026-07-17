@@ -1,6 +1,4 @@
-import Link from 'next/link';
-import type { Route } from 'next';
-import { BenchmarkRunner } from '@/components/BenchmarkRunner';
+import { ApiAwareLink } from '@/components/ApiAwareLink';
 
 const domains = [
   {
@@ -48,11 +46,11 @@ const workflow = [
   },
   {
     label: 'Run',
-    title: 'Simulate agent behavior across channels',
-    copy: 'Start with text and tool traces, then graduate the same benchmarks to voice, WebRTC, and phone workflows.',
+    title: 'Exercise real agent behavior across channels',
+    copy: 'Run configured agents against the same scenarios across text, voice, WebRTC, and phone workflows.',
   },
   {
-    label: 'Score',
+    label: 'Eval',
     title: 'Measure outcomes, not vibes',
     copy: 'Grade task completion, action correctness, policy compliance, final state, and evidence artifacts.',
   },
@@ -74,17 +72,42 @@ const proofRows = [
   ['Output', 'Pass/fail report with suggested fixes'],
 ];
 
+const workspacePaths = [
+  {
+    eyebrow: 'Define the test',
+    title: 'Scenarios',
+    copy: 'Browse evaluation suites, inspect scenario requirements, and choose what an agent must prove.',
+    href: '/scenarios?suite_id=call-center-voice-ai&scenario_id=billing-address-change',
+    cta: 'Browse scenarios',
+  },
+  {
+    eyebrow: 'Evaluate artifacts',
+    title: 'Eval',
+    copy: 'Evaluate transcripts, action traces, final state, calls, and vCon records against a scenario contract.',
+    href: '/eval?demo=sample-evidence',
+    cta: 'Eval sample evidence',
+  },
+  {
+    eyebrow: 'Exercise targets',
+    title: 'Run agent',
+    copy: 'Launch a configured agent target, watch conversations complete, then inspect the run analysis.',
+    href: '/runs?launch=demo',
+    cta: 'Launch agent run',
+  },
+] as const;
+
 export default function HomePage() {
   return (
     <main className="saas-shell">
       <nav className="top-nav" aria-label="Primary">
-        <Link className="brand" href="/">AgentBench</Link>
+        <ApiAwareLink className="brand" href="/">AgentBench</ApiAwareLink>
         <div>
           <a href="#product">Product</a>
-          <a href="#coverage">Coverage</a>
-          <a href="#benchmarks">Benchmarks</a>
-          <Link href="/benchmarks">Runner</Link>
-          <Link href={'/voice' as Route}>Voice eval</Link>
+          <ApiAwareLink href="/scenarios">Scenarios</ApiAwareLink>
+          <ApiAwareLink href="/agents">Agents</ApiAwareLink>
+          <ApiAwareLink href="/runs">Run agent</ApiAwareLink>
+          <ApiAwareLink href="/eval">Eval</ApiAwareLink>
+          <ApiAwareLink href="/voice">Voice eval</ApiAwareLink>
         </div>
       </nav>
 
@@ -97,8 +120,8 @@ export default function HomePage() {
             regression platform before agents reach production.
           </p>
           <div className="hero-cta">
-            <Link className="primary-link" href="/benchmarks">Open benchmark runner</Link>
-            <Link className="secondary-link" href={'/voice' as Route}>Open voice eval</Link>
+            <ApiAwareLink className="primary-link" href="/scenarios">Browse evaluation scenarios</ApiAwareLink>
+            <a className="secondary-link" href="#product">See how it works</a>
           </div>
         </div>
 
@@ -153,8 +176,8 @@ export default function HomePage() {
           <p className="eyebrow">Workspace</p>
           <h2 id="proof-title">A useful test run in one screen.</h2>
           <p>
-            The focused runner keeps the daily workflow tight: pick a scenario, simulate behavior, inspect the
-            evidence, and rerun after every agent prompt or tool change.
+            The focused workflow stays honest: choose a scenario, run an agent, inspect the captured evidence, and
+            rerun after every prompt, model, or tool change.
           </p>
         </div>
         <div className="proof-table" aria-label="Benchmark runner workflow preview">
@@ -169,14 +192,22 @@ export default function HomePage() {
 
       <section className="embedded-runner" aria-labelledby="homepage-runner-title">
         <div className="section-heading">
-          <p className="eyebrow">Runner</p>
-          <h2 id="homepage-runner-title">Simulate or score a benchmark now.</h2>
+          <p className="eyebrow">Workspace</p>
+          <h2 id="homepage-runner-title">Choose the workflow that fits your evidence.</h2>
           <p>
-            Use the same focused runner from the workspace: generate ASSERT-backed scenario artifacts, inspect the
-            action trace and final state, or paste your own transcript evidence for manifest-backed scoring.
+            Start with a clickable demo, then continue in a dedicated workspace without carrying unrelated controls.
           </p>
         </div>
-        <BenchmarkRunner />
+        <div className="surface-grid">
+          {workspacePaths.map((path) => (
+            <article className="surface-card" key={path.title}>
+              <p className="eyebrow">{path.eyebrow}</p>
+              <h3>{path.title}</h3>
+              <p>{path.copy}</p>
+              <ApiAwareLink className="primary-link" href={path.href}>{path.cta}</ApiAwareLink>
+            </article>
+          ))}
+        </div>
       </section>
 
       <section className="workflow-section" aria-labelledby="workflow-title">
@@ -214,9 +245,9 @@ export default function HomePage() {
         <div>
           <p className="eyebrow">MVP</p>
           <h2>Run the first scenario benchmark.</h2>
-          <p>Open the focused benchmark workspace for repeated scenario testing.</p>
+          <p>Choose a scenario, then run an agent or evaluate existing evidence.</p>
         </div>
-        <Link className="primary-link" href="/benchmarks">Launch runner</Link>
+        <ApiAwareLink className="primary-link" href="/scenarios">Browse scenarios</ApiAwareLink>
       </section>
     </main>
   );

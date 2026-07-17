@@ -92,7 +92,9 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
   await expect(page.getByRole('button', { name: 'Pipecat hooks' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Fixture' })).toBeVisible();
   await page.getByRole('button', { name: 'Run' }).click();
-  await expect(page.getByText('voice-run-1')).toBeVisible();
-  await expect(page.getByText('Cancellation rescue')).toBeVisible({ timeout: 10000 });
-  await expect(page.getByText(/vCon|recording|Pipecat hooks/i)).toBeVisible();
+  const results = page.getByRole('region', { name: 'Run results' });
+  await expect(results.getByText('voice-run-1')).toBeVisible();
+  await expect(results.getByText('Cancellation rescue', { exact: true })).toBeVisible({ timeout: 10000 });
+  await expect(results.getByText(/vCon|recording|Pipecat hooks/i).first()).toBeVisible();
+  await expect(results.getByRole('progressbar', { name: 'Voice evaluation progress' })).toHaveAttribute('aria-valuenow', '100');
 });

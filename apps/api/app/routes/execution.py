@@ -44,6 +44,17 @@ def get_run(execution_run_id: str, user_id: str = Query(...)):
     return run
 
 
+@router.get('/runs/{execution_run_id}/conversations/{conversation_id}')
+def get_conversation(execution_run_id: str, conversation_id: str, user_id: str = Query(...)):
+    run = execution_run_store.get_execution_run(execution_run_id)
+    if run is None or run.get('user_id') != user_id:
+        raise HTTPException(status_code=404, detail='Execution run not found.')
+    conversation = execution_run_store.get_conversation(execution_run_id, conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail='Conversation not found.')
+    return conversation
+
+
 @router.get('/audio/capabilities')
 def execution_audio_capabilities():
     """Describe available execution-time audio transports and vCon capture.

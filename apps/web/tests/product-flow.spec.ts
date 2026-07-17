@@ -1,101 +1,125 @@
 import { expect, test } from '@playwright/test';
 
-test('free-to-paid eval journey works end to end', async ({ page }) => {
-  await page.goto('/benchmarks');
+test('homepage links to focused workflow demos', async ({ page }) => {
+  await page.goto('/');
 
-  await expect(page.getByRole('heading', { name: 'Run an agentic scenario test.' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Run deterministic checks now. Save runs and request LLM judge when ready.' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Get from sample scenario to saved QA history.' })).toBeVisible();
-  await expect(page.getByText('Auth', { exact: true })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Sign up to save' })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Create demo project' })).toHaveCount(0);
-  await expect(page.getByLabel('Pick a scenario: Done')).toBeVisible();
-  await expect(page.getByLabel('Run evidence check: Ready')).toBeVisible();
-  await expect(page.getByLabel('Save repeatable history: Next')).toBeVisible();
-  await expect(page.getByText('Starter evidence ready: transcript, action trace, final state.')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Reload starter data' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Run sample now' })).toBeVisible();
-  await expect(page.getByLabel('Pricing and upgrade gates')).toHaveCount(0);
-  await expect(page.getByLabel('Demo plan')).toHaveValue('free');
-
-  await page.getByRole('button', { name: 'Run sample now' }).click();
-  await expect(page.getByRole('heading', { name: /pass|needs_review/i })).toBeVisible();
-  await expect(page.getByText('Benchmark report').last()).toBeVisible();
-  const actionPlan = page.getByLabel('Operator action plan');
-  await expect(actionPlan).toBeVisible();
-  await expect(actionPlan.getByRole('heading', { name: 'Keep moving through uncovered scenarios' })).toBeVisible();
-  await expect(actionPlan.getByText('3 suite scenarios still need fresh coverage before release review.')).toBeVisible();
-  await expect(actionPlan.getByText('Baseline run for this project.')).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Contract evidence' })).toBeVisible();
-  await expect(page.getByText('Suite manifest')).toBeVisible();
-  await expect(page.getByText('Scenario contract', { exact: true })).toBeVisible();
-  await expect(page.getByLabel('Run evidence check: Done')).toBeVisible();
-
-  const reportDownload = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Download report JSON' }).click();
-  const reportDownloadFile = await reportDownload;
-  expect(reportDownloadFile.suggestedFilename()).toMatch(/agentbench-.*-report\.json/);
-  await expect(page.getByText('Exported current benchmark report JSON.')).toBeVisible();
-
-  await page.getByRole('button', { name: 'Request LLM judge' }).click();
-  await expect(page.getByText(/available on Starter and above/)).toBeVisible();
-
-  await page.getByLabel('Demo plan').selectOption('starter');
-  await page.getByRole('button', { name: 'Request LLM judge' }).click();
-  await expect(page.getByText(/LLM judge request accepted/)).toBeVisible();
-  await expect(page.getByText('10 credits estimated; 200 of 200 daily credits available; vertex not configured.')).toBeVisible();
-
-  await page.getByRole('button', { name: 'Save run' }).click();
-  await expect(page.getByText(/Saved run/)).toBeVisible();
-  await expect(page.getByRole('heading', { name: /1 saved for Billing Address Change/ })).toBeVisible();
-  await expect(page.getByLabel('Saved runs and e2e validation').getByText('Baseline run for this project.')).toBeVisible();
-  await expect(page.getByText(/vCon ready: \d+ dialog turns, \d+ analysis records/)).toBeVisible();
-  await expect(page.getByText(/Audit export ready: transcript, action trace, final state/)).toBeVisible();
-  await expect(page.getByText('Project audit trail')).toBeVisible();
-  await expect(page.getByText('run.saved')).toBeVisible();
-  await expect(page.getByLabel('Save repeatable history: Done')).toBeVisible();
-  await expect(page.getByText('Selected scenario: baseline')).toBeVisible();
-  await expect(page.getByText('1 focused runs')).toBeVisible();
-
-  const auditDownload = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Export audit artifacts' }).click();
-  const auditDownloadFile = await auditDownload;
-  expect(auditDownloadFile.suggestedFilename()).toMatch(/agentbench-.*-audit-artifacts\.json/);
-  await expect(page.getByText(/Exported audit artifacts to agentbench-.*-audit-artifacts\.json/)).toBeVisible();
-
-  await page.getByRole('button', { name: 'Load run' }).click();
-  await expect(page.getByText(/Loaded saved run/)).toBeVisible();
-  await expect(page.getByRole('heading', { name: /pass|needs_review/i })).toBeVisible();
-
-  await page.getByRole('button', { name: 'Retry run' }).click();
-  await expect(page.getByText(/Retried saved run/)).toBeVisible();
-  await expect(page.getByRole('heading', { name: /pass|needs_review/i })).toBeVisible();
-
-  await expect(page.getByRole('heading', { name: 'Team-gated WebRTC evals' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Browse evaluation scenarios' })).toHaveAttribute('href', '/scenarios');
+  await expect(page.getByRole('link', { name: 'Eval sample evidence' })).toHaveAttribute('href', '/eval?demo=sample-evidence');
+  await expect(page.getByRole('link', { name: 'Launch agent run' })).toHaveAttribute('href', '/runs?launch=demo');
+  await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Benchmarks' })).toHaveCount(0);
 });
 
-test('failure baseline surfaces actionable benchmark report issues', async ({ page }) => {
+test('homepage navigation preserves an API base override', async ({ page }) => {
+  await page.goto('/?api_base=http%3A%2F%2Fapi.example.test');
+
+  await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Run agent' })).toHaveAttribute(
+    'href',
+    '/runs?api_base=http%3A%2F%2Fapi.example.test',
+  );
+  await expect(page.getByRole('link', { name: 'Browse evaluation scenarios' })).toHaveAttribute(
+    'href',
+    '/scenarios?api_base=http%3A%2F%2Fapi.example.test',
+  );
+  await expect(page.getByRole('link', { name: 'Launch agent run' })).toHaveAttribute(
+    'href',
+    '/runs?launch=demo&api_base=http%3A%2F%2Fapi.example.test',
+  );
+});
+
+test('dedicated paths expose only their primary workflow', async ({ page }) => {
+  await page.goto('/simulate');
+  await expect(page).toHaveURL(/\/scenarios$/);
+  await expect(page.getByRole('heading', { name: 'Choose what your agent must prove.' })).toBeVisible();
+
+  await page.goto('/eval');
+  await expect(page.getByRole('heading', { name: 'Evaluate conversation evidence.' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Evaluate evidence' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Simulate scenario' })).toHaveCount(0);
+  await expect(page.getByLabel('Evidence upload')).toBeVisible();
+  await expect(page.getByLabel('Upload vCon or transcript file')).toBeVisible();
+  await expect(page.getByLabel('Evaluation agent')).toHaveCount(0);
+  await expect(page.getByLabel('Model', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Agent profile')).toHaveCount(0);
+  await expect(page.getByText('Failure baseline')).toHaveCount(0);
+  await expect(page.getByText('Scenario rubric')).toHaveCount(0);
+  await expect(page.getByLabel('Suite contract manifest')).toHaveCount(0);
+  await expect(page.getByText('Required evidence:')).toHaveCount(0);
+  await expect(page.getByText('Advanced details')).toHaveCount(0);
+  await expect(page.getByText('Attribute this score')).toBeVisible();
+  await expect(page.getByLabel('Attributed agent')).toHaveCount(0);
+  await page.getByText('Attribute this score').click();
+  await expect(page.getByLabel('Attributed agent')).toBeVisible();
+  await expect(page.getByLabel('Attributed model')).toBeVisible();
+  await expect(page.getByText(/do not change how evidence is scored/i)).toBeVisible();
+  await expect(page.locator('form').first().locator('textarea').first()).toHaveValue('');
+  await expect(page.getByRole('button', { name: 'Evaluate evidence' })).toBeDisabled();
+  await expect(page.getByText(/This evidence is synthetic/)).toHaveCount(0);
+  await expect(page.getByText('Benchmark suite')).toHaveCount(0);
+  await expect(page.getByText('Scenario', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Load sample evidence' }).click();
+  const sampleOptions = page.getByLabel('Sample evidence options');
+  await expect(sampleOptions).toBeVisible();
+  await expect(sampleOptions.getByText('Benchmark suite')).toBeVisible();
+  await expect(sampleOptions.getByText('Scenario', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Saved runs and e2e validation')).toHaveCount(0);
+
+  await page.goto('/runs');
+  await expect(page.getByRole('heading', { name: 'Run an agent' })).toBeVisible();
+  await expect(page.getByLabel('Launch agent run')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Launch agent run' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Mock agent run' })).toBeVisible();
+  await expect(page.getByLabel('Saved runs and e2e validation')).toHaveCount(0);
+  // /runs is execute/capture — not the evidence-eval contract console
+  await expect(page.getByText('Benchmark suite')).toHaveCount(0);
+  await expect(page.getByText('Scenario rubric')).toHaveCount(0);
+  await expect(page.getByLabel('Suite contract manifest')).toHaveCount(0);
+  await expect(page.getByText('Required evidence:')).toHaveCount(0);
+});
+
+test('legacy benchmark route keeps the full console for history workflows', async ({ page }) => {
   await page.goto('/benchmarks');
+  await expect(page.getByRole('heading', { name: 'Benchmark history and reports.' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Simulate scenario' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Evaluate evidence' })).toBeVisible();
+  await expect(page.getByLabel('Saved runs and e2e validation')).toBeVisible();
+});
 
-  await expect(page.getByRole('heading', { name: 'Run an agentic scenario test.' })).toBeVisible();
+test('scenario and eval deep links preload the advertised scenario', async ({ page }) => {
+  await page.goto('/scenarios?suite_id=call-center-voice-ai&scenario_id=billing-address-change');
+  await expect(page.getByRole('heading', { name: 'Billing Address Change' })).toBeVisible();
+  await expect(page.getByLabel('Selected scenario').getByRole('link', { name: 'Run agent' })).toHaveAttribute('href', /suite_id=call-center-voice-ai&scenario_id=billing-address-change/);
+  await expect(page.getByLabel('Selected scenario').getByRole('link', { name: 'Eval sample evidence' })).toHaveAttribute('href', /sample=1/);
 
-  await page.getByLabel('Failure baseline').check();
-  await page.getByRole('button', { name: 'Simulate scenario' }).click();
+  await page.goto('/eval?demo=sample-evidence');
+  await expect(page.getByText('Loading benchmark suites...')).toHaveCount(0);
+  const evalForm = page.locator('form').first();
+  await expect(evalForm.getByText('Benchmark suite')).toHaveCount(0);
+  await expect(evalForm.getByText('Scenario', { exact: true })).toHaveCount(0);
+  await expect(evalForm.locator('textarea').first()).not.toHaveValue('');
+});
 
-  await expect(page.getByRole('heading', { name: 'needs_review' })).toBeVisible();
-  await expect(page.getByText('Benchmark report').last()).toBeVisible();
-  const actionPlan = page.getByLabel('Operator action plan');
-  await expect(actionPlan).toBeVisible();
-  await expect(actionPlan.getByRole('heading', { name: 'Needs operator review' })).toBeVisible();
-  await expect(actionPlan.getByText('task completion')).toBeVisible();
-  await expect(actionPlan.getByText('Add explicit tool/action execution for: explain next invoice impact')).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Failure categories' })).toBeVisible();
-  await expect(page.getByText('required_action_execution', { exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Missing actions' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Forbidden actions observed' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Suggested fixes' })).toBeVisible();
+test('mobile scenario selection moves focus to the selected detail', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/scenarios');
 
-  await page.getByRole('button', { name: 'Save run' }).click();
-  await expect(page.getByText('Failure mix')).toBeVisible();
-  await expect(page.getByLabel('Saved runs and e2e validation').getByText('required_action_execution')).toBeVisible();
+  await page.getByRole('button', { name: /Suspicious Card Charge/ }).click();
+  await expect(page.getByLabel('Selected scenario').getByRole('heading', { name: 'Suspicious Card Charge' })).toBeInViewport();
+  await expect(page.getByRole('link', { name: 'Back to scenario catalog' })).toBeVisible();
+
+  const navHeight = await page.getByRole('navigation', { name: 'Primary' }).evaluate((element) => element.getBoundingClientRect().height);
+  expect(navHeight).toBeLessThan(100);
+});
+
+test('empty eval history does not request unavailable regression summaries', async ({ page }) => {
+  let regressionSummaryRequests = 0;
+  await page.route('**/api/product/runs?*', async (route) => route.fulfill({ json: [] }));
+  await page.route('**/api/product/projects/*/regression-summary?*', async (route) => {
+    regressionSummaryRequests += 1;
+    await route.fulfill({ json: {} });
+  });
+
+  await page.goto('/eval');
+  await expect(page.getByRole('heading', { name: 'Evaluate conversation evidence.' })).toBeVisible();
+  await page.waitForLoadState('networkidle');
+  expect(regressionSummaryRequests).toBe(0);
 });

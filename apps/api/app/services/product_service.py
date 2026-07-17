@@ -116,13 +116,60 @@ USAGE_RULES = [
 
 
 def product_config() -> ProductConfig:
+    openai_status = _openai_provider_status()
+    connected = openai_status.get('status') == 'connected'
     return ProductConfig(
         pricing=_pricing_with_stripe_ids(),
         usage_rules=USAGE_RULES,
         auth=_firebase_auth_config(),
         voice_status='gated',
-        llm_judge_status='gated',
+        llm_judge_status='enabled' if connected else 'gated',
     )
+
+
+def list_llm_providers() -> list[dict[str, Any]]:
+    from app.services.llm_providers import list_providers
+
+    return list_providers()
+
+
+def start_openai_oauth() -> dict[str, Any]:
+    from app.services.llm_providers import get_provider
+
+    return get_provider('openai').start_oauth()
+
+
+def openai_provider_status() -> dict[str, Any]:
+    return _openai_provider_status()
+
+
+def disconnect_openai_provider() -> dict[str, Any]:
+    from app.services.llm_providers import get_provider
+
+    return get_provider('openai').disconnect()
+
+
+def list_openai_models() -> dict[str, Any]:
+    from app.services.llm_providers import get_provider
+
+    return get_provider('openai').list_models()
+
+
+def _openai_provider_status() -> dict[str, Any]:
+    from app.services.llm_providers import get_provider
+
+    try:
+        return get_provider('openai').status()
+    except Exception as exc:  # noqa: BLE001
+        return {
+            'id': 'openai',
+            'provider': 'openai_codex',
+            'status': 'disconnected',
+            'email': None,
+            'account_id': None,
+            'message': str(exc),
+            'last_error': str(exc),
+        }
 
 
 def _pricing_with_stripe_ids() -> list[PricingPlan]:
@@ -887,15 +934,9 @@ def _stripe_price_id(plan: str) -> str | None:
 
 
 def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> JudgeResponse:
+    del plan  # Local Codex OAuth path gates on provider connection, not paid plan.
     spend_control = _judge_spend_control()
-    if plan == 'free':
-        return JudgeResponse(
-            status='blocked',
-            required_plan='starter',
-            credits=10,
-            message='LLM judges are available on Starter and above. Free runs still use deterministic evidence checks.',
-            spend_control=spend_control,
-        )
+    citations = _judge_citations(report, transcript)
 
     if not spend_control['within_budget']:
         return JudgeResponse(
@@ -903,17 +944,46 @@ def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> Jud
             required_plan='starter',
             credits=10,
             message='LLM judge daily credit budget is exhausted. Increase the limit or wait for the next budget window.',
+            evidence_citations=citations,
             spend_control=spend_control,
+            provider=spend_control.get('provider'),
         )
 
-    citations = _judge_citations(report, transcript)
+    provider_ready = bool(spend_control.get('provider_configured'))
+    if not provider_ready:
+        return JudgeResponse(
+            status='blocked',
+            required_plan='starter',
+            credits=10,
+            message='Connect OpenAI (Codex OAuth) to run the local LLM judge, or set LLM_JUDGE_API_KEY for API-key fallback.',
+            evidence_citations=citations,
+            spend_control=spend_control,
+            provider=spend_control.get('provider'),
+        )
+
+    prompt = _build_judge_prompt(report=report, transcript=transcript, citations=citations)
+    try:
+        judge_output = _execute_judge_completion(prompt)
+    except Exception as exc:  # noqa: BLE001
+        return JudgeResponse(
+            status='blocked',
+            required_plan='starter',
+            credits=10,
+            message=f'LLM judge provider call failed: {exc}',
+            evidence_citations=citations,
+            spend_control=spend_control,
+            provider=spend_control.get('provider'),
+        )
+
     return JudgeResponse(
         status='ready',
         required_plan='starter',
         credits=10,
-        message='LLM judge request accepted. Configure a judge provider key to execute model-backed review.',
+        message='LLM judge review completed via the connected OpenAI provider.',
         evidence_citations=citations,
         spend_control=spend_control,
+        judge_output=judge_output,
+        provider=spend_control.get('provider'),
     )
 
 
@@ -955,21 +1025,108 @@ def _judge_citations(report: dict[str, Any], transcript: str | None) -> list[str
 def _judge_spend_control() -> dict[str, Any]:
     daily_limit = _int_env('LLM_JUDGE_DAILY_CREDIT_LIMIT', 200)
     reserved_credits = _int_env('LLM_JUDGE_RESERVED_DAILY_CREDITS', 0)
-    provider = (os.getenv('LLM_JUDGE_PROVIDER') or 'vertex').strip().lower()
-    provider_configured = bool(
-        os.getenv('LLM_JUDGE_API_KEY')
-        or (provider == 'vertex' and (os.getenv('VERTEX_PROJECT_ID') or os.getenv('GOOGLE_CLOUD_PROJECT')))
+    configured_provider = (os.getenv('LLM_JUDGE_PROVIDER') or 'openai_codex').strip().lower()
+    api_key_configured = bool(os.getenv('LLM_JUDGE_API_KEY'))
+    oauth_connected = False
+    if configured_provider in {'openai', 'openai_codex', 'codex', 'vertex'}:
+        # Prefer Codex OAuth connectivity for local-first judging; API key remains a CI fallback.
+        status = _openai_provider_status()
+        oauth_connected = status.get('status') == 'connected'
+    provider_configured = oauth_connected or api_key_configured or (
+        configured_provider == 'vertex'
+        and bool(os.getenv('VERTEX_PROJECT_ID') or os.getenv('GOOGLE_CLOUD_PROJECT'))
     )
+    provider_label = 'openai_codex' if oauth_connected else configured_provider
     remaining = max(daily_limit - reserved_credits, 0)
     return {
         'estimated_credits': 10,
         'daily_credit_limit': daily_limit,
         'reserved_daily_credits': reserved_credits,
         'remaining_daily_credits': remaining,
-        'provider': provider,
+        'provider': provider_label,
         'provider_configured': provider_configured,
         'within_budget': remaining >= 10,
     }
+
+
+def _build_judge_prompt(*, report: dict[str, Any], transcript: str | None, citations: list[str]) -> str:
+    verdict = report.get('verdict') or report.get('overall') or 'unknown'
+    score = report.get('overall_score') if report.get('overall_score') is not None else report.get('score')
+    suite_id = report.get('suite_id') or 'unknown-suite'
+    scenario_id = report.get('scenario_id') or 'unknown-scenario'
+    citation_lines = [f'- {item}' for item in citations] or ['- (none)']
+    lines = [
+        'You are an evidence-grounded LLM judge for ConversationAgentEvals.',
+        'Review the deterministic benchmark report and transcript. Keep the answer concise.',
+        f'Suite: {suite_id}',
+        f'Scenario: {scenario_id}',
+        f'Deterministic verdict: {verdict}',
+        f'Deterministic score: {score}',
+        'Evidence citations:',
+        *citation_lines,
+        'Transcript excerpt:',
+        (transcript or '(empty)')[:4000],
+        '',
+        'Respond with: (1) agree/disagree with the deterministic verdict, (2) one sentence rationale, (3) one suggested next action.',
+    ]
+    return '\n'.join(lines)
+
+
+def _execute_judge_completion(prompt: str) -> str:
+    from app.services.llm_providers import get_provider
+
+    api_key = (os.getenv('LLM_JUDGE_API_KEY') or '').strip()
+    openai_status = _openai_provider_status()
+    if openai_status.get('status') == 'connected':
+        return get_provider('openai').complete(prompt)
+    if api_key:
+        return _complete_with_openai_api_key(prompt, api_key=api_key)
+    raise RuntimeError('No connected OpenAI Codex OAuth session or LLM_JUDGE_API_KEY configured.')
+
+
+def _complete_with_openai_api_key(prompt: str, *, api_key: str) -> str:
+    import json
+    import urllib.error
+    import urllib.request
+
+    from app.services.ssl_util import verified_ssl_context
+
+    model = (os.getenv('LLM_JUDGE_MODEL') or 'gpt-4.1-mini').strip()
+    body = {
+        'model': model,
+        'messages': [
+            {'role': 'system', 'content': 'You are an evidence-grounded evaluation judge.'},
+            {'role': 'user', 'content': prompt},
+        ],
+        'temperature': 0,
+    }
+    request = urllib.request.Request(
+        'https://api.openai.com/v1/chat/completions',
+        data=json.dumps(body).encode('utf-8'),
+        headers={
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json',
+        },
+        method='POST',
+    )
+    try:
+        with urllib.request.urlopen(  # noqa: S310
+            request,
+            timeout=60,
+            context=verified_ssl_context(),
+        ) as response:
+            payload = json.loads(response.read().decode('utf-8'))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode('utf-8', errors='replace')
+        raise RuntimeError(f'OpenAI API judge call failed ({exc.code}): {detail}') from exc
+    choices = payload.get('choices') if isinstance(payload, dict) else None
+    if not isinstance(choices, list) or not choices:
+        raise RuntimeError('OpenAI API judge call returned no choices.')
+    message = choices[0].get('message') if isinstance(choices[0], dict) else None
+    content = message.get('content') if isinstance(message, dict) else None
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError('OpenAI API judge call returned empty content.')
+    return content.strip()
 
 
 def _int_env(name: str, default: int) -> int:

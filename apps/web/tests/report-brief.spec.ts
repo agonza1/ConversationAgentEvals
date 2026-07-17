@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test';
 test('benchmark report includes a share-ready brief', async ({ page }) => {
   await page.goto('/benchmarks');
 
-  await expect(page.getByRole('heading', { name: 'Run an agentic scenario test.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Benchmark history and reports.' })).toBeVisible();
   await expect(page.getByLabel('Suite contract manifest')).toContainText('Required evidence: transcript, action_trace, final_state');
   await expect(page.getByLabel(/Scenario contract: [a-f0-9]{12}/)).toBeVisible();
   await expect(page.getByLabel(/Suite manifest: [a-f0-9]{12}/)).toBeVisible();
@@ -515,7 +515,7 @@ test('empty suites show setup guidance before users try to run evidence checks',
     'Add at least one scenario to run evidence checks, queue suite runs, and track coverage for this suite.',
   );
   await expect(page.getByLabel('First run checklist')).toContainText(
-    'Empty Suite needs at least one scenario before you can run evidence checks.',
+    'Empty Suite has no scenarios yet.',
   );
   await expect(page.getByRole('button', { name: 'Simulate scenario' })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Queue suite run' })).toBeDisabled();

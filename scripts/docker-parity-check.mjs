@@ -83,6 +83,8 @@ requireIncludes('seed service', seed, 'restart: "no"');
 
 const api = serviceBlock('api');
 requireIncludes('api service', api, '"${API_PORT:-8025}:8000"');
+requireIncludes('api service', api, '"1455:1455"');
+requireNotIncludes('api service', api, 'OPENAI_CODEX_CALLBACK_PORT');
 requireIncludes('api service', api, 'PORT: 8000');
 requireIncludes('api service', api, 'DATABASE_URL: ${COMPOSE_DATABASE_URL:-sqlite:////workspace/storage/conversation_agent_evals.db}');
 requireNotIncludes('api service', api, 'profiles:');
@@ -92,6 +94,7 @@ requireIncludes('api service', api, 'required: false');
 requireIncludes('api service', api, 'http://localhost:8000/health');
 requireNotIncludes('api service', api, './apps/api:/workspace/apps/api');
 requireNotIncludes('api service', api, './apps/api/sales_presenter.db:/workspace/apps/api/sales_presenter.db');
+requireIncludes('api service', api, './artifacts:/workspace/artifacts');
 
 const worker = serviceBlock('worker');
 requireProfile('worker service', worker, 'persistence');

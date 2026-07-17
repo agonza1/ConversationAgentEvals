@@ -1,9 +1,13 @@
 import { defineConfig } from '@playwright/test';
 
-const port = Number(process.env.PLAYWRIGHT_WEB_PORT ?? process.env.PORT ?? 3412);
+const port = Number(process.env.PLAYWRIGHT_WEB_PORT ?? process.env.PORT ?? 3012);
 const apiPort = Number(process.env.PLAYWRIGHT_API_PORT ?? process.env.API_PORT ?? 8425);
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${port}`;
 const apiBase = process.env.PLAYWRIGHT_API_BASE_URL ?? `http://127.0.0.1:${apiPort}`;
+// Reuse the canonical local dev stack by default. CI has no server on this port,
+// so Playwright still starts an isolated production server there. This prevents
+// local test builds from replacing .next while `npm run dev` is using it.
+const reuseExistingServer = process.env.PLAYWRIGHT_REUSE_EXISTING_SERVER !== '0';
 
 export default defineConfig({
   testDir: './tests',
@@ -16,12 +20,12 @@ export default defineConfig({
       command: [
         'test -x apps/api/.venv/bin/python ||',
         '(./scripts/ensure-venv.sh apps/api/.venv apps/api/requirements.txt);',
-        `apps/api/.venv/bin/python -m uvicorn app.main:app --app-dir apps/api --host 127.0.0.1 --port ${apiPort}`,
+        `OPENAI_CODEX_IMPORT_HOME=0 apps/api/.venv/bin/python -m uvicorn app.main:app --app-dir apps/api --host 127.0.0.1 --port ${apiPort}`,
       ].join(' '),
       cwd: '../..',
       url: `${apiBase}/health`,
       timeout: 120_000,
-      reuseExistingServer: false,
+      reuseExistingServer,
     },
     {
       command: [
@@ -32,7 +36,7 @@ export default defineConfig({
       cwd: '../..',
       url: baseURL,
       timeout: 120_000,
-      reuseExistingServer: false,
+      reuseExistingServer,
     },
   ],
   use: {

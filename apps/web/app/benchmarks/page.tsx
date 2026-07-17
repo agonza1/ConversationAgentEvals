@@ -1,25 +1,23 @@
-import { BenchmarkRunner } from '@/components/BenchmarkRunner';
 import Link from 'next/link';
-import type { Route } from 'next';
 
+import { BenchmarkRunner } from '@/components/BenchmarkRunner';
+import { SiteNav } from '@/components/SiteNav';
+
+/** Full console retained for advanced history/report workflows. */
 export default function BenchmarksPage() {
   return (
     <main className="page-shell compact-shell">
-      <nav className="top-nav compact-nav" aria-label="Benchmark navigation">
-        <Link className="brand" href="/">AgentBench</Link>
-        <Link href="/">Homepage</Link>
-        <Link href={'/voice' as Route}>Voice eval</Link>
-      </nav>
-
-      <section className="minimal-hero" aria-labelledby="benchmark-title">
-        <p className="eyebrow">Benchmark runner</p>
-        <h1 id="benchmark-title">Run an agentic scenario test.</h1>
+      <SiteNav current="benchmarks" />
+      <section className="minimal-hero" aria-labelledby="benchmarks-title">
+        <p className="eyebrow">Full console</p>
+        <h1 id="benchmarks-title">Benchmark history and reports.</h1>
         <p>
-          Choose a domain scenario, simulate a run, and inspect task completion, action trace, policy, and final-state scores.
+          Saved runs, suite history, and report tooling. For day-to-day work use{' '}
+          <Link href="/scenarios">Scenarios</Link>, <Link href="/runs">Run agent</Link>, or{' '}
+          <Link href="/eval">Eval</Link>.
         </p>
       </section>
-
-      <BenchmarkRunner />
+      <BenchmarkRunner view="all" />
     </main>
   );
 }

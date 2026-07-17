@@ -8,20 +8,28 @@ from sqlalchemy import inspect, text
 from app.config import settings
 from app.db.database import Base, engine
 from app.services.benchmark_catalog_extensions import register_builtin_benchmark_extensions
+from app.services.user_scenario_store import ensure_user_scenarios_registered
 
 # Register native optional benchmark extensions before route modules bind service
 # functions. This makes the scenario discoverable through the public catalog APIs
 # while keeping it outside the core suite's default coverage denominator.
 register_builtin_benchmark_extensions()
+# File-backed user-created scenarios merge into the same catalog (_SUITES_BY_ID).
+ensure_user_scenarios_registered()
 
 from app.routes.assert_sidecar import router as assert_sidecar_router
+from app.routes.agents import router as agents_router
 from app.routes.benchmarks import router as benchmarks_router
 from app.routes.bootstrap import router as bootstrap_router
 from app.routes.decks import router as decks_router
 from app.routes.execution import router as execution_router
 from app.routes.product import router as product_router
 from app.routes.realtime import router as realtime_router
+from app.routes.scenarios import router as scenarios_router
 from app.routes.sessions import router as sessions_router
+from app.services.agent_store import ensure_seeded as ensure_agents_seeded
+
+ensure_agents_seeded()
 
 Base.metadata.create_all(bind=engine)
 
@@ -113,7 +121,9 @@ app.include_router(sessions_router)
 app.include_router(realtime_router)
 app.include_router(bootstrap_router)
 app.include_router(benchmarks_router)
+app.include_router(scenarios_router)
 app.include_router(execution_router)
+app.include_router(agents_router)
 app.include_router(product_router)
 
 BASE_DIR = Path(__file__).resolve().parents[3]

@@ -16,6 +16,8 @@ from app.schemas.execution import (
     ExecutionRunRecord,
 )
 from app.services import execution_run_store
+from app.services.agent_store import get_agent
+from app.services.execution_metrics import build_metrics_and_timeline
 from app.services.acc_realtime_target import (
     AccAudioFixture,
     AccAudioFixtureScheduler,
@@ -33,6 +35,7 @@ from app.services.execution_audio import (
     LocalPipecatSmallWebRtcTransport,
 )
 from app.services.execution_vcon import build_execution_vcon, vcon_summary
+from app.services.llm_providers import get_provider
 from app.services.pipecat_tester_agent import PipecatTesterAgentRunner
 
 
@@ -40,6 +43,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_VOICE_FIXTURE = 'docs/examples/agentic-contact-center-run-fixture.json'
 DEFAULT_AUDIO_PLAN = 'docs/examples/agentic-contact-center-audio-plan.json'
 DEFAULT_CANCELLATION_SCENARIO = 'docs/examples/agentic-contact-center-cancellation-rescue.json'
+DEFAULT_EXECUTION_MODEL = 'gpt-5.4'
 FIXTURE_BACKED_SCENARIO_IDS = frozenset({'cancellation-rescue'})
 ALLOWED_FIXTURE_ROOTS = (
     REPO_ROOT / 'docs' / 'examples',
@@ -49,15 +53,25 @@ ALLOWED_FIXTURE_ROOTS = (
 
 def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
     register_builtin_benchmark_extensions()
-    suite = get_suite(payload.suite_id)
+    resolved = _resolve_agent_payload(payload)
+    if (
+        resolved.mode == 'text_callable'
+        and resolved.text_callable == 'openai_codex'
+        and not resolved.agent_id
+    ):
+        raise ValueError('openai_codex execution requires an agent_id.')
+    suite = get_suite(resolved.suite_id)
     if suite is None:
-        raise ValueError(f'Unknown suite: {payload.suite_id}')
+        raise ValueError(f'Unknown suite: {resolved.suite_id}')
 
-    scenario_ids = list(payload.scenario_ids)
+    scenario_ids = list(resolved.scenario_ids)
     if not scenario_ids:
         scenario_ids = [item['id'] for item in suite.get('scenarios') or []]
         optional = suite.get('optional_scenarios') or []
-        if payload.mode in {'voice_fixture', 'pipecat_webrtc'} and optional:
+        if (
+            resolved.mode in {'voice_fixture', 'pipecat_webrtc'}
+            or resolved.text_callable == 'offline_acc_fixture'
+        ) and optional:
             scenario_ids = [optional[0]['id']]
         elif not scenario_ids and optional:
             scenario_ids = [optional[0]['id']]
@@ -67,22 +81,33 @@ def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
         raise ValueError('Duplicate scenario ids are not allowed.')
 
     _validate_scenarios(suite, scenario_ids)
-    _validate_fixture_mode_scenarios(payload, scenario_ids)
-    if payload.voice_fixture_path:
-        _repo_path(payload.voice_fixture_path)
-    if payload.audio_plan_path:
-        _repo_path(payload.audio_plan_path)
-    total = len(scenario_ids) * payload.iterations
+    _validate_fixture_mode_scenarios(resolved, scenario_ids)
+    if resolved.voice_fixture_path:
+        _repo_path(resolved.voice_fixture_path)
+    if resolved.audio_plan_path:
+        _repo_path(resolved.audio_plan_path)
+    total = len(scenario_ids) * resolved.iterations
     now = datetime.now(UTC).isoformat()
     execution_run_id = f'exec-{uuid.uuid4().hex[:12]}'
+    agent = get_agent(resolved.agent_id) if resolved.agent_id else None
+    if resolved.agent_id and agent is None:
+        raise ValueError(f'Unknown agent: {resolved.agent_id}')
+    model_name = (resolved.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
     record = ExecutionRunRecord(
         execution_run_id=execution_run_id,
         status='queued',
-        mode=payload.mode,
-        suite_id=payload.suite_id,
+        mode=resolved.mode,
+        suite_id=resolved.suite_id,
         scenario_ids=scenario_ids,
-        user_id=payload.user_id,
-        project_id=payload.project_id,
+        user_id=resolved.user_id,
+        project_id=resolved.project_id,
+        agent_id=resolved.agent_id,
+        agent_name=(agent or {}).get('name'),
+        model_name=model_name,
+        execution_snapshot={
+            'request': resolved.model_dump(mode='json'),
+            'agent': agent,
+        },
         progress=ExecutionRunProgress(
             phase='queued',
             completed_conversations=0,
@@ -100,6 +125,7 @@ def execute_execution_run(execution_run_id: str, payload: ExecutionRunCreateRequ
     run = execution_run_store.mark_execution_run_running(execution_run_id)
     if run is None:
         raise ValueError(f'Unknown execution run: {execution_run_id}')
+    resolved, agent_snapshot = _queued_execution_context(run, fallback=payload)
 
     output_dir = REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -108,21 +134,21 @@ def execute_execution_run(execution_run_id: str, payload: ExecutionRunCreateRequ
     try:
         jobs = [
             (scenario_id, iteration)
-            for iteration in range(1, payload.iterations + 1)
+            for iteration in range(1, resolved.iterations + 1)
             for scenario_id in run['scenario_ids']
         ]
         for scenario_id, iteration in jobs:
             conversation_id = f'{execution_run_id}-{scenario_id}-{iteration}'
-            suite = get_suite(payload.suite_id) or {}
+            suite = get_suite(resolved.suite_id) or {}
             execution_run_store.upsert_conversation(
                 execution_run_id,
                 ConversationRecord(
                     conversation_id=conversation_id,
                     execution_run_id=execution_run_id,
-                    suite_id=payload.suite_id,
+                    suite_id=resolved.suite_id,
                     scenario_id=scenario_id,
                     scenario_title=_scenario_title(suite, scenario_id),
-                    mode=payload.mode,
+                    mode=resolved.mode,
                     status='running',
                     iteration=iteration,
                     started_at=datetime.now(UTC).isoformat(),
@@ -130,24 +156,28 @@ def execute_execution_run(execution_run_id: str, payload: ExecutionRunCreateRequ
             )
             conversation = _run_one_conversation(
                 execution_run_id=execution_run_id,
-                suite_id=payload.suite_id,
+                suite_id=resolved.suite_id,
                 scenario_id=scenario_id,
                 iteration=iteration,
-                payload=payload,
+                payload=resolved,
+                agent_snapshot=agent_snapshot,
             )
             execution_run_store.upsert_conversation(execution_run_id, conversation)
-            if conversation.status != 'failed':
-                with inference_path.open('a', encoding='utf-8') as handle:
-                    handle.write(json.dumps(conversation.model_dump(mode='json'), ensure_ascii=True) + '\n')
+            # Failed conversations are evaluation evidence too. Preserve them in
+            # the inference set so all-failed and mixed runs remain auditable.
+            with inference_path.open('a', encoding='utf-8') as handle:
+                handle.write(json.dumps(conversation.model_dump(mode='json'), ensure_ascii=True) + '\n')
 
         latest = execution_run_store.get_execution_run(execution_run_id) or {}
         failed = any(item.get('status') == 'failed' for item in latest.get('conversations') or [])
         reviewed = any(item.get('verdict') == 'needs_review' for item in latest.get('conversations') or [])
         status = 'failed' if failed else 'needs_review' if reviewed else 'completed'
+        snapshot_rel = str((output_dir / 'run.json').relative_to(REPO_ROOT))
         return execution_run_store.complete_execution_run(
             execution_run_id,
             status=status,
             inference_set_path=str(inference_path.relative_to(REPO_ROOT)),
+            run_snapshot_path=snapshot_rel,
         ) or latest
     except Exception as exc:
         return execution_run_store.mark_execution_run_failed(execution_run_id, str(exc)) or {
@@ -164,6 +194,7 @@ def _run_one_conversation(
     scenario_id: str,
     iteration: int,
     payload: ExecutionRunCreateRequest,
+    agent_snapshot: dict[str, Any] | None = None,
 ) -> ConversationRecord:
     started = datetime.now(UTC).isoformat()
     conversation_id = f'{execution_run_id}-{scenario_id}-{iteration}'
@@ -172,7 +203,12 @@ def _run_one_conversation(
 
     try:
         if payload.mode == 'text_callable':
-            result = _execute_text_callable(suite_id, scenario_id, payload)
+            result = _execute_text_callable(
+                suite_id,
+                scenario_id,
+                payload,
+                agent_snapshot=agent_snapshot,
+            )
         elif payload.mode == 'pipecat_webrtc':
             result = asyncio.run(
                 _execute_pipecat_webrtc(
@@ -185,6 +221,12 @@ def _run_one_conversation(
             )
         else:
             result = asyncio.run(_execute_voice_fixture(suite_id, scenario_id, payload))
+        metrics_summary, timeline = build_metrics_and_timeline(
+            turns=result['turns'],
+            latency_marks=result.get('latency_marks') or [],
+            verdict=result.get('verdict'),
+            score=result.get('score'),
+        )
         return ConversationRecord(
             conversation_id=conversation_id,
             execution_run_id=execution_run_id,
@@ -199,6 +241,8 @@ def _run_one_conversation(
             action_trace=result.get('action_trace') or [],
             final_state=result.get('final_state') or {},
             latency_marks=result.get('latency_marks') or [],
+            metrics_summary=metrics_summary,
+            timeline=timeline,
             recording=result.get('recording'),
             vcon_export=result.get('vcon_export'),
             vcon_export_summary=result.get('vcon_export_summary'),
@@ -229,10 +273,81 @@ def _run_one_conversation(
         )
 
 
-def _execute_text_callable(suite_id: str, scenario_id: str, payload: ExecutionRunCreateRequest) -> dict[str, Any]:
+def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCreateRequest:
+    model_name = (payload.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
+    if not payload.agent_id:
+        return payload.model_copy(update={'model_name': model_name})
+    agent = get_agent(payload.agent_id)
+    if agent is None:
+        raise ValueError(f'Unknown agent: {payload.agent_id}')
+    # An agent supplies defaults, but the advanced target-mode control is an
+    # explicit per-run override.  Pydantic retains whether `mode` appeared in
+    # the request, letting callers omit it to opt into the saved agent target.
+    if 'mode' in payload.model_fields_set:
+        updates: dict[str, Any] = {
+            'agent_id': agent['id'],
+            'model_name': model_name,
+        }
+        if (
+            payload.mode == 'text_callable'
+            and 'text_callable' not in payload.model_fields_set
+            and str(agent.get('target') or '') in {'mock_agent', 'openai_codex', 'offline_acc_fixture'}
+        ):
+            updates['text_callable'] = str(agent['target'])
+        return payload.model_copy(
+            update=updates
+        )
+    target = str(agent.get('target') or 'mock_agent')
+    channel = str(agent.get('channel') or 'text')
+    # Text + offline_acc_fixture stays text_callable; only force voice for voice channel or voice_fixture target.
+    if channel == 'voice' or target == 'voice_fixture':
+        mode = 'voice_fixture'
+        text_callable = payload.text_callable
+    else:
+        mode = 'text_callable'
+        text_callable = target if target in {'mock_agent', 'openai_codex', 'offline_acc_fixture'} else 'mock_agent'
+    return payload.model_copy(
+        update={
+            'mode': mode,
+            'text_callable': text_callable,
+            'agent_id': agent['id'],
+            'model_name': model_name,
+        }
+    )
+
+
+def _queued_execution_context(
+    run: dict[str, Any],
+    *,
+    fallback: ExecutionRunCreateRequest,
+) -> tuple[ExecutionRunCreateRequest, dict[str, Any] | None]:
+    """Read the immutable request/agent snapshot saved before the run was queued."""
+    snapshot = run.get('execution_snapshot')
+    if isinstance(snapshot, dict) and isinstance(snapshot.get('request'), dict):
+        request = ExecutionRunCreateRequest.model_validate(snapshot['request'])
+        agent = snapshot.get('agent')
+        return request, agent if isinstance(agent, dict) else None
+    # Compatibility for a run queued before snapshots existed.
+    return _resolve_agent_payload(fallback), None
+
+
+def _execute_text_callable(
+    suite_id: str,
+    scenario_id: str,
+    payload: ExecutionRunCreateRequest,
+    *,
+    agent_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     callable_id = payload.text_callable
     if callable_id == 'offline_acc_fixture':
         return _evidence_from_offline_fixture(suite_id, scenario_id, payload, evaluate=payload.evaluate)
+    if callable_id == 'openai_codex':
+        return _execute_openai_codex_text_agent(
+            suite_id,
+            scenario_id,
+            payload,
+            agent_snapshot=agent_snapshot,
+        )
     if callable_id != 'mock_agent':
         raise ValueError(f'Unsupported text callable: {callable_id}')
 
@@ -274,6 +389,105 @@ def _execute_text_callable(suite_id: str, scenario_id: str, payload: ExecutionRu
         'verdict': report.get('verdict'),
         'score': report.get('overall_score'),
     }
+
+
+def _execute_openai_codex_text_agent(
+    suite_id: str,
+    scenario_id: str,
+    payload: ExecutionRunCreateRequest,
+    *,
+    agent_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Run a connected OpenAI Codex text agent and persist only real model evidence.
+
+    There is no fake tool trace or completion state here: a model without connected
+    business tools must leave those claims unproven for the benchmark to surface.
+    """
+    if not payload.agent_id:
+        raise ValueError('openai_codex execution requires an agent_id.')
+    agent = agent_snapshot or get_agent(payload.agent_id)
+    if agent is None:
+        raise ValueError(f'Unknown agent: {payload.agent_id}')
+    scenario = _scenario_definition(suite_id, scenario_id)
+
+    provider = get_provider('openai')
+    status = provider.status()
+    if status.get('status') != 'connected':
+        raise ValueError(
+            status.get('message')
+            or 'Connect OpenAI (Codex OAuth) before launching an openai_codex agent.'
+        )
+    model_name = (payload.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
+    response_text = provider.complete(_openai_agent_prompt(agent, scenario), model_name=model_name).strip()
+    if not response_text:
+        raise RuntimeError('OpenAI Codex returned an empty agent response.')
+
+    caller_text = str(scenario.get('persona') or scenario.get('goal') or scenario_id).strip()
+    transcript = f'User: {caller_text}\nAgent: {response_text}'
+    final_state = {
+        'complete': False,
+        'outcome': 'model_response_recorded',
+        'runtime_provenance': {
+            'target': 'openai_codex',
+            'provider': status.get('provider') or 'openai_codex',
+            'model_name': model_name,
+            'fixture_backed': False,
+            'live_tool_execution': False,
+        },
+    }
+    report: dict[str, Any] = {}
+    if payload.evaluate:
+        report = run_scenario(
+            BenchmarkRunRequest(
+                suite_id=suite_id,
+                scenario_id=scenario_id,
+                transcript=transcript,
+                action_trace=[],
+                final_state=final_state,
+                user_id=payload.user_id,
+                project_id=payload.project_id,
+            )
+        )
+    return {
+        'turns': [
+            ConversationTurn(turn_index=1, speaker='user', text=caller_text),
+            ConversationTurn(turn_index=2, speaker='agent', text=response_text),
+        ],
+        'transcript': transcript,
+        'action_trace': [],
+        'final_state': final_state,
+        'latency_marks': [],
+        'verdict': report.get('verdict'),
+        'score': report.get('overall_score'),
+    }
+
+
+def _scenario_definition(suite_id: str, scenario_id: str) -> dict[str, Any]:
+    suite = get_suite(suite_id) or {}
+    for collection_name in ('scenarios', 'optional_scenarios'):
+        for candidate in suite.get(collection_name) or []:
+            if isinstance(candidate, dict) and candidate.get('id') == scenario_id:
+                return candidate
+    raise ValueError(f'Unknown scenario: {suite_id}/{scenario_id}')
+
+
+def _openai_agent_prompt(agent: dict[str, Any], scenario: dict[str, Any]) -> str:
+    name = str(agent.get('name') or 'Support agent').strip()
+    description = str(agent.get('description') or '').strip()
+    required_actions = ', '.join(str(item) for item in scenario.get('required_actions') or []) or 'none listed'
+    forbidden_actions = ', '.join(str(item) for item in scenario.get('forbidden_actions') or []) or 'none listed'
+    return (
+        f'You are {name}, a text support agent being evaluated.\n'
+        f'Agent description: {description or "No additional instructions provided."}\n\n'
+        f'Scenario: {scenario.get("title") or scenario.get("id")}\n'
+        f'Caller context: {scenario.get("persona") or "Not provided."}\n'
+        f'Goal: {scenario.get("goal") or "Not provided."}\n'
+        f'Required behavior to cover where possible: {required_actions}.\n'
+        f'Forbidden behavior: {forbidden_actions}.\n\n'
+        'Reply to the caller only. Be helpful and concise. Do not claim you performed a tool, '
+        'account, billing, or policy action unless the caller supplied evidence that it happened. '
+        'Ask for required verification or hand off when a live tool/action would be needed.'
+    )
 
 
 def _evidence_from_offline_fixture(

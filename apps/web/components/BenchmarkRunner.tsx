@@ -255,6 +255,63 @@ interface ProductConfig {
   llm_judge_status: 'planned' | 'gated' | 'enabled';
 }
 
+interface OpenAIProviderStatus {
+  id?: string;
+  provider?: string;
+  status: 'connected' | 'disconnected' | 'expired' | string;
+  email?: string | null;
+  account_id?: string | null;
+  plan_type?: string | null;
+  message?: string | null;
+  last_error?: string | null;
+}
+
+const DEFAULT_EXECUTION_MODEL = 'gpt-5.4';
+const FALLBACK_EXECUTION_MODELS = [
+  'gpt-5.4',
+  'gpt-5.4-mini',
+  'gpt-5.2',
+  'gpt-4.1',
+  'gpt-4.1-mini',
+  'gpt-4o',
+  'o3',
+  'o3-mini',
+  'o4-mini',
+];
+
+async function fetchOpenAIModels(): Promise<{ models: string[]; message: string | null }> {
+  const response = await fetch(`${getApiBase()}/api/product/providers/openai/models`, { cache: 'no-store' });
+  if (response.status === 401) {
+    return { models: [DEFAULT_EXECUTION_MODEL], message: 'Connect OpenAI to load models' };
+  }
+  if (!response.ok) {
+    // Never leave the dropdown empty on transient API failures.
+    return {
+      models: FALLBACK_EXECUTION_MODELS,
+      message: 'Using built-in model list. Re-connect OpenAI to refresh.',
+    };
+  }
+  const payload = await handleJson<{
+    models?: Array<{ id?: string } | string>;
+    default_model?: string;
+    message?: string | null;
+    source?: string;
+  }>(response);
+  const ids = (payload.models ?? [])
+    .map((item) => (typeof item === 'string' ? item : item.id))
+    .filter((id): id is string => Boolean(id && id.trim()));
+  const merged = Array.from(new Set([DEFAULT_EXECUTION_MODEL, ...ids]));
+  merged.sort((a, b) => {
+    if (a === DEFAULT_EXECUTION_MODEL) return -1;
+    if (b === DEFAULT_EXECUTION_MODEL) return 1;
+    return a.localeCompare(b);
+  });
+  return {
+    models: merged.length ? merged : FALLBACK_EXECUTION_MODELS,
+    message: typeof payload.message === 'string' && payload.message.trim() ? payload.message : null,
+  };
+}
+
 interface SavedRun {
   id: string;
   project_id: string;
@@ -579,6 +636,16 @@ function getApiBase() {
   return '';
 }
 
+function executionAnalysisHref(executionRunId: string) {
+  const params = new URLSearchParams();
+  if (typeof window !== 'undefined') {
+    const apiBase = new URLSearchParams(window.location.search).get('api_base');
+    if (apiBase) params.set('api_base', apiBase);
+  }
+  const query = params.toString();
+  return `/runs/${executionRunId}${query ? `?${query}` : ''}`;
+}
+
 async function handleJson<T>(response: Response): Promise<T> {
   const text = await response.text();
 
@@ -655,7 +722,11 @@ function normalizeSuites(payload: unknown): BenchmarkSuite[] {
   return rawSuites.map((item) => {
     const suite = asRecord(item);
     const id = String(suite.id ?? suite.suite_id ?? crypto.randomUUID());
-    const scenarios = Array.isArray(suite.scenarios) ? suite.scenarios.map((scenario) => normalizeScenario(scenario, id)) : [];
+    const rawScenarios = [
+      ...(Array.isArray(suite.scenarios) ? suite.scenarios : []),
+      ...(Array.isArray(suite.optional_scenarios) ? suite.optional_scenarios : []),
+    ];
+    const scenarios = rawScenarios.map((scenario) => normalizeScenario(scenario, id));
 
     return {
       id,
@@ -666,8 +737,10 @@ function normalizeSuites(payload: unknown): BenchmarkSuite[] {
   });
 }
 
-async function fetchBenchmarkSuites(): Promise<BenchmarkSuite[]> {
-  const suites = await handleJson<unknown>(await fetch(`${getApiBase()}/api/benchmarks/suites`, { cache: 'no-store' }));
+async function fetchBenchmarkSuites(signal?: AbortSignal): Promise<BenchmarkSuite[]> {
+  const suites = await handleJson<unknown>(
+    await fetch(`${getApiBase()}/api/benchmarks/suites`, { cache: 'no-store', signal }),
+  );
   const normalizedSuites = normalizeSuites(suites);
 
   return Promise.all(
@@ -783,10 +856,6 @@ async function enqueueBenchmarkSuiteSimulation(payload: {
   );
 }
 
-async function fetchProductConfig(): Promise<ProductConfig> {
-  return handleJson<ProductConfig>(await fetch(`${getApiBase()}/api/product/config`, { cache: 'no-store' }));
-}
-
 async function saveBenchmarkRun(payload: {
   user_id: string;
   project_id: string;
@@ -868,6 +937,10 @@ interface ExecutionRunRecord {
   };
   conversations: ExecutionConversationRecord[];
   inference_set_path?: string | null;
+  run_snapshot_path?: string | null;
+  agent_id?: string | null;
+  agent_name?: string | null;
+  model_name?: string | null;
   error?: string | null;
   created_at: string;
   updated_at: string;
@@ -883,6 +956,8 @@ async function createExecutionRun(payload: {
   user_id: string;
   project_id: string;
   evaluate?: boolean;
+  agent_id?: string;
+  model_name?: string;
 }) {
   return handleJson<ExecutionRunRecord>(
     await fetch(`${getApiBase()}/api/execution/runs`, {
@@ -891,6 +966,37 @@ async function createExecutionRun(payload: {
       body: JSON.stringify(payload),
     }),
   );
+}
+
+type ScoreAgentOption = {
+  id: string;
+  name: string;
+  channel: string;
+  target: string;
+  metadata?: {
+    model_name?: string | null;
+    prompt_version?: string | null;
+  };
+};
+
+async function listAgents(): Promise<ScoreAgentOption[]> {
+  const payload = await handleJson<{ agents?: ScoreAgentOption[] }>(
+    await fetch(`${getApiBase()}/api/agents`, { cache: 'no-store' }),
+  );
+  return payload.agents ?? [];
+}
+
+function applyAgentProfileDefaults(
+  agent: ScoreAgentOption,
+  setters: {
+    setAgentProfile: (value: string) => void;
+    setModelName: (value: string) => void;
+    setPromptVersion: (value: string) => void;
+  },
+) {
+  setters.setAgentProfile(agent.name);
+  if (agent.metadata?.model_name) setters.setModelName(agent.metadata.model_name);
+  if (agent.metadata?.prompt_version) setters.setPromptVersion(agent.metadata.prompt_version);
 }
 
 async function fetchExecutionRun(userId: string, executionRunId: string) {
@@ -1104,6 +1210,36 @@ function downloadJson(filename: string, payload: unknown) {
   link.click();
   link.remove();
   URL.revokeObjectURL(href);
+}
+
+async function fetchProductConfig(): Promise<ProductConfig> {
+  return handleJson<ProductConfig>(await fetch(`${getApiBase()}/api/product/config`, { cache: 'no-store' }));
+}
+
+async function fetchOpenAIProviderStatus() {
+  return handleJson<OpenAIProviderStatus>(
+    await fetch(`${getApiBase()}/api/product/providers/openai/status`, { cache: 'no-store' }),
+  );
+}
+
+async function startOpenAIProviderOAuth() {
+  return handleJson<{ authorize_url: string; redirect_uri: string; provider?: string }>(
+    await fetch(`${getApiBase()}/api/product/providers/openai/oauth/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    }),
+  );
+}
+
+async function disconnectOpenAIProvider() {
+  return handleJson<OpenAIProviderStatus>(
+    await fetch(`${getApiBase()}/api/product/providers/openai/disconnect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    }),
+  );
 }
 
 async function requestJudge(payload: { plan: PricingPlan['id']; report: BenchmarkReport; transcript: string; user_id?: string; project_id?: string }) {
@@ -1827,10 +1963,111 @@ async function copyText(text: string) {
   }
 }
 
-export function BenchmarkRunner() {
+export type BenchmarkRunnerView = 'all' | 'simulate' | 'score' | 'run';
+
+const WORKFLOW_DEMO_PRESETS: Record<string, { suiteId: string; scenarioId: string }> = {
+  'angry-caller': { suiteId: 'call-center-voice-ai', scenarioId: 'angry-outage-escalation' },
+  'sample-evidence': { suiteId: 'call-center-voice-ai', scenarioId: 'billing-address-change' },
+};
+
+function readWorkflowDemoPreset() {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  const suiteId = params.get('suite_id');
+  const scenarioId = params.get('scenario_id');
+  if (suiteId && scenarioId) return { suiteId, scenarioId };
+  const demo = params.get('demo');
+  if (!demo) return null;
+  return WORKFLOW_DEMO_PRESETS[demo] ?? null;
+}
+
+function shouldPreloadSampleEvidence() {
+  if (typeof window === 'undefined') return false;
+  const params = new URLSearchParams(window.location.search);
+  return params.get('demo') === 'sample-evidence' || params.get('sample') === '1';
+}
+
+function transcriptFromVcon(vcon: JsonRecord): string {
+  const parties = Array.isArray(vcon.parties) ? vcon.parties : [];
+  const dialog = Array.isArray(vcon.dialog) ? vcon.dialog : [];
+  return dialog
+    .map((item) => {
+      const record = asRecord(item);
+      const partyIndex = Number(record.party ?? 0);
+      const party = asRecord(parties[partyIndex]);
+      const name = String(party.name ?? party.role ?? `party-${partyIndex}`);
+      const body = String(record.body ?? record.text ?? '').trim();
+      return body ? `${name}: ${body}` : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function sampleVconFromTranscript(transcriptText: string): string {
+  const lines = transcriptText
+    .split(/\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const parties = [{ name: 'Caller' }, { name: 'Agent' }];
+  const dialog = lines.map((line) => {
+    const matched = line.match(/^(caller|agent|user|customer)\s*:\s*(.*)$/i);
+    if (matched) {
+      const speaker = matched[1].toLowerCase();
+      const party = speaker === 'agent' ? 1 : 0;
+      return { party, body: matched[2] };
+    }
+    return { party: 0, body: line };
+  });
+  return JSON.stringify({ vcon: '0.0.1', parties, dialog }, null, 2);
+}
+
+function describeUploadedEvidence(filename: string, text: string): {
+  kind: 'vcon' | 'transcript';
+  transcript?: string;
+  vcon?: string;
+  message: string;
+} {
+  const trimmed = text.trim();
+  const lower = filename.toLowerCase();
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const record = asRecord(parsed);
+      const looksVcon =
+        lower.endsWith('.vcon')
+        || typeof record.vcon === 'string'
+        || (Array.isArray(record.parties) && Array.isArray(record.dialog));
+      if (looksVcon) {
+        const derived = transcriptFromVcon(record);
+        return {
+          kind: 'vcon',
+          vcon: JSON.stringify(parsed, null, 2),
+          transcript: derived || undefined,
+          message: `Loaded vCon from ${filename}.`,
+        };
+      }
+      if (typeof record.transcript === 'string') {
+        return {
+          kind: 'transcript',
+          transcript: record.transcript,
+          message: `Loaded transcript from ${filename}.`,
+        };
+      }
+    }
+  } catch {
+    // Plain text transcript.
+  }
+  return {
+    kind: 'transcript',
+    transcript: trimmed,
+    message: `Loaded transcript from ${filename}.`,
+  };
+}
+
+export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }) {
   const loadingSavedRunRef = useRef(false);
+  const autoLaunchDemoRef = useRef(false);
   const [suites, setSuites] = useState<BenchmarkSuite[]>([]);
-  const [productConfig, setProductConfig] = useState<ProductConfig | null>(null);
   const [selectedSuiteId, setSelectedSuiteId] = useState('');
   const [selectedScenarioId, setSelectedScenarioId] = useState('');
   const [transcript, setTranscript] = useState('');
@@ -1852,6 +2089,7 @@ export function BenchmarkRunner() {
   const [userId, setUserId] = useState('');
   const [projectId, setProjectId] = useState('call-center-demo');
   const [plan, setPlan] = useState<PricingPlan['id']>('free');
+  const [productConfig, setProductConfig] = useState<ProductConfig | null>(null);
   const [savedRuns, setSavedRuns] = useState<SavedRun[]>([]);
   const [suiteSavedRuns, setSuiteSavedRuns] = useState<SavedRun[]>([]);
   const [auditEvents, setAuditEvents] = useState<ProductAuditEvent[]>([]);
@@ -1865,6 +2103,9 @@ export function BenchmarkRunner() {
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [judgeGate, setJudgeGate] = useState<JudgeGate | null>(null);
+  const [openaiProvider, setOpenaiProvider] = useState<OpenAIProviderStatus | null>(null);
+  const [openaiProviderMessage, setOpenaiProviderMessage] = useState<string | null>(null);
+  const [isConnectingOpenAI, setIsConnectingOpenAI] = useState(false);
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
@@ -1873,12 +2114,25 @@ export function BenchmarkRunner() {
   const [isSimulating, setIsSimulating] = useState(false);
   const [isEnqueueingSuite, setIsEnqueueingSuite] = useState(false);
   const [executionMode, setExecutionMode] = useState<'text_callable' | 'voice_fixture' | 'pipecat_webrtc'>('text_callable');
-  const [executionTextCallable, setExecutionTextCallable] = useState('mock_agent');
   const [executionScope, setExecutionScope] = useState<'selected' | 'suite'>('selected');
   const [executionIterations, setExecutionIterations] = useState(1);
   const [executionRun, setExecutionRun] = useState<ExecutionRunRecord | null>(null);
   const [isLaunchingExecution, setIsLaunchingExecution] = useState(false);
   const [executionMessage, setExecutionMessage] = useState<string | null>(null);
+  const [executionModelName, setExecutionModelName] = useState(DEFAULT_EXECUTION_MODEL);
+  const [executionModelOptions, setExecutionModelOptions] = useState<string[]>([DEFAULT_EXECUTION_MODEL]);
+  const [executionModelsMessage, setExecutionModelsMessage] = useState<string | null>(null);
+  const [agents, setAgents] = useState<ScoreAgentOption[]>([]);
+  const [agentsLoaded, setAgentsLoaded] = useState(false);
+  const [selectedAgentId, setSelectedAgentId] = useState('');
+  const selectedScoreAgent = useMemo(
+    () => agents.find((agent) => agent.id === selectedAgentId) ?? null,
+    [agents, selectedAgentId],
+  );
+  const [showSimulateEvidenceOptions, setShowSimulateEvidenceOptions] = useState(false);
+  const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+  const [catalogReloadKey, setCatalogReloadKey] = useState(0);
+  const suiteLoadRequestRef = useRef(0);
 
   const selectedSuite = useMemo(
     () => suites.find((suite) => suite.id === selectedSuiteId) ?? suites[0] ?? null,
@@ -1888,53 +2142,230 @@ export function BenchmarkRunner() {
     () => selectedSuite?.scenarios.find((scenario) => scenario.id === selectedScenarioId) ?? selectedSuite?.scenarios[0] ?? null,
     [selectedScenarioId, selectedSuite],
   );
-
   function loadScenarioStarterData(nextScenario = selectedScenario) {
     if (!nextScenario) return;
 
-    setTranscript(nextScenario.sample_transcript ?? '');
+    const nextTranscript = nextScenario.sample_transcript ?? '';
+    setTranscript(nextTranscript);
     setActionTrace(stringifyEditable(nextScenario.sample_action_trace, '[]'));
     setFinalState(stringifyEditable(nextScenario.sample_final_state ?? nextScenario.expected_final_state, '{}'));
     setCallEvidence('');
     setGroupCall('');
-    setVconEvidence('');
+    setVconEvidence(nextTranscript ? sampleVconFromTranscript(nextTranscript) : '');
     setReport(null);
     setSuiteSimulation(null);
     setSaveMessage(null);
     setJudgeGate(null);
     setCopyMessage(null);
     setRunError(null);
+    setUploadMessage(null);
+  }
+
+  function onLoadSampleEvidence(scenario: BenchmarkScenario) {
+    setSelectedScenarioId(scenario.id);
+    loadScenarioStarterData(scenario);
+    setShowSimulateEvidenceOptions(false);
+    setUploadMessage(`Loaded sample evidence: ${scenario.title}. This evidence is synthetic.`);
+  }
+
+  async function onUploadEvidenceFile(file: File | null) {
+    if (!file) return;
+    setUploadMessage(null);
+    setRunError(null);
+    try {
+      const text = await file.text();
+      const loaded = describeUploadedEvidence(file.name, text);
+      if (loaded.kind === 'vcon') {
+        setVconEvidence(loaded.vcon || '');
+        if (loaded.transcript) setTranscript(loaded.transcript);
+        setCallEvidence('');
+      } else {
+        setTranscript(loaded.transcript || '');
+        setVconEvidence('');
+      }
+      setReport(null);
+      setUploadMessage(loaded.message);
+    } catch (err) {
+      setRunError(err instanceof Error ? err.message : 'Could not read the uploaded file.');
+    }
   }
 
   useEffect(() => {
-    let isMounted = true;
+    const requestId = suiteLoadRequestRef.current + 1;
+    suiteLoadRequestRef.current = requestId;
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timeoutId = window.setTimeout(() => controller?.abort(), 12000);
 
     async function loadSuites() {
       setIsLoading(true);
       setLoadError(null);
 
       try {
-        const nextSuites = await fetchBenchmarkSuites();
-        const nextConfig = await fetchProductConfig();
-        if (!isMounted) return;
+        const nextSuites = await fetchBenchmarkSuites(controller?.signal);
+        if (suiteLoadRequestRef.current !== requestId) return;
         setSuites(nextSuites);
-        setProductConfig(nextConfig);
-        setSelectedSuiteId(nextSuites[0]?.id ?? '');
-        setSelectedScenarioId(nextSuites[0]?.scenarios[0]?.id ?? '');
+        const preset = readWorkflowDemoPreset();
+        const presetSuite = preset ? nextSuites.find((suite) => suite.id === preset.suiteId) : null;
+        const presetScenario = presetSuite?.scenarios.find((scenario) => scenario.id === preset?.scenarioId) ?? null;
+        if (presetSuite && presetScenario) {
+          setSelectedSuiteId(presetSuite.id);
+          setSelectedScenarioId(presetScenario.id);
+        } else {
+          const preferred =
+            view === 'run'
+              ? nextSuites.find((suite) => suite.id === 'call-center-voice-ai') ?? nextSuites[0]
+              : nextSuites[0];
+          setSelectedSuiteId(preferred?.id ?? '');
+          setSelectedScenarioId(preferred?.scenarios[0]?.id ?? '');
+        }
+        if (!nextSuites.length) {
+          setLoadError('No benchmark suites are available from the API yet.');
+        }
       } catch (err) {
-        if (!isMounted) return;
-        setLoadError(err instanceof Error ? err.message : 'Could not load benchmark suites');
+        if (suiteLoadRequestRef.current !== requestId) return;
+        setSuites([]);
+        setSelectedSuiteId('');
+        setSelectedScenarioId('');
+        const aborted = typeof err === 'object' && err !== null && 'name' in err && (err as { name?: string }).name === 'AbortError';
+        setLoadError(
+          aborted
+            ? 'Timed out loading benchmark suites. Check that the API is running and reachable.'
+            : err instanceof Error
+              ? err.message
+              : 'Could not load benchmark suites',
+        );
       } finally {
-        if (isMounted) setIsLoading(false);
+        window.clearTimeout(timeoutId);
+        if (suiteLoadRequestRef.current === requestId) {
+          setIsLoading(false);
+        }
+      }
+
+      if (suiteLoadRequestRef.current !== requestId) return;
+      try {
+        const nextConfig = await fetchProductConfig();
+        const nextOpenAI = await fetchOpenAIProviderStatus().catch(() => null);
+        if (suiteLoadRequestRef.current !== requestId) return;
+        setProductConfig(nextConfig);
+        if (nextOpenAI) setOpenaiProvider(nextOpenAI);
+      } catch {
+        // Suites can still run without product config / OpenAI status.
       }
     }
 
     void loadSuites();
 
     return () => {
-      isMounted = false;
+      controller?.abort();
+      window.clearTimeout(timeoutId);
+      if (suiteLoadRequestRef.current === requestId) {
+        suiteLoadRequestRef.current = requestId + 1;
+      }
+    };
+  }, [catalogReloadKey, view]);
+
+  useEffect(() => {
+    let active = true;
+    async function loadExecutionModels() {
+      if (openaiProvider?.status !== 'connected') {
+        setExecutionModelOptions([DEFAULT_EXECUTION_MODEL, ...FALLBACK_EXECUTION_MODELS.filter((id) => id !== DEFAULT_EXECUTION_MODEL)]);
+        setExecutionModelsMessage('Connect OpenAI to load models');
+        setExecutionModelName((current) => current || DEFAULT_EXECUTION_MODEL);
+        return;
+      }
+      try {
+        const { models, message } = await fetchOpenAIModels();
+        if (!active) return;
+        setExecutionModelOptions(models);
+        setExecutionModelsMessage(message);
+        setExecutionModelName((current) => (models.includes(current) ? current : DEFAULT_EXECUTION_MODEL));
+      } catch {
+        if (!active) return;
+        setExecutionModelOptions(FALLBACK_EXECUTION_MODELS);
+        setExecutionModelsMessage('Using built-in model list. Re-connect OpenAI to refresh.');
+        setExecutionModelName((current) => current || DEFAULT_EXECUTION_MODEL);
+      }
+    }
+    void loadExecutionModels();
+    return () => {
+      active = false;
+    };
+  }, [openaiProvider?.status]);
+
+  useEffect(() => {
+    let active = true;
+    setAgentsLoaded(false);
+    listAgents()
+      .then((next) => {
+        if (!active) return;
+        setAgents(next);
+        const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+        const fromQuery = params?.get('agent_id');
+        const matched = fromQuery ? next.find((item) => item.id === fromQuery) : null;
+        const fallback = next.find((a) => a.id === 'mock-text-agent') ?? next[0] ?? null;
+        const selected = matched ?? fallback;
+        const nextId = selected?.id || '';
+        setSelectedAgentId(nextId);
+        if (selected) {
+          applyAgentProfileDefaults(selected, { setAgentProfile, setModelName, setPromptVersion });
+        }
+        if (matched) {
+          if (matched.channel === 'voice' || matched.target === 'voice_fixture') {
+            setExecutionMode('voice_fixture');
+          } else {
+            setExecutionMode('text_callable');
+          }
+        }
+        setAgentsLoaded(true);
+      })
+      .catch(() => {
+        if (!active) return;
+        setAgents([]);
+        setAgentsLoaded(true);
+      });
+    return () => {
+      active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (view !== 'run' || typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('launch') !== 'demo' && !params.get('agent_id')) return;
+    document.getElementById('launch-agent')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [view]);
+
+  useEffect(() => {
+    if (view !== 'run' || typeof window === 'undefined') return;
+    if (autoLaunchDemoRef.current || isLoading || isLaunchingExecution || !selectedSuite || !agentsLoaded || !openaiProvider) return;
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('launch') !== 'demo') return;
+
+    const wantedAgentId = params.get('agent_id');
+    if (!selectedAgentId || (wantedAgentId && selectedAgentId !== wantedAgentId)) return;
+
+    if (executionMode === 'text_callable' && !selectedScenario) return;
+
+    autoLaunchDemoRef.current = true;
+    setExecutionMessage('Starting try-it-out run…');
+    void onLaunchExecution({
+      redirectToAnalysis: true,
+      target: 'configured',
+    });
+    // Intentionally omit onLaunchExecution: including it retriggers auto-launch on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    view,
+    isLoading,
+    isLaunchingExecution,
+    selectedSuite,
+    selectedScenario,
+    selectedAgentId,
+    agentsLoaded,
+    executionMode,
+    openaiProvider,
+  ]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -1976,10 +2407,14 @@ export function BenchmarkRunner() {
       listSavedRuns(userId, projectId, selectedSuite.id).catch(() => []),
       listAuditEvents(userId, projectId).catch(() => []),
       listBenchmarkSuiteRuns(userId, projectId, selectedSuite.id, suiteRunStatusFilter).catch(() => []),
-      fetchProjectRegressionSummary(userId, projectId).catch(() => null),
-      fetchProjectRegressionSummary(userId, projectId, selectedSuite.id, selectedScenario.id).catch(() => null),
     ])
-      .then(([runs, nextSuiteSavedRuns, events, nextSuiteRuns, summary, scenarioSummary]) => {
+      .then(async ([runs, nextSuiteSavedRuns, events, nextSuiteRuns]) => {
+        const [summary, scenarioSummary] = await Promise.all([
+          nextSuiteSavedRuns.length ? fetchProjectRegressionSummary(userId, projectId).catch(() => null) : Promise.resolve(null),
+          runs.length
+            ? fetchProjectRegressionSummary(userId, projectId, selectedSuite.id, selectedScenario.id).catch(() => null)
+            : Promise.resolve(null),
+        ]);
         if (!isMounted) return;
         setSavedRuns(runs);
         setSuiteSavedRuns(nextSuiteSavedRuns);
@@ -2043,9 +2478,10 @@ export function BenchmarkRunner() {
       return;
     }
 
-    setTranscript(selectedScenario.sample_transcript ?? '');
-    setActionTrace(stringifyEditable(selectedScenario.sample_action_trace, '[]'));
-    setFinalState(stringifyEditable(selectedScenario.sample_final_state ?? selectedScenario.expected_final_state, '{}'));
+    const preloadSample = view !== 'score' || shouldPreloadSampleEvidence();
+    setTranscript(preloadSample ? selectedScenario.sample_transcript ?? '' : '');
+    setActionTrace(preloadSample ? stringifyEditable(selectedScenario.sample_action_trace, '[]') : '');
+    setFinalState(preloadSample ? stringifyEditable(selectedScenario.sample_final_state ?? selectedScenario.expected_final_state, '{}') : '');
     setCallEvidence('');
     setGroupCall('');
     setVconEvidence('');
@@ -2055,7 +2491,10 @@ export function BenchmarkRunner() {
     setJudgeGate(null);
     setCopyMessage(null);
     setRunError(null);
-  }, [selectedScenario]);
+    setUploadMessage(preloadSample && view === 'score'
+      ? `Loaded sample evidence for ${selectedScenario.title}. This evidence is synthetic.`
+      : null);
+  }, [selectedScenario, view]);
 
   useEffect(() => {
     if (!userId || !projectId || !selectedSuite?.id) return;
@@ -2081,8 +2520,8 @@ export function BenchmarkRunner() {
         .then((next) => {
           setExecutionRun(next);
           if (!isActiveExecutionStatus(next.status)) {
-            const completed = next.progress.completed_conversations;
-            const total = next.progress.total_conversations;
+            const completed = next.progress?.completed_conversations ?? 0;
+            const total = next.progress?.total_conversations ?? 0;
             setExecutionMessage(
               next.status === 'failed'
                 ? `Execution failed${next.error ? `: ${next.error}` : '.'}`
@@ -2119,13 +2558,6 @@ export function BenchmarkRunner() {
     if (nextProject !== projectId) setProjectId(nextProject);
     if (nextPlan !== plan) setPlan(nextPlan);
     return { userId: nextUser, projectId: nextProject, plan: nextPlan };
-  }
-
-  function updatePlan(nextPlan: PricingPlan['id']) {
-    setPlan(nextPlan);
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('conversation-evals-demo-plan', nextPlan);
-    }
   }
 
   async function refreshAuditTrail(overrideUserId = userId, overrideProjectId = projectId) {
@@ -2196,6 +2628,58 @@ export function BenchmarkRunner() {
       setSaveMessage(`Saved ${saved.length} suite runs to ${identity.projectId}.`);
     } catch (err) {
       setSaveMessage(err instanceof Error ? err.message : 'Could not save this suite.');
+    }
+  }
+
+  async function onConnectOpenAI() {
+    setIsConnectingOpenAI(true);
+    setOpenaiProviderMessage(null);
+    try {
+      const started = await startOpenAIProviderOAuth();
+      if (started.authorize_url && typeof window !== 'undefined') {
+        window.open(started.authorize_url, '_blank', 'noopener,noreferrer');
+      }
+      setOpenaiProviderMessage('Complete OpenAI login in the opened browser tab. This page will refresh when connected.');
+      const deadline = Date.now() + 120_000;
+      while (Date.now() < deadline) {
+        await delay(2000);
+        const status = await fetchOpenAIProviderStatus();
+        setOpenaiProvider(status);
+        if (status.status === 'connected') {
+          setOpenaiProviderMessage(`Connected as ${status.email || status.account_id || 'OpenAI account'}.`);
+          const nextConfig = await fetchProductConfig().catch(() => null);
+          if (nextConfig) setProductConfig(nextConfig);
+          const { models, message } = await fetchOpenAIModels().catch(() => ({
+            models: FALLBACK_EXECUTION_MODELS,
+            message: 'Using built-in model list. Re-connect OpenAI to refresh.',
+          }));
+          setExecutionModelOptions(models);
+          setExecutionModelsMessage(message);
+          setExecutionModelName((current) => (models.includes(current) ? current : DEFAULT_EXECUTION_MODEL));
+          break;
+        }
+      }
+    } catch (err) {
+      setOpenaiProviderMessage(err instanceof Error ? err.message : 'Could not start OpenAI OAuth.');
+    } finally {
+      setIsConnectingOpenAI(false);
+    }
+  }
+
+  async function onDisconnectOpenAI() {
+    setOpenaiProviderMessage(null);
+    try {
+      await disconnectOpenAIProvider();
+      const status = await fetchOpenAIProviderStatus();
+      setOpenaiProvider(status);
+      setExecutionModelOptions([DEFAULT_EXECUTION_MODEL]);
+      setExecutionModelsMessage('Connect OpenAI to load models');
+      setExecutionModelName(DEFAULT_EXECUTION_MODEL);
+      const nextConfig = await fetchProductConfig().catch(() => null);
+      if (nextConfig) setProductConfig(nextConfig);
+      setOpenaiProviderMessage('OpenAI disconnected.');
+    } catch (err) {
+      setOpenaiProviderMessage(err instanceof Error ? err.message : 'Could not disconnect OpenAI.');
     }
   }
 
@@ -2510,8 +2994,7 @@ export function BenchmarkRunner() {
     setExportMessage(`Exported ${records.length} vCon-compatible suite records.`);
   }
 
-  async function onSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function evaluateEvidence() {
     if (!selectedSuite || !selectedScenario) return;
 
     setIsRunning(true);
@@ -2547,6 +3030,11 @@ export function BenchmarkRunner() {
     } finally {
       setIsRunning(false);
     }
+  }
+
+  async function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await evaluateEvidence();
   }
 
   async function onSimulate() {
@@ -2585,16 +3073,44 @@ export function BenchmarkRunner() {
     }
   }
 
-  async function onLaunchExecution() {
-    if (!selectedSuite) return;
+  async function onLaunchExecution(options?: { redirectToAnalysis?: boolean; target?: 'live' | 'configured' }) {
+    if (!selectedSuite) return null;
     const identity = ensureDemoIdentity();
 
-    const voiceModes = executionMode === 'voice_fixture' || executionMode === 'pipecat_webrtc';
-    // Voice fixture / Pipecat WebRTC currently require the optional cancellation-rescue
-    // scenario on call-center-voice-ai; do not post that id against other suites.
+    const launchTarget = options?.target ?? 'live';
+    const liveModelRun = launchTarget === 'live';
+    if (liveModelRun && selectedScoreAgent?.channel !== 'text') {
+      setExecutionMessage('Live model execution currently supports text agents. Use Run fixture for this voice agent.');
+      return null;
+    }
+    if (liveModelRun && openaiProvider?.status !== 'connected') {
+      setExecutionMessage('Connect OpenAI before launching a live agent run.');
+      return null;
+    }
+
+    const fixtureBackedAgent = selectedScoreAgent?.target === 'voice_fixture' || selectedScoreAgent?.target === 'offline_acc_fixture';
+    const runMode = liveModelRun
+      ? 'text_callable'
+      : fixtureBackedAgent
+        ? executionMode
+        : 'text_callable';
+    const runTextCallable = liveModelRun
+      ? 'openai_codex'
+      : selectedScoreAgent?.target === 'offline_acc_fixture'
+        ? 'offline_acc_fixture'
+        : selectedScoreAgent?.target === 'openai_codex'
+          ? 'openai_codex'
+          : 'mock_agent';
+
+    const voiceModes = runMode === 'voice_fixture' || runMode === 'pipecat_webrtc';
+    const offlineFixtureText =
+      runMode === 'text_callable' && runTextCallable === 'offline_acc_fixture';
+    // Voice fixture, Pipecat WebRTC, and text offline_acc_fixture require the optional
+    // cancellation-rescue scenario on call-center-voice-ai; do not post other scenario ids.
+    const fixtureBackedRun = voiceModes || offlineFixtureText;
     const voiceSuiteId = 'call-center-voice-ai';
-    const suiteForRun = voiceModes ? voiceSuiteId : selectedSuite.id;
-    const scenarioIds = voiceModes
+    const suiteForRun = fixtureBackedRun ? voiceSuiteId : selectedSuite.id;
+    const scenarioIds = fixtureBackedRun
       ? ['cancellation-rescue']
       : executionScope === 'suite'
         ? selectedSuite.scenarios.map((scenario) => scenario.id)
@@ -2604,12 +3120,12 @@ export function BenchmarkRunner() {
 
     if (!scenarioIds.length) {
       setExecutionMessage('Select at least one scenario to execute.');
-      return;
+      return null;
     }
 
     const suiteNote =
-      voiceModes && selectedSuite.id !== voiceSuiteId
-        ? `Using suite ${voiceSuiteId} / cancellation-rescue for voice execution. `
+      fixtureBackedRun && (selectedSuite.id !== voiceSuiteId || offlineFixtureText)
+        ? `Using suite ${voiceSuiteId} / cancellation-rescue for fixture-backed execution. `
         : '';
 
     setIsLaunchingExecution(true);
@@ -2620,20 +3136,27 @@ export function BenchmarkRunner() {
       const queued = await createExecutionRun({
         suite_id: suiteForRun,
         scenario_ids: scenarioIds,
-        mode: executionMode,
-        text_callable: executionMode === 'text_callable' ? executionTextCallable : undefined,
+        mode: runMode,
+        text_callable: runMode === 'text_callable' ? runTextCallable : undefined,
         iterations: executionIterations,
         user_id: identity.userId,
         project_id: identity.projectId,
         evaluate: true,
+        agent_id: selectedAgentId || undefined,
+        model_name: executionModelName || DEFAULT_EXECUTION_MODEL,
       });
       setExecutionRun(queued);
       setExecutionMessage(
-        `${suiteNote}Execution queued (${queued.mode}). Streaming conversations as inference_set rows are written.`,
+        `${suiteNote || ''}Execution queued (${queued.mode}). Open /runs/${queued.execution_run_id} for analysis when complete.`,
       );
       listExecutionRuns(identity.userId, identity.projectId).catch(() => undefined);
+      if (options?.redirectToAnalysis && queued.execution_run_id) {
+        window.location.assign(executionAnalysisHref(queued.execution_run_id));
+      }
+      return queued;
     } catch (err) {
       setExecutionMessage(err instanceof Error ? err.message : 'Could not launch execution.');
+      return null;
     } finally {
       setIsLaunchingExecution(false);
     }
@@ -2750,9 +3273,6 @@ export function BenchmarkRunner() {
     ? report.suite_contract_manifest_sha256.slice(0, 12)
     : suiteManifestFingerprint ?? 'Not captured';
   const scenarioContractFingerprint = report?.scenario_contract_sha256 ? report.scenario_contract_sha256.slice(0, 12) : selectedScenarioManifestFingerprint ?? 'Not captured';
-  const deterministicRule = productConfig?.usage_rules.find((rule) => rule.id === 'deterministic_eval');
-  const judgeRule = productConfig?.usage_rules.find((rule) => rule.id === 'llm_judge');
-  const voiceRule = productConfig?.usage_rules.find((rule) => rule.id === 'voice_webrtc_minute');
   const hasRunnableEvidence = Boolean(
     transcript.trim() || actionTrace.trim() || finalState.trim() || callEvidence.trim() || groupCall.trim() || vconEvidence.trim(),
   );
@@ -2788,12 +3308,14 @@ export function BenchmarkRunner() {
     },
     {
       title: 'Run evidence check',
-      detail: report ? `Latest verdict: ${verdict ?? 'complete'}${score !== undefined ? ` at ${score}` : ''}.` : 'Simulate the scenario or run the benchmark against pasted evidence.',
+      detail: report ? `Latest verdict: ${verdict ?? 'complete'}${score !== undefined ? ` at ${score}` : ''}.` : view === 'score'
+        ? 'Evaluate the loaded or uploaded evidence against this scenario.'
+        : 'Run the benchmark against captured evidence.',
       done: Boolean(report),
       ready: hasRunnableEvidence && !isRunning && !isSimulating,
       actionLabel: report ? 'Run again' : hasRunnableEvidence ? 'Run sample now' : selectedScenario ? 'Load starter data first' : null,
       action: hasRunnableEvidence || report
-        ? () => void onSimulate()
+        ? view === 'score' ? () => void evaluateEvidence() : () => void onSimulate()
         : selectedScenario
           ? () => loadScenarioStarterData()
           : undefined,
@@ -2828,38 +3350,35 @@ export function BenchmarkRunner() {
 
   return (
     <section style={{ display: 'grid', gap: 20 }}>
-      {productConfig ? (
-        <section className="product-console product-console-compact" aria-label="Product plan controls">
-          <div className="console-panel">
-            <p className="eyebrow">Free browser eval</p>
-            <h2>Run deterministic checks now. Save runs and request LLM judge when ready.</h2>
-            <p>
-              This path is real: the browser sends transcript, action trace, and final state evidence to the benchmark API.
-              Paid gates control persistence, LLM judging, CI/API, and voice minutes. A demo identity is stored locally so save and history work without signup.
-            </p>
-            <div className="usage-strip">
-              <span>{deterministicRule?.credits ?? 1} credit browser eval</span>
-              <span>{judgeRule?.credits ?? 10} credits LLM judge</span>
-              <span>{voiceRule?.credits ?? 5} credits voice minute</span>
+      {(view === 'all' || (view === 'score' && Boolean(report))) ? (
+        <section className="card openai-provider-panel" aria-label="OpenAI judge provider">
+          <div className="openai-provider-control">
+            <div>
+              <p className="eyebrow">LLM judge</p>
+              <h2 style={{ margin: '4px 0 0', fontSize: 22 }}>Connect OpenAI for the local judge</h2>
+              <p style={{ margin: '8px 0 0', color: 'var(--muted)' }}>
+                {openaiProvider?.status === 'connected'
+                  ? `Connected${openaiProvider.email ? ` as ${openaiProvider.email}` : ''}${openaiProvider.plan_type ? ` (${openaiProvider.plan_type})` : ''}.`
+                  : openaiProvider?.message || `Connect Codex-style OpenAI OAuth to unlock LLM judging on scored evidence${productConfig?.llm_judge_status ? ` (${productConfig.llm_judge_status})` : ''}.`}
+              </p>
             </div>
-            <label className="demo-plan-control">
-              <span>Demo plan</span>
-              <select
-                aria-label="Demo plan"
-                value={plan}
-                onChange={(event) => updatePlan(event.target.value as PricingPlan['id'])}
-              >
-                <option value="free">Free</option>
-                <option value="starter">Starter</option>
-                <option value="team">Team</option>
-                <option value="business">Business</option>
-              </select>
-            </label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {openaiProvider?.status === 'connected' ? (
+                <button type="button" className="secondary-link" onClick={() => void onDisconnectOpenAI()}>
+                  Disconnect OpenAI
+                </button>
+              ) : (
+                <button type="button" className="primary-link" disabled={isConnectingOpenAI} onClick={() => void onConnectOpenAI()}>
+                  {isConnectingOpenAI ? 'Waiting for OpenAI…' : 'Connect OpenAI'}
+                </button>
+              )}
+            </div>
+            {openaiProviderMessage ? <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13 }}>{openaiProviderMessage}</p> : null}
           </div>
         </section>
       ) : null}
 
-      <section className="first-run-panel" aria-label="First run checklist">
+      {view === 'all' ? <section className="first-run-panel" aria-label="First run checklist">
         <div>
           <p className="eyebrow">First run checklist</p>
           <h2>Get from sample scenario to saved QA history.</h2>
@@ -2889,16 +3408,25 @@ export function BenchmarkRunner() {
             );
           })}
         </ol>
-      </section>
+      </section> : null}
 
-      <form onSubmit={onSubmit} className="card" style={{ padding: 24, display: 'grid', gap: 18 }}>
+      {/* /runs (view=run): omit suite/scenario contract panel — launch uses catalog defaults. */}
+      {view !== 'run' ? (
+      <form
+        onSubmit={onSubmit}
+        className="card"
+        style={{ padding: 24, display: 'grid', gap: 18 }}
+      >
         {loadError ? (
-          <div style={{ border: '1px solid var(--error-border)', background: 'var(--error-bg)', color: 'var(--error-text)', borderRadius: 8, padding: 12 }}>
-            {loadError}
+          <div style={{ border: '1px solid var(--error-border)', background: 'var(--error-bg)', color: 'var(--error-text)', borderRadius: 8, padding: 12, display: 'grid', gap: 8 }}>
+            <span>{loadError}</span>
+            <button type="button" className="secondary-link" onClick={() => setCatalogReloadKey((value) => value + 1)}>
+              Retry loading suites
+            </button>
           </div>
         ) : null}
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16 }}>
+        {view !== 'score' ? <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16 }}>
           <label style={{ display: 'grid', gap: 8 }}>
             <span style={{ fontWeight: 700 }}>Benchmark suite</span>
             <select
@@ -2926,11 +3454,11 @@ export function BenchmarkRunner() {
               ))}
             </select>
           </label>
-        </div>
+        </div> : null}
 
-        {isLoading ? <p style={{ margin: 0, color: 'var(--muted)' }}>Loading benchmark suites...</p> : null}
+        {view !== 'score' && isLoading ? <p style={{ margin: 0, color: 'var(--muted)' }}>Loading benchmark suites...</p> : null}
 
-        {selectedScenario ? (
+        {view === 'score' ? null : selectedScenario ? (
           <div
             aria-label="Selected scenario"
             style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, background: 'var(--panel-alt)', display: 'grid', gap: 10 }}
@@ -2985,79 +3513,240 @@ export function BenchmarkRunner() {
           </div>
         ) : null}
 
-        <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) auto', gap: 16, alignItems: 'end' }}>
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Agent profile</span>
-              <input
-                value={agentProfile}
-                onChange={(event) => setAgentProfile(event.target.value)}
-                placeholder="mock text agent"
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-              />
-            </label>
-            <label
-              style={{
-                minHeight: 46,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 10,
-                border: '1px solid var(--border)',
-                borderRadius: 8,
-                padding: '10px 12px',
-                fontWeight: 760,
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={includeFailure}
-                onChange={(event) => setIncludeFailure(event.target.checked)}
-              />
-              Failure baseline
-            </label>
+        {view !== 'score' ? (
+          <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 14 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) auto', gap: 16, alignItems: 'end' }}>
+              <label style={{ display: 'grid', gap: 8 }}>
+                <span style={{ fontWeight: 700 }}>Agent profile</span>
+                <input
+                  value={agentProfile}
+                  onChange={(event) => setAgentProfile(event.target.value)}
+                  placeholder="mock text agent"
+                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                />
+              </label>
+              <label
+                style={{
+                  minHeight: 46,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                  fontWeight: 760,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={includeFailure}
+                  onChange={(event) => setIncludeFailure(event.target.checked)}
+                />
+                Failure baseline
+              </label>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+              <label style={{ display: 'grid', gap: 8 }}>
+                <span style={{ fontWeight: 700 }}>Agent version</span>
+                <input
+                  value={agentVersion}
+                  onChange={(event) => setAgentVersion(event.target.value)}
+                  placeholder="agent-v12"
+                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                />
+              </label>
+              <label style={{ display: 'grid', gap: 8 }}>
+                <span style={{ fontWeight: 700 }}>Prompt version</span>
+                <input
+                  value={promptVersion}
+                  onChange={(event) => setPromptVersion(event.target.value)}
+                  placeholder="prompt-2026-05-25"
+                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                />
+              </label>
+              <label style={{ display: 'grid', gap: 8 }}>
+                <span style={{ fontWeight: 700 }}>Model</span>
+                <input
+                  value={modelName}
+                  onChange={(event) => setModelName(event.target.value)}
+                  placeholder="gpt-4.1-mini"
+                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                />
+              </label>
+              <label style={{ display: 'grid', gap: 8 }}>
+                <span style={{ fontWeight: 700 }}>Notes</span>
+                <input
+                  value={runNotes}
+                  onChange={(event) => setRunNotes(event.target.value)}
+                  placeholder="tightened escalation policy"
+                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                />
+              </label>
+            </div>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Agent version</span>
-              <input
-                value={agentVersion}
-                onChange={(event) => setAgentVersion(event.target.value)}
-                placeholder="agent-v12"
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-              />
-            </label>
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Prompt version</span>
-              <input
-                value={promptVersion}
-                onChange={(event) => setPromptVersion(event.target.value)}
-                placeholder="prompt-2026-05-25"
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-              />
-            </label>
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Model</span>
-              <input
-                value={modelName}
-                onChange={(event) => setModelName(event.target.value)}
-                placeholder="gpt-4.1-mini"
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-              />
-            </label>
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Notes</span>
-              <input
-                value={runNotes}
-                onChange={(event) => setRunNotes(event.target.value)}
-                placeholder="tightened escalation policy"
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-              />
-            </label>
-          </div>
-        </div>
+        ) : null}
 
-        <details>
-          <summary style={{ cursor: 'pointer', fontWeight: 800 }}>Evidence payload</summary>
+        {view === 'score' ? (
+          <section className="score-upload-panel" aria-label="Evidence upload">
+            <div className="score-upload-copy">
+              <p className="eyebrow">Evidence intake</p>
+              <h2>Upload a vCon or transcript</h2>
+              <p>Drop in your own conversation artifact, or load clearly labeled sample evidence.</p>
+            </div>
+            <div className="score-upload-actions">
+              <label className="score-upload-drop">
+                <span>Upload vCon or transcript</span>
+                <small>Accepts .vcon, .json, .txt, .md</small>
+                <input
+                  type="file"
+                  accept=".vcon,.json,.txt,.md,application/json,text/plain,text/markdown"
+                  aria-label="Upload vCon or transcript file"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0] ?? null;
+                    void onUploadEvidenceFile(file);
+                    event.currentTarget.value = '';
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                className="score-upload-simulate"
+                onClick={() => setShowSimulateEvidenceOptions((current) => !current)}
+              >
+                {showSimulateEvidenceOptions ? 'Hide sample options' : 'Load sample evidence'}
+              </button>
+            </div>
+            {showSimulateEvidenceOptions ? (
+              <div className="score-simulate-options" aria-label="Sample evidence options">
+                <p>Choose the contract for the synthetic evidence.</p>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+                  <label style={{ display: 'grid', gap: 8 }}>
+                    <span style={{ fontWeight: 700 }}>Benchmark suite</span>
+                    <select
+                      value={selectedSuite?.id ?? ''}
+                      disabled={isLoading || !suites.length}
+                      onChange={(event) => setSelectedSuiteId(event.target.value)}
+                      style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                    >
+                      {suites.map((suite) => (
+                        <option key={suite.id} value={suite.id}>{suite.title}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label style={{ display: 'grid', gap: 8 }}>
+                    <span style={{ fontWeight: 700 }}>Scenario</span>
+                    <select
+                      value={selectedScenario?.id ?? ''}
+                      disabled={isLoading || !selectedSuite?.scenarios.length}
+                      onChange={(event) => setSelectedScenarioId(event.target.value)}
+                      style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                    >
+                      {(selectedSuite?.scenarios ?? []).map((scenario) => (
+                        <option key={scenario.id} value={scenario.id}>{scenario.title}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                {selectedScenario ? (
+                  <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14, lineHeight: 1.45 }} aria-label="Selected sample scenario">
+                    {selectedScenario.title}
+                    {selectedScenario.user_goal || selectedScenario.user_persona
+                      ? ` — ${selectedScenario.user_goal || selectedScenario.user_persona}`
+                      : ''}
+                  </p>
+                ) : null}
+                <button
+                  type="button"
+                  className="secondary-link"
+                  disabled={!selectedScenario}
+                  onClick={() => selectedScenario && onLoadSampleEvidence(selectedScenario)}
+                >
+                  Load selected sample evidence
+                </button>
+              </div>
+            ) : null}
+            {uploadMessage ? <p className="score-upload-message">{uploadMessage}</p> : null}
+          </section>
+        ) : null}
+
+        {view === 'score' ? (
+          <details aria-label="Score attribution">
+            <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Attribute this score</summary>
+            <p style={{ margin: '10px 0 0', color: 'var(--muted)', fontSize: 14, lineHeight: 1.45 }}>
+              Optional labels for the saved report. These do not change how evidence is scored.
+            </p>
+            <div style={{ display: 'grid', gap: 12, marginTop: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+                <label style={{ display: 'grid', gap: 8 }}>
+                  <span style={{ fontWeight: 700 }}>Attributed agent</span>
+                  <select
+                    aria-label="Attributed agent"
+                    value={selectedAgentId}
+                    onChange={(event) => {
+                      const agentId = event.target.value;
+                      setSelectedAgentId(agentId);
+                      const agent = agents.find((item) => item.id === agentId);
+                      if (agent) applyAgentProfileDefaults(agent, { setAgentProfile, setModelName, setPromptVersion });
+                    }}
+                    style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                  >
+                    {!agents.length ? <option value="">No agents</option> : null}
+                    {agents.map((agent) => (
+                      <option key={agent.id} value={agent.id}>{agent.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ display: 'grid', gap: 8 }}>
+                  <span style={{ fontWeight: 700 }}>Attributed model</span>
+                  <input
+                    aria-label="Attributed model"
+                    value={modelName}
+                    onChange={(event) => setModelName(event.target.value)}
+                    placeholder={selectedScoreAgent?.metadata?.model_name || 'gpt-4.1-mini'}
+                    style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                  />
+                </label>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+                <label style={{ display: 'grid', gap: 8 }}>
+                  <span style={{ fontWeight: 700 }}>Agent version</span>
+                  <input
+                    aria-label="Attributed agent version"
+                    value={agentVersion}
+                    onChange={(event) => setAgentVersion(event.target.value)}
+                    placeholder="agent-v12"
+                    style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                  />
+                </label>
+                <label style={{ display: 'grid', gap: 8 }}>
+                  <span style={{ fontWeight: 700 }}>Prompt version</span>
+                  <input
+                    aria-label="Attributed prompt version"
+                    value={promptVersion}
+                    onChange={(event) => setPromptVersion(event.target.value)}
+                    placeholder="prompt-2026-05-25"
+                    style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                  />
+                </label>
+                <label style={{ display: 'grid', gap: 8 }}>
+                  <span style={{ fontWeight: 700 }}>Notes</span>
+                  <input
+                    aria-label="Attribution notes"
+                    value={runNotes}
+                    onChange={(event) => setRunNotes(event.target.value)}
+                    placeholder="tightened escalation policy"
+                    style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                  />
+                </label>
+              </div>
+            </div>
+          </details>
+        ) : null}
+
+        <details open={view === 'score' ? true : undefined}>
+          <summary style={{ cursor: 'pointer', fontWeight: 800 }}>
+            {view === 'score' ? 'Evidence payload (editable)' : 'Evidence payload'}
+          </summary>
           <div style={{ display: 'grid', gap: 16, marginTop: 14 }}>
             <label style={{ display: 'grid', gap: 8 }}>
               <span style={{ fontWeight: 700 }}>Transcript</span>
@@ -3069,65 +3758,39 @@ export function BenchmarkRunner() {
               />
             </label>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
-              <label style={{ display: 'grid', gap: 8 }}>
-                <span style={{ fontWeight: 700 }}>Action/tool trace</span>
-                <textarea
-                  value={actionTrace}
-                  onChange={(event) => setActionTrace(event.target.value)}
-                  rows={7}
-                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }}
-                />
-              </label>
-
-              <label style={{ display: 'grid', gap: 8 }}>
-                <span style={{ fontWeight: 700 }}>Final observed state</span>
-                <textarea
-                  value={finalState}
-                  onChange={(event) => setFinalState(event.target.value)}
-                  rows={7}
-                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }}
-                />
-              </label>
-            </div>
-
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Voice call evidence</span>
-              <textarea
-                value={callEvidence}
-                onChange={(event) => setCallEvidence(event.target.value)}
-                rows={7}
-                placeholder='{"turns":[{"speaker":"Caller","body":"I need a human."},{"speaker":"Agent","body":"I created a ticket and escalated you."}],"metrics":{"durationMs":92000,"avgLatencyMs":340},"media":{"recordingUrl":"https://storage.example.test/calls/demo.wav","mimeType":"audio/wav"}}'
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }}
-              />
-            </label>
-
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Group call evidence</span>
-              <textarea
-                value={groupCall}
-                onChange={(event) => setGroupCall(event.target.value)}
-                rows={7}
-                placeholder='{"messages":[{"speaker":"Patient","text":"I need a refill"}],"decisions":["Route to clinician review"],"commitments":["Send update by 5 PM"],"follow_up_actions":["Confirm pharmacy"]}'
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }}
-              />
-            </label>
-
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>vCon record</span>
-              <textarea
-                value={vconEvidence}
-                onChange={(event) => setVconEvidence(event.target.value)}
-                rows={7}
-                placeholder='{"vcon":"0.0.1","parties":[{"name":"Caller"},{"name":"Agent"}],"dialog":[{"party":0,"body":"I need a human."},{"party":1,"body":"I created a ticket and escalated you."}]}'
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }}
-              />
-            </label>
+            <details className="eval-structured-evidence">
+              <summary>Structured and channel evidence (optional)</summary>
+              <p>Expand when you have tool traces, final-state data, voice/group-call artifacts, or a full vCon record.</p>
+              <div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
+                  <label style={{ display: 'grid', gap: 8 }}>
+                    <span style={{ fontWeight: 700 }}>Action/tool trace</span>
+                    <textarea value={actionTrace} onChange={(event) => setActionTrace(event.target.value)} rows={7} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
+                  </label>
+                  <label style={{ display: 'grid', gap: 8 }}>
+                    <span style={{ fontWeight: 700 }}>Final observed state</span>
+                    <textarea value={finalState} onChange={(event) => setFinalState(event.target.value)} rows={7} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
+                  </label>
+                </div>
+                <label style={{ display: 'grid', gap: 8 }}>
+                  <span style={{ fontWeight: 700 }}>Voice call evidence</span>
+                  <textarea value={callEvidence} onChange={(event) => setCallEvidence(event.target.value)} rows={7} placeholder='{"turns":[{"speaker":"Caller","body":"I need a human."},{"speaker":"Agent","body":"I created a ticket and escalated you."}],"metrics":{"durationMs":92000,"avgLatencyMs":340}}' style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
+                </label>
+                <label style={{ display: 'grid', gap: 8 }}>
+                  <span style={{ fontWeight: 700 }}>Group call evidence</span>
+                  <textarea value={groupCall} onChange={(event) => setGroupCall(event.target.value)} rows={7} placeholder='{"messages":[{"speaker":"Patient","text":"I need a refill"}],"decisions":["Route to clinician review"]}' style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
+                </label>
+                <label style={{ display: 'grid', gap: 8 }}>
+                  <span style={{ fontWeight: 700 }}>vCon record</span>
+                  <textarea value={vconEvidence} onChange={(event) => setVconEvidence(event.target.value)} rows={7} placeholder='{"vcon":"0.0.1","parties":[{"name":"Caller"},{"name":"Agent"}],"dialog":[{"party":0,"body":"I need a human."}]}' style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
+                </label>
+              </div>
+            </details>
           </div>
         </details>
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-          <button
+          {view !== 'score' ? <button
             type="button"
             disabled={isSimulating || isRunning || !selectedScenario}
             onClick={onSimulate}
@@ -3142,8 +3805,8 @@ export function BenchmarkRunner() {
             }}
           >
             {isSimulating ? 'Simulating scenario...' : 'Simulate scenario'}
-          </button>
-          <button
+          </button> : null}
+          {view !== 'score' ? <button
             type="button"
             disabled={isSimulating || isRunning || isEnqueueingSuite || !selectedSuite?.scenarios.length}
             onClick={onSimulateSuite}
@@ -3158,8 +3821,8 @@ export function BenchmarkRunner() {
             }}
           >
             {isSimulating ? 'Simulating suite...' : 'Simulate suite'}
-          </button>
-          <button
+          </button> : null}
+          {view !== 'score' ? <button
             type="button"
             disabled={isSimulating || isRunning || isEnqueueingSuite || !selectedSuite?.scenarios.length}
             onClick={onEnqueueSuiteSimulation}
@@ -3173,9 +3836,9 @@ export function BenchmarkRunner() {
               opacity: isSimulating || isRunning || isEnqueueingSuite || !selectedSuite?.scenarios.length ? 0.65 : 1,
             }}
           >
-            {isEnqueueingSuite ? 'Queueing suite...' : 'Queue suite run'}
-          </button>
-          <button
+            {isEnqueueingSuite ? 'Queueing simulated suite...' : 'Queue simulated suite'}
+          </button> : null}
+          {view !== 'simulate' ? <button
             type="submit"
             disabled={isRunning || isSimulating || isEnqueueingSuite || !selectedScenario || !hasRunnableEvidence}
             style={{
@@ -3188,9 +3851,9 @@ export function BenchmarkRunner() {
               opacity: isRunning || isSimulating || isEnqueueingSuite || !selectedScenario || !hasRunnableEvidence ? 0.65 : 1,
             }}
           >
-            {isRunning ? 'Running benchmark...' : 'Run benchmark'}
-          </button>
-          <button
+            {isRunning ? 'Evaluating evidence...' : 'Evaluate evidence'}
+          </button> : null}
+          {view !== 'simulate' ? <button
             type="button"
             disabled={!report}
             onClick={onSaveRun}
@@ -3205,8 +3868,8 @@ export function BenchmarkRunner() {
             }}
           >
             Save run
-          </button>
-          <button
+          </button> : null}
+          {view !== 'simulate' ? <button
             type="button"
             disabled={!report}
             onClick={onJudge}
@@ -3221,7 +3884,7 @@ export function BenchmarkRunner() {
             }}
           >
             Request LLM judge
-          </button>
+          </button> : null}
         </div>
 
         {runError ? <p style={{ color: 'var(--error-text)', margin: 0 }}>{runError}</p> : null}
@@ -3243,97 +3906,135 @@ export function BenchmarkRunner() {
           </div>
         ) : null}
       </form>
+      ) : null}
 
-      <section className="card" style={{ padding: 24, display: 'grid', gap: 16 }} aria-label="Launch evaluation">
+      <section id="launch-agent" className="card" style={{ padding: 24, display: view === 'score' || view === 'simulate' ? 'none' : 'grid', gap: 16 }} aria-label="Launch agent run">
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
           <div>
             <p className="eyebrow" style={{ margin: '0 0 6px' }}>
               Execute
             </p>
-            <h2 style={{ margin: 0, fontSize: 26 }}>Launch evaluation</h2>
+            <h2 style={{ margin: 0, fontSize: 26 }}>Run agent</h2>
             <p style={{ margin: '8px 0 0', color: 'var(--muted)', maxWidth: 640 }}>
               Run the agent target, capture conversation traces as they finish, and stream an ASSERT-style{' '}
               <code>inference_set.jsonl</code> while conversations append to the live list.
             </p>
           </div>
-          <button
-            type="button"
-            disabled={isLaunchingExecution || isRunning || isSimulating || !selectedSuite}
-            onClick={() => void onLaunchExecution()}
-            style={{
-              border: 0,
-              borderRadius: 8,
-              background: 'var(--accent)',
-              color: 'white',
-              padding: '12px 18px',
-              fontWeight: 800,
-              opacity: isLaunchingExecution || isRunning || isSimulating || !selectedSuite ? 0.65 : 1,
-            }}
-          >
-            {isLaunchingExecution
-              ? 'Launching...'
-              : executionRun && isActiveExecutionStatus(executionRun.status)
-                ? 'Execution running...'
-                : 'Launch evaluation'}
-          </button>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              disabled={
+                isLaunchingExecution
+                || isRunning
+                || isSimulating
+                || !selectedSuite
+                || !selectedScoreAgent
+                || selectedScoreAgent.channel !== 'text'
+                || openaiProvider?.status !== 'connected'
+              }
+              onClick={() => void onLaunchExecution({ target: 'live' })}
+              style={{
+                border: 0,
+                borderRadius: 8,
+                background: 'var(--accent)',
+                color: 'white',
+                padding: '12px 18px',
+                fontWeight: 800,
+                opacity: isLaunchingExecution || isRunning || isSimulating || !selectedSuite || !selectedScoreAgent || selectedScoreAgent.channel !== 'text' || openaiProvider?.status !== 'connected' ? 0.65 : 1,
+              }}
+            >
+              {isLaunchingExecution
+                ? 'Launching...'
+                : executionRun && isActiveExecutionStatus(executionRun.status)
+                  ? 'Execution running...'
+                  : 'Launch agent run'}
+            </button>
+            <button
+              type="button"
+              className="secondary-link"
+              disabled={isLaunchingExecution || isRunning || isSimulating || !selectedSuite || !selectedScoreAgent}
+              onClick={() => void onLaunchExecution({ target: 'configured' })}
+            >
+              {selectedScoreAgent?.target === 'voice_fixture' || selectedScoreAgent?.target === 'offline_acc_fixture'
+                ? 'Run fixture'
+                : 'Mock agent run'}
+            </button>
+          </div>
         </div>
+
+        {view === 'run' && loadError ? (
+          <div style={{ border: '1px solid var(--error-border)', background: 'var(--error-bg)', color: 'var(--error-text)', borderRadius: 8, padding: 12, display: 'grid', gap: 8 }}>
+            <span>{loadError}</span>
+            <button type="button" className="secondary-link" onClick={() => setCatalogReloadKey((value) => value + 1)}>
+              Retry loading suites
+            </button>
+          </div>
+        ) : null}
+
+        {view === 'run' && selectedSuite && !loadError ? (
+          <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }} aria-label="Default scenario for launch">
+            Launch agent run uses {executionModelName || DEFAULT_EXECUTION_MODEL} through the connected OpenAI provider.
+            {' '}The secondary action uses the selected agent&apos;s configured mock or fixture target.
+          </p>
+        ) : null}
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
           <label style={{ display: 'grid', gap: 8 }}>
-            <span style={{ fontWeight: 700 }}>Target mode</span>
+            <span style={{ fontWeight: 700 }}>Agent</span>
             <select
-              aria-label="Execution target mode"
-              value={executionMode}
-              onChange={(event) =>
-                setExecutionMode(event.target.value as 'text_callable' | 'voice_fixture' | 'pipecat_webrtc')
-              }
+              aria-label="Execution agent"
+              value={selectedAgentId}
+              onChange={(event) => {
+                const agentId = event.target.value;
+                setSelectedAgentId(agentId);
+                const agent = agents.find((item) => item.id === agentId);
+                if (!agent) return;
+                if (agent.channel === 'voice' || agent.target === 'voice_fixture') {
+                  setExecutionMode('voice_fixture');
+                } else {
+                  setExecutionMode('text_callable');
+                }
+              }}
               style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
             >
-              <option value="text_callable">Text callable</option>
-              <option value="voice_fixture">Voice fixture</option>
-              <option value="pipecat_webrtc">Pipecat hooks (in-process mock)</option>
+              {!agents.length ? <option value="">No agents</option> : null}
+              {agents.map((agent) => (
+                <option key={agent.id} value={agent.id}>{agent.name}</option>
+              ))}
             </select>
           </label>
-
-          {executionMode === 'text_callable' ? (
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Text callable</span>
-              <select
-                aria-label="Text callable target"
-                value={executionTextCallable}
-                onChange={(event) => setExecutionTextCallable(event.target.value)}
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
-              >
-                <option value="mock_agent">mock_agent</option>
-                <option value="offline_acc_fixture">offline_acc_fixture</option>
-              </select>
-            </label>
-          ) : (
-            <div style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Voice target</span>
-              <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }}>
-                {executionMode === 'pipecat_webrtc'
-                  ? 'In-process mock of Pipecat small WebRTC send/receive hooks — no browser peer, live Pipecat, or FreeSWITCH. Captures synthetic recording + dialog into vCon. Verdict/score stay fixture-backed for cancellation-rescue on call-center-voice-ai.'
-                  : 'Uses the ACC audio plan + cancellation-rescue fixture path on call-center-voice-ai (no live SIP/WebRTC).'}
-              </p>
-            </div>
-          )}
-
-          {executionMode === 'text_callable' ? (
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Scenario scope</span>
-              <select
-                aria-label="Execution scenario scope"
-                value={executionScope}
-                onChange={(event) => setExecutionScope(event.target.value as 'selected' | 'suite')}
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
-              >
-                <option value="selected">Selected scenario</option>
-                <option value="suite">Entire suite</option>
-              </select>
-            </label>
-          ) : null}
-
+          <label style={{ display: 'grid', gap: 8 }}>
+            <span style={{ fontWeight: 700 }}>Model</span>
+            <select
+              aria-label="Execution model"
+              value={executionModelName}
+              onChange={(event) => setExecutionModelName(event.target.value)}
+              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
+            >
+              {(executionModelOptions.includes(executionModelName)
+                ? executionModelOptions
+                : [executionModelName, ...executionModelOptions]
+              ).map((modelId) => (
+                <option key={modelId} value={modelId}>{modelId}</option>
+              ))}
+            </select>
+            {openaiProvider?.status !== 'connected' ? (
+              <span style={{ color: 'var(--muted)', fontSize: 13 }}>
+                Connect OpenAI to load models.{' '}
+                <button
+                  type="button"
+                  className="secondary-link"
+                  disabled={isConnectingOpenAI}
+                  onClick={() => void onConnectOpenAI()}
+                  style={{ padding: 0, border: 0, background: 'transparent', color: 'var(--accent)', fontWeight: 700, cursor: 'pointer' }}
+                >
+                  {isConnectingOpenAI ? 'Connecting…' : 'Connect OpenAI'}
+                </button>
+              </span>
+            ) : executionModelsMessage ? (
+              <span style={{ color: 'var(--muted)', fontSize: 13 }}>{executionModelsMessage}</span>
+            ) : null}
+          </label>
           <label style={{ display: 'grid', gap: 8 }}>
             <span style={{ fontWeight: 700 }}>Iterations</span>
             <input
@@ -3347,6 +4048,26 @@ export function BenchmarkRunner() {
             />
           </label>
         </div>
+
+        <details>
+          <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Advanced</summary>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginTop: 12 }}>
+            {selectedScoreAgent?.channel === 'text' ? (
+              <label style={{ display: 'grid', gap: 8 }}>
+                <span style={{ fontWeight: 700 }}>Scenario scope</span>
+                <select
+                  aria-label="Execution scenario scope"
+                  value={executionScope}
+                  onChange={(event) => setExecutionScope(event.target.value as 'selected' | 'suite')}
+                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
+                >
+                  <option value="selected">Selected scenario</option>
+                  <option value="suite">Entire suite</option>
+                </select>
+              </label>
+            ) : null}
+          </div>
+        </details>
 
         {executionMessage ? <p style={{ margin: 0, color: 'var(--muted)' }}>{executionMessage}</p> : null}
 
@@ -3368,10 +4089,13 @@ export function BenchmarkRunner() {
                 <span style={{ marginLeft: 10, color: executionStatusColor(executionRun.status), fontWeight: 800, textTransform: 'capitalize' }}>
                   {executionRun.status}
                 </span>
+                <a href={executionAnalysisHref(executionRun.execution_run_id)} style={{ marginLeft: 12, fontWeight: 760 }}>
+                  Open analysis
+                </a>
               </div>
               <div style={{ color: 'var(--muted)', fontSize: 14 }}>
-                {executionRun.progress.completed_conversations}/{executionRun.progress.total_conversations} conversations ·{' '}
-                {executionRun.progress.percent}%
+                {executionRun.progress?.completed_conversations ?? 0}/{executionRun.progress?.total_conversations ?? 0} conversations ·{' '}
+                {executionRun.progress?.percent ?? 0}%
                 {executionRun.inference_set_path ? ` · ${executionRun.inference_set_path}` : ''}
               </div>
             </div>
@@ -3453,7 +4177,7 @@ export function BenchmarkRunner() {
         ) : null}
       </section>
 
-      {suiteSimulation ? (
+      {suiteSimulation && view !== 'score' && view !== 'run' ? (
         <section className="card" style={{ padding: 24, display: 'grid', gap: 16 }} aria-label="Suite simulation summary">
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
             <div>
@@ -3811,6 +4535,7 @@ export function BenchmarkRunner() {
         </section>
       ) : null}
 
+      {view === 'all' || (view === 'score' && Boolean(report || savedRuns.length || suiteRuns.length)) ? (
       <section className="validation-grid" aria-label="Saved runs and e2e validation">
         <div className="card" style={{ padding: 20, display: 'grid', gap: 12 }}>
           <p className="eyebrow">Saved runs</p>
@@ -4310,15 +5035,8 @@ export function BenchmarkRunner() {
             <p style={{ margin: 0, color: 'var(--muted)' }}>Run a suite while signed in to retain suite-level history and child report links.</p>
           )}
         </div>
-
-        <div className="card" style={{ padding: 20, display: 'grid', gap: 12 }}>
-          <p className="eyebrow">Voice path</p>
-          <h3 style={{ margin: 0 }}>Team-gated WebRTC evals</h3>
-          <p style={{ margin: 0, color: 'var(--muted)' }}>
-            Voice minutes are modeled in credits now. The visible gate keeps the product honest while the WebRTC/SIP runner is wired to real call evidence.
-          </p>
-        </div>
       </section>
+      ) : null}
     </section>
   );
 }

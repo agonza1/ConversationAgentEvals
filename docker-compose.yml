@@ -50,8 +50,13 @@ services:
       APP_ENV: ${APP_ENV:-development}
     ports:
       - "${API_PORT:-8025}:8000"
+      # The Codex OAuth redirect URI is registered as localhost:1455. Keep the
+      # host mapping fixed so Compose cannot advertise an unusable callback URL.
+      - "1455:1455"
     volumes:
       - ./storage:/workspace/storage
+      - ./.local:/workspace/.local
+      - ./artifacts:/workspace/artifacts
     depends_on:
       db:
         condition: service_healthy

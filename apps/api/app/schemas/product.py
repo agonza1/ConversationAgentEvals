@@ -301,3 +301,5 @@ class JudgeResponse(BaseModel):
     message: str
     evidence_citations: list[str] = Field(default_factory=list)
     spend_control: dict[str, Any] = Field(default_factory=dict)
+    judge_output: str | None = None
+    provider: str | None = None

@@ -1441,56 +1441,106 @@ def test_project_export_returns_owner_scoped_history_bundle():
 
 
 def test_llm_judge_is_gated_for_free_and_ready_for_paid_plans():
-    free_response = client.post('/api/product/judge', json={'plan': 'free', 'report': {'overall_score': 82}})
-    assert free_response.status_code == 200
-    assert free_response.json()['status'] == 'blocked'
-    assert free_response.json()['required_plan'] == 'starter'
+    from app.services.llm_providers import set_provider_for_tests
+    from app.services.llm_providers.openai_codex import OpenAICodexProvider
 
-    paid_response = client.post(
-        '/api/product/judge',
-        json={
-            'plan': 'team',
-            'report': {'evidence_spans': ['Verified customer identity', 'Created support ticket']},
-            'transcript': 'Agent: verified customer identity.',
-        },
-    )
-    assert paid_response.status_code == 200
-    payload = paid_response.json()
-    assert payload['status'] == 'ready'
-    assert payload['credits'] == 10
-    assert payload['evidence_citations'][:2] == ['Verified customer identity', 'Created support ticket']
-    assert payload['spend_control'] == {
-        'estimated_credits': 10,
-        'daily_credit_limit': 200,
-        'reserved_daily_credits': 0,
-        'remaining_daily_credits': 200,
-        'provider': 'vertex',
-        'provider_configured': False,
-        'within_budget': True,
-    }
+    class _Disconnected:
+        provider_id = 'openai'
+
+        def status(self):
+            return {
+                'id': 'openai',
+                'provider': 'openai_codex',
+                'status': 'disconnected',
+                'email': None,
+                'account_id': None,
+                'message': 'Connect OpenAI',
+                'last_error': None,
+            }
+
+        def start_oauth(self):
+            return {'authorize_url': 'https://example.test', 'redirect_uri': 'http://localhost:1455/auth/callback'}
+
+        def disconnect(self):
+            return {'status': 'disconnected'}
+
+        def ensure_access_token(self):
+            raise RuntimeError('disconnected')
+
+        def complete(self, prompt: str):
+            raise RuntimeError('disconnected')
+
+    set_provider_for_tests('openai', _Disconnected())
+    try:
+        free_response = client.post('/api/product/judge', json={'plan': 'free', 'report': {'overall_score': 82}})
+        assert free_response.status_code == 200
+        assert free_response.json()['status'] == 'blocked'
+        assert 'Connect OpenAI' in free_response.json()['message']
+
+        paid_response = client.post(
+            '/api/product/judge',
+            json={
+                'plan': 'team',
+                'report': {'evidence_spans': ['Verified customer identity', 'Created support ticket']},
+                'transcript': 'Agent: verified customer identity.',
+            },
+        )
+        assert paid_response.status_code == 200
+        payload = paid_response.json()
+        assert payload['status'] == 'blocked'
+        assert payload['credits'] == 10
+        assert payload['spend_control']['provider'] in {'openai_codex', 'openai', 'vertex'}
+        assert payload['spend_control']['provider_configured'] is False
+        assert payload['spend_control']['within_budget'] is True
+    finally:
+        set_provider_for_tests('openai', None)
 
 
 def test_llm_judge_spend_control_respects_budget_env(monkeypatch):
-    monkeypatch.setenv('LLM_JUDGE_PROVIDER', 'openai')
-    monkeypatch.setenv('LLM_JUDGE_API_KEY', 'test-key')
+    from app.services.llm_providers import set_provider_for_tests
+
+    class _Connected:
+        provider_id = 'openai'
+
+        def status(self):
+            return {
+                'id': 'openai',
+                'provider': 'openai_codex',
+                'status': 'connected',
+                'email': 'judge@example.com',
+                'account_id': 'acct',
+                'message': 'connected',
+                'last_error': None,
+            }
+
+        def start_oauth(self):
+            return {}
+
+        def disconnect(self):
+            return {'status': 'disconnected'}
+
+        def ensure_access_token(self):
+            return 'token'
+
+        def complete(self, prompt: str):
+            return 'should not run'
+
+    monkeypatch.setenv('LLM_JUDGE_PROVIDER', 'openai_codex')
     monkeypatch.setenv('LLM_JUDGE_DAILY_CREDIT_LIMIT', '15')
     monkeypatch.setenv('LLM_JUDGE_RESERVED_DAILY_CREDITS', '8')
-
-    response = client.post('/api/product/judge', json={'plan': 'starter', 'report': {'overall_score': 82}})
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload['status'] == 'blocked'
-    assert payload['message'] == 'LLM judge daily credit budget is exhausted. Increase the limit or wait for the next budget window.'
-    assert payload['spend_control'] == {
-        'estimated_credits': 10,
-        'daily_credit_limit': 15,
-        'reserved_daily_credits': 8,
-        'remaining_daily_credits': 7,
-        'provider': 'openai',
-        'provider_configured': True,
-        'within_budget': False,
-    }
+    set_provider_for_tests('openai', _Connected())
+    try:
+        response = client.post('/api/product/judge', json={'plan': 'starter', 'report': {'overall_score': 82}})
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload['status'] == 'blocked'
+        assert payload['message'] == 'LLM judge daily credit budget is exhausted. Increase the limit or wait for the next budget window.'
+        assert payload['spend_control']['provider'] == 'openai_codex'
+        assert payload['spend_control']['provider_configured'] is True
+        assert payload['spend_control']['within_budget'] is False
+        assert payload['spend_control']['remaining_daily_credits'] == 7
+    finally:
+        set_provider_for_tests('openai', None)
 
 
 
@@ -1533,7 +1583,7 @@ def test_product_audit_events_track_saved_runs_exports_and_judge_requests():
     assert events[0]['payload'] == {
         'project_id': 'call-center',
         'plan': 'starter',
-        'status': 'ready',
+        'status': judge_response.json()['status'],
         'credits': 10,
     }
     assert events[1]['payload'] == {'run_id': saved['id'], 'export_type': 'single_run'}

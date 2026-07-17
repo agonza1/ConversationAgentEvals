@@ -20,6 +20,7 @@ There is one product and one supported evaluation path. Historical product varia
 - Durable ASSERT artifact manifests with searchable platform metadata indexes.
 - Operator-facing QA reports, saved-run history, regression comparisons, and export workflows.
 - A focused benchmark runner at `/benchmarks`, including an Execute **Launch evaluation** panel that streams conversations into an `inference_set.jsonl` live list for text callables and voice fixtures.
+- An opt-in `openai_codex` text target that uses connected local Codex OAuth to record a real model response. It does not invent tool events or completed-task state, so reports honestly show missing live-tool evidence.
 - Voice and WebRTC integration groundwork through the Pipecat service.
 
 ASSERT artifacts remain the canonical evaluation results. The application database stores product metadata and indexes; it does not replace ASSERT's result model.
@@ -47,6 +48,8 @@ npm run dev
 ```
 
 Open the printed web URL and visit `/benchmarks`. The basic demo uses transcript, action-trace, and final-state evidence, so it does not require live microphone ASR or any external target application. Advanced environment settings are documented in [docs/environment.md](docs/environment.md).
+
+Local LLM judge auth (Codex-style OpenAI OAuth, Claude later): [docs/openai-codex-oauth-plan.md](docs/openai-codex-oauth-plan.md).
 
 For the shortest standalone end-to-end walkthrough, see [docs/assert-flow-demo.md](docs/assert-flow-demo.md) or its [machine-readable example](docs/examples/assert-flow-demo.json).
 
