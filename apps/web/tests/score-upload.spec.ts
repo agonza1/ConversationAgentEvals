@@ -3,8 +3,8 @@ import path from 'node:path';
 import { writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
-test('score page uploads vCon and simulates call-center evidence', async ({ page }) => {
-  await page.goto('/score');
+test('eval page uploads vCon and loads sample call-center evidence', async ({ page }) => {
+  await page.goto('/eval');
   await expect(page.getByText('Loading benchmark suites...')).toHaveCount(0);
 
   const dir = mkdtempSync(path.join(tmpdir(), 'score-upload-'));
@@ -25,11 +25,14 @@ test('score page uploads vCon and simulates call-center evidence', async ({ page
   await expect(page.getByText('Loaded vCon from sample.vcon.json.')).toBeVisible();
   await expect(page.locator('textarea').first()).toHaveValue(/Caller: I need to change my billing address/);
 
-  await page.getByRole('button', { name: 'Simulate evidence upload' }).click();
-  const simulateOptions = page.getByLabel('Call Center Voice AI simulate options');
-  await expect(simulateOptions).toBeVisible();
-  await simulateOptions.getByRole('button', { name: 'Billing Address Change' }).click();
-  await expect(page.getByText(/Loaded simulated Call Center Voice AI evidence: Billing Address Change/)).toBeVisible();
+  await page.getByRole('button', { name: 'Load sample evidence' }).click();
+  const sampleOptions = page.getByLabel('Call Center Voice AI sample evidence options');
+  await expect(sampleOptions).toBeVisible();
+  await sampleOptions.getByRole('button', { name: 'Billing Address Change' }).click();
+  await expect(page.getByText(/Loaded sample Call Center Voice AI evidence: Billing Address Change.*synthetic/)).toBeVisible();
+  await page.getByRole('button', { name: 'Evaluate evidence' }).click();
+  await expect(page.getByText('Benchmark report', { exact: true })).toBeVisible();
+  await expect(page.getByText('Task completion', { exact: true })).toBeVisible();
   await expect(page.locator('form').first().locator('select').nth(0)).toHaveValue('call-center-voice-ai');
   await expect(page.locator('form').first().locator('select').nth(1)).toHaveValue('billing-address-change');
 });

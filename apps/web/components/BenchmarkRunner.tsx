@@ -1958,7 +1958,11 @@ const WORKFLOW_DEMO_PRESETS: Record<string, { suiteId: string; scenarioId: strin
 
 function readWorkflowDemoPreset() {
   if (typeof window === 'undefined') return null;
-  const demo = new URLSearchParams(window.location.search).get('demo');
+  const params = new URLSearchParams(window.location.search);
+  const suiteId = params.get('suite_id');
+  const scenarioId = params.get('scenario_id');
+  if (suiteId && scenarioId) return { suiteId, scenarioId };
+  const demo = params.get('demo');
   if (!demo) return null;
   return WORKFLOW_DEMO_PRESETS[demo] ?? null;
 }
@@ -2143,12 +2147,12 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     setUploadMessage(null);
   }
 
-  function onSimulateCallCenterEvidence(scenario: BenchmarkScenario) {
+  function onLoadCallCenterSampleEvidence(scenario: BenchmarkScenario) {
     setSelectedSuiteId('call-center-voice-ai');
     setSelectedScenarioId(scenario.id);
     loadScenarioStarterData(scenario);
     setShowSimulateEvidenceOptions(false);
-    setUploadMessage(`Loaded simulated Call Center Voice AI evidence: ${scenario.title}.`);
+    setUploadMessage(`Loaded sample Call Center Voice AI evidence: ${scenario.title}. This evidence is synthetic.`);
   }
 
   async function onUploadEvidenceFile(file: File | null) {
@@ -2245,7 +2249,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         suiteLoadRequestRef.current = requestId + 1;
       }
     };
-  }, [catalogReloadKey]);
+  }, [catalogReloadKey, view]);
 
   useEffect(() => {
     let active = true;
@@ -2968,8 +2972,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     setExportMessage(`Exported ${records.length} vCon-compatible suite records.`);
   }
 
-  async function onSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function evaluateEvidence() {
     if (!selectedSuite || !selectedScenario) return;
 
     setIsRunning(true);
@@ -3005,6 +3008,11 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     } finally {
       setIsRunning(false);
     }
+  }
+
+  async function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await evaluateEvidence();
   }
 
   async function onSimulate() {
@@ -3257,12 +3265,14 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     },
     {
       title: 'Run evidence check',
-      detail: report ? `Latest verdict: ${verdict ?? 'complete'}${score !== undefined ? ` at ${score}` : ''}.` : 'Simulate the scenario or run the benchmark against pasted evidence.',
+      detail: report ? `Latest verdict: ${verdict ?? 'complete'}${score !== undefined ? ` at ${score}` : ''}.` : view === 'score'
+        ? 'Evaluate the loaded or uploaded evidence against this scenario.'
+        : 'Run the benchmark against captured evidence.',
       done: Boolean(report),
       ready: hasRunnableEvidence && !isRunning && !isSimulating,
       actionLabel: report ? 'Run again' : hasRunnableEvidence ? 'Run sample now' : selectedScenario ? 'Load starter data first' : null,
       action: hasRunnableEvidence || report
-        ? () => void onSimulate()
+        ? view === 'score' ? () => void evaluateEvidence() : () => void onSimulate()
         : selectedScenario
           ? () => loadScenarioStarterData()
           : undefined,
@@ -3479,7 +3489,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
               <label style={{ display: 'grid', gap: 8 }}>
                 <span style={{ fontWeight: 700 }}>Agent</span>
                 <select
-                  aria-label="Scoring agent"
+                  aria-label="Evaluation agent"
                   value={selectedAgentId}
                   onChange={(event) => {
                     const agentId = event.target.value;
@@ -3639,7 +3649,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             <div className="score-upload-copy">
               <p className="eyebrow">Evidence intake</p>
               <h2>Upload a vCon or transcript</h2>
-              <p>Drop in your own conversation artifact, or load a simulated Call Center Voice AI sample.</p>
+              <p>Drop in your own conversation artifact, or load clearly labeled sample evidence.</p>
             </div>
             <div className="score-upload-actions">
               <label className="score-upload-drop">
@@ -3661,11 +3671,11 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                 className="score-upload-simulate"
                 onClick={() => setShowSimulateEvidenceOptions((current) => !current)}
               >
-                {showSimulateEvidenceOptions ? 'Hide simulate options' : 'Simulate evidence upload'}
+                {showSimulateEvidenceOptions ? 'Hide sample options' : 'Load sample evidence'}
               </button>
             </div>
             {showSimulateEvidenceOptions ? (
-              <div className="score-simulate-options" aria-label="Call Center Voice AI simulate options">
+              <div className="score-simulate-options" aria-label="Call Center Voice AI sample evidence options">
                 <p>Call Center Voice AI scenarios</p>
                 <div className="score-simulate-option-list">
                   {callCenterScenarios.length ? (
@@ -3673,7 +3683,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                       <button
                         key={scenario.id}
                         type="button"
-                        onClick={() => onSimulateCallCenterEvidence(scenario)}
+                        onClick={() => onLoadCallCenterSampleEvidence(scenario)}
                       >
                         {scenario.title}
                       </button>
@@ -3822,7 +3832,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
               opacity: isRunning || isSimulating || isEnqueueingSuite || !selectedScenario || !hasRunnableEvidence ? 0.65 : 1,
             }}
           >
-            {isRunning ? 'Scoring evidence...' : 'Score evidence'}
+            {isRunning ? 'Evaluating evidence...' : 'Evaluate evidence'}
           </button> : null}
           {view !== 'simulate' ? <button
             type="button"

@@ -8,10 +8,10 @@ export default function ScenariosRoutePage() {
 
       <section className="minimal-hero" aria-labelledby="scenarios-title">
         <p className="eyebrow">Scenario library</p>
-        <h1 id="scenarios-title">Create and review agent scenarios.</h1>
+        <h1 id="scenarios-title">Choose what your agent must prove.</h1>
         <p>
-          Define a simulated user prompt, expected output, and description. Created scenarios appear in the
-          User Scenarios suite and can be selected from Simulate and Score.
+          Browse scenarios by evaluation suite, inspect their requirements, then run an agent or evaluate sample
+          evidence. You can also add scenarios for your own workflows.
         </p>
       </section>
 

@@ -46,11 +46,11 @@ const workflow = [
   },
   {
     label: 'Run',
-    title: 'Simulate agent behavior across channels',
-    copy: 'Start with text and tool traces, then graduate the same benchmarks to voice, WebRTC, and phone workflows.',
+    title: 'Exercise real agent behavior across channels',
+    copy: 'Run configured agents against the same scenarios across text, voice, WebRTC, and phone workflows.',
   },
   {
-    label: 'Score',
+    label: 'Eval',
     title: 'Measure outcomes, not vibes',
     copy: 'Grade task completion, action correctness, policy compliance, final state, and evidence artifacts.',
   },
@@ -74,18 +74,18 @@ const proofRows = [
 
 const workspacePaths = [
   {
-    eyebrow: 'Generate fixtures',
-    title: 'Simulate',
-    copy: 'Create a scenario result, run the full suite, or queue a simulated suite for later.',
-    href: '/simulate?demo=angry-caller',
-    cta: 'Simulate scenario',
+    eyebrow: 'Define the test',
+    title: 'Scenarios',
+    copy: 'Browse evaluation suites, inspect scenario requirements, and choose what an agent must prove.',
+    href: '/scenarios?suite_id=call-center-voice-ai&scenario_id=billing-address-change',
+    cta: 'Browse scenarios',
   },
   {
     eyebrow: 'Evaluate artifacts',
-    title: 'Score evidence',
-    copy: 'Grade transcripts, action traces, final state, calls, and vCon records against a scenario contract.',
-    href: '/score?demo=sample-evidence',
-    cta: 'Score sample evidence',
+    title: 'Eval',
+    copy: 'Evaluate transcripts, action traces, final state, calls, and vCon records against a scenario contract.',
+    href: '/eval?demo=sample-evidence',
+    cta: 'Eval sample evidence',
   },
   {
     eyebrow: 'Exercise targets',
@@ -104,11 +104,10 @@ export default function HomePage() {
         <div>
           <a href="#product">Product</a>
           <a href="#benchmarks">Benchmarks</a>
-          <Link href="/simulate">Simulate</Link>
-          <Link href="/score">Score evidence</Link>
-          <Link href="/runs">Run agent</Link>
           <Link href="/scenarios">Scenarios</Link>
           <Link href="/agents">Agents</Link>
+          <Link href="/runs">Run agent</Link>
+          <Link href="/eval">Eval</Link>
           <Link href="/voice">Voice eval</Link>
         </div>
       </nav>
@@ -122,7 +121,7 @@ export default function HomePage() {
             regression platform before agents reach production.
           </p>
           <div className="hero-cta">
-            <Link className="primary-link" href="/simulate?demo=angry-caller">Try a simulated scenario</Link>
+            <Link className="primary-link" href="/scenarios">Browse evaluation scenarios</Link>
             <a className="secondary-link" href="#product">See how it works</a>
           </div>
         </div>
@@ -178,8 +177,8 @@ export default function HomePage() {
           <p className="eyebrow">Workspace</p>
           <h2 id="proof-title">A useful test run in one screen.</h2>
           <p>
-            The focused runner keeps the daily workflow tight: pick a scenario, simulate behavior, inspect the
-            evidence, and rerun after every agent prompt or tool change.
+            The focused workflow stays honest: choose a scenario, run an agent, inspect the captured evidence, and
+            rerun after every prompt, model, or tool change.
           </p>
         </div>
         <div className="proof-table" aria-label="Benchmark runner workflow preview">
@@ -247,9 +246,9 @@ export default function HomePage() {
         <div>
           <p className="eyebrow">MVP</p>
           <h2>Run the first scenario benchmark.</h2>
-          <p>Open the focused benchmark workspace for repeated scenario testing.</p>
+          <p>Choose a scenario, then run an agent or evaluate existing evidence.</p>
         </div>
-        <Link className="primary-link" href="/simulate">Open workspace</Link>
+        <Link className="primary-link" href="/scenarios">Browse scenarios</Link>
       </section>
     </main>
   );

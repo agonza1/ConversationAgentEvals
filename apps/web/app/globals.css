@@ -1786,6 +1786,40 @@ select {
   gap: 8px;
 }
 
+.scenarios-suite-group {
+  display: grid;
+  gap: 8px;
+  padding-top: 6px;
+}
+
+.scenarios-suite-group + .scenarios-suite-group {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+.scenarios-suite-group > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.scenarios-suite-group h3,
+.scenarios-suite-group p {
+  margin: 0;
+}
+
+.scenarios-suite-group h3 {
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.scenarios-suite-group p {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 .scenarios-list button {
   width: 100%;
   text-align: left;
