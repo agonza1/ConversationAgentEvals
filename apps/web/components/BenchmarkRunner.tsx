@@ -1967,6 +1967,12 @@ function readWorkflowDemoPreset() {
   return WORKFLOW_DEMO_PRESETS[demo] ?? null;
 }
 
+function shouldPreloadSampleEvidence() {
+  if (typeof window === 'undefined') return false;
+  const params = new URLSearchParams(window.location.search);
+  return params.get('demo') === 'sample-evidence' || params.get('sample') === '1';
+}
+
 function transcriptFromVcon(vcon: JsonRecord): string {
   const parties = Array.isArray(vcon.parties) ? vcon.parties : [];
   const dialog = Array.isArray(vcon.dialog) ? vcon.dialog : [];
@@ -2393,10 +2399,14 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
       listSavedRuns(userId, projectId, selectedSuite.id).catch(() => []),
       listAuditEvents(userId, projectId).catch(() => []),
       listBenchmarkSuiteRuns(userId, projectId, selectedSuite.id, suiteRunStatusFilter).catch(() => []),
-      fetchProjectRegressionSummary(userId, projectId).catch(() => null),
-      fetchProjectRegressionSummary(userId, projectId, selectedSuite.id, selectedScenario.id).catch(() => null),
     ])
-      .then(([runs, nextSuiteSavedRuns, events, nextSuiteRuns, summary, scenarioSummary]) => {
+      .then(async ([runs, nextSuiteSavedRuns, events, nextSuiteRuns]) => {
+        const [summary, scenarioSummary] = await Promise.all([
+          nextSuiteSavedRuns.length ? fetchProjectRegressionSummary(userId, projectId).catch(() => null) : Promise.resolve(null),
+          runs.length
+            ? fetchProjectRegressionSummary(userId, projectId, selectedSuite.id, selectedScenario.id).catch(() => null)
+            : Promise.resolve(null),
+        ]);
         if (!isMounted) return;
         setSavedRuns(runs);
         setSuiteSavedRuns(nextSuiteSavedRuns);
@@ -2460,9 +2470,10 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
       return;
     }
 
-    setTranscript(selectedScenario.sample_transcript ?? '');
-    setActionTrace(stringifyEditable(selectedScenario.sample_action_trace, '[]'));
-    setFinalState(stringifyEditable(selectedScenario.sample_final_state ?? selectedScenario.expected_final_state, '{}'));
+    const preloadSample = view !== 'score' || shouldPreloadSampleEvidence();
+    setTranscript(preloadSample ? selectedScenario.sample_transcript ?? '' : '');
+    setActionTrace(preloadSample ? stringifyEditable(selectedScenario.sample_action_trace, '[]') : '');
+    setFinalState(preloadSample ? stringifyEditable(selectedScenario.sample_final_state ?? selectedScenario.expected_final_state, '{}') : '');
     setCallEvidence('');
     setGroupCall('');
     setVconEvidence('');
@@ -2472,7 +2483,10 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     setJudgeGate(null);
     setCopyMessage(null);
     setRunError(null);
-  }, [selectedScenario]);
+    setUploadMessage(preloadSample && view === 'score'
+      ? `Loaded sample evidence for ${selectedScenario.title}. This evidence is synthetic.`
+      : null);
+  }, [selectedScenario, view]);
 
   useEffect(() => {
     if (!userId || !projectId || !selectedSuite?.id) return;
@@ -3307,7 +3321,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
   return (
     <section style={{ display: 'grid', gap: 20 }}>
-      {(view === 'score' || view === 'all') ? (
+      {(view === 'all' || (view === 'score' && Boolean(report))) ? (
         <section className="card openai-provider-panel" aria-label="OpenAI judge provider">
           <div className="openai-provider-control">
             <div>
@@ -3713,60 +3727,34 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
               />
             </label>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
-              <label style={{ display: 'grid', gap: 8 }}>
-                <span style={{ fontWeight: 700 }}>Action/tool trace</span>
-                <textarea
-                  value={actionTrace}
-                  onChange={(event) => setActionTrace(event.target.value)}
-                  rows={7}
-                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }}
-                />
-              </label>
-
-              <label style={{ display: 'grid', gap: 8 }}>
-                <span style={{ fontWeight: 700 }}>Final observed state</span>
-                <textarea
-                  value={finalState}
-                  onChange={(event) => setFinalState(event.target.value)}
-                  rows={7}
-                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }}
-                />
-              </label>
-            </div>
-
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Voice call evidence</span>
-              <textarea
-                value={callEvidence}
-                onChange={(event) => setCallEvidence(event.target.value)}
-                rows={7}
-                placeholder='{"turns":[{"speaker":"Caller","body":"I need a human."},{"speaker":"Agent","body":"I created a ticket and escalated you."}],"metrics":{"durationMs":92000,"avgLatencyMs":340},"media":{"recordingUrl":"https://storage.example.test/calls/demo.wav","mimeType":"audio/wav"}}'
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }}
-              />
-            </label>
-
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Group call evidence</span>
-              <textarea
-                value={groupCall}
-                onChange={(event) => setGroupCall(event.target.value)}
-                rows={7}
-                placeholder='{"messages":[{"speaker":"Patient","text":"I need a refill"}],"decisions":["Route to clinician review"],"commitments":["Send update by 5 PM"],"follow_up_actions":["Confirm pharmacy"]}'
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }}
-              />
-            </label>
-
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>vCon record</span>
-              <textarea
-                value={vconEvidence}
-                onChange={(event) => setVconEvidence(event.target.value)}
-                rows={7}
-                placeholder='{"vcon":"0.0.1","parties":[{"name":"Caller"},{"name":"Agent"}],"dialog":[{"party":0,"body":"I need a human."},{"party":1,"body":"I created a ticket and escalated you."}]}'
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }}
-              />
-            </label>
+            <details className="eval-structured-evidence">
+              <summary>Structured and channel evidence (optional)</summary>
+              <p>Expand when you have tool traces, final-state data, voice/group-call artifacts, or a full vCon record.</p>
+              <div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
+                  <label style={{ display: 'grid', gap: 8 }}>
+                    <span style={{ fontWeight: 700 }}>Action/tool trace</span>
+                    <textarea value={actionTrace} onChange={(event) => setActionTrace(event.target.value)} rows={7} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
+                  </label>
+                  <label style={{ display: 'grid', gap: 8 }}>
+                    <span style={{ fontWeight: 700 }}>Final observed state</span>
+                    <textarea value={finalState} onChange={(event) => setFinalState(event.target.value)} rows={7} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
+                  </label>
+                </div>
+                <label style={{ display: 'grid', gap: 8 }}>
+                  <span style={{ fontWeight: 700 }}>Voice call evidence</span>
+                  <textarea value={callEvidence} onChange={(event) => setCallEvidence(event.target.value)} rows={7} placeholder='{"turns":[{"speaker":"Caller","body":"I need a human."},{"speaker":"Agent","body":"I created a ticket and escalated you."}],"metrics":{"durationMs":92000,"avgLatencyMs":340}}' style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
+                </label>
+                <label style={{ display: 'grid', gap: 8 }}>
+                  <span style={{ fontWeight: 700 }}>Group call evidence</span>
+                  <textarea value={groupCall} onChange={(event) => setGroupCall(event.target.value)} rows={7} placeholder='{"messages":[{"speaker":"Patient","text":"I need a refill"}],"decisions":["Route to clinician review"]}' style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
+                </label>
+                <label style={{ display: 'grid', gap: 8 }}>
+                  <span style={{ fontWeight: 700 }}>vCon record</span>
+                  <textarea value={vconEvidence} onChange={(event) => setVconEvidence(event.target.value)} rows={7} placeholder='{"vcon":"0.0.1","parties":[{"name":"Caller"},{"name":"Agent"}],"dialog":[{"party":0,"body":"I need a human."}]}' style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
+                </label>
+              </div>
+            </details>
           </div>
         </details>
 
@@ -4546,7 +4534,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         </section>
       ) : null}
 
-      {view === 'score' || view === 'all' ? (
+      {view === 'all' || (view === 'score' && Boolean(report || savedRuns.length || suiteRuns.length)) ? (
       <section className="validation-grid" aria-label="Saved runs and e2e validation">
         <div className="card" style={{ padding: 20, display: 'grid', gap: 12 }}>
           <p className="eyebrow">Saved runs</p>

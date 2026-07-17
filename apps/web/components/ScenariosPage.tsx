@@ -160,6 +160,7 @@ function scenarioKey(suiteId: string, scenarioId: string) {
 
 function scenarioHref(path: '/runs' | '/eval', scenario: ScenarioRecord) {
   const query: Record<string, string> = { suite_id: scenario.suite_id, scenario_id: scenario.id };
+  if (path === '/eval') query.sample = '1';
   if (typeof window !== 'undefined') {
     const apiBase = new URLSearchParams(window.location.search).get('api_base');
     if (apiBase) query.api_base = apiBase;
@@ -205,6 +206,7 @@ export function ScenariosPage() {
   const [reloadKey, setReloadKey] = useState(0);
   const loadRequestRef = useRef(0);
   const preferredSelectionRef = useRef('');
+  const detailRef = useRef<HTMLElement | null>(null);
 
   const selected = useMemo(() => {
     for (const suite of suites) {
@@ -299,7 +301,7 @@ export function ScenariosPage() {
   return (
     <section className="scenarios-shell" aria-label="Scenarios">
       <div className="scenarios-layout">
-        <aside className="scenarios-sidebar card">
+        <aside id="scenario-catalog" className="scenarios-sidebar card">
           <div className="scenarios-sidebar-header">
             <div>
               <p className="eyebrow">Evaluation suites</p>
@@ -331,7 +333,18 @@ export function ScenariosPage() {
                   const key = scenarioKey(suite.id, scenario.id);
                   return (
                     <li key={key}>
-                      <button type="button" className={selectedKey === key && mode === 'view' ? 'is-active' : undefined} onClick={() => { setSelectedKey(key); setMode('view'); setSaveMessage(null); }}>
+                      <button
+                        type="button"
+                        className={selectedKey === key && mode === 'view' ? 'is-active' : undefined}
+                        onClick={() => {
+                          setSelectedKey(key);
+                          setMode('view');
+                          setSaveMessage(null);
+                          if (window.matchMedia('(max-width: 900px)').matches) {
+                            window.requestAnimationFrame(() => detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+                          }
+                        }}
+                      >
                         <strong>{scenario.title}</strong>
                         <span>{scenario.user_goal || scenario.description || scenario.user_persona}</span>
                       </button>
@@ -368,7 +381,7 @@ export function ScenariosPage() {
           ) : null}
 
           {mode === 'view' && selected ? (
-            <section className="card scenarios-detail" aria-label="Selected scenario">
+            <section ref={detailRef} id="scenario-detail" className="card scenarios-detail" aria-label="Selected scenario">
               <div className="scenarios-detail-header">
                 <div>
                   <p className="eyebrow">{selected.suite.title}</p>
@@ -380,6 +393,7 @@ export function ScenariosPage() {
                   <Link className="secondary-link" href={scenarioHref('/eval', selected.scenario)}>Eval sample evidence</Link>
                 </div>
               </div>
+              <a className="scenario-back-link" href="#scenario-catalog">← Back to scenario catalog</a>
               <FieldCard title="User persona / starting prompt" value={selected.scenario.user_persona || selected.scenario.simulated_user_prompt} onCopy={(label, text) => void onCopy(label, text)} />
               <FieldCard title="Goal" value={selected.scenario.user_goal || selected.scenario.description} onCopy={(label, text) => void onCopy(label, text)} />
               <FieldCard title="Required actions" value={listText(selected.scenario.required_actions)} onCopy={(label, text) => void onCopy(label, text)} />

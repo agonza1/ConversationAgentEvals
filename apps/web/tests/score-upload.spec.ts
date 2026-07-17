@@ -33,6 +33,8 @@ test('eval page uploads vCon and loads sample call-center evidence', async ({ pa
   await page.getByRole('button', { name: 'Evaluate evidence' }).click();
   await expect(page.getByText('Benchmark report', { exact: true })).toBeVisible();
   await expect(page.getByText('Task completion', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('OpenAI judge provider')).toBeVisible();
+  await expect(page.getByLabel('Saved runs and e2e validation')).toBeVisible();
   await expect(page.locator('form').first().locator('select').nth(0)).toHaveValue('call-center-voice-ai');
   await expect(page.locator('form').first().locator('select').nth(1)).toHaveValue('billing-address-change');
 });

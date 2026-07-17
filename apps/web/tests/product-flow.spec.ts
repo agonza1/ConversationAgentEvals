@@ -26,9 +26,12 @@ test('dedicated paths expose only their primary workflow', async ({ page }) => {
   await expect(page.getByLabel('Suite contract manifest')).toHaveCount(0);
   await expect(page.getByText('Required evidence:')).toHaveCount(0);
   await expect(page.getByText('Advanced details')).toBeVisible();
+  await expect(page.locator('form').first().locator('textarea').first()).toHaveValue('');
+  await expect(page.getByRole('button', { name: 'Evaluate evidence' })).toBeDisabled();
+  await expect(page.getByText(/This evidence is synthetic/)).toHaveCount(0);
   await page.getByRole('button', { name: 'Load sample evidence' }).click();
   await expect(page.getByLabel('Call Center Voice AI sample evidence options')).toBeVisible();
-  await expect(page.getByLabel('Saved runs and e2e validation')).toBeVisible();
+  await expect(page.getByLabel('Saved runs and e2e validation')).toHaveCount(0);
 
   await page.goto('/runs');
   await expect(page.getByRole('heading', { name: 'Run an agent' })).toBeVisible();
@@ -54,6 +57,7 @@ test('scenario and eval deep links preload the advertised scenario', async ({ pa
   await page.goto('/scenarios?suite_id=call-center-voice-ai&scenario_id=billing-address-change');
   await expect(page.getByRole('heading', { name: 'Billing Address Change' })).toBeVisible();
   await expect(page.getByLabel('Selected scenario').getByRole('link', { name: 'Run agent' })).toHaveAttribute('href', /suite_id=call-center-voice-ai&scenario_id=billing-address-change/);
+  await expect(page.getByLabel('Selected scenario').getByRole('link', { name: 'Eval sample evidence' })).toHaveAttribute('href', /sample=1/);
 
   await page.goto('/eval?demo=sample-evidence');
   await expect(page.getByText('Loading benchmark suites...')).toHaveCount(0);
@@ -61,4 +65,30 @@ test('scenario and eval deep links preload the advertised scenario', async ({ pa
   await expect(evalForm.locator('select').nth(0)).toHaveValue('call-center-voice-ai');
   await expect(evalForm.locator('select').nth(1)).toHaveValue('billing-address-change');
   await expect(evalForm.locator('textarea').first()).not.toHaveValue('');
+});
+
+test('mobile scenario selection moves focus to the selected detail', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/scenarios');
+
+  await page.getByRole('button', { name: /Suspicious Card Charge/ }).click();
+  await expect(page.getByLabel('Selected scenario').getByRole('heading', { name: 'Suspicious Card Charge' })).toBeInViewport();
+  await expect(page.getByRole('link', { name: 'Back to scenario catalog' })).toBeVisible();
+
+  const navHeight = await page.getByRole('navigation', { name: 'Primary' }).evaluate((element) => element.getBoundingClientRect().height);
+  expect(navHeight).toBeLessThan(100);
+});
+
+test('empty eval history does not request unavailable regression summaries', async ({ page }) => {
+  let regressionSummaryRequests = 0;
+  await page.route('**/api/product/runs?*', async (route) => route.fulfill({ json: [] }));
+  await page.route('**/api/product/projects/*/regression-summary?*', async (route) => {
+    regressionSummaryRequests += 1;
+    await route.fulfill({ json: {} });
+  });
+
+  await page.goto('/eval');
+  await expect(page.getByRole('heading', { name: 'Evaluate conversation evidence.' })).toBeVisible();
+  await page.waitForLoadState('networkidle');
+  expect(regressionSummaryRequests).toBe(0);
 });

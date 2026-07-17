@@ -58,8 +58,8 @@ export function RunsListPage() {
       {!loading && !runs.length ? (
         <section className="card scenarios-empty">
           <h2>No execution runs yet</h2>
-          <p className="scenarios-muted">Launch an agent run above, then open it here for analysis.</p>
-          <a className="primary-link" href="#launch-agent">Launch agent run</a>
+          <p className="scenarios-muted">Launch the selected agent above, or choose a different test from the scenario catalog.</p>
+          <Link className="secondary-link" href="/scenarios">Browse scenarios</Link>
         </section>
       ) : null}
 

@@ -856,10 +856,15 @@ select {
     padding-top: 24px;
   }
 
-  .top-nav,
-  .top-nav div {
+  .top-nav {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .top-nav div {
+    width: 100%;
+    flex-flow: row wrap;
+    gap: 10px 16px;
   }
 
   .saas-hero h1 {
@@ -1759,6 +1764,10 @@ select {
   padding: 20px;
   display: grid;
   gap: 14px;
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  position: sticky;
+  top: 20px;
 }
 
 .scenarios-sidebar-header {
@@ -1907,6 +1916,38 @@ select {
   gap: 10px;
 }
 
+.scenario-back-link {
+  display: none;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.eval-structured-evidence {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-alt);
+  padding: 12px 14px;
+}
+
+.eval-structured-evidence > summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.eval-structured-evidence > p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.eval-structured-evidence > div {
+  display: grid;
+  gap: 16px;
+  margin-top: 14px;
+}
+
 .scenarios-muted {
   margin: 0;
   color: var(--muted);
@@ -2008,5 +2049,15 @@ select {
   .scenarios-sidebar-header,
   .scenarios-detail-header {
     flex-direction: column;
+  }
+
+  .scenarios-sidebar {
+    max-height: none;
+    overflow: visible;
+    position: static;
+  }
+
+  .scenario-back-link {
+    display: inline-flex;
   }
 }
