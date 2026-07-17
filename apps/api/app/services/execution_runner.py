@@ -62,7 +62,10 @@ def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
     if not scenario_ids:
         scenario_ids = [item['id'] for item in suite.get('scenarios') or []]
         optional = suite.get('optional_scenarios') or []
-        if resolved.mode in {'voice_fixture', 'pipecat_webrtc'} and optional:
+        if (
+            resolved.mode in {'voice_fixture', 'pipecat_webrtc'}
+            or resolved.text_callable == 'offline_acc_fixture'
+        ) and optional:
             scenario_ids = [optional[0]['id']]
         elif not scenario_ids and optional:
             scenario_ids = [optional[0]['id']]

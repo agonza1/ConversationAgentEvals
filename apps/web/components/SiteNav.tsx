@@ -1,4 +1,4 @@
-import Link from 'next/link';
+import { ApiAwareLink } from '@/components/ApiAwareLink';
 
 export function SiteNav({
   current,
@@ -7,13 +7,13 @@ export function SiteNav({
 }) {
   return (
     <nav className="top-nav compact-nav" aria-label="Primary">
-      <Link className="brand" href="/">AgentBench</Link>
+      <ApiAwareLink className="brand" href="/">AgentBench</ApiAwareLink>
       <div>
-        <Link href="/" aria-current={current === 'home' ? 'page' : undefined}>Homepage</Link>
-        <Link href="/scenarios" aria-current={current === 'scenarios' ? 'page' : undefined}>Scenarios</Link>
-        <Link href="/agents" aria-current={current === 'agents' ? 'page' : undefined}>Agents</Link>
-        <Link href="/runs" aria-current={current === 'runs' ? 'page' : undefined}>Run agent</Link>
-        <Link href="/eval" aria-current={current === 'eval' ? 'page' : undefined}>Eval</Link>
+        <ApiAwareLink href="/" aria-current={current === 'home' ? 'page' : undefined}>Homepage</ApiAwareLink>
+        <ApiAwareLink href="/scenarios" aria-current={current === 'scenarios' ? 'page' : undefined}>Scenarios</ApiAwareLink>
+        <ApiAwareLink href="/agents" aria-current={current === 'agents' ? 'page' : undefined}>Agents</ApiAwareLink>
+        <ApiAwareLink href="/runs" aria-current={current === 'runs' ? 'page' : undefined}>Run agent</ApiAwareLink>
+        <ApiAwareLink href="/eval" aria-current={current === 'eval' ? 'page' : undefined}>Eval</ApiAwareLink>
       </div>
     </nav>
   );

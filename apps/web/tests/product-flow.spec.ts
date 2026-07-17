@@ -9,6 +9,15 @@ test('homepage links to focused workflow demos', async ({ page }) => {
   await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Benchmarks' })).toHaveCount(0);
 });
 
+test('homepage navigation preserves an API base override', async ({ page }) => {
+  await page.goto('/?api_base=http%3A%2F%2Fapi.example.test');
+
+  await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Run agent' })).toHaveAttribute(
+    'href',
+    '/runs?api_base=http%3A%2F%2Fapi.example.test',
+  );
+});
+
 test('dedicated paths expose only their primary workflow', async ({ page }) => {
   await page.goto('/simulate');
   await expect(page).toHaveURL(/\/scenarios$/);

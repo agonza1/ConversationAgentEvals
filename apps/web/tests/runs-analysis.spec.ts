@@ -105,6 +105,10 @@ test('runs list preserves an API base override in analysis links', async ({ page
     'href',
     '/runs/exec-demo123?api_base=http%3A%2F%2Fapi.example.test',
   );
+  await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Scenarios' })).toHaveAttribute(
+    'href',
+    '/scenarios?api_base=http%3A%2F%2Fapi.example.test',
+  );
 });
 
 test('text agent analysis hides the stub waveform', async ({ page }) => {

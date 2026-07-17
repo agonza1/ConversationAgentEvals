@@ -1,5 +1,7 @@
 import Link from 'next/link';
 
+import { ApiAwareLink } from '@/components/ApiAwareLink';
+
 const domains = [
   {
     name: 'Call center voice AI',
@@ -100,14 +102,14 @@ export default function HomePage() {
   return (
     <main className="saas-shell">
       <nav className="top-nav" aria-label="Primary">
-        <Link className="brand" href="/">AgentBench</Link>
+        <ApiAwareLink className="brand" href="/">AgentBench</ApiAwareLink>
         <div>
           <a href="#product">Product</a>
-          <Link href="/scenarios">Scenarios</Link>
-          <Link href="/agents">Agents</Link>
-          <Link href="/runs">Run agent</Link>
-          <Link href="/eval">Eval</Link>
-          <Link href="/voice">Voice eval</Link>
+          <ApiAwareLink href="/scenarios">Scenarios</ApiAwareLink>
+          <ApiAwareLink href="/agents">Agents</ApiAwareLink>
+          <ApiAwareLink href="/runs">Run agent</ApiAwareLink>
+          <ApiAwareLink href="/eval">Eval</ApiAwareLink>
+          <ApiAwareLink href="/voice">Voice eval</ApiAwareLink>
         </div>
       </nav>
 

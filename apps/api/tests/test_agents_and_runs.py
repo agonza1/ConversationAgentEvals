@@ -317,6 +317,30 @@ def test_explicit_text_mode_uses_selected_text_agent_target_when_callable_is_omi
     assert resolved.text_callable == 'openai_codex'
 
 
+def test_offline_text_agent_without_scenarios_defaults_to_cancellation_rescue():
+    created = client.post(
+        '/api/agents',
+        json={
+            'name': 'Default offline fixture target',
+            'channel': 'text',
+            'target': 'offline_acc_fixture',
+        },
+    )
+    assert created.status_code == 200, created.text
+
+    queued = start_execution_run(
+        ExecutionRunCreateRequest(
+            suite_id='call-center-voice-ai',
+            agent_id=created.json()['id'],
+            user_id='agent-runs-user',
+            project_id='agent-runs-project',
+        )
+    )
+
+    assert queued['mode'] == 'text_callable'
+    assert queued['scenario_ids'] == ['cancellation-rescue']
+
+
 def test_explicit_openai_target_executes_selected_model_for_any_text_agent_without_fake_tool_evidence():
     from app.services.llm_providers import set_provider_for_tests
 
