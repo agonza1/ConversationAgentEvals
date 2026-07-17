@@ -8,7 +8,7 @@ ConversationAgentEvals is an application and workflow wrapper around ASSERT. ASS
 
 There is one product and one supported evaluation path. Historical product variants and the former local evaluator are not supported.
 
-## WebRTC.ventures voice-agent reliability projects
+## All voice-agent reliability projects
 
 This project is part of the [WebRTC.ventures](https://webrtc.ventures/) open-source voice-agent reliability initiative. The projects remain independently usable and integrate through explicit adapters and evidence contracts:
 
