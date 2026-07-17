@@ -2110,7 +2110,6 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   const [isSimulating, setIsSimulating] = useState(false);
   const [isEnqueueingSuite, setIsEnqueueingSuite] = useState(false);
   const [executionMode, setExecutionMode] = useState<'text_callable' | 'voice_fixture' | 'pipecat_webrtc'>('text_callable');
-  const [executionTextCallable, setExecutionTextCallable] = useState('mock_agent');
   const [executionScope, setExecutionScope] = useState<'selected' | 'suite'>('selected');
   const [executionIterations, setExecutionIterations] = useState(1);
   const [executionRun, setExecutionRun] = useState<ExecutionRunRecord | null>(null);
@@ -2317,9 +2316,6 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             setExecutionMode('voice_fixture');
           } else {
             setExecutionMode('text_callable');
-            if (matched.target === 'mock_agent' || matched.target === 'openai_codex' || matched.target === 'offline_acc_fixture') {
-              setExecutionTextCallable(matched.target);
-            }
           }
         }
         setAgentsLoaded(true);
@@ -2343,7 +2339,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
   useEffect(() => {
     if (view !== 'run' || typeof window === 'undefined') return;
-    if (autoLaunchDemoRef.current || isLoading || isLaunchingExecution || !selectedSuite || !agentsLoaded) return;
+    if (autoLaunchDemoRef.current || isLoading || isLaunchingExecution || !selectedSuite || !agentsLoaded || !openaiProvider) return;
 
     const params = new URLSearchParams(window.location.search);
     if (params.get('launch') !== 'demo') return;
@@ -2367,6 +2363,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     selectedAgentId,
     agentsLoaded,
     executionMode,
+    openaiProvider,
   ]);
 
   useEffect(() => {
@@ -3075,13 +3072,36 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     }
   }
 
-  async function onLaunchExecution(options?: { redirectToAnalysis?: boolean }) {
+  async function onLaunchExecution(options?: { redirectToAnalysis?: boolean; target?: 'live' | 'configured' }) {
     if (!selectedSuite) return null;
     const identity = ensureDemoIdentity();
 
-    const voiceModes = executionMode === 'voice_fixture' || executionMode === 'pipecat_webrtc';
+    const launchTarget = options?.target ?? 'live';
+    const liveModelRun = launchTarget === 'live';
+    if (liveModelRun && selectedScoreAgent?.channel !== 'text') {
+      setExecutionMessage('Live model execution currently supports text agents. Use Run fixture for this voice agent.');
+      return null;
+    }
+    if (liveModelRun && openaiProvider?.status !== 'connected') {
+      setExecutionMessage('Connect OpenAI before launching a live agent run.');
+      return null;
+    }
+
+    const fixtureBackedAgent = selectedScoreAgent?.target === 'voice_fixture' || selectedScoreAgent?.target === 'offline_acc_fixture';
+    const runMode = liveModelRun
+      ? 'text_callable'
+      : fixtureBackedAgent
+        ? executionMode
+        : 'text_callable';
+    const runTextCallable = liveModelRun
+      ? 'openai_codex'
+      : selectedScoreAgent?.target === 'offline_acc_fixture'
+        ? 'offline_acc_fixture'
+        : 'mock_agent';
+
+    const voiceModes = runMode === 'voice_fixture' || runMode === 'pipecat_webrtc';
     const offlineFixtureText =
-      executionMode === 'text_callable' && executionTextCallable === 'offline_acc_fixture';
+      runMode === 'text_callable' && runTextCallable === 'offline_acc_fixture';
     // Voice fixture, Pipecat WebRTC, and text offline_acc_fixture require the optional
     // cancellation-rescue scenario on call-center-voice-ai; do not post other scenario ids.
     const fixtureBackedRun = voiceModes || offlineFixtureText;
@@ -3113,8 +3133,8 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
       const queued = await createExecutionRun({
         suite_id: suiteForRun,
         scenario_ids: scenarioIds,
-        mode: executionMode,
-        text_callable: executionMode === 'text_callable' ? executionTextCallable : undefined,
+        mode: runMode,
+        text_callable: runMode === 'text_callable' ? runTextCallable : undefined,
         iterations: executionIterations,
         user_id: identity.userId,
         project_id: identity.projectId,
@@ -3895,26 +3915,46 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
               <code>inference_set.jsonl</code> while conversations append to the live list.
             </p>
           </div>
-          <button
-            type="button"
-            disabled={isLaunchingExecution || isRunning || isSimulating || !selectedSuite}
-            onClick={() => void onLaunchExecution()}
-            style={{
-              border: 0,
-              borderRadius: 8,
-              background: 'var(--accent)',
-              color: 'white',
-              padding: '12px 18px',
-              fontWeight: 800,
-              opacity: isLaunchingExecution || isRunning || isSimulating || !selectedSuite ? 0.65 : 1,
-            }}
-          >
-            {isLaunchingExecution
-              ? 'Launching...'
-              : executionRun && isActiveExecutionStatus(executionRun.status)
-                ? 'Execution running...'
-                : 'Launch agent run'}
-          </button>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              disabled={
+                isLaunchingExecution
+                || isRunning
+                || isSimulating
+                || !selectedSuite
+                || !selectedScoreAgent
+                || selectedScoreAgent.channel !== 'text'
+                || openaiProvider?.status !== 'connected'
+              }
+              onClick={() => void onLaunchExecution({ target: 'live' })}
+              style={{
+                border: 0,
+                borderRadius: 8,
+                background: 'var(--accent)',
+                color: 'white',
+                padding: '12px 18px',
+                fontWeight: 800,
+                opacity: isLaunchingExecution || isRunning || isSimulating || !selectedSuite || !selectedScoreAgent || selectedScoreAgent.channel !== 'text' || openaiProvider?.status !== 'connected' ? 0.65 : 1,
+              }}
+            >
+              {isLaunchingExecution
+                ? 'Launching...'
+                : executionRun && isActiveExecutionStatus(executionRun.status)
+                  ? 'Execution running...'
+                  : 'Launch agent run'}
+            </button>
+            <button
+              type="button"
+              className="secondary-link"
+              disabled={isLaunchingExecution || isRunning || isSimulating || !selectedSuite || !selectedScoreAgent}
+              onClick={() => void onLaunchExecution({ target: 'configured' })}
+            >
+              {selectedScoreAgent?.target === 'voice_fixture' || selectedScoreAgent?.target === 'offline_acc_fixture'
+                ? 'Run fixture'
+                : 'Mock agent run'}
+            </button>
+          </div>
         </div>
 
         {view === 'run' && loadError ? (
@@ -3928,14 +3968,8 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
         {view === 'run' && selectedSuite && !loadError ? (
           <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }} aria-label="Default scenario for launch">
-            Uses this agent&apos;s configured target
-            {executionMode === 'voice_fixture' || executionMode === 'pipecat_webrtc'
-              ? ' (Call Center Voice AI / Cancellation Rescue).'
-              : executionTextCallable === 'offline_acc_fixture'
-                ? ' (Call Center Voice AI / Cancellation Rescue via offline ACC fixture).'
-                : executionScope === 'suite'
-                  ? ` for the full ${selectedSuite.title} suite.`
-                  : ` for ${selectedScenario?.title ?? 'the default scenario'}.`}
+            Launch agent run uses {executionModelName || DEFAULT_EXECUTION_MODEL} through the connected OpenAI provider.
+            {' '}The secondary action uses the selected agent&apos;s configured mock or fixture target.
           </p>
         ) : null}
 
@@ -3954,9 +3988,6 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                   setExecutionMode('voice_fixture');
                 } else {
                   setExecutionMode('text_callable');
-                  if (agent.target === 'mock_agent' || agent.target === 'openai_codex' || agent.target === 'offline_acc_fixture') {
-                    setExecutionTextCallable(agent.target);
-                  }
                 }
               }}
               style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
@@ -4016,48 +4047,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         <details>
           <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Advanced</summary>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginTop: 12 }}>
-            <label style={{ display: 'grid', gap: 8 }}>
-              <span style={{ fontWeight: 700 }}>Target mode</span>
-              <select
-                aria-label="Execution target mode"
-                value={executionMode}
-                onChange={(event) =>
-                  setExecutionMode(event.target.value as 'text_callable' | 'voice_fixture' | 'pipecat_webrtc')
-                }
-                style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
-              >
-                <option value="text_callable">Text callable</option>
-                <option value="voice_fixture">Voice fixture</option>
-                <option value="pipecat_webrtc">Pipecat hooks (in-process mock)</option>
-              </select>
-            </label>
-
-            {executionMode === 'text_callable' ? (
-              <label style={{ display: 'grid', gap: 8 }}>
-                <span style={{ fontWeight: 700 }}>Text callable</span>
-                <select
-                  aria-label="Text callable target"
-                  value={executionTextCallable}
-                  onChange={(event) => setExecutionTextCallable(event.target.value)}
-                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
-                >
-                  <option value="mock_agent">mock_agent</option>
-                  <option value="openai_codex">openai_codex (live OpenAI model)</option>
-                  <option value="offline_acc_fixture">offline_acc_fixture</option>
-                </select>
-              </label>
-            ) : (
-              <div style={{ display: 'grid', gap: 8 }}>
-                <span style={{ fontWeight: 700 }}>Voice target</span>
-                <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }}>
-                  {executionMode === 'pipecat_webrtc'
-                    ? 'In-process mock of Pipecat small WebRTC hooks (no live peer).'
-                    : 'ACC audio plan + cancellation-rescue fixture (no live SIP/WebRTC).'}
-                </p>
-              </div>
-            )}
-
-            {executionMode === 'text_callable' ? (
+            {selectedScoreAgent?.channel === 'text' ? (
               <label style={{ display: 'grid', gap: 8 }}>
                 <span style={{ fontWeight: 700 }}>Scenario scope</span>
                 <select

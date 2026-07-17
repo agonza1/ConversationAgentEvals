@@ -103,7 +103,6 @@ export default function HomePage() {
         <Link className="brand" href="/">AgentBench</Link>
         <div>
           <a href="#product">Product</a>
-          <a href="#benchmarks">Benchmarks</a>
           <Link href="/scenarios">Scenarios</Link>
           <Link href="/agents">Agents</Link>
           <Link href="/runs">Run agent</Link>

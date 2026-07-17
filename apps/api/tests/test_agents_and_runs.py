@@ -317,7 +317,7 @@ def test_explicit_text_mode_uses_selected_text_agent_target_when_callable_is_omi
     assert resolved.text_callable == 'openai_codex'
 
 
-def test_openai_codex_agent_executes_a_real_provider_response_without_fake_tool_evidence():
+def test_explicit_openai_target_executes_selected_model_for_any_text_agent_without_fake_tool_evidence():
     from app.services.llm_providers import set_provider_for_tests
 
     class FakeOpenAIProvider:
@@ -340,7 +340,7 @@ def test_openai_codex_agent_executes_a_real_provider_response_without_fake_tool_
         json={
             'name': 'Live OpenAI support agent',
             'channel': 'text',
-            'target': 'openai_codex',
+            'target': 'mock_agent',
             'description': 'Verify the caller before account changes.',
         },
     )
@@ -352,6 +352,8 @@ def test_openai_codex_agent_executes_a_real_provider_response_without_fake_tool_
         payload = ExecutionRunCreateRequest(
             suite_id='call-center-voice-ai',
             scenario_ids=['billing-address-change'],
+            mode='text_callable',
+            text_callable='openai_codex',
             agent_id=agent_id,
             model_name='gpt-5.4',
             user_id='agent-runs-user',

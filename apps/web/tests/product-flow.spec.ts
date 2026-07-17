@@ -6,6 +6,7 @@ test('homepage links to focused workflow demos', async ({ page }) => {
   await expect(page.getByRole('link', { name: 'Browse evaluation scenarios' })).toHaveAttribute('href', '/scenarios');
   await expect(page.getByRole('link', { name: 'Eval sample evidence' })).toHaveAttribute('href', '/eval?demo=sample-evidence');
   await expect(page.getByRole('link', { name: 'Launch agent run' })).toHaveAttribute('href', '/runs?launch=demo');
+  await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Benchmarks' })).toHaveCount(0);
 });
 
 test('dedicated paths expose only their primary workflow', async ({ page }) => {
@@ -37,6 +38,7 @@ test('dedicated paths expose only their primary workflow', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Run an agent' })).toBeVisible();
   await expect(page.getByLabel('Launch agent run')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Launch agent run' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Mock agent run' })).toBeVisible();
   await expect(page.getByLabel('Saved runs and e2e validation')).toHaveCount(0);
   // /runs is execute/capture — not the evidence-eval contract console
   await expect(page.getByText('Benchmark suite')).toHaveCount(0);
