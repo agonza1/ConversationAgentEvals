@@ -3219,7 +3219,8 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         action_trace: useStructured && !isBlankJsonField(actionTrace) ? parseMaybeJson(actionTrace) : undefined,
         call: useStructured && callEvidence.trim() ? parseMaybeJson(callEvidence) : undefined,
         group_call: useStructured && groupCall.trim() ? parseMaybeJson(groupCall) : undefined,
-        vcon: vconEvidence.trim() ? parseMaybeJson(vconEvidence) as JsonRecord : undefined,
+        // Keep vCon behind the same opt-in on /eval so a leftover sample record cannot force a pass.
+        vcon: useStructured && vconEvidence.trim() ? parseMaybeJson(vconEvidence) as JsonRecord : undefined,
         ...runMetadata,
       });
       setReport(nextReport);
