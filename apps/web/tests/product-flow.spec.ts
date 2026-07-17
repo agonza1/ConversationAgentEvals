@@ -16,6 +16,14 @@ test('homepage navigation preserves an API base override', async ({ page }) => {
     'href',
     '/runs?api_base=http%3A%2F%2Fapi.example.test',
   );
+  await expect(page.getByRole('link', { name: 'Browse evaluation scenarios' })).toHaveAttribute(
+    'href',
+    '/scenarios?api_base=http%3A%2F%2Fapi.example.test',
+  );
+  await expect(page.getByRole('link', { name: 'Launch agent run' })).toHaveAttribute(
+    'href',
+    '/runs?launch=demo&api_base=http%3A%2F%2Fapi.example.test',
+  );
 });
 
 test('dedicated paths expose only their primary workflow', async ({ page }) => {

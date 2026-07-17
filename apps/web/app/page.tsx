@@ -1,5 +1,3 @@
-import Link from 'next/link';
-
 import { ApiAwareLink } from '@/components/ApiAwareLink';
 
 const domains = [
@@ -122,7 +120,7 @@ export default function HomePage() {
             regression platform before agents reach production.
           </p>
           <div className="hero-cta">
-            <Link className="primary-link" href="/scenarios">Browse evaluation scenarios</Link>
+            <ApiAwareLink className="primary-link" href="/scenarios">Browse evaluation scenarios</ApiAwareLink>
             <a className="secondary-link" href="#product">See how it works</a>
           </div>
         </div>
@@ -206,7 +204,7 @@ export default function HomePage() {
               <p className="eyebrow">{path.eyebrow}</p>
               <h3>{path.title}</h3>
               <p>{path.copy}</p>
-              <Link className="primary-link" href={path.href}>{path.cta}</Link>
+              <ApiAwareLink className="primary-link" href={path.href}>{path.cta}</ApiAwareLink>
             </article>
           ))}
         </div>
@@ -249,7 +247,7 @@ export default function HomePage() {
           <h2>Run the first scenario benchmark.</h2>
           <p>Choose a scenario, then run an agent or evaluate existing evidence.</p>
         </div>
-        <Link className="primary-link" href="/scenarios">Browse scenarios</Link>
+        <ApiAwareLink className="primary-link" href="/scenarios">Browse scenarios</ApiAwareLink>
       </section>
     </main>
   );
