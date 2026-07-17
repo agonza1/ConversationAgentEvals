@@ -12,6 +12,13 @@ import {
   listExecutionRuns,
 } from '@/lib/execution';
 
+function testerLabel(testerId?: ExecutionRunRecord['tester_id']) {
+  if (testerId === 'fixture_replay') return 'saved conversation replay';
+  if (testerId === 'pipecat_tester') return 'Pipecat voice tester';
+  if (testerId === 'scenario_simulator') return 'scenario simulator';
+  return null;
+}
+
 export function RunsListPage() {
   const [runs, setRuns] = useState<ExecutionRunRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -124,7 +131,7 @@ export function RunsListPage() {
                 </div>
                 <p>{run.execution_run_id}</p>
                 <p className="runs-list-meta">
-                  {[run.tester_id?.replaceAll('_', ' '), run.executor_id?.replaceAll('_', ' ')].filter(Boolean).join(' · ') || 'Execution record'}
+                  {[testerLabel(run.tester_id), run.executor_id?.replaceAll('_', ' ')].filter(Boolean).join(' · ') || 'Execution record'}
                 </p>
               </div>
               <div className="runs-list-secondary">

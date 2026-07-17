@@ -117,7 +117,7 @@ function evidenceLine(conversation: ExecutionConversation) {
   const readiness = asRecord(session?.real_call_readiness);
   if (conversation.mode === 'pipecat_webrtc') parts.push('Pipecat capture proof');
   if (provenance?.fixture_backed_scoring === true || readiness?.scoring === 'fixture_backed') {
-    parts.push('fixture-backed score');
+    parts.push('sample-based score');
   }
   if (readiness?.browser_webrtc_peer === 'not_connected') parts.push('no live browser peer');
   const url = conversation.recording?.recording_url ?? conversation.recording?.uri;
@@ -137,16 +137,16 @@ const modeOptions = [
     label: 'Pipecat capture proof',
     eyebrow: 'Run Agent + local hooks',
     description: 'Runs the selected target through the execution runner and captures local Pipecat transcript, recording metadata, frame counts, and vCon evidence.',
-    detail: 'Fixture-backed score; no browser mic or SIP call yet',
+    detail: 'Sample-based score; no browser mic or SIP call yet',
     button: 'Run through Run Agent',
   },
   {
     id: 'voice_fixture',
-    label: 'Offline fixture smoke',
+    label: 'Offline sample check',
     eyebrow: 'Fast regression path',
-    description: 'Uses deterministic audio fixtures to verify the scenario, scoring contract, transcript, and evidence packaging without transport dependencies.',
+    description: 'Uses predictable sample audio to verify the scenario, scoring contract, transcript, and evidence packaging without transport dependencies.',
     detail: 'No live media required',
-    button: 'Run fixture smoke',
+    button: 'Run sample check',
   },
 ] as const;
 
@@ -160,8 +160,8 @@ function voiceTargets(agents: AgentRecord[]) {
 
 function targetBadge(agent?: AgentRecord | null) {
   if (!agent) return 'No target loaded';
-  if (agent.target === 'voice_fixture') return 'Built-in voice fixture';
-  if (agent.target === 'offline_acc_fixture') return 'Offline ACC fixture';
+  if (agent.target === 'voice_fixture') return 'Built-in voice sample';
+  if (agent.target === 'offline_acc_fixture') return 'Saved ACC sample';
   return agent.target.replaceAll('_', ' ');
 }
 
@@ -281,7 +281,7 @@ export function VoiceEvalPage() {
         <dl className="voice-scenario-facts">
           <div><dt>Suite</dt><dd>Call center voice AI</dd></div>
           <div><dt>Execution engine</dt><dd>Run Agent</dd></div>
-          <div><dt>Current call proof</dt><dd>Fixture-backed capture</dd></div>
+          <div><dt>Current call proof</dt><dd>Sample-based capture</dd></div>
           <div><dt>Evaluation</dt><dd>Automatic scoring</dd></div>
         </dl>
         <div className="voice-evidence-list" aria-label="Expected evidence">

@@ -120,6 +120,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   });
 
   let posted: Record<string, unknown> | null = null;
+  let postAttempts = 0;
   await page.route('**/api/benchmarks/suite-runs**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
   });
@@ -127,6 +128,20 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await page.route('**/api/execution/runs**', async (route) => {
     if (route.request().method() === 'POST') {
       const body = route.request().postDataJSON() as Record<string, unknown>;
+      postAttempts += 1;
+      if (postAttempts === 1) {
+        await route.fulfill({
+          status: 422,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            detail: [
+              { loc: ['body', 'tester_id'], msg: 'Extra inputs are not permitted' },
+              { loc: ['body', 'executor_id'], msg: 'Extra inputs are not permitted' },
+            ],
+          }),
+        });
+        return;
+      }
       posted = body;
       await route.fulfill({
         status: 200,
@@ -257,7 +272,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
 
   await page.goto('/runs?api_base=http%3A%2F%2Fapi.example.test&suite_id=call-center-voice-ai&scenario_id=cancellation-rescue');
   await expect(page.getByLabel('Launch agent run')).toBeVisible();
-  await expect(page.getByLabel('Launch agent run').getByRole('button', { name: 'Run fixture evaluation' })).toBeEnabled({
+  await expect(page.getByLabel('Launch agent run').getByRole('button', { name: 'Run sample evaluation' })).toBeEnabled({
     timeout: 30_000,
   });
 
@@ -271,7 +286,10 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect(launch.getByLabel('Execution scenario scope')).not.toBeVisible();
   await launch.getByText('Advanced').click();
   await expect(launch.getByLabel('Execution scenario scope')).toBeVisible();
-  await launch.getByRole('button', { name: 'Run fixture evaluation' }).click();
+  await launch.getByRole('button', { name: 'Run sample evaluation' }).click();
+  await expect(launch).toContainText('tester_id: Extra inputs are not permitted; executor_id: Extra inputs are not permitted');
+  await expect(launch).not.toContainText('[object Object]');
+  await launch.getByRole('button', { name: 'Run sample evaluation' }).click();
   await expect(launch.getByText('exec-ui-demo', { exact: true })).toBeVisible();
   await expect(launch.getByRole('link', { name: 'Open analysis' })).toHaveAttribute(
     'href',
@@ -436,9 +454,9 @@ test('offline ACC text fixture launches cancellation-rescue while staying text_c
 
   await page.goto('/runs?agent_id=offline-text-fixture');
   const launch = page.getByLabel('Launch agent run');
-  await expect(launch.getByRole('button', { name: 'Run fixture evaluation' })).toBeEnabled({ timeout: 30_000 });
+  await expect(launch.getByRole('button', { name: 'Run sample evaluation' })).toBeEnabled({ timeout: 30_000 });
   expect(pageErrors).toEqual([]);
-  await launch.getByRole('button', { name: 'Run fixture evaluation' }).click({ force: true });
+  await launch.getByRole('button', { name: 'Run sample evaluation' }).click({ force: true });
   await expect.poll(() => posted).not.toBeNull();
   expect(pageErrors).toEqual([]);
   expect(posted).toMatchObject({

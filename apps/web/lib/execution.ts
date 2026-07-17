@@ -1,3 +1,5 @@
+import { apiErrorMessage } from './apiError';
+
 export type ExecutionMode = 'text_callable' | 'voice_fixture' | 'pipecat_webrtc';
 export type AudioTransportId = 'none' | 'pipecat_small_webrtc' | 'freeswitch_verto_sip';
 
@@ -130,14 +132,7 @@ export function getApiBase() {
 async function handleJson<T>(response: Response): Promise<T> {
   const text = await response.text();
   if (!response.ok) {
-    let message = text || `Request failed with ${response.status}`;
-    try {
-      const parsed = JSON.parse(text) as { detail?: string };
-      if (typeof parsed?.detail === 'string') message = parsed.detail;
-    } catch {
-      // Keep plain text.
-    }
-    throw new Error(message);
+    throw new Error(apiErrorMessage(text, response.status));
   }
   return (text ? JSON.parse(text) : {}) as T;
 }

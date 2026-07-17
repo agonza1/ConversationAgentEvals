@@ -345,8 +345,21 @@ test('agent target form only offers connections compatible with its selected cha
   await expect(page.getByLabel('Endpoint URL')).toBeVisible();
 
   await channel.selectOption('voice');
-  await expect(target).toHaveValue('voice_fixture');
-  await expect(target.getByRole('option')).toHaveCount(1);
-  await expect(target.locator('option')).toHaveText('Offline ACC voice evidence replay');
-  await expect(page.getByText('Live voice adapters are not enabled yet')).toBeVisible();
+  await expect(target).toHaveValue('browser_webrtc');
+  await expect(target.getByRole('option')).toHaveCount(3);
+  await expect(target.locator('option[value="sip_phone"]')).toHaveText(/Agentic Contact Center — SIP \/ phone \(coming soon\)/);
+  await expect(target.locator('option[value="browser_webrtc"]')).toHaveText(/Agentic Contact Center — browser WebRTC \(coming soon\)/);
+  await expect(target.locator('option[value="voice_fixture"]')).toHaveText('Saved ACC voice replay');
+  await expect(page.getByText('CAE ↔ ACC live adapter coming soon')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Coming soon' })).toBeDisabled();
+
+  await target.selectOption('sip_phone');
+  await expect(page.getByLabel('SIP URI')).toBeVisible();
+  await expect(page.getByLabel('Phone number')).toBeVisible();
+  await expect(page.getByText(/FreeSWITCH → Verto\/WebRTC agent leg → Pipecat/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Coming soon' })).toBeDisabled();
+
+  await target.selectOption('voice_fixture');
+  await expect(page.getByText('Fixture-backed voice')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Create target' })).toBeEnabled();
 });

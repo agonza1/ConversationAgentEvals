@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiAwareLink } from './ApiAwareLink';
+import { apiErrorMessage } from '@/lib/apiError';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -675,14 +676,7 @@ async function handleJson<T>(response: Response): Promise<T> {
   const text = await response.text();
 
   if (!response.ok) {
-    let message = text || `Request failed with ${response.status}`;
-    try {
-      const parsed = JSON.parse(text) as { detail?: string };
-      message = parsed.detail || message;
-    } catch {
-      // Keep plain-text fallback.
-    }
-    throw new Error(message);
+    throw new Error(apiErrorMessage(text, response.status));
   }
 
   return (text ? JSON.parse(text) : {}) as T;
@@ -1031,6 +1025,13 @@ type ScoreAgentOption = {
 
 function isFixtureTargetId(target?: string | null) {
   return target === 'mock_agent' || target === 'offline_acc_fixture' || target === 'voice_fixture';
+}
+
+function testerDisplayName(testerId?: string | null) {
+  if (testerId === 'fixture_replay') return 'saved conversation replay';
+  if (testerId === 'scenario_simulator') return 'scenario simulator';
+  if (testerId === 'pipecat_tester') return 'Pipecat voice tester';
+  return 'scenario tester';
 }
 
 async function listAgents(): Promise<ScoreAgentOption[]> {
@@ -3384,7 +3385,7 @@ export function BenchmarkRunner({
 
     const suiteNote =
       fixtureBackedRun && (selectedSuite.id !== voiceSuiteId || offlineFixtureText)
-        ? `Using suite ${voiceSuiteId} / cancellation-rescue for fixture-backed execution. `
+        ? `Using suite ${voiceSuiteId} / cancellation-rescue for the built-in sample run. `
         : '';
 
     setIsLaunchingExecution(true);
@@ -3416,7 +3417,7 @@ export function BenchmarkRunner({
       setExecutionRun(queuedWithLaunchContext);
       onExecutionCreated?.(queuedWithLaunchContext);
       setExecutionMessage(
-        `${suiteNote || ''}Execution queued: ${selectedScoreAgent.name} driven by ${runTesterId.replace(/_/g, ' ')}. Open /runs/${queued.execution_run_id} for analysis when complete.`,
+        `${suiteNote || ''}Execution queued: ${selectedScoreAgent.name} driven by ${testerDisplayName(runTesterId)}. Open /runs/${queued.execution_run_id} for analysis when complete.`,
       );
       listExecutionRuns(identity.userId, identity.projectId).catch(() => undefined);
       if (options?.redirectToAnalysis && queued.execution_run_id) {
@@ -4441,7 +4442,7 @@ export function BenchmarkRunner({
               ))}
             </select>
             </label>
-            <p>{selectedScoreAgent ? (isFixtureTargetId(selectedScoreAgent.target) ? 'Fixture-backed target' : 'Live target adapter') : 'Choose a configured target'}</p>
+            <p>{selectedScoreAgent ? (isFixtureTargetId(selectedScoreAgent.target) ? 'Built-in sample agent' : 'Live target') : 'Choose a configured target'}</p>
           </div>
           <div className="run-config-step">
             <div className="run-config-step-heading">
@@ -4456,7 +4457,7 @@ export function BenchmarkRunner({
               onChange={(event) => setExecutionTesterId(event.target.value as typeof executionTesterId)}
             >
               {selectedScoreAgent?.channel === 'voice' ? (
-                <option value="fixture_replay">Fixture replay (saved caller evidence)</option>
+                <option value="fixture_replay">Saved conversation replay</option>
               ) : (
                 <option value="scenario_simulator">Scenario simulator (scripted user opener)</option>
               )}
@@ -4516,12 +4517,12 @@ export function BenchmarkRunner({
 
         {selectedScoreAgent ? (
           <div className={`run-provenance-notice ${isFixtureTargetId(selectedScoreAgent.target) ? 'is-fixture' : 'is-live'}`} role="note">
-            <strong>{isFixtureTargetId(selectedScoreAgent.target) ? 'Fixture-backed target' : 'Live target adapter'}</strong>
+            <strong>{isFixtureTargetId(selectedScoreAgent.target) ? 'Built-in sample agent' : 'Live target'}</strong>
             <span>
               {selectedScoreAgent.target === 'http_endpoint'
                 ? `POSTs to ${selectedScoreAgent.connection?.endpoint_url || 'the configured endpoint'}; black-box response evidence only.`
                 : isFixtureTargetId(selectedScoreAgent.target)
-                  ? 'Replays generated or saved evidence and does not contact a deployed agent.'
+                  ? 'Uses predictable sample responses and does not contact a deployed agent.'
                   : 'Invokes the connected provider and records the returned response.'}
             </span>
           </div>
@@ -4569,7 +4570,7 @@ export function BenchmarkRunner({
               : executionRun && isActiveExecutionStatus(executionRun.status)
                 ? 'Execution running...'
                 : isFixtureTargetId(selectedScoreAgent?.target)
-                  ? 'Run fixture evaluation'
+                  ? 'Run sample evaluation'
                   : 'Run evaluation'}
           </button>
         </div>
@@ -4646,7 +4647,7 @@ export function BenchmarkRunner({
                           <span style={{ color: executionStatusColor(conversation.verdict), textTransform: 'capitalize' }}>
                             {conversation.verdict}
                             {typeof conversation.score === 'number' ? ` · ${conversation.score}` : ''}
-                            {conversation.mode === 'pipecat_webrtc' ? ' (fixture-backed)' : ''}
+                            {conversation.mode === 'pipecat_webrtc' ? ' (sample-based)' : ''}
                           </span>
                         ) : null}
                         {conversation.error ? <span style={{ color: 'var(--error-text)' }}>{conversation.error}</span> : null}

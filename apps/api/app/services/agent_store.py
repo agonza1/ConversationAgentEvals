@@ -23,22 +23,22 @@ _LOADED = False
 SEED_AGENTS: list[dict[str, Any]] = [
     {
         'id': 'mock-text-agent',
-        'name': 'Mock text target',
+        'name': 'Built-in sample text agent',
         'channel': 'text',
         'target': 'mock_agent',
         'environment': 'local',
         'connection': {},
-        'description': 'Built-in testing target for text: deterministic mock callable for sample scenario checks.',
+        'description': 'Predictable sample responses for trying scenarios without contacting a deployed agent.',
         'metadata': {'model_name': 'mock-text', 'prompt_version': 'seed'},
     },
     {
         'id': 'acc-voice-fixture-agent',
-        'name': 'ACC voice fixture target',
+        'name': 'Saved ACC voice sample',
         'channel': 'voice',
         'target': 'voice_fixture',
         'environment': 'local',
         'connection': {},
-        'description': 'Built-in testing target for voice: offline ACC fixture path for cancellation-rescue style runs.',
+        'description': 'Saved ACC conversation evidence for checking voice scoring without placing a live call.',
         'metadata': {'model_name': 'voice-fixture', 'prompt_version': 'seed'},
     },
 ]
@@ -62,10 +62,19 @@ def reset_agents_for_tests(*, clear_files: bool = False) -> None:
 def ensure_seeded() -> None:
     _ensure_loaded()
     with _LOCK:
-        if _AGENTS:
-            return
         now = _now()
         for seed in SEED_AGENTS:
+            current = _AGENTS.get(str(seed['id']))
+            if current is not None:
+                changed = False
+                for field in ('name', 'description'):
+                    if current.get(field) != seed.get(field):
+                        current[field] = seed.get(field)
+                        changed = True
+                if changed:
+                    current['updated_at'] = now
+                    _persist_unlocked(current)
+                continue
             record = AgentRecord(
                 id=seed['id'],
                 name=seed['name'],
