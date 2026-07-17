@@ -124,7 +124,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
     await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
   });
 
-  await page.route('**/api/execution/runs', async (route) => {
+  await page.route('**/api/execution/runs**', async (route) => {
     if (route.request().method() === 'POST') {
       const body = route.request().postDataJSON() as Record<string, unknown>;
       posted = body;
@@ -153,7 +153,27 @@ test('launch evaluation streams conversations into the live list', async ({ page
       });
       return;
     }
-    await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(posted ? [{
+        execution_run_id: 'exec-ui-demo',
+        status: 'queued',
+        mode: 'text_callable',
+        suite_id: 'call-center-voice-ai',
+        scenario_ids: ['cancellation-rescue'],
+        user_id: 'demo-user-exec',
+        project_id: 'call-center-demo',
+        agent_id: 'mock-text-agent',
+        agent_name: 'Mock text agent',
+        tester_id: 'scenario_simulator',
+        executor_id: 'local_async_runner',
+        progress: { phase: 'queued', completed_conversations: 0, total_conversations: 1, percent: 0 },
+        conversations: [],
+        created_at: '2026-07-15T00:00:00Z',
+        updated_at: '2026-07-15T00:00:00Z',
+      }] : []),
+    });
   });
 
   await page.route('**/api/execution/runs/exec-ui-demo**', async (route) => {
@@ -242,9 +262,11 @@ test('launch evaluation streams conversations into the live list', async ({ page
   });
 
   const launch = page.getByLabel('Launch agent run');
+  await expect(launch.getByRole('heading', { name: 'Configure this run' })).toBeVisible();
+  await expect(launch.getByLabel('Default scenario for launch')).toContainText('Cancellation Rescue');
   await expect(launch.getByLabel('Execution tester')).toHaveValue('scenario_simulator');
   await expect(launch.getByLabel('Execution runner')).toContainText('Local async runner');
-  await expect(launch.getByText(/target is the system under test/i)).toBeVisible();
+  await expect(launch.getByText('System under test')).toBeVisible();
   await expect(launch.getByText('Advanced')).toBeVisible();
   await expect(launch.getByLabel('Execution scenario scope')).not.toBeVisible();
   await launch.getByText('Advanced').click();
@@ -267,6 +289,8 @@ test('launch evaluation streams conversations into the live list', async ({ page
   });
   await expect(launch.getByLabel('Execution conversations')).toContainText('Billing Address Change');
   await expect(launch.getByLabel('Execution conversations')).toContainText(/pass/i, { timeout: 8000 });
+  await expect(page.getByRole('heading', { name: 'Recent runs' })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Mock text agent/ })).toContainText('queued');
 });
 
 test('offline ACC text fixture launches cancellation-rescue while staying text_callable', async ({ page }) => {

@@ -2147,7 +2147,24 @@ function describeUploadedEvidence(filename: string, text: string): {
   };
 }
 
-export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }) {
+export function BenchmarkRunner({
+  view = 'all',
+  onExecutionCreated,
+}: {
+  view?: BenchmarkRunnerView;
+  onExecutionCreated?: (run: {
+    execution_run_id: string;
+    status?: string;
+    mode?: string;
+    suite_id?: string;
+    scenario_ids?: string[];
+    agent_id?: string;
+    agent_name?: string;
+    tester_id?: string;
+    executor_id?: string;
+    [key: string]: unknown;
+  }) => void;
+}) {
   const loadingSavedRunRef = useRef(false);
   const autoLaunchDemoRef = useRef(false);
   const preserveScoreEvidenceRef = useRef(false);
@@ -2268,14 +2285,28 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     );
   }
 
-  function loadScenarioStarterData(nextScenario = selectedScenario) {
+  function applyScenarioStructuredSample(nextScenario: BenchmarkScenario) {
+    setActionTrace(stringifyEditable(nextScenario.sample_action_trace, '[]'));
+    setFinalState(stringifyEditable(nextScenario.sample_final_state ?? nextScenario.expected_final_state, '{}'));
+    setCallEvidence('');
+    setGroupCall('');
+    setVconEvidence(
+      nextScenario.sample_transcript ? sampleVconFromTranscript(nextScenario.sample_transcript) : '',
+    );
+  }
+
+  function loadScenarioStarterData(
+    nextScenario = selectedScenario,
+    options: { includeStructuredSample?: boolean } = {},
+  ) {
     if (!nextScenario) return;
 
     const nextTranscript = nextScenario.sample_transcript ?? '';
+    const includeStructuredSample = options.includeStructuredSample === true;
     setTranscript(nextTranscript);
-    // On /eval, starter structured traces silently force a pass even after transcript edits.
-    // Keep the visible transcript as the scorable evidence; leave optional structured empty.
-    if (view === 'score') {
+    // On /eval, default to transcript-only so hidden sample traces cannot force Task/Final 100s.
+    // Opt into full sample when the operator explicitly asks for structured measurement.
+    if (view === 'score' && !includeStructuredSample) {
       setActionTrace('');
       setFinalState('');
       setCallEvidence('');
@@ -2283,12 +2314,8 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
       setVconEvidence('');
       setIncludeStructuredEvidence(false);
     } else {
-      setActionTrace(stringifyEditable(nextScenario.sample_action_trace, '[]'));
-      setFinalState(stringifyEditable(nextScenario.sample_final_state ?? nextScenario.expected_final_state, '{}'));
-      setCallEvidence('');
-      setGroupCall('');
-      setVconEvidence(nextTranscript ? sampleVconFromTranscript(nextTranscript) : '');
-      setIncludeStructuredEvidence(false);
+      applyScenarioStructuredSample(nextScenario);
+      setIncludeStructuredEvidence(view === 'score' ? includeStructuredSample : false);
     }
     setReport(null);
     setSuiteSimulation(null);
@@ -2299,16 +2326,32 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     setUploadMessage(null);
   }
 
-  function onLoadSampleEvidence(scenario: BenchmarkScenario) {
+  function onLoadSampleEvidence(scenario: BenchmarkScenario, options: { includeStructuredSample?: boolean } = {}) {
     preserveScoreEvidenceRef.current = true;
     setSelectedScenarioId(scenario.id);
-    loadScenarioStarterData(scenario);
+    loadScenarioStarterData(scenario, options);
     setShowSimulateEvidenceOptions(false);
+    const withStructured = options.includeStructuredSample === true;
     setUploadMessage(
       view === 'score'
-        ? `Loaded sample transcript: ${scenario.title}. Edit it and Evaluate — scores follow the transcript, not hidden sample traces.`
+        ? withStructured
+          ? `Loaded full sample evidence: ${scenario.title}. Task completion and final state will be measured from the sample traces.`
+          : `Loaded sample transcript: ${scenario.title}. Task/final stay n/a until you include structured evidence.`
         : `Loaded sample evidence: ${scenario.title}. This evidence is synthetic.`,
     );
+  }
+
+  function onToggleStructuredEvidence(checked: boolean) {
+    setIncludeStructuredEvidence(checked);
+    if (view !== 'score' || !checked || !selectedScenario) return;
+    // Checking the box with empty fields should load the scenario sample traces so
+    // Task completion / Final state become measurable instead of staying n/a forever.
+    if (isBlankJsonField(actionTrace) && isBlankJsonField(finalState)) {
+      applyScenarioStructuredSample(selectedScenario);
+      setUploadMessage(
+        `Included sample action trace and final state for ${selectedScenario.title}. Evaluate to measure task completion and final state.`,
+      );
+    }
   }
 
   async function onUploadEvidenceFile(file: File | null) {
@@ -2323,6 +2366,15 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         setVconEvidence(loaded.vcon || '');
         if (loaded.transcript) setTranscript(loaded.transcript);
         setCallEvidence('');
+        // Keep the uploaded vCon available under structured evidence, but do not auto-include it on /eval.
+        if (view === 'score') {
+          setIncludeStructuredEvidence(false);
+          setUploadMessage(
+            `${loaded.message} Transcript was extracted for scoring. Check “Include structured evidence” if you also want the vCon artifact evaluated.`,
+          );
+          setReport(null);
+          return;
+        }
       } else {
         setTranscript(loaded.transcript || '');
         setVconEvidence('');
@@ -3236,7 +3288,8 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         action_trace: useStructured && !isBlankJsonField(actionTrace) ? parseMaybeJson(actionTrace) : undefined,
         call: useStructured && callEvidence.trim() ? parseMaybeJson(callEvidence) : undefined,
         group_call: useStructured && groupCall.trim() ? parseMaybeJson(groupCall) : undefined,
-        vcon: vconEvidence.trim() ? parseMaybeJson(vconEvidence) as JsonRecord : undefined,
+        // Keep vCon behind the same opt-in on /eval so a leftover sample/upload record cannot force provenance.
+        vcon: useStructured && vconEvidence.trim() ? parseMaybeJson(vconEvidence) as JsonRecord : undefined,
         ...runMetadata,
       });
       setReport(nextReport);
@@ -3364,7 +3417,15 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         tester_id: runTesterId,
         executor_id: 'local_async_runner',
       });
-      setExecutionRun(queued);
+      const queuedWithLaunchContext = {
+        ...queued,
+        agent_id: selectedAgentId || queued.agent_id,
+        agent_name: selectedScoreAgent?.name || queued.agent_name,
+        tester_id: runTesterId || queued.tester_id,
+        executor_id: queued.executor_id || 'local_async_runner',
+      };
+      setExecutionRun(queuedWithLaunchContext);
+      onExecutionCreated?.(queuedWithLaunchContext);
       setExecutionMessage(
         `${suiteNote || ''}Execution queued: ${selectedScoreAgent.name} driven by ${runTesterId.replace(/_/g, ' ')}. Open /runs/${queued.execution_run_id} for analysis when complete.`,
       );
@@ -3922,18 +3983,28 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             {showSimulateEvidenceOptions ? (
               <div className="score-simulate-options" aria-label="Sample evidence options">
                 <p>
-                  Loads a starter transcript for{' '}
-                  <strong>{selectedScenario?.title ?? 'the selected scenario'}</strong>. Synthetic sample — not a live agent run.
-                  On Eval, structured traces are left empty so editing the transcript changes the score.
+                  Synthetic sample for{' '}
+                  <strong>{selectedScenario?.title ?? 'the selected scenario'}</strong> — not a live agent run.
+                  Transcript-only keeps Task/Final as n/a. Full sample includes action trace + final state so those tiles are measured.
                 </p>
-                <button
-                  type="button"
-                  className="secondary-link"
-                  disabled={!selectedScenario}
-                  onClick={() => selectedScenario && onLoadSampleEvidence(selectedScenario)}
-                >
-                  Load selected sample evidence
-                </button>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                  <button
+                    type="button"
+                    className="secondary-link"
+                    disabled={!selectedScenario}
+                    onClick={() => selectedScenario && onLoadSampleEvidence(selectedScenario)}
+                  >
+                    Load sample transcript only
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-link"
+                    disabled={!selectedScenario}
+                    onClick={() => selectedScenario && onLoadSampleEvidence(selectedScenario, { includeStructuredSample: true })}
+                  >
+                    Load full sample (measure Task/Final)
+                  </button>
+                </div>
               </div>
             ) : null}
             {uploadMessage ? <p className="score-upload-message">{uploadMessage}</p> : null}
@@ -4039,11 +4110,11 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                     type="checkbox"
                     aria-label="Include structured evidence in Evaluate"
                     checked={includeStructuredEvidence}
-                    onChange={(event) => setIncludeStructuredEvidence(event.target.checked)}
+                    onChange={(event) => onToggleStructuredEvidence(event.target.checked)}
                     style={{ marginTop: 3 }}
                   />
                   <span style={{ fontSize: 14, lineHeight: 1.4 }}>
-                    Include structured evidence when evaluating (action/tool trace, final state, and channel artifacts below).
+                    Include structured evidence when evaluating (measures Task completion and Final state from action/tool trace and final state below). If those fields are empty, the scenario sample traces are filled in.
                   </span>
                 </label>
               ) : null}
@@ -4317,48 +4388,16 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
       </form>
       ) : null}
 
-      <section id="launch-agent" className="card" style={{ padding: 24, display: view === 'score' || view === 'simulate' ? 'none' : 'grid', gap: 16 }} aria-label="Launch agent run">
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+      <section id="launch-agent" className="card run-launch-card" style={{ display: view === 'score' || view === 'simulate' ? 'none' : 'grid' }} aria-label="Launch agent run">
+        <div className="run-launch-heading">
           <div>
             <p className="eyebrow" style={{ margin: '0 0 6px' }}>
               Execute
             </p>
-            <h2 style={{ margin: 0, fontSize: 26 }}>Run agent</h2>
-            <p style={{ margin: '8px 0 0', color: 'var(--muted)', maxWidth: 640 }}>
-              Run the agent target, capture conversation traces as they finish, and stream an ASSERT-style{' '}
-              <code>inference_set.jsonl</code> while conversations append to the live list.
+            <h2>Configure this run</h2>
+            <p>
+              Choose what to test and who drives the scenario. We will capture the transcript, evidence, and score in one run record.
             </p>
-          </div>
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              disabled={
-                isLaunchingExecution
-                || isRunning
-                || isSimulating
-                || !selectedSuite
-                || !selectedScoreAgent
-                || (selectedScoreAgent.target === 'openai_codex' && openaiProvider?.status !== 'connected')
-              }
-              onClick={() => void onLaunchExecution()}
-              style={{
-                border: 0,
-                borderRadius: 8,
-                background: 'var(--accent)',
-                color: 'white',
-                padding: '12px 18px',
-                fontWeight: 800,
-                opacity: isLaunchingExecution || isRunning || isSimulating || !selectedSuite || !selectedScoreAgent || (selectedScoreAgent.target === 'openai_codex' && openaiProvider?.status !== 'connected') ? 0.65 : 1,
-              }}
-            >
-              {isLaunchingExecution
-                ? 'Launching...'
-                : executionRun && isActiveExecutionStatus(executionRun.status)
-                  ? 'Execution running...'
-                  : isFixtureTargetId(selectedScoreAgent?.target)
-                    ? 'Run fixture evaluation'
-                    : 'Run evaluation'}
-            </button>
           </div>
         </div>
 
@@ -4372,15 +4411,24 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         ) : null}
 
         {view === 'run' && selectedSuite && !loadError ? (
-          <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }} aria-label="Default scenario for launch">
-            The target is the system under test. The tester plays the caller/user from the selected scenario;
-            the local executor records both identities and captured evidence on the run.
-          </p>
+          <div className="run-scenario-context" aria-label="Default scenario for launch">
+            <div>
+              <span>Scenario</span>
+              <strong>{selectedScenario?.title || 'Select a scenario'}</strong>
+              <small>{selectedSuite.title}</small>
+            </div>
+            <ApiAwareLink href="/scenarios">Change scenario</ApiAwareLink>
+          </div>
         ) : null}
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-          <label style={{ display: 'grid', gap: 8 }}>
-            <span style={{ fontWeight: 700 }}>Agent target</span>
+        <div className="run-config-grid">
+          <div className="run-config-step">
+            <div className="run-config-step-heading">
+              <span>1</span>
+              <div><strong>Agent target</strong><small>System under test</small></div>
+            </div>
+            <label>
+              <span className="sr-only">Agent target</span>
             <select
               aria-label="Execution agent target"
               value={selectedAgentId}
@@ -4397,21 +4445,26 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                   setExecutionTesterId('scenario_simulator');
                 }
               }}
-              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
             >
               {!agents.length ? <option value="">No targets</option> : null}
               {agents.map((agent) => (
                 <option key={agent.id} value={agent.id}>{agent.name}</option>
               ))}
             </select>
-          </label>
-          <label style={{ display: 'grid', gap: 8 }}>
-            <span style={{ fontWeight: 700 }}>Tester</span>
+            </label>
+            <p>{selectedScoreAgent ? (isFixtureTargetId(selectedScoreAgent.target) ? 'Fixture-backed target' : 'Live target adapter') : 'Choose a configured target'}</p>
+          </div>
+          <div className="run-config-step">
+            <div className="run-config-step-heading">
+              <span>2</span>
+              <div><strong>Tester</strong><small>Scenario driver</small></div>
+            </div>
+            <label>
+              <span className="sr-only">Tester</span>
             <select
               aria-label="Execution tester"
               value={executionTesterId}
               onChange={(event) => setExecutionTesterId(event.target.value as typeof executionTesterId)}
-              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
             >
               {selectedScoreAgent?.channel === 'voice' ? (
                 <option value="fixture_replay">Fixture replay (saved caller evidence)</option>
@@ -4419,25 +4472,30 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                 <option value="scenario_simulator">Scenario simulator (scripted user opener)</option>
               )}
             </select>
-            <span style={{ color: 'var(--muted)', fontSize: 13 }}>Drives scenario turns; it is not the target being scored.</span>
-          </label>
-          <div className="run-executor-summary" aria-label="Execution runner">
-            <span>Executor</span>
-            <strong>Local async runner</strong>
-            <small>Queues iterations, invokes the target adapter, and writes the inference set.</small>
+            </label>
+            <p>Plays the caller or user; it is never the target being scored.</p>
           </div>
-          <label style={{ display: 'grid', gap: 8 }}>
-            <span style={{ fontWeight: 700 }}>Iterations</span>
-            <input
-              aria-label="Execution iterations"
-              type="number"
-              min={1}
-              max={20}
-              value={executionIterations}
-              onChange={(event) => setExecutionIterations(Math.max(1, Math.min(20, Number(event.target.value) || 1)))}
-              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
-            />
-          </label>
+          <div className="run-config-step">
+            <div className="run-config-step-heading">
+              <span>3</span>
+              <div><strong>Execution</strong><small>Local runner</small></div>
+            </div>
+            <div className="run-execution-fields" aria-label="Execution runner">
+              <div><span>Executor</span><strong>Local async runner</strong></div>
+              <label>
+                <span>Iterations</span>
+                <input
+                  aria-label="Execution iterations"
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={executionIterations}
+                  onChange={(event) => setExecutionIterations(Math.max(1, Math.min(20, Number(event.target.value) || 1)))}
+                />
+              </label>
+            </div>
+            <p>Queues the run and writes the ASSERT inference set locally.</p>
+          </div>
         </div>
 
         {selectedScoreAgent?.target === 'openai_codex' ? (
@@ -4499,6 +4557,33 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             ) : null}
           </div>
         </details>
+
+        <div className="run-launch-actions">
+          <div>
+            <strong>{selectedScoreAgent ? `Ready to test ${selectedScoreAgent.name}` : 'Choose a target to continue'}</strong>
+            <span>{executionIterations} {executionIterations === 1 ? 'conversation' : 'conversations'} · results appear below</span>
+          </div>
+          <button
+            type="button"
+            disabled={
+              isLaunchingExecution
+              || isRunning
+              || isSimulating
+              || !selectedSuite
+              || !selectedScoreAgent
+              || (selectedScoreAgent.target === 'openai_codex' && openaiProvider?.status !== 'connected')
+            }
+            onClick={() => void onLaunchExecution()}
+          >
+            {isLaunchingExecution
+              ? 'Launching...'
+              : executionRun && isActiveExecutionStatus(executionRun.status)
+                ? 'Execution running...'
+                : isFixtureTargetId(selectedScoreAgent?.target)
+                  ? 'Run fixture evaluation'
+                  : 'Run evaluation'}
+          </button>
+        </div>
 
         {executionMessage ? <p style={{ margin: 0, color: 'var(--muted)' }}>{executionMessage}</p> : null}
 
@@ -4770,18 +4855,25 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
               <ScoreTile label="Rubric" score={report.rubric_score} />
             ) : null}
             <ScoreTile label="Forbidden actions" score={report.forbidden_action_score} />
-            <ScoreTile label="Task completion" score={report.task_completion_score} />
-            <ScoreTile label="Final state" score={report.final_state_score} />
+            {typeof report.task_completion_score === 'number' ? (
+              <ScoreTile label="Task completion" score={report.task_completion_score} />
+            ) : null}
+            {typeof report.final_state_score === 'number' ? (
+              <ScoreTile label="Final state" score={report.final_state_score} />
+            ) : null}
           </div>
+          {report.scoring_mode === 'transcript' ? (
+            <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13, lineHeight: 1.45 }} aria-label="Transcript scoring note">
+              Transcript-only mode: Task completion and Final state are not shown (not measured — not counted as 100).
+              Include structured evidence or load the full sample to measure them.
+            </p>
+          ) : null}
           {report.score_components && Object.keys(report.score_components).length ? (
             <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13, lineHeight: 1.45 }} aria-label="Score breakdown">
               Score mode: {report.scoring_mode || 'unknown'} ·{' '}
               {Object.entries(report.score_components)
                 .map(([key, value]) => `${key.replace(/_/g, ' ')} ${value}`)
                 .join(' · ')}
-              {report.scoring_mode === 'transcript'
-                ? ' · Task completion / final state are n/a without structured evidence (not counted as 100).'
-                : ''}
             </p>
           ) : null}
 

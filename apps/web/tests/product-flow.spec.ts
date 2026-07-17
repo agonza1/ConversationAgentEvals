@@ -66,7 +66,8 @@ test('dedicated paths expose only their primary workflow', async ({ page }) => {
   await page.getByRole('button', { name: 'Load sample evidence' }).click();
   const sampleOptions = page.getByLabel('Sample evidence options');
   await expect(sampleOptions).toBeVisible();
-  await expect(sampleOptions.getByRole('button', { name: 'Load selected sample evidence' })).toBeVisible();
+  await expect(sampleOptions.getByRole('button', { name: 'Load sample transcript only' })).toBeVisible();
+  await expect(sampleOptions.getByRole('button', { name: 'Load full sample (measure Task/Final)' })).toBeVisible();
   await expect(page.getByLabel('Saved runs and e2e validation')).toHaveCount(0);
 
   await page.goto('/runs');
