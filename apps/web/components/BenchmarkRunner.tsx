@@ -3094,7 +3094,9 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
       ? 'openai_codex'
       : selectedScoreAgent?.target === 'offline_acc_fixture'
         ? 'offline_acc_fixture'
-        : 'mock_agent';
+        : selectedScoreAgent?.target === 'openai_codex'
+          ? 'openai_codex'
+          : 'mock_agent';
 
     const voiceModes = runMode === 'voice_fixture' || runMode === 'pipecat_webrtc';
     const offlineFixtureText =

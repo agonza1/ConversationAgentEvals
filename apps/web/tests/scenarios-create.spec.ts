@@ -40,3 +40,25 @@ test('built-in scenarios cannot be deleted', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Billing Address Change' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Delete scenario' })).toHaveCount(0);
 });
+
+test('catalog user scenarios remain deletable when the summary omits source', async ({ page }) => {
+  await page.route('**/api/benchmarks/suites**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          id: 'user-scenarios',
+          title: 'User Scenarios',
+          scenarios: [{ id: 'summary-only', title: 'Summary-only user scenario' }],
+        },
+      ]),
+    });
+  });
+  await page.route('**/api/scenarios/summary-only', async (route) => {
+    await route.fulfill({ status: 204, body: '' });
+  });
+
+  await page.goto('/scenarios?suite_id=user-scenarios&scenario_id=summary-only');
+  await expect(page.getByRole('button', { name: 'Delete scenario' })).toBeVisible();
+});

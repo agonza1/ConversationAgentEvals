@@ -64,6 +64,14 @@ async function mockRunnerApis(page: import('@playwright/test').Page, options: Mo
             description: 'Offline ACC voice fixture path.',
             metadata: { model_name: 'voice-fixture', prompt_version: 'seed' },
           },
+          {
+            id: 'live-openai-agent',
+            name: 'Live OpenAI agent',
+            channel: 'text',
+            target: 'openai_codex',
+            description: 'Live OpenAI text target.',
+            metadata: { model_name: 'gpt-5.4', prompt_version: 'seed' },
+          },
         ],
       }),
     });
@@ -166,6 +174,22 @@ test('agents try-it-out auto-launches and opens run analysis', async ({ page }) 
   expect(launches).toHaveLength(1);
   expect(launches[0]?.agent_id).toBe('acc-voice-fixture-agent');
   expect(launches[0]?.mode).toBe('voice_fixture');
+});
+
+test('OpenAI agent try-it-out launches its configured live target', async ({ page }) => {
+  const launches: Record<string, unknown>[] = [];
+  await mockRunnerApis(page, {
+    onExecutionLaunch: (request) => launches.push(request),
+  });
+  await page.goto('/agents');
+  await page.getByRole('article').filter({ hasText: 'Live OpenAI agent' }).getByRole('link', { name: 'Try it Out' }).click();
+  await expect(page).toHaveURL(/\/runs\/exec-try-it-out/, { timeout: 20000 });
+  expect(launches).toHaveLength(1);
+  expect(launches[0]).toMatchObject({
+    agent_id: 'live-openai-agent',
+    mode: 'text_callable',
+    text_callable: 'openai_codex',
+  });
 });
 
 test('homepage demo waits for its default agent before auto-launching', async ({ page }) => {
