@@ -789,12 +789,27 @@ def _execute_assert_contract(
         workflow_order_issues=workflow_order_issues,
     )
     if _has_agentic_evidence(payload):
-        task_score = 0 if final_state_missing else 100
-        forbidden_score = 0 if forbidden_observed else 100
-        workflow_score = 0 if workflow_order_issues else 100
-        overall_score = round((task_score + required_score + forbidden_score + workflow_score + (0 if final_state_missing else 100)) / 5)
+        # Average only dimensions we can actually measure from supplied evidence.
+        # Do not invent 100s for unchecked task/final/workflow slots.
+        components: list[tuple[str, int]] = [
+            ('required_actions', required_score),
+            ('forbidden_actions', 0 if forbidden_observed else 100),
+        ]
+        if _artifact_present(action_trace):
+            components.append(('workflow_order', 0 if workflow_order_issues else 100))
+        if _artifact_present(action_trace) or _artifact_present(final_state):
+            components.append(('final_state', 0 if final_state_missing else 100))
+        overall_score = round(sum(score for _, score in components) / len(components))
+        score_components = {name: score for name, score in components}
+    else:
+        # Transcript-only: required actions + rubric only. No fake agentic dimension scores.
+        score_components = {
+            'required_actions': required_score,
+            'rubric': rubric_score,
+            'forbidden_penalty': penalty,
+        }
 
-    status = 'pass' if overall_score >= 75 and not failed_required_actions and not forbidden_observed and not final_state_missing and not workflow_order_issues else 'needs_review'
+    status = 'pass' if overall_score >= 75 and not failed_required_actions and not forbidden_observed and not final_state_missing and not workflow_order_issues and not missing_actions else 'needs_review'
     failures = _assert_failures(
         missing_actions=missing_actions,
         forbidden_observed=forbidden_observed,
@@ -815,6 +830,8 @@ def _execute_assert_contract(
         'forbidden_action_hits': forbidden_hits,
         'rubric_checks': rubric_checks,
         'hard_check_failures': hard_check_failures,
+        'score_components': score_components,
+        'scoring_mode': 'agentic' if _has_agentic_evidence(payload) else 'transcript',
     }
     return AssertResultManifest.model_validate(
         {
@@ -825,8 +842,10 @@ def _execute_assert_contract(
                 'metrics': {
                     'required_action_score': required_score,
                     'rubric_score': rubric_score,
-                    'workflow_order_score': 0 if workflow_order_issues else 100,
+                    'workflow_order_score': 0 if workflow_order_issues else (100 if _artifact_present(action_trace) else None),
                     'failure_count': len(failures),
+                    'scoring_mode': 'agentic' if _has_agentic_evidence(payload) else 'transcript',
+                    'score_components': score_components,
                 },
             },
             'failures': failures,
@@ -876,11 +895,32 @@ def _assert_report_fields(assert_manifest: AssertResultManifest, *, payload: dic
         final_state_missing=final_state_missing,
         workflow_order_issues=workflow_order_issues,
     )
+    has_action_trace = _artifact_present(payload.get('action_trace'))
+    has_final_state = _artifact_present(payload.get('final_state'))
+    has_agentic = _has_agentic_evidence(payload)
+    scoring_mode = str(result_payload.get('scoring_mode') or metrics.get('scoring_mode') or ('agentic' if has_agentic else 'transcript'))
+    score_components = result_payload.get('score_components') if isinstance(result_payload.get('score_components'), dict) else metrics.get('score_components')
+    if not isinstance(score_components, dict):
+        score_components = {}
+
+    # Prefer explicit null over fake 100s when a dimension was not measurable.
+    if has_agentic:
+        task_completion_score = 0 if final_state_missing else (100 if (has_final_state or has_action_trace) else None)
+        final_state_score = 0 if final_state_missing else (100 if (has_final_state or has_action_trace) else None)
+        workflow_raw = metrics.get('workflow_order_score')
+        workflow_order_score = int(workflow_raw) if isinstance(workflow_raw, (int, float)) else (0 if workflow_order_issues else (100 if has_action_trace else None))
+    else:
+        task_completion_score = None
+        final_state_score = None
+        workflow_order_score = None
+
     web_result_fields = {
-        'task_completion_score': 0 if final_state_missing else 100,
+        'scoring_mode': scoring_mode,
+        'score_components': score_components,
+        'task_completion_score': task_completion_score,
         'forbidden_action_score': 0 if forbidden_observed else 100,
-        'final_state_score': 0 if final_state_missing else 100,
-        'workflow_order_score': int(metrics.get('workflow_order_score', 100)),
+        'final_state_score': final_state_score,
+        'workflow_order_score': workflow_order_score,
         'forbidden_actions_observed': forbidden_observed,
         'final_state_missing': final_state_missing,
         'workflow_order_issues': workflow_order_issues,
@@ -996,6 +1036,36 @@ def _platform_failure_category(assert_category: str) -> str:
     }.get(assert_category, assert_category)
 
 
+def _append_missing_action_citation(
+    citations: list[dict[str, Any]],
+    cited_keys: set[str],
+    action_trace: Any,
+    action_name: str,
+    *,
+    transcript: str = '',
+) -> None:
+    key = f'missing_action:{action_name}'
+    if key in cited_keys:
+        return
+    cited_keys.add(key)
+    has_trace = bool(parse_action_trace(action_trace))
+    if has_trace:
+        citations.append({
+            'source': 'action_trace',
+            'kind': 'missing_action',
+            'action': action_name,
+            'observed_actions': [event.name for event in parse_action_trace(action_trace)],
+            'reason': 'No successful matching action-trace entry was observed.',
+        })
+        return
+    citations.append({
+        'source': 'transcript' if transcript.strip() else 'evidence',
+        'kind': 'missing_action',
+        'action': action_name,
+        'reason': 'Required action was not observed in the transcript.',
+    })
+
+
 def _assert_evidence_citations(
     *,
     action_trace: Any,
@@ -1012,7 +1082,7 @@ def _assert_evidence_citations(
         _append_action_trace_citation(citations, cited_keys, action_trace, event.name, 'required_action')
         _append_transcript_citation(citations, cited_keys, transcript, event.name, 'required_action')
     for action_name in missing_actions:
-        _append_missing_action_citation(citations, cited_keys, action_trace, action_name)
+        _append_missing_action_citation(citations, cited_keys, action_trace, action_name, transcript=transcript)
         _append_transcript_citation(citations, cited_keys, transcript, action_name, 'missing_action_context')
     for action_name in forbidden_observed:
         _append_action_trace_citation(citations, cited_keys, action_trace, action_name, 'forbidden_action')
@@ -1020,7 +1090,7 @@ def _assert_evidence_citations(
         _append_action_trace_citation(citations, cited_keys, action_trace, str(issue.get('action') or ''), 'bad_order', extra=issue)
     for missing in final_state_missing:
         _append_final_state_citation(citations, cited_keys, missing, 'final_state_mismatch')
-    if isinstance(final_state, dict):
+    if isinstance(final_state, dict) and final_state:
         citations.append({'source': 'final_state', 'kind': 'task_completion', 'assertion': {'actual': final_state.get('complete')}, 'final_state': deepcopy(final_state)})
     return citations
 
@@ -2213,25 +2283,6 @@ def _append_action_trace_citation(
             citation['check'] = deepcopy(extra)
         citations.append(citation)
         return
-
-
-def _append_missing_action_citation(
-    citations: list[dict[str, Any]],
-    cited_keys: set[str],
-    action_trace: Any,
-    action_name: str,
-) -> None:
-    key = f'missing_action:{action_name}'
-    if key in cited_keys:
-        return
-    cited_keys.add(key)
-    citations.append({
-        'source': 'action_trace',
-        'kind': 'missing_action',
-        'action': action_name,
-        'observed_actions': [event.name for event in parse_action_trace(action_trace)],
-        'reason': 'No successful matching action trace entry was observed.',
-    })
 
 
 def _append_final_state_citation(

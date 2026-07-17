@@ -59,11 +59,16 @@ interface BenchmarkReport {
   scenario_contract_sha256?: string;
   score?: number;
   overall_score?: number;
-  task_completion_score?: number;
+  scoring_mode?: 'transcript' | 'agentic' | string;
+  score_components?: Record<string, number>;
+  task_completion_score?: number | null;
   required_action_score?: number;
-  forbidden_action_score?: number;
+  rubric_score?: number;
+  forbidden_action_score?: number | null;
   evidence_citations?: Array<string | JsonRecord>;
-  final_state_score?: number;
+  final_state_score?: number | null;
+  workflow_order_score?: number | null;
+  completed_actions?: string[];
   evidence_spans?: Array<string | JsonRecord>;
   evidence?: Array<string | JsonRecord>;
   missing_actions?: string[];
@@ -1364,6 +1369,7 @@ function formatCitationItem(item: string | JsonRecord) {
   const source = sourceKey ? sourceKey.replace(/_/g, " ") : "evidence";
   const kind = typeof item.kind === "string" ? item.kind.replace(/_/g, " ") : null;
   const action = typeof item.action === "string" ? item.action : null;
+  const reason = typeof item.reason === "string" ? item.reason : null;
   const assertionSummary = formatCitationValue(item.assertion);
   const path = typeof item.path === "string" ? item.path : null;
   const actualSummary = Object.hasOwn(item, "actual") ? formatCitationValue(item.actual) : null;
@@ -1374,6 +1380,14 @@ function formatCitationItem(item: string | JsonRecord) {
   const status = typeof item.status === "string" ? item.status : null;
   const timestamp = typeof item.timestamp === "string" ? item.timestamp : null;
   const lineRange = lineStart === null ? null : lineEnd !== null && lineEnd !== lineStart ? `lines ${lineStart}-${lineEnd}` : `line ${lineStart}`;
+
+  if (kind === "missing action" && action) {
+    return [
+      sourceKey === "action_trace" ? "action trace" : source,
+      `missing required action: ${action}`,
+      reason,
+    ].filter(Boolean).join(" — ");
+  }
 
   return [
     source,
@@ -1934,8 +1948,14 @@ function reportActionPlan(
     ? hasCoverageGap && nextCoverageScenario
       ? `Run ${nextCoverageScenario} next to keep suite coverage moving before release review.`
       : 'Save this run as the baseline, then compare the next prompt or model change against it.'
-    : suggestedFix ?? 'Fix the highest-risk failure, regenerate evidence, and rerun this scenario before release.';
-  const regression = regressionDelta ? regressionDeltaSummary(regressionDelta) : 'Save the run to establish regression tracking.';
+    : missingCount > 1
+      ? `Complete the remaining ${missingCount} required actions (next: ${report.missing_actions?.[0] ?? 'see checklist'}).`
+      : suggestedFix ?? 'Fix the highest-risk failure, regenerate evidence, and rerun this scenario before release.';
+  const regression = regressionDelta?.status === 'baseline'
+    ? 'Not compared yet — save this run to start regression tracking.'
+    : regressionDelta
+      ? regressionDeltaSummary(regressionDelta)
+      : 'Save the run to establish regression tracking.';
 
   return { headline, primaryRisk, nextStep, regression, failureCategories };
 }
@@ -4703,11 +4723,75 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
-            <ScoreTile label="Task completion" score={report.task_completion_score} />
             <ScoreTile label="Required actions" score={report.required_action_score} />
+            {report.score_components && 'rubric' in report.score_components ? (
+              <ScoreTile label="Rubric" score={report.rubric_score} />
+            ) : null}
             <ScoreTile label="Forbidden actions" score={report.forbidden_action_score} />
+            <ScoreTile label="Task completion" score={report.task_completion_score} />
             <ScoreTile label="Final state" score={report.final_state_score} />
           </div>
+          {report.score_components && Object.keys(report.score_components).length ? (
+            <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13, lineHeight: 1.45 }} aria-label="Score breakdown">
+              Score mode: {report.scoring_mode || 'unknown'} ·{' '}
+              {Object.entries(report.score_components)
+                .map(([key, value]) => `${key.replace(/_/g, ' ')} ${value}`)
+                .join(' · ')}
+              {report.scoring_mode === 'transcript'
+                ? ' · Task completion / final state are n/a without structured evidence (not counted as 100).'
+                : ''}
+            </p>
+          ) : null}
+
+          {(report.completed_actions?.length || report.missing_actions?.length || selectedScenario?.required_actions?.length) ? (
+            <section
+              aria-label="Required action checklist"
+              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 10, background: 'white' }}
+            >
+              <div>
+                <p style={{ margin: '0 0 6px', color: 'var(--muted)', fontSize: 13, fontWeight: 800, textTransform: 'uppercase' }}>
+                  Required action checklist
+                </p>
+                <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13 }}>
+                  Observed in this evidence vs still missing.
+                </p>
+              </div>
+              <ul style={{ margin: 0, paddingLeft: 0, listStyle: 'none', display: 'grid', gap: 6 }}>
+                {(selectedScenario?.required_actions?.length
+                  ? toStringList(selectedScenario.required_actions)
+                  : [...(report.completed_actions ?? []), ...(report.missing_actions ?? [])]
+                ).map((action) => {
+                  const completed = (report.completed_actions ?? []).some(
+                    (item) => item.toLowerCase() === action.toLowerCase(),
+                  );
+                  const missing = (report.missing_actions ?? []).some(
+                    (item) => item.toLowerCase() === action.toLowerCase(),
+                  );
+                  const status = completed ? 'observed' : missing || report.missing_actions?.length ? 'missing' : 'unknown';
+                  return (
+                    <li
+                      key={action}
+                      style={{
+                        display: 'flex',
+                        gap: 10,
+                        alignItems: 'flex-start',
+                        fontSize: 14,
+                        lineHeight: 1.4,
+                        color: status === 'missing' ? 'var(--error-text)' : 'var(--text)',
+                      }}
+                    >
+                      <span aria-hidden="true" style={{ fontWeight: 900, minWidth: 16 }}>
+                        {status === 'observed' ? '✓' : status === 'missing' ? '✗' : '·'}
+                      </span>
+                      <span>
+                        <strong>{status === 'observed' ? 'Observed' : status === 'missing' ? 'Missing' : 'Unchecked'}:</strong> {action}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ) : null}
 
           {actionPlan ? (
             <section
@@ -5425,11 +5509,19 @@ function ScenarioList({ title, items }: { title: string; items: string[] }) {
   );
 }
 
-function ScoreTile({ label, score }: { label: string; score?: number }) {
+function ScoreTile({ label, score }: { label: string; score?: number | null }) {
+  const hasScore = typeof score === 'number' && Number.isFinite(score);
   return (
     <div aria-label={`${label} score`} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14 }}>
       <p style={{ margin: '0 0 6px', color: 'var(--muted)', fontSize: 13 }}>{label}</p>
-      <p style={{ margin: 0, fontSize: 24, fontWeight: 900, color: scoreColor(score) }}>{score ?? 'n/a'}</p>
+      <p style={{ margin: 0, fontSize: 24, fontWeight: 900, color: hasScore ? scoreColor(score) : 'var(--muted)' }}>
+        {hasScore ? score : 'n/a'}
+      </p>
+      {!hasScore ? (
+        <p style={{ margin: '6px 0 0', color: 'var(--muted)', fontSize: 12, lineHeight: 1.35 }}>
+          Not measured from this evidence
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -5525,7 +5617,19 @@ function GroupCallPanel({ summary }: { summary?: GroupCallSummary | null }) {
 function VoiceInteractionPanel({ summary }: { summary?: VoiceInteractionSummary | null }) {
   if (!summary) return null;
 
-  const signalCount = (summary.interruption_signal_count ?? 0) + (summary.correction_signal_count ?? 0);
+  const signalCount = (summary.interruption_signal_count ?? 0)
+    + (summary.correction_signal_count ?? 0)
+    + (summary.handoff_signal_count ?? 0)
+    + (summary.action_trace_event_count ?? 0);
+  const hasMedia = Boolean(summary.media?.recording_url || summary.media?.mime_type);
+  const hasTiming = typeof summary.duration_ms === 'number'
+    || typeof summary.average_latency_ms === 'number'
+    || typeof summary.max_latency_ms === 'number'
+    || typeof summary.packet_loss_percent === 'number'
+    || typeof summary.jitter_ms === 'number';
+  // Don't show an empty voice card for plain text transcript evals.
+  if (signalCount === 0 && !hasMedia && !hasTiming) return null;
+
   const status = signalCount > 0 ? 'Voice turn signals captured' : 'No interruption or correction signals captured';
 
   return (
