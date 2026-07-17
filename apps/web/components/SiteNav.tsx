@@ -3,7 +3,7 @@ import { ApiAwareLink } from '@/components/ApiAwareLink';
 export function SiteNav({
   current,
 }: {
-  current?: 'home' | 'eval' | 'runs' | 'agents' | 'scenarios';
+  current?: 'home' | 'eval' | 'runs' | 'agents' | 'scenarios' | 'voice' | 'benchmarks';
 }) {
   return (
     <nav className="top-nav compact-nav" aria-label="Primary">
@@ -14,6 +14,8 @@ export function SiteNav({
         <ApiAwareLink href="/agents" aria-current={current === 'agents' ? 'page' : undefined}>Agents</ApiAwareLink>
         <ApiAwareLink href="/runs" aria-current={current === 'runs' ? 'page' : undefined}>Run agent</ApiAwareLink>
         <ApiAwareLink href="/eval" aria-current={current === 'eval' ? 'page' : undefined}>Eval</ApiAwareLink>
+        <ApiAwareLink href="/voice" aria-current={current === 'voice' ? 'page' : undefined}>Voice</ApiAwareLink>
+        <ApiAwareLink href="/benchmarks" aria-current={current === 'benchmarks' ? 'page' : undefined}>Full console</ApiAwareLink>
       </div>
     </nav>
   );

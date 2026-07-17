@@ -96,6 +96,23 @@ function evidenceLine(conversation: ExecutionConversation) {
   return parts.length ? parts.join(' · ') : null;
 }
 
+const modeOptions = [
+  {
+    id: 'pipecat_webrtc',
+    label: 'Pipecat hooks',
+    eyebrow: 'Integration path',
+    description: 'Exercise in-process audio send/receive hooks and capture transport evidence.',
+    detail: 'Includes vCon + frame counts',
+  },
+  {
+    id: 'voice_fixture',
+    label: 'Fixture',
+    eyebrow: 'Fast smoke test',
+    description: 'Run the same scoring workflow against deterministic offline audio.',
+    detail: 'No live transport required',
+  },
+] as const;
+
 export function VoiceEvalPage() {
   const [mode, setMode] = useState<VoiceMode>('pipecat_webrtc');
   const [error, setError] = useState<string | null>(null);
@@ -151,121 +168,183 @@ export function VoiceEvalPage() {
     }
   }
 
+  const selectedMode = modeOptions.find((option) => option.id === mode) ?? modeOptions[0];
+
   return (
-    <section className="card" style={{ padding: 24, display: 'grid', gap: 16 }} aria-label="Voice evaluation">
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'end' }}>
-        <div style={{ display: 'grid', gap: 6, flex: 1, minWidth: 260 }}>
-          <span style={{ fontWeight: 700 }}>Mode</span>
-          <div role="group" aria-label="Voice evaluation mode" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {(
-              [
-                { id: 'pipecat_webrtc', label: 'Pipecat hooks' },
-                { id: 'voice_fixture', label: 'Fixture' },
-              ] as const
-            ).map((option) => {
+    <section className="voice-eval-workspace" aria-label="Voice evaluation">
+      <aside className="voice-scenario-card" aria-labelledby="voice-scenario-title">
+        <div className="voice-section-heading">
+          <span className="voice-step">Scenario</span>
+          <p className="eyebrow">Cancellation rescue</p>
+          <h2 id="voice-scenario-title">Can the agent retain an at-risk caller?</h2>
+          <p>
+            A caller asks to cancel. The agent should understand the reason, respond appropriately,
+            and preserve a clear evidence trail without inventing actions.
+          </p>
+        </div>
+        <dl className="voice-scenario-facts">
+          <div><dt>Suite</dt><dd>Call center voice AI</dd></div>
+          <div><dt>Iterations</dt><dd>1 conversation</dd></div>
+          <div><dt>Evaluation</dt><dd>Automatic scoring</dd></div>
+        </dl>
+        <div className="voice-evidence-list" aria-label="Expected evidence">
+          <strong>Evidence captured</strong>
+          <span>Transcript</span>
+          <span>Recording metadata</span>
+          <span>vCon export</span>
+          <span>Transport frames</span>
+        </div>
+      </aside>
+
+      <div className="voice-eval-main">
+        <section className="card voice-mode-panel" aria-labelledby="voice-mode-title">
+          <div className="voice-panel-heading">
+            <div>
+              <span className="voice-step">1</span>
+              <p className="eyebrow">Choose a test path</p>
+              <h2 id="voice-mode-title">How should this call run?</h2>
+            </div>
+            <span className="voice-selection-summary">Selected · {selectedMode.label}</span>
+          </div>
+
+          <div role="group" aria-label="Voice evaluation mode" className="voice-mode-grid">
+            {modeOptions.map((option) => {
               const selected = mode === option.id;
               return (
                 <button
                   key={option.id}
                   type="button"
+                  className="voice-mode-option"
+                  data-selected={selected}
+                  aria-label={option.label}
                   aria-pressed={selected}
                   onClick={() => setMode(option.id)}
-                  style={{
-                    border: `1px solid ${selected ? 'var(--accent)' : 'var(--border)'}`,
-                    borderRadius: 8,
-                    padding: '10px 14px',
-                    background: selected ? 'var(--accent)' : 'white',
-                    color: selected ? 'white' : 'var(--text)',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                  }}
                 >
-                  {option.label}
+                  <span className="voice-mode-radio" aria-hidden="true">{selected ? '✓' : ''}</span>
+                  <span className="voice-mode-copy">
+                    <small>{option.eyebrow}</small>
+                    <strong>{option.label}</strong>
+                    <span>{option.description}</span>
+                    <em>{option.detail}</em>
+                  </span>
                 </button>
               );
             })}
           </div>
-        </div>
-        <button
-          type="button"
-          onClick={onLaunch}
-          disabled={isLaunching || active}
-          style={{
-            border: 'none',
-            borderRadius: 10,
-            padding: '12px 18px',
-            background: 'var(--accent)',
-            color: 'white',
-            fontWeight: 700,
-            cursor: isLaunching || active ? 'not-allowed' : 'pointer',
-            opacity: isLaunching || active ? 0.65 : 1,
-          }}
-        >
-          {isLaunching ? 'Starting…' : active ? 'Running…' : 'Run'}
-        </button>
+
+          {error ? (
+            <div className="voice-error" role="alert">
+              <strong>Could not start the evaluation</strong>
+              <span>{error}</span>
+            </div>
+          ) : null}
+
+          <div className="voice-launch-bar">
+            <div>
+              <span className="voice-step">2</span>
+              <strong>Run cancellation rescue</strong>
+              <small>{selectedMode.detail}</small>
+            </div>
+            <button
+              type="button"
+              className="voice-run-button"
+              aria-label="Run"
+              onClick={onLaunch}
+              disabled={isLaunching || active}
+            >
+              {isLaunching ? 'Starting…' : active ? 'Running…' : 'Run voice eval'}
+              {!isLaunching && !active ? <span aria-hidden="true">→</span> : null}
+            </button>
+          </div>
+        </section>
+
+        <section className="card voice-results-panel" aria-labelledby="voice-results-title">
+          <div className="voice-panel-heading">
+            <div>
+              <span className="voice-step">3</span>
+              <p className="eyebrow">Evidence and score</p>
+              <h2 id="voice-results-title">Run results</h2>
+            </div>
+            {run ? (
+              <span className="voice-run-status" data-status={run.status}>
+                <i aria-hidden="true" />{run.status}
+              </span>
+            ) : null}
+          </div>
+
+          {run ? (
+            <div className="voice-results-content">
+              <div className="voice-run-meta">
+                <div>
+                  <span>Run ID</span>
+                  <strong>{run.execution_run_id}</strong>
+                </div>
+                <div>
+                  <span>Progress</span>
+                  <strong>{run.progress.completed_conversations}/{run.progress.total_conversations} conversations</strong>
+                </div>
+              </div>
+              <div className="voice-progress-track" aria-label={`Run progress ${run.progress.percent}%`}>
+                <span style={{ width: `${Math.max(0, Math.min(100, run.progress.percent))}%` }} />
+              </div>
+
+              <div aria-label="Voice eval conversations" className="voice-conversation-list">
+                {(run.conversations || []).length ? (
+                  [...run.conversations].reverse().map((conversation) => {
+                    const evidence = evidenceLine(conversation);
+                    const outcome = conversation.verdict || conversation.status;
+                    return (
+                      <article key={conversation.conversation_id} className="voice-conversation-card">
+                        <div className="voice-conversation-header">
+                          <div>
+                            <p className="eyebrow">Evaluated conversation</p>
+                            <h3>{conversation.scenario_title || conversation.scenario_id}</h3>
+                          </div>
+                          <div className="voice-score" style={{ color: statusColor(outcome) }}>
+                            <strong>{typeof conversation.score === 'number' ? conversation.score : '—'}</strong>
+                            <span>{outcome}</span>
+                          </div>
+                        </div>
+                        {evidence ? (
+                          <div className="voice-evidence-chips">
+                            {evidence.split(' · ').map((item) => <span key={item}>{item}</span>)}
+                          </div>
+                        ) : null}
+                        {conversation.error ? <div className="voice-error" role="alert">{conversation.error}</div> : null}
+                        {(conversation.turns || []).length ? (
+                          <div className="voice-transcript" aria-label="Conversation transcript">
+                            {(conversation.turns || []).map((turn, index) => (
+                              <div key={`${turn.speaker || 'turn'}-${index}`}>
+                                <strong>{turn.speaker || 'Speaker'}</strong>
+                                <p>{turn.text || '—'}</p>
+                              </div>
+                            ))}
+                          </div>
+                        ) : conversation.transcript ? (
+                          <pre className="voice-transcript-raw">{conversation.transcript}</pre>
+                        ) : null}
+                      </article>
+                    );
+                  })
+                ) : (
+                  <div className="voice-waiting-state" aria-live="polite">
+                    <span className="voice-pulse" aria-hidden="true" />
+                    <div><strong>Evaluation in progress</strong><p>Waiting for the first conversation evidence…</p></div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="voice-empty-results">
+              <div className="voice-empty-icon" aria-hidden="true">◎</div>
+              <div>
+                <strong>Your evidence will appear here</strong>
+                <p>Choose a test path and run the scenario to see the score, transcript, and captured artifacts.</p>
+              </div>
+            </div>
+          )}
+        </section>
       </div>
-
-      <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }}>
-        {mode === 'pipecat_webrtc'
-          ? 'In-process send/receive hooks + vCon capture.'
-          : 'Offline audio fixture path.'}
-      </p>
-
-      {error ? <p style={{ margin: 0, color: 'var(--error-text)' }}>{error}</p> : null}
-
-      {run ? (
-        <div style={{ display: 'grid', gap: 12 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-            <span>
-              <strong style={{ color: statusColor(run.status), textTransform: 'capitalize' }}>{run.status}</strong>
-              <span style={{ marginLeft: 8, color: 'var(--muted)', fontSize: 13 }}>{run.execution_run_id}</span>
-            </span>
-            <span style={{ color: 'var(--muted)', fontSize: 14 }}>
-              {run.progress.completed_conversations}/{run.progress.total_conversations}
-            </span>
-          </div>
-
-          <div aria-label="Voice eval conversations" style={{ display: 'grid', gap: 8 }}>
-            {(run.conversations || []).length ? (
-              [...run.conversations].reverse().map((conversation) => {
-                const evidence = evidenceLine(conversation);
-                return (
-                  <article
-                    key={conversation.conversation_id}
-                    style={{
-                      border: '1px solid var(--border)',
-                      borderRadius: 10,
-                      padding: '12px 14px',
-                      display: 'grid',
-                      gap: 6,
-                      background: 'white',
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-                      <strong>{conversation.scenario_title || conversation.scenario_id}</strong>
-                      <span style={{ color: statusColor(conversation.verdict || conversation.status), textTransform: 'capitalize' }}>
-                        {conversation.verdict || conversation.status}
-                        {typeof conversation.score === 'number' ? ` · ${conversation.score}` : ''}
-                      </span>
-                    </div>
-                    {evidence ? <p style={{ margin: 0, fontSize: 13, color: 'var(--muted)' }}>{evidence}</p> : null}
-                    {conversation.error ? (
-                      <p style={{ margin: 0, fontSize: 13, color: 'var(--error-text)' }}>{conversation.error}</p>
-                    ) : null}
-                    {conversation.transcript ? (
-                      <p style={{ margin: 0, whiteSpace: 'pre-wrap', fontSize: 13, maxHeight: 96, overflow: 'hidden' }}>
-                        {conversation.transcript}
-                      </p>
-                    ) : null}
-                  </article>
-                );
-              })
-            ) : (
-              <p style={{ margin: 0, color: 'var(--muted)' }}>Waiting…</p>
-            )}
-          </div>
-        </div>
-      ) : null}
     </section>
   );
 }

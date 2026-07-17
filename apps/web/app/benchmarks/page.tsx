@@ -7,7 +7,7 @@ import { SiteNav } from '@/components/SiteNav';
 export default function BenchmarksPage() {
   return (
     <main className="page-shell compact-shell">
-      <SiteNav />
+      <SiteNav current="benchmarks" />
       <section className="minimal-hero" aria-labelledby="benchmarks-title">
         <p className="eyebrow">Full console</p>
         <h1 id="benchmarks-title">Benchmark history and reports.</h1>
