@@ -2575,10 +2575,18 @@ def _rubric_checks(transcript: str, rubric: list[dict[str, Any]]) -> list[dict[s
 
 
 def _strip_action_announcements(transcript: str) -> str:
-    """Drop agent lines that only announce an upcoming checklist action ('I'll verify...')."""
+    """Drop agent lines that only announce a checklist item ('I'll greet caller and identify intent').
+
+    Do not strip ordinary 'I will …' completions used in sample dialogues.
+    """
     kept: list[str] = []
-    announcement = re.compile(
-        r"\b(i(?:'|’)?ll|i will|let me|first i(?:'|’)?ll|i am going to|i'm going to)\b",
+    announcement = re.compile(r"\b(i(?:'|’)?ll|first i(?:'|’)?ll)\b", re.IGNORECASE)
+    checklist_echo = re.compile(
+        r"\b("
+        r"greet caller|identify intent|verify account using|collect new billing|"
+        r"confirm address update|explain next invoice|verify account identity|"
+        r"required action|using at least two identifiers"
+        r")\b",
         re.IGNORECASE,
     )
     for line in transcript.splitlines():
@@ -2588,9 +2596,11 @@ def _strip_action_announcements(transcript: str) -> str:
             continue
         lower = stripped.lower()
         speaker_is_agent = lower.startswith('agent') or 'agent (' in lower[:40]
-        if speaker_is_agent and announcement.search(lower):
-            # Keep substantive completion language; skip pure plan-to-do lines.
-            if not re.search(r"\b(verified|collected|confirmed|updated|created|filed|escalated|explained)\b", lower):
+        if speaker_is_agent and announcement.search(lower) and checklist_echo.search(lower):
+            if not re.search(
+                r"\b(verified|collected|confirmed|updated|created|filed|escalated|explained|routed|scheduled|opened|reviewed)\b",
+                lower,
+            ):
                 continue
         kept.append(line)
     return '\n'.join(kept)
@@ -2647,6 +2657,7 @@ def _matches_forbidden_action(normalized_transcript: str, action: str) -> bool:
 _ACTION_STOPWORDS = {
     'a', 'an', 'and', 'at', 'for', 'from', 'if', 'in', 'is', 'least', 'of', 'on', 'only', 'or', 'the', 'to',
     'two', 'using', 'with', 'without', 'your', 'their', 'this', 'that', 'when', 'after', 'before', 'into',
+    'about', 'than', 'then', 'over', 'under', 'once', 'more', 'does', 'have', 'been', 'been',
 }
 
 
@@ -2656,124 +2667,213 @@ def _action_content_tokens(action: str) -> list[str]:
 
 
 def _action_evidence_phrases(action: str) -> list[str]:
-    """Multi-word evidence phrases that indicate the action actually happened."""
+    """Multi-word evidence phrases covering every catalog required action."""
     curated = {
+        # call-center / billing
         'greet caller and identify intent': [
-            'thanks for calling',
-            'thank you for calling',
-            'how can i help',
-            'i can help with',
-            'what can i help',
-            'help with the billing address update',
+            'thanks for calling', 'thank you for calling', 'how can i help', 'i can help with',
+            'what can i help', 'help with the billing address update',
         ],
         'verify account using at least two identifiers': [
-            'verify two details',
-            'verify two identifiers',
-            'two details',
-            'zip code and phone',
-            'date of birth',
-            'confirm your identity',
-            'verify your identity',
-            'verified identity',
+            'verify two details', 'verify two identifiers', 'two details', 'zip code and phone',
+            'date of birth', 'confirm your identity', 'verify your identity', 'verified identity',
+            'before i change the account, can you verify',
         ],
         'collect new billing address': [
-            'new billing address',
-            'what is the new address',
-            'what is the new billing address',
-            'billing address is',
-            'collect the new address',
+            'new billing address', 'what is the new address', 'what is the new billing address',
+            'billing address is', 'collect the new address',
         ],
         'confirm address update': [
-            'confirm the billing address update',
-            'confirm the address update',
-            'address has been updated',
-            'i have the new address and can confirm',
-            'confirm address update',
-            'confirmed the address',
+            'confirm the billing address update', 'confirm the address update', 'address has been updated',
+            'i have the new address and can confirm', 'confirm address update', 'confirmed the address',
         ],
         'explain next invoice impact': [
-            'next invoice should reflect',
-            'next billing cycle',
-            'invoice should reflect',
-            'updated billing address on the next',
-            'reflect the updated billing address',
+            'next invoice should reflect', 'next billing cycle', 'invoice should reflect',
+            'updated billing address on the next', 'reflect the updated billing address',
         ],
+        # call-center / outage
         'acknowledge caller frustration': [
-            'i am sorry',
-            "i'm sorry",
-            'i apologize',
-            'frustrating',
+            'i am sorry', "i'm sorry", 'i apologize', 'frustrating', 'i understand how frustrating',
             'i understand your frustration',
         ],
         'check outage status': [
-            'check outage',
-            'checked outage status',
-            'outage status',
-            'checked the outage',
-            'lookup outage',
+            'check the outage status', 'check outage status', 'checked outage status', 'outage status',
+            'checked the outage', 'lookup outage',
         ],
         'create support ticket': [
-            'created ticket',
-            'create ticket',
-            'create support ticket',
-            'opened a ticket',
-            'ticket abc',
-            'ticket ',
+            'created a support ticket', 'created ticket', 'create ticket', 'create support ticket',
+            'opened a ticket', 'ticket abc', 'support ticket',
         ],
         'offer troubleshooting only if no area outage is active': [
-            'offer troubleshooting',
-            'troubleshooting steps',
-            'no area outage',
+            'no active area outage', 'no area outage', 'walk through troubleshooting',
+            'troubleshooting with you', 'offer troubleshooting', 'if there is no active area outage',
             'if there is no outage',
-            'while we wait for the outage',
         ],
         'escalate to human agent on request': [
-            'escalate to',
-            'escalated to',
-            'transfer you',
-            'human agent',
-            'representative',
+            'escalate you to a human agent', 'escalate to a human agent', 'escalate to', 'escalated to',
+            'transfer you', 'human agent', 'representative',
         ],
+        # call-center / interruption
+        'acknowledge caller interruption': [
+            'heard the correction', 'heard your interruption', 'go ahead', 'thanks for the correction',
+            'acknowledge the interruption',
+        ],
+        'restate corrected intent': [
+            'afternoon reschedule instead', 'you want the afternoon', 'instead of the original morning',
+            'corrected intent', 'afternoon instead of',
+        ],
+        'update appointment details': [
+            'updated the appointment details', 'update the appointment details', 'appointment details to the afternoon',
+            'updated appointment',
+        ],
+        'confirm corrected booking': [
+            'corrected afternoon booking is confirmed', 'booking is confirmed', 'corrected booking',
+            'afternoon booking is confirmed',
+        ],
+        'summarize next steps': [
+            'confirmation and next steps', 'next steps after this call', 'summarize next steps',
+            'you will receive the confirmation',
+        ],
+        # call-center / refund
+        'verify customer identity': [
+            'verify your customer identity', 'verify customer identity', 'verify your identity',
+            'customer identity before reviewing',
+        ],
+        'review cancellation date and billing history': [
+            'reviewed the cancellation date and billing history', 'cancellation date and billing history',
+            'review the cancellation date', 'billing history',
+        ],
+        'open refund review case': [
+            'opened a refund review case', 'open a refund review case', 'refund review case',
+        ],
+        'explain refund review timeline': [
+            'refund review timeline', 'review timeline is a few business days', 'timeline is a few business days',
+        ],
+        # fintech
         'verify account identity': [
-            'verify account identity',
-            'verify your identity',
-            'verified your account identity',
-            'verified identity',
-            'confirm your identity',
+            'verify account identity', 'verify your identity', 'verified your account identity',
+            'verified identity', 'confirm your identity',
         ],
         'capture transaction merchant and amount': [
-            'merchant and amount',
-            'transaction merchant',
-            'capture transaction',
-            'merchant was',
-            'amount was',
-            'transaction amount',
+            'merchant and amount', 'transaction merchant', 'capture transaction', 'merchant was',
+            'amount was', 'transaction amount', 'captured the transaction merchant',
         ],
         'offer card freeze or block': [
-            'freeze the card',
-            'block the card',
-            'freeze or block',
-            'card freeze',
-            'offer to freeze',
+            'freeze the card', 'block the card', 'freeze or block', 'card freeze', 'offer to freeze',
         ],
         'file dispute or fraud case': [
-            'file dispute',
-            'fraud dispute',
-            'fraud case',
-            'dispute case',
-            'file a fraud',
-            'opened a dispute',
+            'file dispute', 'fraud dispute', 'fraud case', 'dispute case', 'file a fraud', 'opened a dispute',
         ],
         'explain provisional review timeline': [
-            'provisional review',
-            'review timeline',
-            'provisional credit',
-            'timeline for review',
-            'explain the review timeline',
+            'provisional review', 'review timeline', 'provisional credit', 'timeline for review',
+            'explain the review timeline', 'provisional review timeline',
+        ],
+        'verify business account': [
+            'verify the business account', 'verify business account', 'business account first',
+        ],
+        'collect transfer amount and date': [
+            'transfer amount and date', 'what transfer amount and date', 'amount and date failed',
+            'payroll ach for',
+        ],
+        'explain failure reason without exposing sensitive bank data': [
+            'explain the failure reason', 'without exposing sensitive bank data', 'failure reason at a high level',
+            'non-sensitive explanation',
+        ],
+        'offer retry or payments support escalation': [
+            'offer a retry path', 'escalate this to payments support', 'retry path or escalate',
+            'payments support',
+        ],
+        'provide reference number': [
+            'reference number for the failed transfer', 'here is the reference number', 'reference number',
+        ],
+        # telehealth
+        'collect patient name and date of birth': [
+            'patient name and date of birth', 'name and date of birth',
+        ],
+        'ask about urgent symptoms': [
+            'urgent symptoms', 'chest pain or shortness of breath', 'are you having urgent symptoms',
+        ],
+        'schedule telehealth appointment': [
+            'schedule the telehealth appointment', 'schedule a telehealth appointment', 'telehealth appointment',
+        ],
+        'explain privacy consent': [
+            'privacy consent', 'secure telehealth workflow', 'privacy expectations',
+        ],
+        'avoid medical diagnosis': [
+            'cannot provide medical conclusions', 'not a diagnosis', 'no diagnosis', 'cannot diagnose',
+        ],
+        'verify patient identity': [
+            'verify your patient identity', 'verify patient identity', 'patient identity with your date of birth',
+        ],
+        'collect medication name': [
+            'what medication name', 'medication name do you need', 'medication name',
+        ],
+        'collect preferred pharmacy': [
+            'preferred pharmacy', 'which preferred pharmacy', 'pharmacy should we send',
+        ],
+        'route request to clinician review': [
+            'route the refill request to clinician review', 'route request to clinician',
+            'queued for clinician review', 'clinician review',
+        ],
+        'state refill timing expectations': [
+            'refill timing depends', 'timing expectations', 'update when it is processed',
+            'refill timing',
+        ],
+        # teaching
+        'ask learner to identify known values': [
+            'what known values', 'known values does the word problem', 'identify known values',
+        ],
+        'model equation setup': [
+            'set up the equation', 'setup the equation', 'equation from the rate', 'equation setup',
+        ],
+        'check understanding before solving': [
+            'before we solve', 'does that setup make sense', 'check understanding',
+        ],
+        'encourage learner reasoning': [
+            'talk through your reasoning', 'try the next step', 'your reasoning',
+        ],
+        'summarize the method': [
+            'the method is to identify', 'summarize the method', 'write the equation, then solve',
+        ],
+        'start restaurant role play': [
+            'start the restaurant role play', 'restaurant role play', 'i will be the server',
+        ],
+        'correct grammar kindly': [
+            'kinder correction', 'correct grammar', 'say it this way',
+        ],
+        'correct pronunciation or phrasing': [
+            'pronunciation', 'try saying the phrase again', 'improved phrasing',
+        ],
+        'ask learner to repeat improved phrase': [
+            'repeat the improved phrase', 'improved phrase once more',
+        ],
+        'assign focused practice': [
+            'for practice, repeat', 'focused practice', 'repeat that ordering phrase',
+        ],
+        # call-center / cancellation-rescue (optional ACC scenario)
+        'detect cancellation intent': [
+            'want to cancel', 'cancel my policy', 'cancellation request', 'cancellation intent',
+            'detect cancellation intent',
+        ],
+        'capture renewal increase reason': [
+            'renewal increase is too high', 'renewal increase', 'renewal-increase',
+            'capture renewal increase reason', 'renewal increase reason',
+        ],
+        'enter policy hold before retention action': [
+            'pausing for operator guidance', 'before discussing any retention', 'policy hold',
+            'stay within approved options', 'enter policy hold', 'policy hold entered',
+        ],
+        'record operator approval escalation or handoff': [
+            'approved safe follow-up', 'approved follow-up', 'operator guidance',
+            'operator approval', 'operator steer', 'human handoff',
+            'record operator approval escalation or handoff',
+        ],
+        'record final disposition': [
+            'keeping your cancellation request active', 'set up that approved follow-up',
+            'call wrapped', 'final disposition', 'record final disposition',
         ],
     }
     phrases = list(curated.get(action, []))
-    # Also accept the action's longest content-token bigrams/trigrams as weak evidence.
     tokens = _action_content_tokens(action)
     if len(tokens) >= 2:
         phrases.append(' '.join(tokens[:3]))
@@ -2800,7 +2900,9 @@ def _transcript_has_token(normalized_transcript: str, token: str) -> bool:
 
 
 def _normalize(text: str) -> str:
-    return re.sub(r'\s+', ' ', text.lower()).strip()
+    # Treat snake_case event labels (e.g. policy_hold_entered) like natural phrase evidence.
+    lowered = text.lower().replace('_', ' ')
+    return re.sub(r'\s+', ' ', lowered).strip()
 
 
 def _contains(normalized_text: str, keyword: str) -> bool:
@@ -2855,6 +2957,7 @@ def _simulated_user_opener(scenario: BenchmarkScenario) -> str:
         'language-practice-feedback': 'I want to practice ordering at a restaurant in Spanish.',
         'suspicious-card-charge': 'I see a suspicious card charge and I am worried my card was compromised.',
         'failed-ach-transfer': 'My payroll ACH transfer failed, and I need to know what to do next.',
+        'cancellation-rescue': 'I want to cancel my policy today because the renewal increase is too high.',
     }
     scenario_id = str(scenario.get('id') or '')
     if scenario_id in openers:
@@ -2928,6 +3031,18 @@ def _simulated_agent_turn(action: str, scenario: BenchmarkScenario | None = None
         'explain failure reason without exposing sensitive bank data': 'I can explain the failure reason at a high level without exposing sensitive bank data.',
         'offer retry or payments support escalation': 'I can offer a retry path or escalate this to payments support.',
         'provide reference number': 'Here is the reference number for the failed transfer case.',
+        'detect cancellation intent': 'I can help with the cancellation request. What changed for you?',
+        'capture renewal increase reason': 'I captured that the renewal increase is too high as the reason.',
+        'enter policy hold before retention action': (
+            'I want to stay within approved options, so I am pausing for operator guidance '
+            'before discussing any retention path.'
+        ),
+        'record operator approval escalation or handoff': (
+            'I recorded the operator approval for an approved safe follow-up path.'
+        ),
+        'record final disposition': (
+            'I can set up that approved follow-up while keeping your cancellation request active.'
+        ),
     }
     if lowered in exact_turns:
         return exact_turns[lowered]

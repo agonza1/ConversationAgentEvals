@@ -37,13 +37,15 @@ def test_legacy_eval_run_endpoint_is_not_mounted():
 
 def test_list_suites_returns_seeded_webrtc_ventures_catalog():
     suites = list_suites()
+    suite_ids = {suite['id'] for suite in suites}
+    seeded = [suite for suite in suites if suite['id'] in EXPECTED_SUITE_IDS]
 
-    assert {suite['id'] for suite in suites} == EXPECTED_SUITE_IDS
-    assert all(suite['provider'] == 'WebRTC.ventures' for suite in suites)
-    assert all(suite['scenario_count'] >= 2 for suite in suites)
-    assert all('persona' in scenario for suite in suites for scenario in suite['scenarios'])
-    assert all('goal' in scenario for suite in suites for scenario in suite['scenarios'])
-    assert sum(suite['scenario_count'] for suite in suites) == 10
+    assert EXPECTED_SUITE_IDS.issubset(suite_ids)
+    assert all(suite['provider'] == 'WebRTC.ventures' for suite in seeded)
+    assert all(suite['scenario_count'] >= 2 for suite in seeded)
+    assert all('persona' in scenario for suite in seeded for scenario in suite['scenarios'])
+    assert all('goal' in scenario for suite in seeded for scenario in suite['scenarios'])
+    assert sum(suite['scenario_count'] for suite in seeded) == 10
 
 
 def test_call_center_catalog_includes_refund_policy_boundary_scenario():
@@ -1915,6 +1917,86 @@ def test_truncated_billing_transcript_does_not_pass_on_loose_keywords():
     ]
     assert result['task_completion_score'] is None
     assert result['final_state_score'] is None
+
+
+def test_all_catalog_sample_transcripts_and_simulations_still_pass():
+    from app.services.benchmark_catalog_extensions import register_builtin_benchmark_extensions
+    from app.services.benchmark_service import _action_evidence_phrases, list_suites, get_suite, simulate_scenario
+
+    register_builtin_benchmark_extensions()
+
+    built_in_suite_ids = {
+        'call-center-voice-ai',
+        'telehealth-agent',
+        'online-teaching-agent',
+        'fintech-support-agent',
+    }
+    seen_actions: set[str] = set()
+    for suite_summary in list_suites():
+        if suite_summary['id'] not in built_in_suite_ids:
+            continue
+        suite = get_suite(suite_summary['id'])
+        scenarios = list(suite.get('scenarios') or []) + list(suite.get('optional_scenarios') or [])
+        for scenario in scenarios:
+            for action in scenario.get('required_actions') or []:
+                seen_actions.add(action)
+                assert _action_evidence_phrases(action), f'No evidence phrases for action: {action}'
+
+            sample = scenario.get('sample_transcript')
+            if sample:
+                payload: dict = {
+                    'suite_id': suite_summary['id'],
+                    'scenario_id': scenario['id'],
+                    'transcript': sample,
+                }
+                # Cancellation-rescue (and other agentic samples) require structured evidence.
+                if scenario.get('sample_action_trace'):
+                    payload['action_trace'] = scenario['sample_action_trace']
+                if scenario.get('sample_final_state'):
+                    payload['final_state'] = scenario['sample_final_state']
+                scored = run_scenario(payload)
+                assert scored['verdict'] == 'pass', (
+                    suite_summary['id'],
+                    scenario['id'],
+                    scored['missing_actions'],
+                    scored.get('assert_result_manifest', {}).get('verdict', {}).get('metrics'),
+                )
+                assert scored['missing_actions'] == []
+
+            # Transcript-only samples (without structured evidence) must still pass for core suites.
+            if sample and scenario['id'] != 'cancellation-rescue':
+                transcript_only = run_scenario(
+                    {
+                        'suite_id': suite_summary['id'],
+                        'scenario_id': scenario['id'],
+                        'transcript': sample,
+                    }
+                )
+                assert transcript_only['verdict'] == 'pass', (
+                    suite_summary['id'],
+                    scenario['id'],
+                    'transcript-only',
+                    transcript_only['missing_actions'],
+                )
+                assert transcript_only['missing_actions'] == []
+
+            simulated = simulate_scenario(
+                {
+                    'suite_id': suite_summary['id'],
+                    'scenario_id': scenario['id'],
+                    'agent_profile': 'mock text agent',
+                }
+            )
+            report = simulated['benchmark_report']
+            assert report['verdict'] == 'pass', (
+                suite_summary['id'],
+                scenario['id'],
+                report.get('missing_actions'),
+                report.get('assert_result_manifest', {}).get('verdict', {}).get('metrics'),
+            )
+            assert report.get('missing_actions') == []
+
+    assert len(seen_actions) >= 40
 
 
 def test_run_scenario_ignores_failed_action_trace_events_for_required_actions():

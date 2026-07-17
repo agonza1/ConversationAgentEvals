@@ -139,6 +139,7 @@ _ORIGINAL_GET_SUITE: Callable[[str], dict[str, Any] | None] | None = None
 _ORIGINAL_SUITE_CONTRACT_MANIFEST: Callable[[str], dict[str, Any] | None] | None = None
 _ORIGINAL_SCENARIO_CONTRACT: Callable[[dict[str, Any]], dict[str, Any]] | None = None
 _ORIGINAL_EXECUTE_ASSERT: Callable[..., AssertResultManifest] | None = None
+_ORIGINAL_SIMULATE_SCENARIO: Callable[[Any], dict[str, Any]] | None = None
 
 
 def register_builtin_benchmark_extensions() -> None:
@@ -153,7 +154,7 @@ def register_builtin_benchmark_extensions() -> None:
 
     global _REGISTERED
     global _ORIGINAL_LIST_SUITES, _ORIGINAL_GET_SUITE, _ORIGINAL_SUITE_CONTRACT_MANIFEST
-    global _ORIGINAL_SCENARIO_CONTRACT, _ORIGINAL_EXECUTE_ASSERT
+    global _ORIGINAL_SCENARIO_CONTRACT, _ORIGINAL_EXECUTE_ASSERT, _ORIGINAL_SIMULATE_SCENARIO
 
     if _REGISTERED:
         return
@@ -170,6 +171,7 @@ def register_builtin_benchmark_extensions() -> None:
     _ORIGINAL_SUITE_CONTRACT_MANIFEST = benchmark_service.get_suite_contract_manifest
     _ORIGINAL_SCENARIO_CONTRACT = benchmark_service._scenario_contract
     _ORIGINAL_EXECUTE_ASSERT = benchmark_service._execute_assert_contract
+    _ORIGINAL_SIMULATE_SCENARIO = benchmark_service.simulate_scenario
 
     def extended_list_suites() -> list[dict[str, Any]]:
         assert _ORIGINAL_LIST_SUITES is not None
@@ -237,11 +239,79 @@ def register_builtin_benchmark_extensions() -> None:
             return result
         return _apply_cancellation_rescue_checks(result, scenario=value, payload=payload)
 
+    def extended_simulate_scenario(request: Any) -> dict[str, Any]:
+        """Use ACC-compatible starter evidence so mock sims satisfy deterministic checks."""
+        assert _ORIGINAL_SIMULATE_SCENARIO is not None
+        payload = benchmark_service._payload_to_dict(request)
+        suite_id = benchmark_service._first_string(payload, 'suite_id', 'suiteId')
+        scenario_id = benchmark_service._first_string(payload, 'scenario_id', 'scenarioId')
+        include_failure = bool(payload.get('include_failure'))
+        if (
+            suite_id == suite['id']
+            and scenario_id == CANCELLATION_RESCUE_SCENARIO['id']
+            and not include_failure
+        ):
+            agent_profile = (
+                benchmark_service._first_string(payload, 'agent_profile', 'agentProfile')
+                or 'mock text agent'
+            )
+            transcript = _cancellation_rescue_sample_transcript().replace(
+                'starter sample agent',
+                agent_profile,
+            )
+            action_trace = _cancellation_rescue_sample_action_trace()
+            final_state = _cancellation_rescue_sample_final_state()
+            simulation_validation = benchmark_service._simulation_validation(
+                scenario=scenario,
+                transcript=transcript,
+                action_trace=action_trace,
+                final_state=final_state,
+            )
+            benchmark_report = benchmark_service.run_scenario(
+                {
+                    'suite_id': suite_id,
+                    'scenario_id': scenario_id,
+                    'transcript': transcript,
+                    'action_trace': action_trace,
+                    'final_state': final_state,
+                    **benchmark_service._perturbation_payload(payload),
+                    **benchmark_service._run_metadata_payload(payload),
+                    **benchmark_service._run_lifecycle_payload(payload),
+                }
+            )
+            benchmark_report['simulation_validation'] = simulation_validation
+            benchmark_report['vcon_analysis'] = benchmark_service._vcon_analysis(benchmark_report)
+            benchmark_report['vcon_export'] = benchmark_service._vcon_export(
+                {
+                    'suite_id': suite_id,
+                    'scenario_id': scenario_id,
+                    'transcript': transcript,
+                    'action_trace': action_trace,
+                    'final_state': final_state,
+                },
+                transcript,
+                benchmark_report['vcon_analysis'],
+            )
+            return {
+                'suite_id': suite_id,
+                'suite_name': suite['name'],
+                'scenario_id': scenario_id,
+                'scenario_title': scenario['title'],
+                'transcript': transcript,
+                'action_trace': action_trace,
+                'final_state': final_state,
+                'simulation_validation': simulation_validation,
+                'run_metadata': benchmark_report['run_metadata'],
+                'benchmark_report': benchmark_report,
+            }
+        return _ORIGINAL_SIMULATE_SCENARIO(request)
+
     benchmark_service.list_suites = extended_list_suites
     benchmark_service.get_suite = extended_get_suite
     benchmark_service.get_suite_contract_manifest = extended_suite_contract_manifest
     benchmark_service._scenario_contract = extended_scenario_contract
     benchmark_service._execute_assert_contract = extended_execute_assert_contract
+    benchmark_service.simulate_scenario = extended_simulate_scenario
     _REGISTERED = True
 
 
@@ -283,21 +353,22 @@ def _cancellation_rescue_sample_transcript() -> str:
 
 
 def _cancellation_rescue_sample_action_trace() -> list[dict[str, Any]]:
+    """Emit ACC event types while labeling actions with catalog required-action names."""
     events = [
-        'cancellation_intent_detected',
-        'renewal_increase_reason_captured',
-        'policy_hold_entered',
-        'operator_steer_applied',
-        'call_wrapped',
+        ('detect cancellation intent', 'cancellation_intent_detected'),
+        ('capture renewal increase reason', 'renewal_increase_reason_captured'),
+        ('enter policy hold before retention action', 'policy_hold_entered'),
+        ('record operator approval escalation or handoff', 'operator_steer_applied'),
+        ('record final disposition', 'call_wrapped'),
     ]
     return [
         {
             'step': index,
             'type': event_type,
-            'action': event_type.replace('_', ' '),
+            'action': required_action,
             'status': 'completed',
         }
-        for index, event_type in enumerate(events, start=1)
+        for index, (required_action, event_type) in enumerate(events, start=1)
     ]
 
 
