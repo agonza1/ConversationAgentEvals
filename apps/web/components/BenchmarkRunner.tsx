@@ -722,7 +722,11 @@ function normalizeSuites(payload: unknown): BenchmarkSuite[] {
   return rawSuites.map((item) => {
     const suite = asRecord(item);
     const id = String(suite.id ?? suite.suite_id ?? crypto.randomUUID());
-    const scenarios = Array.isArray(suite.scenarios) ? suite.scenarios.map((scenario) => normalizeScenario(scenario, id)) : [];
+    const rawScenarios = [
+      ...(Array.isArray(suite.scenarios) ? suite.scenarios : []),
+      ...(Array.isArray(suite.optional_scenarios) ? suite.optional_scenarios : []),
+    ];
+    const scenarios = rawScenarios.map((scenario) => normalizeScenario(scenario, id));
 
     return {
       id,
@@ -3509,95 +3513,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           </div>
         ) : null}
 
-        {view === 'score' ? (
-          <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 14 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-              <label style={{ display: 'grid', gap: 8 }}>
-                <span style={{ fontWeight: 700 }}>Agent</span>
-                <select
-                  aria-label="Evaluation agent"
-                  value={selectedAgentId}
-                  onChange={(event) => {
-                    const agentId = event.target.value;
-                    setSelectedAgentId(agentId);
-                    const agent = agents.find((item) => item.id === agentId);
-                    if (agent) applyAgentProfileDefaults(agent, { setAgentProfile, setModelName, setPromptVersion });
-                  }}
-                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-                >
-                  {!agents.length ? <option value="">No agents</option> : null}
-                  {agents.map((agent) => (
-                    <option key={agent.id} value={agent.id}>{agent.name}</option>
-                  ))}
-                </select>
-              </label>
-              <label style={{ display: 'grid', gap: 8 }}>
-                <span style={{ fontWeight: 700 }}>Model</span>
-                <input
-                  aria-label="Model"
-                  value={modelName}
-                  onChange={(event) => setModelName(event.target.value)}
-                  placeholder={selectedScoreAgent?.metadata?.model_name || 'gpt-4.1-mini'}
-                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-                />
-              </label>
-            </div>
-            <details>
-              <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Advanced details</summary>
-              <div style={{ display: 'grid', gap: 12, marginTop: 12 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-                  <label style={{ display: 'grid', gap: 8 }}>
-                    <span style={{ fontWeight: 700 }}>Agent version</span>
-                    <input
-                      value={agentVersion}
-                      onChange={(event) => setAgentVersion(event.target.value)}
-                      placeholder="agent-v12"
-                      style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-                    />
-                  </label>
-                  <label style={{ display: 'grid', gap: 8 }}>
-                    <span style={{ fontWeight: 700 }}>Prompt version</span>
-                    <input
-                      value={promptVersion}
-                      onChange={(event) => setPromptVersion(event.target.value)}
-                      placeholder="prompt-2026-05-25"
-                      style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-                    />
-                  </label>
-                  <label style={{ display: 'grid', gap: 8 }}>
-                    <span style={{ fontWeight: 700 }}>Notes</span>
-                    <input
-                      value={runNotes}
-                      onChange={(event) => setRunNotes(event.target.value)}
-                      placeholder="tightened escalation policy"
-                      style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-                    />
-                  </label>
-                </div>
-                <label
-                  style={{
-                    minHeight: 46,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 10,
-                    border: '1px solid var(--border)',
-                    borderRadius: 8,
-                    padding: '10px 12px',
-                    fontWeight: 760,
-                    width: 'fit-content',
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={includeFailure}
-                    onChange={(event) => setIncludeFailure(event.target.checked)}
-                  />
-                  Failure baseline
-                </label>
-              </div>
-            </details>
-          </div>
-        ) : (
+        {view !== 'score' ? (
           <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 14 }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(220px, 1fr) auto', gap: 16, alignItems: 'end' }}>
               <label style={{ display: 'grid', gap: 8 }}>
@@ -3668,7 +3584,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
               </label>
             </div>
           </div>
-        )}
+        ) : null}
 
         {view === 'score' ? (
           <section className="score-upload-panel" aria-label="Evidence upload">
@@ -3751,6 +3667,80 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             ) : null}
             {uploadMessage ? <p className="score-upload-message">{uploadMessage}</p> : null}
           </section>
+        ) : null}
+
+        {view === 'score' ? (
+          <details aria-label="Score attribution">
+            <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Attribute this score</summary>
+            <p style={{ margin: '10px 0 0', color: 'var(--muted)', fontSize: 14, lineHeight: 1.45 }}>
+              Optional labels for the saved report. These do not change how evidence is scored.
+            </p>
+            <div style={{ display: 'grid', gap: 12, marginTop: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+                <label style={{ display: 'grid', gap: 8 }}>
+                  <span style={{ fontWeight: 700 }}>Attributed agent</span>
+                  <select
+                    aria-label="Attributed agent"
+                    value={selectedAgentId}
+                    onChange={(event) => {
+                      const agentId = event.target.value;
+                      setSelectedAgentId(agentId);
+                      const agent = agents.find((item) => item.id === agentId);
+                      if (agent) applyAgentProfileDefaults(agent, { setAgentProfile, setModelName, setPromptVersion });
+                    }}
+                    style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                  >
+                    {!agents.length ? <option value="">No agents</option> : null}
+                    {agents.map((agent) => (
+                      <option key={agent.id} value={agent.id}>{agent.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ display: 'grid', gap: 8 }}>
+                  <span style={{ fontWeight: 700 }}>Attributed model</span>
+                  <input
+                    aria-label="Attributed model"
+                    value={modelName}
+                    onChange={(event) => setModelName(event.target.value)}
+                    placeholder={selectedScoreAgent?.metadata?.model_name || 'gpt-4.1-mini'}
+                    style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                  />
+                </label>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+                <label style={{ display: 'grid', gap: 8 }}>
+                  <span style={{ fontWeight: 700 }}>Agent version</span>
+                  <input
+                    aria-label="Attributed agent version"
+                    value={agentVersion}
+                    onChange={(event) => setAgentVersion(event.target.value)}
+                    placeholder="agent-v12"
+                    style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                  />
+                </label>
+                <label style={{ display: 'grid', gap: 8 }}>
+                  <span style={{ fontWeight: 700 }}>Prompt version</span>
+                  <input
+                    aria-label="Attributed prompt version"
+                    value={promptVersion}
+                    onChange={(event) => setPromptVersion(event.target.value)}
+                    placeholder="prompt-2026-05-25"
+                    style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                  />
+                </label>
+                <label style={{ display: 'grid', gap: 8 }}>
+                  <span style={{ fontWeight: 700 }}>Notes</span>
+                  <input
+                    aria-label="Attribution notes"
+                    value={runNotes}
+                    onChange={(event) => setRunNotes(event.target.value)}
+                    placeholder="tightened escalation policy"
+                    style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                  />
+                </label>
+              </div>
+            </div>
+          </details>
         ) : null}
 
         <details open={view === 'score' ? true : undefined}>
