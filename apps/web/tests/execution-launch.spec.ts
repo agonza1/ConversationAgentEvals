@@ -333,6 +333,10 @@ test('offline ACC text fixture launches cancellation-rescue while staying text_c
       });
       return;
     }
+    if (url.includes('/runs') || url.includes('/audit-events') || url.includes('/regression-summary') || url.includes('/export')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+      return;
+    }
     await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
   });
 

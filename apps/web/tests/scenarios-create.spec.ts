@@ -62,3 +62,25 @@ test('catalog user scenarios remain deletable when the summary omits source', as
   await page.goto('/scenarios?suite_id=user-scenarios&scenario_id=summary-only');
   await expect(page.getByRole('button', { name: 'Delete scenario' })).toBeVisible();
 });
+
+test('catalog includes optional suite scenarios', async ({ page }) => {
+  await page.route('**/api/benchmarks/suites**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          id: 'call-center-voice-ai',
+          title: 'Call Center Voice AI',
+          scenarios: [{ id: 'billing-address-change', title: 'Billing Address Change' }],
+          optional_scenarios: [{ id: 'cancellation-rescue', title: 'Cancellation Rescue' }],
+        },
+      ]),
+    });
+  });
+
+  await page.goto('/scenarios?suite_id=call-center-voice-ai&scenario_id=cancellation-rescue');
+
+  await expect(page.getByRole('button', { name: 'Cancellation Rescue' })).toBeVisible();
+  await expect(page.getByLabel('Selected scenario').getByRole('heading', { name: 'Cancellation Rescue' })).toBeVisible();
+});

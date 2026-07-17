@@ -317,6 +317,31 @@ def test_explicit_text_mode_uses_selected_text_agent_target_when_callable_is_omi
     assert resolved.text_callable == 'openai_codex'
 
 
+def test_rejects_openai_callable_without_agent_before_queueing(monkeypatch):
+    created_records = []
+    monkeypatch.setattr(
+        execution_run_store,
+        'create_execution_run',
+        lambda record: created_records.append(record),
+    )
+
+    response = client.post(
+        '/api/execution/runs',
+        json={
+            'suite_id': 'call-center-voice-ai',
+            'scenario_ids': ['billing-address-change'],
+            'mode': 'text_callable',
+            'text_callable': 'openai_codex',
+            'user_id': 'agent-runs-user',
+            'project_id': 'agent-runs-project',
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()['detail'] == 'openai_codex execution requires an agent_id.'
+    assert created_records == []
+
+
 def test_offline_text_agent_without_scenarios_defaults_to_cancellation_rescue():
     created = client.post(
         '/api/agents',

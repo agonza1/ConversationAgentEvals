@@ -102,11 +102,15 @@ function normalizeSuites(value: unknown): ScenarioSuite[] {
   return rawSuites.map((item) => {
     const suite = asRecord(item);
     const id = String(suite.id ?? suite.suite_id ?? '');
+    const rawScenarios = [
+      ...(Array.isArray(suite.scenarios) ? suite.scenarios : []),
+      ...(Array.isArray(suite.optional_scenarios) ? suite.optional_scenarios : []),
+    ];
     return {
       id,
       title: String(suite.title ?? suite.name ?? 'Untitled suite'),
       description: String(suite.description ?? ''),
-      scenarios: (Array.isArray(suite.scenarios) ? suite.scenarios : []).map((scenario) => normalizeScenario(scenario, id)),
+      scenarios: rawScenarios.map((scenario) => normalizeScenario(scenario, id)),
     };
   });
 }

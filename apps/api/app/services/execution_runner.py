@@ -54,6 +54,12 @@ ALLOWED_FIXTURE_ROOTS = (
 def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
     register_builtin_benchmark_extensions()
     resolved = _resolve_agent_payload(payload)
+    if (
+        resolved.mode == 'text_callable'
+        and resolved.text_callable == 'openai_codex'
+        and not resolved.agent_id
+    ):
+        raise ValueError('openai_codex execution requires an agent_id.')
     suite = get_suite(resolved.suite_id)
     if suite is None:
         raise ValueError(f'Unknown suite: {resolved.suite_id}')
