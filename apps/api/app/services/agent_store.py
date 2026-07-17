@@ -23,18 +23,18 @@ _LOADED = False
 SEED_AGENTS: list[dict[str, Any]] = [
     {
         'id': 'mock-text-agent',
-        'name': 'Mock text agent',
+        'name': 'Mock text target',
         'channel': 'text',
         'target': 'mock_agent',
-        'description': 'Deterministic text callable for sample scenario checks.',
+        'description': 'Built-in testing target for text: deterministic mock callable for sample scenario checks.',
         'metadata': {'model_name': 'mock-text', 'prompt_version': 'seed'},
     },
     {
         'id': 'acc-voice-fixture-agent',
-        'name': 'ACC voice fixture agent',
+        'name': 'ACC voice fixture target',
         'channel': 'voice',
         'target': 'voice_fixture',
-        'description': 'Offline ACC voice fixture path for cancellation-rescue style runs.',
+        'description': 'Built-in testing target for voice: offline ACC fixture path for cancellation-rescue style runs.',
         'metadata': {'model_name': 'voice-fixture', 'prompt_version': 'seed'},
     },
 ]

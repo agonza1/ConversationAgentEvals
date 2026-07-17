@@ -29,22 +29,22 @@ const EMPTY_FORM: AgentFormState = {
 
 const TARGET_OPTIONS: Record<AgentRecord['channel'], Array<{ value: AgentRecord['target']; label: string }>> = {
   text: [
-    { value: 'mock_agent', label: 'mock_agent' },
-    { value: 'openai_codex', label: 'openai_codex (requires OpenAI connection)' },
-    { value: 'offline_acc_fixture', label: 'offline_acc_fixture' },
+    { value: 'mock_agent', label: 'Built-in: mock_agent (text testing target)' },
+    { value: 'openai_codex', label: 'Endpoint: openai_codex (requires OpenAI connection)' },
+    { value: 'offline_acc_fixture', label: 'Built-in: offline_acc_fixture (text fixture target)' },
   ],
-  voice: [{ value: 'voice_fixture', label: 'voice_fixture' }],
+  voice: [{ value: 'voice_fixture', label: 'Built-in: voice_fixture (voice testing target)' }],
 };
 
 function channelLabel(channel: AgentRecord['channel']) {
-  return channel === 'voice' ? 'Inbound Voice' : 'Text chat';
+  return channel === 'voice' ? 'Voice' : 'Text';
 }
 
 function targetLabel(target: AgentRecord['target']) {
-  if (target === 'mock_agent') return 'Mock agent';
-  if (target === 'openai_codex') return 'OpenAI Codex (live)';
-  if (target === 'offline_acc_fixture') return 'ACC fixture';
-  return 'Voice fixture';
+  if (target === 'mock_agent') return 'Built-in text mock';
+  if (target === 'openai_codex') return 'OpenAI endpoint (live)';
+  if (target === 'offline_acc_fixture') return 'Built-in text ACC fixture';
+  return 'Built-in voice fixture';
 }
 
 function agentInitials(name: string) {
@@ -66,9 +66,9 @@ function AgentAvatar({ agent }: { agent: AgentRecord }) {
 function AgentConfigRows({ agent }: { agent: AgentRecord }) {
   const rows = [
     { label: 'Channel', value: channelLabel(agent.channel) },
-    { label: 'Target', value: targetLabel(agent.target) },
+    { label: 'Connection', value: targetLabel(agent.target) },
     {
-      label: 'Agent ID',
+      label: 'Target ID',
       value: agent.id,
       detail: agent.metadata?.model_name ? `Model ${agent.metadata.model_name}` : undefined,
     },
@@ -209,23 +209,23 @@ function AgentFormModal({
         <form className="agents-modal-form" onSubmit={(event) => void handleSubmit(event)}>
           <label>
             <span>Name</span>
-            <input required value={name} onChange={(event) => setName(event.target.value)} placeholder="Support bot v2" />
+            <input required value={name} onChange={(event) => setName(event.target.value)} placeholder="Support bot endpoint" />
           </label>
           <label>
             <span>Channel</span>
             <select
-              aria-label="Agent channel"
+              aria-label="Target channel"
               value={channel}
               onChange={(event) => onChannelChange(event.target.value as AgentRecord['channel'])}
             >
-              <option value="text">Text chat</option>
-              <option value="voice">Inbound voice</option>
+              <option value="text">Text</option>
+              <option value="voice">Voice</option>
             </select>
           </label>
           <label>
-            <span>Target</span>
+            <span>Connection</span>
             <select
-              aria-label="Agent target"
+              aria-label="Target connection"
               value={target}
               onChange={(event) => setTarget(event.target.value as AgentRecord['target'])}
             >
@@ -240,7 +240,7 @@ function AgentFormModal({
               rows={4}
               value={description}
               onChange={(event) => setDescription(event.target.value)}
-              placeholder="Optional notes about when to use this agent."
+              placeholder="Optional notes — e.g. staging endpoint for the support bot under test."
             />
           </label>
           <div className="agents-modal-actions">
@@ -278,7 +278,7 @@ export function AgentsPage() {
         if (active) setAgents(next);
       })
       .catch((err) => {
-        if (active) setError(err instanceof Error ? err.message : 'Could not load agents');
+        if (active) setError(err instanceof Error ? err.message : 'Could not load agent targets');
       });
     return () => {
       active = false;
@@ -301,10 +301,10 @@ export function AgentsPage() {
         description: values.description.trim() || null,
       });
       setShowCreate(false);
-      setMessage('Agent created.');
+      setMessage('Agent target created.');
       await reload();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not create agent');
+      setError(err instanceof Error ? err.message : 'Could not create agent target');
     } finally {
       setSaving(false);
     }
@@ -322,25 +322,25 @@ export function AgentsPage() {
         description: values.description.trim() || null,
       });
       setEditingAgent(null);
-      setMessage('Agent updated.');
+      setMessage('Agent target updated.');
       await reload();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not update agent');
+      setError(err instanceof Error ? err.message : 'Could not update agent target');
     } finally {
       setSaving(false);
     }
   }
 
   async function onDelete(agent: AgentRecord) {
-    if (!window.confirm(`Delete “${agent.name}”?`)) return;
+    if (!window.confirm(`Delete target “${agent.name}”?`)) return;
     setError(null);
     setMessage(null);
     try {
       await deleteAgent(agent.id);
-      setMessage('Agent deleted.');
+      setMessage('Agent target deleted.');
       await reload();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not delete agent');
+      setError(err instanceof Error ? err.message : 'Could not delete agent target');
     }
   }
 
@@ -350,22 +350,23 @@ export function AgentsPage() {
 
       <header className="agents-page-header">
         <div>
-          <p className="eyebrow">Agent registry</p>
-          <h1 id="agents-title">Agents</h1>
+          <p className="eyebrow">Agent targets</p>
+          <h1 id="agents-title">Targets</h1>
           <p className="agents-page-lede">
-            Text and voice targets for launching evaluation runs. Pick an agent and try it out on the runs page.
+            Connections to systems under test. Built-in entries are testing targets for text and voice;
+            add your own to point personas and runs at an existing endpoint.
           </p>
         </div>
         <button type="button" className="agents-add-button" onClick={() => setShowCreate(true)}>
           <span aria-hidden="true">+</span>
-          Add a new Agent
+          Add agent target
         </button>
       </header>
 
       {error ? <div className="scenarios-error" role="alert">{error}</div> : null}
       {message ? <p className="scenarios-muted">{message}</p> : null}
 
-      <section className="agents-grid" aria-label="Registered agents">
+      <section className="agents-grid" aria-label="Agent targets">
         {agents.map((agent) => (
           <article key={agent.id} className="agents-card">
             <div className="agents-card-top">
@@ -376,8 +377,10 @@ export function AgentsPage() {
                   <div className="agents-badges">
                     <span className="agents-badge agents-badge-channel">{channelLabel(agent.channel)}</span>
                     {isBuiltInAgent(agent) ? (
-                      <span className="agents-badge agents-badge-builtin">Built-in</span>
-                    ) : null}
+                      <span className="agents-badge agents-badge-builtin">Built-in testing target</span>
+                    ) : (
+                      <span className="agents-badge agents-badge-channel">Custom target</span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -412,18 +415,20 @@ export function AgentsPage() {
 
       {!agents.length && !error ? (
         <section className="agents-empty card">
-          <h2>No agents yet</h2>
-          <p className="scenarios-muted">Add your first text or voice agent to launch evaluation runs.</p>
+          <h2>No agent targets yet</h2>
+          <p className="scenarios-muted">
+            Add a text or voice testing target — built-in mocks/fixtures or a connection to your own endpoint.
+          </p>
           <button type="button" className="primary-link" onClick={() => setShowCreate(true)}>
-            Add a new Agent
+            Add agent target
           </button>
         </section>
       ) : null}
 
       {showCreate ? (
         <AgentFormModal
-          title="Add a new Agent"
-          submitLabel="Create agent"
+          title="Add agent target"
+          submitLabel="Create target"
           initial={EMPTY_FORM}
           saving={saving}
           onClose={() => setShowCreate(false)}

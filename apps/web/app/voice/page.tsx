@@ -11,14 +11,14 @@ export default function VoicePage() {
           <p className="eyebrow">Call center benchmark · guided run</p>
           <h1 id="voice-title">Voice eval</h1>
           <p>
-            Test whether a voice agent can rescue a cancellation request, then inspect the transcript,
-            recording metadata, and vCon evidence in one place.
+            Run a target-backed call-center scenario through Run Agent, then inspect the transcript,
+            scoring, recording metadata, and vCon evidence without confusing fixture proof for a live call.
           </p>
         </div>
         <div className="voice-eval-proof-strip" aria-label="Voice evaluation outputs">
-          <span>1 scenario</span>
-          <span>Live or fixture</span>
-          <span>Scored evidence</span>
+          <span>Run Agent target</span>
+          <span>Pipecat capture proof</span>
+          <span>Fixture-backed score</span>
         </div>
       </section>
 

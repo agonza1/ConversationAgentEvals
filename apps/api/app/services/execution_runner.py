@@ -617,6 +617,21 @@ async def _execute_pipecat_webrtc(
     else:
         verdict = evidence.get('verdict')
         score = evidence.get('score')
+    runtime_provenance = {
+        'execution_engine': 'run_agent',
+        'target_agent_id': payload.agent_id,
+        'mode': payload.mode,
+        'audio_transport': transport.transport_id,
+        'capture_surface': 'local_pipecat_small_webrtc_hooks',
+        'live_media': False,
+        'browser_peer': False,
+        'sip_pstn': False,
+        'fixture_backed_scoring': True,
+        'note': (
+            'This run exercises Run Agent plus local Pipecat capture hooks. '
+            'Browser microphone media, live Pipecat service media, and SIP/PSTN calling are not proven by this artifact.'
+        ),
+    }
     return {
         'turns': turns or evidence['turns'],
         'transcript': transcript or evidence.get('transcript'),
@@ -626,6 +641,7 @@ async def _execute_pipecat_webrtc(
             'audio_transport': transport.transport_id,
             'tester_termination_reason': tester_result.get('termination_reason'),
             'tester_error': tester_error,
+            'runtime_provenance': runtime_provenance,
         },
         'latency_marks': evidence.get('latency_marks') or [],
         'recording': recording.as_call_media(),
@@ -636,6 +652,15 @@ async def _execute_pipecat_webrtc(
             'tester_status': tester_result.get('status'),
             'tester_error': tester_error,
             'proof': tester_result.get('proof'),
+            'runtime_provenance': runtime_provenance,
+            'real_call_readiness': {
+                'run_agent_execution': 'proven',
+                'pipecat_capture_hooks': 'proven',
+                'browser_webrtc_peer': 'not_connected',
+                'live_media': 'not_proven',
+                'sip_pstn': 'deferred',
+                'scoring': 'fixture_backed',
+            },
             'extension_points': {
                 'freeswitch_verto_sip': {
                     'status': 'deferred',

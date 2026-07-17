@@ -294,6 +294,13 @@ class JudgeRequest(BaseModel):
     project_id: str | None = None
 
 
+class JudgeStructuredResult(BaseModel):
+    agrees: bool | None = None
+    rationale: str | None = None
+    next_action: str | None = None
+    raw_output: str | None = None
+
+
 class JudgeResponse(BaseModel):
     status: Literal['blocked', 'ready']
     required_plan: PlanId
@@ -302,4 +309,9 @@ class JudgeResponse(BaseModel):
     evidence_citations: list[str] = Field(default_factory=list)
     spend_control: dict[str, Any] = Field(default_factory=dict)
     judge_output: str | None = None
+    judge_result: JudgeStructuredResult | None = None
     provider: str | None = None
+    model: str | None = None
+    prompt_preview: str | None = None
+    latency_ms: int | None = None
+    block_reason: Literal['provider', 'budget', 'provider_error'] | None = None

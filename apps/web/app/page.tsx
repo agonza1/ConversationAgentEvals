@@ -85,7 +85,7 @@ const workspacePaths = [
     title: 'Eval',
     copy: 'Evaluate transcripts, action traces, final state, calls, and vCon records against a scenario contract.',
     href: '/eval?demo=sample-evidence',
-    cta: 'Eval sample evidence',
+    cta: 'Eval evidence',
   },
   {
     eyebrow: 'Exercise targets',
@@ -104,7 +104,7 @@ export default function HomePage() {
         <div>
           <a href="#product">Product</a>
           <ApiAwareLink href="/scenarios">Scenarios</ApiAwareLink>
-          <ApiAwareLink href="/agents">Agents</ApiAwareLink>
+          <ApiAwareLink href="/targets">Targets</ApiAwareLink>
           <ApiAwareLink href="/runs">Run agent</ApiAwareLink>
           <ApiAwareLink href="/eval">Eval</ApiAwareLink>
           <ApiAwareLink href="/voice">Voice eval</ApiAwareLink>
@@ -177,7 +177,7 @@ export default function HomePage() {
           <h2 id="proof-title">A useful test run in one screen.</h2>
           <p>
             The focused workflow stays honest: choose a scenario, run an agent, inspect the captured evidence, and
-            rerun after every prompt, model, or tool change.
+            require one QA run for every PR before merge.
           </p>
         </div>
         <div className="proof-table" aria-label="Benchmark runner workflow preview">

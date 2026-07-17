@@ -34,6 +34,13 @@ test('scenarios page can create and view a scenario', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Account access issue' })).not.toBeVisible();
 });
 
+test('create=1 deep link opens the new scenario form', async ({ page }) => {
+  await page.goto('/scenarios?create=1');
+  await expect(page.getByRole('heading', { name: 'Create a scenario' })).toBeVisible();
+  await expect(page.getByPlaceholder('Account lockout handoff')).toBeVisible();
+  await expect(page.getByPlaceholder('Describe the user’s situation and request…')).toBeVisible();
+});
+
 test('built-in scenarios cannot be deleted', async ({ page }) => {
   await page.goto('/scenarios?suite_id=call-center-voice-ai&scenario_id=billing-address-change');
 

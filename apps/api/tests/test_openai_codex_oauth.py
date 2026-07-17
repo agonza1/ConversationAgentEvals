@@ -123,14 +123,25 @@ def test_openai_provider_status_and_oauth_start_disconnect():
     assert fake.disconnected is True
 
 
-def test_llm_judge_blocks_without_provider_and_runs_when_connected():
+def test_llm_judge_blocks_without_provider_and_runs_when_connected(tmp_path, monkeypatch):
+    from app.services import product_service
+
+    monkeypatch.setattr(product_service, '_judge_spend_path', lambda: tmp_path / 'llm_judge_spend.json')
     set_provider_for_tests('openai', FakeOpenAIProvider(connected=False))
     blocked = client.post('/api/product/judge', json={'plan': 'free', 'report': {'overall_score': 82}})
     assert blocked.status_code == 200
-    assert blocked.json()['status'] == 'blocked'
-    assert 'Connect OpenAI' in blocked.json()['message']
+    blocked_payload = blocked.json()
+    assert blocked_payload['status'] == 'blocked'
+    assert blocked_payload['block_reason'] == 'provider'
+    assert 'Connect OpenAI' in blocked_payload['message']
 
-    set_provider_for_tests('openai', FakeOpenAIProvider(connected=True, completion='Agree with pass. Keep the scenario.'))
+    set_provider_for_tests(
+        'openai',
+        FakeOpenAIProvider(
+            connected=True,
+            completion='{"agrees": true, "rationale": "Identity verification is present.", "next_action": "Keep the scenario."}',
+        ),
+    )
     ready = client.post(
         '/api/product/judge',
         json={
@@ -140,7 +151,9 @@ def test_llm_judge_blocks_without_provider_and_runs_when_connected():
                 'scenario_id': 'billing-address-change',
                 'verdict': 'pass',
                 'overall_score': 91,
-                'evidence_spans': ['Verified customer identity'],
+                'missing_actions': [],
+                'evidence_spans': [{'source': 'transcript', 'text': 'Verified customer identity'}],
+                'evidence_citations': [{'kind': 'span', 'text': 'Created support ticket'}],
             },
             'transcript': 'Agent: verified customer identity.',
         },
@@ -148,9 +161,22 @@ def test_llm_judge_blocks_without_provider_and_runs_when_connected():
     assert ready.status_code == 200
     payload = ready.json()
     assert payload['status'] == 'ready'
-    assert payload['judge_output'] == 'Agree with pass. Keep the scenario.'
     assert payload['provider'] == 'openai_codex'
-    assert payload['evidence_citations'][0] == 'Verified customer identity'
+    assert payload['model']
+    assert payload['judge_result']['agrees'] is True
+    assert 'Identity verification' in payload['judge_result']['rationale']
+    assert payload['judge_result']['next_action'] == 'Keep the scenario.'
+    assert any('Verified customer identity' in item or 'Created support ticket' in item for item in payload['evidence_citations'])
+    assert payload['prompt_preview']
+    assert 'Deterministic findings' in payload['prompt_preview']
+    assert payload['spend_control']['spent_daily_credits'] == 10
+    assert payload['spend_control']['remaining_daily_credits'] == 190
+
+    again = client.post(
+        '/api/product/judge',
+        json={'plan': 'free', 'report': {'verdict': 'pass', 'overall_score': 91}, 'transcript': 'ok'},
+    )
+    assert again.json()['spend_control']['spent_daily_credits'] == 20
 
 
 def test_openai_codex_token_store_exchange_and_complete(tmp_path: Path, monkeypatch):

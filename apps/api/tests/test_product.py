@@ -1,4 +1,6 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
@@ -1440,9 +1442,8 @@ def test_project_export_returns_owner_scoped_history_bundle():
     assert wrong_owner.status_code == 404
 
 
-def test_llm_judge_is_gated_for_free_and_ready_for_paid_plans():
+def test_llm_judge_is_gated_without_provider_regardless_of_plan():
     from app.services.llm_providers import set_provider_for_tests
-    from app.services.llm_providers.openai_codex import OpenAICodexProvider
 
     class _Disconnected:
         provider_id = 'openai'
@@ -1475,6 +1476,7 @@ def test_llm_judge_is_gated_for_free_and_ready_for_paid_plans():
         free_response = client.post('/api/product/judge', json={'plan': 'free', 'report': {'overall_score': 82}})
         assert free_response.status_code == 200
         assert free_response.json()['status'] == 'blocked'
+        assert free_response.json()['block_reason'] == 'provider'
         assert 'Connect OpenAI' in free_response.json()['message']
 
         paid_response = client.post(
@@ -1489,14 +1491,17 @@ def test_llm_judge_is_gated_for_free_and_ready_for_paid_plans():
         payload = paid_response.json()
         assert payload['status'] == 'blocked'
         assert payload['credits'] == 10
-        assert payload['spend_control']['provider'] in {'openai_codex', 'openai', 'vertex'}
+        assert payload['block_reason'] == 'provider'
+        assert payload['spend_control']['provider'] in {'openai_codex', 'openai', 'openai_api_key', 'vertex'}
         assert payload['spend_control']['provider_configured'] is False
         assert payload['spend_control']['within_budget'] is True
+        assert payload['spend_control']['spent_daily_credits'] == 0
     finally:
         set_provider_for_tests('openai', None)
 
 
-def test_llm_judge_spend_control_respects_budget_env(monkeypatch):
+def test_llm_judge_spend_control_respects_budget_env(monkeypatch, tmp_path):
+    from app.services import product_service
     from app.services.llm_providers import set_provider_for_tests
 
     class _Connected:
@@ -1525,6 +1530,7 @@ def test_llm_judge_spend_control_respects_budget_env(monkeypatch):
         def complete(self, prompt: str):
             return 'should not run'
 
+    monkeypatch.setattr(product_service, '_judge_spend_path', lambda: tmp_path / 'llm_judge_spend.json')
     monkeypatch.setenv('LLM_JUDGE_PROVIDER', 'openai_codex')
     monkeypatch.setenv('LLM_JUDGE_DAILY_CREDIT_LIMIT', '15')
     monkeypatch.setenv('LLM_JUDGE_RESERVED_DAILY_CREDITS', '8')
@@ -1534,11 +1540,79 @@ def test_llm_judge_spend_control_respects_budget_env(monkeypatch):
         assert response.status_code == 200
         payload = response.json()
         assert payload['status'] == 'blocked'
+        assert payload['block_reason'] == 'budget'
         assert payload['message'] == 'LLM judge daily credit budget is exhausted. Increase the limit or wait for the next budget window.'
         assert payload['spend_control']['provider'] == 'openai_codex'
         assert payload['spend_control']['provider_configured'] is True
         assert payload['spend_control']['within_budget'] is False
         assert payload['spend_control']['remaining_daily_credits'] == 7
+    finally:
+        set_provider_for_tests('openai', None)
+
+
+def test_llm_judge_spend_reservation_is_atomic(monkeypatch, tmp_path):
+    from app.services import product_service
+    from app.services.llm_providers import set_provider_for_tests
+
+    class _Connected:
+        provider_id = 'openai'
+
+        def __init__(self):
+            self.calls = 0
+            self._lock = Lock()
+
+        def status(self):
+            return {
+                'id': 'openai',
+                'provider': 'openai_codex',
+                'status': 'connected',
+                'email': 'judge@example.com',
+                'account_id': 'acct',
+                'message': 'connected',
+                'last_error': None,
+            }
+
+        def start_oauth(self):
+            return {}
+
+        def disconnect(self):
+            return {'status': 'disconnected'}
+
+        def ensure_access_token(self):
+            return 'token'
+
+        def complete(self, prompt: str):
+            del prompt
+            with self._lock:
+                self.calls += 1
+            return '{"agrees": true, "rationale": "Looks consistent.", "next_action": "Keep it."}'
+
+    provider = _Connected()
+    monkeypatch.setattr(product_service, '_judge_spend_path', lambda: tmp_path / 'llm_judge_spend.json')
+    monkeypatch.setenv('LLM_JUDGE_PROVIDER', 'openai_codex')
+    monkeypatch.setenv('LLM_JUDGE_DAILY_CREDIT_LIMIT', '10')
+    monkeypatch.setenv('LLM_JUDGE_RESERVED_DAILY_CREDITS', '0')
+    set_provider_for_tests('openai', provider)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(
+                executor.map(
+                    lambda _: product_service.judge_gate(
+                        plan='starter',
+                        report={
+                            'suite_id': 'call-center-voice-ai',
+                            'scenario_id': 'billing-address-change',
+                            'overall_score': 91,
+                        },
+                        transcript='Agent: verified customer identity.',
+                    ),
+                    range(2),
+                )
+            )
+        assert sorted(response.status for response in responses) == ['blocked', 'ready']
+        assert [response.block_reason for response in responses].count('budget') == 1
+        assert provider.calls == 1
+        assert json.loads((tmp_path / 'llm_judge_spend.json').read_text(encoding='utf-8'))['spent'] == 10
     finally:
         set_provider_for_tests('openai', None)
 
@@ -1585,6 +1659,8 @@ def test_product_audit_events_track_saved_runs_exports_and_judge_requests():
         'plan': 'starter',
         'status': judge_response.json()['status'],
         'credits': 10,
+        'provider': judge_response.json()['provider'],
+        'model': judge_response.json()['model'],
     }
     assert events[1]['payload'] == {'run_id': saved['id'], 'export_type': 'single_run'}
     assert events[2]['payload'] == {

@@ -4,7 +4,7 @@ test('homepage links to focused workflow demos', async ({ page }) => {
   await page.goto('/');
 
   await expect(page.getByRole('link', { name: 'Browse evaluation scenarios' })).toHaveAttribute('href', '/scenarios');
-  await expect(page.getByRole('link', { name: 'Eval sample evidence' })).toHaveAttribute('href', '/eval?demo=sample-evidence');
+  await expect(page.getByRole('link', { name: 'Eval evidence' })).toHaveAttribute('href', '/eval?demo=sample-evidence');
   await expect(page.getByRole('link', { name: 'Launch agent run' })).toHaveAttribute('href', '/runs?launch=demo');
   await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Benchmarks' })).toHaveCount(0);
 });
@@ -45,22 +45,28 @@ test('dedicated paths expose only their primary workflow', async ({ page }) => {
   await expect(page.getByLabel('Suite contract manifest')).toHaveCount(0);
   await expect(page.getByText('Required evidence:')).toHaveCount(0);
   await expect(page.getByText('Advanced details')).toHaveCount(0);
+  await expect(page.getByLabel('Evaluation contract')).toBeVisible();
+  await expect(page.getByLabel('Evaluation suite')).toBeVisible();
+  await expect(page.getByLabel('Evaluation scenario', { exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Create new scenario' })).toHaveAttribute('href', '/scenarios?create=1');
+  await expect(page.getByText('What this scenario checks')).toBeVisible();
   await expect(page.getByText('Attribute this score')).toBeVisible();
-  await expect(page.getByLabel('Attributed agent')).toHaveCount(0);
+  await expect(page.getByLabel('Attributed agent', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Attributed agent target')).toBeHidden();
   await page.getByText('Attribute this score').click();
-  await expect(page.getByLabel('Attributed agent')).toBeVisible();
+  await expect(page.getByLabel('Attributed agent target')).toBeVisible();
+  await expect(page.getByLabel('Attributed agent target')).toHaveValue('');
   await expect(page.getByLabel('Attributed model')).toBeVisible();
   await expect(page.getByText(/do not change how evidence is scored/i)).toBeVisible();
   await expect(page.locator('form').first().locator('textarea').first()).toHaveValue('');
   await expect(page.getByRole('button', { name: 'Evaluate evidence' })).toBeDisabled();
   await expect(page.getByText(/This evidence is synthetic/)).toHaveCount(0);
-  await expect(page.getByText('Benchmark suite')).toHaveCount(0);
-  await expect(page.getByText('Scenario', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('LLM judge controls')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Request LLM judge' })).toBeDisabled();
   await page.getByRole('button', { name: 'Load sample evidence' }).click();
   const sampleOptions = page.getByLabel('Sample evidence options');
   await expect(sampleOptions).toBeVisible();
-  await expect(sampleOptions.getByText('Benchmark suite')).toBeVisible();
-  await expect(sampleOptions.getByText('Scenario', { exact: true })).toBeVisible();
+  await expect(sampleOptions.getByRole('button', { name: 'Load selected sample evidence' })).toBeVisible();
   await expect(page.getByLabel('Saved runs and e2e validation')).toHaveCount(0);
 
   await page.goto('/runs');
@@ -88,13 +94,13 @@ test('scenario and eval deep links preload the advertised scenario', async ({ pa
   await page.goto('/scenarios?suite_id=call-center-voice-ai&scenario_id=billing-address-change');
   await expect(page.getByRole('heading', { name: 'Billing Address Change' })).toBeVisible();
   await expect(page.getByLabel('Selected scenario').getByRole('link', { name: 'Run agent' })).toHaveAttribute('href', /suite_id=call-center-voice-ai&scenario_id=billing-address-change/);
-  await expect(page.getByLabel('Selected scenario').getByRole('link', { name: 'Eval sample evidence' })).toHaveAttribute('href', /sample=1/);
+  await expect(page.getByLabel('Selected scenario').getByRole('link', { name: 'Eval evidence' })).toHaveAttribute('href', /sample=1/);
 
   await page.goto('/eval?demo=sample-evidence');
   await expect(page.getByText('Loading benchmark suites...')).toHaveCount(0);
   const evalForm = page.locator('form').first();
-  await expect(evalForm.getByText('Benchmark suite')).toHaveCount(0);
-  await expect(evalForm.getByText('Scenario', { exact: true })).toHaveCount(0);
+  await expect(evalForm.getByLabel('Evaluation contract')).toBeVisible();
+  await expect(evalForm.getByLabel('Evaluation scenario', { exact: true })).toBeVisible();
   await expect(evalForm.locator('textarea').first()).not.toHaveValue('');
 });
 

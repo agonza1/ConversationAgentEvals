@@ -2,6 +2,8 @@
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
+import { ApiAwareLink } from './ApiAwareLink';
+
 type JsonRecord = Record<string, unknown>;
 
 interface BenchmarkSuite {
@@ -57,11 +59,16 @@ interface BenchmarkReport {
   scenario_contract_sha256?: string;
   score?: number;
   overall_score?: number;
-  task_completion_score?: number;
+  scoring_mode?: 'transcript' | 'agentic' | string;
+  score_components?: Record<string, number>;
+  task_completion_score?: number | null;
   required_action_score?: number;
-  forbidden_action_score?: number;
+  rubric_score?: number;
+  forbidden_action_score?: number | null;
   evidence_citations?: Array<string | JsonRecord>;
-  final_state_score?: number;
+  final_state_score?: number | null;
+  workflow_order_score?: number | null;
+  completed_actions?: string[];
   evidence_spans?: Array<string | JsonRecord>;
   evidence?: Array<string | JsonRecord>;
   missing_actions?: string[];
@@ -81,6 +88,7 @@ interface BenchmarkReport {
   vcon_analysis?: JsonRecord;
   vcon_export?: JsonRecord;
   simulation_validation?: SimulationValidation;
+  llm_judge?: JsonRecord;
 }
 
 interface SimulationValidation {
@@ -493,19 +501,36 @@ interface BenchmarkSuiteVconBundleExport {
   exported_at: string;
 }
 
+interface JudgeStructuredResult {
+  agrees?: boolean | null;
+  rationale?: string | null;
+  next_action?: string | null;
+  raw_output?: string | null;
+}
+
 interface JudgeGate {
   status: 'blocked' | 'ready';
   required_plan: PricingPlan['id'];
   credits: number;
   message: string;
   evidence_citations: string[];
+  judge_output?: string | null;
+  judge_result?: JudgeStructuredResult | null;
+  provider?: string | null;
+  model?: string | null;
+  prompt_preview?: string | null;
+  latency_ms?: number | null;
+  block_reason?: 'provider' | 'budget' | 'provider_error' | null;
   spend_control?: {
     estimated_credits?: number;
     daily_credit_limit?: number;
     reserved_daily_credits?: number;
+    spent_daily_credits?: number;
     remaining_daily_credits?: number;
     provider?: string;
     provider_configured?: boolean;
+    oauth_connected?: boolean;
+    api_key_configured?: boolean;
     within_budget?: boolean;
   };
 }
@@ -683,6 +708,20 @@ function stringifyEditable(value: unknown, fallback = '') {
   return JSON.stringify(value, null, 2);
 }
 
+function isBlankJsonField(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (parsed === null) return true;
+    if (Array.isArray(parsed)) return parsed.length === 0;
+    if (typeof parsed === 'object') return Object.keys(parsed as JsonRecord).length === 0;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 function parseMaybeJson(value: string): string | JsonRecord | unknown[] {
   try {
     return JSON.parse(value) as JsonRecord | unknown[];
@@ -771,8 +810,8 @@ async function runBenchmark(payload: {
   suite_id: string;
   scenario_id: string;
   transcript: string;
-  action_trace: unknown;
-  final_state: unknown;
+  action_trace?: unknown;
+  final_state?: unknown;
   call?: string | JsonRecord | unknown[];
   group_call?: string | JsonRecord | unknown[];
   vcon?: JsonRecord;
@@ -1272,11 +1311,25 @@ function formatJudgeSpend(spendControl: JudgeGate['spend_control']) {
 
   const estimated = spendControl.estimated_credits ?? 10;
   const remaining = spendControl.remaining_daily_credits;
+  const spent = spendControl.spent_daily_credits;
   const limit = spendControl.daily_credit_limit;
   const provider = spendControl.provider ?? 'judge provider';
   const providerStatus = spendControl.provider_configured ? 'configured' : 'not configured';
+  const spentLabel = spent === undefined ? '' : ` ${spent} spent;`;
 
-  return `${estimated} credits estimated; ${remaining ?? 'unknown'} of ${limit ?? 'unknown'} daily credits available; ${provider} ${providerStatus}.`;
+  return `${estimated} credits estimated;${spentLabel} ${remaining ?? 'unknown'} of ${limit ?? 'unknown'} daily credits remaining; ${provider} ${providerStatus}.`;
+}
+
+function judgeBannerTitle(judgeGate: JudgeGate) {
+  if (judgeGate.status === 'ready') {
+    if (judgeGate.judge_result?.agrees === true) return 'LLM judge agrees';
+    if (judgeGate.judge_result?.agrees === false) return 'LLM judge disagrees';
+    return 'LLM judge complete';
+  }
+  if (judgeGate.block_reason === 'budget') return 'Judge budget exhausted';
+  if (judgeGate.block_reason === 'provider_error') return 'Judge provider error';
+  if (judgeGate.block_reason === 'provider') return 'Judge provider required';
+  return 'Judge unavailable';
 }
 
 function EvidenceItem({ item }: { item: string | JsonRecord }) {
@@ -1316,6 +1369,7 @@ function formatCitationItem(item: string | JsonRecord) {
   const source = sourceKey ? sourceKey.replace(/_/g, " ") : "evidence";
   const kind = typeof item.kind === "string" ? item.kind.replace(/_/g, " ") : null;
   const action = typeof item.action === "string" ? item.action : null;
+  const reason = typeof item.reason === "string" ? item.reason : null;
   const assertionSummary = formatCitationValue(item.assertion);
   const path = typeof item.path === "string" ? item.path : null;
   const actualSummary = Object.hasOwn(item, "actual") ? formatCitationValue(item.actual) : null;
@@ -1326,6 +1380,14 @@ function formatCitationItem(item: string | JsonRecord) {
   const status = typeof item.status === "string" ? item.status : null;
   const timestamp = typeof item.timestamp === "string" ? item.timestamp : null;
   const lineRange = lineStart === null ? null : lineEnd !== null && lineEnd !== lineStart ? `lines ${lineStart}-${lineEnd}` : `line ${lineStart}`;
+
+  if (kind === "missing action" && action) {
+    return [
+      sourceKey === "action_trace" ? "action trace" : source,
+      `missing required action: ${action}`,
+      reason,
+    ].filter(Boolean).join(" — ");
+  }
 
   return [
     source,
@@ -1354,7 +1416,7 @@ function cleanRunMetadata(metadata: RunMetadata): RunMetadata {
 
 function metadataEntries(metadata?: RunMetadata) {
   const labels: Record<keyof RunMetadata, string> = {
-    agent_version: 'Agent',
+    agent_version: 'Agent target',
     prompt_version: 'Prompt',
     model_name: 'Model',
     notes: 'Notes',
@@ -1886,8 +1948,14 @@ function reportActionPlan(
     ? hasCoverageGap && nextCoverageScenario
       ? `Run ${nextCoverageScenario} next to keep suite coverage moving before release review.`
       : 'Save this run as the baseline, then compare the next prompt or model change against it.'
-    : suggestedFix ?? 'Fix the highest-risk failure, regenerate evidence, and rerun this scenario before release.';
-  const regression = regressionDelta ? regressionDeltaSummary(regressionDelta) : 'Save the run to establish regression tracking.';
+    : missingCount > 1
+      ? `Complete the remaining ${missingCount} required actions (next: ${report.missing_actions?.[0] ?? 'see checklist'}).`
+      : suggestedFix ?? 'Fix the highest-risk failure, regenerate evidence, and rerun this scenario before release.';
+  const regression = regressionDelta?.status === 'baseline'
+    ? 'Not compared yet — save this run to start regression tracking.'
+    : regressionDelta
+      ? regressionDeltaSummary(regressionDelta)
+      : 'Save the run to establish regression tracking.';
 
   return { headline, primaryRisk, nextStep, regression, failureCategories };
 }
@@ -2067,6 +2135,7 @@ function describeUploadedEvidence(filename: string, text: string): {
 export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }) {
   const loadingSavedRunRef = useRef(false);
   const autoLaunchDemoRef = useRef(false);
+  const preserveScoreEvidenceRef = useRef(false);
   const [suites, setSuites] = useState<BenchmarkSuite[]>([]);
   const [selectedSuiteId, setSelectedSuiteId] = useState('');
   const [selectedScenarioId, setSelectedScenarioId] = useState('');
@@ -2076,7 +2145,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   const [callEvidence, setCallEvidence] = useState('');
   const [groupCall, setGroupCall] = useState('');
   const [vconEvidence, setVconEvidence] = useState('');
-  const [agentProfile, setAgentProfile] = useState('mock text agent');
+  const [agentProfile, setAgentProfile] = useState('');
   const [agentVersion, setAgentVersion] = useState('');
   const [promptVersion, setPromptVersion] = useState('');
   const [modelName, setModelName] = useState('');
@@ -2103,6 +2172,8 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [judgeGate, setJudgeGate] = useState<JudgeGate | null>(null);
+  const [isJudging, setIsJudging] = useState(false);
+  const [showJudgePrompt, setShowJudgePrompt] = useState(false);
   const [openaiProvider, setOpenaiProvider] = useState<OpenAIProviderStatus | null>(null);
   const [openaiProviderMessage, setOpenaiProviderMessage] = useState<string | null>(null);
   const [isConnectingOpenAI, setIsConnectingOpenAI] = useState(false);
@@ -2130,6 +2201,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     [agents, selectedAgentId],
   );
   const [showSimulateEvidenceOptions, setShowSimulateEvidenceOptions] = useState(false);
+  const [includeStructuredEvidence, setIncludeStructuredEvidence] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [catalogReloadKey, setCatalogReloadKey] = useState(0);
   const suiteLoadRequestRef = useRef(0);
@@ -2142,16 +2214,66 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     () => selectedSuite?.scenarios.find((scenario) => scenario.id === selectedScenarioId) ?? selectedSuite?.scenarios[0] ?? null,
     [selectedScenarioId, selectedSuite],
   );
+  function clearStructuredEvidenceFields() {
+    setActionTrace('');
+    setFinalState('');
+    setCallEvidence('');
+    setGroupCall('');
+    setVconEvidence('');
+    setIncludeStructuredEvidence(false);
+  }
+
+  function onTranscriptChange(nextValue: string) {
+    preserveScoreEvidenceRef.current = true;
+    setTranscript(nextValue);
+    if (view !== 'score') return;
+    setReport(null);
+    setJudgeGate(null);
+
+    const hadStructured =
+      !isBlankJsonField(actionTrace)
+      || !isBlankJsonField(finalState)
+      || Boolean(callEvidence.trim())
+      || Boolean(groupCall.trim())
+      || Boolean(vconEvidence.trim())
+      || includeStructuredEvidence;
+    if (!hadStructured) {
+      if (!nextValue.trim()) {
+        setUploadMessage('Transcript cleared. Paste a transcript or load sample evidence to score again.');
+      }
+      return;
+    }
+
+    clearStructuredEvidenceFields();
+    setUploadMessage(
+      nextValue.trim()
+        ? 'Cleared structured sample evidence after the transcript changed, so Evaluate scores your edited transcript.'
+        : 'Cleared structured sample evidence because the transcript is empty. Reload sample evidence or paste a transcript to score again.',
+    );
+  }
+
   function loadScenarioStarterData(nextScenario = selectedScenario) {
     if (!nextScenario) return;
 
     const nextTranscript = nextScenario.sample_transcript ?? '';
     setTranscript(nextTranscript);
-    setActionTrace(stringifyEditable(nextScenario.sample_action_trace, '[]'));
-    setFinalState(stringifyEditable(nextScenario.sample_final_state ?? nextScenario.expected_final_state, '{}'));
-    setCallEvidence('');
-    setGroupCall('');
-    setVconEvidence(nextTranscript ? sampleVconFromTranscript(nextTranscript) : '');
+    // On /eval, starter structured traces silently force a pass even after transcript edits.
+    // Keep the visible transcript as the scorable evidence; leave optional structured empty.
+    if (view === 'score') {
+      setActionTrace('');
+      setFinalState('');
+      setCallEvidence('');
+      setGroupCall('');
+      setVconEvidence('');
+      setIncludeStructuredEvidence(false);
+    } else {
+      setActionTrace(stringifyEditable(nextScenario.sample_action_trace, '[]'));
+      setFinalState(stringifyEditable(nextScenario.sample_final_state ?? nextScenario.expected_final_state, '{}'));
+      setCallEvidence('');
+      setGroupCall('');
+      setVconEvidence(nextTranscript ? sampleVconFromTranscript(nextTranscript) : '');
+      setIncludeStructuredEvidence(false);
+    }
     setReport(null);
     setSuiteSimulation(null);
     setSaveMessage(null);
@@ -2162,14 +2284,20 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   }
 
   function onLoadSampleEvidence(scenario: BenchmarkScenario) {
+    preserveScoreEvidenceRef.current = true;
     setSelectedScenarioId(scenario.id);
     loadScenarioStarterData(scenario);
     setShowSimulateEvidenceOptions(false);
-    setUploadMessage(`Loaded sample evidence: ${scenario.title}. This evidence is synthetic.`);
+    setUploadMessage(
+      view === 'score'
+        ? `Loaded sample transcript: ${scenario.title}. Edit it and Evaluate — scores follow the transcript, not hidden sample traces.`
+        : `Loaded sample evidence: ${scenario.title}. This evidence is synthetic.`,
+    );
   }
 
   async function onUploadEvidenceFile(file: File | null) {
     if (!file) return;
+    preserveScoreEvidenceRef.current = true;
     setUploadMessage(null);
     setRunError(null);
     try {
@@ -2306,7 +2434,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         const selected = matched ?? fallback;
         const nextId = selected?.id || '';
         setSelectedAgentId(nextId);
-        if (selected) {
+        if (selected && (view !== 'score' || matched)) {
           applyAgentProfileDefaults(selected, { setAgentProfile, setModelName, setPromptVersion });
         }
         if (matched) {
@@ -2326,7 +2454,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     return () => {
       active = false;
     };
-  }, []);
+  }, [view]);
 
   useEffect(() => {
     if (view !== 'run' || typeof window === 'undefined') return;
@@ -2479,9 +2607,18 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     }
 
     const preloadSample = view !== 'score' || shouldPreloadSampleEvidence();
+    if (view === 'score' && !preloadSample && preserveScoreEvidenceRef.current) return;
     setTranscript(preloadSample ? selectedScenario.sample_transcript ?? '' : '');
-    setActionTrace(preloadSample ? stringifyEditable(selectedScenario.sample_action_trace, '[]') : '');
-    setFinalState(preloadSample ? stringifyEditable(selectedScenario.sample_final_state ?? selectedScenario.expected_final_state, '{}') : '');
+    // /eval scores the transcript by default. Do not preload sample action/final-state traces —
+    // they complete every required action and keep scores at 100 after transcript edits.
+    if (view === 'score') {
+      setActionTrace('');
+      setFinalState('');
+      setIncludeStructuredEvidence(false);
+    } else {
+      setActionTrace(preloadSample ? stringifyEditable(selectedScenario.sample_action_trace, '[]') : '');
+      setFinalState(preloadSample ? stringifyEditable(selectedScenario.sample_final_state ?? selectedScenario.expected_final_state, '{}') : '');
+    }
     setCallEvidence('');
     setGroupCall('');
     setVconEvidence('');
@@ -2492,7 +2629,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     setCopyMessage(null);
     setRunError(null);
     setUploadMessage(preloadSample && view === 'score'
-      ? `Loaded sample evidence for ${selectedScenario.title}. This evidence is synthetic.`
+      ? `Loaded sample transcript for ${selectedScenario.title}. This evidence is synthetic.`
       : null);
   }, [selectedScenario, view]);
 
@@ -2572,15 +2709,35 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   async function onSaveRun() {
     if (!report) return;
     const identity = ensureDemoIdentity();
+    const reportToSave =
+      judgeGate?.status === 'ready'
+        ? {
+            ...report,
+            llm_judge: {
+              status: judgeGate.status,
+              provider: judgeGate.provider ?? null,
+              model: judgeGate.model ?? null,
+              message: judgeGate.message,
+              credits: judgeGate.credits,
+              latency_ms: judgeGate.latency_ms ?? null,
+              evidence_citations: judgeGate.evidence_citations,
+              judge_output: judgeGate.judge_output ?? null,
+              judge_result: judgeGate.judge_result ?? null,
+              spend_control: judgeGate.spend_control ?? null,
+              requested_at: new Date().toISOString(),
+            },
+          }
+        : report;
 
     try {
       const saved = await saveBenchmarkRun({
         user_id: identity.userId,
         project_id: identity.projectId,
         plan: identity.plan,
-        report,
+        report: reportToSave,
         transcript,
       });
+      setReport(reportToSave);
       setSavedRuns((current) => [saved, ...current.filter((run) => run.id !== saved.id)]);
       fetchProjectRegressionSummary(identity.userId, identity.projectId)
         .then(setProjectRegressionSummary)
@@ -2589,7 +2746,11 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         .then(setScenarioRegressionSummary)
         .catch(() => setScenarioRegressionSummary(null));
       await refreshAuditTrail(identity.userId, identity.projectId);
-      setSaveMessage(`Saved run ${saved.id} to ${identity.projectId}.`);
+      setSaveMessage(
+        judgeGate?.status === 'ready'
+          ? `Saved run ${saved.id} to ${identity.projectId} (with LLM judge).`
+          : `Saved run ${saved.id} to ${identity.projectId}.`,
+      );
     } catch (err) {
       setSaveMessage(err instanceof Error ? err.message : 'Could not save this run.');
     }
@@ -2685,8 +2846,33 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
   async function onJudge() {
     if (!report) return;
+    setIsJudging(true);
+    setShowJudgePrompt(false);
     try {
-      setJudgeGate(await requestJudge({ plan, report, transcript, user_id: userId || undefined, project_id: userId ? projectId : undefined }));
+      const next = await requestJudge({ plan, report, transcript, user_id: userId || undefined, project_id: userId ? projectId : undefined });
+      setJudgeGate(next);
+      if (next.status === 'ready') {
+        setReport((current) =>
+          current
+            ? {
+                ...current,
+                llm_judge: {
+                  status: next.status,
+                  provider: next.provider ?? null,
+                  model: next.model ?? null,
+                  message: next.message,
+                  credits: next.credits,
+                  latency_ms: next.latency_ms ?? null,
+                  evidence_citations: next.evidence_citations,
+                  judge_output: next.judge_output ?? null,
+                  judge_result: next.judge_result ?? null,
+                  spend_control: next.spend_control ?? null,
+                  requested_at: new Date().toISOString(),
+                },
+              }
+            : current,
+        );
+      }
       await refreshAuditTrail();
     } catch (err) {
       setJudgeGate({
@@ -2695,7 +2881,10 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         credits: 10,
         message: err instanceof Error ? err.message : 'Judge request failed.',
         evidence_citations: [],
+        block_reason: 'provider_error',
       });
+    } finally {
+      setIsJudging(false);
     }
   }
 
@@ -2997,6 +3186,12 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   async function evaluateEvidence() {
     if (!selectedSuite || !selectedScenario) return;
 
+    if (view === 'score' && !transcript.trim()) {
+      setRunError('Add a transcript before evaluating. Clearing or editing the transcript also clears structured sample evidence so leftover traces cannot score a pass.');
+      setReport(null);
+      return;
+    }
+
     setIsRunning(true);
     setRunError(null);
     setReport(null);
@@ -3005,22 +3200,27 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
     try {
       const runMetadata = cleanRunMetadata({
-        agent_version: agentVersion,
+        agent_version: agentVersion || agentProfile || undefined,
         prompt_version: promptVersion,
         model_name: modelName,
-        notes: runNotes,
+        notes: [
+          agentProfile.trim() ? `agent_target=${agentProfile.trim()}` : '',
+          runNotes.trim(),
+        ].filter(Boolean).join(' · ') || undefined,
         user_id: userId || undefined,
         project_id: projectId || undefined,
       });
+      const useStructured = view !== 'score' || includeStructuredEvidence;
       const nextReport = await runBenchmark({
         suite_id: selectedSuite.id,
         scenario_id: selectedScenario.id,
         transcript,
-        final_state: parseMaybeJson(finalState),
-        action_trace: parseMaybeJson(actionTrace),
-        call: callEvidence.trim() ? parseMaybeJson(callEvidence) : undefined,
-        group_call: groupCall.trim() ? parseMaybeJson(groupCall) : undefined,
-        vcon: vconEvidence.trim() ? parseMaybeJson(vconEvidence) as JsonRecord : undefined,
+        final_state: useStructured && !isBlankJsonField(finalState) ? parseMaybeJson(finalState) : undefined,
+        action_trace: useStructured && !isBlankJsonField(actionTrace) ? parseMaybeJson(actionTrace) : undefined,
+        call: useStructured && callEvidence.trim() ? parseMaybeJson(callEvidence) : undefined,
+        group_call: useStructured && groupCall.trim() ? parseMaybeJson(groupCall) : undefined,
+        // Keep vCon behind the same opt-in on /eval so a leftover sample record cannot force a pass.
+        vcon: useStructured && vconEvidence.trim() ? parseMaybeJson(vconEvidence) as JsonRecord : undefined,
         ...runMetadata,
       });
       setReport(nextReport);
@@ -3273,9 +3473,19 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     ? report.suite_contract_manifest_sha256.slice(0, 12)
     : suiteManifestFingerprint ?? 'Not captured';
   const scenarioContractFingerprint = report?.scenario_contract_sha256 ? report.scenario_contract_sha256.slice(0, 12) : selectedScenarioManifestFingerprint ?? 'Not captured';
-  const hasRunnableEvidence = Boolean(
-    transcript.trim() || actionTrace.trim() || finalState.trim() || callEvidence.trim() || groupCall.trim() || vconEvidence.trim(),
+  const hasTranscriptEvidence = Boolean(transcript.trim());
+  const hasStructuredEvidence = Boolean(
+    !isBlankJsonField(actionTrace)
+    || !isBlankJsonField(finalState)
+    || callEvidence.trim()
+    || groupCall.trim()
+    || vconEvidence.trim(),
   );
+  // On /eval, transcript is the primary evidence. Structured sample fields alone must not
+  // keep Evaluate enabled after the user clears the visible conversation.
+  const hasRunnableEvidence = view === 'score'
+    ? hasTranscriptEvidence
+    : Boolean(hasTranscriptEvidence || hasStructuredEvidence);
   const hasSavedCurrentScenario = Boolean(
     selectedScenario?.id && savedRuns.some((run) => run.report.scenario_id === selectedScenario.id),
   );
@@ -3348,9 +3558,12 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     },
   ];
 
+  const judgeProviderReady =
+    openaiProvider?.status === 'connected' || productConfig?.llm_judge_status === 'enabled';
+
   return (
     <section style={{ display: 'grid', gap: 20 }}>
-      {(view === 'all' || (view === 'score' && Boolean(report))) ? (
+      {(view === 'all') ? (
         <section className="card openai-provider-panel" aria-label="OpenAI judge provider">
           <div className="openai-provider-control">
             <div>
@@ -3423,6 +3636,77 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             <button type="button" className="secondary-link" onClick={() => setCatalogReloadKey((value) => value + 1)}>
               Retry loading suites
             </button>
+          </div>
+        ) : null}
+
+        {view === 'score' ? (
+          <div
+            aria-label="Evaluation contract"
+            style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 12, background: 'var(--panel-alt)' }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+              <div style={{ minWidth: 0, flex: '1 1 240px' }}>
+                <p className="eyebrow" style={{ margin: 0 }}>Evaluation contract</p>
+                <p style={{ margin: '6px 0 0', color: 'var(--muted)', fontSize: 14, lineHeight: 1.45 }}>
+                  Evidence is scored against this scenario&apos;s required actions, forbidden actions, and rubric — not against the optional structured fields below.
+                </p>
+              </div>
+              <ApiAwareLink
+                href="/scenarios?create=1"
+                className="secondary-link"
+                style={{ flex: '0 0 auto', whiteSpace: 'nowrap' }}
+              >
+                Create new scenario
+              </ApiAwareLink>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+              <label style={{ display: 'grid', gap: 8 }}>
+                <span style={{ fontWeight: 700 }}>Suite</span>
+                <select
+                  aria-label="Evaluation suite"
+                  value={selectedSuite?.id ?? ''}
+                  disabled={isLoading || !suites.length}
+                  onChange={(event) => setSelectedSuiteId(event.target.value)}
+                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                >
+                  {suites.map((suite) => (
+                    <option key={suite.id} value={suite.id}>{suite.title}</option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: 'grid', gap: 8 }}>
+                <span style={{ fontWeight: 700 }}>Scenario</span>
+                <select
+                  aria-label="Evaluation scenario"
+                  value={selectedScenario?.id ?? ''}
+                  disabled={isLoading || !selectedSuite?.scenarios.length}
+                  onChange={(event) => setSelectedScenarioId(event.target.value)}
+                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
+                >
+                  {(selectedSuite?.scenarios ?? []).map((scenario) => (
+                    <option key={scenario.id} value={scenario.id}>{scenario.title}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            {selectedScenario ? (
+              <div style={{ display: 'grid', gap: 8 }}>
+                <p style={{ margin: 0, fontSize: 14, lineHeight: 1.45 }} aria-label="Selected evaluation scenario">
+                  <strong>{selectedScenario.title}</strong>
+                  {selectedScenario.user_goal || selectedScenario.user_persona
+                    ? ` — ${selectedScenario.user_goal || selectedScenario.user_persona}`
+                    : ''}
+                </p>
+                <details>
+                  <summary style={{ cursor: 'pointer', fontWeight: 700, fontSize: 14 }}>What this scenario checks</summary>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginTop: 10 }}>
+                    <ScenarioList title="Required actions" items={toStringList(selectedScenario.required_actions)} />
+                    <ScenarioList title="Forbidden actions" items={toStringList(selectedScenario.forbidden_actions)} />
+                    <ScenarioList title="Constraints" items={toStringList(selectedScenario.constraints)} />
+                  </div>
+                </details>
+              </div>
+            ) : null}
           </div>
         ) : null}
 
@@ -3618,43 +3902,11 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             </div>
             {showSimulateEvidenceOptions ? (
               <div className="score-simulate-options" aria-label="Sample evidence options">
-                <p>Choose the contract for the synthetic evidence.</p>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-                  <label style={{ display: 'grid', gap: 8 }}>
-                    <span style={{ fontWeight: 700 }}>Benchmark suite</span>
-                    <select
-                      value={selectedSuite?.id ?? ''}
-                      disabled={isLoading || !suites.length}
-                      onChange={(event) => setSelectedSuiteId(event.target.value)}
-                      style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-                    >
-                      {suites.map((suite) => (
-                        <option key={suite.id} value={suite.id}>{suite.title}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label style={{ display: 'grid', gap: 8 }}>
-                    <span style={{ fontWeight: 700 }}>Scenario</span>
-                    <select
-                      value={selectedScenario?.id ?? ''}
-                      disabled={isLoading || !selectedSuite?.scenarios.length}
-                      onChange={(event) => setSelectedScenarioId(event.target.value)}
-                      style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-                    >
-                      {(selectedSuite?.scenarios ?? []).map((scenario) => (
-                        <option key={scenario.id} value={scenario.id}>{scenario.title}</option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-                {selectedScenario ? (
-                  <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14, lineHeight: 1.45 }} aria-label="Selected sample scenario">
-                    {selectedScenario.title}
-                    {selectedScenario.user_goal || selectedScenario.user_persona
-                      ? ` — ${selectedScenario.user_goal || selectedScenario.user_persona}`
-                      : ''}
-                  </p>
-                ) : null}
+                <p>
+                  Loads a starter transcript for{' '}
+                  <strong>{selectedScenario?.title ?? 'the selected scenario'}</strong>. Synthetic sample — not a live agent run.
+                  On Eval, structured traces are left empty so editing the transcript changes the score.
+                </p>
                 <button
                   type="button"
                   className="secondary-link"
@@ -3673,28 +3925,19 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           <details aria-label="Score attribution">
             <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Attribute this score</summary>
             <p style={{ margin: '10px 0 0', color: 'var(--muted)', fontSize: 14, lineHeight: 1.45 }}>
-              Optional labels for the saved report. These do not change how evidence is scored.
+              Optional labels for the saved report (which agent target produced this evidence). These do not change how evidence is scored.
             </p>
             <div style={{ display: 'grid', gap: 12, marginTop: 12 }}>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
                 <label style={{ display: 'grid', gap: 8 }}>
-                  <span style={{ fontWeight: 700 }}>Attributed agent</span>
-                  <select
-                    aria-label="Attributed agent"
-                    value={selectedAgentId}
-                    onChange={(event) => {
-                      const agentId = event.target.value;
-                      setSelectedAgentId(agentId);
-                      const agent = agents.find((item) => item.id === agentId);
-                      if (agent) applyAgentProfileDefaults(agent, { setAgentProfile, setModelName, setPromptVersion });
-                    }}
+                  <span style={{ fontWeight: 700 }}>Attributed agent target</span>
+                  <input
+                    aria-label="Attributed agent target"
+                    value={agentProfile}
+                    onChange={(event) => setAgentProfile(event.target.value)}
+                    placeholder="support-bot / mock text target"
                     style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
-                  >
-                    {!agents.length ? <option value="">No agents</option> : null}
-                    {agents.map((agent) => (
-                      <option key={agent.id} value={agent.id}>{agent.name}</option>
-                    ))}
-                  </select>
+                  />
                 </label>
                 <label style={{ display: 'grid', gap: 8 }}>
                   <span style={{ fontWeight: 700 }}>Attributed model</span>
@@ -3702,16 +3945,16 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                     aria-label="Attributed model"
                     value={modelName}
                     onChange={(event) => setModelName(event.target.value)}
-                    placeholder={selectedScoreAgent?.metadata?.model_name || 'gpt-4.1-mini'}
+                    placeholder="gpt-4.1-mini"
                     style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
                   />
                 </label>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
                 <label style={{ display: 'grid', gap: 8 }}>
-                  <span style={{ fontWeight: 700 }}>Agent version</span>
+                  <span style={{ fontWeight: 700 }}>Target version</span>
                   <input
-                    aria-label="Attributed agent version"
+                    aria-label="Attributed target version"
                     value={agentVersion}
                     onChange={(event) => setAgentVersion(event.target.value)}
                     placeholder="agent-v12"
@@ -3751,16 +3994,40 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             <label style={{ display: 'grid', gap: 8 }}>
               <span style={{ fontWeight: 700 }}>Transcript</span>
               <textarea
+                aria-label="Evidence transcript"
                 value={transcript}
-                onChange={(event) => setTranscript(event.target.value)}
+                onChange={(event) => onTranscriptChange(event.target.value)}
                 rows={7}
                 style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }}
               />
+              {view === 'score' && !hasTranscriptEvidence ? (
+                <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13, lineHeight: 1.4 }}>
+                  Paste a transcript or load sample evidence to evaluate. Structured traces alone are not enough here.
+                </p>
+              ) : null}
             </label>
 
             <details className="eval-structured-evidence">
               <summary>Structured and channel evidence (optional)</summary>
-              <p>Expand when you have tool traces, final-state data, voice/group-call artifacts, or a full vCon record.</p>
+              <p>
+                {view === 'score'
+                  ? 'Hidden by default from Evaluate on this page. Sample transcript scoring ignores these unless you opt in below — otherwise leftover tool traces can keep every score at 100.'
+                  : 'Expand when you have tool traces, final-state data, voice/group-call artifacts, or a full vCon record.'}
+              </p>
+              {view === 'score' ? (
+                <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', margin: '0 0 12px' }}>
+                  <input
+                    type="checkbox"
+                    aria-label="Include structured evidence in Evaluate"
+                    checked={includeStructuredEvidence}
+                    onChange={(event) => setIncludeStructuredEvidence(event.target.checked)}
+                    style={{ marginTop: 3 }}
+                  />
+                  <span style={{ fontSize: 14, lineHeight: 1.4 }}>
+                    Include structured evidence when evaluating (action/tool trace, final state, and channel artifacts below).
+                  </span>
+                </label>
+              ) : null}
               <div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
                   <label style={{ display: 'grid', gap: 8 }}>
@@ -3869,39 +4136,162 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           >
             Save run
           </button> : null}
-          {view !== 'simulate' ? <button
-            type="button"
-            disabled={!report}
-            onClick={onJudge}
-            style={{
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              background: plan === 'free' ? 'var(--panel-alt)' : 'white',
-              color: 'var(--text)',
-              padding: '12px 18px',
-              fontWeight: 800,
-              opacity: report ? 1 : 0.65,
-            }}
-          >
-            Request LLM judge
-          </button> : null}
+          {view !== 'simulate' ? (
+            <div
+              aria-label="LLM judge controls"
+              style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}
+            >
+              <button
+                type="button"
+                disabled={!report || !judgeProviderReady || isJudging}
+                onClick={() => void onJudge()}
+                style={{
+                  border: '1px solid var(--border)',
+                  borderRadius: 8,
+                  background: judgeProviderReady ? 'white' : 'var(--panel-alt)',
+                  color: 'var(--text)',
+                  padding: '12px 18px',
+                  fontWeight: 800,
+                  opacity: report && judgeProviderReady && !isJudging ? 1 : 0.65,
+                }}
+              >
+                {isJudging ? 'Requesting LLM judge…' : 'Request LLM judge'}
+              </button>
+              {openaiProvider?.status === 'connected' ? (
+                <span style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.3 }}>
+                  {openaiProvider.email || 'OpenAI Codex'}
+                  {openaiProvider.plan_type ? ` · ${openaiProvider.plan_type}` : ''}
+                  {' · '}
+                  <button
+                    type="button"
+                    onClick={() => void onDisconnectOpenAI()}
+                    style={{
+                      border: 0,
+                      padding: 0,
+                      background: 'transparent',
+                      color: 'var(--muted)',
+                      fontSize: 12,
+                      textDecoration: 'underline',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Disconnect
+                  </button>
+                </span>
+              ) : productConfig?.llm_judge_status === 'enabled' ? (
+                <span style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.3 }}>
+                  API key judge ready
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="secondary-link"
+                  disabled={isConnectingOpenAI}
+                  onClick={() => void onConnectOpenAI()}
+                  style={{ padding: '6px 10px', fontSize: 13, fontWeight: 600 }}
+                >
+                  {isConnectingOpenAI ? 'Connecting…' : 'Connect OpenAI'}
+                </button>
+              )}
+            </div>
+          ) : null}
         </div>
+
+        {view === 'score' && openaiProviderMessage ? (
+          <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13 }}>{openaiProviderMessage}</p>
+        ) : null}
 
         {runError ? <p style={{ color: 'var(--error-text)', margin: 0 }}>{runError}</p> : null}
         {saveMessage ? <p style={{ color: 'var(--muted)', margin: 0 }}>{saveMessage}</p> : null}
         {judgeGate ? (
           <div
+            aria-label="LLM judge result"
             style={{
               border: `1px solid ${judgeGate.status === 'ready' ? 'var(--success-border)' : 'var(--error-border)'}`,
               background: judgeGate.status === 'ready' ? 'var(--success-bg)' : 'var(--error-bg)',
               color: judgeGate.status === 'ready' ? 'var(--success-text)' : 'var(--error-text)',
               borderRadius: 8,
               padding: 12,
+              display: 'grid',
+              gap: 8,
             }}
           >
-            <strong>{judgeGate.status === 'ready' ? 'Judge gate ready' : 'Upgrade required'}:</strong> {judgeGate.message}
+            <div>
+              <strong>{judgeBannerTitle(judgeGate)}:</strong> {judgeGate.message}
+            </div>
+            {(judgeGate.provider || judgeGate.model || judgeGate.latency_ms != null) ? (
+              <p style={{ margin: 0, color: 'inherit', fontSize: 13 }}>
+                {[
+                  judgeGate.provider ? `Provider: ${judgeGate.provider}` : null,
+                  judgeGate.model ? `Model: ${judgeGate.model}` : null,
+                  judgeGate.latency_ms != null ? `${judgeGate.latency_ms} ms` : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </p>
+            ) : null}
+            {judgeGate.judge_result?.rationale ? (
+              <p style={{ margin: 0, color: 'inherit' }}>
+                <strong>Rationale:</strong> {judgeGate.judge_result.rationale}
+              </p>
+            ) : null}
+            {judgeGate.judge_result?.next_action ? (
+              <p style={{ margin: 0, color: 'inherit' }}>
+                <strong>Next action:</strong> {judgeGate.judge_result.next_action}
+              </p>
+            ) : null}
+            {!judgeGate.judge_result?.rationale && judgeGate.judge_output ? (
+              <p style={{ margin: 0, color: 'inherit', whiteSpace: 'pre-wrap' }}>{judgeGate.judge_output}</p>
+            ) : null}
             {formatJudgeSpend(judgeGate.spend_control) ? (
-              <p style={{ margin: '8px 0 0', color: 'inherit' }}>{formatJudgeSpend(judgeGate.spend_control)}</p>
+              <p style={{ margin: 0, color: 'inherit', fontSize: 13 }}>{formatJudgeSpend(judgeGate.spend_control)}</p>
+            ) : null}
+            {judgeGate.evidence_citations.length ? (
+              <div>
+                <p style={{ margin: '0 0 4px', fontSize: 13, fontWeight: 700 }}>Citations sent to judge</p>
+                <ul style={{ margin: 0, paddingLeft: 18 }}>
+                  {judgeGate.evidence_citations.map((citation) => (
+                    <li key={citation} style={{ fontSize: 13 }}>{citation}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {judgeGate.prompt_preview ? (
+              <div>
+                <button
+                  type="button"
+                  onClick={() => setShowJudgePrompt((current) => !current)}
+                  style={{
+                    border: 0,
+                    padding: 0,
+                    background: 'transparent',
+                    color: 'inherit',
+                    textDecoration: 'underline',
+                    cursor: 'pointer',
+                    fontSize: 13,
+                    fontWeight: 700,
+                  }}
+                >
+                  {showJudgePrompt ? 'Hide what the judge saw' : 'What the judge saw'}
+                </button>
+                {showJudgePrompt ? (
+                  <pre
+                    style={{
+                      margin: '8px 0 0',
+                      padding: 10,
+                      borderRadius: 6,
+                      background: 'rgba(0,0,0,0.06)',
+                      color: 'inherit',
+                      whiteSpace: 'pre-wrap',
+                      fontSize: 12,
+                      maxHeight: 280,
+                      overflow: 'auto',
+                    }}
+                  >
+                    {judgeGate.prompt_preview}
+                  </pre>
+                ) : null}
+              </div>
             ) : null}
           </div>
         ) : null}
@@ -3973,16 +4363,16 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
         {view === 'run' && selectedSuite && !loadError ? (
           <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }} aria-label="Default scenario for launch">
-            Launch agent run uses {executionModelName || DEFAULT_EXECUTION_MODEL} through the connected OpenAI provider.
-            {' '}The secondary action uses the selected agent&apos;s configured mock or fixture target.
+            Launch uses {executionModelName || DEFAULT_EXECUTION_MODEL} through the connected OpenAI provider when available.
+            {' '}The secondary action uses the selected agent target&apos;s built-in mock or fixture connection.
           </p>
         ) : null}
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
           <label style={{ display: 'grid', gap: 8 }}>
-            <span style={{ fontWeight: 700 }}>Agent</span>
+            <span style={{ fontWeight: 700 }}>Agent target</span>
             <select
-              aria-label="Execution agent"
+              aria-label="Execution agent target"
               value={selectedAgentId}
               onChange={(event) => {
                 const agentId = event.target.value;
@@ -3997,7 +4387,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
               }}
               style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
             >
-              {!agents.length ? <option value="">No agents</option> : null}
+              {!agents.length ? <option value="">No targets</option> : null}
               {agents.map((agent) => (
                 <option key={agent.id} value={agent.id}>{agent.name}</option>
               ))}
@@ -4334,11 +4724,75 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
-            <ScoreTile label="Task completion" score={report.task_completion_score} />
             <ScoreTile label="Required actions" score={report.required_action_score} />
+            {report.score_components && 'rubric' in report.score_components ? (
+              <ScoreTile label="Rubric" score={report.rubric_score} />
+            ) : null}
             <ScoreTile label="Forbidden actions" score={report.forbidden_action_score} />
+            <ScoreTile label="Task completion" score={report.task_completion_score} />
             <ScoreTile label="Final state" score={report.final_state_score} />
           </div>
+          {report.score_components && Object.keys(report.score_components).length ? (
+            <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13, lineHeight: 1.45 }} aria-label="Score breakdown">
+              Score mode: {report.scoring_mode || 'unknown'} ·{' '}
+              {Object.entries(report.score_components)
+                .map(([key, value]) => `${key.replace(/_/g, ' ')} ${value}`)
+                .join(' · ')}
+              {report.scoring_mode === 'transcript'
+                ? ' · Task completion / final state are n/a without structured evidence (not counted as 100).'
+                : ''}
+            </p>
+          ) : null}
+
+          {(report.completed_actions?.length || report.missing_actions?.length || selectedScenario?.required_actions?.length) ? (
+            <section
+              aria-label="Required action checklist"
+              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 10, background: 'white' }}
+            >
+              <div>
+                <p style={{ margin: '0 0 6px', color: 'var(--muted)', fontSize: 13, fontWeight: 800, textTransform: 'uppercase' }}>
+                  Required action checklist
+                </p>
+                <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13 }}>
+                  Observed in this evidence vs still missing.
+                </p>
+              </div>
+              <ul style={{ margin: 0, paddingLeft: 0, listStyle: 'none', display: 'grid', gap: 6 }}>
+                {(selectedScenario?.required_actions?.length
+                  ? toStringList(selectedScenario.required_actions)
+                  : [...(report.completed_actions ?? []), ...(report.missing_actions ?? [])]
+                ).map((action) => {
+                  const completed = (report.completed_actions ?? []).some(
+                    (item) => item.toLowerCase() === action.toLowerCase(),
+                  );
+                  const missing = (report.missing_actions ?? []).some(
+                    (item) => item.toLowerCase() === action.toLowerCase(),
+                  );
+                  const status = completed ? 'observed' : missing || report.missing_actions?.length ? 'missing' : 'unknown';
+                  return (
+                    <li
+                      key={action}
+                      style={{
+                        display: 'flex',
+                        gap: 10,
+                        alignItems: 'flex-start',
+                        fontSize: 14,
+                        lineHeight: 1.4,
+                        color: status === 'missing' ? 'var(--error-text)' : 'var(--text)',
+                      }}
+                    >
+                      <span aria-hidden="true" style={{ fontWeight: 900, minWidth: 16 }}>
+                        {status === 'observed' ? '✓' : status === 'missing' ? '✗' : '·'}
+                      </span>
+                      <span>
+                        <strong>{status === 'observed' ? 'Observed' : status === 'missing' ? 'Missing' : 'Unchecked'}:</strong> {action}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ) : null}
 
           {actionPlan ? (
             <section
@@ -5056,11 +5510,19 @@ function ScenarioList({ title, items }: { title: string; items: string[] }) {
   );
 }
 
-function ScoreTile({ label, score }: { label: string; score?: number }) {
+function ScoreTile({ label, score }: { label: string; score?: number | null }) {
+  const hasScore = typeof score === 'number' && Number.isFinite(score);
   return (
-    <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14 }}>
+    <div aria-label={`${label} score`} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14 }}>
       <p style={{ margin: '0 0 6px', color: 'var(--muted)', fontSize: 13 }}>{label}</p>
-      <p style={{ margin: 0, fontSize: 24, fontWeight: 900, color: scoreColor(score) }}>{score ?? 'n/a'}</p>
+      <p style={{ margin: 0, fontSize: 24, fontWeight: 900, color: hasScore ? scoreColor(score) : 'var(--muted)' }}>
+        {hasScore ? score : 'n/a'}
+      </p>
+      {!hasScore ? (
+        <p style={{ margin: '6px 0 0', color: 'var(--muted)', fontSize: 12, lineHeight: 1.35 }}>
+          Not measured from this evidence
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -5156,7 +5618,19 @@ function GroupCallPanel({ summary }: { summary?: GroupCallSummary | null }) {
 function VoiceInteractionPanel({ summary }: { summary?: VoiceInteractionSummary | null }) {
   if (!summary) return null;
 
-  const signalCount = (summary.interruption_signal_count ?? 0) + (summary.correction_signal_count ?? 0);
+  const signalCount = (summary.interruption_signal_count ?? 0)
+    + (summary.correction_signal_count ?? 0)
+    + (summary.handoff_signal_count ?? 0)
+    + (summary.action_trace_event_count ?? 0);
+  const hasMedia = Boolean(summary.media?.recording_url || summary.media?.mime_type);
+  const hasTiming = typeof summary.duration_ms === 'number'
+    || typeof summary.average_latency_ms === 'number'
+    || typeof summary.max_latency_ms === 'number'
+    || typeof summary.packet_loss_percent === 'number'
+    || typeof summary.jitter_ms === 'number';
+  // Don't show an empty voice card for plain text transcript evals.
+  if (signalCount === 0 && !hasMedia && !hasTiming) return null;
+
   const status = signalCount > 0 ? 'Voice turn signals captured' : 'No interruption or correction signals captured';
 
   return (

@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from datetime import UTC, datetime
+from threading import Lock
 from typing import Any
 from urllib.parse import urlencode
 
@@ -25,6 +26,7 @@ from app.schemas.product import (
     CheckoutResponse,
     FirebaseAuthConfig,
     JudgeResponse,
+    JudgeStructuredResult,
     PricingPlan,
     ProductAuditEventResponse,
     ProductFailureCategorySummary,
@@ -107,9 +109,11 @@ PRICING = [
     ),
 ]
 
+_JUDGE_SPEND_LOCK = Lock()
+
 USAGE_RULES = [
     UsageRule(id='deterministic_eval', label='Deterministic browser eval', credits=1),
-    UsageRule(id='llm_judge', label='Evidence-grounded LLM judge', credits=10, gated_plan='starter'),
+    UsageRule(id='llm_judge', label='Evidence-grounded LLM judge', credits=10),
     UsageRule(id='voice_webrtc_minute', label='Voice/WebRTC eval minute', credits=5, gated_plan='team'),
     UsageRule(id='api_ci_run', label='CI/API benchmark run', credits=3, gated_plan='team'),
 ]
@@ -118,12 +122,13 @@ USAGE_RULES = [
 def product_config() -> ProductConfig:
     openai_status = _openai_provider_status()
     connected = openai_status.get('status') == 'connected'
+    api_key_configured = bool((os.getenv('LLM_JUDGE_API_KEY') or '').strip())
     return ProductConfig(
         pricing=_pricing_with_stripe_ids(),
         usage_rules=USAGE_RULES,
         auth=_firebase_auth_config(),
         voice_status='gated',
-        llm_judge_status='enabled' if connected else 'gated',
+        llm_judge_status='enabled' if (connected or api_key_configured) else 'gated',
     )
 
 
@@ -860,17 +865,35 @@ def record_judge_request(
     plan: str,
     status: str,
     credits: int,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+    judge_output: str | None = None,
+    agrees: bool | None = None,
 ) -> None:
     project = None
     if project_id:
         project = _get_or_create_project(db=db, user_id=user_id, project_id=project_id, plan=plan)
+    output_preview = (judge_output or '').strip()
+    payload: dict[str, Any] = {
+        'project_id': project_id,
+        'plan': plan,
+        'status': status,
+        'credits': credits,
+        'provider': provider,
+        'model': model,
+        'agrees': agrees,
+    }
+    if output_preview:
+        payload['output_preview'] = output_preview[:400]
+        payload['output_sha256'] = hashlib.sha256(output_preview.encode('utf-8')).hexdigest()[:16]
     _record_audit_event(
         db=db,
         user_id=user_id,
         actor_user_id=user_id,
         event_type='judge.requested',
         project=project,
-        payload={'project_id': project_id, 'plan': plan, 'status': status, 'credits': credits},
+        payload=payload,
     )
     db.commit()
 
@@ -934,9 +957,10 @@ def _stripe_price_id(plan: str) -> str | None:
 
 
 def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> JudgeResponse:
-    del plan  # Local Codex OAuth path gates on provider connection, not paid plan.
+    del plan  # Local Codex OAuth / API-key path gates on provider + budget, not paid plan.
     spend_control = _judge_spend_control()
     citations = _judge_citations(report, transcript)
+    model_name = _judge_model_name(spend_control)
 
     if not spend_control['within_budget']:
         return JudgeResponse(
@@ -947,10 +971,11 @@ def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> Jud
             evidence_citations=citations,
             spend_control=spend_control,
             provider=spend_control.get('provider'),
+            model=model_name,
+            block_reason='budget',
         )
 
-    provider_ready = bool(spend_control.get('provider_configured'))
-    if not provider_ready:
+    if not spend_control.get('provider_configured'):
         return JudgeResponse(
             status='blocked',
             required_plan='starter',
@@ -959,12 +984,30 @@ def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> Jud
             evidence_citations=citations,
             spend_control=spend_control,
             provider=spend_control.get('provider'),
+            model=model_name,
+            block_reason='provider',
+        )
+
+    reserved, spend_control = _reserve_judge_credits(spend_control, credits=10)
+    if not reserved:
+        return JudgeResponse(
+            status='blocked',
+            required_plan='starter',
+            credits=10,
+            message='LLM judge daily credit budget is exhausted. Increase the limit or wait for the next budget window.',
+            evidence_citations=citations,
+            spend_control=spend_control,
+            provider=spend_control.get('provider'),
+            model=model_name,
+            block_reason='budget',
         )
 
     prompt = _build_judge_prompt(report=report, transcript=transcript, citations=citations)
+    started = datetime.now(UTC)
     try:
-        judge_output = _execute_judge_completion(prompt)
+        raw_output = _execute_judge_completion(prompt)
     except Exception as exc:  # noqa: BLE001
+        spend_control = _refund_judge_credits(spend_control, credits=10)
         return JudgeResponse(
             status='blocked',
             required_plan='starter',
@@ -973,17 +1016,29 @@ def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> Jud
             evidence_citations=citations,
             spend_control=spend_control,
             provider=spend_control.get('provider'),
+            model=model_name,
+            prompt_preview=prompt,
+            block_reason='provider_error',
         )
 
+    latency_ms = int((datetime.now(UTC) - started).total_seconds() * 1000)
+    structured = _parse_judge_output(raw_output)
+    agrees_label = (
+        'agrees' if structured.agrees is True else 'disagrees' if structured.agrees is False else 'reviewed'
+    )
     return JudgeResponse(
         status='ready',
         required_plan='starter',
         credits=10,
-        message='LLM judge review completed via the connected OpenAI provider.',
+        message=f'LLM judge {agrees_label} the deterministic verdict via {spend_control.get("provider")}.',
         evidence_citations=citations,
         spend_control=spend_control,
-        judge_output=judge_output,
+        judge_output=raw_output,
+        judge_result=structured,
         provider=spend_control.get('provider'),
+        model=model_name,
+        prompt_preview=prompt,
+        latency_ms=latency_ms,
     )
 
 
@@ -996,6 +1051,7 @@ def reset_saved_runs_for_tests() -> None:
         db.query(ProductWorkspaceMember).delete()
         db.query(ProductWorkspace).delete()
         db.commit()
+    _reset_judge_spend_for_tests()
 
 
 def _firebase_auth_config() -> FirebaseAuthConfig:
@@ -1011,42 +1067,206 @@ def _firebase_auth_config() -> FirebaseAuthConfig:
     )
 
 
+def _format_citation_item(item: Any) -> str:
+    if isinstance(item, str):
+        return item.strip()[:240]
+    if not isinstance(item, dict):
+        return str(item)[:240]
+    parts: list[str] = []
+    for key in ('source', 'source_key', 'kind', 'assertion', 'label', 'summary', 'text', 'span', 'path'):
+        value = item.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            parts.append(f'{key}={text[:120]}')
+    return '; '.join(parts)[:240] if parts else str(item)[:240]
+
+
 def _judge_citations(report: dict[str, Any], transcript: str | None) -> list[str]:
     citations: list[str] = []
-    evidence = report.get('evidence_spans') or report.get('evidence') or []
-    if isinstance(evidence, list):
-        for item in evidence[:4]:
-            citations.append(str(item)[:180])
+    for key in ('evidence_citations', 'evidence_spans', 'evidence'):
+        evidence = report.get(key)
+        if not isinstance(evidence, list):
+            continue
+        for item in evidence:
+            formatted = _format_citation_item(item)
+            if formatted and formatted not in citations:
+                citations.append(formatted)
+            if len(citations) >= 6:
+                break
+        if len(citations) >= 6:
+            break
     if transcript and len(citations) < 2:
         citations.extend(line.strip()[:180] for line in transcript.splitlines() if line.strip())
-    return citations[:4]
+    return citations[:6]
+
+
+def _string_list(value: Any, *, limit: int = 8) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    items: list[str] = []
+    for item in value[:limit]:
+        if isinstance(item, str) and item.strip():
+            items.append(item.strip()[:160])
+        elif isinstance(item, dict):
+            formatted = _format_citation_item(item)
+            if formatted:
+                items.append(formatted)
+    return items
+
+
+def _judge_failure_summary(report: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    missing = _string_list(report.get('missing_actions'))
+    if missing:
+        lines.append('Missing required actions: ' + '; '.join(missing))
+    forbidden = _string_list(report.get('forbidden_action_hits') or report.get('forbidden_actions'))
+    if forbidden:
+        lines.append('Forbidden action hits: ' + '; '.join(forbidden))
+    failures = _string_list(report.get('failure_categories') or report.get('hard_check_failures'))
+    if failures:
+        lines.append('Failure categories: ' + '; '.join(failures))
+    rubric = report.get('rubric_checks')
+    if isinstance(rubric, list):
+        failed_rubric = []
+        for item in rubric[:12]:
+            if not isinstance(item, dict):
+                continue
+            passed = item.get('passed')
+            if passed is False or item.get('status') in {'fail', 'failed', 'missing'}:
+                label = item.get('id') or item.get('label') or item.get('name') or 'rubric'
+                failed_rubric.append(str(label))
+        if failed_rubric:
+            lines.append('Failed rubric checks: ' + '; '.join(failed_rubric[:8]))
+    fixes = _string_list(report.get('suggested_fixes') or report.get('recommendations'), limit=5)
+    if fixes:
+        lines.append('Suggested fixes: ' + '; '.join(fixes))
+    final_state = report.get('final_state')
+    if isinstance(final_state, dict) and final_state:
+        complete = final_state.get('complete')
+        lines.append(f'Final state complete={complete!r}; keys={", ".join(list(final_state.keys())[:8])}')
+    action_trace = report.get('action_trace')
+    if isinstance(action_trace, list) and action_trace:
+        events = []
+        for item in action_trace[:8]:
+            if isinstance(item, dict):
+                events.append(str(item.get('event') or item.get('name') or item.get('action') or item)[:80])
+            else:
+                events.append(str(item)[:80])
+        lines.append('Action trace sample: ' + '; '.join(events))
+    return lines
+
+
+def _judge_spend_path():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[4]
+    return root / 'artifacts' / 'llm_judge_spend.json'
+
+
+def _reset_judge_spend_for_tests() -> None:
+    with _JUDGE_SPEND_LOCK:
+        path = _judge_spend_path()
+        if path.exists():
+            path.unlink(missing_ok=True)
+
+
+def _load_judge_spend() -> dict[str, Any]:
+    path = _judge_spend_path()
+    today = datetime.now(UTC).date().isoformat()
+    if not path.exists():
+        return {'date': today, 'spent': 0}
+    try:
+        payload = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return {'date': today, 'spent': 0}
+    if not isinstance(payload, dict) or payload.get('date') != today:
+        return {'date': today, 'spent': 0}
+    try:
+        spent = int(payload.get('spent') or 0)
+    except (TypeError, ValueError):
+        spent = 0
+    return {'date': today, 'spent': max(spent, 0)}
+
+
+def _save_judge_spend(payload: dict[str, Any]) -> None:
+    path = _judge_spend_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f'{path.name}.tmp')
+    temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+    os.replace(temp_path, path)
 
 
 def _judge_spend_control() -> dict[str, Any]:
     daily_limit = _int_env('LLM_JUDGE_DAILY_CREDIT_LIMIT', 200)
     reserved_credits = _int_env('LLM_JUDGE_RESERVED_DAILY_CREDITS', 0)
+    spent_state = _load_judge_spend()
+    spent_credits = int(spent_state.get('spent') or 0)
     configured_provider = (os.getenv('LLM_JUDGE_PROVIDER') or 'openai_codex').strip().lower()
-    api_key_configured = bool(os.getenv('LLM_JUDGE_API_KEY'))
+    api_key_configured = bool((os.getenv('LLM_JUDGE_API_KEY') or '').strip())
     oauth_connected = False
-    if configured_provider in {'openai', 'openai_codex', 'codex', 'vertex'}:
-        # Prefer Codex OAuth connectivity for local-first judging; API key remains a CI fallback.
+    if configured_provider in {'openai', 'openai_codex', 'codex'}:
         status = _openai_provider_status()
         oauth_connected = status.get('status') == 'connected'
-    provider_configured = oauth_connected or api_key_configured or (
-        configured_provider == 'vertex'
-        and bool(os.getenv('VERTEX_PROJECT_ID') or os.getenv('GOOGLE_CLOUD_PROJECT'))
-    )
-    provider_label = 'openai_codex' if oauth_connected else configured_provider
-    remaining = max(daily_limit - reserved_credits, 0)
+    provider_configured = oauth_connected or api_key_configured
+    provider_label = 'openai_codex' if oauth_connected else ('openai_api_key' if api_key_configured else configured_provider)
+    remaining = max(daily_limit - reserved_credits - spent_credits, 0)
     return {
         'estimated_credits': 10,
         'daily_credit_limit': daily_limit,
         'reserved_daily_credits': reserved_credits,
+        'spent_daily_credits': spent_credits,
         'remaining_daily_credits': remaining,
         'provider': provider_label,
         'provider_configured': provider_configured,
+        'oauth_connected': oauth_connected,
+        'api_key_configured': api_key_configured,
         'within_budget': remaining >= 10,
     }
+
+
+def _with_spend_totals(spend_control: dict[str, Any], spent_credits: int, *, credits: int) -> dict[str, Any]:
+    updated = dict(spend_control)
+    updated['spent_daily_credits'] = spent_credits
+    daily_limit = int(updated.get('daily_credit_limit') or 200)
+    reserved = int(updated.get('reserved_daily_credits') or 0)
+    updated['remaining_daily_credits'] = max(daily_limit - reserved - spent_credits, 0)
+    updated['within_budget'] = updated['remaining_daily_credits'] >= credits
+    return updated
+
+
+def _reserve_judge_credits(spend_control: dict[str, Any], *, credits: int) -> tuple[bool, dict[str, Any]]:
+    with _JUDGE_SPEND_LOCK:
+        state = _load_judge_spend()
+        spent = int(state.get('spent') or 0)
+        daily_limit = int(spend_control.get('daily_credit_limit') or 200)
+        reserved = int(spend_control.get('reserved_daily_credits') or 0)
+        remaining = max(daily_limit - reserved - spent, 0)
+        if remaining < credits:
+            return False, _with_spend_totals(spend_control, spent, credits=credits)
+        next_spent = spent + credits
+        state['spent'] = next_spent
+        _save_judge_spend(state)
+        return True, _with_spend_totals(spend_control, next_spent, credits=credits)
+
+
+def _refund_judge_credits(spend_control: dict[str, Any], *, credits: int) -> dict[str, Any]:
+    with _JUDGE_SPEND_LOCK:
+        state = _load_judge_spend()
+        next_spent = max(int(state.get('spent') or 0) - credits, 0)
+        state['spent'] = next_spent
+        _save_judge_spend(state)
+        return _with_spend_totals(spend_control, next_spent, credits=credits)
+
+
+def _judge_model_name(spend_control: dict[str, Any]) -> str:
+    env_model = (os.getenv('LLM_JUDGE_MODEL') or '').strip()
+    if env_model:
+        return env_model
+    if spend_control.get('oauth_connected'):
+        return 'gpt-5.4-mini'
+    return 'gpt-4.1-mini'
 
 
 def _build_judge_prompt(*, report: dict[str, Any], transcript: str | None, citations: list[str]) -> str:
@@ -1055,21 +1275,78 @@ def _build_judge_prompt(*, report: dict[str, Any], transcript: str | None, citat
     suite_id = report.get('suite_id') or 'unknown-suite'
     scenario_id = report.get('scenario_id') or 'unknown-scenario'
     citation_lines = [f'- {item}' for item in citations] or ['- (none)']
+    failure_lines = [f'- {item}' for item in _judge_failure_summary(report)] or ['- (none)']
+    score_bits = []
+    for key, label in (
+        ('required_action_score', 'required_actions'),
+        ('rubric_score', 'rubric'),
+        ('task_completion_score', 'task_completion'),
+        ('forbidden_action_score', 'forbidden'),
+        ('final_state_score', 'final_state'),
+        ('workflow_order_score', 'workflow_order'),
+    ):
+        value = report.get(key)
+        if value is not None:
+            score_bits.append(f'{label}={value}')
     lines = [
         'You are an evidence-grounded LLM judge for ConversationAgentEvals.',
-        'Review the deterministic benchmark report and transcript. Keep the answer concise.',
+        'Review the deterministic ASSERT-style benchmark report and transcript.',
+        'Decide whether you agree with the deterministic verdict using the evidence.',
         f'Suite: {suite_id}',
         f'Scenario: {scenario_id}',
         f'Deterministic verdict: {verdict}',
         f'Deterministic score: {score}',
+        f'Score breakdown: {", ".join(score_bits) if score_bits else "(none)"}',
+        'Deterministic findings:',
+        *failure_lines,
         'Evidence citations:',
         *citation_lines,
         'Transcript excerpt:',
         (transcript or '(empty)')[:4000],
         '',
-        'Respond with: (1) agree/disagree with the deterministic verdict, (2) one sentence rationale, (3) one suggested next action.',
+        'Respond with ONLY compact JSON (no markdown fences):',
+        '{"agrees": true|false, "rationale": "one sentence", "next_action": "one concrete next step"}',
     ]
     return '\n'.join(lines)
+
+
+def _parse_judge_output(raw_output: str) -> JudgeStructuredResult:
+    text = (raw_output or '').strip()
+    if not text:
+        return JudgeStructuredResult(raw_output=raw_output)
+    candidate = text
+    if candidate.startswith('```'):
+        candidate = candidate.strip('`')
+        if candidate.lower().startswith('json'):
+            candidate = candidate[4:].strip()
+    try:
+        start = candidate.find('{')
+        end = candidate.rfind('}')
+        if start >= 0 and end > start:
+            payload = json.loads(candidate[start : end + 1])
+            if isinstance(payload, dict):
+                agrees = payload.get('agrees')
+                if isinstance(agrees, str):
+                    agrees = agrees.strip().lower() in {'true', 'yes', 'agree', 'agrees'}
+                elif not isinstance(agrees, bool):
+                    agrees = None
+                rationale = payload.get('rationale') or payload.get('reason')
+                next_action = payload.get('next_action') or payload.get('nextAction')
+                return JudgeStructuredResult(
+                    agrees=agrees,
+                    rationale=str(rationale).strip() if rationale else None,
+                    next_action=str(next_action).strip() if next_action else None,
+                    raw_output=raw_output,
+                )
+    except json.JSONDecodeError:
+        pass
+    lowered = text.lower()
+    agrees = None
+    if 'disagree' in lowered:
+        agrees = False
+    elif 'agree' in lowered:
+        agrees = True
+    return JudgeStructuredResult(agrees=agrees, rationale=text[:400], next_action=None, raw_output=raw_output)
 
 
 def _execute_judge_completion(prompt: str) -> str:
@@ -1085,7 +1362,6 @@ def _execute_judge_completion(prompt: str) -> str:
 
 
 def _complete_with_openai_api_key(prompt: str, *, api_key: str) -> str:
-    import json
     import urllib.error
     import urllib.request
 
@@ -1095,7 +1371,10 @@ def _complete_with_openai_api_key(prompt: str, *, api_key: str) -> str:
     body = {
         'model': model,
         'messages': [
-            {'role': 'system', 'content': 'You are an evidence-grounded evaluation judge.'},
+            {
+                'role': 'system',
+                'content': 'You are an evidence-grounded evaluation judge. Reply with compact JSON only.',
+            },
             {'role': 'user', 'content': prompt},
         ],
         'temperature': 0,

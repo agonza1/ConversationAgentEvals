@@ -237,6 +237,13 @@ export function ScenariosPage() {
   }, [selectedKey, suites]);
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('create') === '1') {
+      setMode('create');
+    }
+  }, []);
+
+  useEffect(() => {
     const requestId = loadRequestRef.current + 1;
     loadRequestRef.current = requestId;
     const controller = new AbortController();
@@ -427,7 +434,7 @@ export function ScenariosPage() {
                 </div>
                 <div className="scenarios-actions">
                   <Link className="primary-link" href={scenarioHref('/runs', selected.scenario)}>Run agent</Link>
-                  <Link className="secondary-link" href={scenarioHref('/eval', selected.scenario)}>Eval sample evidence</Link>
+                  <Link className="secondary-link" href={scenarioHref('/eval', selected.scenario)}>Eval evidence</Link>
                   {selected.scenario.suite_id === 'user-scenarios' ? (
                     <button
                       type="button"

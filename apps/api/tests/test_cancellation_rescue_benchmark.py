@@ -174,6 +174,8 @@ def test_optional_cancellation_rescue_starter_evidence_satisfies_deterministic_c
     suite = get_suite('call-center-voice-ai')
     assert suite is not None
     optional = next(item for item in suite['optional_scenarios'] if item['id'] == 'cancellation-rescue')
+    assert 'I reached the retention boundary' not in optional['sample_transcript']
+    assert 'approved follow-up while keeping your cancellation request active' in optional['sample_transcript']
     event_types = {item['type'] for item in optional['sample_action_trace']}
     assert {
         'cancellation_intent_detected',
@@ -393,4 +395,3 @@ def test_trace_event_type_is_preferred_over_action_label():
     result = _apply_cancellation_rescue_checks(base, scenario=CANCELLATION_RESCUE_SCENARIO, payload=payload)
     assert result.verdict.status == 'pass'
     assert result.verdict.metrics['deterministic_check_fail_count'] == 0
-

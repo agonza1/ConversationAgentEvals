@@ -7,7 +7,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.services.benchmark_service import get_suite, list_suites, simulate_scenario
+from app.services.benchmark_service import get_suite, list_suites, run_scenario, simulate_scenario
+from app.schemas.benchmarks import BenchmarkRunRequest
 from app.services.user_scenario_store import (
     USER_SCENARIOS_SUITE_ID,
     configure_store_path,
@@ -151,6 +152,30 @@ def test_created_scenario_is_selectable_in_benchmark_catalog_and_simulatable():
     assert simulation['scenario_id'] == scenario_id
     assert simulation['benchmark_report']['scenario_id'] == scenario_id
     assert 'custom scenario mock agent' in simulation['transcript']
+
+
+def test_starter_sample_transcript_uses_caller_facing_language():
+    suite = get_suite('call-center-voice-ai')
+    assert suite is not None
+    scenario = next(item for item in suite['scenarios'] if item['id'] == 'billing-address-change')
+    transcript = scenario['sample_transcript']
+
+    assert 'I moved recently and need to update my billing address' in transcript
+    assert "I'll greet caller" not in transcript
+    assert "I'll collect new billing address" not in transcript
+    assert 'Okay, continue.' not in transcript
+    assert 'What is the new billing address?' in transcript
+
+    report = run_scenario(
+        BenchmarkRunRequest(
+            suite_id='call-center-voice-ai',
+            scenario_id='billing-address-change',
+            transcript=transcript,
+            action_trace=scenario['sample_action_trace'],
+            final_state=scenario['sample_final_state'],
+        )
+    )
+    assert report['verdict'] == 'pass'
 
 
 def test_created_scenarios_persist_across_store_reload(tmp_path: Path):

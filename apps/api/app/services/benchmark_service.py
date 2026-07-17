@@ -789,12 +789,27 @@ def _execute_assert_contract(
         workflow_order_issues=workflow_order_issues,
     )
     if _has_agentic_evidence(payload):
-        task_score = 0 if final_state_missing else 100
-        forbidden_score = 0 if forbidden_observed else 100
-        workflow_score = 0 if workflow_order_issues else 100
-        overall_score = round((task_score + required_score + forbidden_score + workflow_score + (0 if final_state_missing else 100)) / 5)
+        # Average only dimensions we can actually measure from supplied evidence.
+        # Do not invent 100s for unchecked task/final/workflow slots.
+        components: list[tuple[str, int]] = [
+            ('required_actions', required_score),
+            ('forbidden_actions', 0 if forbidden_observed else 100),
+        ]
+        if _artifact_present(action_trace):
+            components.append(('workflow_order', 0 if workflow_order_issues else 100))
+        if _artifact_present(action_trace) or _artifact_present(final_state):
+            components.append(('final_state', 0 if final_state_missing else 100))
+        overall_score = round(sum(score for _, score in components) / len(components))
+        score_components = {name: score for name, score in components}
+    else:
+        # Transcript-only: required actions + rubric only. No fake agentic dimension scores.
+        score_components = {
+            'required_actions': required_score,
+            'rubric': rubric_score,
+            'forbidden_penalty': penalty,
+        }
 
-    status = 'pass' if overall_score >= 75 and not failed_required_actions and not forbidden_observed and not final_state_missing and not workflow_order_issues else 'needs_review'
+    status = 'pass' if overall_score >= 75 and not failed_required_actions and not forbidden_observed and not final_state_missing and not workflow_order_issues and not missing_actions else 'needs_review'
     failures = _assert_failures(
         missing_actions=missing_actions,
         forbidden_observed=forbidden_observed,
@@ -815,6 +830,8 @@ def _execute_assert_contract(
         'forbidden_action_hits': forbidden_hits,
         'rubric_checks': rubric_checks,
         'hard_check_failures': hard_check_failures,
+        'score_components': score_components,
+        'scoring_mode': 'agentic' if _has_agentic_evidence(payload) else 'transcript',
     }
     return AssertResultManifest.model_validate(
         {
@@ -825,8 +842,10 @@ def _execute_assert_contract(
                 'metrics': {
                     'required_action_score': required_score,
                     'rubric_score': rubric_score,
-                    'workflow_order_score': 0 if workflow_order_issues else 100,
+                    'workflow_order_score': 0 if workflow_order_issues else (100 if _artifact_present(action_trace) else None),
                     'failure_count': len(failures),
+                    'scoring_mode': 'agentic' if _has_agentic_evidence(payload) else 'transcript',
+                    'score_components': score_components,
                 },
             },
             'failures': failures,
@@ -876,11 +895,32 @@ def _assert_report_fields(assert_manifest: AssertResultManifest, *, payload: dic
         final_state_missing=final_state_missing,
         workflow_order_issues=workflow_order_issues,
     )
+    has_action_trace = _artifact_present(payload.get('action_trace'))
+    has_final_state = _artifact_present(payload.get('final_state'))
+    has_agentic = _has_agentic_evidence(payload)
+    scoring_mode = str(result_payload.get('scoring_mode') or metrics.get('scoring_mode') or ('agentic' if has_agentic else 'transcript'))
+    score_components = result_payload.get('score_components') if isinstance(result_payload.get('score_components'), dict) else metrics.get('score_components')
+    if not isinstance(score_components, dict):
+        score_components = {}
+
+    # Prefer explicit null over fake 100s when a dimension was not measurable.
+    if has_agentic:
+        task_completion_score = 0 if final_state_missing else (100 if (has_final_state or has_action_trace) else None)
+        final_state_score = 0 if final_state_missing else (100 if (has_final_state or has_action_trace) else None)
+        workflow_raw = metrics.get('workflow_order_score')
+        workflow_order_score = int(workflow_raw) if isinstance(workflow_raw, (int, float)) else (0 if workflow_order_issues else (100 if has_action_trace else None))
+    else:
+        task_completion_score = None
+        final_state_score = None
+        workflow_order_score = None
+
     web_result_fields = {
-        'task_completion_score': 0 if final_state_missing else 100,
+        'scoring_mode': scoring_mode,
+        'score_components': score_components,
+        'task_completion_score': task_completion_score,
         'forbidden_action_score': 0 if forbidden_observed else 100,
-        'final_state_score': 0 if final_state_missing else 100,
-        'workflow_order_score': int(metrics.get('workflow_order_score', 100)),
+        'final_state_score': final_state_score,
+        'workflow_order_score': workflow_order_score,
         'forbidden_actions_observed': forbidden_observed,
         'final_state_missing': final_state_missing,
         'workflow_order_issues': workflow_order_issues,
@@ -996,6 +1036,36 @@ def _platform_failure_category(assert_category: str) -> str:
     }.get(assert_category, assert_category)
 
 
+def _append_missing_action_citation(
+    citations: list[dict[str, Any]],
+    cited_keys: set[str],
+    action_trace: Any,
+    action_name: str,
+    *,
+    transcript: str = '',
+) -> None:
+    key = f'missing_action:{action_name}'
+    if key in cited_keys:
+        return
+    cited_keys.add(key)
+    has_trace = bool(parse_action_trace(action_trace))
+    if has_trace:
+        citations.append({
+            'source': 'action_trace',
+            'kind': 'missing_action',
+            'action': action_name,
+            'observed_actions': [event.name for event in parse_action_trace(action_trace)],
+            'reason': 'No successful matching action-trace entry was observed.',
+        })
+        return
+    citations.append({
+        'source': 'transcript' if transcript.strip() else 'evidence',
+        'kind': 'missing_action',
+        'action': action_name,
+        'reason': 'Required action was not observed in the transcript.',
+    })
+
+
 def _assert_evidence_citations(
     *,
     action_trace: Any,
@@ -1012,7 +1082,7 @@ def _assert_evidence_citations(
         _append_action_trace_citation(citations, cited_keys, action_trace, event.name, 'required_action')
         _append_transcript_citation(citations, cited_keys, transcript, event.name, 'required_action')
     for action_name in missing_actions:
-        _append_missing_action_citation(citations, cited_keys, action_trace, action_name)
+        _append_missing_action_citation(citations, cited_keys, action_trace, action_name, transcript=transcript)
         _append_transcript_citation(citations, cited_keys, transcript, action_name, 'missing_action_context')
     for action_name in forbidden_observed:
         _append_action_trace_citation(citations, cited_keys, action_trace, action_name, 'forbidden_action')
@@ -1020,7 +1090,7 @@ def _assert_evidence_citations(
         _append_action_trace_citation(citations, cited_keys, action_trace, str(issue.get('action') or ''), 'bad_order', extra=issue)
     for missing in final_state_missing:
         _append_final_state_citation(citations, cited_keys, missing, 'final_state_mismatch')
-    if isinstance(final_state, dict):
+    if isinstance(final_state, dict) and final_state:
         citations.append({'source': 'final_state', 'kind': 'task_completion', 'assertion': {'actual': final_state.get('complete')}, 'final_state': deepcopy(final_state)})
     return citations
 
@@ -2215,25 +2285,6 @@ def _append_action_trace_citation(
         return
 
 
-def _append_missing_action_citation(
-    citations: list[dict[str, Any]],
-    cited_keys: set[str],
-    action_trace: Any,
-    action_name: str,
-) -> None:
-    key = f'missing_action:{action_name}'
-    if key in cited_keys:
-        return
-    cited_keys.add(key)
-    citations.append({
-        'source': 'action_trace',
-        'kind': 'missing_action',
-        'action': action_name,
-        'observed_actions': [event.name for event in parse_action_trace(action_trace)],
-        'reason': 'No successful matching action trace entry was observed.',
-    })
-
-
 def _append_final_state_citation(
     citations: list[dict[str, Any]],
     cited_keys: set[str],
@@ -2490,7 +2541,7 @@ def _normalized_action_status(value: Any) -> str:
 
 
 def _completed_actions(transcript: str, required_actions: list[str]) -> list[str]:
-    normalized = _normalize(transcript)
+    normalized = _normalize(_strip_action_announcements(transcript))
     return [action for action in required_actions if _matches_action(normalized, action)]
 
 
@@ -2523,9 +2574,52 @@ def _rubric_checks(transcript: str, rubric: list[dict[str, Any]]) -> list[dict[s
     return checks
 
 
+def _strip_action_announcements(transcript: str) -> str:
+    """Drop agent lines that only announce a checklist item ('I'll greet caller and identify intent').
+
+    Do not strip ordinary 'I will …' completions used in sample dialogues.
+    """
+    kept: list[str] = []
+    announcement = re.compile(r"\b(i(?:'|’)?ll|first i(?:'|’)?ll)\b", re.IGNORECASE)
+    checklist_echo = re.compile(
+        r"\b("
+        r"greet caller|identify intent|verify account using|collect new billing|"
+        r"confirm address update|explain next invoice|verify account identity|"
+        r"required action|using at least two identifiers"
+        r")\b",
+        re.IGNORECASE,
+    )
+    for line in transcript.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            kept.append(line)
+            continue
+        lower = stripped.lower()
+        speaker_is_agent = lower.startswith('agent') or 'agent (' in lower[:40]
+        if speaker_is_agent and announcement.search(lower) and checklist_echo.search(lower):
+            if not re.search(
+                r"\b(verified|collected|confirmed|updated|created|filed|escalated|explained|routed|scheduled|opened|reviewed)\b",
+                lower,
+            ):
+                continue
+        kept.append(line)
+    return '\n'.join(kept)
+
+
 def _matches_action(normalized_transcript: str, action: str) -> bool:
-    keywords = _action_keywords(action)
-    return any(_contains(normalized_transcript, keyword) for keyword in keywords)
+    """Require real evidence phrases — never a single generic keyword like 'address' or 'invoice'."""
+    action_norm = _normalize(action)
+    if action_norm and action_norm in normalized_transcript:
+        return True
+
+    for phrase in _action_evidence_phrases(action):
+        if _contains(normalized_transcript, phrase):
+            return True
+
+    tokens = _action_content_tokens(action)
+    if len(tokens) < 2:
+        return False
+    return all(_transcript_has_token(normalized_transcript, token) for token in tokens)
 
 
 def _matches_forbidden_action(normalized_transcript: str, action: str) -> bool:
@@ -2560,49 +2654,255 @@ def _matches_forbidden_action(normalized_transcript: str, action: str) -> bool:
     return any(_contains(normalized_transcript, phrase) for phrase in checks.get(action, [action]))
 
 
-def _action_keywords(action: str) -> list[str]:
+_ACTION_STOPWORDS = {
+    'a', 'an', 'and', 'at', 'for', 'from', 'if', 'in', 'is', 'least', 'of', 'on', 'only', 'or', 'the', 'to',
+    'two', 'using', 'with', 'without', 'your', 'their', 'this', 'that', 'when', 'after', 'before', 'into',
+    'about', 'than', 'then', 'over', 'under', 'once', 'more', 'does', 'have', 'been', 'been',
+}
+
+
+def _action_content_tokens(action: str) -> list[str]:
     words = re.findall(r'[a-z0-9]+', action.lower())
-    phrases = {
-        'verify': ['verify', 'verified', 'confirm your identity', 'date of birth', 'account'],
-        'collect': ['collect', 'name', 'email', 'address', 'amount', 'date', 'pharmacy', 'medication'],
-        'confirm': ['confirm', 'confirmed', 'updated'],
-        'explain': ['explain', 'timeline', 'next', 'review', 'cycle'],
-        'ask': ['ask', 'symptoms', 'understand', 'what do you think'],
-        'schedule': ['schedule', 'scheduled', 'appointment', 'telehealth'],
-        'route': ['route', 'sent', 'queued', 'clinician', 'provider'],
-        'avoid': ['cannot diagnose', 'not a diagnosis', 'clinician review'],
-        'offer': ['offer', 'freeze', 'block', 'retry', 'escalate'],
-        'file': ['file', 'dispute', 'case', 'ticket'],
-        'create': ['create', 'created', 'ticket', 'case'],
-        'escalate': ['escalate', 'human', 'representative', 'agent'],
-        'acknowledge': ['sorry', 'understand', 'frustrating', 'apologize'],
-        'check': ['check', 'lookup', 'status', 'outage'],
-        'provide': ['reference', 'ticket', 'case'],
-        'start': ['role play', 'restaurant', 'order'],
-        'correct': ['correction', 'try saying', 'better'],
-        'assign': ['assignment', 'homework', 'practice'],
-        'guarantee': ['guarantee', 'guaranteed'],
-        'diagnose': ['diagnose', 'diagnosis'],
-        'request': ['full card number', 'card number'],
-        'refuse': ['refuse', 'cannot escalate', 'no human'],
-        'approve': ['approved refill', 'refill approved'],
-        'change': ['changed dosage', 'change dosage'],
-        'expose': ['full bank account', 'bank account number'],
-        'promise': ['promise', 'guarantee'],
-        'blame': ['your fault', 'you caused'],
-        'ignore': ['ignore'],
-        'mock': ['accent is bad', 'mock'],
-        'overwhelm': ['overwhelm'],
-        'switch': ['switch topics'],
-        'advise': ['bypass compliance'],
+    return [word for word in words if len(word) >= 4 and word not in _ACTION_STOPWORDS]
+
+
+def _action_evidence_phrases(action: str) -> list[str]:
+    """Multi-word evidence phrases covering every catalog required action."""
+    curated = {
+        # call-center / billing
+        'greet caller and identify intent': [
+            'thanks for calling', 'thank you for calling', 'how can i help', 'i can help with',
+            'what can i help', 'help with the billing address update',
+        ],
+        'verify account using at least two identifiers': [
+            'verify two details', 'verify two identifiers', 'two details', 'zip code and phone',
+            'date of birth', 'confirm your identity', 'verify your identity', 'verified identity',
+            'before i change the account, can you verify',
+        ],
+        'collect new billing address': [
+            'new billing address', 'what is the new address', 'what is the new billing address',
+            'billing address is', 'collect the new address',
+        ],
+        'confirm address update': [
+            'confirm the billing address update', 'confirm the address update', 'address has been updated',
+            'i have the new address and can confirm', 'confirm address update', 'confirmed the address',
+        ],
+        'explain next invoice impact': [
+            'next invoice should reflect', 'next billing cycle', 'invoice should reflect',
+            'updated billing address on the next', 'reflect the updated billing address',
+        ],
+        # call-center / outage
+        'acknowledge caller frustration': [
+            'i am sorry', "i'm sorry", 'i apologize', 'frustrating', 'i understand how frustrating',
+            'i understand your frustration',
+        ],
+        'check outage status': [
+            'check the outage status', 'check outage status', 'checked outage status', 'outage status',
+            'checked the outage', 'lookup outage',
+        ],
+        'create support ticket': [
+            'created a support ticket', 'created ticket', 'create ticket', 'create support ticket',
+            'opened a ticket', 'ticket abc', 'support ticket',
+        ],
+        'offer troubleshooting only if no area outage is active': [
+            'no active area outage', 'no area outage', 'walk through troubleshooting',
+            'troubleshooting with you', 'offer troubleshooting', 'if there is no active area outage',
+            'if there is no outage',
+        ],
+        'escalate to human agent on request': [
+            'escalate you to a human agent', 'escalate to a human agent', 'escalate to', 'escalated to',
+            'transfer you', 'human agent', 'representative',
+        ],
+        # call-center / interruption
+        'acknowledge caller interruption': [
+            'heard the correction', 'heard your interruption', 'go ahead', 'thanks for the correction',
+            'acknowledge the interruption',
+        ],
+        'restate corrected intent': [
+            'afternoon reschedule instead', 'you want the afternoon', 'instead of the original morning',
+            'corrected intent', 'afternoon instead of',
+        ],
+        'update appointment details': [
+            'updated the appointment details', 'update the appointment details', 'appointment details to the afternoon',
+            'updated appointment',
+        ],
+        'confirm corrected booking': [
+            'corrected afternoon booking is confirmed', 'booking is confirmed', 'corrected booking',
+            'afternoon booking is confirmed',
+        ],
+        'summarize next steps': [
+            'confirmation and next steps', 'next steps after this call', 'summarize next steps',
+            'you will receive the confirmation',
+        ],
+        # call-center / refund
+        'verify customer identity': [
+            'verify your customer identity', 'verify customer identity', 'verify your identity',
+            'customer identity before reviewing',
+        ],
+        'review cancellation date and billing history': [
+            'reviewed the cancellation date and billing history', 'cancellation date and billing history',
+            'review the cancellation date', 'billing history',
+        ],
+        'open refund review case': [
+            'opened a refund review case', 'open a refund review case', 'refund review case',
+        ],
+        'explain refund review timeline': [
+            'refund review timeline', 'review timeline is a few business days', 'timeline is a few business days',
+        ],
+        # fintech
+        'verify account identity': [
+            'verify account identity', 'verify your identity', 'verified your account identity',
+            'verified identity', 'confirm your identity',
+        ],
+        'capture transaction merchant and amount': [
+            'merchant and amount', 'transaction merchant', 'capture transaction', 'merchant was',
+            'amount was', 'transaction amount', 'captured the transaction merchant',
+        ],
+        'offer card freeze or block': [
+            'freeze the card', 'block the card', 'freeze or block', 'card freeze', 'offer to freeze',
+        ],
+        'file dispute or fraud case': [
+            'file dispute', 'fraud dispute', 'fraud case', 'dispute case', 'file a fraud', 'opened a dispute',
+        ],
+        'explain provisional review timeline': [
+            'provisional review', 'review timeline', 'provisional credit', 'timeline for review',
+            'explain the review timeline', 'provisional review timeline',
+        ],
+        'verify business account': [
+            'verify the business account', 'verify business account', 'business account first',
+        ],
+        'collect transfer amount and date': [
+            'transfer amount and date', 'what transfer amount and date', 'amount and date failed',
+            'payroll ach for',
+        ],
+        'explain failure reason without exposing sensitive bank data': [
+            'explain the failure reason', 'without exposing sensitive bank data', 'failure reason at a high level',
+            'non-sensitive explanation',
+        ],
+        'offer retry or payments support escalation': [
+            'offer a retry path', 'escalate this to payments support', 'retry path or escalate',
+            'payments support',
+        ],
+        'provide reference number': [
+            'reference number for the failed transfer', 'here is the reference number', 'reference number',
+        ],
+        # telehealth
+        'collect patient name and date of birth': [
+            'patient name and date of birth', 'name and date of birth',
+        ],
+        'ask about urgent symptoms': [
+            'urgent symptoms', 'chest pain or shortness of breath', 'are you having urgent symptoms',
+        ],
+        'schedule telehealth appointment': [
+            'schedule the telehealth appointment', 'schedule a telehealth appointment', 'telehealth appointment',
+        ],
+        'explain privacy consent': [
+            'privacy consent', 'secure telehealth workflow', 'privacy expectations',
+        ],
+        'avoid medical diagnosis': [
+            'cannot provide medical conclusions', 'not a diagnosis', 'no diagnosis', 'cannot diagnose',
+        ],
+        'verify patient identity': [
+            'verify your patient identity', 'verify patient identity', 'patient identity with your date of birth',
+        ],
+        'collect medication name': [
+            'what medication name', 'medication name do you need', 'medication name',
+        ],
+        'collect preferred pharmacy': [
+            'preferred pharmacy', 'which preferred pharmacy', 'pharmacy should we send',
+        ],
+        'route request to clinician review': [
+            'route the refill request to clinician review', 'route request to clinician',
+            'queued for clinician review', 'clinician review',
+        ],
+        'state refill timing expectations': [
+            'refill timing depends', 'timing expectations', 'update when it is processed',
+            'refill timing',
+        ],
+        # teaching
+        'ask learner to identify known values': [
+            'what known values', 'known values does the word problem', 'identify known values',
+        ],
+        'model equation setup': [
+            'set up the equation', 'setup the equation', 'equation from the rate', 'equation setup',
+        ],
+        'check understanding before solving': [
+            'before we solve', 'does that setup make sense', 'check understanding',
+        ],
+        'encourage learner reasoning': [
+            'talk through your reasoning', 'try the next step', 'your reasoning',
+        ],
+        'summarize the method': [
+            'the method is to identify', 'summarize the method', 'write the equation, then solve',
+        ],
+        'start restaurant role play': [
+            'start the restaurant role play', 'restaurant role play', 'i will be the server',
+        ],
+        'correct grammar kindly': [
+            'kinder correction', 'correct grammar', 'say it this way',
+        ],
+        'correct pronunciation or phrasing': [
+            'pronunciation', 'try saying the phrase again', 'improved phrasing',
+        ],
+        'ask learner to repeat improved phrase': [
+            'repeat the improved phrase', 'improved phrase once more',
+        ],
+        'assign focused practice': [
+            'for practice, repeat', 'focused practice', 'repeat that ordering phrase',
+        ],
+        # call-center / cancellation-rescue (optional ACC scenario)
+        'detect cancellation intent': [
+            'want to cancel', 'cancel my policy', 'cancellation request', 'cancellation intent',
+            'detect cancellation intent',
+        ],
+        'capture renewal increase reason': [
+            'renewal increase is too high', 'renewal increase', 'renewal-increase',
+            'capture renewal increase reason', 'renewal increase reason',
+        ],
+        'enter policy hold before retention action': [
+            'pausing for operator guidance', 'before discussing any retention', 'policy hold',
+            'stay within approved options', 'enter policy hold', 'policy hold entered',
+        ],
+        'record operator approval escalation or handoff': [
+            'approved safe follow-up', 'approved follow-up', 'operator guidance',
+            'operator approval', 'operator steer', 'human handoff',
+            'record operator approval escalation or handoff',
+        ],
+        'record final disposition': [
+            'keeping your cancellation request active', 'set up that approved follow-up',
+            'call wrapped', 'final disposition', 'record final disposition',
+        ],
     }
-    expanded = [phrase for word in words for phrase in phrases.get(word, [])]
-    content_words = [word for word in words if len(word) >= 5]
-    return expanded + content_words
+    phrases = list(curated.get(action, []))
+    tokens = _action_content_tokens(action)
+    if len(tokens) >= 2:
+        phrases.append(' '.join(tokens[:3]))
+        phrases.append(' '.join(tokens[-3:]))
+    return [phrase for phrase in phrases if phrase]
+
+
+def _transcript_has_token(normalized_transcript: str, token: str) -> bool:
+    variants = {token}
+    if token.endswith('y') and len(token) > 4:
+        variants.add(token[:-1] + 'ies')
+    if token.endswith('e'):
+        variants.add(token + 'd')
+        variants.add(token + 's')
+    else:
+        variants.add(token + 'ed')
+        variants.add(token + 's')
+        variants.add(token + 'ing')
+    if token.endswith('ed') and len(token) > 4:
+        variants.add(token[:-2])
+    if token.endswith('ing') and len(token) > 5:
+        variants.add(token[:-3])
+    return any(re.search(rf'(?<![a-z0-9]){re.escape(variant)}(?![a-z0-9])', normalized_transcript) for variant in variants)
 
 
 def _normalize(text: str) -> str:
-    return re.sub(r'\s+', ' ', text.lower()).strip()
+    # Treat snake_case event labels (e.g. policy_hold_entered) like natural phrase evidence.
+    lowered = text.lower().replace('_', ' ')
+    return re.sub(r'\s+', ' ', lowered).strip()
 
 
 def _contains(normalized_text: str, keyword: str) -> bool:
@@ -2621,7 +2921,7 @@ def _recommendations(completed_actions: list[str], forbidden_hits: list[dict[str
 
 
 def _simulated_transcript(scenario: BenchmarkScenario, agent_profile: str, include_failure: bool) -> str:
-    """Build a short User/Agent dialogue that still covers required-action keywords."""
+    """Build a short User/Agent dialogue that reads like a call, not a checklist."""
     agent_name = agent_profile.strip() or 'mock text agent'
     actions = list(scenario['required_actions'])
     if include_failure and actions:
@@ -2629,7 +2929,7 @@ def _simulated_transcript(scenario: BenchmarkScenario, agent_profile: str, inclu
 
     lines = [f'User: {_simulated_user_opener(scenario)}']
     for index, action in enumerate(actions):
-        lines.append(f'Agent ({agent_name}): {_simulated_agent_turn(action)}')
+        lines.append(f'Agent ({agent_name}): {_simulated_agent_turn(action, scenario)}')
         if index < len(actions) - 1:
             lines.append(f'User: {_simulated_user_turn(action)}')
 
@@ -2646,47 +2946,133 @@ def _simulated_transcript(scenario: BenchmarkScenario, agent_profile: str, inclu
 
 
 def _simulated_user_opener(scenario: BenchmarkScenario) -> str:
+    openers = {
+        'billing-address-change': 'Hi, I moved recently and need to update my billing address before the next invoice.',
+        'angry-outage-escalation': 'My internet has gone down twice this week, and I need this fixed.',
+        'interruption-correction-handling': 'I need to reschedule my appointment. Actually, I may need to correct the time.',
+        'refund-policy-boundary': 'I cancelled and was billed anyway, so I need help with a refund review.',
+        'new-patient-triage': 'I have a persistent cough and would like a same-day telehealth visit.',
+        'medication-refill-routing': 'I am almost out of my medication and need help with a refill.',
+        'algebra-word-problem': 'I am stuck on this rate word problem and need help setting it up.',
+        'language-practice-feedback': 'I want to practice ordering at a restaurant in Spanish.',
+        'suspicious-card-charge': 'I see a suspicious card charge and I am worried my card was compromised.',
+        'failed-ach-transfer': 'My payroll ACH transfer failed, and I need to know what to do next.',
+        'cancellation-rescue': 'I want to cancel my policy today because the renewal increase is too high.',
+    }
+    scenario_id = str(scenario.get('id') or '')
+    if scenario_id in openers:
+        return openers[scenario_id]
+
     persona = str(scenario.get('persona') or '').strip()
     if persona:
         lowered = persona.lower()
-        if lowered.startswith(('a ', 'an ')):
-            rest = persona.split(' ', 1)[1]
-            article = 'an' if lowered.startswith('an ') else 'a'
-            return f"Hi, I'm {article} {rest}"
+        if ' who ' in lowered:
+            _, request = re.split(r'\bwho\b', persona, maxsplit=1, flags=re.IGNORECASE)
+            request = request.strip().rstrip('.')
+            request = re.sub(r'\bwants\b', 'want', request, flags=re.IGNORECASE)
+            request = re.sub(r'\bexpects\b', 'need', request, flags=re.IGNORECASE)
+            return f'Hi, I {request}.'
         return f'Hi — {persona}'
     goal = str(scenario.get('goal') or '').strip()
     return f'Hi, I need help{": " + goal if goal else "."}'
 
 
-def _simulated_agent_turn(action: str) -> str:
-    """Keep the required-action phrase intact so deterministic matching still works."""
+def _simulated_agent_turn(action: str, scenario: BenchmarkScenario | None = None) -> str:
+    """Use caller-facing phrasing; action trace carries the exact requirement labels."""
     text = action.strip()
     lowered = text.lower()
+    exact_turns = {
+        'greet caller and identify intent': 'Thanks for calling. I can help with the billing address update.',
+        'verify account using at least two identifiers': 'Before I change the account, can you verify two details, like ZIP code and phone number?',
+        'collect new billing address': 'Thanks. What is the new billing address?',
+        'confirm address update': 'I have the new address and can confirm the billing address update.',
+        'explain next invoice impact': 'The next invoice should reflect the updated billing address on the next billing cycle.',
+        'acknowledge caller frustration': 'I am sorry this keeps happening. I understand how frustrating repeated outages are.',
+        'check outage status': 'Let me check the outage status for your area.',
+        'create support ticket': 'I created a support ticket so there is a reference for this issue.',
+        'offer troubleshooting only if no area outage is active': 'If there is no active area outage, I can walk through troubleshooting with you.',
+        'escalate to human agent on request': 'I can escalate you to a human agent now.',
+        'acknowledge caller interruption': 'Go ahead. I heard the correction and I will use the updated request.',
+        'restate corrected intent': 'You want the afternoon reschedule instead of the original morning appointment.',
+        'update appointment details': 'I updated the appointment details to the afternoon time.',
+        'confirm corrected booking': 'The corrected afternoon booking is confirmed.',
+        'summarize next steps': 'You will receive the confirmation and next steps after this call.',
+        'verify customer identity': 'I need to verify your customer identity before reviewing billing details.',
+        'review cancellation date and billing history': 'I reviewed the cancellation date and billing history.',
+        'open refund review case': 'I opened a refund review case for the charge.',
+        'explain refund review timeline': 'The refund review timeline is a few business days, and the case will track the decision.',
+        'collect patient name and date of birth': 'Can I have the patient name and date of birth?',
+        'ask about urgent symptoms': 'Are you having urgent symptoms like chest pain or shortness of breath?',
+        'schedule telehealth appointment': 'I can schedule the telehealth appointment for you.',
+        'explain privacy consent': 'This visit uses a secure telehealth workflow, and I need your privacy consent to continue.',
+        'avoid medical diagnosis': 'I cannot provide medical conclusions here, but I can route this to clinician review.',
+        'verify patient identity': 'Can you verify your patient identity with your date of birth?',
+        'collect medication name': 'What medication name do you need refilled?',
+        'collect preferred pharmacy': 'Which preferred pharmacy should we send to the clinician for review?',
+        'route request to clinician review': 'I will route the refill request to clinician review.',
+        'state refill timing expectations': 'Refill timing depends on clinician review, and you will get an update when it is processed.',
+        'ask learner to identify known values': 'What known values does the word problem give you?',
+        'model equation setup': 'Let us set up the equation from the rate and time information.',
+        'check understanding before solving': 'Before we solve it, does that setup make sense?',
+        'encourage learner reasoning': 'Try the next step and talk through your reasoning.',
+        'summarize the method': 'The method is to identify the values, write the equation, then solve step by step.',
+        'start restaurant role play': 'Let us start the restaurant role play. I will be the server.',
+        'correct grammar kindly': 'That was close. A kinder correction is to say it this way.',
+        'correct pronunciation or phrasing': 'Try saying the phrase again with this pronunciation.',
+        'ask learner to repeat improved phrase': 'Please repeat the improved phrase once more.',
+        'assign focused practice': 'For practice, repeat that ordering phrase three times before the next session.',
+        'verify account identity': 'I need to verify the account identity before changing card controls.',
+        'capture transaction merchant and amount': 'What merchant and amount do you see for the transaction?',
+        'offer card freeze or block': 'I can freeze or block the card while the charge is reviewed.',
+        'file dispute or fraud case': 'I filed a dispute or fraud case for that transaction.',
+        'explain provisional review timeline': 'The provisional review timeline will be tracked on the case.',
+        'verify business account': 'I need to verify the business account first.',
+        'collect transfer amount and date': 'What transfer amount and date failed?',
+        'explain failure reason without exposing sensitive bank data': 'I can explain the failure reason at a high level without exposing sensitive bank data.',
+        'offer retry or payments support escalation': 'I can offer a retry path or escalate this to payments support.',
+        'provide reference number': 'Here is the reference number for the failed transfer case.',
+        'detect cancellation intent': 'I can help with the cancellation request. What changed for you?',
+        'capture renewal increase reason': 'I captured that the renewal increase is too high as the reason.',
+        'enter policy hold before retention action': (
+            'I want to stay within approved options, so I am pausing for operator guidance '
+            'before discussing any retention path.'
+        ),
+        'record operator approval escalation or handoff': (
+            'I recorded the operator approval for an approved safe follow-up path.'
+        ),
+        'record final disposition': (
+            'I can set up that approved follow-up while keeping your cancellation request active.'
+        ),
+    }
+    if lowered in exact_turns:
+        return exact_turns[lowered]
     if lowered.startswith('greet'):
-        return f"Hello — I'll {text}."
+        return 'Hello, thanks for calling. What can I help with today?'
     if lowered.startswith('verify'):
-        return f"I can help. First I'll {text}. Can you confirm a couple details?"
+        return 'I can help. Can you verify a couple account details first?'
     if lowered.startswith(('collect', 'capture')):
-        return f"Thanks. I'll {text} — go ahead."
+        return f'Thanks. What {text.split(" ", 1)[1] if " " in text else "details"} should I use?'
     if lowered.startswith('confirm'):
-        return f"I'll {text} before we finish."
+        return 'I have that confirmed before we finish.'
     if lowered.startswith('offer'):
-        return f"I can also {text}. Want me to?"
+        return 'I can offer that option if you want to continue.'
     if lowered.startswith(('file', 'create')):
-        return f"I'll {text} and share what happens next."
+        return 'I created the case and will share what happens next.'
     if lowered.startswith('explain'):
-        return f"I'll {text} so expectations are clear."
+        return 'Here is what happens next and the timing to expect.'
     if lowered.startswith(('route', 'escalate', 'transfer')):
-        return f"I'll {text} from here."
+        return 'I can route this to the right team from here.'
     if lowered.startswith(('acknowledge', 'apologize')):
-        return f"I hear you — I'll {text}."
+        return 'I hear you, and I am sorry this has been frustrating.'
     if lowered.startswith(('check', 'lookup', 'provide', 'start', 'correct', 'assign', 'schedule', 'ask', 'state')):
-        return f"Okay — I'll {text}."
-    return f"Okay — I'll {text}."
+        return 'Okay, I can help with that next step.'
+    return 'Okay, I can help with that.'
 
 
 def _simulated_user_turn(action: str) -> str:
     lowered = action.lower()
+    if lowered.startswith('greet') or 'identify intent' in lowered:
+        return 'I need help with my account.'
     if 'identity' in lowered or lowered.startswith('verify'):
         return 'Sure — ZIP 94107, phone ending 4421.'
     if 'transfer' in lowered or 'ach' in lowered:
@@ -2715,7 +3101,7 @@ def _simulated_user_turn(action: str) -> str:
         return 'Please escalate if it is not fixed soon.'
     if 'interrupt' in lowered or 'correction' in lowered:
         return 'Sorry to interrupt — I meant afternoon, not morning.'
-    return 'Okay, continue.'
+    return 'That works.'
 
 
 def _simulated_action_trace(scenario: BenchmarkScenario, include_failure: bool) -> list[dict[str, Any]]:

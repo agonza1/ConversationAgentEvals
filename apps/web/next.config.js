@@ -9,8 +9,8 @@ const productionFlag = process.env.PRODUCTION === 'true' || process.env.NEXT_PUB
 
 const nextConfig = {
   // Keep the long-running dev compiler isolated from production build artifacts.
-  // `npm run build:web` clears `.next`; sharing that directory used to strand the
-  // dev server with missing manifests and make localhost return 500 until restart.
+  // Local validation builds use `.next-build`; sharing or deleting the default
+  // `.next` cache can strand the dev server with missing manifests until restart.
   distDir: process.env.NEXT_DIST_DIR || '.next',
   typedRoutes: true,
   // Local demos often open either localhost or 127.0.0.1; without this, Next 15 can

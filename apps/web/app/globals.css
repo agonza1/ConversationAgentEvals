@@ -859,12 +859,17 @@ select {
   .top-nav {
     align-items: flex-start;
     flex-direction: column;
+    gap: 8px;
   }
 
   .top-nav div {
     width: 100%;
     flex-flow: row wrap;
-    gap: 10px 16px;
+    gap: 4px 10px;
+  }
+
+  .top-nav a {
+    font-size: 12px;
   }
 
   .saas-hero h1 {
@@ -1221,6 +1226,80 @@ select {
   gap: 12px;
 }
 
+.voice-target-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.75fr) minmax(0, 1fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.voice-target-select,
+.voice-target-summary {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  padding: 14px;
+}
+
+.voice-target-select span,
+.voice-target-summary span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.voice-target-select select {
+  min-height: 42px;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 0 10px;
+  color: var(--text);
+  font: inherit;
+  font-weight: 750;
+}
+
+.voice-target-summary {
+  background: var(--panel-alt);
+}
+
+.voice-target-summary strong {
+  font-size: 18px;
+}
+
+.voice-target-summary p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.voice-inline-link {
+  width: fit-content;
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  padding: 6px 10px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 850;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.voice-inline-link:hover {
+  border-color: rgba(15, 118, 110, 0.35);
+  background: #f3fbf8;
+}
+
 .voice-mode-option {
   display: grid;
   grid-template-columns: 24px minmax(0, 1fr);
@@ -1339,6 +1418,77 @@ select {
   box-shadow: none;
 }
 
+.voice-readiness-panel {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-alt);
+  padding: 16px;
+}
+
+.voice-readiness-panel > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.voice-readiness-panel > div:first-child strong {
+  font-size: 16px;
+}
+
+.voice-readiness-panel dl {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.voice-readiness-panel dl div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
+}
+
+.voice-readiness-panel dl div::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.voice-readiness-panel dl div[data-state="ready"]::before {
+  background: var(--success-text);
+}
+
+.voice-readiness-panel dl div[data-state="warn"]::before {
+  background: #b45309;
+}
+
+.voice-readiness-panel dl div[data-state="blocked"]::before {
+  background: #64748b;
+}
+
+.voice-readiness-panel dt {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1.25;
+  text-transform: uppercase;
+}
+
+.voice-readiness-panel dd {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
 .voice-error {
   display: grid;
   gap: 3px;
@@ -1404,8 +1554,9 @@ select {
 
 .voice-run-meta {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 18px;
+  align-items: end;
 }
 
 .voice-run-meta div {
@@ -1413,7 +1564,7 @@ select {
   gap: 3px;
 }
 
-.voice-run-meta div:last-child {
+.voice-run-meta div:nth-child(2) {
   text-align: right;
 }
 
@@ -1552,14 +1703,16 @@ select {
   }
 
   .top-nav a:not(.brand) {
-    min-height: 40px;
+    min-height: 28px;
     display: inline-flex;
     align-items: center;
-    padding: 7px 0;
+    padding: 2px 0;
   }
 
   .voice-mode-grid,
-  .voice-scenario-facts {
+  .voice-scenario-facts,
+  .voice-target-grid,
+  .voice-readiness-panel dl {
     grid-template-columns: 1fr;
   }
 
@@ -1593,7 +1746,7 @@ select {
     grid-template-columns: 1fr;
   }
 
-  .voice-run-meta div:last-child {
+  .voice-run-meta div:nth-child(2) {
     text-align: left;
   }
 }
