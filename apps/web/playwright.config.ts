@@ -1,10 +1,13 @@
 import { defineConfig } from '@playwright/test';
 
-const port = Number(process.env.PLAYWRIGHT_WEB_PORT ?? process.env.PORT ?? 3412);
+const port = Number(process.env.PLAYWRIGHT_WEB_PORT ?? process.env.PORT ?? 3012);
 const apiPort = Number(process.env.PLAYWRIGHT_API_PORT ?? process.env.API_PORT ?? 8425);
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${port}`;
 const apiBase = process.env.PLAYWRIGHT_API_BASE_URL ?? `http://127.0.0.1:${apiPort}`;
-const reuseExistingServer = process.env.PLAYWRIGHT_REUSE_EXISTING_SERVER === '1';
+// Reuse the canonical local dev stack by default. CI has no server on this port,
+// so Playwright still starts an isolated production server there. This prevents
+// local test builds from replacing .next while `npm run dev` is using it.
+const reuseExistingServer = process.env.PLAYWRIGHT_REUSE_EXISTING_SERVER !== '0';
 
 export default defineConfig({
   testDir: './tests',
