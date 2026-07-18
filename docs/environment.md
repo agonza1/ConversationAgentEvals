@@ -87,10 +87,15 @@ it to both processes when the variable is absent. Managed or separately started
 processes must set the same non-empty value explicitly; it is never included in run
 artifacts or provenance.
 
-When Pipecat runs in the Compose `voice` profile and rtc-asr runs on the host, use the host-reachable base URL:
+When the API and Pipecat run in the Compose `voice` profile while rtc-asr and
+Kokoro run on the host, give both containers host-reachable service URLs and the
+same non-empty internal token:
 
 ```bash
-RTC_ASR_BASE_URL=http://host.docker.internal:8000 docker compose --profile voice up --build
+RTC_ASR_BASE_URL=http://host.docker.internal:8000 \
+KOKORO_BASE_URL=http://host.docker.internal:8880 \
+REFERENCE_AGENT_INTERNAL_TOKEN=replace-with-a-random-local-token \
+docker compose --profile voice up --build
 ```
 
 When `RTC_ASR_BASE_URL` is empty or unhealthy, live session startup records ASR as `not_configured` or `unavailable` and logs a `rtc_asr_skipped` event. The `/sessions/{id}/ask` transcript loop remains non-production demo support, not the ASR provider contract.
