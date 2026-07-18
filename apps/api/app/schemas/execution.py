@@ -44,7 +44,7 @@ class ExecutionRunCreateRequest(BaseModel):
                 self.tester_id = 'pipecat_tester'
             elif self.tester_id != 'pipecat_tester':
                 raise ValueError('pipecat_webrtc mode requires tester_id=pipecat_tester')
-            if 'executor_id' not in self.model_fields_set:
+            if 'executor_id' not in self.model_fields_set or self.executor_id == 'local_async_runner':
                 self.executor_id = 'cae_local_audio_loop'
             elif self.executor_id != 'cae_local_audio_loop':
                 raise ValueError('pipecat_webrtc mode requires executor_id=cae_local_audio_loop')
