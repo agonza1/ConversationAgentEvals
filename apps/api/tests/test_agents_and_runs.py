@@ -268,6 +268,28 @@ def test_builtin_sample_voice_agent_run_uses_local_audio_loop_provenance():
         assert isinstance(conversation['timeline'], list)
 
 
+def test_saved_voice_agent_ignores_serialized_request_placeholders():
+    queued = start_execution_run(
+        ExecutionRunCreateRequest(
+            suite_id='call-center-voice-ai',
+            scenario_ids=['cancellation-rescue'],
+            agent_id='acc-voice-fixture-agent',
+            mode='text_callable',
+            tester_id='scenario_simulator',
+            executor_id='local_async_runner',
+            audio_transport='none',
+            user_id='agent-runs-user',
+            project_id='agent-runs-project',
+            iterations=1,
+        )
+    )
+
+    assert queued['mode'] == 'pipecat_webrtc'
+    assert queued['tester_id'] == 'pipecat_tester'
+    assert queued['executor_id'] == 'cae_local_audio_loop'
+    assert queued['execution_snapshot']['request']['audio_transport'] == 'pipecat_small_webrtc'
+
+
 def test_acc_readiness_does_not_overclaim_cae_executor_availability(monkeypatch):
     blocked = client.post(
         '/api/agents',

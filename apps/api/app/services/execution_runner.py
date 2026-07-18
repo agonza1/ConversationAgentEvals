@@ -318,9 +318,19 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
         raise ValueError(f'Unknown agent: {payload.agent_id}')
     target = str(agent.get('target') or 'mock_agent')
     defaults = execution_defaults_for_target(target)
+    request_placeholders = {
+        'mode': 'text_callable',
+        'tester_id': 'scenario_simulator',
+        'executor_id': 'local_async_runner',
+        'audio_transport': 'none',
+    }
+    # Generated clients and forms commonly serialize every request default.
+    # Treat those placeholder values like omitted fields so the saved target's
+    # execution defaults remain authoritative; non-default values still opt in
+    # to the advanced per-run override behavior.
     explicit_execution = any(
-        field in payload.model_fields_set
-        for field in ('mode', 'tester_id', 'executor_id', 'audio_transport')
+        field in payload.model_fields_set and getattr(payload, field) != placeholder
+        for field, placeholder in request_placeholders.items()
     )
     mode = payload.mode if explicit_execution else defaults.mode
     tester_id = payload.tester_id if explicit_execution else defaults.tester_id
