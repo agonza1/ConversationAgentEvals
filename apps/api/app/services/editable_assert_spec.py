@@ -19,7 +19,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.entities import EditableAssertSpecVersion, ProductProject
+from app.models.entities import EditableAssertSpecVersion, ProductProject, ProductWorkspaceMember
 from app.services.llm_providers import get_provider
 from app.services.ssl_util import verified_ssl_context
 
@@ -295,12 +295,15 @@ def save_spec(*, db: Session, user_id: str, project_id: str, spec: EditableAsser
 
 
 def get_spec(db: Session, spec_id: str, *, user_id: str, project_id: str) -> SavedEditableAssertSpec | None:
+    visible_projects = _visible_projects(db, user_id=user_id, project_id=project_id)
+    project_ids = [project.id for project in visible_projects]
+    if not project_ids:
+        return None
     row = (
         db.query(EditableAssertSpecVersion, ProductProject)
         .join(ProductProject, ProductProject.id == EditableAssertSpecVersion.project_id)
         .filter(
-            ProductProject.user_id == user_id,
-            ProductProject.project_key == project_id,
+            ProductProject.id.in_(project_ids),
             EditableAssertSpecVersion.spec_key == spec_id,
         )
         .order_by(EditableAssertSpecVersion.version.desc())
@@ -313,7 +316,10 @@ def export_saved_spec(db: Session, spec_id: str, *, user_id: str, project_id: st
     saved = get_spec(db, spec_id, user_id=user_id, project_id=project_id)
     if saved is None:
         return None
-    return saved.yaml if format == 'yaml' else preview_spec(saved.spec).json_preview
+    if format == 'yaml':
+        return saved.yaml
+    persisted = yaml.safe_load(saved.yaml)
+    return persisted if isinstance(persisted, dict) else None
 
 
 def _with_defaults(spec: EditableAssertSpec) -> EditableAssertSpec:
@@ -444,11 +450,8 @@ def _coerce_max_turns(value: Any) -> int | None:
 
 
 def _resolve_project(db: Session, *, user_id: str, project_id: str) -> ProductProject:
-    project = (
-        db.query(ProductProject)
-        .filter(ProductProject.user_id == user_id, ProductProject.project_key == project_id)
-        .first()
-    )
+    visible = _visible_projects(db, user_id=user_id, project_id=project_id)
+    project = next((item for item in visible if item.user_id == user_id), None) or (visible[0] if visible else None)
     if project is None:
         project = ProductProject(user_id=user_id, project_key=project_id, name=project_id.replace('-', ' ').title() or 'Default Project')
         db.add(project)
@@ -462,6 +465,21 @@ def _resolve_project(db: Session, *, user_id: str, project_id: str) -> ProductPr
                 .one()
             )
     return project
+
+
+def _visible_projects(db: Session, *, user_id: str, project_id: str) -> list[ProductProject]:
+    workspace_ids = [
+        workspace_id
+        for (workspace_id,) in db.query(ProductWorkspaceMember.workspace_id)
+        .filter(ProductWorkspaceMember.user_id == user_id)
+        .all()
+    ]
+    query = db.query(ProductProject).filter(ProductProject.project_key == project_id)
+    if workspace_ids:
+        query = query.filter((ProductProject.user_id == user_id) | ProductProject.workspace_id.in_(workspace_ids))
+    else:
+        query = query.filter(ProductProject.user_id == user_id)
+    return query.order_by(ProductProject.created_at.asc()).all()
 
 
 def _spec_lock(project_id: str, spec_id: str) -> threading.Lock:

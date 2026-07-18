@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.db.database import SessionLocal
 from app.main import app
-from app.models.entities import EditableAssertSpecVersion, ProductProject
+from app.models.entities import EditableAssertSpecVersion, ProductProject, ProductWorkspace, ProductWorkspaceMember
 from app.services.editable_assert_spec import EditableAssertSpec, save_spec
 from app.services.llm_providers import set_provider_for_tests
 
@@ -208,6 +208,50 @@ def test_saved_specs_are_scoped_by_owner_and_project():
     assert other_owner_export.status_code == 200
     assert 'other owner evidence' in other_owner_export.text
     assert 'owner scoped evidence' not in other_owner_export.text
+
+
+def test_workspace_members_share_the_same_project_spec_history():
+    suffix = uuid4().hex
+    owner_id = f'workspace-owner-{suffix}'
+    member_id = f'workspace-member-{suffix}'
+    project_key = f'shared-project-{suffix}'
+    with SessionLocal() as db:
+        workspace = ProductWorkspace(owner_user_id=owner_id, workspace_key=f'workspace-{suffix}', name='Shared workspace')
+        db.add(workspace)
+        db.flush()
+        db.add_all([
+            ProductWorkspaceMember(workspace_id=workspace.id, user_id=owner_id, role='owner'),
+            ProductWorkspaceMember(workspace_id=workspace.id, user_id=member_id, role='editor'),
+        ])
+        project = ProductProject(user_id=owner_id, workspace_id=workspace.id, project_key=project_key, name='Shared project')
+        db.add(project)
+        db.commit()
+
+    first = client.post('/api/specs', json={'user_id': owner_id, 'project_id': project_key, 'spec': _valid_spec()})
+    visible = client.get('/api/specs/cancellation-rescue-agent', params={'user_id': member_id, 'project_id': project_key})
+    second = client.post('/api/specs', json={'user_id': member_id, 'project_id': project_key, 'spec': _valid_spec(objective='Shared member edit remains in the workspace history.')})
+
+    assert first.status_code == 200
+    assert visible.status_code == 200
+    assert second.status_code == 200
+    assert second.json()['version'] == 2
+    with SessionLocal() as db:
+        assert db.query(ProductProject).filter(ProductProject.project_key == project_key).count() == 1
+
+
+def test_json_export_uses_the_immutable_persisted_config(monkeypatch):
+    suffix = uuid4().hex
+    user_id = f'export-user-{suffix}'
+    project_id = f'export-project-{suffix}'
+    monkeypatch.setenv('ASSERT_DEFAULT_MODEL', 'openai/saved-model')
+    saved = client.post('/api/specs', json={'user_id': user_id, 'project_id': project_id, 'spec': _valid_spec()})
+    assert saved.status_code == 200
+    monkeypatch.setenv('ASSERT_DEFAULT_MODEL', 'openai/new-environment-model')
+
+    exported = client.get('/api/specs/cancellation-rescue-agent/export', params={'user_id': user_id, 'project_id': project_id, 'format': 'json'})
+
+    assert exported.status_code == 200
+    assert exported.json()['default_model']['name'] == 'openai/saved-model'
 
 
 def test_preview_quotes_yaml_scalars_that_look_like_list_markers():
