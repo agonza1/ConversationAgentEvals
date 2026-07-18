@@ -2,11 +2,11 @@
 
 Open-source QA and regression testing for voice and conversation agents, powered by [ASSERT](https://github.com/responsibleai/ASSERT).
 
-ConversationAgentEvals is an application and workflow wrapper around ASSERT. ASSERT owns the evaluation core: specifications, scenarios, runtime orchestration, judging, scoring, failure taxonomy, and portable artifacts. This repository adds the product layer around that core: evidence ingestion, projects and runs, queue lifecycle, persistence, reports, exports, and deployment.
+ConversationAgentEvals is an application and workflow wrapper around ASSERT-compatible contracts. ASSERT defines the upstream specification, scenario, failure-taxonomy, and portable-artifact model. This repository currently provides the standalone evaluation implementation as well as the product layer around it: target execution, evidence ingestion, projects and runs, queue lifecycle, persistence, reports, exports, and deployment. The ASSERT boundary keeps that local runtime replaceable by an external engine without changing product-facing contracts.
 
 **ConversationAgentEvals is independently installable, testable, and usable.** Its built-in benchmark suites, evidence APIs, ASSERT boundary, reports, exports, and saved-run workflows do not require Agentic Contact Center or another target repository. External systems are optional target adapters and examples, never runtime dependencies of the core product.
 
-There is one product and one supported evaluation path. Historical product variants and the former local evaluator are not supported.
+There is one product and one supported evaluation contract. Users can either run a configured agent to produce current-run evidence or submit existing evidence from an outside system; both paths converge on the same normalization, evaluation, artifact, and reporting workflow.
 
 ## All voice-agent reliability projects
 
@@ -22,13 +22,13 @@ flowchart LR
   CAE["ConversationAgentEvals<br/>Test orchestration + evidence"]
   ACC["Agentic Contact Center<br/>Reference target"]
   ASR["rtc-asr<br/>Optional local STT"]
-  ASSERT["ASSERT<br/>Evaluation engine"]
+  ASSERT["ASSERT<br/>Upstream evaluation model"]
 
-  CAE -->|"test scenarios"| ACC
-  ACC -->|"proof bundle"| CAE
-  ACC -->|"audio"| ASR
-  ASR -->|"transcripts"| ACC
-  CAE -->|"canonical evaluation"| ASSERT
+  CAE -. "optional test execution" .-> ACC
+  ACC -. "evidence + proof bundles" .-> CAE
+  CAE -. "optional voice transcription" .-> ASR
+  ASR -. "transcripts" .-> CAE
+  ASSERT -->|"specification + artifact conventions"| CAE
 ```
 
 ## Acknowledgment
@@ -46,7 +46,7 @@ flowchart LR
 - An opt-in `openai_codex` text target that uses connected local Codex OAuth to record a real model response. It does not invent tool events or completed-task state, so reports honestly show missing live-tool evidence.
 - A built-in generalist reference target: Pipecat tester audio → separate Pipecat agent → rtc-asr → configured OpenAI-compatible/Codex LLM → Kokoro → current-run evaluation and vCon evidence. This local synthetic-media proof is not browser, SIP, or PSTN validation.
 
-ASSERT artifacts remain the canonical evaluation results. The application database stores product metadata and indexes; it does not replace ASSERT's result model.
+Evaluation artifacts that conform to the ASSERT boundary remain the canonical results. The application database stores product metadata and indexes; it does not replace the evaluation result model.
 
 ## Local development
 
@@ -108,13 +108,17 @@ npm run test:voice-lab-proof:acc
 
 ```mermaid
 flowchart LR
-  Inputs["Requests + evidence"] --> Platform["ConversationAgentEvals wrapper"]
-  Platform --> Core["ASSERT core"]
-  Core --> Artifacts["Canonical ASSERT artifacts"]
-  Platform --> Metadata["Platform metadata + indexes"]
+  Scenario["Scenario + configured target"] --> Execute["Tester + executor"]
+  Execute --> CurrentEvidence["Current-run evidence"]
+  ExistingEvidence["Existing external evidence"] --> Normalize["Evidence normalization"]
+  CurrentEvidence --> Normalize
+  Normalize --> Evaluate["ASSERT-compatible evaluation boundary"]
+  Evaluate --> Artifacts["Canonical evaluation artifacts"]
+  Normalize --> Metadata["Platform metadata + indexes"]
   Artifacts --> Reports["Reports + exports"]
   Metadata --> Reports
-  OptionalTargets["Optional external targets"] -. evidence .-> Inputs
+  OptionalTargets["Optional external targets"] -. "target adapter" .-> Execute
+  ASSERT["Upstream ASSERT model"] -. "contract conventions" .-> Evaluate
 ```
 
 Core ownership:
@@ -132,7 +136,7 @@ Canonical ASSERT wrapper anchors:
 - [apps/api/app/services/assert_queue_lifecycle.py](apps/api/app/services/assert_queue_lifecycle.py)
 - [docs/assert-boundary-and-schemas.md](docs/assert-boundary-and-schemas.md)
 
-The local sidecar endpoint is `POST /api/assert/runs`; completed manifests use `local-artifact://assert/runs/{run_id}/manifest.json`.
+The primary checked-in runtime evaluates through the local ASSERT-compatible boundary in [apps/api/app/services/benchmark_service.py](apps/api/app/services/benchmark_service.py). The optional `POST /api/assert/runs` endpoint is a synthetic local sidecar adapter used to exercise the same contract. Completed canonical manifests use `local-artifact://assert/runs/{run_id}/manifest.json`.
 
 ## Docker
 
