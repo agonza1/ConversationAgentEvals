@@ -193,3 +193,29 @@ test('deleting a check does not transfer removed metadata to the surviving check
     { id: 'kept-check', label: 'Keep me', description: 'Metadata that belongs to the survivor.', severity: 'info', draft: false },
   ]);
 });
+
+test('save completion does not overwrite edits made while the request is in flight', async ({ page }) => {
+  let releaseSave: (() => void) | null = null;
+  let markSaveStarted: (() => void) | null = null;
+  const saveStarted = new Promise<void>((resolve) => { markSaveStarted = resolve; });
+  await page.route('**/api/specs/templates', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ templates: [] }) }));
+  await page.route('**/api/specs/preview', async (route) => {
+    const spec = JSON.parse(route.request().postData() || '{}').spec;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ valid: true, errors: [], warnings: [], normalized: spec, yaml: 'suite: stale-save\npipeline:\n  systematize: {}\n', json_preview: {}, export_filename: 'stale-save.eval_config.yaml', assert_validator: 'assert-ai', assert_validated: true }) });
+  });
+  await page.route('**/api/specs', async (route) => {
+    const body = JSON.parse(route.request().postData() || '{}');
+    markSaveStarted?.();
+    await new Promise<void>((resolve) => { releaseSave = resolve; });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'stale-save', version: 1, user_id: body.user_id, project_id: body.project_id, created_at: '2026-07-18T20:00:00Z', updated_at: '2026-07-18T20:00:00Z', spec: { ...body.spec, id: 'stale-save', version: 1 }, yaml: 'suite: stale-save\n' }) });
+  });
+
+  await page.goto('/specs/new?api_base=http%3A%2F%2Fapi.example.test');
+  await page.getByRole('button', { name: 'Save version' }).click();
+  await saveStarted;
+  await page.getByRole('textbox', { name: 'Objective', exact: true }).fill('This newer objective must survive the older save response.');
+  releaseSave?.();
+
+  await expect(page.getByText(/Saved `stale-save` version 1/)).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Objective', exact: true })).toHaveValue('This newer objective must survive the older save response.');
+});

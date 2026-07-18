@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { SiteNav } from '@/components/SiteNav';
 import {
@@ -136,6 +136,10 @@ export function SpecEditorPage() {
       judges: [{ ...(spec.judges?.[0] || defaultJudge), rubric: judgeRubric.trim() || defaultJudge.rubric }],
     };
   }, [deterministicChecks, evidenceRequirements, failureChecks, generatedApproved, judgeRubric, scenarioSeeds, scenarios, spec, successChecks]);
+  const latestWorkingSpec = useRef(workingSpec);
+  useEffect(() => {
+    latestWorkingSpec.current = workingSpec;
+  }, [workingSpec]);
   const needsApproval = workingSpec.generated_content_status === 'draft' && !generatedApproved;
 
   useEffect(() => {
@@ -220,17 +224,20 @@ export function SpecEditorPage() {
   }
 
   async function saveVersion() {
+    const submittedSpec = workingSpec;
     setBusy('save');
     setError(null);
     try {
       const next = await saveEditableAssertSpec({
         user_id: identity.userId,
         project_id: identity.projectId,
-        spec: workingSpec,
+        spec: submittedSpec,
       });
       setSaved(next);
-      setSpec(next.spec);
-      setGeneratedApproved(next.spec.generated_content_status !== 'draft');
+      if (latestWorkingSpec.current === submittedSpec) {
+        setSpec(next.spec);
+        setGeneratedApproved(next.spec.generated_content_status !== 'draft');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not save spec');
     } finally {

@@ -393,16 +393,16 @@ def _compile_assert_config(spec: EditableAssertSpec) -> dict[str, Any]:
             'tester': {'model': {'name': str(spec.runtime_overrides.get('tester_model') or model_name)}},
             'max_turns': _coerce_max_turns(spec.runtime_overrides.get('max_turns')) or 10,
         }
-        judge = spec.judges[0]
-        pipeline['judge'] = {
-            'model': {'name': judge.model or model_name},
-            'dimensions': {
-                _slug(judge.id): {
-                    'description': judge.name,
-                    'rubric': judge.rubric,
-                }
-            },
-        }
+    judge = spec.judges[0]
+    pipeline['judge'] = {
+        'model': {'name': judge.model or model_name},
+        'dimensions': {
+            _slug(judge.id): {
+                'description': judge.name,
+                'rubric': judge.rubric,
+            }
+        },
+    }
 
     return {
         'suite': _slug(spec.id or spec.title),
