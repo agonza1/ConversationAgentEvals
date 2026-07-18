@@ -313,9 +313,9 @@ def _execution_target(
 
 
 def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCreateRequest:
-    model_name = (payload.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
     if not payload.agent_id:
         target = _execution_target(payload)
+        model_name = _execution_model_name(payload, target=target)
         assert_execution_compatible(
             agent_target=target,
             mode=payload.mode,
@@ -328,6 +328,7 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
     if agent is None:
         raise ValueError(f'Unknown agent: {payload.agent_id}')
     target = _execution_target(payload, agent)
+    model_name = _execution_model_name(payload, target=target)
     defaults = execution_defaults_for_target(target)
     request_placeholders = {
         'mode': 'text_callable',
@@ -373,6 +374,15 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
         'agent_id': agent['id'],
         'model_name': model_name,
     })
+
+
+def _execution_model_name(payload: ExecutionRunCreateRequest, *, target: str) -> str:
+    explicit = (payload.model_name or '').strip()
+    if explicit:
+        return explicit
+    if target == 'builtin_sample_voice':
+        return ReferenceRuntimeConfig().llm_model
+    return DEFAULT_EXECUTION_MODEL
 
 
 def _queued_execution_context(
@@ -749,7 +759,11 @@ async def _execute_pipecat_webrtc(
         )
 
     artifact_dir = REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id / 'audio'
-    config = ReferenceRuntimeConfig(llm_model=(payload.model_name or DEFAULT_EXECUTION_MODEL))
+    config = (
+        ReferenceRuntimeConfig(llm_model=payload.model_name)
+        if payload.model_name
+        else ReferenceRuntimeConfig()
+    )
     completion = resolve_reference_completion_provider()
     # Construction performs fail-closed readiness checks before a session is opened.
     transport = ReferencePipecatAgentTransport(

@@ -478,6 +478,28 @@ def test_execution_persists_model_name_default_and_override():
     assert via_api.json()['model_name'] == 'gpt-4.1'
 
 
+def test_generalist_voice_honors_reference_model_env_and_explicit_override(monkeypatch):
+    monkeypatch.setenv('REFERENCE_LLM_MODEL', 'compatible-local-model')
+    base = {
+        'suite_id': 'call-center-voice-ai',
+        'scenario_ids': ['cancellation-rescue'],
+        'agent_id': 'generalist-voice-agent',
+        'user_id': 'agent-runs-user',
+        'project_id': 'agent-runs-project',
+        'iterations': 1,
+    }
+
+    from_env = start_execution_run(ExecutionRunCreateRequest(**base))
+    assert from_env['model_name'] == 'compatible-local-model'
+    assert from_env['execution_snapshot']['request']['model_name'] == 'compatible-local-model'
+
+    explicit = start_execution_run(
+        ExecutionRunCreateRequest(**base, model_name='per-run-model')
+    )
+    assert explicit['model_name'] == 'per-run-model'
+    assert explicit['execution_snapshot']['request']['model_name'] == 'per-run-model'
+
+
 def test_rejects_unsafe_agent_id_and_seed_mutations():
     bad = client.post(
         '/api/agents',
