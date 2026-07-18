@@ -3,6 +3,26 @@ import { expect, test } from '@playwright/test';
 test('voice eval page launches and shows conversation evidence', async ({ page }) => {
   let polled = 0;
 
+  await page.addInitScript(() => {
+    const state = window as Window & { __audioPlayAttempts: string[] };
+    state.__audioPlayAttempts = [];
+    class TestAudio extends EventTarget {
+      constructor(private readonly url: string) {
+        super();
+      }
+      play() {
+        state.__audioPlayAttempts.push(this.url);
+        if (this.url.includes('/audio/1?') && state.__audioPlayAttempts.filter((item) => item === this.url).length === 1) {
+          return Promise.reject(new Error('autoplay blocked'));
+        }
+        queueMicrotask(() => this.dispatchEvent(new Event('ended')));
+        return Promise.resolve();
+      }
+      pause() {}
+    }
+    Object.defineProperty(window, 'Audio', { value: TestAudio });
+  });
+
   await page.route('**/api/agents', async (route) => {
     await route.fulfill({
       status: 200,
@@ -204,6 +224,14 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
   await expect(results.getByLabel('Observed live exchange')).toContainText('I want to cancel.', { timeout: 10000 });
   await results.getByRole('button', { name: 'Unmute live conversation' }).click();
   await expect(results.getByRole('button', { name: 'Mute live conversation' })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __audioPlayAttempts: string[] }
+  ).__audioPlayAttempts.filter((url) => url.includes('/audio/1?')).length)).toBe(1);
+  await results.getByRole('button', { name: 'Mute live conversation' }).click();
+  await results.getByRole('button', { name: 'Unmute live conversation' }).click();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __audioPlayAttempts: string[] }
+  ).__audioPlayAttempts.filter((url) => url.includes('/audio/1?')).length)).toBeGreaterThan(1);
   await expect(results.getByRole('link', { name: 'Open Run Agent detail' })).toHaveAttribute(
     'href',
     '/runs/voice-run-1?api_base=http%3A%2F%2Fapi.example.test',

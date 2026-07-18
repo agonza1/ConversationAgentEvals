@@ -63,17 +63,20 @@ export function LiveRunFeedback({ conversations, apiBase, voice = false }: LiveR
           queuedRef.current.delete(key);
           return;
         }
-        playedRef.current.add(key);
-        queuedRef.current.delete(key);
-        const audio = new Audio(mediaUrl(apiBase, event.media_url as string));
-        currentAudioRef.current = audio;
-        await audio.play();
-        await new Promise<void>((resolve) => {
-          currentResolveRef.current = resolve;
-          audio.addEventListener('ended', () => resolve(), { once: true });
-          audio.addEventListener('error', () => resolve(), { once: true });
-        });
-        currentResolveRef.current = null;
+        try {
+          const audio = new Audio(mediaUrl(apiBase, event.media_url as string));
+          currentAudioRef.current = audio;
+          await audio.play();
+          playedRef.current.add(key);
+          await new Promise<void>((resolve) => {
+            currentResolveRef.current = resolve;
+            audio.addEventListener('ended', () => resolve(), { once: true });
+            audio.addEventListener('error', () => resolve(), { once: true });
+          });
+          currentResolveRef.current = null;
+        } finally {
+          queuedRef.current.delete(key);
+        }
       }).catch(() => undefined);
     }
   }, [apiBase, events, listening]);
