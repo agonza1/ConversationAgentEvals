@@ -230,6 +230,24 @@ def test_preview_safely_preserves_arbitrary_extension_keys_in_canonical_context(
     assert '"? odd"' in parsed['context']
 
 
+def test_preview_reports_multiple_judges_as_an_inline_validation_error():
+    judges = _valid_spec()['judges'] * 2
+
+    response = client.post('/api/specs/preview', json={'spec': _valid_spec(judges=judges)})
+
+    assert response.status_code == 200
+    assert response.json()['valid'] is False
+    assert any(error['field'] == 'judges' for error in response.json()['errors'])
+
+
+def test_preview_reports_invalid_max_turns_without_raising_server_error():
+    response = client.post('/api/specs/preview', json={'spec': _valid_spec(runtime_overrides={'target': {'endpoint': 'http://example.test'}, 'max_turns': 'many'})})
+
+    assert response.status_code == 200
+    assert response.json()['valid'] is False
+    assert any(error['field'] == 'runtime_overrides.max_turns' for error in response.json()['errors'])
+
+
 def test_atomic_version_allocation_keeps_both_concurrent_edits():
     suffix = uuid4().hex
     user_id = f'atomic-user-{suffix}'

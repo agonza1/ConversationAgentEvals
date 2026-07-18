@@ -99,7 +99,7 @@ class GeneratedSpecContent(BaseModel):
     scenario_seeds: list[str]
     scenarios: list[AssertScenario]
     deterministic_checks: list[AssertCheck]
-    judges: list[AssertJudge]
+    judges: list[AssertJudge] = Field(max_length=1)
 
 
 class GeneratedSpecDraft(GeneratedSpecContent):
@@ -211,6 +211,10 @@ def validate_spec(spec: EditableAssertSpec) -> SpecValidationResult:
         errors.append(SpecValidationMessage(field='scenarios', message='Add scenario seeds or generated scenarios.'))
     if normalized.generated_content_status == 'draft' and _has_draft_content(normalized):
         errors.append(SpecValidationMessage(field='generated_content_status', message='Generated suggestions must be approved or edited before saving.'))
+    if len(normalized.judges) > 1:
+        errors.append(SpecValidationMessage(field='judges', message='ASSERT export currently supports exactly one configured judge. Remove additional judges before saving.'))
+    if 'max_turns' in normalized.runtime_overrides and _coerce_max_turns(normalized.runtime_overrides.get('max_turns')) is None:
+        errors.append(SpecValidationMessage(field='runtime_overrides.max_turns', message='max_turns must be a whole number from 1 through 100.'))
     if isinstance(normalized.extensions.get('agentic_contact_center'), dict):
         warnings.append(SpecValidationMessage(field='extensions.agentic_contact_center', message='ACC data is preserved in the CAE editor context; CAE does not require ACC to compile or validate this ASSERT config.', severity='warning'))
     return SpecValidationResult(valid=not errors, errors=errors, warnings=warnings, normalized=normalized)
@@ -360,7 +364,7 @@ def _compile_assert_config(spec: EditableAssertSpec) -> dict[str, Any]:
         pipeline['inference'] = {
             'target': deepcopy(target),
             'tester': {'model': {'name': str(spec.runtime_overrides.get('tester_model') or model_name)}},
-            'max_turns': int(spec.runtime_overrides.get('max_turns') or 10),
+            'max_turns': _coerce_max_turns(spec.runtime_overrides.get('max_turns')) or 10,
         }
         judge = spec.judges[0]
         pipeline['judge'] = {
@@ -405,6 +409,22 @@ def _assert_validation_errors(config: dict[str, Any]) -> list[SpecValidationMess
 
 def _render_yaml(value: dict[str, Any]) -> str:
     return yaml.safe_dump(value, sort_keys=False, allow_unicode=True, default_flow_style=False)
+
+
+def _coerce_max_turns(value: Any) -> int | None:
+    if value is None:
+        return 10
+    if isinstance(value, bool):
+        return None
+    try:
+        coerced = int(value)
+    except (TypeError, ValueError):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        return None
+    if isinstance(value, str) and str(coerced) != value.strip():
+        return None
+    return coerced if 1 <= coerced <= 100 else None
 
 
 def _resolve_project(db: Session, *, user_id: str, project_id: str) -> ProductProject:
