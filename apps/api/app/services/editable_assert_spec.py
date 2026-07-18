@@ -205,10 +205,22 @@ def validate_spec(spec: EditableAssertSpec) -> SpecValidationResult:
         errors.append(SpecValidationMessage(field='objective', message='Describe the task outcome in at least one sentence.'))
     if not normalized.required_behaviors:
         errors.append(SpecValidationMessage(field='required_behaviors', message='Add at least one success check.'))
+    for index, check in enumerate(normalized.required_behaviors):
+        if not check.label.strip():
+            errors.append(SpecValidationMessage(field=f'required_behaviors.{index}.label', message='Success check labels cannot be blank.'))
     if not normalized.forbidden_behaviors:
         errors.append(SpecValidationMessage(field='forbidden_behaviors', message='Add at least one failure/forbidden check.'))
+    for index, check in enumerate(normalized.forbidden_behaviors):
+        if not check.label.strip():
+            errors.append(SpecValidationMessage(field=f'forbidden_behaviors.{index}.label', message='Forbidden check labels cannot be blank.'))
     if not normalized.scenario_seeds and not normalized.scenarios:
         errors.append(SpecValidationMessage(field='scenarios', message='Add scenario seeds or generated scenarios.'))
+    for index, seed in enumerate(normalized.scenario_seeds):
+        if not seed.strip():
+            errors.append(SpecValidationMessage(field=f'scenario_seeds.{index}', message='Scenario seeds cannot be blank.'))
+    for index, scenario in enumerate(normalized.scenarios):
+        if not scenario.title.strip():
+            errors.append(SpecValidationMessage(field=f'scenarios.{index}.title', message='Scenario titles cannot be blank.'))
     if normalized.generated_content_status == 'draft' and _has_draft_content(normalized):
         errors.append(SpecValidationMessage(field='generated_content_status', message='Generated suggestions must be approved or edited before saving.'))
     if len(normalized.judges) > 1:

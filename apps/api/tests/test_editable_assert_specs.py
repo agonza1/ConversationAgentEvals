@@ -248,6 +248,25 @@ def test_preview_reports_invalid_max_turns_without_raising_server_error():
     assert any(error['field'] == 'runtime_overrides.max_turns' for error in response.json()['errors'])
 
 
+def test_preview_rejects_blank_checks_seeds_and_scenario_titles():
+    response = client.post('/api/specs/preview', json={'spec': _valid_spec(
+        required_behaviors=[{'label': '   '}],
+        forbidden_behaviors=[{'label': '\t'}],
+        scenario_seeds=['  '],
+        scenarios=[{'title': ' ', 'description': 'No usable title.'}],
+    )})
+
+    assert response.status_code == 200
+    assert response.json()['valid'] is False
+    fields = {error['field'] for error in response.json()['errors']}
+    assert {
+        'required_behaviors.0.label',
+        'forbidden_behaviors.0.label',
+        'scenario_seeds.0',
+        'scenarios.0.title',
+    } <= fields
+
+
 def test_atomic_version_allocation_keeps_both_concurrent_edits():
     suffix = uuid4().hex
     user_id = f'atomic-user-{suffix}'
