@@ -103,6 +103,24 @@ def test_generate_fails_closed_when_no_llm_is_configured(monkeypatch):
     assert 'Connect OpenAI Codex OAuth' in response.json()['detail']
 
 
+def test_generate_returns_client_safe_error_for_malformed_provider_content():
+    class MalformedProvider:
+        def status(self):
+            return {'status': 'connected', 'provider': 'malformed-provider'}
+
+        def complete(self, prompt, *, model_name=None):
+            return 'not valid JSON'
+
+    set_provider_for_tests('openai', MalformedProvider())
+    try:
+        response = client.post('/api/specs/generate', json={'title': 'Support agent', 'role': 'customer support agent', 'objective': 'Resolve account requests without unsupported claims.'})
+    finally:
+        set_provider_for_tests('openai', None)
+
+    assert response.status_code == 502
+    assert 'invalid editable ASSERT draft' in response.json()['detail']
+
+
 def test_validate_reports_inline_errors_for_vague_or_empty_spec():
     response = client.post('/api/specs/validate', json={'spec': {'title': 'AI', 'role': '', 'objective': 'help'}})
 

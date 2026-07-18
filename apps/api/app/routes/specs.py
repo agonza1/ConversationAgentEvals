@@ -10,6 +10,7 @@ from app.db.database import get_db
 
 from app.services.editable_assert_spec import (
     EditableAssertSpec,
+    SpecGenerationFailed,
     SpecGenerationUnavailable,
     default_templates,
     export_saved_spec,
@@ -51,6 +52,8 @@ def generate_editable_spec_draft(payload: SpecDraftGenerateRequest):
         return generate_spec_draft(title=payload.title, role=payload.role, objective=payload.objective)
     except SpecGenerationUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except SpecGenerationFailed as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

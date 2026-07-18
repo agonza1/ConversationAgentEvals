@@ -125,6 +125,10 @@ class SpecGenerationUnavailable(RuntimeError):
     pass
 
 
+class SpecGenerationFailed(RuntimeError):
+    pass
+
+
 _SPEC_LOCKS_GUARD = threading.Lock()
 _SPEC_LOCKS: dict[tuple[str, str], threading.Lock] = {}
 
@@ -178,7 +182,7 @@ def generate_spec_draft(*, title: str, role: str, objective: str) -> GeneratedSp
     try:
         content = GeneratedSpecContent.model_validate(_parse_json_object(raw))
     except (ValueError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f'Configured model returned an invalid editable ASSERT draft: {exc}') from exc
+        raise SpecGenerationFailed(f'Configured model returned an invalid editable ASSERT draft: {exc}') from exc
 
     return GeneratedSpecDraft(
         provider=provider_name,
@@ -499,11 +503,17 @@ def _complete_generation(prompt: str) -> tuple[str, str, str]:
     status = provider.status()
     model_name = (os.getenv('OPENAI_RESPONSES_MODEL') or os.getenv('LLM_JUDGE_MODEL') or 'gpt-5.4').strip()
     if status.get('status') == 'connected':
-        return provider.complete(prompt, model_name=model_name), str(status.get('provider') or 'openai_codex'), model_name
+        try:
+            return provider.complete(prompt, model_name=model_name), str(status.get('provider') or 'openai_codex'), model_name
+        except Exception as exc:
+            raise SpecGenerationFailed(f'Configured CAE model could not generate a draft: {exc}') from exc
     api_key = (os.getenv('LLM_JUDGE_API_KEY') or os.getenv('OPENAI_API_KEY') or '').strip()
     if not api_key:
         raise SpecGenerationUnavailable('Connect OpenAI Codex OAuth or configure OPENAI_API_KEY/LLM_JUDGE_API_KEY before generating draft checks and scenarios.')
-    return _complete_with_api_key(prompt, api_key=api_key, model_name=model_name), 'openai_api_key', model_name
+    try:
+        return _complete_with_api_key(prompt, api_key=api_key, model_name=model_name), 'openai_api_key', model_name
+    except Exception as exc:
+        raise SpecGenerationFailed(f'OpenAI could not generate an editable ASSERT draft: {exc}') from exc
 
 
 def _complete_with_api_key(prompt: str, *, api_key: str, model_name: str) -> str:
