@@ -37,6 +37,13 @@ from app.services.execution_audio import (
 from app.services.execution_vcon import build_execution_vcon, vcon_summary
 from app.services.llm_providers import get_provider
 from app.services.pipecat_tester_agent import PipecatTesterAgentRunner
+from app.services.run_provenance import (
+    assert_executor_compatible,
+    build_run_provenance,
+    default_executor_for_target,
+    normalize_agent_target,
+    resolve_execution_mode_for_executor,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -93,6 +100,15 @@ def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
     if resolved.agent_id and agent is None:
         raise ValueError(f'Unknown agent: {resolved.agent_id}')
     model_name = (resolved.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
+    provenance = build_run_provenance(
+        agent=agent,
+        agent_target=(agent or {}).get('target') if agent else resolved.text_callable,
+        channel=(agent or {}).get('channel') if agent else None,
+        executor_kind=resolved.executor_kind or 'none',
+        mode=resolved.mode,
+        text_callable=resolved.text_callable,
+        evaluate=resolved.evaluate,
+    )
     record = ExecutionRunRecord(
         execution_run_id=execution_run_id,
         status='queued',
@@ -104,9 +120,11 @@ def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
         agent_id=resolved.agent_id,
         agent_name=(agent or {}).get('name'),
         model_name=model_name,
+        provenance=provenance,
         execution_snapshot={
             'request': resolved.model_dump(mode='json'),
             'agent': agent,
+            'provenance': provenance.model_dump(mode='json'),
         },
         progress=ExecutionRunProgress(
             phase='queued',
@@ -276,13 +294,24 @@ def _run_one_conversation(
 def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCreateRequest:
     model_name = (payload.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
     if not payload.agent_id:
-        return payload.model_copy(update={'model_name': model_name})
+        executor_kind = payload.executor_kind
+        if executor_kind is None:
+            if payload.mode == 'pipecat_webrtc':
+                executor_kind = 'cae_local_audio_loop'
+            else:
+                executor_kind = 'none'
+        if 'executor_kind' in payload.model_fields_set and executor_kind not in {None, 'none'}:
+            assert_executor_compatible(agent_target=payload.text_callable, executor_kind=executor_kind)
+        return payload.model_copy(update={'model_name': model_name, 'executor_kind': executor_kind})
+
     agent = get_agent(payload.agent_id)
     if agent is None:
         raise ValueError(f'Unknown agent: {payload.agent_id}')
-    # An agent supplies defaults, but the advanced target-mode control is an
-    # explicit per-run override.  Pydantic retains whether `mode` appeared in
-    # the request, letting callers omit it to opt into the saved agent target.
+
+    target = normalize_agent_target(str(agent.get('target') or 'mock_agent'))
+    channel = str(agent.get('channel') or 'text')
+
+    # An agent supplies defaults, but explicit mode / executor_kind are per-run overrides.
     if 'mode' in payload.model_fields_set:
         updates: dict[str, Any] = {
             'agent_id': agent['id'],
@@ -294,24 +323,49 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
             and str(agent.get('target') or '') in {'mock_agent', 'openai_codex', 'offline_acc_fixture'}
         ):
             updates['text_callable'] = str(agent['target'])
-        return payload.model_copy(
-            update=updates
-        )
-    target = str(agent.get('target') or 'mock_agent')
-    channel = str(agent.get('channel') or 'text')
-    # Text + offline_acc_fixture stays text_callable; only force voice for voice channel or voice_fixture target.
-    if channel == 'voice' or target == 'voice_fixture':
-        mode = 'voice_fixture'
+        executor_kind = payload.executor_kind
+        if executor_kind is None:
+            if payload.mode == 'pipecat_webrtc':
+                executor_kind = 'cae_local_audio_loop'
+            elif payload.mode == 'voice_fixture':
+                executor_kind = 'none'
+            else:
+                executor_kind = 'none'
+        # Enforce Target↔Executor pairs only when the caller set executor_kind explicitly.
+        if 'executor_kind' in payload.model_fields_set and executor_kind not in {None, 'none'}:
+            assert_executor_compatible(agent_target=target, executor_kind=executor_kind)
+        updates['executor_kind'] = executor_kind
+        if payload.mode == 'pipecat_webrtc':
+            updates['audio_transport'] = 'pipecat_small_webrtc'
+        return payload.model_copy(update=updates)
+
+    if channel == 'voice' or target in {'builtin_sample_voice', 'voice_fixture'}:
+        if 'executor_kind' in payload.model_fields_set and payload.executor_kind not in {None, 'none'}:
+            executor_kind = payload.executor_kind
+            assert_executor_compatible(agent_target=target, executor_kind=executor_kind)
+        else:
+            executor_kind = default_executor_for_target(target)
+        mode = resolve_execution_mode_for_executor(executor_kind)
         text_callable = payload.text_callable
+        audio_transport = 'pipecat_small_webrtc' if mode == 'pipecat_webrtc' else 'none'
     else:
         mode = 'text_callable'
-        text_callable = target if target in {'mock_agent', 'openai_codex', 'offline_acc_fixture'} else 'mock_agent'
+        text_callable = (
+            target if target in {'mock_agent', 'openai_codex', 'offline_acc_fixture'} else 'mock_agent'
+        )
+        executor_kind = payload.executor_kind or 'none'
+        audio_transport = 'none'
+        if 'executor_kind' in payload.model_fields_set and executor_kind not in {None, 'none'}:
+            assert_executor_compatible(agent_target=target, executor_kind=executor_kind)
+
     return payload.model_copy(
         update={
             'mode': mode,
             'text_callable': text_callable,
             'agent_id': agent['id'],
             'model_name': model_name,
+            'executor_kind': executor_kind,
+            'audio_transport': audio_transport,
         }
     )
 

@@ -58,9 +58,9 @@ async function mockRunnerApis(page: import('@playwright/test').Page, options: Mo
           },
           {
             id: 'acc-voice-fixture-agent',
-            name: 'ACC voice fixture agent',
+            name: 'Built-in sample voice call',
             channel: 'voice',
-            target: 'voice_fixture',
+            target: 'builtin_sample_voice',
             description: 'Offline ACC voice fixture path.',
             metadata: { model_name: 'voice-fixture', prompt_version: 'seed' },
           },
@@ -94,6 +94,40 @@ async function mockRunnerApis(page: import('@playwright/test').Page, options: Mo
     await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
   });
 
+  await page.route('**/api/execution/acc-connection**', async (route) => {
+    const tested = route.request().method() === 'POST';
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        connected: tested,
+        status: tested ? 'connected' : 'requires_acc_connection',
+        label: tested ? 'ACC connected' : 'Requires ACC connection',
+        message: tested
+          ? 'Connection verified against the official ACC media readiness API.'
+          : 'Enter the ACC URL and test the connection.',
+        base_url: tested ? 'http://127.0.0.1:8026' : null,
+        destinations: {
+          browser_webrtc_agent: {
+            creatable: tested,
+            executor_kind: 'acc_browser_webrtc',
+            label: tested ? 'Ready through ACC' : 'Connect ACC to enable',
+          },
+          sip_agent: {
+            creatable: tested,
+            executor_kind: 'acc_sip',
+            label: tested ? 'Ready through ACC' : 'Connect ACC to enable',
+          },
+          phone_agent: {
+            creatable: false,
+            executor_kind: 'acc_phone',
+            label: tested ? 'PSTN trunk routing is not ready.' : 'Connect ACC to check PSTN readiness',
+          },
+        },
+      }),
+    });
+  });
+
   await page.route('**/api/execution/runs**', async (route) => {
     const url = route.request().url();
     if (route.request().method() === 'POST') {
@@ -104,7 +138,7 @@ async function mockRunnerApis(page: import('@playwright/test').Page, options: Mo
         body: JSON.stringify({
           execution_run_id: 'exec-try-it-out',
           status: 'queued',
-          mode: 'voice_fixture',
+          mode: 'pipecat_webrtc',
           agent_id: 'acc-voice-fixture-agent',
           conversations: [],
         }),
@@ -118,7 +152,7 @@ async function mockRunnerApis(page: import('@playwright/test').Page, options: Mo
         body: JSON.stringify({
           execution_run_id: 'exec-try-it-out',
           status: 'completed',
-          mode: 'voice_fixture',
+          mode: 'pipecat_webrtc',
           agent_id: 'acc-voice-fixture-agent',
           conversations: [],
         }),
@@ -138,13 +172,13 @@ test('targets page shows agent target cards and try-it-out deep links', async ({
 
   const mockCard = page.getByRole('article').filter({ hasText: 'Mock text agent' });
   await expect(mockCard.locator('.agents-badge-channel').first()).toHaveText('Text');
-  await expect(mockCard.getByText('Built-in testing target')).toBeVisible();
+  await expect(mockCard.locator('.agents-badge-builtin')).toHaveText('Built-in sample');
   await expect(mockCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
     'href',
     '/runs?launch=demo&agent_id=mock-text-agent',
   );
 
-  const voiceCard = page.getByRole('article').filter({ hasText: 'ACC voice fixture agent' });
+  const voiceCard = page.getByRole('article').filter({ hasText: 'Built-in sample voice call' });
   await expect(voiceCard.locator('.agents-badge-channel').first()).toHaveText('Voice');
   await expect(voiceCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
     'href',
@@ -176,11 +210,12 @@ test('targets try-it-out auto-launches and opens run analysis', async ({ page })
     onExecutionLaunch: (request) => launches.push(request),
   });
   await page.goto('/targets');
-  await page.getByRole('article').filter({ hasText: 'ACC voice fixture agent' }).getByRole('link', { name: 'Try it Out' }).click();
+  await page.getByRole('article').filter({ hasText: 'Built-in sample voice call' }).getByRole('link', { name: 'Try it Out' }).click();
   await expect(page).toHaveURL(/\/runs\/exec-try-it-out/, { timeout: 20000 });
   expect(launches).toHaveLength(1);
   expect(launches[0]?.agent_id).toBe('acc-voice-fixture-agent');
-  expect(launches[0]?.mode).toBe('voice_fixture');
+  expect(launches[0]?.mode).toBe('pipecat_webrtc');
+  expect(launches[0]?.executor_kind).toBe('cae_local_audio_loop');
 });
 
 test('OpenAI agent try-it-out launches its configured live target', async ({ page }) => {
@@ -271,17 +306,31 @@ test('add agent target modal creates a registry entry', async ({ page }) => {
   await expect(page.getByRole('article').filter({ hasText: 'Playwright agent created' })).toBeVisible();
 });
 
-test('agent target form only offers connections compatible with its selected channel', async ({ page }) => {
+test('agent target form connects ACC and enables only ready destinations', async ({ page }) => {
   await mockRunnerApis(page);
   await page.goto('/targets');
   await page.locator('.agents-page-header').getByRole('button', { name: 'Add agent target' }).click();
 
   const channel = page.getByLabel('Target channel');
-  const target = page.getByLabel('Target connection');
-  await expect(target.getByRole('option')).toHaveCount(3);
+  await expect(page.getByRole('radiogroup', { name: 'Target destination' })).toBeVisible();
+  await expect(page.getByRole('radio', { name: /Built-in sample agent/i })).toBeChecked();
 
   await channel.selectOption('voice');
-  await expect(target).toHaveValue('voice_fixture');
-  await expect(target.getByRole('option')).toHaveCount(1);
-  await expect(target.locator('option')).toHaveText('Built-in: voice_fixture (voice testing target)');
+  await expect(page.getByRole('radio', { name: /Built-in sample agent/i })).toBeChecked();
+  await expect(page.getByRole('radio', { name: /SIP agent/i })).toBeDisabled();
+  await expect(page.getByRole('radio', { name: /Phone agent/i })).toBeDisabled();
+  await expect(page.getByRole('radio', { name: /Browser\/WebRTC agent/i })).toBeDisabled();
+  await expect(page.getByRole('dialog').getByText('Built-in sample voice call')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Test connection' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Test connection' }).click();
+  await expect(page.getByText(/Connection verified/)).toBeVisible();
+  await expect(page.getByRole('radio', { name: /SIP agent/i })).toBeEnabled();
+  await expect(page.getByRole('radio', { name: /Browser\/WebRTC agent/i })).toBeEnabled();
+  await expect(page.getByRole('radio', { name: /Phone agent/i })).toBeDisabled();
+  await expect(page.getByText('PSTN trunk routing is not ready.')).toBeVisible();
+
+  await page.getByRole('radio', { name: /SIP agent/i }).check();
+  await expect(page.getByLabel('SIP URI')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Create target' })).toBeEnabled();
 });

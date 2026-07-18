@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.main import app
-from app.services import agent_store, execution_run_store
+from app.services import agent_store, execution_run_store, run_provenance
 from app.services.execution_runner import execute_execution_run, start_execution_run
 from app.schemas.execution import ExecutionRunCreateRequest
 
@@ -17,9 +17,11 @@ def isolated_agent_registry(tmp_path, monkeypatch):
     """Keep agent CRUD tests from reading or writing the local demo registry."""
     monkeypatch.setattr(agent_store, 'AGENTS_DIR', tmp_path / 'agents')
     execution_run_store.reset_execution_runs_for_tests()
+    run_provenance.reset_acc_connections_for_tests()
     agent_store.reset_agents_for_tests(clear_files=True)
     yield
     execution_run_store.reset_execution_runs_for_tests()
+    run_provenance.reset_acc_connections_for_tests()
     agent_store.reset_agents_for_tests(clear_files=True)
 
 
@@ -93,7 +95,7 @@ def test_execution_with_agent_id_and_metrics_summary():
     assert reloaded['conversations'][0]['metrics_summary']['turn_count'] >= 1
 
 
-def test_voice_fixture_agent_run_includes_latency_metrics():
+def test_builtin_sample_voice_agent_run_uses_local_audio_loop_provenance():
     queued = start_execution_run(
         ExecutionRunCreateRequest(
             suite_id='call-center-voice-ai',
@@ -104,7 +106,16 @@ def test_voice_fixture_agent_run_includes_latency_metrics():
             iterations=1,
         )
     )
-    assert queued['mode'] == 'voice_fixture'
+    assert queued['mode'] == 'pipecat_webrtc'
+    provenance = queued['provenance']
+    assert provenance['target_kind'] == 'builtin_sample_voice'
+    assert provenance['executor_kind'] == 'cae_local_audio_loop'
+    assert provenance['media_source'] == 'local_loop'
+    assert provenance['live_external_connection'] is False
+    assert provenance['synthetic_audio'] is True
+    assert provenance['honesty_label'] == (
+        'Built-in sample agent · local audio loop · no phone or SIP call'
+    )
     finished = execute_execution_run(
         queued['execution_run_id'],
         ExecutionRunCreateRequest(
@@ -121,6 +132,123 @@ def test_voice_fixture_agent_run_includes_latency_metrics():
     if conversation['status'] == 'completed':
         assert conversation['metrics_summary']['latency']['count'] >= 0
         assert isinstance(conversation['timeline'], list)
+
+
+def test_external_voice_destination_requires_then_uses_tested_acc_connection(monkeypatch):
+    blocked = client.post(
+        '/api/agents',
+        json={
+            'name': 'SIP bot',
+            'channel': 'voice',
+            'target': 'sip_agent',
+            'sip_uri': 'sip:agent@example.com',
+        },
+    )
+    assert blocked.status_code in {400, 422}
+    detail = blocked.json().get('detail')
+    detail_text = detail if isinstance(detail, str) else str(detail)
+    assert 'ACC' in detail_text
+
+    status = client.get('/api/execution/acc-connection')
+    assert status.status_code == 200
+    assert status.json()['connected'] is False
+    assert status.json()['label'] == 'Requires ACC connection'
+
+    readiness_payload = {
+        'ok': True,
+        'route': '/api/pipecat-media-engine/readiness',
+        'sharedEngineContract': {
+            'requiredAdapters': [
+                {'id': 'browser_webrtc', 'implementedNow': True},
+                {
+                    'id': 'sip_freeswitch_verto',
+                    'implementedNow': True,
+                    'liveMediaProofComplete': True,
+                },
+                {
+                    'id': 'signalwire_sip_trunk',
+                    'implementedNow': False,
+                    'blocker': 'PSTN trunk routing is not ready.',
+                },
+            ],
+        },
+    }
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return readiness_payload
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, url, **_kwargs):
+            assert url == 'http://acc.local:8026/api/pipecat-media-engine/readiness'
+            return FakeResponse()
+
+    monkeypatch.setattr(run_provenance.httpx, 'Client', FakeClient)
+    tested = client.post(
+        '/api/execution/acc-connection/test',
+        json={'base_url': 'http://acc.local:8026'},
+    )
+    assert tested.status_code == 200, tested.text
+    assert tested.json()['connected'] is True
+    assert tested.json()['destinations']['sip_agent']['creatable'] is True
+    assert tested.json()['destinations']['browser_webrtc_agent']['creatable'] is True
+    assert tested.json()['destinations']['phone_agent']['creatable'] is False
+
+    created = client.post(
+        '/api/agents',
+        json={
+            'name': 'SIP bot',
+            'channel': 'voice',
+            'target': 'sip_agent',
+            'sip_uri': 'sip:agent@example.com:5060;transport=tcp',
+            'acc_base_url': 'http://acc.local:8026',
+        },
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()['target'] == 'sip_agent'
+
+    phone = client.post(
+        '/api/agents',
+        json={
+            'name': 'Phone bot',
+            'channel': 'voice',
+            'target': 'phone_agent',
+            'phone_number': '+12125550123',
+            'acc_base_url': 'http://acc.local:8026',
+        },
+    )
+    assert phone.status_code in {400, 422}
+    assert 'PSTN trunk routing is not ready' in phone.text
+
+
+def test_rejects_incompatible_executor_for_builtin_sample_voice():
+    response = client.post(
+        '/api/execution/runs',
+        json={
+            'suite_id': 'call-center-voice-ai',
+            'scenario_ids': ['cancellation-rescue'],
+            'agent_id': 'acc-voice-fixture-agent',
+            'executor_kind': 'acc_sip',
+            'mode': 'pipecat_webrtc',
+            'user_id': 'agent-runs-user',
+            'project_id': 'agent-runs-project',
+            'iterations': 1,
+        },
+    )
+    assert response.status_code == 400
+    assert 'compatible' in response.json()['detail'] or 'ACC' in response.json()['detail']
 
 
 def test_execution_persists_model_name_default_and_override():

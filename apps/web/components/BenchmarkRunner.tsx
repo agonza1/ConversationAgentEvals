@@ -980,6 +980,16 @@ interface ExecutionRunRecord {
   agent_id?: string | null;
   agent_name?: string | null;
   model_name?: string | null;
+  provenance?: {
+    target_kind: string;
+    tester_kind: string;
+    executor_kind: string;
+    media_source: string;
+    live_external_connection: boolean;
+    saved_evidence: boolean;
+    synthetic_audio: boolean;
+    honesty_label?: string | null;
+  } | null;
   error?: string | null;
   created_at: string;
   updated_at: string;
@@ -990,6 +1000,7 @@ async function createExecutionRun(payload: {
   suite_id: string;
   scenario_ids: string[];
   mode: 'text_callable' | 'voice_fixture' | 'pipecat_webrtc';
+  executor_kind?: 'cae_local_audio_loop' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone' | 'none';
   text_callable?: string;
   iterations?: number;
   user_id: string;
@@ -997,6 +1008,7 @@ async function createExecutionRun(payload: {
   evaluate?: boolean;
   agent_id?: string;
   model_name?: string;
+  audio_transport?: 'none' | 'pipecat_small_webrtc' | 'freeswitch_verto_sip';
 }) {
   return handleJson<ExecutionRunRecord>(
     await fetch(`${getApiBase()}/api/execution/runs`, {
@@ -1005,6 +1017,18 @@ async function createExecutionRun(payload: {
       body: JSON.stringify(payload),
     }),
   );
+}
+
+function isBuiltinSampleVoiceTarget(target?: string | null, channel?: string | null) {
+  void channel;
+  return (
+    target === 'builtin_sample_voice' ||
+    target === 'voice_fixture'
+  );
+}
+
+function isExternalVoiceTarget(target?: string | null) {
+  return target === 'sip_agent' || target === 'phone_agent' || target === 'browser_webrtc_agent';
 }
 
 type ScoreAgentOption = {
@@ -2185,6 +2209,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   const [isSimulating, setIsSimulating] = useState(false);
   const [isEnqueueingSuite, setIsEnqueueingSuite] = useState(false);
   const [executionMode, setExecutionMode] = useState<'text_callable' | 'voice_fixture' | 'pipecat_webrtc'>('text_callable');
+  const [executorKind, setExecutorKind] = useState<'cae_local_audio_loop' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone' | 'none'>('none');
   const [executionScope, setExecutionScope] = useState<'selected' | 'suite'>('selected');
   const [executionIterations, setExecutionIterations] = useState(1);
   const [executionRun, setExecutionRun] = useState<ExecutionRunRecord | null>(null);
@@ -2438,10 +2463,12 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
           applyAgentProfileDefaults(selected, { setAgentProfile, setModelName, setPromptVersion });
         }
         if (matched) {
-          if (matched.channel === 'voice' || matched.target === 'voice_fixture') {
-            setExecutionMode('voice_fixture');
+          if (isBuiltinSampleVoiceTarget(matched.target, matched.channel)) {
+            setExecutionMode('pipecat_webrtc');
+            setExecutorKind('cae_local_audio_loop');
           } else {
             setExecutionMode('text_callable');
+            setExecutorKind('none');
           }
         }
         setAgentsLoaded(true);
@@ -3279,8 +3306,14 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
     const launchTarget = options?.target ?? 'live';
     const liveModelRun = launchTarget === 'live';
+    if (!liveModelRun && isExternalVoiceTarget(selectedScoreAgent?.target)) {
+      setExecutionMessage(
+        'This ACC destination is connected and saved, but its CAE live executor adapter is not wired yet.',
+      );
+      return null;
+    }
     if (liveModelRun && selectedScoreAgent?.channel !== 'text') {
-      setExecutionMessage('Live model execution currently supports text agents. Use Run fixture for this voice agent.');
+      setExecutionMessage('Live model execution currently supports text agents. Use Run sample voice call for this voice destination.');
       return null;
     }
     if (liveModelRun && openaiProvider?.status !== 'connected') {
@@ -3288,12 +3321,19 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
       return null;
     }
 
-    const fixtureBackedAgent = selectedScoreAgent?.target === 'voice_fixture' || selectedScoreAgent?.target === 'offline_acc_fixture';
+    const fixtureBackedAgent =
+      isBuiltinSampleVoiceTarget(selectedScoreAgent?.target, selectedScoreAgent?.channel) ||
+      selectedScoreAgent?.target === 'offline_acc_fixture';
     const runMode = liveModelRun
       ? 'text_callable'
       : fixtureBackedAgent
         ? executionMode
         : 'text_callable';
+    const runExecutorKind = liveModelRun
+      ? 'none'
+      : isBuiltinSampleVoiceTarget(selectedScoreAgent?.target, selectedScoreAgent?.channel)
+        ? executorKind || 'cae_local_audio_loop'
+        : 'none';
     const runTextCallable = liveModelRun
       ? 'openai_codex'
       : selectedScoreAgent?.target === 'offline_acc_fixture'
@@ -3305,8 +3345,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     const voiceModes = runMode === 'voice_fixture' || runMode === 'pipecat_webrtc';
     const offlineFixtureText =
       runMode === 'text_callable' && runTextCallable === 'offline_acc_fixture';
-    // Voice fixture, Pipecat WebRTC, and text offline_acc_fixture require the optional
-    // cancellation-rescue scenario on call-center-voice-ai; do not post other scenario ids.
+    // Voice local-loop / saved-evidence and text offline_acc_fixture require cancellation-rescue.
     const fixtureBackedRun = voiceModes || offlineFixtureText;
     const voiceSuiteId = 'call-center-voice-ai';
     const suiteForRun = fixtureBackedRun ? voiceSuiteId : selectedSuite.id;
@@ -3337,6 +3376,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         suite_id: suiteForRun,
         scenario_ids: scenarioIds,
         mode: runMode,
+        executor_kind: runExecutorKind,
         text_callable: runMode === 'text_callable' ? runTextCallable : undefined,
         iterations: executionIterations,
         user_id: identity.userId,
@@ -3344,10 +3384,14 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         evaluate: true,
         agent_id: selectedAgentId || undefined,
         model_name: executionModelName || DEFAULT_EXECUTION_MODEL,
+        audio_transport: runMode === 'pipecat_webrtc' ? 'pipecat_small_webrtc' : undefined,
       });
       setExecutionRun(queued);
+      const honesty = queued.provenance?.honesty_label
+        ? ` ${queued.provenance.honesty_label}.`
+        : '';
       setExecutionMessage(
-        `${suiteNote || ''}Execution queued (${queued.mode}). Open /runs/${queued.execution_run_id} for analysis when complete.`,
+        `${suiteNote || ''}Execution queued (${queued.mode} / ${queued.provenance?.executor_kind || runExecutorKind}).${honesty} Open /runs/${queued.execution_run_id} for analysis when complete.`,
       );
       listExecutionRuns(identity.userId, identity.projectId).catch(() => undefined);
       if (options?.redirectToAnalysis && queued.execution_run_id) {
@@ -4345,9 +4389,11 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
               disabled={isLaunchingExecution || isRunning || isSimulating || !selectedSuite || !selectedScoreAgent}
               onClick={() => void onLaunchExecution({ target: 'configured' })}
             >
-              {selectedScoreAgent?.target === 'voice_fixture' || selectedScoreAgent?.target === 'offline_acc_fixture'
-                ? 'Run fixture'
-                : 'Mock agent run'}
+              {isBuiltinSampleVoiceTarget(selectedScoreAgent?.target, selectedScoreAgent?.channel)
+                ? 'Run sample voice call'
+                : selectedScoreAgent?.target === 'offline_acc_fixture'
+                  ? 'Run fixture'
+                  : 'Mock agent run'}
             </button>
           </div>
         </div>
@@ -4363,8 +4409,8 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
         {view === 'run' && selectedSuite && !loadError ? (
           <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }} aria-label="Default scenario for launch">
-            Launch uses {executionModelName || DEFAULT_EXECUTION_MODEL} through the connected OpenAI provider when available.
-            {' '}The secondary action uses the selected agent target&apos;s built-in mock or fixture connection.
+            Launch picks a Target destination plus an Executor separately. Built-in sample voice uses the local audio loop (no phone or SIP).
+            {' '}Saved conversation replay remains an Eval evidence mode, not a destination.
           </p>
         ) : null}
 
@@ -4379,10 +4425,12 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                 setSelectedAgentId(agentId);
                 const agent = agents.find((item) => item.id === agentId);
                 if (!agent) return;
-                if (agent.channel === 'voice' || agent.target === 'voice_fixture') {
-                  setExecutionMode('voice_fixture');
+                if (isBuiltinSampleVoiceTarget(agent.target, agent.channel)) {
+                  setExecutionMode('pipecat_webrtc');
+                  setExecutorKind('cae_local_audio_loop');
                 } else {
                   setExecutionMode('text_callable');
+                  setExecutorKind('none');
                 }
               }}
               style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
@@ -4391,6 +4439,26 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
               {agents.map((agent) => (
                 <option key={agent.id} value={agent.id}>{agent.name}</option>
               ))}
+            </select>
+          </label>
+          <label style={{ display: 'grid', gap: 8 }}>
+            <span style={{ fontWeight: 700 }}>Executor</span>
+            <select
+              aria-label="Execution executor"
+              value={executorKind}
+              disabled={!isBuiltinSampleVoiceTarget(selectedScoreAgent?.target, selectedScoreAgent?.channel)}
+              onChange={(event) => {
+                const next = event.target.value as typeof executorKind;
+                setExecutorKind(next);
+                if (next === 'cae_local_audio_loop') setExecutionMode('pipecat_webrtc');
+              }}
+              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
+            >
+              <option value="cae_local_audio_loop">Built-in local audio loop</option>
+              <option value="acc_browser_webrtc" disabled>ACC browser WebRTC (Requires ACC connection)</option>
+              <option value="acc_sip" disabled>ACC SIP (Requires ACC connection)</option>
+              <option value="acc_phone" disabled>ACC phone/PSTN (Requires ACC connection)</option>
+              <option value="none">None (text)</option>
             </select>
           </label>
           <label style={{ display: 'grid', gap: 8 }}>

@@ -78,6 +78,19 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
       <section className="minimal-hero" aria-labelledby="run-title">
         <p className="eyebrow">Run analysis</p>
         <h1 id="run-title">{run?.agent_name || run?.agent_id || executionRunId}</h1>
+        {run?.provenance?.honesty_label ? (
+          <p className="runs-honesty-label" role="status">
+            {run.provenance.honesty_label}
+          </p>
+        ) : null}
+        {run?.provenance ? (
+          <dl className="runs-provenance" aria-label="Run provenance">
+            <div><dt>Target</dt><dd>{run.provenance.target_kind}</dd></div>
+            <div><dt>Tester</dt><dd>{run.provenance.tester_kind}</dd></div>
+            <div><dt>Executor</dt><dd>{run.provenance.executor_kind}</dd></div>
+            <div><dt>Media</dt><dd>{run.provenance.media_source}</dd></div>
+          </dl>
+        ) : null}
         <p>
           <ApiAwareLink href="/runs">All runs</ApiAwareLink>
           {' · '}

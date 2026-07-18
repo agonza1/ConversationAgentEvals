@@ -26,16 +26,19 @@ SEED_AGENTS: list[dict[str, Any]] = [
         'name': 'Mock text target',
         'channel': 'text',
         'target': 'mock_agent',
-        'description': 'Built-in testing target for text: deterministic mock callable for sample scenario checks.',
+        'description': 'Built-in sample text agent destination for deterministic scenario checks.',
         'metadata': {'model_name': 'mock-text', 'prompt_version': 'seed'},
     },
     {
         'id': 'acc-voice-fixture-agent',
-        'name': 'ACC voice fixture target',
+        'name': 'Built-in sample voice call',
         'channel': 'voice',
-        'target': 'voice_fixture',
-        'description': 'Built-in testing target for voice: offline ACC fixture path for cancellation-rescue style runs.',
-        'metadata': {'model_name': 'voice-fixture', 'prompt_version': 'seed'},
+        'target': 'builtin_sample_voice',
+        'description': (
+            'Built-in sample voice agent destination. Runs use the CAE local audio loop '
+            '(no phone or SIP call). Pipecat is an implementation detail of that executor.'
+        ),
+        'metadata': {'model_name': 'builtin-sample-voice', 'prompt_version': 'seed'},
     },
 ]
 
@@ -102,6 +105,9 @@ def create_agent(payload: AgentCreateRequest) -> dict[str, Any]:
         channel=payload.channel,
         target=payload.target,
         description=(payload.description or None),
+        sip_uri=payload.sip_uri,
+        phone_number=payload.phone_number,
+        acc_base_url=payload.acc_base_url,
         metadata=payload.metadata or {},
         created_at=now,
         updated_at=now,
