@@ -13,38 +13,117 @@ import {
   updateAgent,
 } from '@/lib/execution';
 
+type PlannedVoiceTarget = 'browser_webrtc' | 'sip_phone';
+type FormTarget = AgentRecord['target'] | PlannedVoiceTarget;
+
 type AgentFormState = {
   name: string;
   channel: AgentRecord['channel'];
-  target: AgentRecord['target'];
+  target: FormTarget;
+  environment: NonNullable<AgentRecord['environment']>;
+  endpointUrl: string;
+  authType: 'none' | 'bearer_secret' | 'api_key_secret';
+  secretRef: string;
+  apiKeyHeader: string;
+  responsePath: string;
+  timeoutMs: number;
+  sipDestination: string;
+  phoneNumber: string;
   description: string;
 };
 
 const EMPTY_FORM: AgentFormState = {
   name: '',
   channel: 'text',
-  target: 'mock_agent',
+  target: 'http_endpoint',
+  environment: 'staging',
+  endpointUrl: '',
+  authType: 'none',
+  secretRef: '',
+  apiKeyHeader: 'x-api-key',
+  responsePath: 'response',
+  timeoutMs: 15000,
+  sipDestination: '',
+  phoneNumber: '',
   description: '',
 };
 
-const TARGET_OPTIONS: Record<AgentRecord['channel'], Array<{ value: AgentRecord['target']; label: string }>> = {
+const TARGET_OPTIONS: Record<
+  AgentRecord['channel'],
+  Array<{
+    value: FormTarget;
+    label: string;
+    group: 'Live connections' | 'Built-in samples';
+    comingSoon?: boolean;
+  }>
+> = {
   text: [
-    { value: 'mock_agent', label: 'Built-in: mock_agent (text testing target)' },
-    { value: 'openai_codex', label: 'Endpoint: openai_codex (requires OpenAI connection)' },
-    { value: 'offline_acc_fixture', label: 'Built-in: offline_acc_fixture (text fixture target)' },
+    { value: 'http_endpoint', label: 'HTTP JSON chat endpoint', group: 'Live connections' },
+    { value: 'openai_codex', label: 'Connected OpenAI prompt agent', group: 'Live connections' },
+    { value: 'mock_agent', label: 'Built-in sample text agent', group: 'Built-in samples' },
+    { value: 'offline_acc_fixture', label: 'Saved ACC text replay', group: 'Built-in samples' },
   ],
-  voice: [{ value: 'voice_fixture', label: 'Built-in: voice_fixture (voice testing target)' }],
+  voice: [
+    { value: 'browser_webrtc', label: 'Agentic Contact Center — browser WebRTC (coming soon)', group: 'Live connections', comingSoon: true },
+    { value: 'sip_phone', label: 'Agentic Contact Center — SIP / phone (coming soon)', group: 'Live connections', comingSoon: true },
+    { value: 'voice_fixture', label: 'Saved ACC voice replay', group: 'Built-in samples' },
+  ],
 };
+
+function isPlannedVoiceTarget(target: FormTarget): target is PlannedVoiceTarget {
+  return target === 'browser_webrtc' || target === 'sip_phone';
+}
+
+function isComingSoonTarget(target: FormTarget) {
+  return TARGET_OPTIONS.text.concat(TARGET_OPTIONS.voice).some((option) => option.value === target && option.comingSoon);
+}
 
 function channelLabel(channel: AgentRecord['channel']) {
   return channel === 'voice' ? 'Voice' : 'Text';
 }
 
-function targetLabel(target: AgentRecord['target']) {
-  if (target === 'mock_agent') return 'Built-in text mock';
+function targetLabel(target: FormTarget) {
+  if (target === 'mock_agent') return 'Built-in sample text agent';
   if (target === 'openai_codex') return 'OpenAI endpoint (live)';
-  if (target === 'offline_acc_fixture') return 'Built-in text ACC fixture';
-  return 'Built-in voice fixture';
+  if (target === 'offline_acc_fixture') return 'Saved ACC text replay';
+  if (target === 'http_endpoint') return 'HTTP JSON endpoint (live)';
+  if (target === 'browser_webrtc') return 'ACC browser WebRTC (coming soon)';
+  if (target === 'sip_phone') return 'ACC SIP / phone (coming soon)';
+  return 'Saved ACC voice replay';
+}
+
+function isFixtureTarget(target: FormTarget) {
+  return target === 'mock_agent' || target === 'offline_acc_fixture' || target === 'voice_fixture';
+}
+
+function connectionFromForm(values: AgentFormState): AgentRecord['connection'] {
+  if (values.target !== 'http_endpoint') return {};
+  return {
+    endpoint_url: values.endpointUrl.trim(),
+    auth_type: values.authType || 'none',
+    secret_ref: values.authType === 'none' ? null : values.secretRef.trim(),
+    api_key_header: values.apiKeyHeader.trim() || 'x-api-key',
+    response_path: values.responsePath.trim() || 'response',
+    timeout_ms: values.timeoutMs,
+  };
+}
+
+function formFromAgent(agent: AgentRecord): AgentFormState {
+  return {
+    name: agent.name,
+    channel: agent.channel,
+    target: agent.target,
+    environment: agent.environment || 'local',
+    endpointUrl: agent.connection?.endpoint_url || '',
+    authType: agent.connection?.auth_type || 'none',
+    secretRef: agent.connection?.secret_ref || '',
+    apiKeyHeader: agent.connection?.api_key_header || 'x-api-key',
+    responsePath: agent.connection?.response_path || 'response',
+    timeoutMs: agent.connection?.timeout_ms || 15000,
+    sipDestination: '',
+    phoneNumber: '',
+    description: agent.description ?? '',
+  };
 }
 
 function agentInitials(name: string) {
@@ -64,9 +143,24 @@ function AgentAvatar({ agent }: { agent: AgentRecord }) {
 }
 
 function AgentConfigRows({ agent }: { agent: AgentRecord }) {
+  const endpoint = agent.connection?.endpoint_url
+    ? (() => {
+        try {
+          return new URL(agent.connection?.endpoint_url || '').origin;
+        } catch {
+          return agent.connection?.endpoint_url || '—';
+        }
+      })()
+    : null;
   const rows = [
     { label: 'Channel', value: channelLabel(agent.channel) },
     { label: 'Connection', value: targetLabel(agent.target) },
+    { label: 'Environment', value: agent.environment || 'local' },
+    ...(endpoint ? [{ label: 'Endpoint', value: endpoint, detail: `Reply path ${agent.connection?.response_path || 'response'}` }] : []),
+    {
+      label: 'Evidence',
+      value: isFixtureTarget(agent.target) ? 'Sample-generated' : agent.target === 'http_endpoint' ? 'Black-box response' : 'Provider response',
+    },
     {
       label: 'Target ID',
       value: agent.id,
@@ -170,18 +264,52 @@ function AgentFormModal({
   const [name, setName] = useState(initial.name);
   const [channel, setChannel] = useState(initial.channel);
   const [target, setTarget] = useState(initial.target);
+  const [environment, setEnvironment] = useState(initial.environment);
+  const [endpointUrl, setEndpointUrl] = useState(initial.endpointUrl);
+  const [authType, setAuthType] = useState(initial.authType);
+  const [secretRef, setSecretRef] = useState(initial.secretRef);
+  const [apiKeyHeader, setApiKeyHeader] = useState(initial.apiKeyHeader);
+  const [responsePath, setResponsePath] = useState(initial.responsePath);
+  const [timeoutMs, setTimeoutMs] = useState(initial.timeoutMs);
+  const [sipDestination, setSipDestination] = useState(initial.sipDestination);
+  const [phoneNumber, setPhoneNumber] = useState(initial.phoneNumber);
   const [description, setDescription] = useState(initial.description);
+  const comingSoon = isComingSoonTarget(target);
 
   useEffect(() => {
     setName(initial.name);
     setChannel(initial.channel);
     setTarget(initial.target);
+    setEnvironment(initial.environment);
+    setEndpointUrl(initial.endpointUrl);
+    setAuthType(initial.authType);
+    setSecretRef(initial.secretRef);
+    setApiKeyHeader(initial.apiKeyHeader);
+    setResponsePath(initial.responsePath);
+    setTimeoutMs(initial.timeoutMs);
+    setSipDestination(initial.sipDestination);
+    setPhoneNumber(initial.phoneNumber);
     setDescription(initial.description);
   }, [initial]);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    await onSubmit({ name, channel, target, description });
+    if (comingSoon) return;
+    await onSubmit({
+      name,
+      channel,
+      target,
+      environment,
+      endpointUrl,
+      authType,
+      secretRef,
+      apiKeyHeader,
+      responsePath,
+      timeoutMs,
+      sipDestination,
+      phoneNumber,
+      description,
+    });
   }
 
   function onChannelChange(nextChannel: AgentRecord['channel']) {
@@ -209,7 +337,7 @@ function AgentFormModal({
         <form className="agents-modal-form" onSubmit={(event) => void handleSubmit(event)}>
           <label>
             <span>Name</span>
-            <input required value={name} onChange={(event) => setName(event.target.value)} placeholder="Support bot endpoint" />
+            <input required value={name} onChange={(event) => setName(event.target.value)} placeholder="Billing support — staging" />
           </label>
           <label>
             <span>Channel</span>
@@ -223,17 +351,143 @@ function AgentFormModal({
             </select>
           </label>
           <label>
-            <span>Connection</span>
+            <span>Connection adapter</span>
             <select
               aria-label="Target connection"
               value={target}
-              onChange={(event) => setTarget(event.target.value as AgentRecord['target'])}
+              onChange={(event) => setTarget(event.target.value as FormTarget)}
             >
-              {TARGET_OPTIONS[channel].map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
+              {(['Live connections', 'Built-in samples'] as const).map((group) => {
+                const options = TARGET_OPTIONS[channel].filter((option) => option.group === group);
+                return options.length ? (
+                  <optgroup key={group} label={group}>
+                    {options.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </optgroup>
+                ) : null;
+              })}
             </select>
           </label>
+          {isFixtureTarget(target) ? (
+            <div className="agents-form-notice" role="note">
+              <strong>Built-in sample</strong>
+              <span>Uses predictable sample responses or a saved conversation. It does not contact a deployed agent.</span>
+            </div>
+          ) : !comingSoon ? (
+            <label>
+              <span>Environment</span>
+              <select aria-label="Target environment" value={environment} onChange={(event) => setEnvironment(event.target.value as AgentFormState['environment'])}>
+                <option value="local">Local</option>
+                <option value="staging">Staging</option>
+                <option value="production">Production</option>
+              </select>
+            </label>
+          ) : null}
+          {target === 'http_endpoint' ? (
+            <fieldset className="agents-connection-fields">
+              <legend>HTTP JSON contract</legend>
+              <p>
+                We POST <code>{'{"message":"…","history":[…],"scenario":{…}}'}</code> and read reply text from the response path.
+              </p>
+              <label>
+                <span>Endpoint URL</span>
+                <input required type="url" aria-label="Endpoint URL" value={endpointUrl} onChange={(event) => setEndpointUrl(event.target.value)} placeholder="https://staging.example.com/chat" />
+              </label>
+              <div className="agents-form-grid">
+                <label>
+                  <span>Authentication</span>
+                  <select aria-label="Target authentication" value={authType} onChange={(event) => setAuthType(event.target.value as AgentFormState['authType'])}>
+                    <option value="none">None</option>
+                    <option value="bearer_secret">Configured bearer credential</option>
+                    <option value="api_key_secret">Configured API key</option>
+                  </select>
+                </label>
+                {authType !== 'none' ? (
+                  <label>
+                    <span>Credential ID</span>
+                    <input required aria-label="Credential ID" value={secretRef} onChange={(event) => setSecretRef(event.target.value)} placeholder="support-staging" pattern="[a-z][a-z0-9-]{0,63}" />
+                  </label>
+                ) : null}
+                {authType === 'api_key_secret' ? (
+                  <label>
+                    <span>API key header</span>
+                    <input required aria-label="API key header" value={apiKeyHeader} onChange={(event) => setApiKeyHeader(event.target.value)} />
+                  </label>
+                ) : null}
+                <label>
+                  <span>Response text path</span>
+                  <input required aria-label="Response text path" value={responsePath} onChange={(event) => setResponsePath(event.target.value)} placeholder="response" />
+                </label>
+                <label>
+                  <span>Timeout (ms)</span>
+                  <input required aria-label="Target timeout" type="number" min={500} max={120000} value={timeoutMs} onChange={(event) => setTimeoutMs(Number(event.target.value) || 15000)} />
+                </label>
+              </div>
+              <small>Ask an administrator for a configured credential ID. Environment-variable names and raw credentials are never accepted or stored here.</small>
+            </fieldset>
+          ) : null}
+          {target === 'sip_phone' ? (
+            <fieldset className="agents-connection-fields">
+              <legend>ACC SIP / phone destination</legend>
+              <p>
+                Live SIP already works in{' '}
+                <a href="https://github.com/agonza1/agentic-contact-center" target="_blank" rel="noreferrer">
+                  Agentic Contact Center
+                </a>
+                {' '}(FreeSWITCH → Verto/WebRTC agent leg → Pipecat). ConversationAgentEvals will call that target — we will not reimplement dialing here.
+              </p>
+              <label>
+                <span>SIP URI or ACC extension</span>
+                <input
+                  aria-label="SIP URI"
+                  value={sipDestination}
+                  onChange={(event) => setSipDestination(event.target.value)}
+                  placeholder="sip:1000@127.0.0.1 or ACC extension 8600"
+                />
+              </label>
+              <label>
+                <span>Phone number (E.164)</span>
+                <input
+                  aria-label="Phone number"
+                  value={phoneNumber}
+                  onChange={(event) => setPhoneNumber(event.target.value)}
+                  placeholder="+15551234567"
+                />
+              </label>
+              <small>
+                Preferred ACC path: softphone/SIP → FreeSWITCH dialplan → Verto user <code>acc-pipecat</code> →{' '}
+                <code>pipecat-verto-agent-bridge.py</code>. CAE integration (create + Execute against a running ACC) is coming soon.
+              </small>
+            </fieldset>
+          ) : null}
+          {target === 'browser_webrtc' ? (
+            <fieldset className="agents-connection-fields">
+              <legend>ACC browser WebRTC</legend>
+              <p>
+                Live browser media already works in ACC via{' '}
+                <code>pipecat-browser-webrtc-bridge.py</code> (SmallWebRTCTransport + shared voice pipeline). CAE will attach as the eval harness against that session — not a second media stack.
+              </p>
+            </fieldset>
+          ) : null}
+          {comingSoon ? (
+            <div className="agents-form-notice" role="note">
+              <strong>CAE ↔ ACC live adapter coming soon</strong>
+              <span>
+                {target === 'sip_phone'
+                  ? 'You can sketch the destination now. Create stays disabled until ConversationAgentEvals can launch/score against a running Agentic Contact Center SIP session.'
+                  : 'You can preview this adapter now. Create stays disabled until ConversationAgentEvals can attach to ACC’s browser WebRTC session for eval evidence.'}
+              </span>
+            </div>
+          ) : null}
+          {channel === 'voice' && !comingSoon ? (
+            <div className="agents-form-notice" role="note">
+              <strong>Fixture-backed voice</strong>
+              <span>
+                Uses a saved ACC conversation replay inside ConversationAgentEvals. For live SIP or browser calls, pick an Agentic Contact Center adapter above (integration coming soon).
+              </span>
+            </div>
+          ) : null}
           <label>
             <span>Description</span>
             <textarea
@@ -247,8 +501,8 @@ function AgentFormModal({
             <button type="button" className="secondary-link" onClick={onClose}>
               Cancel
             </button>
-            <button type="submit" className="primary-link" disabled={saving}>
-              {saving ? 'Saving…' : submitLabel}
+            <button type="submit" className="primary-link" disabled={saving || comingSoon} title={comingSoon ? 'CAE ↔ ACC live adapter coming soon' : undefined}>
+              {saving ? 'Saving…' : comingSoon ? 'Coming soon' : submitLabel}
             </button>
           </div>
         </form>
@@ -290,6 +544,10 @@ export function AgentsPage() {
   }, []);
 
   async function onCreate(values: AgentFormState) {
+    if (isComingSoonTarget(values.target) || isPlannedVoiceTarget(values.target)) {
+      setError('That ACC live adapter is coming soon — CAE cannot create it until the ACC session bridge is wired.');
+      return;
+    }
     setSaving(true);
     setError(null);
     setMessage(null);
@@ -298,6 +556,8 @@ export function AgentsPage() {
         name: values.name.trim(),
         channel: values.channel,
         target: values.target,
+        environment: isFixtureTarget(values.target) ? 'local' : values.environment,
+        connection: connectionFromForm(values),
         description: values.description.trim() || null,
       });
       setShowCreate(false);
@@ -311,6 +571,10 @@ export function AgentsPage() {
   }
 
   async function onEdit(agentId: string, values: AgentFormState) {
+    if (isComingSoonTarget(values.target) || isPlannedVoiceTarget(values.target)) {
+      setError('That ACC live adapter is coming soon — CAE cannot create it until the ACC session bridge is wired.');
+      return;
+    }
     setSaving(true);
     setError(null);
     setMessage(null);
@@ -319,6 +583,8 @@ export function AgentsPage() {
         name: values.name.trim(),
         channel: values.channel,
         target: values.target,
+        environment: isFixtureTarget(values.target) ? 'local' : values.environment,
+        connection: connectionFromForm(values),
         description: values.description.trim() || null,
       });
       setEditingAgent(null);
@@ -417,7 +683,7 @@ export function AgentsPage() {
         <section className="agents-empty card">
           <h2>No agent targets yet</h2>
           <p className="scenarios-muted">
-            Add a text or voice testing target — built-in mocks/fixtures or a connection to your own endpoint.
+            Add a text or voice target — use a built-in sample or connect your own endpoint.
           </p>
           <button type="button" className="primary-link" onClick={() => setShowCreate(true)}>
             Add agent target
@@ -440,12 +706,7 @@ export function AgentsPage() {
         <AgentFormModal
           title={`Edit ${editingAgent.name}`}
           submitLabel="Save changes"
-          initial={{
-            name: editingAgent.name,
-            channel: editingAgent.channel,
-            target: editingAgent.target,
-            description: editingAgent.description ?? '',
-          }}
+          initial={formFromAgent(editingAgent)}
           saving={saving}
           onClose={() => setEditingAgent(null)}
           onSubmit={(values) => onEdit(editingAgent.id, values)}

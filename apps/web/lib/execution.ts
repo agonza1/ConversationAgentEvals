@@ -1,3 +1,5 @@
+import { apiErrorMessage } from './apiError';
+
 export type ExecutionMode = 'text_callable' | 'voice_fixture' | 'pipecat_webrtc';
 export type AudioTransportId = 'none' | 'pipecat_small_webrtc' | 'freeswitch_verto_sip';
 
@@ -5,7 +7,16 @@ export interface AgentRecord {
   id: string;
   name: string;
   channel: 'text' | 'voice';
-  target: 'mock_agent' | 'openai_codex' | 'offline_acc_fixture' | 'voice_fixture';
+  target: 'mock_agent' | 'openai_codex' | 'offline_acc_fixture' | 'voice_fixture' | 'http_endpoint';
+  environment?: 'local' | 'staging' | 'production';
+  connection?: {
+    endpoint_url?: string | null;
+    auth_type?: 'none' | 'bearer_secret' | 'api_key_secret';
+    secret_ref?: string | null;
+    api_key_header?: string;
+    response_path?: string;
+    timeout_ms?: number;
+  };
   description?: string | null;
   metadata?: {
     model_name?: string | null;
@@ -79,6 +90,10 @@ export interface ExecutionRunRecord {
   agent_id?: string | null;
   agent_name?: string | null;
   model_name?: string | null;
+  tester_id?: 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
+  tester_model_name?: string | null;
+  executor_id?: 'local_async_runner';
+  execution_snapshot?: Record<string, unknown> | null;
   progress: {
     phase: string;
     completed_conversations: number;
@@ -117,14 +132,7 @@ export function getApiBase() {
 async function handleJson<T>(response: Response): Promise<T> {
   const text = await response.text();
   if (!response.ok) {
-    let message = text || `Request failed with ${response.status}`;
-    try {
-      const parsed = JSON.parse(text) as { detail?: string };
-      if (typeof parsed?.detail === 'string') message = parsed.detail;
-    } catch {
-      // Keep plain text.
-    }
-    throw new Error(message);
+    throw new Error(apiErrorMessage(text, response.status));
   }
   return (text ? JSON.parse(text) : {}) as T;
 }
@@ -152,7 +160,7 @@ export function applyAgentLaunchDefaults(
   }
   return {
     mode: 'text_callable',
-    textCallable: agent.target === 'mock_agent' || agent.target === 'openai_codex' || agent.target === 'offline_acc_fixture' ? agent.target : 'mock_agent',
+    textCallable: ['mock_agent', 'openai_codex', 'offline_acc_fixture', 'http_endpoint'].includes(agent.target) ? agent.target : 'mock_agent',
   };
 }
 
@@ -167,6 +175,8 @@ export async function createAgent(payload: {
   name: string;
   channel: AgentRecord['channel'];
   target: AgentRecord['target'];
+  environment?: AgentRecord['environment'];
+  connection?: AgentRecord['connection'];
   description?: string | null;
 }): Promise<AgentRecord> {
   return handleJson(
@@ -180,7 +190,7 @@ export async function createAgent(payload: {
 
 export async function updateAgent(
   agentId: string,
-  payload: Partial<Pick<AgentRecord, 'name' | 'channel' | 'target' | 'description'>>,
+  payload: Partial<Pick<AgentRecord, 'name' | 'channel' | 'target' | 'environment' | 'connection' | 'description'>>,
 ): Promise<AgentRecord> {
   return handleJson(
     await fetch(`${getApiBase()}/api/agents/${encodeURIComponent(agentId)}`, {
@@ -224,6 +234,9 @@ export async function createExecutionRun(payload: {
   agent_id?: string;
   text_callable?: string;
   model_name?: string;
+  tester_id?: 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
+  tester_model_name?: string;
+  executor_id?: 'local_async_runner';
   evaluate?: boolean;
   audio_transport?: AudioTransportId;
 }): Promise<ExecutionRunRecord> {

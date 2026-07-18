@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 import pytest
 
 from app.main import app
 from app.services import agent_store, execution_run_store
 from app.services.execution_runner import execute_execution_run, start_execution_run
+from app.services.target_secrets import resolve_http_target_secret
 from app.schemas.execution import ExecutionRunCreateRequest
 
 
@@ -52,6 +55,136 @@ def test_agent_crud_round_trip():
     deleted = client.delete(f'/api/agents/{agent_id}')
     assert deleted.status_code == 200
     assert client.get(f'/api/agents/{agent_id}').status_code == 404
+
+
+def test_http_target_requires_real_connection_configuration():
+    missing = client.post(
+        '/api/agents',
+        json={'name': 'No endpoint', 'channel': 'text', 'target': 'http_endpoint'},
+    )
+    assert missing.status_code == 422
+    assert 'endpoint_url' in missing.text
+
+    inline_credentials = client.post(
+        '/api/agents',
+        json={
+            'name': 'Unsafe endpoint',
+            'channel': 'text',
+            'target': 'http_endpoint',
+            'connection': {'endpoint_url': 'https://user:secret@example.test/chat'},
+        },
+    )
+    assert inline_credentials.status_code == 422
+    assert 'Do not embed credentials' in inline_credentials.text
+
+    arbitrary_environment_variable = client.post(
+        '/api/agents',
+        json={
+            'name': 'Unsafe credential reference',
+            'channel': 'text',
+            'target': 'http_endpoint',
+            'connection': {
+                'endpoint_url': 'https://example.test/chat',
+                'auth_type': 'bearer_secret',
+                'secret_ref': 'AWS_SECRET_ACCESS_KEY',
+            },
+        },
+    )
+    assert arbitrary_environment_variable.status_code == 422
+    assert 'string_pattern_mismatch' in arbitrary_environment_variable.text
+
+
+def test_http_target_credentials_only_resolve_from_dedicated_namespace(monkeypatch):
+    monkeypatch.setenv('AWS_SECRET_ACCESS_KEY', 'must-not-be-read')
+
+    with pytest.raises(ValueError, match='credential is not configured'):
+        resolve_http_target_secret('aws-secret-access-key')
+
+    monkeypatch.setenv('CAE_HTTP_TARGET_SECRET_AWS_SECRET_ACCESS_KEY', 'approved-target-secret')
+    assert resolve_http_target_secret('aws-secret-access-key') == 'approved-target-secret'
+
+
+def test_http_target_executes_black_box_contract_and_persists_tester_provenance(monkeypatch):
+    from app.services import execution_runner
+
+    requests = []
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps({'result': {'reply': 'Please confirm your ZIP code and phone number.'}}).encode()
+
+    def fake_urlopen(request, *, timeout):
+        requests.append((request, timeout))
+        return FakeResponse()
+
+    monkeypatch.setenv('SUPPORT_AGENT_TOKEN', 'must-not-be-read')
+    monkeypatch.setenv('CAE_HTTP_TARGET_SECRET_SUPPORT_AGENT_TOKEN', 'not-persisted')
+    monkeypatch.setattr(execution_runner, 'urlopen', fake_urlopen)
+    created = client.post(
+        '/api/agents',
+        json={
+            'name': 'Staging HTTP support',
+            'channel': 'text',
+            'target': 'http_endpoint',
+            'environment': 'staging',
+            'connection': {
+                'endpoint_url': 'https://support.example.test/chat',
+                'auth_type': 'bearer_secret',
+                'secret_ref': 'support-agent-token',
+                'response_path': 'result.reply',
+                'timeout_ms': 5000,
+            },
+        },
+    )
+    assert created.status_code == 200, created.text
+    assert 'not-persisted' not in created.text
+
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['billing-address-change'],
+        agent_id=created.json()['id'],
+        tester_id='scenario_simulator',
+        executor_id='local_async_runner',
+        user_id='agent-runs-user',
+        project_id='agent-runs-project',
+        evaluate=False,
+    )
+    queued = start_execution_run(payload)
+    assert queued['tester_id'] == 'scenario_simulator'
+    assert queued['executor_id'] == 'local_async_runner'
+    assert queued['execution_snapshot']['agent']['target'] == 'http_endpoint'
+    finished = execute_execution_run(queued['execution_run_id'], payload)
+
+    assert finished['status'] == 'completed'
+    conversation = finished['conversations'][0]
+    assert conversation['turns'][1]['text'] == 'Please confirm your ZIP code and phone number.'
+    provenance = conversation['final_state']['runtime_provenance']
+    assert provenance['fixture_backed'] is False
+    assert provenance['trace_visibility'] == 'black_box'
+    assert provenance['tester_id'] == 'scenario_simulator'
+    request, timeout = requests[0]
+    assert timeout == 5
+    assert request.headers['Authorization'] == 'Bearer not-persisted'
+    posted = json.loads(request.data)
+    assert posted['scenario']['id'] == 'billing-address-change'
+    assert posted['history'][0]['role'] == 'user'
+    assert posted['message'].startswith('Hi,')
+    assert 'A busy customer who' not in posted['message']
+
+
+def test_execution_rejects_tester_incompatible_with_mode():
+    with pytest.raises(ValueError, match='text_callable mode requires tester_id=scenario_simulator'):
+        ExecutionRunCreateRequest(mode='text_callable', tester_id='fixture_replay')
+    with pytest.raises(ValueError, match='voice_fixture mode requires tester_id=fixture_replay'):
+        ExecutionRunCreateRequest(mode='voice_fixture', tester_id='scenario_simulator')
 
 
 def test_execution_with_agent_id_and_metrics_summary():
@@ -268,24 +401,39 @@ def test_text_offline_acc_fixture_stays_text_callable():
     assert queued['mode'] == 'text_callable'
 
 
-def test_agent_payload_honors_an_explicit_target_mode_override():
+def test_agent_payload_rejects_execution_mode_that_bypasses_selected_text_target():
+    from app.services.execution_runner import _resolve_agent_payload
+
+    with pytest.raises(ValueError, match='would execute a different adapter'):
+        _resolve_agent_payload(
+            ExecutionRunCreateRequest(
+                suite_id='call-center-voice-ai',
+                scenario_ids=['cancellation-rescue'],
+                agent_id='mock-text-agent',
+                mode='pipecat_webrtc',
+                user_id='agent-runs-user',
+                project_id='agent-runs-project',
+                iterations=1,
+            )
+        )
+
+
+def test_voice_fixture_target_allows_pipecat_capture_proof_mode():
     from app.services.execution_runner import _resolve_agent_payload
 
     resolved = _resolve_agent_payload(
         ExecutionRunCreateRequest(
             suite_id='call-center-voice-ai',
             scenario_ids=['cancellation-rescue'],
-            agent_id='mock-text-agent',
+            agent_id='acc-voice-fixture-agent',
             mode='pipecat_webrtc',
             user_id='agent-runs-user',
             project_id='agent-runs-project',
-            iterations=1,
         )
     )
 
-    assert resolved.agent_id == 'mock-text-agent'
     assert resolved.mode == 'pipecat_webrtc'
-    assert resolved.audio_transport == 'pipecat_small_webrtc'
+    assert resolved.tester_id == 'pipecat_tester'
 
 
 def test_explicit_text_mode_uses_selected_text_agent_target_when_callable_is_omitted():
@@ -315,6 +463,32 @@ def test_explicit_text_mode_uses_selected_text_agent_target_when_callable_is_omi
 
     assert resolved.mode == 'text_callable'
     assert resolved.text_callable == 'openai_codex'
+
+
+def test_execution_rejects_callable_that_does_not_match_selected_target():
+    created = client.post(
+        '/api/agents',
+        json={
+            'name': 'HTTP provenance guard',
+            'channel': 'text',
+            'target': 'http_endpoint',
+            'connection': {'endpoint_url': 'https://support.example.test/chat'},
+        },
+    )
+    assert created.status_code == 200, created.text
+
+    with pytest.raises(ValueError, match='would execute a different target'):
+        start_execution_run(
+            ExecutionRunCreateRequest(
+                suite_id='call-center-voice-ai',
+                scenario_ids=['billing-address-change'],
+                agent_id=created.json()['id'],
+                mode='text_callable',
+                text_callable='mock_agent',
+                user_id='agent-runs-user',
+                project_id='agent-runs-project',
+            )
+        )
 
 
 def test_rejects_openai_callable_without_agent_before_queueing(monkeypatch):
@@ -389,7 +563,7 @@ def test_explicit_openai_target_executes_selected_model_for_any_text_agent_witho
         json={
             'name': 'Live OpenAI support agent',
             'channel': 'text',
-            'target': 'mock_agent',
+            'target': 'openai_codex',
             'description': 'Verify the caller before account changes.',
         },
     )

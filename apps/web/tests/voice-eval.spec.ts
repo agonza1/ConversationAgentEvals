@@ -16,6 +16,13 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
             target: 'voice_fixture',
             description: 'Built-in target for cancellation-rescue voice evaluation.',
           },
+          {
+            id: 'acc-offline-fixture-agent',
+            name: 'ACC offline text fixture',
+            channel: 'text',
+            target: 'offline_acc_fixture',
+            description: 'Text-only fixture that must not be offered through a voice transport.',
+          },
         ],
       }),
     });
@@ -159,9 +166,11 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
     '/targets?api_base=http%3A%2F%2Fapi.example.test',
   );
   await expect(page.getByLabel('Voice target')).toHaveValue('acc-voice-fixture-agent');
+  await expect(page.getByLabel('Voice target').locator('option')).toHaveCount(1);
+  await expect(page.getByLabel('Voice target').locator('option')).not.toContainText('ACC offline text fixture');
   await expect(page.getByRole('heading', { name: 'Pick the Run Agent target' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Pipecat capture proof' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Offline fixture smoke' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Offline sample check' })).toBeVisible();
   await expect(page.getByText('Browser mic peer')).toBeVisible();
   await expect(page.getByText('Not connected in this slice')).toBeVisible();
   await page.getByRole('button', { name: 'Run through Run Agent' }).click();
@@ -172,6 +181,6 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
     '/runs/voice-run-1?api_base=http%3A%2F%2Fapi.example.test',
   );
   await expect(results.getByText('Cancellation rescue', { exact: true })).toBeVisible({ timeout: 10000 });
-  await expect(results.getByText(/vCon|recording metadata|Pipecat capture proof|fixture-backed score/i).first()).toBeVisible();
+  await expect(results.getByText(/vCon|recording metadata|Pipecat capture proof|sample-based score/i).first()).toBeVisible();
   await expect(results.getByRole('progressbar', { name: 'Voice evaluation progress' })).toHaveAttribute('aria-valuenow', '100');
 });

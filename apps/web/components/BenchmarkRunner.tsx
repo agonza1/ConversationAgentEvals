@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiAwareLink } from './ApiAwareLink';
+import { apiErrorMessage } from '@/lib/apiError';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -675,14 +676,7 @@ async function handleJson<T>(response: Response): Promise<T> {
   const text = await response.text();
 
   if (!response.ok) {
-    let message = text || `Request failed with ${response.status}`;
-    try {
-      const parsed = JSON.parse(text) as { detail?: string };
-      message = parsed.detail || message;
-    } catch {
-      // Keep plain-text fallback.
-    }
-    throw new Error(message);
+    throw new Error(apiErrorMessage(text, response.status));
   }
 
   return (text ? JSON.parse(text) : {}) as T;
@@ -980,6 +974,9 @@ interface ExecutionRunRecord {
   agent_id?: string | null;
   agent_name?: string | null;
   model_name?: string | null;
+  tester_id?: 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
+  tester_model_name?: string | null;
+  executor_id?: 'local_async_runner';
   error?: string | null;
   created_at: string;
   updated_at: string;
@@ -997,6 +994,9 @@ async function createExecutionRun(payload: {
   evaluate?: boolean;
   agent_id?: string;
   model_name?: string;
+  tester_id?: 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
+  tester_model_name?: string;
+  executor_id?: 'local_async_runner';
 }) {
   return handleJson<ExecutionRunRecord>(
     await fetch(`${getApiBase()}/api/execution/runs`, {
@@ -1012,11 +1012,27 @@ type ScoreAgentOption = {
   name: string;
   channel: string;
   target: string;
+  environment?: 'local' | 'staging' | 'production';
+  connection?: {
+    endpoint_url?: string | null;
+    response_path?: string | null;
+  };
   metadata?: {
     model_name?: string | null;
     prompt_version?: string | null;
   };
 };
+
+function isFixtureTargetId(target?: string | null) {
+  return target === 'mock_agent' || target === 'offline_acc_fixture' || target === 'voice_fixture';
+}
+
+function testerDisplayName(testerId?: string | null) {
+  if (testerId === 'fixture_replay') return 'saved conversation replay';
+  if (testerId === 'scenario_simulator') return 'scenario simulator';
+  if (testerId === 'pipecat_tester') return 'Pipecat voice tester';
+  return 'scenario tester';
+}
 
 async function listAgents(): Promise<ScoreAgentOption[]> {
   const payload = await handleJson<{ agents?: ScoreAgentOption[] }>(
@@ -2132,7 +2148,13 @@ function describeUploadedEvidence(filename: string, text: string): {
   };
 }
 
-export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }) {
+export function BenchmarkRunner({
+  view = 'all',
+  onExecutionCreated,
+}: {
+  view?: BenchmarkRunnerView;
+  onExecutionCreated?: (run: ExecutionRunRecord) => void;
+}) {
   const loadingSavedRunRef = useRef(false);
   const autoLaunchDemoRef = useRef(false);
   const preserveScoreEvidenceRef = useRef(false);
@@ -2187,6 +2209,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
   const [executionMode, setExecutionMode] = useState<'text_callable' | 'voice_fixture' | 'pipecat_webrtc'>('text_callable');
   const [executionScope, setExecutionScope] = useState<'selected' | 'suite'>('selected');
   const [executionIterations, setExecutionIterations] = useState(1);
+  const [executionTesterId, setExecutionTesterId] = useState<'scenario_simulator' | 'fixture_replay' | 'pipecat_tester'>('scenario_simulator');
   const [executionRun, setExecutionRun] = useState<ExecutionRunRecord | null>(null);
   const [isLaunchingExecution, setIsLaunchingExecution] = useState(false);
   const [executionMessage, setExecutionMessage] = useState<string | null>(null);
@@ -2252,14 +2275,28 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     );
   }
 
-  function loadScenarioStarterData(nextScenario = selectedScenario) {
+  function applyScenarioStructuredSample(nextScenario: BenchmarkScenario) {
+    setActionTrace(stringifyEditable(nextScenario.sample_action_trace, '[]'));
+    setFinalState(stringifyEditable(nextScenario.sample_final_state ?? nextScenario.expected_final_state, '{}'));
+    setCallEvidence('');
+    setGroupCall('');
+    setVconEvidence(
+      nextScenario.sample_transcript ? sampleVconFromTranscript(nextScenario.sample_transcript) : '',
+    );
+  }
+
+  function loadScenarioStarterData(
+    nextScenario = selectedScenario,
+    options: { includeStructuredSample?: boolean } = {},
+  ) {
     if (!nextScenario) return;
 
     const nextTranscript = nextScenario.sample_transcript ?? '';
+    const includeStructuredSample = options.includeStructuredSample === true;
     setTranscript(nextTranscript);
-    // On /eval, starter structured traces silently force a pass even after transcript edits.
-    // Keep the visible transcript as the scorable evidence; leave optional structured empty.
-    if (view === 'score') {
+    // On /eval, default to transcript-only so hidden sample traces cannot force Task/Final 100s.
+    // Opt into full sample when the operator explicitly asks for structured measurement.
+    if (view === 'score' && !includeStructuredSample) {
       setActionTrace('');
       setFinalState('');
       setCallEvidence('');
@@ -2267,12 +2304,8 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
       setVconEvidence('');
       setIncludeStructuredEvidence(false);
     } else {
-      setActionTrace(stringifyEditable(nextScenario.sample_action_trace, '[]'));
-      setFinalState(stringifyEditable(nextScenario.sample_final_state ?? nextScenario.expected_final_state, '{}'));
-      setCallEvidence('');
-      setGroupCall('');
-      setVconEvidence(nextTranscript ? sampleVconFromTranscript(nextTranscript) : '');
-      setIncludeStructuredEvidence(false);
+      applyScenarioStructuredSample(nextScenario);
+      setIncludeStructuredEvidence(view === 'score' ? includeStructuredSample : false);
     }
     setReport(null);
     setSuiteSimulation(null);
@@ -2283,16 +2316,32 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     setUploadMessage(null);
   }
 
-  function onLoadSampleEvidence(scenario: BenchmarkScenario) {
+  function onLoadSampleEvidence(scenario: BenchmarkScenario, options: { includeStructuredSample?: boolean } = {}) {
     preserveScoreEvidenceRef.current = true;
     setSelectedScenarioId(scenario.id);
-    loadScenarioStarterData(scenario);
+    loadScenarioStarterData(scenario, options);
     setShowSimulateEvidenceOptions(false);
+    const withStructured = options.includeStructuredSample === true;
     setUploadMessage(
       view === 'score'
-        ? `Loaded sample transcript: ${scenario.title}. Edit it and Evaluate — scores follow the transcript, not hidden sample traces.`
+        ? withStructured
+          ? `Loaded full sample evidence: ${scenario.title}. Task completion and final state will be measured from the sample traces.`
+          : `Loaded sample transcript: ${scenario.title}. Task/final stay n/a until you include structured evidence.`
         : `Loaded sample evidence: ${scenario.title}. This evidence is synthetic.`,
     );
+  }
+
+  function onToggleStructuredEvidence(checked: boolean) {
+    setIncludeStructuredEvidence(checked);
+    if (view !== 'score' || !checked || !selectedScenario) return;
+    // Checking the box with empty fields should load the scenario sample traces so
+    // Task completion / Final state become measurable instead of staying n/a forever.
+    if (isBlankJsonField(actionTrace) && isBlankJsonField(finalState)) {
+      applyScenarioStructuredSample(selectedScenario);
+      setUploadMessage(
+        `Included sample action trace and final state for ${selectedScenario.title}. Evaluate to measure task completion and final state.`,
+      );
+    }
   }
 
   async function onUploadEvidenceFile(file: File | null) {
@@ -2307,6 +2356,15 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         setVconEvidence(loaded.vcon || '');
         if (loaded.transcript) setTranscript(loaded.transcript);
         setCallEvidence('');
+        // Keep the uploaded vCon available under structured evidence, but do not auto-include it on /eval.
+        if (view === 'score') {
+          setIncludeStructuredEvidence(false);
+          setUploadMessage(
+            `${loaded.message} Transcript was extracted for scoring. Check “Include structured evidence” if you also want the vCon artifact evaluated.`,
+          );
+          setReport(null);
+          return;
+        }
       } else {
         setTranscript(loaded.transcript || '');
         setVconEvidence('');
@@ -2440,8 +2498,10 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         if (matched) {
           if (matched.channel === 'voice' || matched.target === 'voice_fixture') {
             setExecutionMode('voice_fixture');
+            setExecutionTesterId('fixture_replay');
           } else {
             setExecutionMode('text_callable');
+            setExecutionTesterId('scenario_simulator');
           }
         }
         setAgentsLoaded(true);
@@ -2479,7 +2539,6 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     setExecutionMessage('Starting try-it-out run…');
     void onLaunchExecution({
       redirectToAnalysis: true,
-      target: 'configured',
     });
     // Intentionally omit onLaunchExecution: including it retriggers auto-launch on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3219,7 +3278,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         action_trace: useStructured && !isBlankJsonField(actionTrace) ? parseMaybeJson(actionTrace) : undefined,
         call: useStructured && callEvidence.trim() ? parseMaybeJson(callEvidence) : undefined,
         group_call: useStructured && groupCall.trim() ? parseMaybeJson(groupCall) : undefined,
-        // Keep vCon behind the same opt-in on /eval so a leftover sample record cannot force a pass.
+        // Keep vCon behind the same opt-in on /eval so a leftover sample/upload record cannot force provenance.
         vcon: useStructured && vconEvidence.trim() ? parseMaybeJson(vconEvidence) as JsonRecord : undefined,
         ...runMetadata,
       });
@@ -3273,34 +3332,35 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
     }
   }
 
-  async function onLaunchExecution(options?: { redirectToAnalysis?: boolean; target?: 'live' | 'configured' }) {
+  async function onLaunchExecution(options?: { redirectToAnalysis?: boolean }) {
     if (!selectedSuite) return null;
     const identity = ensureDemoIdentity();
 
-    const launchTarget = options?.target ?? 'live';
-    const liveModelRun = launchTarget === 'live';
-    if (liveModelRun && selectedScoreAgent?.channel !== 'text') {
-      setExecutionMessage('Live model execution currently supports text agents. Use Run fixture for this voice agent.');
+    if (!selectedScoreAgent) {
+      setExecutionMessage('Select an agent target before launching.');
       return null;
     }
-    if (liveModelRun && openaiProvider?.status !== 'connected') {
-      setExecutionMessage('Connect OpenAI before launching a live agent run.');
+    if (selectedScoreAgent.target === 'openai_codex' && openaiProvider?.status !== 'connected') {
+      setExecutionMessage('Connect OpenAI before running this target.');
       return null;
     }
 
     const fixtureBackedAgent = selectedScoreAgent?.target === 'voice_fixture' || selectedScoreAgent?.target === 'offline_acc_fixture';
-    const runMode = liveModelRun
-      ? 'text_callable'
-      : fixtureBackedAgent
+    const runMode = fixtureBackedAgent
         ? executionMode
         : 'text_callable';
-    const runTextCallable = liveModelRun
-      ? 'openai_codex'
-      : selectedScoreAgent?.target === 'offline_acc_fixture'
+    const runTextCallable = selectedScoreAgent?.target === 'offline_acc_fixture'
         ? 'offline_acc_fixture'
         : selectedScoreAgent?.target === 'openai_codex'
           ? 'openai_codex'
+          : selectedScoreAgent?.target === 'http_endpoint'
+            ? 'http_endpoint'
           : 'mock_agent';
+    const runTesterId: NonNullable<ExecutionRunRecord['tester_id']> = runMode === 'pipecat_webrtc'
+      ? 'pipecat_tester'
+      : runMode === 'voice_fixture'
+        ? 'fixture_replay'
+        : 'scenario_simulator';
 
     const voiceModes = runMode === 'voice_fixture' || runMode === 'pipecat_webrtc';
     const offlineFixtureText =
@@ -3325,7 +3385,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
 
     const suiteNote =
       fixtureBackedRun && (selectedSuite.id !== voiceSuiteId || offlineFixtureText)
-        ? `Using suite ${voiceSuiteId} / cancellation-rescue for fixture-backed execution. `
+        ? `Using suite ${voiceSuiteId} / cancellation-rescue for the built-in sample run. `
         : '';
 
     setIsLaunchingExecution(true);
@@ -3344,10 +3404,20 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         evaluate: true,
         agent_id: selectedAgentId || undefined,
         model_name: executionModelName || DEFAULT_EXECUTION_MODEL,
+        tester_id: runTesterId,
+        executor_id: 'local_async_runner',
       });
-      setExecutionRun(queued);
+      const queuedWithLaunchContext = {
+        ...queued,
+        agent_id: selectedAgentId || queued.agent_id || undefined,
+        agent_name: selectedScoreAgent?.name || queued.agent_name || undefined,
+        tester_id: runTesterId || queued.tester_id,
+        executor_id: queued.executor_id || 'local_async_runner',
+      };
+      setExecutionRun(queuedWithLaunchContext);
+      onExecutionCreated?.(queuedWithLaunchContext);
       setExecutionMessage(
-        `${suiteNote || ''}Execution queued (${queued.mode}). Open /runs/${queued.execution_run_id} for analysis when complete.`,
+        `${suiteNote || ''}Execution queued: ${selectedScoreAgent.name} driven by ${testerDisplayName(runTesterId)}. Open /runs/${queued.execution_run_id} for analysis when complete.`,
       );
       listExecutionRuns(identity.userId, identity.projectId).catch(() => undefined);
       if (options?.redirectToAnalysis && queued.execution_run_id) {
@@ -3903,18 +3973,28 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             {showSimulateEvidenceOptions ? (
               <div className="score-simulate-options" aria-label="Sample evidence options">
                 <p>
-                  Loads a starter transcript for{' '}
-                  <strong>{selectedScenario?.title ?? 'the selected scenario'}</strong>. Synthetic sample — not a live agent run.
-                  On Eval, structured traces are left empty so editing the transcript changes the score.
+                  Synthetic sample for{' '}
+                  <strong>{selectedScenario?.title ?? 'the selected scenario'}</strong> — not a live agent run.
+                  Transcript-only keeps Task/Final as n/a. Full sample includes action trace + final state so those tiles are measured.
                 </p>
-                <button
-                  type="button"
-                  className="secondary-link"
-                  disabled={!selectedScenario}
-                  onClick={() => selectedScenario && onLoadSampleEvidence(selectedScenario)}
-                >
-                  Load selected sample evidence
-                </button>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                  <button
+                    type="button"
+                    className="secondary-link"
+                    disabled={!selectedScenario}
+                    onClick={() => selectedScenario && onLoadSampleEvidence(selectedScenario)}
+                  >
+                    Load sample transcript only
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-link"
+                    disabled={!selectedScenario}
+                    onClick={() => selectedScenario && onLoadSampleEvidence(selectedScenario, { includeStructuredSample: true })}
+                  >
+                    Load full sample (measure Task/Final)
+                  </button>
+                </div>
               </div>
             ) : null}
             {uploadMessage ? <p className="score-upload-message">{uploadMessage}</p> : null}
@@ -4020,11 +4100,11 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                     type="checkbox"
                     aria-label="Include structured evidence in Evaluate"
                     checked={includeStructuredEvidence}
-                    onChange={(event) => setIncludeStructuredEvidence(event.target.checked)}
+                    onChange={(event) => onToggleStructuredEvidence(event.target.checked)}
                     style={{ marginTop: 3 }}
                   />
                   <span style={{ fontSize: 14, lineHeight: 1.4 }}>
-                    Include structured evidence when evaluating (action/tool trace, final state, and channel artifacts below).
+                    Include structured evidence when evaluating (measures Task completion and Final state from action/tool trace and final state below). If those fields are empty, the scenario sample traces are filled in.
                   </span>
                 </label>
               ) : null}
@@ -4298,57 +4378,16 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
       </form>
       ) : null}
 
-      <section id="launch-agent" className="card" style={{ padding: 24, display: view === 'score' || view === 'simulate' ? 'none' : 'grid', gap: 16 }} aria-label="Launch agent run">
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+      <section id="launch-agent" className="card run-launch-card" style={{ display: view === 'score' || view === 'simulate' ? 'none' : 'grid' }} aria-label="Launch agent run">
+        <div className="run-launch-heading">
           <div>
             <p className="eyebrow" style={{ margin: '0 0 6px' }}>
               Execute
             </p>
-            <h2 style={{ margin: 0, fontSize: 26 }}>Run agent</h2>
-            <p style={{ margin: '8px 0 0', color: 'var(--muted)', maxWidth: 640 }}>
-              Run the agent target, capture conversation traces as they finish, and stream an ASSERT-style{' '}
-              <code>inference_set.jsonl</code> while conversations append to the live list.
+            <h2>Configure this run</h2>
+            <p>
+              Choose what to test and who drives the scenario. We will capture the transcript, evidence, and score in one run record.
             </p>
-          </div>
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              disabled={
-                isLaunchingExecution
-                || isRunning
-                || isSimulating
-                || !selectedSuite
-                || !selectedScoreAgent
-                || selectedScoreAgent.channel !== 'text'
-                || openaiProvider?.status !== 'connected'
-              }
-              onClick={() => void onLaunchExecution({ target: 'live' })}
-              style={{
-                border: 0,
-                borderRadius: 8,
-                background: 'var(--accent)',
-                color: 'white',
-                padding: '12px 18px',
-                fontWeight: 800,
-                opacity: isLaunchingExecution || isRunning || isSimulating || !selectedSuite || !selectedScoreAgent || selectedScoreAgent.channel !== 'text' || openaiProvider?.status !== 'connected' ? 0.65 : 1,
-              }}
-            >
-              {isLaunchingExecution
-                ? 'Launching...'
-                : executionRun && isActiveExecutionStatus(executionRun.status)
-                  ? 'Execution running...'
-                  : 'Launch agent run'}
-            </button>
-            <button
-              type="button"
-              className="secondary-link"
-              disabled={isLaunchingExecution || isRunning || isSimulating || !selectedSuite || !selectedScoreAgent}
-              onClick={() => void onLaunchExecution({ target: 'configured' })}
-            >
-              {selectedScoreAgent?.target === 'voice_fixture' || selectedScoreAgent?.target === 'offline_acc_fixture'
-                ? 'Run fixture'
-                : 'Mock agent run'}
-            </button>
           </div>
         </div>
 
@@ -4362,15 +4401,24 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
         ) : null}
 
         {view === 'run' && selectedSuite && !loadError ? (
-          <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }} aria-label="Default scenario for launch">
-            Launch uses {executionModelName || DEFAULT_EXECUTION_MODEL} through the connected OpenAI provider when available.
-            {' '}The secondary action uses the selected agent target&apos;s built-in mock or fixture connection.
-          </p>
+          <div className="run-scenario-context" aria-label="Default scenario for launch">
+            <div>
+              <span>Scenario</span>
+              <strong>{selectedScenario?.title || 'Select a scenario'}</strong>
+              <small>{selectedSuite.title}</small>
+            </div>
+            <ApiAwareLink href="/scenarios">Change scenario</ApiAwareLink>
+          </div>
         ) : null}
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-          <label style={{ display: 'grid', gap: 8 }}>
-            <span style={{ fontWeight: 700 }}>Agent target</span>
+        <div className="run-config-grid">
+          <div className="run-config-step">
+            <div className="run-config-step-heading">
+              <span>1</span>
+              <div><strong>Agent target</strong><small>System under test</small></div>
+            </div>
+            <label>
+              <span className="sr-only">Agent target</span>
             <select
               aria-label="Execution agent target"
               value={selectedAgentId}
@@ -4381,20 +4429,68 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                 if (!agent) return;
                 if (agent.channel === 'voice' || agent.target === 'voice_fixture') {
                   setExecutionMode('voice_fixture');
+                  setExecutionTesterId('fixture_replay');
                 } else {
                   setExecutionMode('text_callable');
+                  setExecutionTesterId('scenario_simulator');
                 }
               }}
-              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
             >
               {!agents.length ? <option value="">No targets</option> : null}
               {agents.map((agent) => (
                 <option key={agent.id} value={agent.id}>{agent.name}</option>
               ))}
             </select>
-          </label>
-          <label style={{ display: 'grid', gap: 8 }}>
-            <span style={{ fontWeight: 700 }}>Model</span>
+            </label>
+            <p>{selectedScoreAgent ? (isFixtureTargetId(selectedScoreAgent.target) ? 'Built-in sample agent' : 'Live target') : 'Choose a configured target'}</p>
+          </div>
+          <div className="run-config-step">
+            <div className="run-config-step-heading">
+              <span>2</span>
+              <div><strong>Tester</strong><small>Scenario driver</small></div>
+            </div>
+            <label>
+              <span className="sr-only">Tester</span>
+            <select
+              aria-label="Execution tester"
+              value={executionTesterId}
+              onChange={(event) => setExecutionTesterId(event.target.value as typeof executionTesterId)}
+            >
+              {selectedScoreAgent?.channel === 'voice' ? (
+                <option value="fixture_replay">Saved conversation replay</option>
+              ) : (
+                <option value="scenario_simulator">Scenario simulator (scripted user opener)</option>
+              )}
+            </select>
+            </label>
+            <p>Plays the caller or user; it is never the target being scored.</p>
+          </div>
+          <div className="run-config-step">
+            <div className="run-config-step-heading">
+              <span>3</span>
+              <div><strong>Execution</strong><small>Local runner</small></div>
+            </div>
+            <div className="run-execution-fields" aria-label="Execution runner">
+              <div><span>Executor</span><strong>Local async runner</strong></div>
+              <label>
+                <span>Iterations</span>
+                <input
+                  aria-label="Execution iterations"
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={executionIterations}
+                  onChange={(event) => setExecutionIterations(Math.max(1, Math.min(20, Number(event.target.value) || 1)))}
+                />
+              </label>
+            </div>
+            <p>Queues the run and writes the ASSERT inference set locally.</p>
+          </div>
+        </div>
+
+        {selectedScoreAgent?.target === 'openai_codex' ? (
+          <label style={{ display: 'grid', gap: 8, maxWidth: 360 }}>
+            <span style={{ fontWeight: 700 }}>Target model</span>
             <select
               aria-label="Execution model"
               value={executionModelName}
@@ -4410,34 +4506,27 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             </select>
             {openaiProvider?.status !== 'connected' ? (
               <span style={{ color: 'var(--muted)', fontSize: 13 }}>
-                Connect OpenAI to load models.{' '}
-                <button
-                  type="button"
-                  className="secondary-link"
-                  disabled={isConnectingOpenAI}
-                  onClick={() => void onConnectOpenAI()}
-                  style={{ padding: 0, border: 0, background: 'transparent', color: 'var(--accent)', fontWeight: 700, cursor: 'pointer' }}
-                >
+                Connect OpenAI to run this target.{' '}
+                <button type="button" className="secondary-link" disabled={isConnectingOpenAI} onClick={() => void onConnectOpenAI()} style={{ padding: 0, border: 0, background: 'transparent', color: 'var(--accent)', fontWeight: 700, cursor: 'pointer' }}>
                   {isConnectingOpenAI ? 'Connecting…' : 'Connect OpenAI'}
                 </button>
               </span>
-            ) : executionModelsMessage ? (
-              <span style={{ color: 'var(--muted)', fontSize: 13 }}>{executionModelsMessage}</span>
-            ) : null}
+            ) : executionModelsMessage ? <span style={{ color: 'var(--muted)', fontSize: 13 }}>{executionModelsMessage}</span> : null}
           </label>
-          <label style={{ display: 'grid', gap: 8 }}>
-            <span style={{ fontWeight: 700 }}>Iterations</span>
-            <input
-              aria-label="Execution iterations"
-              type="number"
-              min={1}
-              max={20}
-              value={executionIterations}
-              onChange={(event) => setExecutionIterations(Math.max(1, Math.min(20, Number(event.target.value) || 1)))}
-              style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
-            />
-          </label>
-        </div>
+        ) : null}
+
+        {selectedScoreAgent ? (
+          <div className={`run-provenance-notice ${isFixtureTargetId(selectedScoreAgent.target) ? 'is-fixture' : 'is-live'}`} role="note">
+            <strong>{isFixtureTargetId(selectedScoreAgent.target) ? 'Built-in sample agent' : 'Live target'}</strong>
+            <span>
+              {selectedScoreAgent.target === 'http_endpoint'
+                ? `POSTs to ${selectedScoreAgent.connection?.endpoint_url || 'the configured endpoint'}; black-box response evidence only.`
+                : isFixtureTargetId(selectedScoreAgent.target)
+                  ? 'Uses predictable sample responses and does not contact a deployed agent.'
+                  : 'Invokes the connected provider and records the returned response.'}
+            </span>
+          </div>
+        ) : null}
 
         <details>
           <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Advanced</summary>
@@ -4458,6 +4547,33 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
             ) : null}
           </div>
         </details>
+
+        <div className="run-launch-actions">
+          <div>
+            <strong>{selectedScoreAgent ? `Ready to test ${selectedScoreAgent.name}` : 'Choose a target to continue'}</strong>
+            <span>{executionIterations} {executionIterations === 1 ? 'conversation' : 'conversations'} · results appear below</span>
+          </div>
+          <button
+            type="button"
+            disabled={
+              isLaunchingExecution
+              || isRunning
+              || isSimulating
+              || !selectedSuite
+              || !selectedScoreAgent
+              || (selectedScoreAgent.target === 'openai_codex' && openaiProvider?.status !== 'connected')
+            }
+            onClick={() => void onLaunchExecution()}
+          >
+            {isLaunchingExecution
+              ? 'Launching...'
+              : executionRun && isActiveExecutionStatus(executionRun.status)
+                ? 'Execution running...'
+                : isFixtureTargetId(selectedScoreAgent?.target)
+                  ? 'Run sample evaluation'
+                  : 'Run evaluation'}
+          </button>
+        </div>
 
         {executionMessage ? <p style={{ margin: 0, color: 'var(--muted)' }}>{executionMessage}</p> : null}
 
@@ -4531,7 +4647,7 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
                           <span style={{ color: executionStatusColor(conversation.verdict), textTransform: 'capitalize' }}>
                             {conversation.verdict}
                             {typeof conversation.score === 'number' ? ` · ${conversation.score}` : ''}
-                            {conversation.mode === 'pipecat_webrtc' ? ' (fixture-backed)' : ''}
+                            {conversation.mode === 'pipecat_webrtc' ? ' (sample-based)' : ''}
                           </span>
                         ) : null}
                         {conversation.error ? <span style={{ color: 'var(--error-text)' }}>{conversation.error}</span> : null}
@@ -4729,18 +4845,25 @@ export function BenchmarkRunner({ view = 'all' }: { view?: BenchmarkRunnerView }
               <ScoreTile label="Rubric" score={report.rubric_score} />
             ) : null}
             <ScoreTile label="Forbidden actions" score={report.forbidden_action_score} />
-            <ScoreTile label="Task completion" score={report.task_completion_score} />
-            <ScoreTile label="Final state" score={report.final_state_score} />
+            {typeof report.task_completion_score === 'number' ? (
+              <ScoreTile label="Task completion" score={report.task_completion_score} />
+            ) : null}
+            {typeof report.final_state_score === 'number' ? (
+              <ScoreTile label="Final state" score={report.final_state_score} />
+            ) : null}
           </div>
+          {report.scoring_mode === 'transcript' ? (
+            <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13, lineHeight: 1.45 }} aria-label="Transcript scoring note">
+              Transcript-only mode: Task completion and Final state are not shown (not measured — not counted as 100).
+              Include structured evidence or load the full sample to measure them.
+            </p>
+          ) : null}
           {report.score_components && Object.keys(report.score_components).length ? (
             <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13, lineHeight: 1.45 }} aria-label="Score breakdown">
               Score mode: {report.scoring_mode || 'unknown'} ·{' '}
               {Object.entries(report.score_components)
                 .map(([key, value]) => `${key.replace(/_/g, ' ')} ${value}`)
                 .join(' · ')}
-              {report.scoring_mode === 'transcript'
-                ? ' · Task completion / final state are n/a without structured evidence (not counted as 100).'
-                : ''}
             </p>
           ) : null}
 

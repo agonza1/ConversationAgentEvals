@@ -91,11 +91,28 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
 
       {run ? (
         <>
+          <section className="card run-participants" aria-label="Run participants and executor">
+            <div>
+              <span>Target under test</span>
+              <strong>{run.agent_name || run.agent_id || 'Unattributed target'}</strong>
+              <small>{runTargetSummary(run)}</small>
+            </div>
+            <div>
+              <span>Tester</span>
+              <strong>{formatTesterId(run.tester_id)}</strong>
+              <small>Plays the scenario user/caller and supplies test turns.</small>
+            </div>
+            <div>
+              <span>Executor</span>
+              <strong>{formatRuntimeId(run.executor_id || 'local_async_runner')}</strong>
+              <small>Invokes the adapter and persists evidence; it is not scored.</small>
+            </div>
+          </section>
           <section className="metric-summary-grid" aria-label="Metric summaries">
             <MetricTile
               title="Interruption Detection"
               value={`${summary.interruptionCount}`}
-              detail="fixture count across conversations"
+              detail="sample count across conversations"
               selected={metric === 'audio_interruption'}
               onClick={() => setMetric('audio_interruption')}
             />
@@ -179,6 +196,36 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
   );
 }
 
+function formatRuntimeId(value: string) {
+  return value.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatTesterId(value?: string | null) {
+  if (value === 'fixture_replay') return 'Saved Conversation Replay';
+  if (value === 'pipecat_tester') return 'Pipecat Voice Tester';
+  return 'Scenario Simulator';
+}
+
+function formatTargetId(value: string) {
+  if (value === 'mock_agent') return 'Built-in Sample Agent';
+  if (value === 'offline_acc_fixture') return 'Saved ACC Text Replay';
+  if (value === 'voice_fixture') return 'Saved ACC Voice Replay';
+  if (value === 'http_endpoint') return 'HTTP Endpoint';
+  if (value === 'openai_codex') return 'Connected OpenAI Agent';
+  return formatRuntimeId(value);
+}
+
+function runTargetSummary(run: ExecutionRunRecord) {
+  const snapshot = run.execution_snapshot;
+  const agent = snapshot && typeof snapshot.agent === 'object' && snapshot.agent
+    ? snapshot.agent as Record<string, unknown>
+    : null;
+  const target = typeof agent?.target === 'string' ? agent.target : run.mode;
+  const environment = typeof agent?.environment === 'string' ? agent.environment : null;
+  const fixture = target === 'mock_agent' || target === 'offline_acc_fixture' || target === 'voice_fixture';
+  return `${formatTargetId(target)}${environment ? ` · ${environment}` : ''} · ${fixture ? 'sample-generated evidence' : 'live target evidence'}`;
+}
+
 function MetricTile({
   title,
   value,
@@ -226,7 +273,7 @@ function MetricDetail({
     return (
       <div className="runs-detail-copy">
         <h2>Interruption Detection</h2>
-        <p>{summary.interruption_count} interruption signals in this conversation (fixture-derived).</p>
+        <p>{summary.interruption_count} interruption signals in this conversation (from sample data).</p>
       </div>
     );
   }

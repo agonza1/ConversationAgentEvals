@@ -66,14 +66,16 @@ test('dedicated paths expose only their primary workflow', async ({ page }) => {
   await page.getByRole('button', { name: 'Load sample evidence' }).click();
   const sampleOptions = page.getByLabel('Sample evidence options');
   await expect(sampleOptions).toBeVisible();
-  await expect(sampleOptions.getByRole('button', { name: 'Load selected sample evidence' })).toBeVisible();
+  await expect(sampleOptions.getByRole('button', { name: 'Load sample transcript only' })).toBeVisible();
+  await expect(sampleOptions.getByRole('button', { name: 'Load full sample (measure Task/Final)' })).toBeVisible();
   await expect(page.getByLabel('Saved runs and e2e validation')).toHaveCount(0);
 
   await page.goto('/runs');
   await expect(page.getByRole('heading', { name: 'Run an agent' })).toBeVisible();
   await expect(page.getByLabel('Launch agent run')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Launch agent run' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Mock agent run' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Run sample evaluation' })).toBeVisible();
+  await expect(page.getByLabel('Execution tester')).toHaveValue('scenario_simulator');
+  await expect(page.getByLabel('Execution runner')).toContainText('Local async runner');
   await expect(page.getByLabel('Saved runs and e2e validation')).toHaveCount(0);
   // /runs is execute/capture — not the evidence-eval contract console
   await expect(page.getByText('Benchmark suite')).toHaveCount(0);
