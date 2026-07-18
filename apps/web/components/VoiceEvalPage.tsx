@@ -234,6 +234,7 @@ export function VoiceEvalPage() {
             user_id: identity.userId,
             project_id: identity.projectId,
             agent_id: selectedTarget?.id,
+            model_name: selectedTarget?.metadata?.model_name ?? undefined,
             tester_id: 'pipecat_tester',
             executor_id: 'cae_local_audio_loop',
             evaluate: true,

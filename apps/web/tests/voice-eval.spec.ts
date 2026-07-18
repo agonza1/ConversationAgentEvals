@@ -15,6 +15,7 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
             channel: 'voice',
             target: 'builtin_sample_voice',
             description: 'Built-in target for cancellation-rescue voice evaluation.',
+            metadata: { model_name: 'gpt-5.4-mini', prompt_version: 'generalist-v1' },
           },
           {
             id: 'acc-offline-fixture-agent',
@@ -59,6 +60,7 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
         scenario_ids: ['cancellation-rescue'],
         mode: 'pipecat_webrtc',
         agent_id: 'generalist-voice-agent',
+        model_name: 'gpt-5.4-mini',
         tester_id: 'pipecat_tester',
         executor_id: 'cae_local_audio_loop',
         audio_transport: 'pipecat_small_webrtc',

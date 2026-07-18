@@ -425,7 +425,11 @@ function AgentFormModal({
           {isBuiltInTarget(target) ? (
             <div className="agents-form-notice" role="note">
               <strong>{target === 'builtin_sample_voice' ? 'Built-in reference agent' : 'Built-in sample'}</strong>
-              <span>Uses predictable responses generated during this run. It does not contact a deployed agent.</span>
+              <span>
+                {target === 'builtin_sample_voice'
+                  ? 'Uses the configured LLM through the local Pipecat, rtc-asr, and Kokoro pipeline. Evidence is generated during this run; it does not contact a deployed agent.'
+                  : 'Uses predictable responses generated during this run. It does not contact a deployed agent.'}
+              </span>
             </div>
           ) : isSavedReplayTarget(target) ? (
             <div className="agents-form-notice" role="note">

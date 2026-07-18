@@ -36,6 +36,7 @@ queued = request('/api/execution/runs', payload={
     'user_id': USER,
     'project_id': 'reference-voice-smoke',
     'iterations': 1,
+    'model_name': os.getenv('REFERENCE_LLM_MODEL', 'gpt-5.4-mini'),
 })
 run_id = queued['execution_run_id']
 deadline = time.time() + 300
