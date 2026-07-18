@@ -258,10 +258,11 @@ def preview_spec(spec: EditableAssertSpec) -> SpecPreviewResult:
 
 
 def save_spec(*, db: Session, user_id: str, project_id: str, spec: EditableAssertSpec) -> SavedEditableAssertSpec:
+    spec_id = spec.id or _slug(spec.title)
+    spec = spec.model_copy(update={'id': spec_id})
     preview = preview_spec(spec)
     if not preview.valid:
         raise ValueError('; '.join(error.message for error in preview.errors) or 'Spec is invalid')
-    spec_id = spec.id or _slug_id('spec')
     if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,70}[a-z0-9])?', spec_id):
         raise ValueError('Spec id must be a lowercase path-safe slug containing only letters, numbers, and hyphens.')
     project = _resolve_project(db, user_id=user_id, project_id=project_id)
@@ -528,7 +529,7 @@ def _saved_response(*, record: EditableAssertSpecVersion, project: ProductProjec
         id=record.spec_key,
         version=record.version,
         user_id=project.user_id,
-        project_id=project.project_key,
+        project_id=project.id,
         created_at=created,
         updated_at=created,
         spec=spec,

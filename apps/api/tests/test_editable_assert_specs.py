@@ -152,6 +152,20 @@ def test_preview_compiles_canonical_assert_yaml_and_validates_with_assert():
     assert payload['warnings'][0]['field'] == 'extensions.agentic_contact_center'
 
 
+def test_save_without_id_preserves_the_suite_name_shown_in_preview():
+    suffix = uuid4().hex
+    spec = _valid_spec()
+    spec.pop('id')
+    preview = client.post('/api/specs/preview', json={'spec': spec})
+    saved = client.post('/api/specs', json={'user_id': f'suite-user-{suffix}', 'project_id': f'suite-project-{suffix}', 'spec': spec})
+
+    assert preview.status_code == 200
+    assert saved.status_code == 200
+    assert yaml.safe_load(preview.json()['yaml'])['suite'] == 'cancellation-rescue-agent'
+    assert yaml.safe_load(saved.json()['yaml'])['suite'] == 'cancellation-rescue-agent'
+    assert saved.json()['id'] == 'cancellation-rescue-agent'
+
+
 def test_save_rejects_unapproved_generated_draft_and_versions_approved_spec_in_project_store():
     suffix = uuid4().hex
     user_id = f'spec-user-{suffix}'
@@ -246,6 +260,7 @@ def test_workspace_members_share_the_same_project_spec_history():
         personal_project = next(project for project in projects if not project.workspace_id)
         assert db.query(EditableAssertSpecVersion).filter(EditableAssertSpecVersion.project_id == shared_project.id).count() == 2
         assert db.query(EditableAssertSpecVersion).filter(EditableAssertSpecVersion.project_id == personal_project.id).count() == 0
+        assert second.json()['project_id'] == shared_project.id
 
 
 def test_workspace_viewers_can_read_but_cannot_write_shared_specs():
