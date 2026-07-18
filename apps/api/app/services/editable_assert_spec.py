@@ -332,6 +332,15 @@ def _compile_assert_config(spec: EditableAssertSpec) -> dict[str, Any]:
                 *[f'- {step.strip()}' for step in scenario.steps if step.strip()],
                 f'Expected outcome: {scenario.expected_outcome.strip()}',
             ])
+    if spec.deterministic_checks:
+        behavior_sections.extend([
+            '',
+            '## Deterministic checks',
+            *[
+                f'- [{item.severity}] {item.label.strip()}: {item.description.strip()}'.rstrip(': ')
+                for item in spec.deterministic_checks
+            ],
+        ])
 
     context_lines = [f'Target role: {spec.role.strip()}']
     if spec.runtime_overrides:

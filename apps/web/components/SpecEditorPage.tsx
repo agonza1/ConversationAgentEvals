@@ -56,29 +56,43 @@ function slug(prefix: string, label: string, index: number) {
 }
 
 function checksFromText(value: string, existing: AssertCheck[], prefix: string, draft: boolean): AssertCheck[] {
-  return lines(value).map((label, index) => ({
-    ...(existing[index] || {}),
-    id: existing[index]?.id || slug(prefix, label, index),
-    label,
-    description: existing[index]?.description || label,
-    severity: existing[index]?.severity || (prefix === 'failure' ? 'error' : 'warning'),
-    draft: draft || Boolean(existing[index]?.draft),
-  }));
+  const consumed = new Set<number>();
+  return lines(value).map((label, index) => {
+    const existingIndex = existing.findIndex((item, candidateIndex) => !consumed.has(candidateIndex) && item.label === label);
+    const matched = existingIndex >= 0 ? existing[existingIndex] : undefined;
+    if (existingIndex >= 0) consumed.add(existingIndex);
+    return {
+      ...(matched || {}),
+      id: matched?.id || slug(prefix, label, index),
+      label,
+      description: matched?.description || label,
+      severity: matched?.severity || (prefix === 'failure' ? 'error' : 'warning'),
+      draft: draft || Boolean(matched?.draft),
+    };
+  });
 }
 
 function scenariosFromText(value: string, existing: AssertScenario[], draft: boolean): AssertScenario[] {
+  const consumed = new Set<number>();
   return lines(value).map((line, index) => {
     const [title, ...rest] = line.split(':');
     const description = rest.join(':').trim() || line;
+    const existingIndex = existing.findIndex((item, candidateIndex) => (
+      !consumed.has(candidateIndex)
+      && item.title === title.trim()
+      && (item.description || item.expected_outcome || '') === description
+    ));
+    const matched = existingIndex >= 0 ? existing[existingIndex] : undefined;
+    if (existingIndex >= 0) consumed.add(existingIndex);
     return {
-      ...(existing[index] || {}),
-      id: existing[index]?.id || slug('scenario', title, index),
+      ...(matched || {}),
+      id: matched?.id || slug('scenario', title, index),
       title: title.trim(),
-      persona: existing[index]?.persona || '',
+      persona: matched?.persona || '',
       description,
-      steps: existing[index]?.steps || [],
-      expected_outcome: existing[index]?.expected_outcome || description,
-      draft: draft || Boolean(existing[index]?.draft),
+      steps: matched?.steps || [],
+      expected_outcome: matched?.expected_outcome || description,
+      draft: draft || Boolean(matched?.draft),
     };
   });
 }

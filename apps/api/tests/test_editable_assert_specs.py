@@ -126,6 +126,8 @@ def test_preview_compiles_canonical_assert_yaml_and_validates_with_assert():
     assert parsed['behavior']['name'] == 'cancellation-rescue-agent'
     assert parsed['pipeline']['systematize'] == {}
     assert parsed['pipeline']['test_set']['scenario']['sample_size'] == 1
+    assert '## Deterministic checks' in parsed['behavior']['description']
+    assert '[warning] Final state evidence present: Run artifacts include final state evidence.' in parsed['behavior']['description']
     assert 'agentic_contact_center' in parsed['context']
     assert payload['export_filename'] == 'cancellation-rescue-agent.eval_config.yaml'
     assert payload['warnings'][0]['field'] == 'extensions.agentic_contact_center'

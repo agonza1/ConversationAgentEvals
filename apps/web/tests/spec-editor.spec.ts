@@ -151,3 +151,45 @@ test('loading and previewing a rich template preserves structured fields', async
   await expect.poll(() => previewed).not.toBeNull();
   await expect.poll(() => JSON.stringify(previewed)).toBe(JSON.stringify(richSpec));
 });
+
+test('deleting a check does not transfer removed metadata to the surviving check', async ({ page }) => {
+  const richSpec = {
+    title: 'Metadata-safe support agent',
+    role: 'customer support agent',
+    objective: 'Keep evaluation metadata attached to the correct requirement after edits.',
+    generated_content_status: 'none',
+    required_behaviors: [
+      { id: 'removed-check', label: 'Remove me', description: 'Metadata that must not survive.', severity: 'error', draft: false },
+      { id: 'kept-check', label: 'Keep me', description: 'Metadata that belongs to the survivor.', severity: 'info', draft: false },
+    ],
+    forbidden_behaviors: [{ id: 'forbidden', label: 'No invention', description: 'Do not invent.', severity: 'error', draft: false }],
+    scenario_seeds: ['Metadata edit'],
+    scenarios: [],
+    deterministic_checks: [],
+    evidence_requirements: ['transcript'],
+    judges: [{ id: 'judge', name: 'Judge', kind: 'semantic', rubric: 'Evaluate metadata safety.', weight: 1, provider: 'configured-default' }],
+    runtime_overrides: {},
+    extensions: {},
+  };
+  let previewed: typeof richSpec | null = null;
+  await page.route('**/api/specs/templates', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ templates: [{ id: 'metadata', label: 'Metadata template', description: 'Metadata', spec: richSpec }] }),
+  }));
+  await page.route('**/api/specs/preview', async (route) => {
+    previewed = JSON.parse(route.request().postData() || '{}').spec;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ valid: true, errors: [], warnings: [], normalized: previewed, yaml: 'suite: metadata-safe-support-agent\npipeline:\n  systematize: {}\n', json_preview: {}, export_filename: 'metadata.eval_config.yaml', assert_validator: 'assert-ai', assert_validated: true }),
+    });
+  });
+
+  await page.goto('/specs/new?api_base=http%3A%2F%2Fapi.example.test');
+  await page.getByLabel('Template').selectOption('metadata');
+  await page.getByLabel('Success checks').fill('Keep me');
+  await expect.poll(() => previewed?.required_behaviors).toEqual([
+    { id: 'kept-check', label: 'Keep me', description: 'Metadata that belongs to the survivor.', severity: 'info', draft: false },
+  ]);
+});
