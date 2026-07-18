@@ -104,7 +104,7 @@ def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
     model_name = (resolved.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
     provenance = build_run_provenance(
         agent=agent,
-        agent_target=(agent or {}).get('target') if agent else resolved.text_callable,
+        agent_target=_execution_target(resolved, agent),
         tester_id=resolved.tester_id,
         executor_id=resolved.executor_id,
         mode=resolved.mode,
@@ -295,16 +295,23 @@ def _run_one_conversation(
         )
 
 
+def _execution_target(
+    payload: ExecutionRunCreateRequest,
+    agent: dict[str, Any] | None = None,
+) -> str:
+    if agent:
+        return str(agent.get('target') or 'mock_agent')
+    if payload.mode == 'pipecat_webrtc':
+        return 'builtin_sample_voice'
+    if payload.mode == 'voice_fixture':
+        return 'voice_fixture'
+    return payload.text_callable
+
+
 def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCreateRequest:
     model_name = (payload.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
     if not payload.agent_id:
-        target = (
-            'builtin_sample_voice'
-            if payload.mode == 'pipecat_webrtc'
-            else 'voice_fixture'
-            if payload.mode == 'voice_fixture'
-            else payload.text_callable
-        )
+        target = _execution_target(payload)
         assert_execution_compatible(
             agent_target=target,
             mode=payload.mode,
@@ -316,7 +323,7 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
     agent = get_agent(payload.agent_id)
     if agent is None:
         raise ValueError(f'Unknown agent: {payload.agent_id}')
-    target = str(agent.get('target') or 'mock_agent')
+    target = _execution_target(payload, agent)
     defaults = execution_defaults_for_target(target)
     request_placeholders = {
         'mode': 'text_callable',

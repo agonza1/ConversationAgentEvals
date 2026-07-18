@@ -654,6 +654,8 @@ def test_saved_text_replay_without_scenarios_defaults_to_cancellation_rescue():
         ExecutionRunCreateRequest(
             suite_id='call-center-voice-ai',
             text_callable='offline_acc_fixture',
+            tester_id='scenario_simulator',
+            executor_id='local_async_runner',
             user_id='agent-runs-user',
             project_id='agent-runs-project',
         )
@@ -664,6 +666,28 @@ def test_saved_text_replay_without_scenarios_defaults_to_cancellation_rescue():
     assert queued['executor_id'] == 'evidence_replay'
     assert queued['provenance']['saved_evidence'] is True
     assert queued['scenario_ids'] == ['cancellation-rescue']
+
+
+@pytest.mark.parametrize(
+    ('mode', 'target_kind'),
+    [
+        ('voice_fixture', 'saved_voice_replay'),
+        ('pipecat_webrtc', 'builtin_sample_voice'),
+    ],
+)
+def test_no_agent_voice_run_uses_inferred_target_provenance(mode: str, target_kind: str):
+    queued = start_execution_run(
+        ExecutionRunCreateRequest(
+            suite_id='call-center-voice-ai',
+            scenario_ids=['cancellation-rescue'],
+            mode=mode,
+            user_id='agent-runs-user',
+            project_id='agent-runs-project',
+        )
+    )
+
+    assert queued['provenance']['target_kind'] == target_kind
+    assert queued['provenance']['target_channel'] == 'voice'
 
 
 def test_explicit_openai_target_executes_selected_model_for_any_text_agent_without_fake_tool_evidence():

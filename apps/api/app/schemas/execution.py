@@ -79,11 +79,13 @@ class ExecutionRunCreateRequest(BaseModel):
         elif self.mode == 'text_callable' and self.audio_transport != 'none':
             raise ValueError('text_callable mode does not stream execution audio; set audio_transport=none')
         elif self.text_callable == 'offline_acc_fixture':
-            if 'tester_id' not in self.model_fields_set:
+            # Generated clients commonly serialize the generic text defaults.
+            # Treat those placeholders like omitted fields for direct replay.
+            if 'tester_id' not in self.model_fields_set or self.tester_id == 'scenario_simulator':
                 self.tester_id = 'fixture_replay'
             elif self.tester_id != 'fixture_replay':
                 raise ValueError('offline_acc_fixture replay requires tester_id=fixture_replay')
-            if 'executor_id' not in self.model_fields_set:
+            if 'executor_id' not in self.model_fields_set or self.executor_id == 'local_async_runner':
                 self.executor_id = 'evidence_replay'
             elif self.executor_id != 'evidence_replay':
                 raise ValueError('offline_acc_fixture replay requires executor_id=evidence_replay')
