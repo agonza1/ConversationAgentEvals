@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiAwareLink } from './ApiAwareLink';
+import { LiveRunFeedback, type LiveRunEvent } from './LiveRunFeedback';
 import { apiErrorMessage } from '@/lib/apiError';
 
 type JsonRecord = Record<string, unknown>;
@@ -940,6 +941,7 @@ interface ExecutionConversationRecord {
   status: 'queued' | 'running' | 'completed' | 'failed';
   iteration?: number;
   turns?: ExecutionConversationTurn[];
+  live_events?: LiveRunEvent[];
   transcript?: string | null;
   latency_marks?: Array<JsonRecord>;
   recording?: JsonRecord | null;
@@ -4705,6 +4707,12 @@ export function BenchmarkRunner({
                 {executionRun.inference_set_path ? ` · ${executionRun.inference_set_path}` : ''}
               </div>
             </div>
+
+            <LiveRunFeedback
+              conversations={executionRun.conversations || []}
+              apiBase={getApiBase()}
+              voice={executionRun.mode === 'pipecat_webrtc'}
+            />
 
             <div aria-label="Execution conversations" style={{ display: 'grid', gap: 8, maxHeight: 420, overflow: 'auto' }}>
               {(executionRun.conversations || []).length ? (

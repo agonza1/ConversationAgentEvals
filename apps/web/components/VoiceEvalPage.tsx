@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { ApiAwareLink } from './ApiAwareLink';
+import { LiveRunFeedback, type LiveRunEvent } from './LiveRunFeedback';
 
 type VoiceMode = 'pipecat_webrtc';
 type JsonRecord = Record<string, unknown>;
@@ -42,6 +43,7 @@ interface ExecutionConversation {
   mode: VoiceMode | string;
   status: string;
   turns?: Array<{ speaker?: string | null; text?: string | null }>;
+  live_events?: LiveRunEvent[];
   transcript?: string | null;
   recording?: JsonRecord | null;
   vcon_export_summary?: JsonRecord | null;
@@ -238,7 +240,6 @@ export function VoiceEvalPage() {
             user_id: identity.userId,
             project_id: identity.projectId,
             agent_id: selectedTarget?.id,
-            model_name: selectedTarget?.metadata?.model_name ?? undefined,
             tester_id: 'pipecat_tester',
             executor_id: 'cae_local_audio_loop',
             evaluate: true,
@@ -442,6 +443,8 @@ export function VoiceEvalPage() {
               >
                 <span style={{ width: `${Math.max(0, Math.min(100, run.progress.percent))}%` }} />
               </div>
+
+              <LiveRunFeedback conversations={run.conversations || []} apiBase={getApiBase()} voice />
 
               <div aria-label="Voice eval conversations" className="voice-conversation-list">
                 {(run.conversations || []).length ? (

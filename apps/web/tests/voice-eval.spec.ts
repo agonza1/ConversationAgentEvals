@@ -55,17 +55,18 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
   await page.route('**/api/execution/runs**', async (route) => {
     const url = route.request().url();
     if (route.request().method() === 'POST' && url.endsWith('/api/execution/runs')) {
-      expect(JSON.parse(route.request().postData() ?? '{}')).toMatchObject({
+      const posted = JSON.parse(route.request().postData() ?? '{}') as Record<string, unknown>;
+      expect(posted).toMatchObject({
         suite_id: 'call-center-voice-ai',
         scenario_ids: ['cancellation-rescue'],
         mode: 'pipecat_webrtc',
         agent_id: 'generalist-voice-agent',
-        model_name: 'gpt-5.4-mini',
         tester_id: 'pipecat_tester',
         executor_id: 'cae_local_audio_loop',
         audio_transport: 'pipecat_small_webrtc',
         evaluate: true,
       });
+      expect(posted).not.toHaveProperty('model_name');
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -123,6 +124,22 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
                     status: 'completed',
                     iteration: 1,
                     turns: [{ turn_index: 1, speaker: 'caller', text: 'I want to cancel.' }],
+                    live_events: [
+                      {
+                        sequence: 1,
+                        kind: 'audio',
+                        speaker: 'Caller',
+                        text: 'I want to cancel.',
+                        media_url: '/api/execution/runs/voice-run-1/conversations/voice-run-1-cancellation-rescue-1/audio/1?user_id=voice-user',
+                      },
+                      {
+                        sequence: 2,
+                        kind: 'audio',
+                        speaker: 'Agent',
+                        text: 'I can help with that.',
+                        media_url: '/api/execution/runs/voice-run-1/conversations/voice-run-1-cancellation-rescue-1/audio/2?user_id=voice-user',
+                      },
+                    ],
                     transcript: 'Caller: I want to cancel.\nAgent: I can help with that.',
                     recording: { recording_url: 'artifact://voice-run-1.wav', mime_type: 'audio/wav' },
                     vcon_export_summary: {
@@ -183,6 +200,10 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
   await page.getByRole('button', { name: 'Run generalist voice evaluation' }).click();
   const results = page.getByRole('region', { name: 'Run results' });
   await expect(results.getByText('voice-run-1')).toBeVisible();
+  await results.getByRole('button', { name: 'Show live exchange' }).click();
+  await expect(results.getByLabel('Observed live exchange')).toContainText('I want to cancel.', { timeout: 10000 });
+  await results.getByRole('button', { name: 'Unmute live conversation' }).click();
+  await expect(results.getByRole('button', { name: 'Mute live conversation' })).toBeVisible();
   await expect(results.getByRole('link', { name: 'Open Run Agent detail' })).toHaveAttribute(
     'href',
     '/runs/voice-run-1?api_base=http%3A%2F%2Fapi.example.test',

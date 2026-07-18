@@ -104,11 +104,13 @@ def test_reference_tester_to_agent_contract_uses_only_current_run(tmp_path: Path
             llm_model='fake-model',
             internal_token='test-token',
         )
+        observed = []
         transport = ReferencePipecatAgentTransport(
             artifact_dir=tmp_path,
             media=media,  # type: ignore[arg-type]
             completion=FakeCompletion(),
             config=config,
+            event_observer=observed.append,
         )
         runner = PipecatTesterAgentRunner(
             target=ExecutionAudioTargetAdapter(transport),
@@ -142,6 +144,9 @@ def test_reference_tester_to_agent_contract_uses_only_current_run(tmp_path: Path
         assert proof['evidence_source'] == 'current_run'
         assert transport.recording_handle(session_id).uri.endswith('.wav')
         assert len(transport.latency_marks(session_id)) == 1
+        assert [event['speaker'] for event in observed] == ['Caller', 'Agent']
+        assert all(event['text'] for event in observed)
+        assert all(event['audio'] for event in observed)
 
     asyncio.run(run())
 

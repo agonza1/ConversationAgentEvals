@@ -221,6 +221,9 @@ test('launch evaluation streams conversations into the live list', async ({ page
                 status: 'running',
                 iteration: 1,
                 turns: [],
+                live_events: [
+                  { sequence: 1, kind: 'message', speaker: 'User', text: 'Please update my address.' },
+                ],
               },
             ],
             created_at: '2026-07-15T00:00:00Z',
@@ -251,6 +254,10 @@ test('launch evaluation streams conversations into the live list', async ({ page
                 status: 'completed',
                 iteration: 1,
                 turns: [{ turn_index: 1, speaker: 'caller', text: 'Please update my address.' }],
+                live_events: [
+                  { sequence: 1, kind: 'message', speaker: 'User', text: 'Please update my address.' },
+                  { sequence: 2, kind: 'message', speaker: 'Agent', text: 'Updated.' },
+                ],
                 transcript: 'Caller: Please update my address.\nAgent: Updated.',
                 verdict: 'pass',
                 score: 91,
@@ -291,6 +298,9 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect(launch).not.toContainText('[object Object]');
   await launch.getByRole('button', { name: 'Run sample evaluation' }).click();
   await expect(launch.getByText('exec-ui-demo', { exact: true })).toBeVisible();
+  await launch.getByRole('button', { name: 'Show live exchange' }).click();
+  await expect(launch.getByLabel('Observed live exchange')).toContainText('Please update my address.', { timeout: 8000 });
+  await expect(launch.getByLabel('Observed live exchange')).toContainText('Updated.', { timeout: 8000 });
   await expect(launch.getByRole('link', { name: 'Open analysis' })).toHaveAttribute(
     'href',
     '/runs/exec-ui-demo?api_base=http%3A%2F%2Fapi.example.test',

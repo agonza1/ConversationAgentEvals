@@ -6,7 +6,8 @@ import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+from urllib.parse import quote
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -17,6 +18,7 @@ from app.schemas.execution import (
     ExecutionRunCreateRequest,
     ExecutionRunProgress,
     ExecutionRunRecord,
+    LiveExecutionEvent,
 )
 from app.services import execution_run_store
 from app.services.agent_store import get_agent
@@ -213,6 +215,52 @@ def execute_execution_run(execution_run_id: str, payload: ExecutionRunCreateRequ
         }
 
 
+def _live_event_publisher(
+    *,
+    execution_run_id: str,
+    conversation_id: str,
+    user_id: str,
+) -> Callable[[dict[str, Any]], None]:
+    sequence = 0
+
+    def publish(payload: dict[str, Any]) -> None:
+        nonlocal sequence
+        speaker = str(payload.get('speaker') or 'System').strip()
+        text = str(payload.get('text') or '').strip()
+        if not text:
+            return
+        sequence += 1
+        audio = payload.get('audio')
+        media_url = None
+        mime_type = None
+        kind = 'message'
+        if isinstance(audio, bytes) and audio:
+            kind = 'audio'
+            mime_type = 'audio/wav'
+            live_dir = REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id / 'audio' / 'live'
+            live_dir.mkdir(parents=True, exist_ok=True)
+            (live_dir / f'{conversation_id}-{sequence}.wav').write_bytes(audio)
+            media_url = (
+                f'/api/execution/runs/{quote(execution_run_id)}/conversations/'
+                f'{quote(conversation_id)}/audio/{sequence}?user_id={quote(user_id)}'
+            )
+        execution_run_store.append_live_event(
+            execution_run_id,
+            conversation_id,
+            LiveExecutionEvent(
+                sequence=sequence,
+                kind=kind,
+                speaker=speaker,
+                text=text,
+                media_url=media_url,
+                mime_type=mime_type,
+                created_at=datetime.now(UTC).isoformat(),
+            ),
+        )
+
+    return publish
+
+
 def _run_one_conversation(
     *,
     execution_run_id: str,
@@ -226,6 +274,11 @@ def _run_one_conversation(
     conversation_id = f'{execution_run_id}-{scenario_id}-{iteration}'
     suite = get_suite(suite_id) or {}
     scenario_title = _scenario_title(suite, scenario_id)
+    publish = _live_event_publisher(
+        execution_run_id=execution_run_id,
+        conversation_id=conversation_id,
+        user_id=payload.user_id,
+    )
 
     try:
         if payload.mode == 'text_callable':
@@ -234,6 +287,7 @@ def _run_one_conversation(
                 scenario_id,
                 payload,
                 agent_snapshot=agent_snapshot,
+                event_observer=publish,
             )
         elif payload.mode == 'pipecat_webrtc':
             result = asyncio.run(
@@ -243,6 +297,7 @@ def _run_one_conversation(
                     suite_id=suite_id,
                     scenario_id=scenario_id,
                     payload=payload,
+                    event_observer=publish,
                 )
             )
         else:
@@ -253,6 +308,7 @@ def _run_one_conversation(
             verdict=result.get('verdict'),
             score=result.get('score'),
         )
+        current = execution_run_store.get_conversation(execution_run_id, conversation_id) or {}
         return ConversationRecord(
             conversation_id=conversation_id,
             execution_run_id=execution_run_id,
@@ -263,6 +319,7 @@ def _run_one_conversation(
             status='failed' if result.get('verdict') in {'fail', 'failed'} else 'completed',
             iteration=iteration,
             turns=result['turns'],
+            live_events=current.get('live_events') or [],
             transcript=result.get('transcript'),
             action_trace=result.get('action_trace') or [],
             final_state=result.get('final_state') or {},
@@ -293,6 +350,9 @@ def _run_one_conversation(
             mode=payload.mode,
             status='failed',
             iteration=iteration,
+            live_events=(
+                execution_run_store.get_conversation(execution_run_id, conversation_id) or {}
+            ).get('live_events') or [],
             error=str(exc),
             started_at=started,
             completed_at=datetime.now(UTC).isoformat(),
@@ -406,6 +466,7 @@ def _execute_text_callable(
     payload: ExecutionRunCreateRequest,
     *,
     agent_snapshot: dict[str, Any] | None = None,
+    event_observer: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     callable_id = payload.text_callable
     if callable_id == 'offline_acc_fixture':
@@ -416,6 +477,7 @@ def _execute_text_callable(
             scenario_id,
             payload,
             agent_snapshot=agent_snapshot,
+            event_observer=event_observer,
         )
     if callable_id == 'http_endpoint':
         return _execute_http_text_agent(
@@ -423,6 +485,7 @@ def _execute_text_callable(
             scenario_id,
             payload,
             agent_snapshot=agent_snapshot,
+            event_observer=event_observer,
         )
     if callable_id != 'mock_agent':
         raise ValueError(f'Unsupported text callable: {callable_id}')
@@ -441,6 +504,9 @@ def _execute_text_callable(
     action_trace = simulation.get('action_trace') if isinstance(simulation.get('action_trace'), list) else []
     final_state = simulation.get('final_state') if isinstance(simulation.get('final_state'), dict) else {}
     turns = _turns_from_transcript(transcript)
+    if event_observer is not None:
+        for turn in turns:
+            event_observer({'speaker': turn.speaker, 'text': turn.text})
     report: dict[str, Any] = {}
     if payload.evaluate:
         # simulate_scenario always evaluates; only surface the report when evaluate=true.
@@ -473,6 +539,7 @@ def _execute_http_text_agent(
     payload: ExecutionRunCreateRequest,
     *,
     agent_snapshot: dict[str, Any] | None = None,
+    event_observer: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Invoke a black-box HTTP chat target using the documented ASSERT-style boundary."""
     if not payload.agent_id:
@@ -496,6 +563,8 @@ def _execute_http_text_agent(
             'goal': scenario.get('goal'),
         },
     }
+    if event_observer is not None:
+        event_observer({'speaker': 'User', 'text': caller_text})
     headers = {'content-type': 'application/json', 'accept': 'application/json'}
     auth_type = str(connection.get('auth_type') or 'none')
     if auth_type != 'none':
@@ -531,6 +600,8 @@ def _execute_http_text_agent(
     if not isinstance(response_text, str) or not response_text.strip():
         raise RuntimeError(f'HTTP target response path "{response_path}" did not contain reply text.')
     response_text = response_text.strip()
+    if event_observer is not None:
+        event_observer({'speaker': 'Agent', 'text': response_text})
     transcript = f'User: {caller_text}\nAgent: {response_text}'
     final_state = {
         'complete': False,
@@ -593,6 +664,7 @@ def _execute_openai_codex_text_agent(
     payload: ExecutionRunCreateRequest,
     *,
     agent_snapshot: dict[str, Any] | None = None,
+    event_observer: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Run a connected OpenAI Codex text agent and persist only real model evidence.
 
@@ -614,11 +686,15 @@ def _execute_openai_codex_text_agent(
             or 'Set OPENAI_API_KEY or connect OpenAI/Codex OAuth before launching this agent.'
         )
     model_name = (payload.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
+    caller_text = _scenario_user_opener(scenario)
+    if event_observer is not None:
+        event_observer({'speaker': 'User', 'text': caller_text})
     response_text = provider.complete(_openai_agent_prompt(agent, scenario), model_name=model_name).strip()
     if not response_text:
         raise RuntimeError('OpenAI Codex returned an empty agent response.')
 
-    caller_text = _scenario_user_opener(scenario)
+    if event_observer is not None:
+        event_observer({'speaker': 'Agent', 'text': response_text})
     transcript = f'User: {caller_text}\nAgent: {response_text}'
     final_state = {
         'complete': False,
@@ -691,6 +767,7 @@ def _openai_agent_prompt(agent: dict[str, Any], scenario: dict[str, Any]) -> str
         f'Agent description: {description or "No additional instructions provided."}\n\n'
         f'Scenario: {scenario.get("title") or scenario.get("id")}\n'
         f'Caller context: {scenario.get("persona") or "Not provided."}\n'
+        f'Caller message: {_scenario_user_opener(scenario)}\n'
         f'Goal: {scenario.get("goal") or "Not provided."}\n'
         f'Required behavior to cover where possible: {required_actions}.\n'
         f'Forbidden behavior: {forbidden_actions}.\n\n'
@@ -750,6 +827,7 @@ async def _execute_pipecat_webrtc(
     suite_id: str,
     scenario_id: str,
     payload: ExecutionRunCreateRequest,
+    event_observer: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Drive the Pipecat tester against a separate reference agent participant."""
     if payload.audio_transport != 'pipecat_small_webrtc':
@@ -771,6 +849,7 @@ async def _execute_pipecat_webrtc(
         media=ReferenceMediaServices(config),
         completion=completion,
         config=config,
+        event_observer=event_observer,
     )
     target = ExecutionAudioTargetAdapter(transport)
     runner = PipecatTesterAgentRunner(

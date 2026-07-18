@@ -4,6 +4,7 @@ import os
 import secrets
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
@@ -105,6 +106,38 @@ def get_conversation(execution_run_id: str, conversation_id: str, user_id: str =
     if conversation is None:
         raise HTTPException(status_code=404, detail='Conversation not found.')
     return conversation
+
+
+@router.get('/runs/{execution_run_id}/conversations/{conversation_id}/audio/{sequence}')
+def get_live_conversation_audio(
+    execution_run_id: str,
+    conversation_id: str,
+    sequence: int,
+    user_id: str = Query(...),
+):
+    run = execution_run_store.get_execution_run(execution_run_id)
+    if run is None or run.get('user_id') != user_id:
+        raise HTTPException(status_code=404, detail='Execution run not found.')
+    conversation = execution_run_store.get_conversation(execution_run_id, conversation_id)
+    matching = next(
+        (
+            event for event in (conversation or {}).get('live_events') or []
+            if event.get('sequence') == sequence and event.get('kind') == 'audio'
+        ),
+        None,
+    )
+    if matching is None:
+        raise HTTPException(status_code=404, detail='Live audio segment not found.')
+    root = (execution_run_store.RUNS_DIR / execution_run_id).resolve()
+    path = (
+        root
+        / 'audio'
+        / 'live'
+        / f'{conversation_id}-{sequence}.wav'
+    ).resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        raise HTTPException(status_code=404, detail='Live audio segment not found.')
+    return FileResponse(path, media_type='audio/wav')
 
 
 @router.get('/audio/capabilities')

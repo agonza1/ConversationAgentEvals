@@ -11,6 +11,7 @@ from app.schemas.execution import (
     ConversationRecord,
     ExecutionRunProgress,
     ExecutionRunRecord,
+    LiveExecutionEvent,
 )
 
 
@@ -134,6 +135,34 @@ def upsert_conversation(execution_run_id: str, conversation: ConversationRecord)
 
 def append_conversation(execution_run_id: str, conversation: ConversationRecord) -> dict[str, Any] | None:
     return upsert_conversation(execution_run_id, conversation)
+
+
+def append_live_event(
+    execution_run_id: str,
+    conversation_id: str,
+    event: LiveExecutionEvent,
+) -> dict[str, Any] | None:
+    """Append a current-run event without replacing the running conversation."""
+    with _LOCK:
+        run = _RUNS.get(execution_run_id)
+        if run is None:
+            loaded = _load_from_disk(execution_run_id)
+            if loaded is None:
+                return None
+            _RUNS[execution_run_id] = loaded
+            run = loaded
+        conversations = list(run.get('conversations') or [])
+        for conversation in conversations:
+            if conversation.get('conversation_id') != conversation_id:
+                continue
+            events = list(conversation.get('live_events') or [])
+            events.append(event.model_dump(mode='json'))
+            conversation['live_events'] = events
+            run['conversations'] = conversations
+            run['updated_at'] = _now()
+            _persist_unlocked(run)
+            return deepcopy(run)
+        return None
 
 
 def complete_execution_run(

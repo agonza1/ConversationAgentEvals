@@ -23,6 +23,7 @@ Legacy names from earlier drafts (`voice_webrtc`, `local_pipecat_webrtc`, `sip_v
 | Local Pipecat reference execution | **Available when configured** — separate tester and target participants; no browser peer |
 | `POST /api/execution/runs` mode `pipecat_webrtc` | **Available when configured** — Pipecat tester → rtc-asr → LLM → Kokoro target pipeline |
 | Recording + transcription capture | **Available** — current-run WAV, rtc-asr transcript, timings, and dialog turns |
+| Live run feedback | **Available** — polling exposes observed turns while the run is active; UI can reveal text or play authenticated current-run WAV segments |
 | vCon export on conversation rows | **Available** — reuses `benchmark_service._vcon_export` shape; Launch UI shows summary |
 | Launch UI mode label | **Honest** — local synthetic media and current-run evidence; browser/SIP/PSTN not proven |
 | First-class **`/voice`** page | **Available** — dedicated Voice eval launch + conversation/vCon/recording results |
@@ -113,6 +114,12 @@ Completed conversations include `audio_session` with:
 - tester proof (`proof.recording`, `proof.transcription_turns`)
 - `extension_points.freeswitch_verto_sip` describing the next SIP plug-in
 
+While a run is active, each conversation's `live_events` array grows as the tester and
+target turns are observed. Text executions emit the actual request/reply text. Reference
+voice executions emit rtc-asr/LLM text plus one authenticated current-run WAV URL per
+speaker turn. The Launch and Voice pages keep this hidden until the user chooses **Show
+live exchange**; voice runs also expose **Unmute live conversation**.
+
 ## Code map
 
 | Module | Role |
@@ -121,7 +128,7 @@ Completed conversations include `audio_session` with:
 | `apps/api/app/services/execution_vcon.py` | vCon export from recording + transcription turns |
 | `apps/api/app/services/execution_runner.py` | Wires transport into `pipecat_webrtc` Execute |
 | `apps/api/app/schemas/execution.py` | `pipecat_webrtc` mode + `audio_transport` field |
-| `apps/api/app/routes/execution.py` | `/audio/capabilities` |
+| `apps/api/app/routes/execution.py` | `/audio/capabilities` and owner-scoped live WAV segments |
 | `apps/pipecat/server.py` | Existing live SmallWebRTC presenter path (presentation demos) — not required for Execute CI |
 
 Reusable contracts from the ACC / cancellation-rescue work:
@@ -144,19 +151,19 @@ Do not wire Verto into default CI.
 
 ## Honesty boundary
 
-This slice proves:
+The built-in reference-agent slice proves:
 
 - execution-time local WebRTC-shaped audio send/receive hooks;
 - recording URI/hash handles;
 - transcription dialog capture;
 - CAE-compatible vCon export on the execution path;
 - duplex frame/byte proof on `conversation.audio_session`.
+- live rtc-asr, configured LLM, and Kokoro provider boundaries when the opt-in smoke is run;
+- observed text turns and owner-scoped current-run WAV segments before terminal run status.
 
 It does **not** prove:
 
 - a browser peer connection against `apps/pipecat`;
-- live ASR/TTS vendors;
 - FreeSWITCH Verto / SIP / PSTN;
 - barge-in against a production media server;
-- that benchmark scoring itself came from live media (cancellation-rescue scoring still
-  reuses the offline fixture evidence path until a live SUT proof bundle lands).
+- production network conditions or an externally deployed target.

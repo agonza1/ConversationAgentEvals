@@ -16,7 +16,7 @@ import time
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 import httpx
 
@@ -254,12 +254,14 @@ class ReferencePipecatAgentTransport:
         completion: CompletionProvider,
         config: ReferenceRuntimeConfig,
         agent_name: str = 'CAE generalist voice agent',
+        event_observer: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.artifact_dir = artifact_dir
         self.media = media
         self.completion = completion
         self.config = config
         self.agent_name = agent_name
+        self.event_observer = event_observer
         self.runtime = media.readiness()
         if not config.internal_token:
             raise ReferenceRuntimeError(
@@ -377,6 +379,9 @@ class ReferencePipecatAgentTransport:
         state.recording_wavs.extend([wav_bytes, agent_wav])
         state.inbound.append({'text': agent_text, 'audio': agent_wav, 'bytes': len(agent_wav)})
         state.latency_marks.append({'label': 'Pipecat rtc-asr → LLM → Kokoro turn', 'latency_ms': pipeline_ms})
+        if self.event_observer is not None:
+            self.event_observer({'speaker': 'Caller', 'text': caller_text, 'audio': wav_bytes})
+            self.event_observer({'speaker': 'Agent', 'text': agent_text, 'audio': agent_wav})
         return {'accepted': True, 'session_id': session_id, 'fixture_id': fixture.fixture_id, 'current_run': True}
 
     async def receive_audio(self, session_id: str, *, cursor: str | None = None) -> dict[str, Any]:
