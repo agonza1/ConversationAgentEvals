@@ -154,6 +154,31 @@ def test_reference_media_readiness_fails_closed_without_each_service():
         )).readiness()
 
 
+def test_reference_media_readiness_honors_custom_asr_health_path():
+    class ReadinessClient:
+        def __init__(self):
+            self.urls = []
+
+        def get(self, url):
+            self.urls.append(url)
+            if url.endswith('/readyz'):
+                return FakeResponse({'backend': 'faster-whisper', 'model': 'base.en'})
+            return FakeResponse({'status': 'healthy'})
+
+    client = ReadinessClient()
+    readiness = ReferenceMediaServices(
+        ReferenceRuntimeConfig(
+            rtc_asr_base_url='http://rtc-asr.test',
+            rtc_asr_health_path='/readyz',
+            kokoro_base_url='http://kokoro.test',
+        ),
+        client=client,  # type: ignore[arg-type]
+    ).readiness()
+
+    assert client.urls[0] == 'http://rtc-asr.test/readyz'
+    assert readiness['stt']['backend'] == 'faster-whisper'
+
+
 def test_reference_completion_callback_requires_internal_token(monkeypatch):
     import app.routes.execution as execution_routes
 

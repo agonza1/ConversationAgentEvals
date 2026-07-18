@@ -1051,6 +1051,14 @@ def _validate_scenarios(suite: dict[str, Any], scenario_ids: list[str]) -> None:
 
 
 def _validate_fixture_mode_scenarios(payload: ExecutionRunCreateRequest, scenario_ids: list[str]) -> None:
+    if payload.mode == 'pipecat_webrtc':
+        unsupported = [item for item in scenario_ids if item != 'cancellation-rescue']
+        if unsupported:
+            raise ValueError(
+                'pipecat_webrtc currently supports only scenario cancellation-rescue; '
+                'its tester act plan is scenario-specific.'
+            )
+        return
     uses_fixture = (
         payload.mode == 'voice_fixture'
         or payload.text_callable == 'offline_acc_fixture'

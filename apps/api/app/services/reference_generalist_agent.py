@@ -47,6 +47,11 @@ class ReferenceRuntimeConfig:
     rtc_asr_base_url: str = field(
         default_factory=lambda: os.getenv('RTC_ASR_BASE_URL', '').rstrip('/')
     )
+    rtc_asr_health_path: str = field(
+        default_factory=lambda: '/' + (
+            os.getenv('RTC_ASR_HEALTH_PATH', '').strip() or '/health'
+        ).lstrip('/')
+    )
     rtc_asr_backend: str = field(
         default_factory=lambda: os.getenv('REFERENCE_STT_BACKEND', 'whisper').strip().lower()
     )
@@ -136,7 +141,9 @@ class ReferenceMediaServices:
                 'Built-in voice target requires Kokoro. Set KOKORO_BASE_URL (for example http://localhost:8880).'
             )
         try:
-            asr = self.client.get(f'{self.config.rtc_asr_base_url}/health')
+            asr = self.client.get(
+                f'{self.config.rtc_asr_base_url}{self.config.rtc_asr_health_path}'
+            )
             asr.raise_for_status()
             asr_payload = asr.json()
         except Exception as exc:  # noqa: BLE001 - normalize service errors
