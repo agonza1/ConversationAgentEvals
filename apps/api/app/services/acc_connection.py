@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from typing import Any
@@ -26,6 +27,20 @@ def normalize_acc_base_url(value: str) -> str:
     if parsed.path not in {'', '/'}:
         raise ValueError('Enter the ACC base URL only (for example http://127.0.0.1:8026).')
     return raw
+
+
+def configured_acc_base_url() -> str:
+    return normalize_acc_base_url(os.getenv('ACC_BASE_URL') or 'http://127.0.0.1:8026')
+
+
+def trusted_acc_base_url(value: str) -> str:
+    normalized = normalize_acc_base_url(value)
+    configured = configured_acc_base_url()
+    if normalized != configured:
+        raise ValueError(
+            'ACC readiness can only be tested against the operator-configured ACC_BASE_URL.'
+        )
+    return normalized
 
 
 def _capabilities(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -62,7 +77,7 @@ def _capabilities(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def test_acc_connection(base_url: str) -> dict[str, Any]:
-    normalized = normalize_acc_base_url(base_url)
+    normalized = trusted_acc_base_url(base_url)
     readiness_url = f'{normalized}{_READINESS_PATH}'
     try:
         with httpx.Client(timeout=4.0, follow_redirects=False) as client:

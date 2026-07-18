@@ -293,6 +293,7 @@ def test_saved_voice_agent_ignores_serialized_request_placeholders():
 
 
 def test_acc_readiness_does_not_overclaim_cae_executor_availability(monkeypatch):
+    monkeypatch.setenv('ACC_BASE_URL', 'http://acc.local:8026')
     blocked = client.post(
         '/api/agents',
         json={
@@ -383,6 +384,26 @@ def test_acc_readiness_does_not_overclaim_cae_executor_availability(monkeypatch)
     )
     assert still_blocked.status_code in {400, 422}
     assert 'execution adapter is not implemented' in still_blocked.text
+
+
+def test_acc_readiness_rejects_unconfigured_probe_destinations(monkeypatch):
+    monkeypatch.setenv('ACC_BASE_URL', 'http://127.0.0.1:8026')
+
+    class RejectNetworkClient:
+        def __init__(self, **_kwargs):
+            raise AssertionError('Untrusted ACC destinations must be rejected before network access.')
+
+    monkeypatch.setattr(acc_connection.httpx, 'Client', RejectNetworkClient)
+
+    for base_url in (
+        'http://169.254.169.254',
+        'http://127.0.0.1:22',
+        'http://10.0.0.5:8080',
+        'https://example.test',
+    ):
+        response = client.post('/api/execution/acc-connection/test', json={'base_url': base_url})
+        assert response.status_code == 400
+        assert 'operator-configured ACC_BASE_URL' in response.text
 
 
 def test_saved_voice_replay_is_not_a_creatable_target():
