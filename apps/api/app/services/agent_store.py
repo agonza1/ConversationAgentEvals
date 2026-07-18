@@ -33,13 +33,16 @@ SEED_AGENTS: list[dict[str, Any]] = [
     },
     {
         'id': 'acc-voice-fixture-agent',
-        'name': 'Saved ACC voice sample',
+        'name': 'Built-in sample voice agent',
         'channel': 'voice',
-        'target': 'voice_fixture',
+        'target': 'builtin_sample_voice',
         'environment': 'local',
         'connection': {},
-        'description': 'Saved ACC conversation evidence for checking voice scoring without placing a live call.',
-        'metadata': {'model_name': 'voice-fixture', 'prompt_version': 'seed'},
+        'description': (
+            'Predictable sample voice agent for the CAE local audio loop. '
+            'It does not place a browser, SIP, or phone call.'
+        ),
+        'metadata': {'model_name': 'builtin-sample-voice', 'prompt_version': 'seed'},
     },
 ]
 
@@ -67,7 +70,7 @@ def ensure_seeded() -> None:
             current = _AGENTS.get(str(seed['id']))
             if current is not None:
                 changed = False
-                for field in ('name', 'description'):
+                for field in ('name', 'channel', 'target', 'environment', 'connection', 'description', 'metadata'):
                     if current.get(field) != seed.get(field):
                         current[field] = seed.get(field)
                         changed = True
@@ -80,6 +83,8 @@ def ensure_seeded() -> None:
                 name=seed['name'],
                 channel=seed['channel'],
                 target=seed['target'],
+                environment=seed.get('environment') or 'local',
+                connection=seed.get('connection') or {},
                 description=seed.get('description'),
                 metadata=seed.get('metadata') or {},
                 created_at=now,

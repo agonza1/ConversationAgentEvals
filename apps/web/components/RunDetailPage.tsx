@@ -78,6 +78,19 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
       <section className="minimal-hero" aria-labelledby="run-title">
         <p className="eyebrow">Run analysis</p>
         <h1 id="run-title">{run?.agent_name || run?.agent_id || executionRunId}</h1>
+        {run?.provenance?.honesty_label ? (
+          <p className="runs-honesty-label" role="status">
+            {run.provenance.honesty_label}
+          </p>
+        ) : null}
+        {run?.provenance ? (
+          <dl className="runs-provenance" aria-label="Run provenance">
+            <div><dt>Target</dt><dd>{run.provenance.target_kind}</dd></div>
+            <div><dt>Tester</dt><dd>{run.provenance.tester_id}</dd></div>
+            <div><dt>Executor</dt><dd>{run.provenance.executor_id}</dd></div>
+            <div><dt>Evidence</dt><dd>{run.provenance.evidence_source}</dd></div>
+          </dl>
+        ) : null}
         <p>
           <ApiAwareLink href="/runs">All runs</ApiAwareLink>
           {' · '}
@@ -210,6 +223,10 @@ function formatTargetId(value: string) {
   if (value === 'mock_agent') return 'Built-in Sample Agent';
   if (value === 'offline_acc_fixture') return 'Saved ACC Text Replay';
   if (value === 'voice_fixture') return 'Saved ACC Voice Replay';
+  if (value === 'builtin_sample_voice') return 'Built-in Sample Voice Agent';
+  if (value === 'sip_agent') return 'SIP Agent Destination';
+  if (value === 'phone_agent') return 'Phone Agent Destination';
+  if (value === 'browser_webrtc_agent') return 'Browser WebRTC Agent Destination';
   if (value === 'http_endpoint') return 'HTTP Endpoint';
   if (value === 'openai_codex') return 'Connected OpenAI Agent';
   return formatRuntimeId(value);
@@ -222,8 +239,14 @@ function runTargetSummary(run: ExecutionRunRecord) {
     : null;
   const target = typeof agent?.target === 'string' ? agent.target : run.mode;
   const environment = typeof agent?.environment === 'string' ? agent.environment : null;
-  const fixture = target === 'mock_agent' || target === 'offline_acc_fixture' || target === 'voice_fixture';
-  return `${formatTargetId(target)}${environment ? ` · ${environment}` : ''} · ${fixture ? 'sample-generated evidence' : 'live target evidence'}`;
+  const evidenceOnly = target === 'offline_acc_fixture' || target === 'voice_fixture';
+  const builtInSample = target === 'mock_agent' || target === 'builtin_sample_voice';
+  const evidenceLabel = evidenceOnly
+    ? 'saved evidence replay'
+    : builtInSample
+      ? 'built-in sample evidence'
+      : 'live target evidence';
+  return `${formatTargetId(target)}${environment ? ` · ${environment}` : ''} · ${evidenceLabel}`;
 }
 
 function MetricTile({

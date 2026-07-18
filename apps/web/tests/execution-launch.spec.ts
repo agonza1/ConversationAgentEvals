@@ -280,7 +280,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect(launch.getByRole('heading', { name: 'Configure this run' })).toBeVisible();
   await expect(launch.getByLabel('Default scenario for launch')).toContainText('Cancellation Rescue');
   await expect(launch.getByLabel('Execution tester')).toHaveValue('scenario_simulator');
-  await expect(launch.getByLabel('Execution runner')).toContainText('Local async runner');
+  await expect(launch.getByLabel('Execution runner')).toContainText(/local async runner/i);
   await expect(launch.getByText('System under test')).toBeVisible();
   await expect(launch.getByText('Advanced')).toBeVisible();
   await expect(launch.getByLabel('Execution scenario scope')).not.toBeVisible();
@@ -311,7 +311,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect(page.getByRole('link', { name: /Mock text agent/ })).toContainText('queued');
 });
 
-test('offline ACC text fixture launches cancellation-rescue while staying text_callable', async ({ page }) => {
+test('saved ACC evidence is not offered as a Run Agent target', async ({ page }) => {
   let posted: Record<string, unknown> | null = null;
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
@@ -454,17 +454,10 @@ test('offline ACC text fixture launches cancellation-rescue while staying text_c
 
   await page.goto('/runs?agent_id=offline-text-fixture');
   const launch = page.getByLabel('Launch agent run');
-  await expect(launch.getByRole('button', { name: 'Run sample evaluation' })).toBeEnabled({ timeout: 30_000 });
+  await expect(launch.getByLabel('Execution agent target')).toHaveValue('');
+  await expect(launch.getByLabel('Execution agent target').locator('option')).toHaveCount(1);
+  await expect(launch.getByLabel('Execution agent target').locator('option')).toHaveText('No targets');
+  await expect(launch.getByRole('button', { name: 'Run evaluation' })).toBeDisabled();
+  expect(posted).toBeNull();
   expect(pageErrors).toEqual([]);
-  await launch.getByRole('button', { name: 'Run sample evaluation' }).click({ force: true });
-  await expect.poll(() => posted).not.toBeNull();
-  expect(pageErrors).toEqual([]);
-  expect(posted).toMatchObject({
-    mode: 'text_callable',
-    text_callable: 'offline_acc_fixture',
-    suite_id: 'call-center-voice-ai',
-    scenario_ids: ['cancellation-rescue'],
-    tester_id: 'scenario_simulator',
-    executor_id: 'local_async_runner',
-  });
 });

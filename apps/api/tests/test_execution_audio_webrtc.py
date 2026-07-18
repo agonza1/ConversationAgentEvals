@@ -68,11 +68,14 @@ def test_execution_health_includes_audio_capabilities():
 def test_pipecat_webrtc_mode_defaults_transport_and_rejects_verto():
     ok = ExecutionRunCreateRequest(
         mode='pipecat_webrtc',
+        tester_id='pipecat_tester',
+        executor_id='local_async_runner',
         scenario_ids=['cancellation-rescue'],
         user_id='u',
         project_id='p',
     )
     assert ok.audio_transport == 'pipecat_small_webrtc'
+    assert ok.executor_id == 'cae_local_audio_loop'
 
     with pytest.raises(ValidationError) as exc:
         ExecutionRunCreateRequest(

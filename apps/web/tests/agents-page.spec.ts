@@ -58,11 +58,11 @@ async function mockRunnerApis(page: import('@playwright/test').Page, options: Mo
           },
           {
             id: 'acc-voice-fixture-agent',
-            name: 'ACC voice fixture agent',
+            name: 'Built-in sample voice agent',
             channel: 'voice',
-            target: 'voice_fixture',
-            description: 'Offline ACC voice fixture path.',
-            metadata: { model_name: 'voice-fixture', prompt_version: 'seed' },
+            target: 'builtin_sample_voice',
+            description: 'CAE local audio loop.',
+            metadata: { model_name: 'builtin-sample-voice', prompt_version: 'seed' },
           },
           {
             id: 'live-openai-agent',
@@ -130,7 +130,7 @@ async function mockRunnerApis(page: import('@playwright/test').Page, options: Mo
         body: JSON.stringify({
           execution_run_id: 'exec-try-it-out',
           status: 'queued',
-          mode: 'voice_fixture',
+          mode: 'pipecat_webrtc',
           agent_id: 'acc-voice-fixture-agent',
           conversations: [],
         }),
@@ -144,7 +144,7 @@ async function mockRunnerApis(page: import('@playwright/test').Page, options: Mo
         body: JSON.stringify({
           execution_run_id: 'exec-try-it-out',
           status: 'completed',
-          mode: 'voice_fixture',
+          mode: 'pipecat_webrtc',
           agent_id: 'acc-voice-fixture-agent',
           conversations: [],
         }),
@@ -170,8 +170,9 @@ test('targets page shows agent target cards and try-it-out deep links', async ({
     '/runs?launch=demo&agent_id=mock-text-agent',
   );
 
-  const voiceCard = page.getByRole('article').filter({ hasText: 'ACC voice fixture agent' });
+  const voiceCard = page.getByRole('article').filter({ hasText: 'Built-in sample voice agent' });
   await expect(voiceCard.locator('.agents-badge-channel').first()).toHaveText('Voice');
+  await expect(voiceCard).toContainText('Local capture · fixture-backed scoring');
   await expect(voiceCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
     'href',
     '/runs?launch=demo&agent_id=acc-voice-fixture-agent',
@@ -202,13 +203,14 @@ test('targets try-it-out auto-launches and opens run analysis', async ({ page })
     onExecutionLaunch: (request) => launches.push(request),
   });
   await page.goto('/targets');
-  await page.getByRole('article').filter({ hasText: 'ACC voice fixture agent' }).getByRole('link', { name: 'Try it Out' }).click();
+  await page.getByRole('article').filter({ hasText: 'Built-in sample voice agent' }).getByRole('link', { name: 'Try it Out' }).click();
   await expect(page).toHaveURL(/\/runs\/exec-try-it-out/, { timeout: 20000 });
   expect(launches).toHaveLength(1);
   expect(launches[0]?.agent_id).toBe('acc-voice-fixture-agent');
-  expect(launches[0]?.mode).toBe('voice_fixture');
-  expect(launches[0]?.tester_id).toBe('fixture_replay');
-  expect(launches[0]?.executor_id).toBe('local_async_runner');
+  expect(launches[0]?.mode).toBe('pipecat_webrtc');
+  expect(launches[0]?.tester_id).toBe('pipecat_tester');
+  expect(launches[0]?.executor_id).toBe('cae_local_audio_loop');
+  expect(launches[0]?.audio_transport).toBe('pipecat_small_webrtc');
 });
 
 test('OpenAI agent try-it-out launches its configured live target', async ({ page }) => {
@@ -340,26 +342,33 @@ test('agent target form only offers connections compatible with its selected cha
 
   const channel = page.getByLabel('Target channel');
   const target = page.getByLabel('Target connection');
-  await expect(target.getByRole('option')).toHaveCount(4);
+  await expect(target.getByRole('option')).toHaveCount(3);
+  await expect(target.locator('option[value="offline_acc_fixture"]')).toHaveCount(0);
   await expect(target).toHaveValue('http_endpoint');
   await expect(page.getByLabel('Endpoint URL')).toBeVisible();
 
   await channel.selectOption('voice');
-  await expect(target).toHaveValue('browser_webrtc');
-  await expect(target.getByRole('option')).toHaveCount(3);
-  await expect(target.locator('option[value="sip_phone"]')).toHaveText(/Agentic Contact Center — SIP \/ phone \(coming soon\)/);
-  await expect(target.locator('option[value="browser_webrtc"]')).toHaveText(/Agentic Contact Center — browser WebRTC \(coming soon\)/);
-  await expect(target.locator('option[value="voice_fixture"]')).toHaveText('Saved ACC voice replay');
+  await expect(target).toHaveValue('browser_webrtc_agent');
+  await expect(target.getByRole('option')).toHaveCount(4);
+  await expect(target.locator('option[value="sip_agent"]')).toHaveText(/ACC SIP URI \(coming soon\)/);
+  await expect(target.locator('option[value="phone_agent"]')).toHaveText(/ACC phone number \(coming soon\)/);
+  await expect(target.locator('option[value="browser_webrtc_agent"]')).toHaveText(/ACC browser WebRTC \(coming soon\)/);
+  await expect(target.locator('option[value="builtin_sample_voice"]')).toHaveText('Built-in sample voice agent');
   await expect(page.getByText('CAE ↔ ACC live adapter coming soon')).toBeVisible();
+  await expect(page.getByLabel('ACC base URL')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Coming soon' })).toBeDisabled();
 
-  await target.selectOption('sip_phone');
+  await target.selectOption('sip_agent');
   await expect(page.getByLabel('SIP URI')).toBeVisible();
-  await expect(page.getByLabel('Phone number')).toBeVisible();
-  await expect(page.getByText(/FreeSWITCH → Verto\/WebRTC agent leg → Pipecat/)).toBeVisible();
+  await expect(page.getByLabel('Phone number')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Coming soon' })).toBeDisabled();
 
-  await target.selectOption('voice_fixture');
-  await expect(page.getByText('Fixture-backed voice')).toBeVisible();
+  await target.selectOption('phone_agent');
+  await expect(page.getByLabel('Phone number')).toBeVisible();
+  await expect(page.getByLabel('SIP URI')).toHaveCount(0);
+
+  await target.selectOption('builtin_sample_voice');
+  await expect(page.getByText('Built-in sample voice call')).toBeVisible();
+  await expect(page.getByText(/Capture artifacts are generated by this run, while scoring and structured outcome evidence remain fixture-backed/)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Create target' })).toBeEnabled();
 });

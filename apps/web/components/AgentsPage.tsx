@@ -4,17 +4,18 @@ import { FormEvent, useEffect, useId, useRef, useState } from 'react';
 
 import { SiteNav } from '@/components/SiteNav';
 import {
+  AccConnectionStatus,
   AgentRecord,
   agentTryItOutHref,
   createAgent,
   deleteAgent,
   isBuiltInAgent,
   listAgents,
+  testAccConnection,
   updateAgent,
 } from '@/lib/execution';
 
-type PlannedVoiceTarget = 'browser_webrtc' | 'sip_phone';
-type FormTarget = AgentRecord['target'] | PlannedVoiceTarget;
+type FormTarget = AgentRecord['target'];
 
 type AgentFormState = {
   name: string;
@@ -27,8 +28,9 @@ type AgentFormState = {
   apiKeyHeader: string;
   responsePath: string;
   timeoutMs: number;
-  sipDestination: string;
+  sipUri: string;
   phoneNumber: string;
+  accBaseUrl: string;
   description: string;
 };
 
@@ -43,8 +45,9 @@ const EMPTY_FORM: AgentFormState = {
   apiKeyHeader: 'x-api-key',
   responsePath: 'response',
   timeoutMs: 15000,
-  sipDestination: '',
+  sipUri: '',
   phoneNumber: '',
+  accBaseUrl: 'http://127.0.0.1:8026',
   description: '',
 };
 
@@ -61,18 +64,14 @@ const TARGET_OPTIONS: Record<
     { value: 'http_endpoint', label: 'HTTP JSON chat endpoint', group: 'Live connections' },
     { value: 'openai_codex', label: 'Connected OpenAI prompt agent', group: 'Live connections' },
     { value: 'mock_agent', label: 'Built-in sample text agent', group: 'Built-in samples' },
-    { value: 'offline_acc_fixture', label: 'Saved ACC text replay', group: 'Built-in samples' },
   ],
   voice: [
-    { value: 'browser_webrtc', label: 'Agentic Contact Center — browser WebRTC (coming soon)', group: 'Live connections', comingSoon: true },
-    { value: 'sip_phone', label: 'Agentic Contact Center — SIP / phone (coming soon)', group: 'Live connections', comingSoon: true },
-    { value: 'voice_fixture', label: 'Saved ACC voice replay', group: 'Built-in samples' },
+    { value: 'browser_webrtc_agent', label: 'ACC browser WebRTC (coming soon)', group: 'Live connections', comingSoon: true },
+    { value: 'sip_agent', label: 'ACC SIP URI (coming soon)', group: 'Live connections', comingSoon: true },
+    { value: 'phone_agent', label: 'ACC phone number (coming soon)', group: 'Live connections', comingSoon: true },
+    { value: 'builtin_sample_voice', label: 'Built-in sample voice agent', group: 'Built-in samples' },
   ],
 };
-
-function isPlannedVoiceTarget(target: FormTarget): target is PlannedVoiceTarget {
-  return target === 'browser_webrtc' || target === 'sip_phone';
-}
 
 function isComingSoonTarget(target: FormTarget) {
   return TARGET_OPTIONS.text.concat(TARGET_OPTIONS.voice).some((option) => option.value === target && option.comingSoon);
@@ -87,25 +86,44 @@ function targetLabel(target: FormTarget) {
   if (target === 'openai_codex') return 'OpenAI endpoint (live)';
   if (target === 'offline_acc_fixture') return 'Saved ACC text replay';
   if (target === 'http_endpoint') return 'HTTP JSON endpoint (live)';
-  if (target === 'browser_webrtc') return 'ACC browser WebRTC (coming soon)';
-  if (target === 'sip_phone') return 'ACC SIP / phone (coming soon)';
-  return 'Saved ACC voice replay';
+  if (target === 'browser_webrtc_agent') return 'ACC browser WebRTC (coming soon)';
+  if (target === 'sip_agent') return 'ACC SIP URI (coming soon)';
+  if (target === 'phone_agent') return 'ACC phone number (coming soon)';
+  if (target === 'builtin_sample_voice') return 'Built-in sample voice agent';
+  return 'Legacy saved voice replay';
 }
 
-function isFixtureTarget(target: FormTarget) {
-  return target === 'mock_agent' || target === 'offline_acc_fixture' || target === 'voice_fixture';
+function isBuiltInSampleTarget(target: FormTarget) {
+  return target === 'mock_agent' || target === 'builtin_sample_voice';
+}
+
+function isSavedReplayTarget(target: FormTarget) {
+  return target === 'offline_acc_fixture' || target === 'voice_fixture';
+}
+
+function isAccTarget(target: FormTarget) {
+  return target === 'sip_agent' || target === 'phone_agent' || target === 'browser_webrtc_agent';
 }
 
 function connectionFromForm(values: AgentFormState): AgentRecord['connection'] {
-  if (values.target !== 'http_endpoint') return {};
-  return {
-    endpoint_url: values.endpointUrl.trim(),
-    auth_type: values.authType || 'none',
-    secret_ref: values.authType === 'none' ? null : values.secretRef.trim(),
-    api_key_header: values.apiKeyHeader.trim() || 'x-api-key',
-    response_path: values.responsePath.trim() || 'response',
-    timeout_ms: values.timeoutMs,
-  };
+  if (values.target === 'http_endpoint') {
+    return {
+      endpoint_url: values.endpointUrl.trim(),
+      auth_type: values.authType || 'none',
+      secret_ref: values.authType === 'none' ? null : values.secretRef.trim(),
+      api_key_header: values.apiKeyHeader.trim() || 'x-api-key',
+      response_path: values.responsePath.trim() || 'response',
+      timeout_ms: values.timeoutMs,
+    };
+  }
+  if (isAccTarget(values.target)) {
+    return {
+      acc_base_url: values.accBaseUrl.trim(),
+      sip_uri: values.target === 'sip_agent' ? values.sipUri.trim() : null,
+      phone_number: values.target === 'phone_agent' ? values.phoneNumber.trim() : null,
+    };
+  }
+  return {};
 }
 
 function formFromAgent(agent: AgentRecord): AgentFormState {
@@ -120,8 +138,9 @@ function formFromAgent(agent: AgentRecord): AgentFormState {
     apiKeyHeader: agent.connection?.api_key_header || 'x-api-key',
     responsePath: agent.connection?.response_path || 'response',
     timeoutMs: agent.connection?.timeout_ms || 15000,
-    sipDestination: '',
-    phoneNumber: '',
+    sipUri: agent.connection?.sip_uri || '',
+    phoneNumber: agent.connection?.phone_number || '',
+    accBaseUrl: agent.connection?.acc_base_url || 'http://127.0.0.1:8026',
     description: agent.description ?? '',
   };
 }
@@ -157,9 +176,20 @@ function AgentConfigRows({ agent }: { agent: AgentRecord }) {
     { label: 'Connection', value: targetLabel(agent.target) },
     { label: 'Environment', value: agent.environment || 'local' },
     ...(endpoint ? [{ label: 'Endpoint', value: endpoint, detail: `Reply path ${agent.connection?.response_path || 'response'}` }] : []),
+    ...(agent.connection?.sip_uri ? [{ label: 'Destination', value: agent.connection.sip_uri }] : []),
+    ...(agent.connection?.phone_number ? [{ label: 'Destination', value: agent.connection.phone_number }] : []),
+    ...(agent.connection?.acc_base_url ? [{ label: 'ACC', value: agent.connection.acc_base_url }] : []),
     {
       label: 'Evidence',
-      value: isFixtureTarget(agent.target) ? 'Sample-generated' : agent.target === 'http_endpoint' ? 'Black-box response' : 'Provider response',
+      value: agent.target === 'builtin_sample_voice'
+        ? 'Local capture · fixture-backed scoring'
+        : isBuiltInSampleTarget(agent.target)
+          ? 'Generated during the run'
+          : isSavedReplayTarget(agent.target)
+            ? 'Saved replay'
+            : agent.target === 'http_endpoint'
+              ? 'Black-box response'
+              : 'Provider response',
     },
     {
       label: 'Target ID',
@@ -271,8 +301,11 @@ function AgentFormModal({
   const [apiKeyHeader, setApiKeyHeader] = useState(initial.apiKeyHeader);
   const [responsePath, setResponsePath] = useState(initial.responsePath);
   const [timeoutMs, setTimeoutMs] = useState(initial.timeoutMs);
-  const [sipDestination, setSipDestination] = useState(initial.sipDestination);
+  const [sipUri, setSipUri] = useState(initial.sipUri);
   const [phoneNumber, setPhoneNumber] = useState(initial.phoneNumber);
+  const [accBaseUrl, setAccBaseUrl] = useState(initial.accBaseUrl);
+  const [accStatus, setAccStatus] = useState<AccConnectionStatus | null>(null);
+  const [testingAcc, setTestingAcc] = useState(false);
   const [description, setDescription] = useState(initial.description);
   const comingSoon = isComingSoonTarget(target);
 
@@ -287,8 +320,10 @@ function AgentFormModal({
     setApiKeyHeader(initial.apiKeyHeader);
     setResponsePath(initial.responsePath);
     setTimeoutMs(initial.timeoutMs);
-    setSipDestination(initial.sipDestination);
+    setSipUri(initial.sipUri);
     setPhoneNumber(initial.phoneNumber);
+    setAccBaseUrl(initial.accBaseUrl);
+    setAccStatus(null);
     setDescription(initial.description);
   }, [initial]);
 
@@ -306,8 +341,9 @@ function AgentFormModal({
       apiKeyHeader,
       responsePath,
       timeoutMs,
-      sipDestination,
+      sipUri,
       phoneNumber,
+      accBaseUrl,
       description,
     });
   }
@@ -316,6 +352,23 @@ function AgentFormModal({
     setChannel(nextChannel);
     if (!TARGET_OPTIONS[nextChannel].some((option) => option.value === target)) {
       setTarget(TARGET_OPTIONS[nextChannel][0].value);
+    }
+  }
+
+  async function onTestAcc() {
+    setTestingAcc(true);
+    try {
+      const result = await testAccConnection(accBaseUrl);
+      setAccStatus(result);
+    } catch (error) {
+      setAccStatus({
+        connected: false,
+        status: 'error',
+        label: 'ACC connection failed',
+        message: error instanceof Error ? error.message : 'Could not test ACC connection',
+      });
+    } finally {
+      setTestingAcc(false);
     }
   }
 
@@ -369,12 +422,17 @@ function AgentFormModal({
               })}
             </select>
           </label>
-          {isFixtureTarget(target) ? (
+          {isBuiltInSampleTarget(target) ? (
             <div className="agents-form-notice" role="note">
               <strong>Built-in sample</strong>
-              <span>Uses predictable sample responses or a saved conversation. It does not contact a deployed agent.</span>
+              <span>Uses predictable responses generated during this run. It does not contact a deployed agent.</span>
             </div>
-          ) : !comingSoon ? (
+          ) : isSavedReplayTarget(target) ? (
+            <div className="agents-form-notice" role="note">
+              <strong>Saved evidence</strong>
+              <span>Saved conversation replay belongs in Eval evidence and cannot be created as a new target.</span>
+            </div>
+          ) : (
             <label>
               <span>Environment</span>
               <select aria-label="Target environment" value={environment} onChange={(event) => setEnvironment(event.target.value as AgentFormState['environment'])}>
@@ -383,7 +441,7 @@ function AgentFormModal({
                 <option value="production">Production</option>
               </select>
             </label>
-          ) : null}
+          )}
           {target === 'http_endpoint' ? (
             <fieldset className="agents-connection-fields">
               <legend>HTTP JSON contract</legend>
@@ -427,64 +485,78 @@ function AgentFormModal({
               <small>Ask an administrator for a configured credential ID. Environment-variable names and raw credentials are never accepted or stored here.</small>
             </fieldset>
           ) : null}
-          {target === 'sip_phone' ? (
+          {isAccTarget(target) ? (
             <fieldset className="agents-connection-fields">
-              <legend>ACC SIP / phone destination</legend>
+              <legend>Agentic Contact Center connection</legend>
               <p>
-                Live SIP already works in{' '}
+                ACC owns live browser, SIP, phone/PSTN, FreeSWITCH, Verto, and production media. CAE only tests readiness here; its execution adapter is not implemented yet.
+              </p>
+              <label>
+                <span>ACC base URL</span>
+                <input
+                  required
+                  type="url"
+                  aria-label="ACC base URL"
+                  value={accBaseUrl}
+                  onChange={(event) => { setAccBaseUrl(event.target.value); setAccStatus(null); }}
+                  placeholder="http://127.0.0.1:8026"
+                />
+              </label>
+              {target === 'sip_agent' ? (
+                <label>
+                  <span>SIP URI</span>
+                  <input
+                    required
+                    aria-label="SIP URI"
+                    value={sipUri}
+                    onChange={(event) => setSipUri(event.target.value)}
+                    placeholder="sip:agent@example.com"
+                  />
+                </label>
+              ) : null}
+              {target === 'phone_agent' ? (
+                <label>
+                  <span>Phone number (E.164)</span>
+                  <input
+                    required
+                    aria-label="Phone number"
+                    value={phoneNumber}
+                    onChange={(event) => setPhoneNumber(event.target.value)}
+                    placeholder="+12125550123"
+                  />
+                </label>
+              ) : null}
+              <div className="agents-connection-actions">
+                <button type="button" className="secondary-link" disabled={testingAcc || !accBaseUrl.trim()} onClick={() => void onTestAcc()}>
+                  {testingAcc ? 'Testing…' : 'Test ACC readiness'}
+                </button>
+                {accStatus ? (
+                  <span role="status" className={accStatus.connected ? 'is-ready' : 'is-blocked'}>
+                    {accStatus.label}: {accStatus.message}
+                  </span>
+                ) : null}
+              </div>
+              <small>
+                A successful readiness check does not enable Create target until CAE can actually execute and capture evidence through this adapter. See{' '}
                 <a href="https://github.com/agonza1/agentic-contact-center" target="_blank" rel="noreferrer">
                   Agentic Contact Center
                 </a>
-                {' '}(FreeSWITCH → Verto/WebRTC agent leg → Pipecat). ConversationAgentEvals will call that target — we will not reimplement dialing here.
-              </p>
-              <label>
-                <span>SIP URI or ACC extension</span>
-                <input
-                  aria-label="SIP URI"
-                  value={sipDestination}
-                  onChange={(event) => setSipDestination(event.target.value)}
-                  placeholder="sip:1000@127.0.0.1 or ACC extension 8600"
-                />
-              </label>
-              <label>
-                <span>Phone number (E.164)</span>
-                <input
-                  aria-label="Phone number"
-                  value={phoneNumber}
-                  onChange={(event) => setPhoneNumber(event.target.value)}
-                  placeholder="+15551234567"
-                />
-              </label>
-              <small>
-                Preferred ACC path: softphone/SIP → FreeSWITCH dialplan → Verto user <code>acc-pipecat</code> →{' '}
-                <code>pipecat-verto-agent-bridge.py</code>. CAE integration (create + Execute against a running ACC) is coming soon.
               </small>
-            </fieldset>
-          ) : null}
-          {target === 'browser_webrtc' ? (
-            <fieldset className="agents-connection-fields">
-              <legend>ACC browser WebRTC</legend>
-              <p>
-                Live browser media already works in ACC via{' '}
-                <code>pipecat-browser-webrtc-bridge.py</code> (SmallWebRTCTransport + shared voice pipeline). CAE will attach as the eval harness against that session — not a second media stack.
-              </p>
             </fieldset>
           ) : null}
           {comingSoon ? (
             <div className="agents-form-notice" role="note">
               <strong>CAE ↔ ACC live adapter coming soon</strong>
               <span>
-                {target === 'sip_phone'
-                  ? 'You can sketch the destination now. Create stays disabled until ConversationAgentEvals can launch/score against a running Agentic Contact Center SIP session.'
-                  : 'You can preview this adapter now. Create stays disabled until ConversationAgentEvals can attach to ACC’s browser WebRTC session for eval evidence.'}
+                Readiness and executability are separate. Create stays disabled until ConversationAgentEvals can launch the ACC session and capture evidence end to end.
               </span>
             </div>
           ) : null}
-          {channel === 'voice' && !comingSoon ? (
+          {target === 'builtin_sample_voice' ? (
             <div className="agents-form-notice" role="note">
-              <strong>Fixture-backed voice</strong>
+              <strong>Built-in sample voice call</strong>
               <span>
-                Uses a saved ACC conversation replay inside ConversationAgentEvals. For live SIP or browser calls, pick an Agentic Contact Center adapter above (integration coming soon).
+                Runs the built-in sample agent through CAE&apos;s synthetic local audio loop. Capture artifacts are generated by this run, while scoring and structured outcome evidence remain fixture-backed. This is not a browser, SIP, or phone call.
               </span>
             </div>
           ) : null}
@@ -544,8 +616,8 @@ export function AgentsPage() {
   }, []);
 
   async function onCreate(values: AgentFormState) {
-    if (isComingSoonTarget(values.target) || isPlannedVoiceTarget(values.target)) {
-      setError('That ACC live adapter is coming soon — CAE cannot create it until the ACC session bridge is wired.');
+    if (isComingSoonTarget(values.target)) {
+      setError('That ACC executor is not implemented in CAE yet, so this target cannot be created.');
       return;
     }
     setSaving(true);
@@ -556,7 +628,7 @@ export function AgentsPage() {
         name: values.name.trim(),
         channel: values.channel,
         target: values.target,
-        environment: isFixtureTarget(values.target) ? 'local' : values.environment,
+        environment: isBuiltInSampleTarget(values.target) || isSavedReplayTarget(values.target) ? 'local' : values.environment,
         connection: connectionFromForm(values),
         description: values.description.trim() || null,
       });
@@ -571,8 +643,8 @@ export function AgentsPage() {
   }
 
   async function onEdit(agentId: string, values: AgentFormState) {
-    if (isComingSoonTarget(values.target) || isPlannedVoiceTarget(values.target)) {
-      setError('That ACC live adapter is coming soon — CAE cannot create it until the ACC session bridge is wired.');
+    if (isComingSoonTarget(values.target)) {
+      setError('That ACC executor is not implemented in CAE yet, so this target cannot be created.');
       return;
     }
     setSaving(true);
@@ -583,7 +655,7 @@ export function AgentsPage() {
         name: values.name.trim(),
         channel: values.channel,
         target: values.target,
-        environment: isFixtureTarget(values.target) ? 'local' : values.environment,
+        environment: isBuiltInSampleTarget(values.target) || isSavedReplayTarget(values.target) ? 'local' : values.environment,
         connection: connectionFromForm(values),
         description: values.description.trim() || null,
       });

@@ -11,7 +11,19 @@ const runFixture = {
   agent_id: 'acc-voice-fixture-agent',
   agent_name: 'ACC voice fixture agent',
   tester_id: 'fixture_replay',
-  executor_id: 'local_async_runner',
+  executor_id: 'evidence_replay',
+  provenance: {
+    target_id: null,
+    target_kind: 'saved_voice_replay',
+    target_channel: 'voice',
+    tester_id: 'fixture_replay',
+    executor_id: 'evidence_replay',
+    evidence_source: 'saved_replay',
+    live_external_connection: false,
+    saved_evidence: true,
+    synthetic_media: true,
+    honesty_label: 'Saved conversation replay · evidence evaluation · no live call',
+  },
   execution_snapshot: {
     agent: { target: 'voice_fixture', environment: 'local' },
   },
@@ -91,8 +103,8 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
   await expect(page.getByRole('heading', { name: 'ACC voice fixture agent' })).toBeVisible();
   const participants = page.getByLabel('Run participants and executor');
   await expect(participants).toContainText('Saved Conversation Replay');
-  await expect(participants).toContainText('Local Async Runner');
-  await expect(participants).toContainText('sample-generated evidence');
+  await expect(participants).toContainText('Evidence Replay');
+  await expect(participants).toContainText('saved evidence replay');
   await expect(page.getByRole('button', { name: /Interruption Detection/ }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: /Latency/ }).first()).toBeVisible();
   await expect(page.getByLabel('Stub dual-track waveform')).toBeVisible();

@@ -40,6 +40,11 @@ from app.services.execution_audio import (
 from app.services.execution_vcon import build_execution_vcon, vcon_summary
 from app.services.llm_providers import get_provider
 from app.services.pipecat_tester_agent import PipecatTesterAgentRunner
+from app.services.run_provenance import (
+    assert_execution_compatible,
+    build_run_provenance,
+    execution_defaults_for_target,
+)
 from app.services.target_secrets import resolve_http_target_secret
 
 
@@ -97,6 +102,14 @@ def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
     if resolved.agent_id and agent is None:
         raise ValueError(f'Unknown agent: {resolved.agent_id}')
     model_name = (resolved.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
+    provenance = build_run_provenance(
+        agent=agent,
+        agent_target=_execution_target(resolved, agent),
+        tester_id=resolved.tester_id,
+        executor_id=resolved.executor_id,
+        mode=resolved.mode,
+        text_callable=resolved.text_callable,
+    )
     record = ExecutionRunRecord(
         execution_run_id=execution_run_id,
         status='queued',
@@ -111,9 +124,11 @@ def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
         tester_id=resolved.tester_id,
         tester_model_name=resolved.tester_model_name,
         executor_id=resolved.executor_id,
+        provenance=provenance,
         execution_snapshot={
             'request': resolved.model_dump(mode='json'),
             'agent': agent,
+            'provenance': provenance.model_dump(mode='json'),
         },
         progress=ExecutionRunProgress(
             phase='queued',
@@ -280,66 +295,80 @@ def _run_one_conversation(
         )
 
 
+def _execution_target(
+    payload: ExecutionRunCreateRequest,
+    agent: dict[str, Any] | None = None,
+) -> str:
+    if agent:
+        return str(agent.get('target') or 'mock_agent')
+    if payload.mode == 'pipecat_webrtc':
+        return 'builtin_sample_voice'
+    if payload.mode == 'voice_fixture':
+        return 'voice_fixture'
+    return payload.text_callable
+
+
 def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCreateRequest:
     model_name = (payload.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
     if not payload.agent_id:
+        target = _execution_target(payload)
+        assert_execution_compatible(
+            agent_target=target,
+            mode=payload.mode,
+            tester_id=payload.tester_id,
+            executor_id=payload.executor_id,
+        )
         return payload.model_copy(update={'model_name': model_name})
+
     agent = get_agent(payload.agent_id)
     if agent is None:
         raise ValueError(f'Unknown agent: {payload.agent_id}')
-    # An agent supplies defaults, but the advanced target-mode control is an
-    # explicit per-run override.  Pydantic retains whether `mode` appeared in
-    # the request, letting callers omit it to opt into the saved agent target.
-    if 'mode' in payload.model_fields_set:
-        agent_channel = str(agent.get('channel') or 'text')
-        agent_target = str(agent.get('target') or '')
-        if agent_channel == 'text' and payload.mode != 'text_callable':
-            raise ValueError(
-                f'Selected text target {agent["id"]} requires mode=text_callable; '
-                f'mode={payload.mode} would execute a different adapter.'
-            )
-        if agent_channel == 'voice' and agent_target == 'voice_fixture' and payload.mode not in {
-            'voice_fixture', 'pipecat_webrtc'
-        }:
-            raise ValueError(
-                f'Selected voice fixture {agent["id"]} requires mode=voice_fixture or pipecat_webrtc.'
-            )
-        updates: dict[str, Any] = {
-            'agent_id': agent['id'],
-            'model_name': model_name,
-        }
-        if payload.mode == 'text_callable' and agent_target in {
-            'mock_agent', 'openai_codex', 'offline_acc_fixture', 'http_endpoint'
-        }:
-            if 'text_callable' in payload.model_fields_set and payload.text_callable != agent_target:
-                raise ValueError(
-                    f'Selected target {agent["id"]} uses {agent_target}; '
-                    f'text_callable={payload.text_callable} would execute a different target.'
-                )
-            updates['text_callable'] = agent_target
-        return payload.model_copy(
-            update=updates
-        )
-    target = str(agent.get('target') or 'mock_agent')
-    channel = str(agent.get('channel') or 'text')
-    # Text + offline_acc_fixture stays text_callable; only force voice for voice channel or voice_fixture target.
-    if channel == 'voice' or target == 'voice_fixture':
-        mode = 'voice_fixture'
-        text_callable = payload.text_callable
-        tester_id = 'fixture_replay'
-    else:
-        mode = 'text_callable'
-        text_callable = target if target in {'mock_agent', 'openai_codex', 'offline_acc_fixture', 'http_endpoint'} else 'mock_agent'
-        tester_id = 'scenario_simulator'
-    return payload.model_copy(
-        update={
-            'mode': mode,
-            'text_callable': text_callable,
-            'tester_id': tester_id,
-            'agent_id': agent['id'],
-            'model_name': model_name,
-        }
+    target = _execution_target(payload, agent)
+    defaults = execution_defaults_for_target(target)
+    request_placeholders = {
+        'mode': 'text_callable',
+        'tester_id': 'scenario_simulator',
+        'executor_id': 'local_async_runner',
+        'audio_transport': 'none',
+    }
+    # Generated clients and forms commonly serialize every request default.
+    # Treat those placeholder values like omitted fields so the saved target's
+    # execution defaults remain authoritative; non-default values still opt in
+    # to the advanced per-run override behavior.
+    explicit_execution = any(
+        field in payload.model_fields_set and getattr(payload, field) != placeholder
+        for field, placeholder in request_placeholders.items()
     )
+    mode = payload.mode if explicit_execution else defaults.mode
+    tester_id = payload.tester_id if explicit_execution else defaults.tester_id
+    executor_id = payload.executor_id if explicit_execution else defaults.executor_id
+    audio_transport = payload.audio_transport if explicit_execution else defaults.audio_transport
+
+    assert_execution_compatible(
+        agent_target=target,
+        mode=mode,
+        tester_id=tester_id,
+        executor_id=executor_id,
+    )
+
+    text_callable = payload.text_callable
+    if target in {'mock_agent', 'openai_codex', 'offline_acc_fixture', 'http_endpoint'}:
+        if 'text_callable' in payload.model_fields_set and payload.text_callable != target:
+            raise ValueError(
+                f'Selected target {agent["id"]} uses {target}; '
+                f'text_callable={payload.text_callable} would execute a different target.'
+            )
+        text_callable = target
+
+    return payload.model_copy(update={
+        'mode': mode,
+        'text_callable': text_callable,
+        'tester_id': tester_id,
+        'executor_id': executor_id,
+        'audio_transport': audio_transport,
+        'agent_id': agent['id'],
+        'model_name': model_name,
+    })
 
 
 def _queued_execution_context(
