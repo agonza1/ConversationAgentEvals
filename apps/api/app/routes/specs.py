@@ -12,6 +12,7 @@ from app.services.editable_assert_spec import (
     EditableAssertSpec,
     SpecGenerationFailed,
     SpecGenerationUnavailable,
+    SpecProjectAmbiguous,
     default_templates,
     export_saved_spec,
     generate_spec_draft,
@@ -72,13 +73,18 @@ def preview_editable_spec(payload: SpecEnvelope):
 def create_editable_spec(payload: SpecSaveRequest, db: Session = Depends(get_db)):
     try:
         return save_spec(db=db, user_id=payload.user_id, project_id=payload.project_id, spec=payload.spec)
+    except SpecProjectAmbiguous as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get('/{spec_id}')
 def get_editable_spec(spec_id: str, user_id: str = Query(min_length=1), project_id: str = Query(default='default', min_length=1), db: Session = Depends(get_db)):
-    saved = get_spec(db, spec_id, user_id=user_id, project_id=project_id)
+    try:
+        saved = get_spec(db, spec_id, user_id=user_id, project_id=project_id)
+    except SpecProjectAmbiguous as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if saved is None:
         raise HTTPException(status_code=404, detail='Spec not found')
     return saved
@@ -88,6 +94,8 @@ def get_editable_spec(spec_id: str, user_id: str = Query(min_length=1), project_
 def update_editable_spec(spec_id: str, payload: SpecSaveRequest, db: Session = Depends(get_db)):
     try:
         return save_spec(db=db, user_id=payload.user_id, project_id=payload.project_id, spec=payload.spec.model_copy(update={'id': spec_id}))
+    except SpecProjectAmbiguous as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -96,6 +104,8 @@ def update_editable_spec(spec_id: str, payload: SpecSaveRequest, db: Session = D
 def create_editable_spec_version(spec_id: str, payload: SpecSaveRequest, db: Session = Depends(get_db)):
     try:
         return save_spec(db=db, user_id=payload.user_id, project_id=payload.project_id, spec=payload.spec.model_copy(update={'id': spec_id}))
+    except SpecProjectAmbiguous as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -108,7 +118,10 @@ def export_editable_spec(
     format: Literal['json', 'yaml'] = Query(default='yaml'),
     db: Session = Depends(get_db),
 ):
-    exported = export_saved_spec(db, spec_id, user_id=user_id, project_id=project_id, format=format)
+    try:
+        exported = export_saved_spec(db, spec_id, user_id=user_id, project_id=project_id, format=format)
+    except SpecProjectAmbiguous as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if exported is None:
         raise HTTPException(status_code=404, detail='Spec not found')
     if format == 'yaml':

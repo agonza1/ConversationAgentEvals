@@ -271,6 +271,47 @@ def test_workspace_viewers_can_read_but_cannot_write_shared_specs():
     assert 'Workspace editor access' in rejected.json()['detail']
 
 
+def test_same_key_projects_across_workspaces_require_unique_project_id():
+    suffix = uuid4().hex
+    member_id = f'multi-workspace-member-{suffix}'
+    project_key = f'multi-workspace-project-{suffix}'
+    project_ids = []
+    owner_ids = []
+    with SessionLocal() as db:
+        for index in range(2):
+            owner_id = f'multi-owner-{index}-{suffix}'
+            owner_ids.append(owner_id)
+            workspace = ProductWorkspace(owner_user_id=owner_id, workspace_key=f'multi-workspace-{index}-{suffix}', name=f'Workspace {index}')
+            db.add(workspace)
+            db.flush()
+            db.add_all([
+                ProductWorkspaceMember(workspace_id=workspace.id, user_id=owner_id, role='owner'),
+                ProductWorkspaceMember(workspace_id=workspace.id, user_id=member_id, role='editor'),
+            ])
+            project = ProductProject(user_id=owner_id, workspace_id=workspace.id, project_key=project_key, name=f'Project {index}')
+            db.add(project)
+            db.flush()
+            project_ids.append(project.id)
+        db.commit()
+
+    for owner_id, project_id in zip(owner_ids, project_ids, strict=True):
+        assert client.post('/api/specs', json={'user_id': owner_id, 'project_id': project_id, 'spec': _valid_spec()}).status_code == 200
+
+    ambiguous = client.get('/api/specs/cancellation-rescue-agent', params={'user_id': member_id, 'project_id': project_key})
+    exact = client.get('/api/specs/cancellation-rescue-agent', params={'user_id': member_id, 'project_id': project_ids[1]})
+
+    assert ambiguous.status_code == 409
+    assert 'ambiguous across visible workspaces' in ambiguous.json()['detail']
+    assert exact.status_code == 200
+
+
+def test_save_rejects_spec_ids_that_cannot_be_addressed_as_one_path_segment():
+    response = client.post('/api/specs', json={'user_id': 'slug-user', 'project_id': 'slug-project', 'spec': _valid_spec(id='support/v2')})
+
+    assert response.status_code == 422
+    assert 'path-safe slug' in response.json()['detail']
+
+
 def test_json_export_uses_the_immutable_persisted_config(monkeypatch):
     suffix = uuid4().hex
     user_id = f'export-user-{suffix}'

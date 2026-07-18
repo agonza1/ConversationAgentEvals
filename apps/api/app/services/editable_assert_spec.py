@@ -129,6 +129,10 @@ class SpecGenerationFailed(RuntimeError):
     pass
 
 
+class SpecProjectAmbiguous(ValueError):
+    pass
+
+
 _SPEC_LOCKS_GUARD = threading.Lock()
 _SPEC_LOCKS: dict[tuple[str, str], threading.Lock] = {}
 
@@ -258,6 +262,8 @@ def save_spec(*, db: Session, user_id: str, project_id: str, spec: EditableAsser
     if not preview.valid:
         raise ValueError('; '.join(error.message for error in preview.errors) or 'Spec is invalid')
     spec_id = spec.id or _slug_id('spec')
+    if not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,70}[a-z0-9])?', spec_id):
+        raise ValueError('Spec id must be a lowercase path-safe slug containing only letters, numbers, and hyphens.')
     project = _resolve_project(db, user_id=user_id, project_id=project_id)
 
     with _spec_lock(project.id, spec_id):
@@ -490,6 +496,8 @@ def _select_visible_project(projects: list[ProductProject], *, project_id: str) 
     if exact_id is not None:
         return exact_id
     shared = [project for project in projects if project.workspace_id]
+    if len(shared) > 1:
+        raise SpecProjectAmbiguous('Project key is ambiguous across visible workspaces; use the unique project id.')
     return shared[0] if shared else projects[0]
 
 
