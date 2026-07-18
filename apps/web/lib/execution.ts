@@ -1,11 +1,15 @@
+import { apiErrorMessage } from './apiError';
+
 export type ExecutionMode = 'text_callable' | 'voice_fixture' | 'pipecat_webrtc';
 export type AudioTransportId = 'none' | 'pipecat_small_webrtc' | 'freeswitch_verto_sip';
-export type ExecutorKind =
+export type TesterId = 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
+export type ExecutorId =
+  | 'local_async_runner'
+  | 'evidence_replay'
   | 'cae_local_audio_loop'
   | 'acc_browser_webrtc'
   | 'acc_sip'
-  | 'acc_phone'
-  | 'none';
+  | 'acc_phone';
 export type AgentTarget =
   | 'mock_agent'
   | 'openai_codex'
@@ -14,34 +18,33 @@ export type AgentTarget =
   | 'builtin_sample_voice'
   | 'sip_agent'
   | 'phone_agent'
-  | 'browser_webrtc_agent';
+  | 'browser_webrtc_agent'
+  | 'http_endpoint';
 
 export interface AgentRecord {
   id: string;
   name: string;
   channel: 'text' | 'voice';
   target: AgentTarget;
+  environment?: 'local' | 'staging' | 'production';
+  connection?: {
+    endpoint_url?: string | null;
+    auth_type?: 'none' | 'bearer_secret' | 'api_key_secret';
+    secret_ref?: string | null;
+    api_key_header?: string;
+    response_path?: string;
+    timeout_ms?: number;
+    sip_uri?: string | null;
+    phone_number?: string | null;
+    acc_base_url?: string | null;
+  };
   description?: string | null;
-  sip_uri?: string | null;
-  phone_number?: string | null;
-  acc_base_url?: string | null;
   metadata?: {
     model_name?: string | null;
     prompt_version?: string | null;
   };
   created_at?: string;
   updated_at?: string;
-}
-
-export interface ExecutionRunProvenance {
-  target_kind: string;
-  tester_kind: string;
-  executor_kind: ExecutorKind;
-  media_source: string;
-  live_external_connection: boolean;
-  saved_evidence: boolean;
-  synthetic_audio: boolean;
-  honesty_label?: string | null;
 }
 
 export interface LatencyStats {
@@ -108,7 +111,11 @@ export interface ExecutionRunRecord {
   agent_id?: string | null;
   agent_name?: string | null;
   model_name?: string | null;
+  tester_id?: TesterId;
+  tester_model_name?: string | null;
+  executor_id?: ExecutorId;
   provenance?: ExecutionRunProvenance | null;
+  execution_snapshot?: Record<string, unknown> | null;
   progress: {
     phase: string;
     completed_conversations: number;
@@ -125,6 +132,19 @@ export interface ExecutionRunRecord {
   completed_at?: string | null;
 }
 
+export interface ExecutionRunProvenance {
+  target_id?: string | null;
+  target_kind: string;
+  target_channel: 'text' | 'voice';
+  tester_id: TesterId;
+  executor_id: ExecutorId;
+  evidence_source: string;
+  live_external_connection: boolean;
+  saved_evidence: boolean;
+  synthetic_media: boolean;
+  honesty_label?: string | null;
+}
+
 export interface AccConnectionStatus {
   connected: boolean;
   status: string;
@@ -132,7 +152,13 @@ export interface AccConnectionStatus {
   message: string;
   base_url?: string | null;
   readiness_url?: string | null;
-  destinations?: Record<string, { creatable?: boolean; executor_kind?: string; label?: string }>;
+  destinations?: Record<string, {
+    acc_ready?: boolean;
+    cae_executor_available?: boolean;
+    creatable?: boolean;
+    executor_id?: ExecutorId;
+    label?: string;
+  }>;
 }
 
 function normalizeApiBase(value: string) {
@@ -157,14 +183,7 @@ export function getApiBase() {
 async function handleJson<T>(response: Response): Promise<T> {
   const text = await response.text();
   if (!response.ok) {
-    let message = text || `Request failed with ${response.status}`;
-    try {
-      const parsed = JSON.parse(text) as { detail?: string };
-      if (typeof parsed?.detail === 'string') message = parsed.detail;
-    } catch {
-      // Keep plain text.
-    }
-    throw new Error(message);
+    throw new Error(apiErrorMessage(text, response.status));
   }
   return (text ? JSON.parse(text) : {}) as T;
 }
@@ -173,13 +192,6 @@ const BUILT_IN_AGENT_IDS = new Set(['mock-text-agent', 'acc-voice-fixture-agent'
 
 export function isBuiltInAgent(agent: Pick<AgentRecord, 'id'>) {
   return BUILT_IN_AGENT_IDS.has(agent.id);
-}
-
-export function isBuiltinSampleVoice(agent: Pick<AgentRecord, 'channel' | 'target'>) {
-  return (
-    agent.target === 'builtin_sample_voice' ||
-    agent.target === 'voice_fixture'
-  );
 }
 
 export function agentTryItOutHref(agentId: string, apiBase?: string | null) {
@@ -192,19 +204,42 @@ export function applyAgentLaunchDefaults(
   agent: Pick<AgentRecord, 'channel' | 'target'>,
 ): {
   mode: ExecutionMode;
-  executor_kind: ExecutorKind;
+  testerId: TesterId;
+  executorId: ExecutorId;
+  audioTransport: AudioTransportId;
   textCallable?: AgentTarget;
 } {
-  if (isBuiltinSampleVoice(agent)) {
-    return { mode: 'pipecat_webrtc', executor_kind: 'cae_local_audio_loop' };
+  if (agent.target === 'builtin_sample_voice') {
+    return {
+      mode: 'pipecat_webrtc',
+      testerId: 'pipecat_tester',
+      executorId: 'cae_local_audio_loop',
+      audioTransport: 'pipecat_small_webrtc',
+    };
+  }
+  if (agent.target === 'voice_fixture') {
+    return {
+      mode: 'voice_fixture',
+      testerId: 'fixture_replay',
+      executorId: 'evidence_replay',
+      audioTransport: 'none',
+    };
+  }
+  if (agent.target === 'offline_acc_fixture') {
+    return {
+      mode: 'text_callable',
+      testerId: 'fixture_replay',
+      executorId: 'evidence_replay',
+      audioTransport: 'none',
+      textCallable: 'offline_acc_fixture',
+    };
   }
   return {
     mode: 'text_callable',
-    executor_kind: 'none',
-    textCallable:
-      agent.target === 'mock_agent' || agent.target === 'openai_codex' || agent.target === 'offline_acc_fixture'
-        ? agent.target
-        : 'mock_agent',
+    testerId: 'scenario_simulator',
+    executorId: 'local_async_runner',
+    audioTransport: 'none',
+    textCallable: ['mock_agent', 'openai_codex', 'offline_acc_fixture', 'http_endpoint'].includes(agent.target) ? agent.target : 'mock_agent',
   };
 }
 
@@ -219,10 +254,9 @@ export async function createAgent(payload: {
   name: string;
   channel: AgentRecord['channel'];
   target: AgentRecord['target'];
+  environment?: AgentRecord['environment'];
+  connection?: AgentRecord['connection'];
   description?: string | null;
-  sip_uri?: string | null;
-  phone_number?: string | null;
-  acc_base_url?: string | null;
 }): Promise<AgentRecord> {
   return handleJson(
     await fetch(`${getApiBase()}/api/agents`, {
@@ -235,9 +269,7 @@ export async function createAgent(payload: {
 
 export async function updateAgent(
   agentId: string,
-  payload: Partial<
-    Pick<AgentRecord, 'name' | 'channel' | 'target' | 'description' | 'sip_uri' | 'phone_number' | 'acc_base_url'>
-  >,
+  payload: Partial<Pick<AgentRecord, 'name' | 'channel' | 'target' | 'environment' | 'connection' | 'description'>>,
 ): Promise<AgentRecord> {
   return handleJson(
     await fetch(`${getApiBase()}/api/agents/${encodeURIComponent(agentId)}`, {
@@ -290,13 +322,15 @@ export async function createExecutionRun(payload: {
   suite_id: string;
   scenario_ids?: string[];
   mode?: ExecutionMode;
-  executor_kind?: ExecutorKind;
   iterations?: number;
   user_id: string;
   project_id: string;
   agent_id?: string;
   text_callable?: string;
   model_name?: string;
+  tester_id?: TesterId;
+  tester_model_name?: string;
+  executor_id?: ExecutorId;
   evaluate?: boolean;
   audio_transport?: AudioTransportId;
 }): Promise<ExecutionRunRecord> {
@@ -322,7 +356,6 @@ export function demoProjectId() {
   if (typeof window === 'undefined') return 'call-center-demo';
   const existing = window.localStorage.getItem('conversation-evals-demo-project');
   if (existing) return existing;
-  const next = 'call-center-demo';
-  window.localStorage.setItem('conversation-evals-demo-project', next);
-  return next;
+  window.localStorage.setItem('conversation-evals-demo-project', 'call-center-demo');
+  return 'call-center-demo';
 }

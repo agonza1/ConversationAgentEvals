@@ -10,6 +10,23 @@ const runFixture = {
   project_id: 'call-center-demo',
   agent_id: 'acc-voice-fixture-agent',
   agent_name: 'ACC voice fixture agent',
+  tester_id: 'fixture_replay',
+  executor_id: 'evidence_replay',
+  provenance: {
+    target_id: null,
+    target_kind: 'saved_voice_replay',
+    target_channel: 'voice',
+    tester_id: 'fixture_replay',
+    executor_id: 'evidence_replay',
+    evidence_source: 'saved_replay',
+    live_external_connection: false,
+    saved_evidence: true,
+    synthetic_media: true,
+    honesty_label: 'Saved conversation replay · evidence evaluation · no live call',
+  },
+  execution_snapshot: {
+    agent: { target: 'voice_fixture', environment: 'local' },
+  },
   progress: {
     phase: 'completed',
     completed_conversations: 1,
@@ -84,6 +101,10 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
 
   await page.getByRole('link', { name: /ACC voice fixture agent/ }).click();
   await expect(page.getByRole('heading', { name: 'ACC voice fixture agent' })).toBeVisible();
+  const participants = page.getByLabel('Run participants and executor');
+  await expect(participants).toContainText('Saved Conversation Replay');
+  await expect(participants).toContainText('Evidence Replay');
+  await expect(participants).toContainText('saved evidence replay');
   await expect(page.getByRole('button', { name: /Interruption Detection/ }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: /Latency/ }).first()).toBeVisible();
   await expect(page.getByLabel('Stub dual-track waveform')).toBeVisible();
@@ -138,6 +159,32 @@ test('runs list preserves an API base override in analysis links', async ({ page
     'href',
     '/scenarios?api_base=http%3A%2F%2Fapi.example.test',
   );
+});
+
+test('runs list exposes readable status filtering and run metadata', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    window.localStorage.setItem('conversation-evals-demo-project', 'call-center-demo');
+  });
+
+  const reviewRun = {
+    ...runFixture,
+    execution_run_id: 'exec-review456',
+    status: 'needs_review',
+    agent_name: 'Billing support staging',
+    tester_id: 'scenario_simulator',
+  };
+  await page.route('**/api/execution/runs**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([runFixture, reviewRun]) });
+  });
+
+  await page.goto('/runs');
+  await expect(page.getByRole('heading', { name: 'Recent runs' })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Billing support staging/ })).toContainText('needs review');
+  await expect(page.getByRole('link', { name: /Billing support staging/ })).toContainText('scenario simulator');
+  await page.getByLabel('Filter runs by status').selectOption('completed');
+  await expect(page.getByRole('link', { name: /ACC voice fixture agent/ })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Billing support staging/ })).toHaveCount(0);
 });
 
 test('run analysis preserves an API base override on the All runs link', async ({ page }) => {

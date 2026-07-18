@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 import pytest
 
 from app.main import app
-from app.services import agent_store, execution_run_store, run_provenance
+from app.services import acc_connection, agent_store, execution_run_store
 from app.services.execution_runner import execute_execution_run, start_execution_run
+from app.services.target_secrets import resolve_http_target_secret
 from app.schemas.execution import ExecutionRunCreateRequest
 
 
@@ -17,11 +20,11 @@ def isolated_agent_registry(tmp_path, monkeypatch):
     """Keep agent CRUD tests from reading or writing the local demo registry."""
     monkeypatch.setattr(agent_store, 'AGENTS_DIR', tmp_path / 'agents')
     execution_run_store.reset_execution_runs_for_tests()
-    run_provenance.reset_acc_connections_for_tests()
+    acc_connection.reset_acc_connections_for_tests()
     agent_store.reset_agents_for_tests(clear_files=True)
     yield
     execution_run_store.reset_execution_runs_for_tests()
-    run_provenance.reset_acc_connections_for_tests()
+    acc_connection.reset_acc_connections_for_tests()
     agent_store.reset_agents_for_tests(clear_files=True)
 
 
@@ -54,6 +57,136 @@ def test_agent_crud_round_trip():
     deleted = client.delete(f'/api/agents/{agent_id}')
     assert deleted.status_code == 200
     assert client.get(f'/api/agents/{agent_id}').status_code == 404
+
+
+def test_http_target_requires_real_connection_configuration():
+    missing = client.post(
+        '/api/agents',
+        json={'name': 'No endpoint', 'channel': 'text', 'target': 'http_endpoint'},
+    )
+    assert missing.status_code == 422
+    assert 'endpoint_url' in missing.text
+
+    inline_credentials = client.post(
+        '/api/agents',
+        json={
+            'name': 'Unsafe endpoint',
+            'channel': 'text',
+            'target': 'http_endpoint',
+            'connection': {'endpoint_url': 'https://user:secret@example.test/chat'},
+        },
+    )
+    assert inline_credentials.status_code == 422
+    assert 'Do not embed credentials' in inline_credentials.text
+
+    arbitrary_environment_variable = client.post(
+        '/api/agents',
+        json={
+            'name': 'Unsafe credential reference',
+            'channel': 'text',
+            'target': 'http_endpoint',
+            'connection': {
+                'endpoint_url': 'https://example.test/chat',
+                'auth_type': 'bearer_secret',
+                'secret_ref': 'AWS_SECRET_ACCESS_KEY',
+            },
+        },
+    )
+    assert arbitrary_environment_variable.status_code == 422
+    assert 'string_pattern_mismatch' in arbitrary_environment_variable.text
+
+
+def test_http_target_credentials_only_resolve_from_dedicated_namespace(monkeypatch):
+    monkeypatch.setenv('AWS_SECRET_ACCESS_KEY', 'must-not-be-read')
+
+    with pytest.raises(ValueError, match='credential is not configured'):
+        resolve_http_target_secret('aws-secret-access-key')
+
+    monkeypatch.setenv('CAE_HTTP_TARGET_SECRET_AWS_SECRET_ACCESS_KEY', 'approved-target-secret')
+    assert resolve_http_target_secret('aws-secret-access-key') == 'approved-target-secret'
+
+
+def test_http_target_executes_black_box_contract_and_persists_tester_provenance(monkeypatch):
+    from app.services import execution_runner
+
+    requests = []
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps({'result': {'reply': 'Please confirm your ZIP code and phone number.'}}).encode()
+
+    def fake_urlopen(request, *, timeout):
+        requests.append((request, timeout))
+        return FakeResponse()
+
+    monkeypatch.setenv('SUPPORT_AGENT_TOKEN', 'must-not-be-read')
+    monkeypatch.setenv('CAE_HTTP_TARGET_SECRET_SUPPORT_AGENT_TOKEN', 'not-persisted')
+    monkeypatch.setattr(execution_runner, 'urlopen', fake_urlopen)
+    created = client.post(
+        '/api/agents',
+        json={
+            'name': 'Staging HTTP support',
+            'channel': 'text',
+            'target': 'http_endpoint',
+            'environment': 'staging',
+            'connection': {
+                'endpoint_url': 'https://support.example.test/chat',
+                'auth_type': 'bearer_secret',
+                'secret_ref': 'support-agent-token',
+                'response_path': 'result.reply',
+                'timeout_ms': 5000,
+            },
+        },
+    )
+    assert created.status_code == 200, created.text
+    assert 'not-persisted' not in created.text
+
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['billing-address-change'],
+        agent_id=created.json()['id'],
+        tester_id='scenario_simulator',
+        executor_id='local_async_runner',
+        user_id='agent-runs-user',
+        project_id='agent-runs-project',
+        evaluate=False,
+    )
+    queued = start_execution_run(payload)
+    assert queued['tester_id'] == 'scenario_simulator'
+    assert queued['executor_id'] == 'local_async_runner'
+    assert queued['execution_snapshot']['agent']['target'] == 'http_endpoint'
+    finished = execute_execution_run(queued['execution_run_id'], payload)
+
+    assert finished['status'] == 'completed'
+    conversation = finished['conversations'][0]
+    assert conversation['turns'][1]['text'] == 'Please confirm your ZIP code and phone number.'
+    provenance = conversation['final_state']['runtime_provenance']
+    assert provenance['fixture_backed'] is False
+    assert provenance['trace_visibility'] == 'black_box'
+    assert provenance['tester_id'] == 'scenario_simulator'
+    request, timeout = requests[0]
+    assert timeout == 5
+    assert request.headers['Authorization'] == 'Bearer not-persisted'
+    posted = json.loads(request.data)
+    assert posted['scenario']['id'] == 'billing-address-change'
+    assert posted['history'][0]['role'] == 'user'
+    assert posted['message'].startswith('Hi,')
+    assert 'A busy customer who' not in posted['message']
+
+
+def test_execution_rejects_tester_incompatible_with_mode():
+    with pytest.raises(ValueError, match='text_callable mode requires tester_id=scenario_simulator'):
+        ExecutionRunCreateRequest(mode='text_callable', tester_id='fixture_replay')
+    with pytest.raises(ValueError, match='voice_fixture mode requires tester_id=fixture_replay'):
+        ExecutionRunCreateRequest(mode='voice_fixture', tester_id='scenario_simulator')
 
 
 def test_execution_with_agent_id_and_metrics_summary():
@@ -109,10 +242,11 @@ def test_builtin_sample_voice_agent_run_uses_local_audio_loop_provenance():
     assert queued['mode'] == 'pipecat_webrtc'
     provenance = queued['provenance']
     assert provenance['target_kind'] == 'builtin_sample_voice'
-    assert provenance['executor_kind'] == 'cae_local_audio_loop'
-    assert provenance['media_source'] == 'local_loop'
+    assert provenance['tester_id'] == 'pipecat_tester'
+    assert provenance['executor_id'] == 'cae_local_audio_loop'
+    assert provenance['evidence_source'] == 'local_audio_loop'
     assert provenance['live_external_connection'] is False
-    assert provenance['synthetic_audio'] is True
+    assert provenance['synthetic_media'] is True
     assert provenance['honesty_label'] == (
         'Built-in sample agent · local audio loop · no phone or SIP call'
     )
@@ -134,14 +268,17 @@ def test_builtin_sample_voice_agent_run_uses_local_audio_loop_provenance():
         assert isinstance(conversation['timeline'], list)
 
 
-def test_external_voice_destination_requires_then_uses_tested_acc_connection(monkeypatch):
+def test_acc_readiness_does_not_overclaim_cae_executor_availability(monkeypatch):
     blocked = client.post(
         '/api/agents',
         json={
             'name': 'SIP bot',
             'channel': 'voice',
             'target': 'sip_agent',
-            'sip_uri': 'sip:agent@example.com',
+            'connection': {
+                'sip_uri': 'sip:agent@example.com',
+                'acc_base_url': 'http://acc.local:8026',
+            },
         },
     )
     assert blocked.status_code in {400, 422}
@@ -195,42 +332,46 @@ def test_external_voice_destination_requires_then_uses_tested_acc_connection(mon
             assert url == 'http://acc.local:8026/api/pipecat-media-engine/readiness'
             return FakeResponse()
 
-    monkeypatch.setattr(run_provenance.httpx, 'Client', FakeClient)
+    monkeypatch.setattr(acc_connection.httpx, 'Client', FakeClient)
     tested = client.post(
         '/api/execution/acc-connection/test',
         json={'base_url': 'http://acc.local:8026'},
     )
     assert tested.status_code == 200, tested.text
     assert tested.json()['connected'] is True
-    assert tested.json()['destinations']['sip_agent']['creatable'] is True
-    assert tested.json()['destinations']['browser_webrtc_agent']['creatable'] is True
+    assert tested.json()['destinations']['sip_agent']['acc_ready'] is True
+    assert tested.json()['destinations']['sip_agent']['cae_executor_available'] is False
+    assert tested.json()['destinations']['sip_agent']['creatable'] is False
+    assert tested.json()['destinations']['browser_webrtc_agent']['creatable'] is False
     assert tested.json()['destinations']['phone_agent']['creatable'] is False
 
-    created = client.post(
+    still_blocked = client.post(
         '/api/agents',
         json={
             'name': 'SIP bot',
             'channel': 'voice',
             'target': 'sip_agent',
-            'sip_uri': 'sip:agent@example.com:5060;transport=tcp',
-            'acc_base_url': 'http://acc.local:8026',
+            'connection': {
+                'sip_uri': 'sip:agent@example.com:5060;transport=tcp',
+                'acc_base_url': 'http://acc.local:8026',
+            },
         },
     )
-    assert created.status_code == 200, created.text
-    assert created.json()['target'] == 'sip_agent'
+    assert still_blocked.status_code in {400, 422}
+    assert 'execution adapter is not implemented' in still_blocked.text
 
-    phone = client.post(
+
+def test_saved_voice_replay_is_not_a_creatable_target():
+    response = client.post(
         '/api/agents',
         json={
-            'name': 'Phone bot',
+            'name': 'Saved evidence is not a target',
             'channel': 'voice',
-            'target': 'phone_agent',
-            'phone_number': '+12125550123',
-            'acc_base_url': 'http://acc.local:8026',
+            'target': 'voice_fixture',
         },
     )
-    assert phone.status_code in {400, 422}
-    assert 'PSTN trunk routing is not ready' in phone.text
+    assert response.status_code == 422
+    assert 'evidence, not an agent target' in response.text
 
 
 def test_rejects_incompatible_executor_for_builtin_sample_voice():
@@ -240,15 +381,15 @@ def test_rejects_incompatible_executor_for_builtin_sample_voice():
             'suite_id': 'call-center-voice-ai',
             'scenario_ids': ['cancellation-rescue'],
             'agent_id': 'acc-voice-fixture-agent',
-            'executor_kind': 'acc_sip',
+            'executor_id': 'acc_sip',
             'mode': 'pipecat_webrtc',
             'user_id': 'agent-runs-user',
             'project_id': 'agent-runs-project',
             'iterations': 1,
         },
     )
-    assert response.status_code == 400
-    assert 'compatible' in response.json()['detail'] or 'ACC' in response.json()['detail']
+    assert response.status_code == 422
+    assert 'cae_local_audio_loop' in response.text
 
 
 def test_execution_persists_model_name_default_and_override():
@@ -305,8 +446,8 @@ def test_rejects_unsafe_agent_id_and_seed_mutations():
     assert 'Seed agent' in seed_delete.json()['detail']
 
     seed_edit = client.patch('/api/agents/mock-text-agent', json={'target': 'offline_acc_fixture'})
-    assert seed_edit.status_code == 400
-    assert 'Seed agent' in seed_edit.json()['detail']
+    assert seed_edit.status_code == 422
+    assert 'evidence, not an agent target' in seed_edit.text
     assert client.get('/api/agents/mock-text-agent').json()['target'] == 'mock_agent'
 
 
@@ -352,68 +493,56 @@ def test_rejects_incompatible_agent_channel_target_pairs(channel: str, target: s
         f"/api/agents/{valid.json()['id']}",
         json={'target': 'voice_fixture'},
     )
-    assert patched.status_code == 400
-    assert 'requires one of' in patched.json()['detail']
+    assert patched.status_code == 422
+    assert 'evidence, not an agent target' in patched.text
 
 
-def test_text_offline_acc_fixture_stays_text_callable():
-    from app.services.execution_runner import _resolve_agent_payload
-
-    created = client.post(
+def test_saved_text_replay_is_not_a_creatable_target():
+    response = client.post(
         '/api/agents',
         json={
-            'name': 'Offline text fixture',
+            'name': 'Saved text evidence is not a target',
             'channel': 'text',
             'target': 'offline_acc_fixture',
         },
     )
-    assert created.status_code == 200
-    agent_id = created.json()['id']
+    assert response.status_code == 422
+    assert 'evidence, not an agent target' in response.text
 
-    resolved = _resolve_agent_payload(
-        ExecutionRunCreateRequest(
-            suite_id='call-center-voice-ai',
-            scenario_ids=['cancellation-rescue'],
-            agent_id=agent_id,
-            user_id='agent-runs-user',
-            project_id='agent-runs-project',
-            iterations=1,
+
+def test_agent_payload_rejects_execution_mode_that_bypasses_selected_text_target():
+    from app.services.execution_runner import _resolve_agent_payload
+
+    with pytest.raises(ValueError, match='not compatible with target'):
+        _resolve_agent_payload(
+            ExecutionRunCreateRequest(
+                suite_id='call-center-voice-ai',
+                scenario_ids=['cancellation-rescue'],
+                agent_id='mock-text-agent',
+                mode='pipecat_webrtc',
+                user_id='agent-runs-user',
+                project_id='agent-runs-project',
+                iterations=1,
+            )
         )
-    )
-    assert resolved.mode == 'text_callable'
-    assert resolved.text_callable == 'offline_acc_fixture'
-
-    queued = start_execution_run(
-        ExecutionRunCreateRequest(
-            suite_id='call-center-voice-ai',
-            scenario_ids=['cancellation-rescue'],
-            agent_id=agent_id,
-            user_id='agent-runs-user',
-            project_id='agent-runs-project',
-            iterations=1,
-        )
-    )
-    assert queued['mode'] == 'text_callable'
 
 
-def test_agent_payload_honors_an_explicit_target_mode_override():
+def test_voice_fixture_target_allows_pipecat_capture_proof_mode():
     from app.services.execution_runner import _resolve_agent_payload
 
     resolved = _resolve_agent_payload(
         ExecutionRunCreateRequest(
             suite_id='call-center-voice-ai',
             scenario_ids=['cancellation-rescue'],
-            agent_id='mock-text-agent',
+            agent_id='acc-voice-fixture-agent',
             mode='pipecat_webrtc',
             user_id='agent-runs-user',
             project_id='agent-runs-project',
-            iterations=1,
         )
     )
 
-    assert resolved.agent_id == 'mock-text-agent'
     assert resolved.mode == 'pipecat_webrtc'
-    assert resolved.audio_transport == 'pipecat_small_webrtc'
+    assert resolved.tester_id == 'pipecat_tester'
 
 
 def test_explicit_text_mode_uses_selected_text_agent_target_when_callable_is_omitted():
@@ -445,6 +574,32 @@ def test_explicit_text_mode_uses_selected_text_agent_target_when_callable_is_omi
     assert resolved.text_callable == 'openai_codex'
 
 
+def test_execution_rejects_callable_that_does_not_match_selected_target():
+    created = client.post(
+        '/api/agents',
+        json={
+            'name': 'HTTP provenance guard',
+            'channel': 'text',
+            'target': 'http_endpoint',
+            'connection': {'endpoint_url': 'https://support.example.test/chat'},
+        },
+    )
+    assert created.status_code == 200, created.text
+
+    with pytest.raises(ValueError, match='would execute a different target'):
+        start_execution_run(
+            ExecutionRunCreateRequest(
+                suite_id='call-center-voice-ai',
+                scenario_ids=['billing-address-change'],
+                agent_id=created.json()['id'],
+                mode='text_callable',
+                text_callable='mock_agent',
+                user_id='agent-runs-user',
+                project_id='agent-runs-project',
+            )
+        )
+
+
 def test_rejects_openai_callable_without_agent_before_queueing(monkeypatch):
     created_records = []
     monkeypatch.setattr(
@@ -470,27 +625,20 @@ def test_rejects_openai_callable_without_agent_before_queueing(monkeypatch):
     assert created_records == []
 
 
-def test_offline_text_agent_without_scenarios_defaults_to_cancellation_rescue():
-    created = client.post(
-        '/api/agents',
-        json={
-            'name': 'Default offline fixture target',
-            'channel': 'text',
-            'target': 'offline_acc_fixture',
-        },
-    )
-    assert created.status_code == 200, created.text
-
+def test_saved_text_replay_without_scenarios_defaults_to_cancellation_rescue():
     queued = start_execution_run(
         ExecutionRunCreateRequest(
             suite_id='call-center-voice-ai',
-            agent_id=created.json()['id'],
+            text_callable='offline_acc_fixture',
             user_id='agent-runs-user',
             project_id='agent-runs-project',
         )
     )
 
     assert queued['mode'] == 'text_callable'
+    assert queued['tester_id'] == 'fixture_replay'
+    assert queued['executor_id'] == 'evidence_replay'
+    assert queued['provenance']['saved_evidence'] is True
     assert queued['scenario_ids'] == ['cancellation-rescue']
 
 
@@ -517,7 +665,7 @@ def test_explicit_openai_target_executes_selected_model_for_any_text_agent_witho
         json={
             'name': 'Live OpenAI support agent',
             'channel': 'text',
-            'target': 'mock_agent',
+            'target': 'openai_codex',
             'description': 'Verify the caller before account changes.',
         },
     )

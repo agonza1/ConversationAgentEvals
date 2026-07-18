@@ -6,84 +6,143 @@ import { SiteNav } from '@/components/SiteNav';
 import {
   AccConnectionStatus,
   AgentRecord,
-  AgentTarget,
   agentTryItOutHref,
   createAgent,
   deleteAgent,
-  getAccConnectionStatus,
   isBuiltInAgent,
   listAgents,
   testAccConnection,
   updateAgent,
 } from '@/lib/execution';
 
+type FormTarget = AgentRecord['target'];
+
 type AgentFormState = {
   name: string;
   channel: AgentRecord['channel'];
-  target: AgentTarget;
+  target: FormTarget;
+  environment: NonNullable<AgentRecord['environment']>;
+  endpointUrl: string;
+  authType: 'none' | 'bearer_secret' | 'api_key_secret';
+  secretRef: string;
+  apiKeyHeader: string;
+  responsePath: string;
+  timeoutMs: number;
+  sipUri: string;
+  phoneNumber: string;
+  accBaseUrl: string;
   description: string;
-  sip_uri: string;
-  phone_number: string;
-  acc_base_url: string;
-};
-
-type DestinationOption = {
-  value: AgentTarget;
-  label: string;
-  disabled?: boolean;
-  hint?: string;
 };
 
 const EMPTY_FORM: AgentFormState = {
   name: '',
   channel: 'text',
-  target: 'mock_agent',
+  target: 'http_endpoint',
+  environment: 'staging',
+  endpointUrl: '',
+  authType: 'none',
+  secretRef: '',
+  apiKeyHeader: 'x-api-key',
+  responsePath: 'response',
+  timeoutMs: 15000,
+  sipUri: '',
+  phoneNumber: '',
+  accBaseUrl: 'http://127.0.0.1:8026',
   description: '',
-  sip_uri: '',
-  phone_number: '',
-  acc_base_url: '',
 };
 
-function textDestinations(): DestinationOption[] {
-  return [
-    { value: 'mock_agent', label: 'Built-in sample agent' },
-    { value: 'openai_codex', label: 'OpenAI text endpoint' },
-    { value: 'offline_acc_fixture', label: 'Built-in text fixture' },
-  ];
-}
+const TARGET_OPTIONS: Record<
+  AgentRecord['channel'],
+  Array<{
+    value: FormTarget;
+    label: string;
+    group: 'Live connections' | 'Built-in samples';
+    comingSoon?: boolean;
+  }>
+> = {
+  text: [
+    { value: 'http_endpoint', label: 'HTTP JSON chat endpoint', group: 'Live connections' },
+    { value: 'openai_codex', label: 'Connected OpenAI prompt agent', group: 'Live connections' },
+    { value: 'mock_agent', label: 'Built-in sample text agent', group: 'Built-in samples' },
+  ],
+  voice: [
+    { value: 'browser_webrtc_agent', label: 'ACC browser WebRTC (coming soon)', group: 'Live connections', comingSoon: true },
+    { value: 'sip_agent', label: 'ACC SIP URI (coming soon)', group: 'Live connections', comingSoon: true },
+    { value: 'phone_agent', label: 'ACC phone number (coming soon)', group: 'Live connections', comingSoon: true },
+    { value: 'builtin_sample_voice', label: 'Built-in sample voice agent', group: 'Built-in samples' },
+  ],
+};
 
-function voiceDestinations(connection: AccConnectionStatus | null): DestinationOption[] {
-  const destination = (target: AgentTarget) => connection?.destinations?.[target];
-  const option = (value: AgentTarget, label: string): DestinationOption => {
-    const capability = destination(value);
-    const ready = connection?.connected === true && capability?.creatable === true;
-    return {
-      value,
-      label,
-      disabled: !ready,
-      hint: capability?.label || (connection?.connected ? 'Not ready in this ACC runtime' : 'Connect ACC to enable'),
-    };
-  };
-  return [
-    { value: 'builtin_sample_voice', label: 'Built-in sample agent' },
-    option('browser_webrtc_agent', 'Browser/WebRTC agent'),
-    option('sip_agent', 'SIP agent'),
-    option('phone_agent', 'Phone agent'),
-  ];
+function isComingSoonTarget(target: FormTarget) {
+  return TARGET_OPTIONS.text.concat(TARGET_OPTIONS.voice).some((option) => option.value === target && option.comingSoon);
 }
 
 function channelLabel(channel: AgentRecord['channel']) {
   return channel === 'voice' ? 'Voice' : 'Text';
 }
 
-function targetLabel(target: AgentRecord['target']) {
+function targetLabel(target: FormTarget) {
   if (target === 'mock_agent') return 'Built-in sample text agent';
-  if (target === 'openai_codex') return 'OpenAI text endpoint';
-  if (target === 'offline_acc_fixture') return 'Built-in text fixture';
-  if (target === 'sip_agent') return 'SIP agent';
-  if (target === 'phone_agent') return 'Phone agent';
-  if (target === 'browser_webrtc_agent') return 'Browser/WebRTC agent';
-  return 'Built-in sample voice agent';
+  if (target === 'openai_codex') return 'OpenAI endpoint (live)';
+  if (target === 'offline_acc_fixture') return 'Saved ACC text replay';
+  if (target === 'http_endpoint') return 'HTTP JSON endpoint (live)';
+  if (target === 'browser_webrtc_agent') return 'ACC browser WebRTC (coming soon)';
+  if (target === 'sip_agent') return 'ACC SIP URI (coming soon)';
+  if (target === 'phone_agent') return 'ACC phone number (coming soon)';
+  if (target === 'builtin_sample_voice') return 'Built-in sample voice agent';
+  return 'Legacy saved voice replay';
+}
+
+function isBuiltInSampleTarget(target: FormTarget) {
+  return target === 'mock_agent' || target === 'builtin_sample_voice';
+}
+
+function isSavedReplayTarget(target: FormTarget) {
+  return target === 'offline_acc_fixture' || target === 'voice_fixture';
+}
+
+function isAccTarget(target: FormTarget) {
+  return target === 'sip_agent' || target === 'phone_agent' || target === 'browser_webrtc_agent';
+}
+
+function connectionFromForm(values: AgentFormState): AgentRecord['connection'] {
+  if (values.target === 'http_endpoint') {
+    return {
+      endpoint_url: values.endpointUrl.trim(),
+      auth_type: values.authType || 'none',
+      secret_ref: values.authType === 'none' ? null : values.secretRef.trim(),
+      api_key_header: values.apiKeyHeader.trim() || 'x-api-key',
+      response_path: values.responsePath.trim() || 'response',
+      timeout_ms: values.timeoutMs,
+    };
+  }
+  if (isAccTarget(values.target)) {
+    return {
+      acc_base_url: values.accBaseUrl.trim(),
+      sip_uri: values.target === 'sip_agent' ? values.sipUri.trim() : null,
+      phone_number: values.target === 'phone_agent' ? values.phoneNumber.trim() : null,
+    };
+  }
+  return {};
+}
+
+function formFromAgent(agent: AgentRecord): AgentFormState {
+  return {
+    name: agent.name,
+    channel: agent.channel,
+    target: agent.target,
+    environment: agent.environment || 'local',
+    endpointUrl: agent.connection?.endpoint_url || '',
+    authType: agent.connection?.auth_type || 'none',
+    secretRef: agent.connection?.secret_ref || '',
+    apiKeyHeader: agent.connection?.api_key_header || 'x-api-key',
+    responsePath: agent.connection?.response_path || 'response',
+    timeoutMs: agent.connection?.timeout_ms || 15000,
+    sipUri: agent.connection?.sip_uri || '',
+    phoneNumber: agent.connection?.phone_number || '',
+    accBaseUrl: agent.connection?.acc_base_url || 'http://127.0.0.1:8026',
+    description: agent.description ?? '',
+  };
 }
 
 function agentInitials(name: string) {
@@ -103,11 +162,33 @@ function AgentAvatar({ agent }: { agent: AgentRecord }) {
 }
 
 function AgentConfigRows({ agent }: { agent: AgentRecord }) {
+  const endpoint = agent.connection?.endpoint_url
+    ? (() => {
+        try {
+          return new URL(agent.connection?.endpoint_url || '').origin;
+        } catch {
+          return agent.connection?.endpoint_url || '—';
+        }
+      })()
+    : null;
   const rows = [
     { label: 'Channel', value: channelLabel(agent.channel) },
-    { label: 'Destination', value: targetLabel(agent.target) },
-    agent.sip_uri ? { label: 'SIP URI', value: agent.sip_uri } : null,
-    agent.phone_number ? { label: 'Phone', value: agent.phone_number } : null,
+    { label: 'Connection', value: targetLabel(agent.target) },
+    { label: 'Environment', value: agent.environment || 'local' },
+    ...(endpoint ? [{ label: 'Endpoint', value: endpoint, detail: `Reply path ${agent.connection?.response_path || 'response'}` }] : []),
+    ...(agent.connection?.sip_uri ? [{ label: 'Destination', value: agent.connection.sip_uri }] : []),
+    ...(agent.connection?.phone_number ? [{ label: 'Destination', value: agent.connection.phone_number }] : []),
+    ...(agent.connection?.acc_base_url ? [{ label: 'ACC', value: agent.connection.acc_base_url }] : []),
+    {
+      label: 'Evidence',
+      value: isBuiltInSampleTarget(agent.target)
+        ? 'Generated during the run'
+        : isSavedReplayTarget(agent.target)
+          ? 'Saved replay'
+          : agent.target === 'http_endpoint'
+            ? 'Black-box response'
+            : 'Provider response',
+    },
     {
       label: 'Target ID',
       value: agent.id,
@@ -117,7 +198,7 @@ function AgentConfigRows({ agent }: { agent: AgentRecord }) {
       label: 'Prompt version',
       value: agent.metadata?.prompt_version || '—',
     },
-  ].filter(Boolean) as Array<{ label: string; value: string; detail?: string }>;
+  ];
 
   return (
     <dl className="agents-config-list">
@@ -197,8 +278,6 @@ function AgentFormModal({
   submitLabel,
   initial,
   saving,
-  accConnection,
-  onAccConnectionChange,
   onClose,
   onSubmit,
 }: {
@@ -206,8 +285,6 @@ function AgentFormModal({
   submitLabel: string;
   initial: AgentFormState;
   saving: boolean;
-  accConnection: AccConnectionStatus | null;
-  onAccConnectionChange: (status: AccConnectionStatus) => void;
   onClose: () => void;
   onSubmit: (values: AgentFormState) => Promise<void>;
 }) {
@@ -215,64 +292,81 @@ function AgentFormModal({
   const [name, setName] = useState(initial.name);
   const [channel, setChannel] = useState(initial.channel);
   const [target, setTarget] = useState(initial.target);
+  const [environment, setEnvironment] = useState(initial.environment);
+  const [endpointUrl, setEndpointUrl] = useState(initial.endpointUrl);
+  const [authType, setAuthType] = useState(initial.authType);
+  const [secretRef, setSecretRef] = useState(initial.secretRef);
+  const [apiKeyHeader, setApiKeyHeader] = useState(initial.apiKeyHeader);
+  const [responsePath, setResponsePath] = useState(initial.responsePath);
+  const [timeoutMs, setTimeoutMs] = useState(initial.timeoutMs);
+  const [sipUri, setSipUri] = useState(initial.sipUri);
+  const [phoneNumber, setPhoneNumber] = useState(initial.phoneNumber);
+  const [accBaseUrl, setAccBaseUrl] = useState(initial.accBaseUrl);
+  const [accStatus, setAccStatus] = useState<AccConnectionStatus | null>(null);
+  const [testingAcc, setTestingAcc] = useState(false);
   const [description, setDescription] = useState(initial.description);
-  const [sipUri, setSipUri] = useState(initial.sip_uri);
-  const [phoneNumber, setPhoneNumber] = useState(initial.phone_number);
-  const [accBaseUrl, setAccBaseUrl] = useState(
-    initial.acc_base_url || accConnection?.base_url || 'http://127.0.0.1:8026',
-  );
-  const [connectionStatus, setConnectionStatus] = useState(accConnection);
-  const [testingConnection, setTestingConnection] = useState(false);
-  const [connectionError, setConnectionError] = useState<string | null>(null);
-
-  const destinations = channel === 'voice' ? voiceDestinations(connectionStatus) : textDestinations();
-  const selectedDestination = destinations.find((item) => item.value === target);
-  const destinationDisabled = Boolean(selectedDestination?.disabled);
+  const comingSoon = isComingSoonTarget(target);
 
   useEffect(() => {
-    setConnectionStatus(accConnection);
-    if (accConnection?.base_url) setAccBaseUrl(accConnection.base_url);
-  }, [accConnection]);
+    setName(initial.name);
+    setChannel(initial.channel);
+    setTarget(initial.target);
+    setEnvironment(initial.environment);
+    setEndpointUrl(initial.endpointUrl);
+    setAuthType(initial.authType);
+    setSecretRef(initial.secretRef);
+    setApiKeyHeader(initial.apiKeyHeader);
+    setResponsePath(initial.responsePath);
+    setTimeoutMs(initial.timeoutMs);
+    setSipUri(initial.sipUri);
+    setPhoneNumber(initial.phoneNumber);
+    setAccBaseUrl(initial.accBaseUrl);
+    setAccStatus(null);
+    setDescription(initial.description);
+  }, [initial]);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    if (destinationDisabled) return;
+    if (comingSoon) return;
     await onSubmit({
       name,
       channel,
       target,
+      environment,
+      endpointUrl,
+      authType,
+      secretRef,
+      apiKeyHeader,
+      responsePath,
+      timeoutMs,
+      sipUri,
+      phoneNumber,
+      accBaseUrl,
       description,
-      sip_uri: sipUri,
-      phone_number: phoneNumber,
-      acc_base_url: accBaseUrl,
     });
   }
 
   function onChannelChange(nextChannel: AgentRecord['channel']) {
     setChannel(nextChannel);
-    const nextOptions = nextChannel === 'voice' ? voiceDestinations(connectionStatus) : textDestinations();
-    const firstCreatable = nextOptions.find((item) => !item.disabled) || nextOptions[0];
-    setTarget(firstCreatable.value);
-    setSipUri('');
-    setPhoneNumber('');
+    if (!TARGET_OPTIONS[nextChannel].some((option) => option.value === target)) {
+      setTarget(TARGET_OPTIONS[nextChannel][0].value);
+    }
   }
 
-  async function testConnection() {
-    setTestingConnection(true);
-    setConnectionError(null);
+  async function onTestAcc() {
+    setTestingAcc(true);
     try {
-      const status = await testAccConnection(accBaseUrl);
-      setConnectionStatus(status);
-      onAccConnectionChange(status);
-      if (status.base_url) {
-        setAccBaseUrl(status.base_url);
-        window.localStorage.setItem('conversation-evals-acc-base-url', status.base_url);
-      }
-      if (!status.connected) setConnectionError(status.message);
-    } catch (err) {
-      setConnectionError(err instanceof Error ? err.message : 'Could not test ACC connection.');
+      const result = await testAccConnection(accBaseUrl);
+      setAccStatus(result);
+    } catch (error) {
+      setAccStatus({
+        connected: false,
+        status: 'error',
+        label: 'ACC connection failed',
+        message: error instanceof Error ? error.message : 'Could not test ACC connection',
+      });
     } finally {
-      setTestingConnection(false);
+      setTestingAcc(false);
     }
   }
 
@@ -294,7 +388,7 @@ function AgentFormModal({
         <form className="agents-modal-form" onSubmit={(event) => void handleSubmit(event)}>
           <label>
             <span>Name</span>
-            <input required value={name} onChange={(event) => setName(event.target.value)} placeholder="Support bot endpoint" />
+            <input required value={name} onChange={(event) => setName(event.target.value)} placeholder="Billing support — staging" />
           </label>
           <label>
             <span>Channel</span>
@@ -307,114 +401,160 @@ function AgentFormModal({
               <option value="voice">Voice</option>
             </select>
           </label>
-          <fieldset className="agents-destination-fieldset">
-            <legend>Destination</legend>
-            <p className="agents-form-help">
-              Destination is the agent under test. Choose the executor (local audio loop vs ACC) when launching a run.
-            </p>
-            {channel === 'voice' ? (
-              <div className="agents-acc-connect">
-                <div>
-                  <strong>Agentic Contact Center</strong>
-                  <span>
-                    {connectionStatus?.connected
-                      ? `Connected to ${connectionStatus.base_url}`
-                      : 'Connect ACC to unlock its available live destinations.'}
-                  </span>
-                </div>
-                <div className="agents-acc-connect-controls">
-                  <input
-                    aria-label="ACC base URL"
-                    value={accBaseUrl}
-                    onChange={(event) => {
-                      setAccBaseUrl(event.target.value);
-                      setConnectionStatus(null);
-                      setConnectionError(null);
-                    }}
-                    placeholder="http://127.0.0.1:8026"
-                  />
-                  <button
-                    type="button"
-                    className="secondary-link"
-                    disabled={testingConnection || !accBaseUrl.trim()}
-                    onClick={() => void testConnection()}
-                  >
-                    {testingConnection ? 'Testing…' : connectionStatus?.connected ? 'Test again' : 'Test connection'}
-                  </button>
-                </div>
-                {connectionStatus?.connected ? (
-                  <small className="agents-connection-success">Connection verified. Ready destinations are enabled below.</small>
-                ) : null}
-                {connectionError ? <small className="agents-connection-error" role="alert">{connectionError}</small> : null}
-              </div>
-            ) : null}
-            <div className="agents-destination-list" role="radiogroup" aria-label="Target destination">
-              {destinations.map((option) => (
-                <label
-                  key={option.value}
-                  className={`agents-destination-card${option.disabled ? ' is-disabled' : ''}${target === option.value ? ' is-selected' : ''}`}
-                >
-                  <input
-                    type="radio"
-                    name="destination"
-                    value={option.value}
-                    checked={target === option.value}
-                    disabled={option.disabled}
-                    onChange={() => setTarget(option.value)}
-                  />
-                  <span>
-                    <strong>{option.label}</strong>
-                    {option.disabled ? <em>{option.hint || 'Requires ACC connection'}</em> : null}
-                  </span>
-                </label>
-              ))}
-            </div>
-          </fieldset>
-          {target === 'sip_agent' && !destinationDisabled ? (
-            <label>
-              <span>SIP URI</span>
-              <input
-                required
-                aria-label="SIP URI"
-                value={sipUri}
-                onChange={(event) => setSipUri(event.target.value)}
-                placeholder="sip:agent@example.com:5060"
-              />
-            </label>
-          ) : null}
-          {target === 'phone_agent' && !destinationDisabled ? (
-            <label>
-              <span>Phone number (E.164)</span>
-              <input
-                required
-                aria-label="Phone number"
-                value={phoneNumber}
-                onChange={(event) => setPhoneNumber(event.target.value)}
-                placeholder="+12125550123"
-              />
-            </label>
-          ) : null}
-          {target === 'browser_webrtc_agent' && !destinationDisabled ? (
-            <p className="agents-form-help">
-              This target will use the verified ACC browser WebRTC session endpoint.
-            </p>
-          ) : null}
-          {channel === 'voice' && target === 'builtin_sample_voice' ? (
+          <label>
+            <span>Connection adapter</span>
+            <select
+              aria-label="Target connection"
+              value={target}
+              onChange={(event) => setTarget(event.target.value as FormTarget)}
+            >
+              {(['Live connections', 'Built-in samples'] as const).map((group) => {
+                const options = TARGET_OPTIONS[channel].filter((option) => option.group === group);
+                return options.length ? (
+                  <optgroup key={group} label={group}>
+                    {options.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </optgroup>
+                ) : null;
+              })}
+            </select>
+          </label>
+          {isBuiltInSampleTarget(target) ? (
             <div className="agents-form-notice" role="note">
-              <strong>Built-in sample voice call</strong>
+              <strong>Built-in sample</strong>
+              <span>Uses predictable responses generated during this run. It does not contact a deployed agent.</span>
+            </div>
+          ) : isSavedReplayTarget(target) ? (
+            <div className="agents-form-notice" role="note">
+              <strong>Saved evidence</strong>
+              <span>Saved conversation replay belongs in Eval evidence and cannot be created as a new target.</span>
+            </div>
+          ) : (
+            <label>
+              <span>Environment</span>
+              <select aria-label="Target environment" value={environment} onChange={(event) => setEnvironment(event.target.value as AgentFormState['environment'])}>
+                <option value="local">Local</option>
+                <option value="staging">Staging</option>
+                <option value="production">Production</option>
+              </select>
+            </label>
+          )}
+          {target === 'http_endpoint' ? (
+            <fieldset className="agents-connection-fields">
+              <legend>HTTP JSON contract</legend>
+              <p>
+                We POST <code>{'{"message":"…","history":[…],"scenario":{…}}'}</code> and read reply text from the response path.
+              </p>
+              <label>
+                <span>Endpoint URL</span>
+                <input required type="url" aria-label="Endpoint URL" value={endpointUrl} onChange={(event) => setEndpointUrl(event.target.value)} placeholder="https://staging.example.com/chat" />
+              </label>
+              <div className="agents-form-grid">
+                <label>
+                  <span>Authentication</span>
+                  <select aria-label="Target authentication" value={authType} onChange={(event) => setAuthType(event.target.value as AgentFormState['authType'])}>
+                    <option value="none">None</option>
+                    <option value="bearer_secret">Configured bearer credential</option>
+                    <option value="api_key_secret">Configured API key</option>
+                  </select>
+                </label>
+                {authType !== 'none' ? (
+                  <label>
+                    <span>Credential ID</span>
+                    <input required aria-label="Credential ID" value={secretRef} onChange={(event) => setSecretRef(event.target.value)} placeholder="support-staging" pattern="[a-z][a-z0-9-]{0,63}" />
+                  </label>
+                ) : null}
+                {authType === 'api_key_secret' ? (
+                  <label>
+                    <span>API key header</span>
+                    <input required aria-label="API key header" value={apiKeyHeader} onChange={(event) => setApiKeyHeader(event.target.value)} />
+                  </label>
+                ) : null}
+                <label>
+                  <span>Response text path</span>
+                  <input required aria-label="Response text path" value={responsePath} onChange={(event) => setResponsePath(event.target.value)} placeholder="response" />
+                </label>
+                <label>
+                  <span>Timeout (ms)</span>
+                  <input required aria-label="Target timeout" type="number" min={500} max={120000} value={timeoutMs} onChange={(event) => setTimeoutMs(Number(event.target.value) || 15000)} />
+                </label>
+              </div>
+              <small>Ask an administrator for a configured credential ID. Environment-variable names and raw credentials are never accepted or stored here.</small>
+            </fieldset>
+          ) : null}
+          {isAccTarget(target) ? (
+            <fieldset className="agents-connection-fields">
+              <legend>Agentic Contact Center connection</legend>
+              <p>
+                ACC owns live browser, SIP, phone/PSTN, FreeSWITCH, Verto, and production media. CAE only tests readiness here; its execution adapter is not implemented yet.
+              </p>
+              <label>
+                <span>ACC base URL</span>
+                <input
+                  required
+                  type="url"
+                  aria-label="ACC base URL"
+                  value={accBaseUrl}
+                  onChange={(event) => { setAccBaseUrl(event.target.value); setAccStatus(null); }}
+                  placeholder="http://127.0.0.1:8026"
+                />
+              </label>
+              {target === 'sip_agent' ? (
+                <label>
+                  <span>SIP URI</span>
+                  <input
+                    required
+                    aria-label="SIP URI"
+                    value={sipUri}
+                    onChange={(event) => setSipUri(event.target.value)}
+                    placeholder="sip:agent@example.com"
+                  />
+                </label>
+              ) : null}
+              {target === 'phone_agent' ? (
+                <label>
+                  <span>Phone number (E.164)</span>
+                  <input
+                    required
+                    aria-label="Phone number"
+                    value={phoneNumber}
+                    onChange={(event) => setPhoneNumber(event.target.value)}
+                    placeholder="+12125550123"
+                  />
+                </label>
+              ) : null}
+              <div className="agents-connection-actions">
+                <button type="button" className="secondary-link" disabled={testingAcc || !accBaseUrl.trim()} onClick={() => void onTestAcc()}>
+                  {testingAcc ? 'Testing…' : 'Test ACC readiness'}
+                </button>
+                {accStatus ? (
+                  <span role="status" className={accStatus.connected ? 'is-ready' : 'is-blocked'}>
+                    {accStatus.label}: {accStatus.message}
+                  </span>
+                ) : null}
+              </div>
+              <small>
+                A successful readiness check does not enable Create target until CAE can actually execute and capture evidence through this adapter. See{' '}
+                <a href="https://github.com/agonza1/agentic-contact-center" target="_blank" rel="noreferrer">
+                  Agentic Contact Center
+                </a>
+              </small>
+            </fieldset>
+          ) : null}
+          {comingSoon ? (
+            <div className="agents-form-notice" role="note">
+              <strong>CAE ↔ ACC live adapter coming soon</strong>
               <span>
-                Creatable without ACC. At launch, the default executor is the CAE local audio loop — no phone or SIP call.
-                Saved conversation replay lives on the Eval evidence path, not as a destination here.
+                Readiness and executability are separate. Create stays disabled until ConversationAgentEvals can launch the ACC session and capture evidence end to end.
               </span>
             </div>
           ) : null}
-          {destinationDisabled ? (
+          {target === 'builtin_sample_voice' ? (
             <div className="agents-form-notice" role="note">
-              <strong>{selectedDestination?.hint || 'Requires ACC connection'}</strong>
+              <strong>Built-in sample voice call</strong>
               <span>
-                {connectionStatus?.connected
-                  ? 'This ACC runtime responded, but this destination is not ready.'
-                  : 'Enter the ACC URL above and choose Test connection.'}
+                Runs through the CAE local audio loop. It is not a browser, SIP, or phone call, and saved replay is not used as the target.
               </span>
             </div>
           ) : null}
@@ -431,8 +571,8 @@ function AgentFormModal({
             <button type="button" className="secondary-link" onClick={onClose}>
               Cancel
             </button>
-            <button type="submit" className="primary-link" disabled={saving || destinationDisabled}>
-              {saving ? 'Saving…' : destinationDisabled ? 'Requires ACC connection' : submitLabel}
+            <button type="submit" className="primary-link" disabled={saving || comingSoon} title={comingSoon ? 'CAE ↔ ACC live adapter coming soon' : undefined}>
+              {saving ? 'Saving…' : comingSoon ? 'Coming soon' : submitLabel}
             </button>
           </div>
         </form>
@@ -449,7 +589,6 @@ export function AgentsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [editingAgent, setEditingAgent] = useState<AgentRecord | null>(null);
   const [apiBaseOverride, setApiBaseOverride] = useState<string | null>(null);
-  const [accConnection, setAccConnection] = useState<AccConnectionStatus | null>(null);
 
   async function reload() {
     const next = await listAgents();
@@ -465,21 +604,6 @@ export function AgentsPage() {
       .catch((err) => {
         if (active) setError(err instanceof Error ? err.message : 'Could not load agent targets');
       });
-    const savedAccUrl = window.localStorage.getItem('conversation-evals-acc-base-url') || undefined;
-    getAccConnectionStatus(savedAccUrl)
-      .then((status) => {
-        if (active) setAccConnection(status);
-      })
-      .catch(() => {
-        if (active) {
-          setAccConnection({
-            connected: false,
-            status: 'requires_acc_connection',
-            label: 'Requires ACC connection',
-            message: 'Could not read ACC connection status.',
-          });
-        }
-      });
     return () => {
       active = false;
     };
@@ -490,6 +614,10 @@ export function AgentsPage() {
   }, []);
 
   async function onCreate(values: AgentFormState) {
+    if (isComingSoonTarget(values.target)) {
+      setError('That ACC executor is not implemented in CAE yet, so this target cannot be created.');
+      return;
+    }
     setSaving(true);
     setError(null);
     setMessage(null);
@@ -498,10 +626,9 @@ export function AgentsPage() {
         name: values.name.trim(),
         channel: values.channel,
         target: values.target,
+        environment: isBuiltInSampleTarget(values.target) || isSavedReplayTarget(values.target) ? 'local' : values.environment,
+        connection: connectionFromForm(values),
         description: values.description.trim() || null,
-        sip_uri: values.sip_uri.trim() || null,
-        phone_number: values.phone_number.trim() || null,
-        acc_base_url: values.acc_base_url.trim() || null,
       });
       setShowCreate(false);
       setMessage('Agent target created.');
@@ -514,6 +641,10 @@ export function AgentsPage() {
   }
 
   async function onEdit(agentId: string, values: AgentFormState) {
+    if (isComingSoonTarget(values.target)) {
+      setError('That ACC executor is not implemented in CAE yet, so this target cannot be created.');
+      return;
+    }
     setSaving(true);
     setError(null);
     setMessage(null);
@@ -522,10 +653,9 @@ export function AgentsPage() {
         name: values.name.trim(),
         channel: values.channel,
         target: values.target,
+        environment: isBuiltInSampleTarget(values.target) || isSavedReplayTarget(values.target) ? 'local' : values.environment,
+        connection: connectionFromForm(values),
         description: values.description.trim() || null,
-        sip_uri: values.sip_uri.trim() || null,
-        phone_number: values.phone_number.trim() || null,
-        acc_base_url: values.acc_base_url.trim() || null,
       });
       setEditingAgent(null);
       setMessage('Agent target updated.');
@@ -559,8 +689,8 @@ export function AgentsPage() {
           <p className="eyebrow">Agent targets</p>
           <h1 id="agents-title">Targets</h1>
           <p className="agents-page-lede">
-            Destinations for the agent under test. Executors (local audio loop, ACC SIP/phone/browser) are chosen
-            when you launch a run — not when you create a target.
+            Connections to systems under test. Built-in entries are testing targets for text and voice;
+            add your own to point personas and runs at an existing endpoint.
           </p>
         </div>
         <button type="button" className="agents-add-button" onClick={() => setShowCreate(true)}>
@@ -583,9 +713,9 @@ export function AgentsPage() {
                   <div className="agents-badges">
                     <span className="agents-badge agents-badge-channel">{channelLabel(agent.channel)}</span>
                     {isBuiltInAgent(agent) ? (
-                      <span className="agents-badge agents-badge-builtin">Built-in sample</span>
+                      <span className="agents-badge agents-badge-builtin">Built-in testing target</span>
                     ) : (
-                      <span className="agents-badge agents-badge-channel">Custom destination</span>
+                      <span className="agents-badge agents-badge-channel">Custom target</span>
                     )}
                   </div>
                 </div>
@@ -623,7 +753,7 @@ export function AgentsPage() {
         <section className="agents-empty card">
           <h2>No agent targets yet</h2>
           <p className="scenarios-muted">
-            Add a text or voice destination — built-in sample agent, or an ACC-backed SIP/phone/browser agent once connected.
+            Add a text or voice target — use a built-in sample or connect your own endpoint.
           </p>
           <button type="button" className="primary-link" onClick={() => setShowCreate(true)}>
             Add agent target
@@ -637,8 +767,6 @@ export function AgentsPage() {
           submitLabel="Create target"
           initial={EMPTY_FORM}
           saving={saving}
-          accConnection={accConnection}
-          onAccConnectionChange={setAccConnection}
           onClose={() => setShowCreate(false)}
           onSubmit={onCreate}
         />
@@ -648,18 +776,8 @@ export function AgentsPage() {
         <AgentFormModal
           title={`Edit ${editingAgent.name}`}
           submitLabel="Save changes"
-          initial={{
-            name: editingAgent.name,
-            channel: editingAgent.channel,
-            target: editingAgent.target === 'voice_fixture' ? 'builtin_sample_voice' : editingAgent.target,
-            description: editingAgent.description ?? '',
-            sip_uri: editingAgent.sip_uri ?? '',
-            phone_number: editingAgent.phone_number ?? '',
-            acc_base_url: editingAgent.acc_base_url ?? '',
-          }}
+          initial={formFromAgent(editingAgent)}
           saving={saving}
-          accConnection={accConnection}
-          onAccConnectionChange={setAccConnection}
           onClose={() => setEditingAgent(null)}
           onSubmit={(values) => onEdit(editingAgent.id, values)}
         />

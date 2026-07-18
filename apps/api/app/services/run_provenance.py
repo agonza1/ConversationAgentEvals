@@ -1,368 +1,213 @@
-"""Target → Tester → Executor → Evidence provenance for execution runs.
+"""Pure Target → Tester → Executor → Evidence provenance rules.
 
-Executor kinds (cae_local_audio_loop, acc_sip, …) are transports — not agent destinations.
+Targets identify the system under test and its destination. Executors identify
+the runtime/transport that conducts the test. This module intentionally has no
+network or mutable readiness state.
 """
 
 from __future__ import annotations
 
-import threading
-import time
 from typing import Any, Literal
-from urllib.parse import urlparse
 
-import httpx
 from pydantic import BaseModel, ConfigDict
+
 
 TargetKind = Literal[
     'builtin_sample_text',
     'openai_text',
-    'builtin_text_fixture',
+    'http_text_endpoint',
+    'saved_text_replay',
     'builtin_sample_voice',
+    'saved_voice_replay',
     'sip_agent',
     'phone_agent',
     'browser_webrtc_agent',
     'unknown',
 ]
-TesterKind = Literal[
-    'scenario_policy',
-    'pipecat_tester',
-    'fixture_scheduler',
-    'openai_text_agent',
-    'mock_text_agent',
-    'unknown',
-]
-ExecutorKind = Literal[
+TesterId = Literal['scenario_simulator', 'fixture_replay', 'pipecat_tester']
+ExecutorId = Literal[
+    'local_async_runner',
+    'evidence_replay',
     'cae_local_audio_loop',
     'acc_browser_webrtc',
     'acc_sip',
     'acc_phone',
-    'none',
 ]
-MediaSource = Literal['local_loop', 'acc_live', 'saved_replay', 'none']
+EvidenceSource = Literal['generated_text', 'provider_response', 'saved_replay', 'local_audio_loop', 'acc_live']
 
-BUILTIN_SAMPLE_VOICE_HONESTY = (
-    'Built-in sample agent · local audio loop · no phone or SIP call'
-)
+BUILTIN_SAMPLE_VOICE_HONESTY = 'Built-in sample agent · local audio loop · no phone or SIP call'
 
-_VOICE_SAMPLE_TARGETS = frozenset({'builtin_sample_voice', 'voice_fixture'})
-_EXTERNAL_VOICE_TARGETS = frozenset({'sip_agent', 'phone_agent', 'browser_webrtc_agent'})
-
-_COMPATIBLE_EXECUTORS: dict[str, frozenset[str]] = {
-    'mock_agent': frozenset({'none'}),
-    'openai_codex': frozenset({'none'}),
-    'offline_acc_fixture': frozenset({'none'}),
+_COMPATIBLE_EXECUTORS: dict[str, frozenset[ExecutorId]] = {
+    'mock_agent': frozenset({'local_async_runner'}),
+    'openai_codex': frozenset({'local_async_runner'}),
+    'http_endpoint': frozenset({'local_async_runner'}),
+    'offline_acc_fixture': frozenset({'evidence_replay'}),
     'builtin_sample_voice': frozenset({'cae_local_audio_loop'}),
-    'voice_fixture': frozenset({'cae_local_audio_loop'}),
+    'voice_fixture': frozenset({'evidence_replay'}),
     'sip_agent': frozenset({'acc_sip'}),
     'phone_agent': frozenset({'acc_phone'}),
     'browser_webrtc_agent': frozenset({'acc_browser_webrtc'}),
 }
-
-_ACC_EXECUTORS = frozenset({'acc_sip', 'acc_phone', 'acc_browser_webrtc'})
-_ACC_READINESS_PATH = '/api/pipecat-media-engine/readiness'
-_ACC_CONNECTION_TTL_SECONDS = 15 * 60
-_ACC_CONNECTIONS: dict[str, tuple[float, dict[str, Any]]] = {}
-_ACC_CONNECTION_LOCK = threading.Lock()
+_UNAVAILABLE_EXECUTORS = frozenset({'acc_browser_webrtc', 'acc_sip', 'acc_phone'})
 
 
 class ExecutionRunProvenance(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
+    target_id: str | None = None
     target_kind: TargetKind
-    tester_kind: TesterKind
-    executor_kind: ExecutorKind
-    media_source: MediaSource
+    target_channel: Literal['text', 'voice']
+    tester_id: TesterId
+    executor_id: ExecutorId
+    evidence_source: EvidenceSource
     live_external_connection: bool = False
     saved_evidence: bool = False
-    synthetic_audio: bool = False
+    synthetic_media: bool = False
     honesty_label: str | None = None
 
 
+class ExecutionDefaults(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    mode: Literal['text_callable', 'voice_fixture', 'pipecat_webrtc']
+    tester_id: TesterId
+    executor_id: ExecutorId
+    audio_transport: Literal['none', 'pipecat_small_webrtc', 'freeswitch_verto_sip'] = 'none'
+
+
 def normalize_agent_target(target: str | None) -> str:
-    value = str(target or '').strip()
-    if value == 'voice_fixture':
-        return 'builtin_sample_voice'
-    return value or 'mock_agent'
+    return str(target or '').strip() or 'mock_agent'
 
 
-def target_kind_for_agent_target(target: str | None, *, channel: str | None = None) -> TargetKind:
+def execution_defaults_for_target(target: str | None) -> ExecutionDefaults:
     normalized = normalize_agent_target(target)
+    if normalized == 'builtin_sample_voice':
+        return ExecutionDefaults(
+            mode='pipecat_webrtc',
+            tester_id='pipecat_tester',
+            executor_id='cae_local_audio_loop',
+            audio_transport='pipecat_small_webrtc',
+        )
+    if normalized == 'voice_fixture':
+        return ExecutionDefaults(
+            mode='voice_fixture',
+            tester_id='fixture_replay',
+            executor_id='evidence_replay',
+        )
+    if normalized == 'offline_acc_fixture':
+        return ExecutionDefaults(
+            mode='text_callable',
+            tester_id='fixture_replay',
+            executor_id='evidence_replay',
+        )
+    if normalized == 'sip_agent':
+        return ExecutionDefaults(mode='text_callable', tester_id='scenario_simulator', executor_id='acc_sip')
+    if normalized == 'phone_agent':
+        return ExecutionDefaults(mode='text_callable', tester_id='scenario_simulator', executor_id='acc_phone')
+    if normalized == 'browser_webrtc_agent':
+        return ExecutionDefaults(
+            mode='text_callable',
+            tester_id='scenario_simulator',
+            executor_id='acc_browser_webrtc',
+        )
+    return ExecutionDefaults(
+        mode='text_callable',
+        tester_id='scenario_simulator',
+        executor_id='local_async_runner',
+    )
+
+
+def assert_execution_compatible(
+    *,
+    agent_target: str | None,
+    mode: str,
+    tester_id: str,
+    executor_id: str,
+) -> None:
+    normalized = normalize_agent_target(agent_target)
+    defaults = execution_defaults_for_target(normalized)
+    allowed = _COMPATIBLE_EXECUTORS.get(normalized, frozenset({'local_async_runner'}))
+    if executor_id not in allowed:
+        raise ValueError(
+            f'Executor "{executor_id}" is not compatible with target "{normalized}". '
+            f'Allowed: {", ".join(sorted(allowed))}.'
+        )
+    if mode != defaults.mode or tester_id != defaults.tester_id:
+        raise ValueError(
+            f'Target "{normalized}" requires mode={defaults.mode}, '
+            f'tester_id={defaults.tester_id}, and executor_id={defaults.executor_id}.'
+        )
+    if executor_id in _UNAVAILABLE_EXECUTORS:
+        raise ValueError(
+            f'Executor "{executor_id}" is not implemented in ConversationAgentEvals yet. '
+            'ACC remains the live media owner; connection readiness does not make the CAE adapter executable.'
+        )
+
+
+def target_kind_for_agent_target(target: str | None) -> TargetKind:
     mapping: dict[str, TargetKind] = {
         'mock_agent': 'builtin_sample_text',
         'openai_codex': 'openai_text',
-        'offline_acc_fixture': 'builtin_text_fixture',
+        'http_endpoint': 'http_text_endpoint',
+        'offline_acc_fixture': 'saved_text_replay',
         'builtin_sample_voice': 'builtin_sample_voice',
+        'voice_fixture': 'saved_voice_replay',
         'sip_agent': 'sip_agent',
         'phone_agent': 'phone_agent',
         'browser_webrtc_agent': 'browser_webrtc_agent',
     }
-    if normalized in mapping:
-        return mapping[normalized]
-    if channel == 'voice':
-        return 'builtin_sample_voice'
-    return 'unknown'
-
-
-def default_executor_for_target(target: str | None) -> ExecutorKind:
-    normalized = normalize_agent_target(target)
-    if normalized in _VOICE_SAMPLE_TARGETS:
-        return 'cae_local_audio_loop'
-    if normalized == 'sip_agent':
-        return 'acc_sip'
-    if normalized == 'phone_agent':
-        return 'acc_phone'
-    if normalized == 'browser_webrtc_agent':
-        return 'acc_browser_webrtc'
-    return 'none'
-
-
-def assert_executor_compatible(*, agent_target: str | None, executor_kind: ExecutorKind) -> None:
-    normalized = normalize_agent_target(agent_target)
-    allowed = _COMPATIBLE_EXECUTORS.get(normalized, frozenset({'none'}))
-    # Legacy voice_fixture agents map to builtin_sample_voice.
-    if normalized == 'builtin_sample_voice':
-        allowed = _COMPATIBLE_EXECUTORS['builtin_sample_voice']
-    if executor_kind not in allowed:
-        raise ValueError(
-            f'Executor "{executor_kind}" is not compatible with target "{normalized}". '
-            f'Allowed: {", ".join(sorted(allowed))}.'
-        )
-    if executor_kind in _ACC_EXECUTORS:
-        raise ValueError(
-            f'Executor "{executor_kind}" requires an ACC connection. '
-            'Live SIP, phone/PSTN, and browser WebRTC stay owned by Agentic Contact Center.'
-        )
-
-
-def resolve_execution_mode_for_executor(executor_kind: ExecutorKind) -> str:
-    """Map executor transport to today's ExecutionMode wire values."""
-    if executor_kind == 'cae_local_audio_loop':
-        return 'pipecat_webrtc'
-    return 'text_callable'
+    return mapping.get(normalize_agent_target(target), 'unknown')
 
 
 def build_run_provenance(
     *,
     agent: dict[str, Any] | None,
     agent_target: str | None,
-    channel: str | None,
-    executor_kind: ExecutorKind,
+    tester_id: TesterId,
+    executor_id: ExecutorId,
     mode: str,
     text_callable: str | None = None,
-    evaluate: bool = True,
 ) -> ExecutionRunProvenance:
-    target = normalize_agent_target(agent_target or (agent or {}).get('target'))
-    channel_value = channel or str((agent or {}).get('channel') or 'text')
-    target_kind = target_kind_for_agent_target(target, channel=channel_value)
+    target = normalize_agent_target(agent_target or (agent or {}).get('target') or text_callable)
+    channel = str((agent or {}).get('channel') or ('voice' if target in {
+        'builtin_sample_voice', 'voice_fixture', 'sip_agent', 'phone_agent', 'browser_webrtc_agent'
+    } else 'text'))
 
-    if executor_kind == 'cae_local_audio_loop' or mode == 'pipecat_webrtc':
-        tester_kind: TesterKind = 'pipecat_tester'
-        media_source: MediaSource = 'local_loop'
-        synthetic_audio = True
+    if executor_id == 'cae_local_audio_loop':
+        evidence_source: EvidenceSource = 'local_audio_loop'
+        honesty_label = BUILTIN_SAMPLE_VOICE_HONESTY
         saved_evidence = False
-        honesty = BUILTIN_SAMPLE_VOICE_HONESTY
-    elif mode == 'voice_fixture':
-        # Legacy / evidence-evaluation path: saved ACC conversation replay.
-        tester_kind = 'fixture_scheduler'
-        media_source = 'saved_replay'
-        synthetic_audio = True
+        synthetic_media = True
+    elif executor_id == 'evidence_replay' or mode == 'voice_fixture' or target == 'offline_acc_fixture':
+        evidence_source = 'saved_replay'
+        honesty_label = 'Saved conversation replay · evidence evaluation · no live call'
         saved_evidence = True
-        honesty = 'Saved conversation replay · evidence evaluation · no phone or SIP call'
-    elif text_callable == 'offline_acc_fixture' or target == 'offline_acc_fixture':
-        tester_kind = 'fixture_scheduler'
-        media_source = 'none'
-        synthetic_audio = False
-        saved_evidence = True
-        honesty = 'Built-in text fixture · saved evidence'
-    elif text_callable == 'openai_codex' or target == 'openai_codex':
-        tester_kind = 'openai_text_agent'
-        media_source = 'none'
-        synthetic_audio = False
+        synthetic_media = target == 'voice_fixture' or mode == 'voice_fixture'
+    elif executor_id in _UNAVAILABLE_EXECUTORS:
+        evidence_source = 'acc_live'
+        honesty_label = None
         saved_evidence = False
-        honesty = None
+        synthetic_media = False
+    elif target in {'openai_codex', 'http_endpoint'}:
+        evidence_source = 'provider_response'
+        honesty_label = None
+        saved_evidence = False
+        synthetic_media = False
     else:
-        tester_kind = 'mock_text_agent' if target == 'mock_agent' else 'scenario_policy'
-        media_source = 'none'
-        synthetic_audio = False
+        evidence_source = 'generated_text'
+        honesty_label = None
         saved_evidence = False
-        honesty = None
+        synthetic_media = False
 
-    live = executor_kind in _ACC_EXECUTORS
     return ExecutionRunProvenance(
-        target_kind=target_kind,
-        tester_kind=tester_kind,
-        executor_kind=executor_kind,
-        media_source=media_source,
-        live_external_connection=live,
+        target_id=str((agent or {}).get('id') or '') or None,
+        target_kind=target_kind_for_agent_target(target),
+        target_channel='voice' if channel == 'voice' else 'text',
+        tester_id=tester_id,
+        executor_id=executor_id,
+        evidence_source=evidence_source,
+        live_external_connection=executor_id in _UNAVAILABLE_EXECUTORS,
         saved_evidence=saved_evidence,
-        synthetic_audio=synthetic_audio,
-        honesty_label=honesty,
+        synthetic_media=synthetic_media,
+        honesty_label=honesty_label,
     )
-
-
-def external_voice_target_blocked(target: str) -> bool:
-    return normalize_agent_target(str(target)) in _EXTERNAL_VOICE_TARGETS
-
-
-def normalize_acc_base_url(value: str) -> str:
-    raw = (value or '').strip().rstrip('/')
-    parsed = urlparse(raw)
-    if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
-        raise ValueError('ACC URL must be an http:// or https:// URL with a host.')
-    if parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise ValueError('ACC URL cannot include credentials, a query, or a fragment.')
-    if parsed.path not in {'', '/'}:
-        raise ValueError('Enter the ACC base URL only (for example http://127.0.0.1:8026).')
-    return raw
-
-
-def _destination_capabilities(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    adapters = (
-        ((payload.get('sharedEngineContract') or {}).get('requiredAdapters') or [])
-        if isinstance(payload.get('sharedEngineContract'), dict)
-        else []
-    )
-    by_id = {
-        str(item.get('id')): item
-        for item in adapters
-        if isinstance(item, dict) and item.get('id')
-    }
-    browser = by_id.get('browser_webrtc') or {}
-    sip = by_id.get('sip_freeswitch_verto') or {}
-    phone = by_id.get('signalwire_sip_trunk') or {}
-    return {
-        'browser_webrtc_agent': {
-            'creatable': browser.get('implementedNow') is True,
-            'executor_kind': 'acc_browser_webrtc',
-            'label': (
-                'Ready through ACC'
-                if browser.get('implementedNow') is True
-                else str(browser.get('blocker') or 'ACC browser WebRTC is not ready.')
-            ),
-        },
-        'sip_agent': {
-            'creatable': (
-                sip.get('implementedNow') is True
-                and sip.get('liveMediaProofComplete') is True
-            ),
-            'executor_kind': 'acc_sip',
-            'label': (
-                'Ready through ACC'
-                if sip.get('implementedNow') is True
-                and sip.get('liveMediaProofComplete') is True
-                else str(sip.get('blocker') or 'ACC SIP/Verto is not ready.')
-            ),
-        },
-        'phone_agent': {
-            'creatable': (
-                phone.get('implementedNow') is True
-                and phone.get('liveMediaProofComplete') is True
-            ),
-            'executor_kind': 'acc_phone',
-            'label': (
-                'Ready through ACC'
-                if phone.get('implementedNow') is True
-                and phone.get('liveMediaProofComplete') is True
-                else str(phone.get('blocker') or 'ACC phone/PSTN trunk is not ready.')
-            ),
-        },
-    }
-
-
-def test_acc_connection(base_url: str) -> dict[str, Any]:
-    """Probe the official ACC media readiness route and cache a successful result."""
-    normalized = normalize_acc_base_url(base_url)
-    readiness_url = f'{normalized}{_ACC_READINESS_PATH}'
-    try:
-        with httpx.Client(timeout=4.0, follow_redirects=False) as client:
-            response = client.get(readiness_url, headers={'Accept': 'application/json'})
-        response.raise_for_status()
-        payload = response.json()
-    except (httpx.HTTPError, ValueError) as exc:
-        return acc_connection_status(
-            base_url=normalized,
-            message=f'Could not connect to ACC readiness: {exc}',
-        )
-    if not isinstance(payload, dict) or payload.get('ok') is not True or payload.get('route') != _ACC_READINESS_PATH:
-        return acc_connection_status(
-            base_url=normalized,
-            message='The server responded, but it is not the expected Agentic Contact Center readiness API.',
-        )
-
-    destinations = _destination_capabilities(payload)
-    result = {
-        'connected': True,
-        'status': 'connected',
-        'label': 'ACC connected',
-        'message': 'Connection verified against the official ACC media readiness API.',
-        'base_url': normalized,
-        'readiness_url': readiness_url,
-        'destinations': destinations,
-    }
-    with _ACC_CONNECTION_LOCK:
-        _ACC_CONNECTIONS[normalized] = (time.monotonic(), result)
-    return result
-
-
-def is_acc_destination_ready(base_url: str | None, target: str) -> bool:
-    if not base_url:
-        return False
-    try:
-        normalized = normalize_acc_base_url(base_url)
-    except ValueError:
-        return False
-    with _ACC_CONNECTION_LOCK:
-        cached = _ACC_CONNECTIONS.get(normalized)
-    if not cached or time.monotonic() - cached[0] > _ACC_CONNECTION_TTL_SECONDS:
-        return False
-    destination = (cached[1].get('destinations') or {}).get(normalize_agent_target(target)) or {}
-    return destination.get('creatable') is True
-
-
-def reset_acc_connections_for_tests() -> None:
-    with _ACC_CONNECTION_LOCK:
-        _ACC_CONNECTIONS.clear()
-
-
-def acc_connection_status(
-    *,
-    base_url: str | None = None,
-    message: str | None = None,
-) -> dict[str, Any]:
-    if base_url:
-        try:
-            normalized = normalize_acc_base_url(base_url)
-        except ValueError:
-            normalized = base_url
-        with _ACC_CONNECTION_LOCK:
-            cached = _ACC_CONNECTIONS.get(normalized)
-        if cached and time.monotonic() - cached[0] <= _ACC_CONNECTION_TTL_SECONDS:
-            return dict(cached[1])
-    return {
-        'connected': False,
-        'status': 'requires_acc_connection',
-        'label': 'Requires ACC connection',
-        'message': message or (
-            'Live SIP, phone/PSTN, FreeSWITCH, Verto, and browser WebRTC stay in '
-            'Agentic Contact Center. Enter its URL and test the connection first.'
-        ),
-        'base_url': base_url,
-        'readiness_url': None,
-        'destinations': {
-            'sip_agent': {
-                'creatable': False,
-                'executor_kind': 'acc_sip',
-                'label': 'Test ACC connection to enable',
-            },
-            'phone_agent': {
-                'creatable': False,
-                'executor_kind': 'acc_phone',
-                'label': 'Test ACC connection to check PSTN readiness',
-            },
-            'browser_webrtc_agent': {
-                'creatable': False,
-                'executor_kind': 'acc_browser_webrtc',
-                'label': 'Test ACC connection to enable',
-            },
-        },
-    }

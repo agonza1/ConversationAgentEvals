@@ -4,12 +4,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.services.run_provenance import ExecutionRunProvenance, ExecutorKind
+from app.services.run_provenance import ExecutionRunProvenance, ExecutorId, TesterId
 
 
 ExecutionMode = Literal['text_callable', 'voice_fixture', 'pipecat_webrtc']
 AudioTransportId = Literal['none', 'pipecat_small_webrtc', 'freeswitch_verto_sip']
-TextCallableId = Literal['mock_agent', 'offline_acc_fixture', 'openai_codex']
+TextCallableId = Literal['mock_agent', 'offline_acc_fixture', 'openai_codex', 'http_endpoint']
 ConversationStatus = Literal['queued', 'running', 'completed', 'failed']
 ExecutionRunStatus = Literal['queued', 'running', 'completed', 'needs_review', 'failed']
 
@@ -20,8 +20,6 @@ class ExecutionRunCreateRequest(BaseModel):
     suite_id: str = Field(default='call-center-voice-ai', min_length=1)
     scenario_ids: list[str] = Field(default_factory=list)
     mode: ExecutionMode = 'text_callable'
-    # Executor is the call system (transport). Distinct from Target destination.
-    executor_kind: ExecutorKind | None = None
     iterations: int = Field(default=1, ge=1, le=20)
     concurrent_sessions: int = Field(default=1, ge=1, le=4)
     user_id: str = Field(default='execution-user', min_length=1)
@@ -32,20 +30,30 @@ class ExecutionRunCreateRequest(BaseModel):
     audio_plan_path: str | None = None
     agent_id: str | None = None
     model_name: str | None = Field(default=None, min_length=1)
-    # Local CAE audio loop uses pipecat_small_webrtc hooks; ACC SIP/Verto stays deferred.
+    tester_id: TesterId = 'scenario_simulator'
+    tester_model_name: str | None = Field(default=None, min_length=1)
+    executor_id: ExecutorId = 'local_async_runner'
+    # Local Pipecat small WebRTC is the supported first slice; Verto SIP is rejected
+    # until FreeSwitchVertoSipTransport is implemented.
     audio_transport: AudioTransportId = 'none'
 
     @model_validator(mode='after')
     def validate_audio_transport_for_mode(self) -> 'ExecutionRunCreateRequest':
-        if self.executor_kind == 'cae_local_audio_loop' and 'mode' not in self.model_fields_set:
-            self.mode = 'pipecat_webrtc'
         if self.mode == 'pipecat_webrtc':
+            if 'tester_id' not in self.model_fields_set:
+                self.tester_id = 'pipecat_tester'
+            elif self.tester_id != 'pipecat_tester':
+                raise ValueError('pipecat_webrtc mode requires tester_id=pipecat_tester')
+            if 'executor_id' not in self.model_fields_set:
+                self.executor_id = 'cae_local_audio_loop'
+            elif self.executor_id != 'cae_local_audio_loop':
+                raise ValueError('pipecat_webrtc mode requires executor_id=cae_local_audio_loop')
             if self.audio_transport in {'none', 'pipecat_small_webrtc'}:
                 self.audio_transport = 'pipecat_small_webrtc'
             elif self.audio_transport == 'freeswitch_verto_sip':
                 raise ValueError(
                     'audio_transport=freeswitch_verto_sip is deferred (FreeSWITCH Verto outbound SIP). '
-                    'Use pipecat_small_webrtc for the built-in local audio loop.'
+                    'Use pipecat_small_webrtc for local execution audio hooks.'
                 )
             else:
                 raise ValueError('pipecat_webrtc mode requires audio_transport=pipecat_small_webrtc')
@@ -56,11 +64,33 @@ class ExecutionRunCreateRequest(BaseModel):
             )
         elif self.mode == 'voice_fixture' and self.audio_transport != 'none':
             raise ValueError(
-                'voice_fixture mode is saved-evidence evaluation only; set audio_transport=none '
-                '(use executor_kind=cae_local_audio_loop / mode=pipecat_webrtc for the local audio loop).'
+                'voice_fixture mode uses AccAudioFixtureScheduler only; set audio_transport=none '
+                '(use mode=pipecat_webrtc for pipecat_small_webrtc hooks).'
             )
+        elif self.mode == 'voice_fixture':
+            if 'tester_id' not in self.model_fields_set:
+                self.tester_id = 'fixture_replay'
+            elif self.tester_id != 'fixture_replay':
+                raise ValueError('voice_fixture mode requires tester_id=fixture_replay')
+            if 'executor_id' not in self.model_fields_set:
+                self.executor_id = 'evidence_replay'
+            elif self.executor_id != 'evidence_replay':
+                raise ValueError('voice_fixture mode requires executor_id=evidence_replay')
         elif self.mode == 'text_callable' and self.audio_transport != 'none':
             raise ValueError('text_callable mode does not stream execution audio; set audio_transport=none')
+        elif self.text_callable == 'offline_acc_fixture':
+            if 'tester_id' not in self.model_fields_set:
+                self.tester_id = 'fixture_replay'
+            elif self.tester_id != 'fixture_replay':
+                raise ValueError('offline_acc_fixture replay requires tester_id=fixture_replay')
+            if 'executor_id' not in self.model_fields_set:
+                self.executor_id = 'evidence_replay'
+            elif self.executor_id != 'evidence_replay':
+                raise ValueError('offline_acc_fixture replay requires executor_id=evidence_replay')
+        elif self.tester_id != 'scenario_simulator':
+            raise ValueError('text_callable mode requires tester_id=scenario_simulator')
+        elif self.executor_id not in {'local_async_runner', 'acc_browser_webrtc', 'acc_sip', 'acc_phone'}:
+            raise ValueError('text_callable mode requires a text or ACC executor')
         return self
 
 
@@ -161,7 +191,9 @@ class ExecutionRunRecord(BaseModel):
     agent_id: str | None = None
     agent_name: str | None = None
     model_name: str | None = None
-    # Target → Tester → Executor → Evidence (immutable at queue time).
+    tester_id: TesterId = 'scenario_simulator'
+    tester_model_name: str | None = None
+    executor_id: ExecutorId = 'local_async_runner'
     provenance: ExecutionRunProvenance | None = None
     # Immutable request and agent settings captured at queue time. Execution uses
     # this instead of re-reading the mutable agent registry in the background.

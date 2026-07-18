@@ -23,20 +23,24 @@ _LOADED = False
 SEED_AGENTS: list[dict[str, Any]] = [
     {
         'id': 'mock-text-agent',
-        'name': 'Mock text target',
+        'name': 'Built-in sample text agent',
         'channel': 'text',
         'target': 'mock_agent',
-        'description': 'Built-in sample text agent destination for deterministic scenario checks.',
+        'environment': 'local',
+        'connection': {},
+        'description': 'Predictable sample responses for trying scenarios without contacting a deployed agent.',
         'metadata': {'model_name': 'mock-text', 'prompt_version': 'seed'},
     },
     {
         'id': 'acc-voice-fixture-agent',
-        'name': 'Built-in sample voice call',
+        'name': 'Built-in sample voice agent',
         'channel': 'voice',
         'target': 'builtin_sample_voice',
+        'environment': 'local',
+        'connection': {},
         'description': (
-            'Built-in sample voice agent destination. Runs use the CAE local audio loop '
-            '(no phone or SIP call). Pipecat is an implementation detail of that executor.'
+            'Predictable sample voice agent for the CAE local audio loop. '
+            'It does not place a browser, SIP, or phone call.'
         ),
         'metadata': {'model_name': 'builtin-sample-voice', 'prompt_version': 'seed'},
     },
@@ -44,7 +48,7 @@ SEED_AGENTS: list[dict[str, Any]] = [
 
 SEED_AGENT_IDS = {str(seed['id']) for seed in SEED_AGENTS}
 _SAFE_AGENT_ID_RE = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$')
-_NON_NULLABLE_UPDATE_FIELDS = frozenset({'name', 'channel', 'target', 'metadata'})
+_NON_NULLABLE_UPDATE_FIELDS = frozenset({'name', 'channel', 'target', 'environment', 'connection', 'metadata'})
 
 
 def reset_agents_for_tests(*, clear_files: bool = False) -> None:
@@ -61,15 +65,26 @@ def reset_agents_for_tests(*, clear_files: bool = False) -> None:
 def ensure_seeded() -> None:
     _ensure_loaded()
     with _LOCK:
-        if _AGENTS:
-            return
         now = _now()
         for seed in SEED_AGENTS:
+            current = _AGENTS.get(str(seed['id']))
+            if current is not None:
+                changed = False
+                for field in ('name', 'channel', 'target', 'environment', 'connection', 'description', 'metadata'):
+                    if current.get(field) != seed.get(field):
+                        current[field] = seed.get(field)
+                        changed = True
+                if changed:
+                    current['updated_at'] = now
+                    _persist_unlocked(current)
+                continue
             record = AgentRecord(
                 id=seed['id'],
                 name=seed['name'],
                 channel=seed['channel'],
                 target=seed['target'],
+                environment=seed.get('environment') or 'local',
+                connection=seed.get('connection') or {},
                 description=seed.get('description'),
                 metadata=seed.get('metadata') or {},
                 created_at=now,
@@ -104,10 +119,9 @@ def create_agent(payload: AgentCreateRequest) -> dict[str, Any]:
         name=payload.name.strip(),
         channel=payload.channel,
         target=payload.target,
+        environment=payload.environment,
+        connection=payload.connection,
         description=(payload.description or None),
-        sip_uri=payload.sip_uri,
-        phone_number=payload.phone_number,
-        acc_base_url=payload.acc_base_url,
         metadata=payload.metadata or {},
         created_at=now,
         updated_at=now,

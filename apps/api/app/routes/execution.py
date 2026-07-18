@@ -9,7 +9,7 @@ from app.schemas.execution import ExecutionRunCreateRequest
 from app.services import execution_run_store
 from app.services.execution_audio import describe_execution_audio_capabilities
 from app.services.execution_runner import execute_execution_run, start_execution_run
-from app.services.run_provenance import acc_connection_status, test_acc_connection
+from app.services.acc_connection import acc_connection_status, test_acc_connection
 
 
 router = APIRouter(prefix='/api/execution', tags=['execution'])
