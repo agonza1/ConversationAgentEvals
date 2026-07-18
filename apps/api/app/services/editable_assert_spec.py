@@ -295,15 +295,14 @@ def save_spec(*, db: Session, user_id: str, project_id: str, spec: EditableAsser
 
 
 def get_spec(db: Session, spec_id: str, *, user_id: str, project_id: str) -> SavedEditableAssertSpec | None:
-    visible_projects = _visible_projects(db, user_id=user_id, project_id=project_id)
-    project_ids = [project.id for project in visible_projects]
-    if not project_ids:
+    project = _select_visible_project(_visible_projects(db, user_id=user_id, project_id=project_id), project_id=project_id)
+    if project is None:
         return None
     row = (
         db.query(EditableAssertSpecVersion, ProductProject)
         .join(ProductProject, ProductProject.id == EditableAssertSpecVersion.project_id)
         .filter(
-            ProductProject.id.in_(project_ids),
+            ProductProject.id == project.id,
             EditableAssertSpecVersion.spec_key == spec_id,
         )
         .order_by(EditableAssertSpecVersion.version.desc())
@@ -451,7 +450,7 @@ def _coerce_max_turns(value: Any) -> int | None:
 
 def _resolve_project(db: Session, *, user_id: str, project_id: str) -> ProductProject:
     visible = _visible_projects(db, user_id=user_id, project_id=project_id)
-    project = next((item for item in visible if item.user_id == user_id), None) or (visible[0] if visible else None)
+    project = _select_visible_project(visible, project_id=project_id)
     if project is not None and project.user_id != user_id and not _can_edit_shared_project(db, project=project, user_id=user_id):
         raise ValueError('Workspace editor access is required to save a shared ASSERT spec.')
     if project is None:
@@ -476,12 +475,22 @@ def _visible_projects(db: Session, *, user_id: str, project_id: str) -> list[Pro
         .filter(ProductWorkspaceMember.user_id == user_id)
         .all()
     ]
-    query = db.query(ProductProject).filter(ProductProject.project_key == project_id)
+    query = db.query(ProductProject).filter((ProductProject.id == project_id) | (ProductProject.project_key == project_id))
     if workspace_ids:
         query = query.filter((ProductProject.user_id == user_id) | ProductProject.workspace_id.in_(workspace_ids))
     else:
         query = query.filter(ProductProject.user_id == user_id)
     return query.order_by(ProductProject.created_at.asc()).all()
+
+
+def _select_visible_project(projects: list[ProductProject], *, project_id: str) -> ProductProject | None:
+    if not projects:
+        return None
+    exact_id = next((project for project in projects if project.id == project_id), None)
+    if exact_id is not None:
+        return exact_id
+    shared = [project for project in projects if project.workspace_id]
+    return shared[0] if shared else projects[0]
 
 
 def _can_edit_shared_project(db: Session, *, project: ProductProject, user_id: str) -> bool:

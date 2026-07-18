@@ -229,6 +229,9 @@ def test_workspace_members_share_the_same_project_spec_history():
 
     first = client.post('/api/specs', json={'user_id': owner_id, 'project_id': project_key, 'spec': _valid_spec()})
     visible = client.get('/api/specs/cancellation-rescue-agent', params={'user_id': member_id, 'project_id': project_key})
+    with SessionLocal() as db:
+        db.add(ProductProject(user_id=member_id, project_key=project_key, name='Colliding personal project'))
+        db.commit()
     second = client.post('/api/specs', json={'user_id': member_id, 'project_id': project_key, 'spec': _valid_spec(objective='Shared member edit remains in the workspace history.')})
 
     assert first.status_code == 200
@@ -236,7 +239,12 @@ def test_workspace_members_share_the_same_project_spec_history():
     assert second.status_code == 200
     assert second.json()['version'] == 2
     with SessionLocal() as db:
-        assert db.query(ProductProject).filter(ProductProject.project_key == project_key).count() == 1
+        projects = db.query(ProductProject).filter(ProductProject.project_key == project_key).all()
+        assert len(projects) == 2
+        shared_project = next(project for project in projects if project.workspace_id)
+        personal_project = next(project for project in projects if not project.workspace_id)
+        assert db.query(EditableAssertSpecVersion).filter(EditableAssertSpecVersion.project_id == shared_project.id).count() == 2
+        assert db.query(EditableAssertSpecVersion).filter(EditableAssertSpecVersion.project_id == personal_project.id).count() == 0
 
 
 def test_workspace_viewers_can_read_but_cannot_write_shared_specs():
