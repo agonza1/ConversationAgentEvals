@@ -35,7 +35,10 @@ ExecutorId = Literal[
 ]
 EvidenceSource = Literal['generated_text', 'provider_response', 'saved_replay', 'local_audio_loop', 'acc_live']
 
-BUILTIN_SAMPLE_VOICE_HONESTY = 'Built-in sample agent · local audio loop · no phone or SIP call'
+BUILTIN_SAMPLE_VOICE_HONESTY = (
+    'Built-in sample agent · local audio-loop capture · saved fixture scoring and structured evidence · '
+    'no phone or SIP call'
+)
 
 _COMPATIBLE_EXECUTORS: dict[str, frozenset[ExecutorId]] = {
     'mock_agent': frozenset({'local_async_runner'}),
@@ -174,9 +177,13 @@ def build_run_provenance(
     } else 'text'))
 
     if executor_id == 'cae_local_audio_loop':
-        evidence_source: EvidenceSource = 'local_audio_loop'
+        # The local loop produces fresh capture artifacts, but score, action
+        # trace, and final state still come from the saved cancellation fixture.
+        # Keep the primary evidence provenance fixture-backed until live SUT
+        # scoring replaces that replay path.
+        evidence_source: EvidenceSource = 'saved_replay'
         honesty_label = BUILTIN_SAMPLE_VOICE_HONESTY
-        saved_evidence = False
+        saved_evidence = True
         synthetic_media = True
     elif executor_id == 'evidence_replay' or mode == 'voice_fixture' or target == 'offline_acc_fixture':
         evidence_source = 'saved_replay'

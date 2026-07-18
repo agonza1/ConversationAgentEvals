@@ -244,11 +244,13 @@ def test_builtin_sample_voice_agent_run_uses_local_audio_loop_provenance():
     assert provenance['target_kind'] == 'builtin_sample_voice'
     assert provenance['tester_id'] == 'pipecat_tester'
     assert provenance['executor_id'] == 'cae_local_audio_loop'
-    assert provenance['evidence_source'] == 'local_audio_loop'
+    assert provenance['evidence_source'] == 'saved_replay'
     assert provenance['live_external_connection'] is False
+    assert provenance['saved_evidence'] is True
     assert provenance['synthetic_media'] is True
     assert provenance['honesty_label'] == (
-        'Built-in sample agent · local audio loop · no phone or SIP call'
+        'Built-in sample agent · local audio-loop capture · saved fixture scoring and structured evidence · '
+        'no phone or SIP call'
     )
     finished = execute_execution_run(
         queued['execution_run_id'],
