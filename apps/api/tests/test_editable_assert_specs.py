@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import yaml
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -142,3 +143,17 @@ def test_preview_quotes_yaml_scalars_that_look_like_list_markers():
     assert 'description: "? keep pasted checklist text scalar"' in yaml
     assert '- ": still scalar"' in yaml
     assert '- "--- not a document marker"' in yaml
+
+
+def test_preview_preserves_empty_yaml_mappings_as_objects():
+    spec = _valid_spec(runtime_overrides={}, extensions={})
+
+    response = client.post('/api/specs/preview', json={'spec': spec})
+
+    assert response.status_code == 200
+    exported_yaml = response.json()['yaml']
+    assert 'runtime_overrides: {}' in exported_yaml
+    assert 'extensions: {}' in exported_yaml
+    parsed = yaml.safe_load(exported_yaml)
+    assert parsed['runtime_overrides'] == {}
+    assert parsed['extensions'] == {}

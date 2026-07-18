@@ -291,9 +291,13 @@ def _render_yaml(value: Any, *, indent: int = 0) -> str:
 def _yaml_lines(value: Any, *, indent: int) -> list[str]:
     prefix = ' ' * indent
     if isinstance(value, dict):
+        if not value:
+            return [f'{prefix}{{}}']
         lines: list[str] = []
         for key, item in value.items():
-            if isinstance(item, (dict, list)):
+            if isinstance(item, dict) and not item:
+                lines.append(f'{prefix}{key}: {{}}')
+            elif isinstance(item, (dict, list)):
                 lines.append(f'{prefix}{key}:')
                 lines.extend(_yaml_lines(item, indent=indent + 2))
             else:
@@ -304,7 +308,9 @@ def _yaml_lines(value: Any, *, indent: int) -> list[str]:
             return [f'{prefix}[]']
         lines = []
         for item in value:
-            if isinstance(item, (dict, list)):
+            if isinstance(item, dict) and not item:
+                lines.append(f'{prefix}- {{}}')
+            elif isinstance(item, (dict, list)):
                 lines.append(f'{prefix}-')
                 lines.extend(_yaml_lines(item, indent=indent + 2))
             else:
