@@ -33,13 +33,17 @@ from app.services.agentic_contact_center_example import build_benchmark_run_requ
 from app.services.benchmark_catalog_extensions import register_builtin_benchmark_extensions
 from app.services.benchmark_service import get_suite, run_scenario, simulate_scenario
 from app.services.execution_audio import (
-    DeterministicExecutionTtsRenderer,
     ExecutionAudioTargetAdapter,
-    LocalPipecatSmallWebRtcTransport,
 )
 from app.services.execution_vcon import build_execution_vcon, vcon_summary
-from app.services.llm_providers import get_provider
 from app.services.pipecat_tester_agent import PipecatTesterAgentRunner
+from app.services.reference_generalist_agent import (
+    KokoroTesterTtsRenderer,
+    ReferencePipecatAgentTransport,
+    ReferenceMediaServices,
+    ReferenceRuntimeConfig,
+    resolve_reference_completion_provider,
+)
 from app.services.run_provenance import (
     assert_execution_compatible,
     build_run_provenance,
@@ -592,12 +596,12 @@ def _execute_openai_codex_text_agent(
         raise ValueError(f'Unknown agent: {payload.agent_id}')
     scenario = _scenario_definition(suite_id, scenario_id)
 
-    provider = get_provider('openai')
+    provider = resolve_reference_completion_provider()
     status = provider.status()
     if status.get('status') != 'connected':
         raise ValueError(
             status.get('message')
-            or 'Connect OpenAI (Codex OAuth) before launching an openai_codex agent.'
+            or 'Set OPENAI_API_KEY or connect OpenAI/Codex OAuth before launching this agent.'
         )
     model_name = (payload.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
     response_text = provider.complete(_openai_agent_prompt(agent, scenario), model_name=model_name).strip()
@@ -611,7 +615,7 @@ def _execute_openai_codex_text_agent(
         'outcome': 'model_response_recorded',
         'runtime_provenance': {
             'target': 'openai_codex',
-            'provider': status.get('provider') or 'openai_codex',
+            'provider': status.get('provider') or provider.provider_id,
             'model_name': model_name,
             'fixture_backed': False,
             'live_tool_execution': False,
@@ -737,7 +741,7 @@ async def _execute_pipecat_webrtc(
     scenario_id: str,
     payload: ExecutionRunCreateRequest,
 ) -> dict[str, Any]:
-    """Drive Pipecat tester over local small WebRTC hooks and emit vCon evidence."""
+    """Drive the Pipecat tester against a separate reference agent participant."""
     if payload.audio_transport != 'pipecat_small_webrtc':
         raise ValueError(
             'pipecat_webrtc execution currently supports audio_transport=pipecat_small_webrtc only; '
@@ -745,11 +749,19 @@ async def _execute_pipecat_webrtc(
         )
 
     artifact_dir = REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id / 'audio'
-    transport = LocalPipecatSmallWebRtcTransport(artifact_dir=artifact_dir)
+    config = ReferenceRuntimeConfig(llm_model=(payload.model_name or DEFAULT_EXECUTION_MODEL))
+    completion = resolve_reference_completion_provider()
+    # Construction performs fail-closed readiness checks before a session is opened.
+    transport = ReferencePipecatAgentTransport(
+        artifact_dir=artifact_dir,
+        media=ReferenceMediaServices(config),
+        completion=completion,
+        config=config,
+    )
     target = ExecutionAudioTargetAdapter(transport)
     runner = PipecatTesterAgentRunner(
         target=target,
-        tts_renderer=DeterministicExecutionTtsRenderer(),
+        tts_renderer=KokoroTesterTtsRenderer(transport.media),
     )
     tester_result = await runner.run(_pipecat_webrtc_tester_config(scenario_id))
     session_id = str(tester_result.get('session_id') or '')
@@ -762,8 +774,10 @@ async def _execute_pipecat_webrtc(
 
     transcription = transport.transcription_turns(session_id)
     recording = transport.recording_handle(session_id)
-    if recording is None:
+    if recording is None and not tester_failed:
         recording = await transport.stop_recording(session_id)
+    if recording is None:
+        raise RuntimeError(str(tester_error or 'Reference voice run produced no current-run recording.'))
 
     vcon_export = build_execution_vcon(
         conversation_id=conversation_id,
@@ -798,48 +812,61 @@ async def _execute_pipecat_webrtc(
         f'{item.speaker}: {item.text}' for item in transcription if item.text.strip()
     )
 
-    # Scoring remains fixture-backed for cancellation-rescue until a live SUT proof
-    # path lands; capture (recording + dialog + vCon) comes from the WebRTC session.
-    # Do not let offline fixture pass mask a failed/needs_review tester run.
-    evidence = _evidence_from_offline_fixture(
-        suite_id,
-        scenario_id,
-        payload,
-        evaluate=payload.evaluate and not tester_failed,
-    )
+    current_final_state = {
+        'complete': False,
+        'outcome': 'reference_conversation_captured',
+        'evidence_scope': 'current_run_only',
+    }
+    report: dict[str, Any] = {}
+    if payload.evaluate and not tester_failed:
+        report = run_scenario(
+            BenchmarkRunRequest(
+                suite_id=suite_id,
+                scenario_id=scenario_id,
+                transcript=transcript,
+                action_trace=[],
+                final_state=current_final_state,
+                user_id=payload.user_id,
+                project_id=payload.project_id,
+            )
+        )
     if tester_failed:
         verdict = 'fail' if tester_status == 'failed' else 'needs_review'
         score = None
     else:
-        verdict = evidence.get('verdict')
-        score = evidence.get('score')
+        verdict = report.get('verdict')
+        score = report.get('overall_score')
     runtime_provenance = {
         'execution_engine': 'run_agent',
         'target_agent_id': payload.agent_id,
         'mode': payload.mode,
         'audio_transport': transport.transport_id,
-        'capture_surface': 'local_pipecat_small_webrtc_hooks',
+        'capture_surface': 'cae_reference_local_audio_loop',
+        'tester': {'participant': 'pipecat_tester', 'tts_provider': 'kokoro'},
+        'target': {'participant': 'reference_pipecat_agent', **transport.runtime},
         'live_media': False,
         'browser_peer': False,
         'sip_pstn': False,
-        'fixture_backed_scoring': True,
+        'saved_evidence': False,
+        'fixture_backed_scoring': False,
+        'evidence_source': 'current_run',
         'note': (
-            'This run exercises Run Agent plus local Pipecat capture hooks. '
-            'Browser microphone media, live Pipecat service media, and SIP/PSTN calling are not proven by this artifact.'
+            'Local synthetic media between separate Pipecat tester and reference agent participants. '
+            'Browser, SIP, PSTN, and external network behavior are not proven.'
         ),
     }
     return {
-        'turns': turns or evidence['turns'],
-        'transcript': transcript or evidence.get('transcript'),
-        'action_trace': evidence.get('action_trace') or [],
+        'turns': turns,
+        'transcript': transcript,
+        'action_trace': [],
         'final_state': {
-            **(evidence.get('final_state') or {}),
+            **current_final_state,
             'audio_transport': transport.transport_id,
             'tester_termination_reason': tester_result.get('termination_reason'),
             'tester_error': tester_error,
             'runtime_provenance': runtime_provenance,
         },
-        'latency_marks': evidence.get('latency_marks') or [],
+        'latency_marks': transport.latency_marks(session_id),
         'recording': recording.as_call_media(),
         'vcon_export': vcon_export,
         'vcon_export_summary': vcon_summary(vcon_export),
@@ -850,12 +877,13 @@ async def _execute_pipecat_webrtc(
             'proof': tester_result.get('proof'),
             'runtime_provenance': runtime_provenance,
             'real_call_readiness': {
-                'run_agent_execution': 'proven',
-                'pipecat_capture_hooks': 'proven',
+                'tester_to_agent_audio': 'proven',
+                'rtc_asr_transcription': 'proven',
+                'llm_response': 'proven',
+                'kokoro_playback': 'proven',
                 'browser_webrtc_peer': 'not_connected',
-                'live_media': 'not_proven',
                 'sip_pstn': 'deferred',
-                'scoring': 'fixture_backed',
+                'scoring': 'current_run_transcript',
             },
             'extension_points': {
                 'freeswitch_verto_sip': {
@@ -1010,7 +1038,7 @@ def _validate_scenarios(suite: dict[str, Any], scenario_ids: list[str]) -> None:
 
 def _validate_fixture_mode_scenarios(payload: ExecutionRunCreateRequest, scenario_ids: list[str]) -> None:
     uses_fixture = (
-        payload.mode in {'voice_fixture', 'pipecat_webrtc'}
+        payload.mode == 'voice_fixture'
         or payload.text_callable == 'offline_acc_fixture'
     )
     if not uses_fixture:
@@ -1026,7 +1054,7 @@ def _validate_fixture_mode_scenarios(payload: ExecutionRunCreateRequest, scenari
 def _pipecat_webrtc_tester_config(scenario_id: str) -> TesterScenarioConfig:
     return TesterScenarioConfig(
         scenario_id=scenario_id,
-        goal='Drive local Pipecat small WebRTC audio in/out and capture vCon evidence.',
+        goal='Evaluate a separate reference voice agent using current-run audio and evidence.',
         allowed_caller_acts=[
             'request_cancellation',
             'explain_renewal_increase',

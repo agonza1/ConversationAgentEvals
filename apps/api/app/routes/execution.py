@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+import os
+import secrets
+
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
@@ -9,6 +12,10 @@ from app.schemas.execution import ExecutionRunCreateRequest
 from app.services import execution_run_store
 from app.services.execution_audio import describe_execution_audio_capabilities
 from app.services.execution_runner import execute_execution_run, start_execution_run
+from app.services.reference_generalist_agent import (
+    ReferenceRuntimeError,
+    resolve_reference_completion_provider,
+)
 from app.services.acc_connection import acc_connection_status, test_acc_connection
 
 
@@ -19,6 +26,43 @@ class AccConnectionTestRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     base_url: str = Field(min_length=1, max_length=2048)
+
+
+class ReferenceCompletionRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    prompt: str = Field(min_length=1, max_length=50000)
+    model_name: str = Field(min_length=1, max_length=128)
+
+
+@router.post('/reference/complete')
+def execution_reference_complete(
+    payload: ReferenceCompletionRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+):
+    """Local Pipecat target callback using configured API-key or Codex OAuth auth.
+
+    Credentials never leave the API process; the Pipecat participant receives only
+    the prompt and response text on the local service boundary.
+    """
+    expected_token = os.getenv('REFERENCE_AGENT_INTERNAL_TOKEN', '').strip()
+    if not expected_token:
+        raise HTTPException(status_code=503, detail='Set REFERENCE_AGENT_INTERNAL_TOKEN for the local reference pipeline.')
+    if not x_cae_reference_token or not secrets.compare_digest(x_cae_reference_token, expected_token):
+        raise HTTPException(status_code=403, detail='Invalid local reference-agent token.')
+    try:
+        provider = resolve_reference_completion_provider()
+        text = provider.complete(payload.prompt, model_name=payload.model_name).strip()
+    except (ReferenceRuntimeError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not text:
+        raise HTTPException(status_code=502, detail='Reference LLM returned empty response text.')
+    status = provider.status()
+    return {
+        'text': text,
+        'provider': status.get('provider') or provider.provider_id,
+        'model_name': payload.model_name,
+    }
 
 
 @router.post('/runs')

@@ -69,15 +69,15 @@ def describe_execution_audio_capabilities() -> ExecutionAudioCapabilities:
             ),
             ExecutionAudioTransportInfo(
                 id='pipecat_small_webrtc',
-                label='Local Pipecat small WebRTC hooks (in-process mock)',
+                label='Local Pipecat tester-to-generalist-agent pipeline',
                 available=True,
                 status='available',
                 requires_freeswitch=False,
-                requires_live_pipecat=False,
+                requires_live_pipecat=True,
                 notes=(
-                    'In-process mock of Pipecat small WebRTC send/receive + recording/transcription '
-                    'hooks for execution mode pipecat_webrtc. No browser peer, live Pipecat process, '
-                    'or FreeSWITCH required. Emits vCon-shaped capture; not live media.'
+                    'Configured reference execution uses a Pipecat tester and separate Pipecat target '
+                    'through rtc-asr, an OpenAI-compatible/Codex LLM, and Kokoro. It emits current-run '
+                    'WAV, transcript, timing, evaluation, and vCon evidence; no browser or SIP peer.'
                 ),
             ),
             ExecutionAudioTransportInfo(

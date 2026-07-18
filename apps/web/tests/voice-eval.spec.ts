@@ -10,8 +10,8 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
       body: JSON.stringify({
         agents: [
           {
-            id: 'acc-voice-fixture-agent',
-            name: 'Built-in sample voice agent',
+            id: 'generalist-voice-agent',
+            name: 'Built-in generalist voice agent',
             channel: 'voice',
             target: 'builtin_sample_voice',
             description: 'Built-in target for cancellation-rescue voice evaluation.',
@@ -58,7 +58,7 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
         suite_id: 'call-center-voice-ai',
         scenario_ids: ['cancellation-rescue'],
         mode: 'pipecat_webrtc',
-        agent_id: 'acc-voice-fixture-agent',
+        agent_id: 'generalist-voice-agent',
         tester_id: 'pipecat_tester',
         executor_id: 'cae_local_audio_loop',
         audio_transport: 'pipecat_small_webrtc',
@@ -167,18 +167,18 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
     'href',
     '/targets?api_base=http%3A%2F%2Fapi.example.test',
   );
-  await expect(page.getByLabel('Voice target')).toHaveValue('acc-voice-fixture-agent');
+  await expect(page.getByLabel('Voice target')).toHaveValue('generalist-voice-agent');
   await expect(page.getByLabel('Voice target').locator('option')).toHaveCount(1);
   await expect(page.getByLabel('Voice target').locator('option')).not.toContainText('ACC offline text fixture');
   await expect(page.getByRole('heading', { name: 'Pick the Run Agent target' })).toBeVisible();
-  await expect(page.getByLabel('Built-in sample voice call')).toBeVisible();
+  await expect(page.getByLabel('Built-in generalist voice evaluation')).toBeVisible();
   await expect(page.getByRole('link', { name: 'Open Eval evidence' })).toHaveAttribute(
     'href',
     '/eval?api_base=http%3A%2F%2Fapi.example.test',
   );
   await expect(page.getByText('Browser mic peer')).toBeVisible();
   await expect(page.getByText('Not connected in this slice')).toBeVisible();
-  await page.getByRole('button', { name: 'Run sample voice call' }).click();
+  await page.getByRole('button', { name: 'Run generalist voice evaluation' }).click();
   const results = page.getByRole('region', { name: 'Run results' });
   await expect(results.getByText('voice-run-1')).toBeVisible();
   await expect(results.getByRole('link', { name: 'Open Run Agent detail' })).toHaveAttribute(

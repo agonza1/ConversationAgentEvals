@@ -264,7 +264,18 @@ def test_pipecat_tester_over_execution_audio_target_captures_proof():
     asyncio.run(run())
 
 
-def test_pipecat_webrtc_execution_run_emits_vcon_without_live_sip():
+def test_pipecat_webrtc_execution_fails_closed_without_reference_services(monkeypatch):
+    import app.services.execution_runner as execution_runner
+
+    class _ConnectedProvider:
+        provider_id = 'fake'
+
+        def status(self):
+            return {'status': 'connected', 'provider': 'fake'}
+
+    monkeypatch.setattr(execution_runner, 'resolve_reference_completion_provider', lambda: _ConnectedProvider())
+    monkeypatch.delenv('RTC_ASR_BASE_URL', raising=False)
+    monkeypatch.delenv('KOKORO_BASE_URL', raising=False)
     queued = client.post(
         '/api/execution/runs',
         json={
@@ -282,38 +293,38 @@ def test_pipecat_webrtc_execution_run_emits_vcon_without_live_sip():
     assert queued.json()['mode'] == 'pipecat_webrtc'
 
     completed = _wait_for_terminal(run_id, user_id='webrtc-user')
-    assert completed['status'] in {'completed', 'needs_review', 'failed'}
+    assert completed['status'] == 'failed'
     assert len(completed['conversations']) == 1
     conversation = completed['conversations'][0]
     assert conversation['scenario_id'] == 'cancellation-rescue'
-    assert conversation['turns']
-    assert any(turn.get('speaker') == 'caller' for turn in conversation['turns'])
-    assert conversation.get('recording', {}).get('recording_url')
-    vcon = conversation.get('vcon_export') or {}
-    assert vcon.get('vcon') == '0.0.1'
-    assert vcon.get('source_format') == 'pipecat_execution'
-    assert vcon.get('appended_analysis_type') == 'execution_audio_capture'
-    assert isinstance(vcon.get('dialog'), list) and len(vcon['dialog']) >= 2
-    assert conversation.get('vcon_export_summary', {}).get('recording_attached') is True
-    assert conversation.get('audio_session', {}).get('extension_points', {}).get('freeswitch_verto_sip', {}).get(
-        'status'
-    ) == 'deferred'
-    audio_session = conversation.get('audio_session') or {}
-    assert audio_session.get('frames_sent', 0) >= 1
-    assert audio_session.get('frames_received', 0) >= 1
-    provenance = audio_session.get('runtime_provenance') or {}
-    assert provenance.get('execution_engine') == 'run_agent'
-    assert provenance.get('live_media') is False
-    assert provenance.get('browser_peer') is False
-    assert provenance.get('fixture_backed_scoring') is True
-    readiness = audio_session.get('real_call_readiness') or {}
-    assert readiness.get('run_agent_execution') == 'proven'
-    assert readiness.get('pipecat_capture_hooks') == 'proven'
-    assert readiness.get('browser_webrtc_peer') == 'not_connected'
-    assert readiness.get('sip_pstn') == 'deferred'
+    assert not conversation['turns']
+    assert 'RTC_ASR_BASE_URL' in conversation['error']
 
 
 def test_pipecat_webrtc_propagates_tester_needs_review(monkeypatch, tmp_path):
+    import app.services.execution_runner as execution_runner
+
+    class _FakeMedia:
+        def synthesize(self, text):
+            return b'fake-wav'
+
+    class _FakeReferenceTransport(LocalPipecatSmallWebRtcTransport):
+        def __init__(self, **kwargs):
+            super().__init__(artifact_dir=tmp_path)
+            self.media = _FakeMedia()
+            self.runtime = {}
+
+        def latency_marks(self, session_id):
+            return []
+
+    class _FakeCompletion:
+        provider_id = 'fake'
+
+        def status(self):
+            return {'status': 'connected'}
+
+    monkeypatch.setattr(execution_runner, 'ReferencePipecatAgentTransport', _FakeReferenceTransport)
+    monkeypatch.setattr(execution_runner, 'resolve_reference_completion_provider', lambda: _FakeCompletion())
     async def _failing_run(self, config):  # noqa: ANN001
         return {
             'scenario_id': config.scenario_id,
@@ -342,9 +353,9 @@ def test_pipecat_webrtc_propagates_tester_needs_review(monkeypatch, tmp_path):
     def _proof(self, session_id):  # noqa: ANN001
         return {'session_id': session_id, 'frames_sent': 1, 'frames_received': 1}
 
-    monkeypatch.setattr(LocalPipecatSmallWebRtcTransport, 'transcription_turns', _turns)
-    monkeypatch.setattr(LocalPipecatSmallWebRtcTransport, 'recording_handle', _recording)
-    monkeypatch.setattr(LocalPipecatSmallWebRtcTransport, 'session_proof', _proof)
+    monkeypatch.setattr(_FakeReferenceTransport, 'transcription_turns', _turns)
+    monkeypatch.setattr(_FakeReferenceTransport, 'recording_handle', _recording)
+    monkeypatch.setattr(_FakeReferenceTransport, 'session_proof', _proof)
 
     queued = client.post(
         '/api/execution/runs',

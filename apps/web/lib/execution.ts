@@ -188,7 +188,7 @@ async function handleJson<T>(response: Response): Promise<T> {
   return (text ? JSON.parse(text) : {}) as T;
 }
 
-const BUILT_IN_AGENT_IDS = new Set(['mock-text-agent', 'acc-voice-fixture-agent']);
+const BUILT_IN_AGENT_IDS = new Set(['mock-text-agent', 'generalist-text-agent', 'generalist-voice-agent']);
 
 export function isBuiltInAgent(agent: Pick<AgentRecord, 'id'>) {
   return BUILT_IN_AGENT_IDS.has(agent.id);

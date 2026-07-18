@@ -115,10 +115,11 @@ function evidenceLine(conversation: ExecutionConversation) {
   const session = conversation.audio_session;
   const provenance = asRecord(session?.runtime_provenance);
   const readiness = asRecord(session?.real_call_readiness);
-  if (conversation.mode === 'pipecat_webrtc') parts.push('Pipecat capture proof');
+  if (conversation.mode === 'pipecat_webrtc') parts.push('Pipecat tester → agent proof');
   if (provenance?.fixture_backed_scoring === true || readiness?.scoring === 'fixture_backed') {
     parts.push('sample-based score');
   }
+  if (provenance?.evidence_source === 'current_run') parts.push('current-run evidence');
   if (readiness?.browser_webrtc_peer === 'not_connected') parts.push('no live browser peer');
   const url = conversation.recording?.recording_url ?? conversation.recording?.uri;
   if (typeof url === 'string' && url.trim()) parts.push('recording metadata');
@@ -133,11 +134,11 @@ function evidenceLine(conversation: ExecutionConversation) {
 
 const localVoiceOption = {
   id: 'pipecat_webrtc',
-  label: 'Built-in sample voice call',
+  label: 'Built-in generalist voice evaluation',
   eyebrow: 'CAE local audio loop',
-  description: 'Runs the built-in sample agent through CAE\'s local audio loop and captures transcript, recording metadata, frame counts, and vCon evidence.',
+  description: 'Runs a Pipecat tester against a separate Pipecat agent through rtc-asr, a configured LLM, and Kokoro; evaluation uses only evidence captured in this run.',
   detail: 'Synthetic local media; no browser mic, SIP, or phone call',
-  button: 'Run sample voice call',
+  button: 'Run generalist voice evaluation',
 } as const;
 
 function transportStatus(health: ExecutionHealth | null, id: string) {
@@ -150,7 +151,7 @@ function voiceTargets(agents: AgentRecord[]) {
 
 function targetBadge(agent?: AgentRecord | null) {
   if (!agent) return 'No target loaded';
-  if (agent.target === 'builtin_sample_voice') return 'Built-in sample agent';
+  if (agent.target === 'builtin_sample_voice') return 'Built-in generalist agent';
   return agent.target.replaceAll('_', ' ');
 }
 
@@ -184,7 +185,7 @@ export function VoiceEvalPage() {
         const nextAgents = payload.agents ?? [];
         setAgents(nextAgents);
         const nextTargets = voiceTargets(nextAgents);
-        const preferred = nextTargets.find((agent) => agent.id === 'acc-voice-fixture-agent') ?? nextTargets[0];
+        const preferred = nextTargets.find((agent) => agent.id === 'generalist-voice-agent') ?? nextTargets[0];
         if (preferred) setSelectedAgentId(preferred.id);
       })
       .catch((err) => {

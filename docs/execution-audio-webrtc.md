@@ -20,16 +20,17 @@ Legacy names from earlier drafts (`voice_webrtc`, `local_pipecat_webrtc`, `sip_v
 
 | Piece | Status |
 | --- | --- |
-| Local Pipecat small WebRTC send/receive hooks | **Available** — in-process **mock** transport; no browser peer or live Pipecat process |
-| `POST /api/execution/runs` mode `pipecat_webrtc` | **Available** — drives `PipecatTesterAgentRunner` over local mock hooks |
-| Recording + transcription capture | **Available** — synthetic capture into `AudioRecordingHandle` + dialog turns (not live ASR/WAV) |
+| Local Pipecat reference execution | **Available when configured** — separate tester and target participants; no browser peer |
+| `POST /api/execution/runs` mode `pipecat_webrtc` | **Available when configured** — Pipecat tester → rtc-asr → LLM → Kokoro target pipeline |
+| Recording + transcription capture | **Available** — current-run WAV, rtc-asr transcript, timings, and dialog turns |
 | vCon export on conversation rows | **Available** — reuses `benchmark_service._vcon_export` shape; Launch UI shows summary |
-| Launch UI mode label | **Honest** — “Pipecat hooks (in-process mock)”; verdict marked fixture-backed |
+| Launch UI mode label | **Honest** — local synthetic media and current-run evidence; browser/SIP/PSTN not proven |
 | First-class **`/voice`** page | **Available** — dedicated Voice eval launch + conversation/vCon/recording results |
 | `GET /api/execution/audio/capabilities` | **Available** — advertises transports, vCon capture, honesty boundary |
 | FreeSWITCH Verto outbound SIP | **Deferred** — `FreeSwitchVertoSipTransport` extension stub only |
 
-Default CI does **not** require FreeSWITCH, PSTN, or a live Pipecat service.
+Default CI uses fakes around the provider boundaries and does **not** require FreeSWITCH or PSTN.
+`npm run test:reference-voice-smoke` is the opt-in real-service proof.
 
 ## How it maps to ACC’s Pipecat + Verto + WebRTC pattern
 

@@ -2,6 +2,7 @@ const { spawn } = require('node:child_process');
 const path = require('node:path');
 const fs = require('node:fs');
 const net = require('node:net');
+const crypto = require('node:crypto');
 
 const root = path.resolve(__dirname, '..');
 const envPath = path.join(root, '.env');
@@ -24,6 +25,12 @@ function loadDotEnv(filePath) {
 }
 
 loadDotEnv(envPath);
+
+// One ephemeral capability token per dev supervisor. It is inherited by API and
+// Pipecat, never printed or persisted, and may be overridden for managed runtimes.
+if (!process.env.REFERENCE_AGENT_INTERNAL_TOKEN) {
+  process.env.REFERENCE_AGENT_INTERNAL_TOKEN = crypto.randomBytes(32).toString('hex');
+}
 
 if (!fs.existsSync(apiVenvPython)) {
   console.error('Missing apps/api/.venv. Run `npm run setup` first.');

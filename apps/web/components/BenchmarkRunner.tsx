@@ -1040,7 +1040,7 @@ type ScoreAgentOption = {
 };
 
 function isFixtureTargetId(target?: string | null) {
-  return target === 'mock_agent' || target === 'builtin_sample_voice';
+  return target === 'mock_agent';
 }
 
 function isSavedReplayTargetId(target?: string | null) {
@@ -3388,7 +3388,9 @@ export function BenchmarkRunner({
       setExecutionMessage('Select an agent target before launching.');
       return null;
     }
-    if (selectedScoreAgent.target === 'openai_codex' && openaiProvider?.status !== 'connected') {
+    if (selectedScoreAgent.target === 'openai_codex'
+      && selectedScoreAgent.id !== 'generalist-text-agent'
+      && openaiProvider?.status !== 'connected') {
       setExecutionMessage('Connect OpenAI before running this target.');
       return null;
     }
@@ -4517,7 +4519,7 @@ export function BenchmarkRunner({
               ))}
             </select>
             </label>
-            <p>{selectedScoreAgent ? (isFixtureTargetId(selectedScoreAgent.target) ? 'Built-in sample agent' : 'Live target') : 'Choose a configured target'}</p>
+            <p>{selectedScoreAgent ? (selectedScoreAgent.target === 'builtin_sample_voice' ? 'Built-in reference agent' : isFixtureTargetId(selectedScoreAgent.target) ? 'Built-in sample agent' : 'Live target') : 'Choose a configured target'}</p>
           </div>
           <div className="run-config-step">
             <div className="run-config-step-heading">
@@ -4583,7 +4585,9 @@ export function BenchmarkRunner({
             </select>
             {openaiProvider?.status !== 'connected' ? (
               <span style={{ color: 'var(--muted)', fontSize: 13 }}>
-                Connect OpenAI to run this target.{' '}
+                {selectedScoreAgent.id === 'generalist-text-agent'
+                  ? 'This reference target can use OPENAI_API_KEY from the API environment, or you can connect OpenAI here. '
+                  : 'Connect OpenAI to run this target. '}
                 <button type="button" className="secondary-link" disabled={isConnectingOpenAI} onClick={() => void onConnectOpenAI()} style={{ padding: 0, border: 0, background: 'transparent', color: 'var(--accent)', fontWeight: 700, cursor: 'pointer' }}>
                   {isConnectingOpenAI ? 'Connecting…' : 'Connect OpenAI'}
                 </button>
@@ -4597,6 +4601,8 @@ export function BenchmarkRunner({
             <strong>
               {isSavedReplayTargetId(selectedScoreAgent.target)
                 ? 'Saved evidence replay'
+                : selectedScoreAgent.target === 'builtin_sample_voice'
+                  ? 'Built-in generalist reference agent'
                 : isFixtureTargetId(selectedScoreAgent.target)
                   ? 'Built-in sample agent'
                   : 'Live target'}
@@ -4605,7 +4611,7 @@ export function BenchmarkRunner({
               {selectedScoreAgent.target === 'http_endpoint'
                 ? `POSTs to ${selectedScoreAgent.connection?.endpoint_url || 'the configured endpoint'}; black-box response evidence only.`
                 : selectedScoreAgent.target === 'builtin_sample_voice'
-                  ? 'Uses the CAE local audio loop with generated media. It is not a browser, SIP, or phone call.'
+                  ? 'Runs a separate Pipecat target through rtc-asr, the configured LLM, and Kokoro. Evaluation uses current-run local evidence; it is not a browser, SIP, or phone call.'
                   : isSavedReplayTargetId(selectedScoreAgent.target)
                     ? 'Uses saved evidence. Replay is not a live agent destination.'
                     : isExternalVoiceTargetId(selectedScoreAgent.target)
@@ -4650,7 +4656,9 @@ export function BenchmarkRunner({
               || isSimulating
               || !selectedSuite
               || !selectedScoreAgent
-              || (selectedScoreAgent.target === 'openai_codex' && openaiProvider?.status !== 'connected')
+              || (selectedScoreAgent.target === 'openai_codex'
+                && selectedScoreAgent.id !== 'generalist-text-agent'
+                && openaiProvider?.status !== 'connected')
               || isExternalVoiceTargetId(selectedScoreAgent.target)
             }
             onClick={() => void onLaunchExecution()}
@@ -4660,7 +4668,7 @@ export function BenchmarkRunner({
               : executionRun && isActiveExecutionStatus(executionRun.status)
                 ? 'Execution running...'
                 : selectedScoreAgent?.target === 'builtin_sample_voice'
-                  ? 'Run sample voice call'
+                  ? 'Run generalist voice evaluation'
                   : isFixtureTargetId(selectedScoreAgent?.target)
                     ? 'Run sample evaluation'
                   : 'Run evaluation'}
