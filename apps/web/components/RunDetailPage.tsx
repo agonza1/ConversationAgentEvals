@@ -78,6 +78,19 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
       <section className="minimal-hero" aria-labelledby="run-title">
         <p className="eyebrow">Run analysis</p>
         <h1 id="run-title">{run?.agent_name || run?.agent_id || executionRunId}</h1>
+        {run?.provenance?.honesty_label ? (
+          <p className="runs-honesty-label" role="status">
+            {run.provenance.honesty_label}
+          </p>
+        ) : null}
+        {run?.provenance ? (
+          <dl className="runs-provenance" aria-label="Run provenance">
+            <div><dt>Target</dt><dd>{run.provenance.target_kind}</dd></div>
+            <div><dt>Tester</dt><dd>{run.provenance.tester_id}</dd></div>
+            <div><dt>Executor</dt><dd>{run.provenance.executor_id}</dd></div>
+            <div><dt>Evidence</dt><dd>{run.provenance.evidence_source}</dd></div>
+          </dl>
+        ) : null}
         <p>
           <ApiAwareLink href="/runs">All runs</ApiAwareLink>
           {' · '}
@@ -91,11 +104,28 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
 
       {run ? (
         <>
+          <section className="card run-participants" aria-label="Run participants and executor">
+            <div>
+              <span>Target under test</span>
+              <strong>{run.agent_name || run.agent_id || 'Unattributed target'}</strong>
+              <small>{runTargetSummary(run)}</small>
+            </div>
+            <div>
+              <span>Tester</span>
+              <strong>{formatTesterId(run.tester_id)}</strong>
+              <small>Plays the scenario user/caller and supplies test turns.</small>
+            </div>
+            <div>
+              <span>Executor</span>
+              <strong>{formatRuntimeId(run.executor_id || 'local_async_runner')}</strong>
+              <small>Invokes the adapter and persists evidence; it is not scored.</small>
+            </div>
+          </section>
           <section className="metric-summary-grid" aria-label="Metric summaries">
             <MetricTile
               title="Interruption Detection"
               value={`${summary.interruptionCount}`}
-              detail="fixture count across conversations"
+              detail="sample count across conversations"
               selected={metric === 'audio_interruption'}
               onClick={() => setMetric('audio_interruption')}
             />
@@ -179,6 +209,46 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
   );
 }
 
+function formatRuntimeId(value: string) {
+  return value.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatTesterId(value?: string | null) {
+  if (value === 'fixture_replay') return 'Saved Conversation Replay';
+  if (value === 'pipecat_tester') return 'Pipecat Voice Tester';
+  return 'Scenario Simulator';
+}
+
+function formatTargetId(value: string) {
+  if (value === 'mock_agent') return 'Built-in Sample Agent';
+  if (value === 'offline_acc_fixture') return 'Saved ACC Text Replay';
+  if (value === 'voice_fixture') return 'Saved ACC Voice Replay';
+  if (value === 'builtin_sample_voice') return 'Built-in Sample Voice Agent';
+  if (value === 'sip_agent') return 'SIP Agent Destination';
+  if (value === 'phone_agent') return 'Phone Agent Destination';
+  if (value === 'browser_webrtc_agent') return 'Browser WebRTC Agent Destination';
+  if (value === 'http_endpoint') return 'HTTP Endpoint';
+  if (value === 'openai_codex') return 'Connected OpenAI Agent';
+  return formatRuntimeId(value);
+}
+
+function runTargetSummary(run: ExecutionRunRecord) {
+  const snapshot = run.execution_snapshot;
+  const agent = snapshot && typeof snapshot.agent === 'object' && snapshot.agent
+    ? snapshot.agent as Record<string, unknown>
+    : null;
+  const target = typeof agent?.target === 'string' ? agent.target : run.mode;
+  const environment = typeof agent?.environment === 'string' ? agent.environment : null;
+  const evidenceOnly = target === 'offline_acc_fixture' || target === 'voice_fixture';
+  const builtInSample = target === 'mock_agent' || target === 'builtin_sample_voice';
+  const evidenceLabel = evidenceOnly
+    ? 'saved evidence replay'
+    : builtInSample
+      ? 'built-in sample evidence'
+      : 'live target evidence';
+  return `${formatTargetId(target)}${environment ? ` · ${environment}` : ''} · ${evidenceLabel}`;
+}
+
 function MetricTile({
   title,
   value,
@@ -226,7 +296,7 @@ function MetricDetail({
     return (
       <div className="runs-detail-copy">
         <h2>Interruption Detection</h2>
-        <p>{summary.interruption_count} interruption signals in this conversation (fixture-derived).</p>
+        <p>{summary.interruption_count} interruption signals in this conversation (from sample data).</p>
       </div>
     );
   }

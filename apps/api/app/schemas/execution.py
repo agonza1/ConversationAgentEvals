@@ -4,10 +4,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.services.run_provenance import ExecutionRunProvenance, ExecutorId, TesterId
+
 
 ExecutionMode = Literal['text_callable', 'voice_fixture', 'pipecat_webrtc']
 AudioTransportId = Literal['none', 'pipecat_small_webrtc', 'freeswitch_verto_sip']
-TextCallableId = Literal['mock_agent', 'offline_acc_fixture', 'openai_codex']
+TextCallableId = Literal['mock_agent', 'offline_acc_fixture', 'openai_codex', 'http_endpoint']
 ConversationStatus = Literal['queued', 'running', 'completed', 'failed']
 ExecutionRunStatus = Literal['queued', 'running', 'completed', 'needs_review', 'failed']
 
@@ -28,6 +30,9 @@ class ExecutionRunCreateRequest(BaseModel):
     audio_plan_path: str | None = None
     agent_id: str | None = None
     model_name: str | None = Field(default=None, min_length=1)
+    tester_id: TesterId = 'scenario_simulator'
+    tester_model_name: str | None = Field(default=None, min_length=1)
+    executor_id: ExecutorId = 'local_async_runner'
     # Local Pipecat small WebRTC is the supported first slice; Verto SIP is rejected
     # until FreeSwitchVertoSipTransport is implemented.
     audio_transport: AudioTransportId = 'none'
@@ -35,6 +40,14 @@ class ExecutionRunCreateRequest(BaseModel):
     @model_validator(mode='after')
     def validate_audio_transport_for_mode(self) -> 'ExecutionRunCreateRequest':
         if self.mode == 'pipecat_webrtc':
+            if 'tester_id' not in self.model_fields_set:
+                self.tester_id = 'pipecat_tester'
+            elif self.tester_id != 'pipecat_tester':
+                raise ValueError('pipecat_webrtc mode requires tester_id=pipecat_tester')
+            if 'executor_id' not in self.model_fields_set or self.executor_id == 'local_async_runner':
+                self.executor_id = 'cae_local_audio_loop'
+            elif self.executor_id != 'cae_local_audio_loop':
+                raise ValueError('pipecat_webrtc mode requires executor_id=cae_local_audio_loop')
             if self.audio_transport in {'none', 'pipecat_small_webrtc'}:
                 self.audio_transport = 'pipecat_small_webrtc'
             elif self.audio_transport == 'freeswitch_verto_sip':
@@ -54,8 +67,32 @@ class ExecutionRunCreateRequest(BaseModel):
                 'voice_fixture mode uses AccAudioFixtureScheduler only; set audio_transport=none '
                 '(use mode=pipecat_webrtc for pipecat_small_webrtc hooks).'
             )
+        elif self.mode == 'voice_fixture':
+            if 'tester_id' not in self.model_fields_set:
+                self.tester_id = 'fixture_replay'
+            elif self.tester_id != 'fixture_replay':
+                raise ValueError('voice_fixture mode requires tester_id=fixture_replay')
+            if 'executor_id' not in self.model_fields_set:
+                self.executor_id = 'evidence_replay'
+            elif self.executor_id != 'evidence_replay':
+                raise ValueError('voice_fixture mode requires executor_id=evidence_replay')
         elif self.mode == 'text_callable' and self.audio_transport != 'none':
             raise ValueError('text_callable mode does not stream execution audio; set audio_transport=none')
+        elif self.text_callable == 'offline_acc_fixture':
+            # Generated clients commonly serialize the generic text defaults.
+            # Treat those placeholders like omitted fields for direct replay.
+            if 'tester_id' not in self.model_fields_set or self.tester_id == 'scenario_simulator':
+                self.tester_id = 'fixture_replay'
+            elif self.tester_id != 'fixture_replay':
+                raise ValueError('offline_acc_fixture replay requires tester_id=fixture_replay')
+            if 'executor_id' not in self.model_fields_set or self.executor_id == 'local_async_runner':
+                self.executor_id = 'evidence_replay'
+            elif self.executor_id != 'evidence_replay':
+                raise ValueError('offline_acc_fixture replay requires executor_id=evidence_replay')
+        elif self.tester_id != 'scenario_simulator':
+            raise ValueError('text_callable mode requires tester_id=scenario_simulator')
+        elif self.executor_id not in {'local_async_runner', 'acc_browser_webrtc', 'acc_sip', 'acc_phone'}:
+            raise ValueError('text_callable mode requires a text or ACC executor')
         return self
 
 
@@ -156,6 +193,10 @@ class ExecutionRunRecord(BaseModel):
     agent_id: str | None = None
     agent_name: str | None = None
     model_name: str | None = None
+    tester_id: TesterId = 'scenario_simulator'
+    tester_model_name: str | None = None
+    executor_id: ExecutorId = 'local_async_runner'
+    provenance: ExecutionRunProvenance | None = None
     # Immutable request and agent settings captured at queue time. Execution uses
     # this instead of re-reading the mutable agent registry in the background.
     execution_snapshot: dict[str, Any] | None = None

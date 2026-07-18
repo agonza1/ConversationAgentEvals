@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { ApiAwareLink } from './ApiAwareLink';
 
-type VoiceMode = 'voice_fixture' | 'pipecat_webrtc';
+type VoiceMode = 'pipecat_webrtc';
 type JsonRecord = Record<string, unknown>;
 
 interface AgentRecord {
@@ -117,7 +117,7 @@ function evidenceLine(conversation: ExecutionConversation) {
   const readiness = asRecord(session?.real_call_readiness);
   if (conversation.mode === 'pipecat_webrtc') parts.push('Pipecat capture proof');
   if (provenance?.fixture_backed_scoring === true || readiness?.scoring === 'fixture_backed') {
-    parts.push('fixture-backed score');
+    parts.push('sample-based score');
   }
   if (readiness?.browser_webrtc_peer === 'not_connected') parts.push('no live browser peer');
   const url = conversation.recording?.recording_url ?? conversation.recording?.uri;
@@ -131,42 +131,30 @@ function evidenceLine(conversation: ExecutionConversation) {
   return parts.length ? parts.join(' · ') : null;
 }
 
-const modeOptions = [
-  {
-    id: 'pipecat_webrtc',
-    label: 'Pipecat capture proof',
-    eyebrow: 'Run Agent + local hooks',
-    description: 'Runs the selected target through the execution runner and captures local Pipecat transcript, recording metadata, frame counts, and vCon evidence.',
-    detail: 'Fixture-backed score; no browser mic or SIP call yet',
-    button: 'Run through Run Agent',
-  },
-  {
-    id: 'voice_fixture',
-    label: 'Offline fixture smoke',
-    eyebrow: 'Fast regression path',
-    description: 'Uses deterministic audio fixtures to verify the scenario, scoring contract, transcript, and evidence packaging without transport dependencies.',
-    detail: 'No live media required',
-    button: 'Run fixture smoke',
-  },
-] as const;
+const localVoiceOption = {
+  id: 'pipecat_webrtc',
+  label: 'Built-in sample voice call',
+  eyebrow: 'CAE local audio loop',
+  description: 'Runs the built-in sample agent through CAE\'s local audio loop and captures transcript, recording metadata, frame counts, and vCon evidence.',
+  detail: 'Synthetic local media; no browser mic, SIP, or phone call',
+  button: 'Run sample voice call',
+} as const;
 
 function transportStatus(health: ExecutionHealth | null, id: string) {
   return health?.audio?.transports?.find((transport) => transport.id === id);
 }
 
 function voiceTargets(agents: AgentRecord[]) {
-  return agents.filter((agent) => agent.channel === 'voice' || agent.target === 'voice_fixture' || agent.target === 'offline_acc_fixture');
+  return agents.filter((agent) => agent.channel === 'voice' && agent.target === 'builtin_sample_voice');
 }
 
 function targetBadge(agent?: AgentRecord | null) {
   if (!agent) return 'No target loaded';
-  if (agent.target === 'voice_fixture') return 'Built-in voice fixture';
-  if (agent.target === 'offline_acc_fixture') return 'Offline ACC fixture';
+  if (agent.target === 'builtin_sample_voice') return 'Built-in sample agent';
   return agent.target.replaceAll('_', ' ');
 }
 
 export function VoiceEvalPage() {
-  const [mode, setMode] = useState<VoiceMode>('pipecat_webrtc');
   const [error, setError] = useState<string | null>(null);
   const [isLaunching, setIsLaunching] = useState(false);
   const [run, setRun] = useState<ExecutionRun | null>(null);
@@ -184,7 +172,7 @@ export function VoiceEvalPage() {
     () => targets.find((agent) => agent.id === selectedAgentId) ?? targets[0] ?? null,
     [selectedAgentId, targets],
   );
-  const selectedMode = modeOptions.find((option) => option.id === mode) ?? modeOptions[0];
+  const selectedMode = localVoiceOption;
   const pipecat = transportStatus(health, 'pipecat_small_webrtc');
 
   useEffect(() => {
@@ -240,13 +228,15 @@ export function VoiceEvalPage() {
           body: JSON.stringify({
             suite_id: 'call-center-voice-ai',
             scenario_ids: ['cancellation-rescue'],
-            mode,
+            mode: 'pipecat_webrtc',
             iterations: 1,
             user_id: identity.userId,
             project_id: identity.projectId,
             agent_id: selectedTarget?.id,
+            tester_id: 'pipecat_tester',
+            executor_id: 'cae_local_audio_loop',
             evaluate: true,
-            audio_transport: mode === 'pipecat_webrtc' ? 'pipecat_small_webrtc' : 'none',
+            audio_transport: 'pipecat_small_webrtc',
           }),
         }),
       );
@@ -281,7 +271,7 @@ export function VoiceEvalPage() {
         <dl className="voice-scenario-facts">
           <div><dt>Suite</dt><dd>Call center voice AI</dd></div>
           <div><dt>Execution engine</dt><dd>Run Agent</dd></div>
-          <div><dt>Current call proof</dt><dd>Fixture-backed capture</dd></div>
+          <div><dt>Current call proof</dt><dd>Sample-based capture</dd></div>
           <div><dt>Evaluation</dt><dd>Automatic scoring</dd></div>
         </dl>
         <div className="voice-evidence-list" aria-label="Expected evidence">
@@ -345,28 +335,24 @@ export function VoiceEvalPage() {
           </div>
 
           <div role="group" aria-label="Voice evaluation mode" className="voice-mode-grid">
-            {modeOptions.map((option) => {
-              const selected = mode === option.id;
-              return (
-                <button
-                  key={option.id}
-                  type="button"
-                  className="voice-mode-option"
-                  data-selected={selected}
-                  aria-label={option.label}
-                  aria-pressed={selected}
-                  onClick={() => setMode(option.id)}
-                >
-                  <span className="voice-mode-radio" aria-hidden="true">{selected ? '✓' : ''}</span>
-                  <span className="voice-mode-copy">
-                    <small>{option.eyebrow}</small>
-                    <strong>{option.label}</strong>
-                    <span>{option.description}</span>
-                    <em>{option.detail}</em>
-                  </span>
-                </button>
-              );
-            })}
+            <div className="voice-mode-option" data-selected="true" aria-label={selectedMode.label}>
+              <span className="voice-mode-radio" aria-hidden="true">✓</span>
+              <span className="voice-mode-copy">
+                <small>{selectedMode.eyebrow}</small>
+                <strong>{selectedMode.label}</strong>
+                <span>{selectedMode.description}</span>
+                <em>{selectedMode.detail}</em>
+              </span>
+            </div>
+            <div className="voice-mode-option" data-selected="false">
+              <span className="voice-mode-radio" aria-hidden="true">→</span>
+              <span className="voice-mode-copy">
+                <small>Already have a conversation?</small>
+                <strong>Evaluate saved evidence</strong>
+                <span>Score an existing transcript or evidence bundle without pretending it is an agent target.</span>
+                <ApiAwareLink href="/eval">Open Eval evidence</ApiAwareLink>
+              </span>
+            </div>
           </div>
 
           <div className="voice-readiness-panel" aria-label="Voice call readiness">
