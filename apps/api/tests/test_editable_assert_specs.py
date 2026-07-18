@@ -239,6 +239,30 @@ def test_workspace_members_share_the_same_project_spec_history():
         assert db.query(ProductProject).filter(ProductProject.project_key == project_key).count() == 1
 
 
+def test_workspace_viewers_can_read_but_cannot_write_shared_specs():
+    suffix = uuid4().hex
+    owner_id = f'viewer-owner-{suffix}'
+    viewer_id = f'viewer-{suffix}'
+    project_key = f'viewer-project-{suffix}'
+    with SessionLocal() as db:
+        workspace = ProductWorkspace(owner_user_id=owner_id, workspace_key=f'viewer-workspace-{suffix}', name='Viewer workspace')
+        db.add(workspace)
+        db.flush()
+        db.add_all([
+            ProductWorkspaceMember(workspace_id=workspace.id, user_id=owner_id, role='owner'),
+            ProductWorkspaceMember(workspace_id=workspace.id, user_id=viewer_id, role='viewer'),
+        ])
+        db.add(ProductProject(user_id=owner_id, workspace_id=workspace.id, project_key=project_key, name='Viewer project'))
+        db.commit()
+
+    assert client.post('/api/specs', json={'user_id': owner_id, 'project_id': project_key, 'spec': _valid_spec()}).status_code == 200
+    assert client.get('/api/specs/cancellation-rescue-agent', params={'user_id': viewer_id, 'project_id': project_key}).status_code == 200
+    rejected = client.post('/api/specs', json={'user_id': viewer_id, 'project_id': project_key, 'spec': _valid_spec(objective='Viewer must not replace shared history.')})
+
+    assert rejected.status_code == 422
+    assert 'Workspace editor access' in rejected.json()['detail']
+
+
 def test_json_export_uses_the_immutable_persisted_config(monkeypatch):
     suffix = uuid4().hex
     user_id = f'export-user-{suffix}'

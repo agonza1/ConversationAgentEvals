@@ -452,6 +452,8 @@ def _coerce_max_turns(value: Any) -> int | None:
 def _resolve_project(db: Session, *, user_id: str, project_id: str) -> ProductProject:
     visible = _visible_projects(db, user_id=user_id, project_id=project_id)
     project = next((item for item in visible if item.user_id == user_id), None) or (visible[0] if visible else None)
+    if project is not None and project.user_id != user_id and not _can_edit_shared_project(db, project=project, user_id=user_id):
+        raise ValueError('Workspace editor access is required to save a shared ASSERT spec.')
     if project is None:
         project = ProductProject(user_id=user_id, project_key=project_id, name=project_id.replace('-', ' ').title() or 'Default Project')
         db.add(project)
@@ -480,6 +482,20 @@ def _visible_projects(db: Session, *, user_id: str, project_id: str) -> list[Pro
     else:
         query = query.filter(ProductProject.user_id == user_id)
     return query.order_by(ProductProject.created_at.asc()).all()
+
+
+def _can_edit_shared_project(db: Session, *, project: ProductProject, user_id: str) -> bool:
+    if not project.workspace_id:
+        return False
+    member = (
+        db.query(ProductWorkspaceMember)
+        .filter(
+            ProductWorkspaceMember.workspace_id == project.workspace_id,
+            ProductWorkspaceMember.user_id == user_id,
+        )
+        .first()
+    )
+    return member is not None and member.role in {'owner', 'admin', 'editor'}
 
 
 def _spec_lock(project_id: str, spec_id: str) -> threading.Lock:
