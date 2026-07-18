@@ -13,6 +13,10 @@ interface AgentRecord {
   channel: 'text' | 'voice';
   target: string;
   description?: string | null;
+  metadata?: {
+    model_name?: string | null;
+    prompt_version?: string | null;
+  };
 }
 
 interface AudioTransportCapability {
