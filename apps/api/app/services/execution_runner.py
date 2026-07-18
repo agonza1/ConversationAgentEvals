@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import time
 import uuid
 from datetime import UTC, datetime
@@ -41,6 +40,7 @@ from app.services.execution_audio import (
 from app.services.execution_vcon import build_execution_vcon, vcon_summary
 from app.services.llm_providers import get_provider
 from app.services.pipecat_tester_agent import PipecatTesterAgentRunner
+from app.services.target_secrets import resolve_http_target_secret
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -457,9 +457,7 @@ def _execute_http_text_agent(
     auth_type = str(connection.get('auth_type') or 'none')
     if auth_type != 'none':
         secret_ref = str(connection.get('secret_ref') or '')
-        secret = os.getenv(secret_ref)
-        if not secret:
-            raise ValueError(f'HTTP target secret reference is not available: {secret_ref}')
+        secret = resolve_http_target_secret(secret_ref)
         if auth_type == 'bearer_secret':
             headers['authorization'] = f'Bearer {secret}'
         elif auth_type == 'api_key_secret':

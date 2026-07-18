@@ -399,14 +399,14 @@ function AgentFormModal({
                   <span>Authentication</span>
                   <select aria-label="Target authentication" value={authType} onChange={(event) => setAuthType(event.target.value as AgentFormState['authType'])}>
                     <option value="none">None</option>
-                    <option value="bearer_secret">Bearer token from environment</option>
-                    <option value="api_key_secret">API key from environment</option>
+                    <option value="bearer_secret">Configured bearer credential</option>
+                    <option value="api_key_secret">Configured API key</option>
                   </select>
                 </label>
                 {authType !== 'none' ? (
                   <label>
-                    <span>Secret environment variable</span>
-                    <input required aria-label="Secret environment variable" value={secretRef} onChange={(event) => setSecretRef(event.target.value)} placeholder="SUPPORT_AGENT_TOKEN" pattern="[A-Za-z_][A-Za-z0-9_]*" />
+                    <span>Credential ID</span>
+                    <input required aria-label="Credential ID" value={secretRef} onChange={(event) => setSecretRef(event.target.value)} placeholder="support-staging" pattern="[a-z][a-z0-9-]{0,63}" />
                   </label>
                 ) : null}
                 {authType === 'api_key_secret' ? (
@@ -424,7 +424,7 @@ function AgentFormModal({
                   <input required aria-label="Target timeout" type="number" min={500} max={120000} value={timeoutMs} onChange={(event) => setTimeoutMs(Number(event.target.value) || 15000)} />
                 </label>
               </div>
-              <small>Only the environment-variable name is saved. Raw credentials are never stored in the target registry.</small>
+              <small>Ask an administrator for a configured credential ID. Environment-variable names and raw credentials are never accepted or stored here.</small>
             </fieldset>
           ) : null}
           {target === 'sip_phone' ? (

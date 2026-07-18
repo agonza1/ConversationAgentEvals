@@ -5,6 +5,8 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.services.target_secrets import HTTP_TARGET_SECRET_ID_PATTERN
+
 
 AgentChannel = Literal['text', 'voice']
 AgentEnvironment = Literal['local', 'staging', 'production']
@@ -37,15 +39,15 @@ class AgentMetadata(BaseModel):
 class AgentConnection(BaseModel):
     """Executable connection details for an external target.
 
-    `secret_ref` is an environment-variable name, never the secret value. This
-    keeps registry artifacts safe to inspect and commit as test evidence.
+    `secret_ref` is an opaque credential ID, never an environment-variable name
+    or secret value. The server maps it into a dedicated HTTP-target namespace.
     """
 
     model_config = ConfigDict(extra='forbid')
 
     endpoint_url: str | None = None
     auth_type: Literal['none', 'bearer_secret', 'api_key_secret'] = 'none'
-    secret_ref: str | None = Field(default=None, pattern=r'^[A-Za-z_][A-Za-z0-9_]*$')
+    secret_ref: str | None = Field(default=None, pattern=HTTP_TARGET_SECRET_ID_PATTERN)
     api_key_header: str = Field(default='x-api-key', min_length=1, max_length=80)
     response_path: str = Field(default='response', min_length=1, max_length=160)
     timeout_ms: int = Field(default=15000, ge=500, le=120000)
@@ -53,7 +55,7 @@ class AgentConnection(BaseModel):
     @model_validator(mode='after')
     def validate_auth_reference(self):
         if self.auth_type != 'none' and not self.secret_ref:
-            raise ValueError('Authenticated connections require a secret_ref environment variable name.')
+            raise ValueError('Authenticated connections require a configured credential ID.')
         return self
 
 

@@ -8,6 +8,7 @@ import pytest
 from app.main import app
 from app.services import agent_store, execution_run_store
 from app.services.execution_runner import execute_execution_run, start_execution_run
+from app.services.target_secrets import resolve_http_target_secret
 from app.schemas.execution import ExecutionRunCreateRequest
 
 
@@ -76,6 +77,32 @@ def test_http_target_requires_real_connection_configuration():
     assert inline_credentials.status_code == 422
     assert 'Do not embed credentials' in inline_credentials.text
 
+    arbitrary_environment_variable = client.post(
+        '/api/agents',
+        json={
+            'name': 'Unsafe credential reference',
+            'channel': 'text',
+            'target': 'http_endpoint',
+            'connection': {
+                'endpoint_url': 'https://example.test/chat',
+                'auth_type': 'bearer_secret',
+                'secret_ref': 'AWS_SECRET_ACCESS_KEY',
+            },
+        },
+    )
+    assert arbitrary_environment_variable.status_code == 422
+    assert 'string_pattern_mismatch' in arbitrary_environment_variable.text
+
+
+def test_http_target_credentials_only_resolve_from_dedicated_namespace(monkeypatch):
+    monkeypatch.setenv('AWS_SECRET_ACCESS_KEY', 'must-not-be-read')
+
+    with pytest.raises(ValueError, match='credential is not configured'):
+        resolve_http_target_secret('aws-secret-access-key')
+
+    monkeypatch.setenv('CAE_HTTP_TARGET_SECRET_AWS_SECRET_ACCESS_KEY', 'approved-target-secret')
+    assert resolve_http_target_secret('aws-secret-access-key') == 'approved-target-secret'
+
 
 def test_http_target_executes_black_box_contract_and_persists_tester_provenance(monkeypatch):
     from app.services import execution_runner
@@ -98,7 +125,8 @@ def test_http_target_executes_black_box_contract_and_persists_tester_provenance(
         requests.append((request, timeout))
         return FakeResponse()
 
-    monkeypatch.setenv('SUPPORT_AGENT_TOKEN', 'not-persisted')
+    monkeypatch.setenv('SUPPORT_AGENT_TOKEN', 'must-not-be-read')
+    monkeypatch.setenv('CAE_HTTP_TARGET_SECRET_SUPPORT_AGENT_TOKEN', 'not-persisted')
     monkeypatch.setattr(execution_runner, 'urlopen', fake_urlopen)
     created = client.post(
         '/api/agents',
@@ -110,7 +138,7 @@ def test_http_target_executes_black_box_contract_and_persists_tester_provenance(
             'connection': {
                 'endpoint_url': 'https://support.example.test/chat',
                 'auth_type': 'bearer_secret',
-                'secret_ref': 'SUPPORT_AGENT_TOKEN',
+                'secret_ref': 'support-agent-token',
                 'response_path': 'result.reply',
                 'timeout_ms': 5000,
             },

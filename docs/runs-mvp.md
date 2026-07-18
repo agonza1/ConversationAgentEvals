@@ -24,7 +24,10 @@ Execute → analyze loop for ConversationAgentEvals.
 - The external HTTP JSON adapter POSTs `message`, OpenAI-style `history`, and scenario metadata,
   then reads reply text from a configured dot path (default `response`). It is real black-box
   invocation, but has no tool/trace visibility unless the target response provides it later.
-- HTTP authentication uses an environment-variable name in `secret_ref`; raw secrets are never stored.
+- HTTP authentication stores an opaque lowercase credential ID in `secret_ref`, never an
+  environment-variable name or raw secret. The server resolves only the dedicated
+  `CAE_HTTP_TARGET_SECRET_*` namespace: for example, credential ID `support-staging`
+  resolves from `CAE_HTTP_TARGET_SECRET_SUPPORT_STAGING`.
 - Metrics and waveform remain fixture/synthetic for voice in this MVP (no real audio playback).
 - Built-in **testing targets**: **Mock text target**, **ACC voice fixture target**.
 - Browser WebRTC and SIP/phone target registration remain unavailable until end-to-end media proof exists.
