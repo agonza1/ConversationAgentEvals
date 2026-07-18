@@ -65,8 +65,8 @@ def create_editable_spec(payload: SpecSaveRequest):
 
 
 @router.get('/{spec_id}')
-def get_editable_spec(spec_id: str):
-    saved = get_spec(spec_id)
+def get_editable_spec(spec_id: str, user_id: str = Query(min_length=1), project_id: str = Query(default='default', min_length=1)):
+    saved = get_spec(spec_id, user_id=user_id, project_id=project_id)
     if saved is None:
         raise HTTPException(status_code=404, detail='Spec not found')
     return saved
@@ -89,8 +89,13 @@ def create_editable_spec_version(spec_id: str, payload: SpecSaveRequest):
 
 
 @router.get('/{spec_id}/export')
-def export_editable_spec(spec_id: str, format: Literal['json', 'yaml'] = Query(default='yaml')):
-    exported = export_saved_spec(spec_id, format=format)
+def export_editable_spec(
+    spec_id: str,
+    user_id: str = Query(min_length=1),
+    project_id: str = Query(default='default', min_length=1),
+    format: Literal['json', 'yaml'] = Query(default='yaml'),
+):
+    exported = export_saved_spec(spec_id, user_id=user_id, project_id=project_id, format=format)
     if exported is None:
         raise HTTPException(status_code=404, detail='Spec not found')
     if format == 'yaml':

@@ -101,6 +101,44 @@ def test_save_rejects_unapproved_generated_draft_and_versions_approved_spec(tmp_
     assert first.json()['version'] == 1
     assert second.status_code == 200
     assert second.json()['version'] == 2
-    exported = client.get('/api/specs/cancellation-rescue-agent/export', params={'format': 'yaml'})
+    exported = client.get('/api/specs/cancellation-rescue-agent/export', params={'user_id': 'demo-user', 'project_id': 'demo-project', 'format': 'yaml'})
     assert exported.status_code == 200
     assert 'Save eligible callers while documenting policy-safe evidence.' in exported.text
+
+
+def test_saved_specs_are_scoped_by_owner_and_project(tmp_path, monkeypatch):
+    monkeypatch.setenv('EDITABLE_ASSERT_SPEC_STORE_DIR', str(tmp_path))
+    first = client.post('/api/specs', json={'user_id': 'demo-user', 'project_id': 'demo-project', 'spec': _valid_spec(objective='Save eligible callers while documenting owner scoped evidence.')})
+    second = client.post('/api/specs', json={'user_id': 'other-user', 'project_id': 'demo-project', 'spec': _valid_spec(objective='Save eligible callers while documenting other owner evidence.')})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()['version'] == 1
+    assert second.json()['version'] == 1
+
+    visible = client.get('/api/specs/cancellation-rescue-agent', params={'user_id': 'demo-user', 'project_id': 'demo-project'})
+    other_project = client.get('/api/specs/cancellation-rescue-agent', params={'user_id': 'demo-user', 'project_id': 'other-project'})
+    other_owner_export = client.get('/api/specs/cancellation-rescue-agent/export', params={'user_id': 'other-user', 'project_id': 'demo-project', 'format': 'yaml'})
+
+    assert visible.status_code == 200
+    assert visible.json()['spec']['objective'] == 'Save eligible callers while documenting owner scoped evidence.'
+    assert other_project.status_code == 404
+    assert other_owner_export.status_code == 200
+    assert 'other owner evidence' in other_owner_export.text
+    assert 'owner scoped evidence' not in other_owner_export.text
+
+
+def test_preview_quotes_yaml_scalars_that_look_like_list_markers():
+    spec = _valid_spec(
+        required_behaviors=[{'id': 'dash-text', 'label': '- do not parse me as a list', 'description': '? keep pasted checklist text scalar'}],
+        scenario_seeds=[': still scalar', '--- not a document marker'],
+    )
+
+    response = client.post('/api/specs/preview', json={'spec': spec})
+
+    assert response.status_code == 200
+    yaml = response.json()['yaml']
+    assert 'label: "- do not parse me as a list"' in yaml
+    assert 'description: "? keep pasted checklist text scalar"' in yaml
+    assert '- ": still scalar"' in yaml
+    assert '- "--- not a document marker"' in yaml

@@ -219,7 +219,7 @@ def save_spec(*, user_id: str, project_id: str, spec: EditableAssertSpec) -> Sav
         raise ValueError('; '.join(error.message for error in preview.errors) or 'Spec is invalid')
     now = _timestamp()
     spec_id = spec.id or _slug_id('spec')
-    previous = _read_latest(spec_id)
+    previous = _read_latest(user_id=user_id, project_id=project_id, spec_id=spec_id)
     version = int(previous['version']) + 1 if previous else 1
     saved_spec = preview.normalized.model_copy(update={'id': spec_id, 'version': version})
     saved = SavedEditableAssertSpec(
@@ -236,13 +236,13 @@ def save_spec(*, user_id: str, project_id: str, spec: EditableAssertSpec) -> Sav
     return saved
 
 
-def get_spec(spec_id: str) -> SavedEditableAssertSpec | None:
-    raw = _read_latest(spec_id)
+def get_spec(spec_id: str, *, user_id: str, project_id: str) -> SavedEditableAssertSpec | None:
+    raw = _read_latest(user_id=user_id, project_id=project_id, spec_id=spec_id)
     return SavedEditableAssertSpec.model_validate(raw) if raw else None
 
 
-def export_saved_spec(spec_id: str, *, format: Literal['json', 'yaml']) -> dict[str, Any] | str | None:
-    saved = get_spec(spec_id)
+def export_saved_spec(spec_id: str, *, user_id: str, project_id: str, format: Literal['json', 'yaml']) -> dict[str, Any] | str | None:
+    saved = get_spec(spec_id, user_id=user_id, project_id=project_id)
     if saved is None:
         return None
     return saved.yaml if format == 'yaml' else preview_spec(saved.spec).json_preview
@@ -323,7 +323,13 @@ def _yaml_scalar(value: Any) -> str:
     text = str(value)
     if not text:
         return '""'
-    if '\n' in text or re.search(r'[:#\[\]{},&*?]|\s$', text) or text[:1].isspace() or text.lower() in {'true', 'false', 'null', 'yes', 'no'}:
+    if (
+        '\n' in text
+        or re.search(r'[:#\[\]{},&*?]|\s$', text)
+        or re.match(r'^(?:---|\.\.\.|[-?:](?:\s|$))', text)
+        or text[:1].isspace()
+        or text.lower() in {'true', 'false', 'null', 'yes', 'no'}
+    ):
         return json.dumps(text)
     return text
 
@@ -355,14 +361,18 @@ def _store_dir() -> Path:
     return root
 
 
-def _read_latest(spec_id: str) -> dict[str, Any] | None:
-    latest = _store_dir() / _slug(spec_id) / 'latest.json'
+def _read_latest(*, user_id: str, project_id: str, spec_id: str) -> dict[str, Any] | None:
+    latest = _spec_dir(user_id=user_id, project_id=project_id, spec_id=spec_id) / 'latest.json'
     return json.loads(latest.read_text(encoding='utf-8')) if latest.exists() else None
 
 
 def _write_saved(saved: SavedEditableAssertSpec) -> None:
-    spec_dir = _store_dir() / _slug(saved.id)
+    spec_dir = _spec_dir(user_id=saved.user_id, project_id=saved.project_id, spec_id=saved.id)
     spec_dir.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(saved.model_dump(mode='json'), indent=2, sort_keys=True)
     (spec_dir / f'v{saved.version}.json').write_text(payload + '\n', encoding='utf-8')
     (spec_dir / 'latest.json').write_text(payload + '\n', encoding='utf-8')
+
+
+def _spec_dir(*, user_id: str, project_id: str, spec_id: str) -> Path:
+    return _store_dir() / _slug(user_id) / _slug(project_id) / _slug(spec_id)
