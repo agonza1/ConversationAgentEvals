@@ -316,6 +316,8 @@ export interface EditableAssertPreview {
   yaml: string;
   json_preview: Record<string, unknown>;
   export_filename: string;
+  assert_validator: 'assert-ai' | string;
+  assert_validated: boolean;
 }
 
 export interface EditableAssertGeneratedDraft {

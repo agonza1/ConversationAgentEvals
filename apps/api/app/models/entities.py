@@ -104,6 +104,7 @@ class ProductProject(Base):
 
     workspace = relationship('ProductWorkspace', back_populates='projects')
     saved_runs = relationship('ProductSavedRun', back_populates='project', cascade='all, delete-orphan')
+    editable_assert_spec_versions = relationship('EditableAssertSpecVersion', back_populates='project', cascade='all, delete-orphan')
 
 
 class ProductSavedRun(Base):
@@ -119,6 +120,23 @@ class ProductSavedRun(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
 
     project = relationship('ProductProject', back_populates='saved_runs')
+
+
+class EditableAssertSpecVersion(Base):
+    __tablename__ = 'editable_assert_spec_versions'
+    __table_args__ = (
+        UniqueConstraint('project_id', 'spec_key', 'version', name='uq_editable_assert_spec_project_key_version'),
+    )
+
+    id = Column(String, primary_key=True, default=lambda: f'assert_spec_{uuid.uuid4().hex[:16]}')
+    project_id = Column(String, ForeignKey('product_projects.id'), nullable=False, index=True)
+    spec_key = Column(String, nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    spec_json = Column(Text, nullable=False)
+    yaml = Column(Text, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+    project = relationship('ProductProject', back_populates='editable_assert_spec_versions')
 
 
 class ProductAuditEvent(Base):

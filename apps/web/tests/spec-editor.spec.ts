@@ -1,6 +1,10 @@
 import { expect, test } from '@playwright/test';
 
 test('spec editor generates draft checks, requires approval, previews YAML, and saves a version', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'workspace-user');
+    window.localStorage.setItem('conversation-evals-demo-project', 'workspace-project');
+  });
   await page.route('**/api/specs/templates', async (route) => {
     await route.fulfill({
       status: 200,
@@ -40,8 +44,8 @@ test('spec editor generates draft checks, requires approval, previews YAML, and 
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        provider: 'local_draft_generator',
-        model: 'not-configured',
+        provider: 'openai_codex',
+        model: 'gpt-5.4',
         status: 'draft',
         requires_user_approval: true,
         required_behaviors: [{ id: 'complete-task', label: 'Completes the stated task', description: 'Draft', severity: 'error', draft: true }],
@@ -66,9 +70,11 @@ test('spec editor generates draft checks, requires approval, previews YAML, and 
         errors: approved ? [] : [{ field: 'generated_content_status', message: 'Generated suggestions must be approved or edited before saving.', severity: 'error' }],
         warnings: [],
         normalized: body.spec,
-        yaml: `assert_version: v2\nmetadata:\n  title: ${body.spec.title}\nobjective: ${body.spec.objective}\n`,
-        json_preview: { metadata: { title: body.spec.title } },
-        export_filename: 'cancellation-rescue-agent.assert.yml',
+        yaml: `suite: cancellation-rescue-agent\nbehavior:\n  name: cancellation-rescue-agent\n  description: ${body.spec.objective}\npipeline:\n  systematize: {}\n`,
+        json_preview: { suite: 'cancellation-rescue-agent', pipeline: { systematize: {} } },
+        export_filename: 'cancellation-rescue-agent.eval_config.yaml',
+        assert_validator: 'assert-ai',
+        assert_validated: true,
       }),
     });
   });
@@ -76,6 +82,8 @@ test('spec editor generates draft checks, requires approval, previews YAML, and 
   await page.route('**/api/specs', async (route) => {
     const body = JSON.parse(route.request().postData() || '{}');
     expect(body.spec.generated_content_status).toBe('approved');
+    expect(body.user_id).toBe('workspace-user');
+    expect(body.project_id).toBe('workspace-project');
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -87,7 +95,7 @@ test('spec editor generates draft checks, requires approval, previews YAML, and 
         created_at: '2026-07-17T20:00:00Z',
         updated_at: '2026-07-17T20:00:00Z',
         spec: { ...body.spec, id: 'cancellation-rescue-agent', version: 1 },
-        yaml: 'assert_version: v2\n',
+        yaml: 'suite: cancellation-rescue-agent\npipeline:\n  systematize: {}\n',
       }),
     });
   });
@@ -101,7 +109,45 @@ test('spec editor generates draft checks, requires approval, previews YAML, and 
   await expect(page.getByText('Generated suggestions must be approved')).toBeVisible();
   await page.getByRole('button', { name: 'Approve generated draft' }).click();
   await expect(page.getByText('Valid preview')).toBeVisible();
-  await expect(page.getByText('assert_version: v2')).toBeVisible();
+  await expect(page.getByText('suite: cancellation-rescue-agent')).toBeVisible();
+  await expect(page.getByText('Workspace: workspace-project')).toBeVisible();
   await page.getByRole('button', { name: 'Save version' }).click();
   await expect(page.getByText(/Saved `cancellation-rescue-agent` version 1/)).toBeVisible();
+});
+
+test('loading and previewing a rich template preserves structured fields', async ({ page }) => {
+  const richSpec = {
+    title: 'Rich support agent',
+    role: 'customer support agent',
+    objective: 'Resolve a rich structured request without losing evaluation metadata.',
+    generated_content_status: 'none',
+    required_behaviors: [{ id: 'success-rich', label: 'Resolve request', description: 'Keep this detailed description.', severity: 'info', draft: false }],
+    forbidden_behaviors: [{ id: 'failure-rich', label: 'No invention', description: 'Keep this forbidden description.', severity: 'error', draft: false }],
+    scenario_seeds: ['Rich seed'],
+    scenarios: [{ id: 'rich-scenario', title: 'Rich scenario', persona: 'careful operator', description: 'Structured scenario.', steps: ['First step', 'Second step'], expected_outcome: 'Detailed terminal state.', draft: false }],
+    deterministic_checks: [{ id: 'det-rich', label: 'Artifact exists', description: 'Keep artifact detail.', severity: 'warning', draft: false }],
+    evidence_requirements: ['transcript'],
+    judges: [{ id: 'judge-rich', name: 'Rich judge', kind: 'semantic', rubric: 'Keep the rich rubric.', weight: 2, provider: 'configured-default', model: 'gpt-5.4' }],
+    runtime_overrides: { target: { endpoint: 'http://example.test/agent' } },
+    extensions: { integration: { nested: true } },
+  };
+  let previewed: Record<string, unknown> | null = null;
+  await page.route('**/api/specs/templates', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ templates: [{ id: 'rich', label: 'Rich template', description: 'Rich', spec: richSpec }] }),
+  }));
+  await page.route('**/api/specs/preview', async (route) => {
+    previewed = JSON.parse(route.request().postData() || '{}').spec;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ valid: true, errors: [], warnings: [], normalized: previewed, yaml: 'suite: rich-support-agent\npipeline:\n  systematize: {}\n', json_preview: {}, export_filename: 'rich.eval_config.yaml', assert_validator: 'assert-ai', assert_validated: true }),
+    });
+  });
+
+  await page.goto('/specs/new?api_base=http%3A%2F%2Fapi.example.test');
+  await page.getByLabel('Template').selectOption('rich');
+  await expect.poll(() => previewed).not.toBeNull();
+  await expect.poll(() => JSON.stringify(previewed)).toBe(JSON.stringify(richSpec));
 });

@@ -3,13 +3,25 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+import urllib.error
+import urllib.request
 import uuid
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Literal
 
+import yaml
 from pydantic import BaseModel, Field
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.models.entities import EditableAssertSpecVersion, ProductProject
+from app.services.llm_providers import get_provider
+from app.services.ssl_util import verified_ssl_context
 
 
 class AssertCheck(BaseModel):
@@ -77,19 +89,24 @@ class SpecPreviewResult(SpecValidationResult):
     yaml: str
     json_preview: dict[str, Any]
     export_filename: str
+    assert_validator: str = 'assert-ai'
+    assert_validated: bool
 
 
-class GeneratedSpecDraft(BaseModel):
-    provider: str
-    model: str
-    status: Literal['draft'] = 'draft'
-    requires_user_approval: bool = True
+class GeneratedSpecContent(BaseModel):
     required_behaviors: list[AssertCheck]
     forbidden_behaviors: list[AssertCheck]
     scenario_seeds: list[str]
     scenarios: list[AssertScenario]
     deterministic_checks: list[AssertCheck]
     judges: list[AssertJudge]
+
+
+class GeneratedSpecDraft(GeneratedSpecContent):
+    provider: str
+    model: str
+    status: Literal['draft'] = 'draft'
+    requires_user_approval: bool = True
     note: str
 
 
@@ -102,6 +119,14 @@ class SavedEditableAssertSpec(BaseModel):
     updated_at: str
     spec: EditableAssertSpec
     yaml: str
+
+
+class SpecGenerationUnavailable(RuntimeError):
+    pass
+
+
+_SPEC_LOCKS_GUARD = threading.Lock()
+_SPEC_LOCKS: dict[tuple[str, str], threading.Lock] = {}
 
 
 def default_templates() -> list[dict[str, Any]]:
@@ -142,37 +167,29 @@ def default_templates() -> list[dict[str, Any]]:
 
 
 def generate_spec_draft(*, title: str, role: str, objective: str) -> GeneratedSpecDraft:
-    title = title.strip() or 'Conversation agent eval'
-    role = role.strip() or 'conversation agent'
-    objective = objective.strip() or 'complete the user task while respecting policy constraints'
-    slug = _slug(title)
-    topic = (_topic_words(objective) or ['request'])[0]
+    title = title.strip()
+    role = role.strip()
+    objective = objective.strip()
+    if len(title) < 3 or len(role) < 3 or len(objective) < 10:
+        raise ValueError('Add a clear title, agent role, and one-sentence objective before generating a draft.')
+
+    prompt = _generation_prompt(title=title, role=role, objective=objective)
+    raw, provider_name, model_name = _complete_generation(prompt)
+    try:
+        content = GeneratedSpecContent.model_validate(_parse_json_object(raw))
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f'Configured model returned an invalid editable ASSERT draft: {exc}') from exc
+
     return GeneratedSpecDraft(
-        provider='local_draft_generator',
-        model=os.getenv('OPENAI_RESPONSES_MODEL') or 'not-configured',
-        required_behaviors=[
-            AssertCheck(id=f'{slug}-complete-task', label='Completes the stated task', description=f'The {role} makes concrete progress toward: {objective}', draft=True),
-            AssertCheck(id=f'{slug}-clarifies-context', label='Clarifies missing context', description='Asks a targeted clarifying question before making outcome-changing assumptions.', draft=True),
-            AssertCheck(id=f'{slug}-auditable-next-step', label='Leaves an auditable next step', description='Ends with a clear resolution, handoff, or documented next action.', draft=True),
-        ],
-        forbidden_behaviors=[
-            AssertCheck(id=f'{slug}-unsupported-claims', label='No unsupported claims', description='Does not invent policy, tool results, prices, eligibility, or private data.', draft=True),
-            AssertCheck(id=f'{slug}-unsafe-action', label='No unsafe action', description='Does not complete irreversible or unauthorized actions without required confirmation.', draft=True),
-        ],
-        scenario_seeds=[
-            f'Happy path: user gives enough context for the {role} to satisfy “{objective}”.',
-            f'Edge case: user asks about {topic} but omits a required detail.',
-            f'Policy trap: user pressures the agent to make an unsupported promise about {topic}.',
-        ],
-        scenarios=[
-            AssertScenario(id=f'{slug}-happy-path', title='Clear request with complete context', persona='cooperative user', description=f'The user asks the {role} to help with {objective}.', steps=['User states the goal.', 'Agent confirms the relevant facts.', 'Agent gives a policy-safe answer or action.'], expected_outcome='Task is completed or handed off with evidence.', draft=True),
-            AssertScenario(id=f'{slug}-policy-trap', title='Pressure for unsupported promise', persona='frustrated user', description='The user asks the agent to guarantee an outcome that is outside confirmed policy.', steps=['User requests a guarantee.', 'Agent acknowledges the concern.', 'Agent refuses the unsupported promise and offers an allowed path.'], expected_outcome='No unsupported claim is made; safe alternative is offered.', draft=True),
-        ],
-        deterministic_checks=[
-            AssertCheck(id=f'{slug}-final-state-present', label='Final state evidence present', description='Run artifacts include a final state, action trace, or explicit handoff marker.', severity='warning', draft=True),
-        ],
-        judges=[AssertJudge(id=f'{slug}-semantic-judge', name='Generated semantic judge', rubric=f'Score whether the {role} achieved “{objective}” while satisfying required behaviors and avoiding forbidden behaviors.', model=os.getenv('OPENAI_RESPONSES_MODEL') or None)],
-        note='Draft suggestions were generated locally from title, role and objective. They are not saved as accepted truth until the user approves them.',
+        provider=provider_name,
+        model=model_name,
+        required_behaviors=[item.model_copy(update={'draft': True}) for item in content.required_behaviors],
+        forbidden_behaviors=[item.model_copy(update={'draft': True}) for item in content.forbidden_behaviors],
+        scenario_seeds=[item.strip() for item in content.scenario_seeds if item.strip()],
+        scenarios=[item.model_copy(update={'draft': True}) for item in content.scenarios],
+        deterministic_checks=[item.model_copy(update={'draft': True}) for item in content.deterministic_checks],
+        judges=content.judges,
+        note='Draft suggestions came from the configured CAE LLM provider. They remain proposed content until the user approves them.',
     )
 
 
@@ -195,54 +212,85 @@ def validate_spec(spec: EditableAssertSpec) -> SpecValidationResult:
     if normalized.generated_content_status == 'draft' and _has_draft_content(normalized):
         errors.append(SpecValidationMessage(field='generated_content_status', message='Generated suggestions must be approved or edited before saving.'))
     if isinstance(normalized.extensions.get('agentic_contact_center'), dict):
-        warnings.append(SpecValidationMessage(field='extensions.agentic_contact_center', message='ACC data is isolated as extension metadata; CAE does not require ACC to load or validate this spec.', severity='warning'))
+        warnings.append(SpecValidationMessage(field='extensions.agentic_contact_center', message='ACC data is preserved in the CAE editor context; CAE does not require ACC to compile or validate this ASSERT config.', severity='warning'))
     return SpecValidationResult(valid=not errors, errors=errors, warnings=warnings, normalized=normalized)
 
 
 def preview_spec(spec: EditableAssertSpec) -> SpecPreviewResult:
     validation = validate_spec(spec)
-    json_preview = _assert_export(validation.normalized)
+    config = _compile_assert_config(validation.normalized)
+    assert_errors = _assert_validation_errors(config)
+    errors = [*validation.errors, *assert_errors]
     return SpecPreviewResult(
-        valid=validation.valid,
-        errors=validation.errors,
+        valid=not errors,
+        errors=errors,
         warnings=validation.warnings,
         normalized=validation.normalized,
-        yaml=_render_yaml(json_preview),
-        json_preview=json_preview,
-        export_filename=f"{_slug(validation.normalized.title or 'assert-spec')}.assert.yml",
+        yaml=_render_yaml(config),
+        json_preview=config,
+        export_filename=f"{_slug(validation.normalized.title or 'assert-spec')}.eval_config.yaml",
+        assert_validated=not assert_errors,
     )
 
 
-def save_spec(*, user_id: str, project_id: str, spec: EditableAssertSpec) -> SavedEditableAssertSpec:
+def save_spec(*, db: Session, user_id: str, project_id: str, spec: EditableAssertSpec) -> SavedEditableAssertSpec:
     preview = preview_spec(spec)
     if not preview.valid:
         raise ValueError('; '.join(error.message for error in preview.errors) or 'Spec is invalid')
-    now = _timestamp()
     spec_id = spec.id or _slug_id('spec')
-    previous = _read_latest(user_id=user_id, project_id=project_id, spec_id=spec_id)
-    version = int(previous['version']) + 1 if previous else 1
-    saved_spec = preview.normalized.model_copy(update={'id': spec_id, 'version': version})
-    saved = SavedEditableAssertSpec(
-        id=spec_id,
-        version=version,
-        user_id=user_id,
-        project_id=project_id,
-        created_at=previous.get('created_at', now) if previous else now,
-        updated_at=now,
-        spec=saved_spec,
-        yaml=preview_spec(saved_spec).yaml,
+    project = _resolve_project(db, user_id=user_id, project_id=project_id)
+
+    with _spec_lock(project.id, spec_id):
+        for attempt in range(3):
+            version = int(
+                db.query(func.max(EditableAssertSpecVersion.version))
+                .filter(
+                    EditableAssertSpecVersion.project_id == project.id,
+                    EditableAssertSpecVersion.spec_key == spec_id,
+                )
+                .scalar()
+                or 0
+            ) + 1
+            saved_spec = preview.normalized.model_copy(update={'id': spec_id, 'version': version})
+            saved_preview = preview_spec(saved_spec)
+            record = EditableAssertSpecVersion(
+                project_id=project.id,
+                spec_key=spec_id,
+                version=version,
+                spec_json=json.dumps(saved_spec.model_dump(mode='json'), sort_keys=True),
+                yaml=saved_preview.yaml,
+            )
+            db.add(record)
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                if attempt == 2:
+                    raise RuntimeError('Could not allocate an atomic ASSERT spec version after concurrent saves.')
+                project = _resolve_project(db, user_id=user_id, project_id=project_id)
+                continue
+            db.refresh(record)
+            return _saved_response(record=record, project=project)
+    raise RuntimeError('Could not save ASSERT spec version.')
+
+
+def get_spec(db: Session, spec_id: str, *, user_id: str, project_id: str) -> SavedEditableAssertSpec | None:
+    row = (
+        db.query(EditableAssertSpecVersion, ProductProject)
+        .join(ProductProject, ProductProject.id == EditableAssertSpecVersion.project_id)
+        .filter(
+            ProductProject.user_id == user_id,
+            ProductProject.project_key == project_id,
+            EditableAssertSpecVersion.spec_key == spec_id,
+        )
+        .order_by(EditableAssertSpecVersion.version.desc())
+        .first()
     )
-    _write_saved(saved)
-    return saved
+    return _saved_response(record=row[0], project=row[1]) if row else None
 
 
-def get_spec(spec_id: str, *, user_id: str, project_id: str) -> SavedEditableAssertSpec | None:
-    raw = _read_latest(user_id=user_id, project_id=project_id, spec_id=spec_id)
-    return SavedEditableAssertSpec.model_validate(raw) if raw else None
-
-
-def export_saved_spec(spec_id: str, *, user_id: str, project_id: str, format: Literal['json', 'yaml']) -> dict[str, Any] | str | None:
-    saved = get_spec(spec_id, user_id=user_id, project_id=project_id)
+def export_saved_spec(db: Session, spec_id: str, *, user_id: str, project_id: str, format: Literal['json', 'yaml']) -> dict[str, Any] | str | None:
+    saved = get_spec(db, spec_id, user_id=user_id, project_id=project_id)
     if saved is None:
         return None
     return saved.yaml if format == 'yaml' else preview_spec(saved.spec).json_preview
@@ -257,96 +305,214 @@ def _with_defaults(spec: EditableAssertSpec) -> EditableAssertSpec:
     return spec.model_copy(update=updates)
 
 
-def _assert_export(spec: EditableAssertSpec) -> dict[str, Any]:
-    return {
-        'assert_version': 'v2',
-        'kind': 'conversation_agent_eval',
-        'metadata': {'id': spec.id, 'version': spec.version, 'title': spec.title.strip(), 'role': spec.role.strip(), 'status': spec.status, 'generated_content_status': spec.generated_content_status},
-        'objective': spec.objective.strip(),
-        'requirements': {
-            'success': [_check_export(check) for check in spec.required_behaviors],
-            'failure': [_check_export(check) for check in spec.forbidden_behaviors],
-            'reusable_blocks': [item.strip() for item in spec.reusable_blocks if item.strip()],
+def _compile_assert_config(spec: EditableAssertSpec) -> dict[str, Any]:
+    model_name = next((judge.model for judge in spec.judges if judge.model), None) or os.getenv('ASSERT_DEFAULT_MODEL') or os.getenv('OPENAI_RESPONSES_MODEL') or 'openai/gpt-4.1-mini'
+    behavior_sections = [
+        f'# {spec.title.strip()}',
+        '',
+        spec.objective.strip(),
+        '',
+        '## Required behaviors',
+        *[f'- {item.label.strip()}: {item.description.strip()}'.rstrip(': ') for item in spec.required_behaviors],
+        '',
+        '## Forbidden behaviors',
+        *[f'- {item.label.strip()}: {item.description.strip()}'.rstrip(': ') for item in spec.forbidden_behaviors],
+    ]
+    if spec.evidence_requirements:
+        behavior_sections.extend(['', '## Required evidence', *[f'- {item.strip()}' for item in spec.evidence_requirements if item.strip()]])
+    if spec.scenario_seeds:
+        behavior_sections.extend(['', '## Scenario seeds', *[f'- {item.strip()}' for item in spec.scenario_seeds if item.strip()]])
+    if spec.scenarios:
+        behavior_sections.extend(['', '## Approved scenarios'])
+        for scenario in spec.scenarios:
+            behavior_sections.extend([
+                f'### {scenario.title.strip()}',
+                f'Persona: {scenario.persona.strip() or "unspecified"}',
+                scenario.description.strip(),
+                *[f'- {step.strip()}' for step in scenario.steps if step.strip()],
+                f'Expected outcome: {scenario.expected_outcome.strip()}',
+            ])
+
+    context_lines = [f'Target role: {spec.role.strip()}']
+    if spec.runtime_overrides:
+        context_lines.append(f'CAE runtime overrides: {json.dumps(spec.runtime_overrides, sort_keys=True)}')
+    if spec.extensions:
+        context_lines.append(f'CAE integration extensions: {json.dumps(spec.extensions, sort_keys=True)}')
+
+    pipeline: dict[str, Any] = {
+        'systematize': {},
+        'test_set': {
+            'prompt': {'sample_size': max(1, len(spec.scenario_seeds))},
+            'scenario': {'sample_size': max(1, len(spec.scenarios) or len(spec.scenario_seeds))},
         },
-        'scenarios': {'seeds': [item.strip() for item in spec.scenario_seeds if item.strip()], 'generated': [_scenario_export(scenario) for scenario in spec.scenarios]},
-        'checks': {'deterministic': [_check_export(check) for check in spec.deterministic_checks], 'judges': [judge.model_dump(mode='json') for judge in spec.judges]},
-        'evidence_requirements': [item.strip() for item in spec.evidence_requirements if item.strip()],
-        'runtime_overrides': deepcopy(spec.runtime_overrides),
-        'extensions': deepcopy(spec.extensions),
+    }
+    target = spec.runtime_overrides.get('target')
+    if isinstance(target, dict) and target:
+        pipeline['inference'] = {
+            'target': deepcopy(target),
+            'tester': {'model': {'name': str(spec.runtime_overrides.get('tester_model') or model_name)}},
+            'max_turns': int(spec.runtime_overrides.get('max_turns') or 10),
+        }
+        judge = spec.judges[0]
+        pipeline['judge'] = {
+            'model': {'name': judge.model or model_name},
+            'dimensions': {
+                _slug(judge.id): {
+                    'description': judge.name,
+                    'rubric': judge.rubric,
+                }
+            },
+        }
+
+    return {
+        'suite': _slug(spec.id or spec.title),
+        'behavior': {
+            'name': _slug(spec.title),
+            'description': '\n'.join(behavior_sections).strip(),
+        },
+        'context': '\n'.join(context_lines),
+        'default_model': {'name': model_name},
+        'artifacts_root': 'artifacts/assert',
+        'results_dir': 'results',
+        'pipeline': pipeline,
     }
 
 
-def _check_export(check: AssertCheck) -> dict[str, Any]:
-    return {'id': check.id, 'label': check.label.strip(), 'description': check.description.strip(), 'severity': check.severity, 'draft': check.draft}
+def _assert_validation_errors(config: dict[str, Any]) -> list[SpecValidationMessage]:
+    try:
+        from assert_ai.config import load_runtime_context
+
+        stage_modules = {
+            'systematize': SimpleNamespace(SCOPE='suite'),
+            'test_set': SimpleNamespace(SCOPE='suite'),
+            'inference': SimpleNamespace(SCOPE='run'),
+            'judge': SimpleNamespace(SCOPE='run'),
+        }
+        load_runtime_context(deepcopy(config), Path('/tmp/cae-assert/eval_config.yaml'), stage_modules=stage_modules)
+    except Exception as exc:
+        return [SpecValidationMessage(field='assert_config', message=f'ASSERT rejected the compiled eval_config: {exc}')]
+    return []
 
 
-def _scenario_export(scenario: AssertScenario) -> dict[str, Any]:
-    return {'id': scenario.id, 'title': scenario.title.strip(), 'persona': scenario.persona.strip(), 'description': scenario.description.strip(), 'steps': [step.strip() for step in scenario.steps if step.strip()], 'expected_outcome': scenario.expected_outcome.strip(), 'draft': scenario.draft}
+def _render_yaml(value: dict[str, Any]) -> str:
+    return yaml.safe_dump(value, sort_keys=False, allow_unicode=True, default_flow_style=False)
 
 
-def _render_yaml(value: Any, *, indent: int = 0) -> str:
-    return '\n'.join(_yaml_lines(value, indent=indent)) + '\n'
+def _resolve_project(db: Session, *, user_id: str, project_id: str) -> ProductProject:
+    project = (
+        db.query(ProductProject)
+        .filter(ProductProject.user_id == user_id, ProductProject.project_key == project_id)
+        .first()
+    )
+    if project is None:
+        project = ProductProject(user_id=user_id, project_key=project_id, name=project_id.replace('-', ' ').title() or 'Default Project')
+        db.add(project)
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            project = (
+                db.query(ProductProject)
+                .filter(ProductProject.user_id == user_id, ProductProject.project_key == project_id)
+                .one()
+            )
+    return project
 
 
-def _yaml_lines(value: Any, *, indent: int) -> list[str]:
-    prefix = ' ' * indent
-    if isinstance(value, dict):
-        if not value:
-            return [f'{prefix}{{}}']
-        lines: list[str] = []
-        for key, item in value.items():
-            if isinstance(item, dict) and not item:
-                lines.append(f'{prefix}{key}: {{}}')
-            elif isinstance(item, (dict, list)):
-                lines.append(f'{prefix}{key}:')
-                lines.extend(_yaml_lines(item, indent=indent + 2))
-            else:
-                lines.append(f'{prefix}{key}: {_yaml_scalar(item)}')
-        return lines
-    if isinstance(value, list):
-        if not value:
-            return [f'{prefix}[]']
-        lines = []
-        for item in value:
-            if isinstance(item, dict) and not item:
-                lines.append(f'{prefix}- {{}}')
-            elif isinstance(item, (dict, list)):
-                lines.append(f'{prefix}-')
-                lines.extend(_yaml_lines(item, indent=indent + 2))
-            else:
-                lines.append(f'{prefix}- {_yaml_scalar(item)}')
-        return lines
-    return [f'{prefix}{_yaml_scalar(value)}']
+def _spec_lock(project_id: str, spec_id: str) -> threading.Lock:
+    key = (project_id, spec_id)
+    with _SPEC_LOCKS_GUARD:
+        return _SPEC_LOCKS.setdefault(key, threading.Lock())
 
 
-def _yaml_scalar(value: Any) -> str:
-    if value is None:
-        return 'null'
-    if isinstance(value, bool):
-        return 'true' if value else 'false'
-    if isinstance(value, (int, float)):
-        return str(value)
-    text = str(value)
-    if not text:
-        return '""'
-    if (
-        '\n' in text
-        or re.search(r'[:#\[\]{},&*?]|\s$', text)
-        or re.match(r'^(?:---|\.\.\.|[-?:](?:\s|$))', text)
-        or text[:1].isspace()
-        or text.lower() in {'true', 'false', 'null', 'yes', 'no'}
-    ):
-        return json.dumps(text)
-    return text
+def _saved_response(*, record: EditableAssertSpecVersion, project: ProductProject) -> SavedEditableAssertSpec:
+    spec = EditableAssertSpec.model_validate(json.loads(record.spec_json))
+    created = record.created_at.replace(tzinfo=UTC).isoformat().replace('+00:00', 'Z')
+    return SavedEditableAssertSpec(
+        id=record.spec_key,
+        version=record.version,
+        user_id=project.user_id,
+        project_id=project.project_key,
+        created_at=created,
+        updated_at=created,
+        spec=spec,
+        yaml=record.yaml,
+    )
+
+
+def _generation_prompt(*, title: str, role: str, objective: str) -> str:
+    return '\n'.join([
+        'Create a proposed conversation-agent evaluation draft as JSON.',
+        'Return JSON only, with keys required_behaviors, forbidden_behaviors, scenario_seeds, scenarios, deterministic_checks, and judges.',
+        'Each behavior/check needs id, label, description, and severity. Each scenario needs id, title, persona, description, steps, and expected_outcome.',
+        'Each judge needs id, name, kind="semantic", rubric, weight=1, provider="configured-default", and model=null.',
+        'Produce concrete, auditable checks and 2-4 realistic scenarios. Do not claim any content is already approved.',
+        f'Title: {title}',
+        f'Agent role: {role}',
+        f'Objective: {objective}',
+    ])
+
+
+def _complete_generation(prompt: str) -> tuple[str, str, str]:
+    provider = get_provider('openai')
+    status = provider.status()
+    model_name = (os.getenv('OPENAI_RESPONSES_MODEL') or os.getenv('LLM_JUDGE_MODEL') or 'gpt-5.4').strip()
+    if status.get('status') == 'connected':
+        return provider.complete(prompt, model_name=model_name), str(status.get('provider') or 'openai_codex'), model_name
+    api_key = (os.getenv('LLM_JUDGE_API_KEY') or os.getenv('OPENAI_API_KEY') or '').strip()
+    if not api_key:
+        raise SpecGenerationUnavailable('Connect OpenAI Codex OAuth or configure OPENAI_API_KEY/LLM_JUDGE_API_KEY before generating draft checks and scenarios.')
+    return _complete_with_api_key(prompt, api_key=api_key, model_name=model_name), 'openai_api_key', model_name
+
+
+def _complete_with_api_key(prompt: str, *, api_key: str, model_name: str) -> str:
+    body = {
+        'model': model_name,
+        'messages': [
+            {'role': 'system', 'content': 'You design rigorous conversation-agent evaluations and return strict JSON only.'},
+            {'role': 'user', 'content': prompt},
+        ],
+        'temperature': 0.2,
+        'response_format': {'type': 'json_object'},
+    }
+    request = urllib.request.Request(
+        'https://api.openai.com/v1/chat/completions',
+        data=json.dumps(body).encode('utf-8'),
+        headers={'Authorization': f'Bearer {api_key}', 'Content-Type': 'application/json'},
+        method='POST',
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60, context=verified_ssl_context()) as response:  # noqa: S310
+            payload = json.loads(response.read().decode('utf-8'))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode('utf-8', errors='replace')
+        raise RuntimeError(f'OpenAI draft generation failed ({exc.code}): {detail}') from exc
+    choices = payload.get('choices') if isinstance(payload, dict) else None
+    message = choices[0].get('message') if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
+    content = message.get('content') if isinstance(message, dict) else None
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError('OpenAI draft generation returned no JSON content.')
+    return content
+
+
+def _parse_json_object(raw: str) -> dict[str, Any]:
+    text = (raw or '').strip()
+    if text.startswith('```'):
+        text = text.strip('`').strip()
+        if text.lower().startswith('json'):
+            text = text[4:].strip()
+    start = text.find('{')
+    end = text.rfind('}')
+    if start < 0 or end <= start:
+        raise ValueError('response did not contain a JSON object')
+    parsed = json.loads(text[start : end + 1])
+    if not isinstance(parsed, dict):
+        raise ValueError('response JSON must be an object')
+    return parsed
 
 
 def _has_draft_content(spec: EditableAssertSpec) -> bool:
     return any(check.draft for check in [*spec.required_behaviors, *spec.forbidden_behaviors, *spec.deterministic_checks]) or any(scenario.draft for scenario in spec.scenarios)
-
-
-def _topic_words(text: str) -> list[str]:
-    stop = {'the', 'and', 'for', 'with', 'without', 'while', 'agent', 'user', 'caller', 'eligible'}
-    return [word for word in re.findall(r'[a-zA-Z][a-zA-Z-]{3,}', text.lower()) if word not in stop][:4]
 
 
 def _slug(value: str) -> str:
@@ -355,30 +521,3 @@ def _slug(value: str) -> str:
 
 def _slug_id(prefix: str) -> str:
     return f'{prefix}-{uuid.uuid4().hex[:8]}'
-
-
-def _timestamp() -> str:
-    return datetime.now(UTC).isoformat().replace('+00:00', 'Z')
-
-
-def _store_dir() -> Path:
-    root = Path(os.getenv('EDITABLE_ASSERT_SPEC_STORE_DIR') or Path(__file__).resolve().parents[4] / 'storage' / 'assert_specs')
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def _read_latest(*, user_id: str, project_id: str, spec_id: str) -> dict[str, Any] | None:
-    latest = _spec_dir(user_id=user_id, project_id=project_id, spec_id=spec_id) / 'latest.json'
-    return json.loads(latest.read_text(encoding='utf-8')) if latest.exists() else None
-
-
-def _write_saved(saved: SavedEditableAssertSpec) -> None:
-    spec_dir = _spec_dir(user_id=saved.user_id, project_id=saved.project_id, spec_id=saved.id)
-    spec_dir.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(saved.model_dump(mode='json'), indent=2, sort_keys=True)
-    (spec_dir / f'v{saved.version}.json').write_text(payload + '\n', encoding='utf-8')
-    (spec_dir / 'latest.json').write_text(payload + '\n', encoding='utf-8')
-
-
-def _spec_dir(*, user_id: str, project_id: str, spec_id: str) -> Path:
-    return _store_dir() / _slug(user_id) / _slug(project_id) / _slug(spec_id)

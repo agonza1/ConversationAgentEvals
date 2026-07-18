@@ -18,6 +18,7 @@ import {
   EditableAssertTemplate,
   SavedEditableAssertSpec,
 } from '@/lib/types';
+import { demoProjectId, demoUserId } from '@/lib/execution';
 
 const defaultJudge: AssertJudge = {
   id: 'semantic-policy-judge',
@@ -54,28 +55,30 @@ function slug(prefix: string, label: string, index: number) {
   return `${prefix}-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 42) || index + 1}`;
 }
 
-function checksFromText(value: string, prefix: string, draft: boolean): AssertCheck[] {
+function checksFromText(value: string, existing: AssertCheck[], prefix: string, draft: boolean): AssertCheck[] {
   return lines(value).map((label, index) => ({
-    id: slug(prefix, label, index),
+    ...(existing[index] || {}),
+    id: existing[index]?.id || slug(prefix, label, index),
     label,
-    description: label,
-    severity: prefix === 'failure' ? 'error' : 'warning',
-    draft,
+    description: existing[index]?.description || label,
+    severity: existing[index]?.severity || (prefix === 'failure' ? 'error' : 'warning'),
+    draft: draft || Boolean(existing[index]?.draft),
   }));
 }
 
-function scenariosFromText(value: string, draft: boolean): AssertScenario[] {
+function scenariosFromText(value: string, existing: AssertScenario[], draft: boolean): AssertScenario[] {
   return lines(value).map((line, index) => {
     const [title, ...rest] = line.split(':');
     const description = rest.join(':').trim() || line;
     return {
-      id: slug('scenario', title, index),
+      ...(existing[index] || {}),
+      id: existing[index]?.id || slug('scenario', title, index),
       title: title.trim(),
-      persona: '',
+      persona: existing[index]?.persona || '',
       description,
-      steps: [],
-      expected_outcome: description,
-      draft,
+      steps: existing[index]?.steps || [],
+      expected_outcome: existing[index]?.expected_outcome || description,
+      draft: draft || Boolean(existing[index]?.draft),
     };
   });
 }
@@ -89,6 +92,7 @@ function textFromScenarios(scenarios: AssertScenario[]) {
 }
 
 export function SpecEditorPage() {
+  const identity = useMemo(() => ({ userId: demoUserId(), projectId: demoProjectId() }), []);
   const [spec, setSpec] = useState<EditableAssertSpec>(starterSpec);
   const [templates, setTemplates] = useState<EditableAssertTemplate[]>([]);
   const [successChecks, setSuccessChecks] = useState('');
@@ -108,14 +112,14 @@ export function SpecEditorPage() {
     const draft = !generatedApproved && spec.generated_content_status === 'draft';
     return {
       ...spec,
-      generated_content_status: generatedApproved ? 'approved' : spec.generated_content_status,
-      required_behaviors: checksFromText(successChecks, 'success', draft),
-      forbidden_behaviors: checksFromText(failureChecks, 'failure', draft),
+      generated_content_status: spec.generated_content_status === 'draft' && generatedApproved ? 'approved' : spec.generated_content_status,
+      required_behaviors: checksFromText(successChecks, spec.required_behaviors || [], 'success', draft),
+      forbidden_behaviors: checksFromText(failureChecks, spec.forbidden_behaviors || [], 'failure', draft),
       scenario_seeds: lines(scenarioSeeds),
-      scenarios: scenariosFromText(scenarios, draft),
-      deterministic_checks: checksFromText(deterministicChecks, 'deterministic', draft),
+      scenarios: scenariosFromText(scenarios, spec.scenarios || [], draft),
+      deterministic_checks: checksFromText(deterministicChecks, spec.deterministic_checks || [], 'deterministic', draft),
       evidence_requirements: lines(evidenceRequirements),
-      judges: [{ ...defaultJudge, rubric: judgeRubric.trim() || defaultJudge.rubric }],
+      judges: [{ ...(spec.judges?.[0] || defaultJudge), rubric: judgeRubric.trim() || defaultJudge.rubric }],
     };
   }, [deterministicChecks, evidenceRequirements, failureChecks, generatedApproved, judgeRubric, scenarioSeeds, scenarios, spec, successChecks]);
   const needsApproval = workingSpec.generated_content_status === 'draft' && !generatedApproved;
@@ -206,8 +210,8 @@ export function SpecEditorPage() {
     setError(null);
     try {
       const next = await saveEditableAssertSpec({
-        user_id: 'demo-user',
-        project_id: 'conversation-agent-evals',
+        user_id: identity.userId,
+        project_id: identity.projectId,
         spec: workingSpec,
       });
       setSaved(next);
@@ -240,6 +244,7 @@ export function SpecEditorPage() {
         <button className="secondary-link" type="button" onClick={generateDraft} disabled={busy === 'generate'}>{busy === 'generate' ? 'Generating…' : 'Generate draft checks/scenarios'}</button>
         <button className="primary-link" type="button" onClick={() => setGeneratedApproved(true)} disabled={!needsApproval}>Approve generated draft</button>
         <button className="primary-link" type="button" onClick={saveVersion} disabled={busy === 'save'}>{busy === 'save' ? 'Saving…' : 'Save version'}</button>
+        <span className="spec-workspace-context">Workspace: {identity.projectId}</span>
       </section>
 
       {error ? <div className="scenarios-error" role="alert">{error}</div> : null}

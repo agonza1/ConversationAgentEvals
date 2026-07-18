@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from app.db.database import get_db
 
 from app.services.editable_assert_spec import (
     EditableAssertSpec,
+    SpecGenerationUnavailable,
     default_templates,
     export_saved_spec,
     generate_spec_draft,
@@ -43,7 +47,12 @@ def list_spec_templates():
 
 @router.post('/generate')
 def generate_editable_spec_draft(payload: SpecDraftGenerateRequest):
-    return generate_spec_draft(title=payload.title, role=payload.role, objective=payload.objective)
+    try:
+        return generate_spec_draft(title=payload.title, role=payload.role, objective=payload.objective)
+    except SpecGenerationUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post('/validate')
@@ -57,33 +66,33 @@ def preview_editable_spec(payload: SpecEnvelope):
 
 
 @router.post('')
-def create_editable_spec(payload: SpecSaveRequest):
+def create_editable_spec(payload: SpecSaveRequest, db: Session = Depends(get_db)):
     try:
-        return save_spec(user_id=payload.user_id, project_id=payload.project_id, spec=payload.spec)
+        return save_spec(db=db, user_id=payload.user_id, project_id=payload.project_id, spec=payload.spec)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get('/{spec_id}')
-def get_editable_spec(spec_id: str, user_id: str = Query(min_length=1), project_id: str = Query(default='default', min_length=1)):
-    saved = get_spec(spec_id, user_id=user_id, project_id=project_id)
+def get_editable_spec(spec_id: str, user_id: str = Query(min_length=1), project_id: str = Query(default='default', min_length=1), db: Session = Depends(get_db)):
+    saved = get_spec(db, spec_id, user_id=user_id, project_id=project_id)
     if saved is None:
         raise HTTPException(status_code=404, detail='Spec not found')
     return saved
 
 
 @router.patch('/{spec_id}')
-def update_editable_spec(spec_id: str, payload: SpecSaveRequest):
+def update_editable_spec(spec_id: str, payload: SpecSaveRequest, db: Session = Depends(get_db)):
     try:
-        return save_spec(user_id=payload.user_id, project_id=payload.project_id, spec=payload.spec.model_copy(update={'id': spec_id}))
+        return save_spec(db=db, user_id=payload.user_id, project_id=payload.project_id, spec=payload.spec.model_copy(update={'id': spec_id}))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post('/{spec_id}/versions')
-def create_editable_spec_version(spec_id: str, payload: SpecSaveRequest):
+def create_editable_spec_version(spec_id: str, payload: SpecSaveRequest, db: Session = Depends(get_db)):
     try:
-        return save_spec(user_id=payload.user_id, project_id=payload.project_id, spec=payload.spec.model_copy(update={'id': spec_id}))
+        return save_spec(db=db, user_id=payload.user_id, project_id=payload.project_id, spec=payload.spec.model_copy(update={'id': spec_id}))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -94,8 +103,9 @@ def export_editable_spec(
     user_id: str = Query(min_length=1),
     project_id: str = Query(default='default', min_length=1),
     format: Literal['json', 'yaml'] = Query(default='yaml'),
+    db: Session = Depends(get_db),
 ):
-    exported = export_saved_spec(spec_id, user_id=user_id, project_id=project_id, format=format)
+    exported = export_saved_spec(db, spec_id, user_id=user_id, project_id=project_id, format=format)
     if exported is None:
         raise HTTPException(status_code=404, detail='Spec not found')
     if format == 'yaml':

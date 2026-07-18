@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import json
+from concurrent.futures import ThreadPoolExecutor
+from uuid import uuid4
+
 import yaml
 from fastapi.testclient import TestClient
 
+from app.db.database import SessionLocal
 from app.main import app
+from app.models.entities import EditableAssertSpecVersion, ProductProject
+from app.services.editable_assert_spec import EditableAssertSpec, save_spec
+from app.services.llm_providers import set_provider_for_tests
 
 
 client = TestClient(app)
@@ -41,19 +49,58 @@ def test_templates_include_cae_native_and_acc_extension_without_acc_dependency()
     assert 'agentic_contact_center' not in acc_spec['required_behaviors'][0]
 
 
-def test_generate_returns_draft_suggestions_that_require_user_approval():
-    response = client.post(
-        '/api/specs/generate',
-        json={'title': 'Cancellation rescue agent', 'role': 'insurance retention voice agent', 'objective': 'Save eligible callers without making unauthorized billing promises.'},
-    )
+def test_generate_calls_configured_llm_and_returns_draft_suggestions_that_require_user_approval():
+    class FakeProvider:
+        def status(self):
+            return {'status': 'connected', 'provider': 'fake-openai-oauth'}
+
+        def complete(self, prompt, *, model_name=None):
+            assert 'Cancellation rescue agent' in prompt
+            return json.dumps({
+                'required_behaviors': [{'id': 'diagnose', 'label': 'Diagnose reason', 'description': 'Ask why the caller wants to cancel.', 'severity': 'error'}],
+                'forbidden_behaviors': [{'id': 'no-promises', 'label': 'No unsupported promises', 'description': 'Do not invent a discount.', 'severity': 'error'}],
+                'scenario_seeds': ['Caller wants to cancel after a price increase.'],
+                'scenarios': [
+                    {'id': 'price', 'title': 'Price increase', 'persona': 'frustrated caller', 'description': 'Caller asks to cancel.', 'steps': ['Ask to cancel.', 'Explain price concern.'], 'expected_outcome': 'Safe save or handoff.'},
+                    {'id': 'ineligible', 'title': 'Ineligible save', 'persona': 'direct caller', 'description': 'No eligible offer exists.', 'steps': ['Ask to cancel.'], 'expected_outcome': 'Cancellation proceeds without invented offer.'},
+                ],
+                'deterministic_checks': [{'id': 'final-state', 'label': 'Final state exists', 'description': 'Require terminal evidence.', 'severity': 'warning'}],
+                'judges': [{'id': 'policy', 'name': 'Policy judge', 'kind': 'semantic', 'rubric': 'Score policy-safe resolution.', 'weight': 1, 'provider': 'configured-default', 'model': None}],
+            })
+
+    set_provider_for_tests('openai', FakeProvider())
+    try:
+        response = client.post(
+            '/api/specs/generate',
+            json={'title': 'Cancellation rescue agent', 'role': 'insurance retention voice agent', 'objective': 'Save eligible callers without making unauthorized billing promises.'},
+        )
+    finally:
+        set_provider_for_tests('openai', None)
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload['provider'] == 'local_draft_generator'
+    assert payload['provider'] == 'fake-openai-oauth'
     assert payload['status'] == 'draft'
     assert payload['requires_user_approval'] is True
     assert all(item['draft'] is True for item in payload['required_behaviors'])
-    assert len(payload['scenarios']) >= 2
+    assert len(payload['scenarios']) == 2
+
+
+def test_generate_fails_closed_when_no_llm_is_configured(monkeypatch):
+    class DisconnectedProvider:
+        def status(self):
+            return {'status': 'disconnected'}
+
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    monkeypatch.delenv('LLM_JUDGE_API_KEY', raising=False)
+    set_provider_for_tests('openai', DisconnectedProvider())
+    try:
+        response = client.post('/api/specs/generate', json={'title': 'Support agent', 'role': 'customer support agent', 'objective': 'Resolve account requests without unsupported claims.'})
+    finally:
+        set_provider_for_tests('openai', None)
+
+    assert response.status_code == 503
+    assert 'Connect OpenAI Codex OAuth' in response.json()['detail']
 
 
 def test_validate_reports_inline_errors_for_vague_or_empty_spec():
@@ -66,60 +113,74 @@ def test_validate_reports_inline_errors_for_vague_or_empty_spec():
     assert {'title', 'role', 'objective', 'required_behaviors', 'forbidden_behaviors', 'scenarios'} <= fields
 
 
-def test_preview_generates_readable_yaml_and_warns_for_acc_extension():
+def test_preview_compiles_canonical_assert_yaml_and_validates_with_assert():
     response = client.post('/api/specs/preview', json={'spec': _valid_spec()})
 
     assert response.status_code == 200
     payload = response.json()
     assert payload['valid'] is True
-    assert 'assert_version: v2' in payload['yaml']
-    assert 'title: Cancellation rescue agent' in payload['yaml']
-    assert 'agentic_contact_center:' in payload['yaml']
-    assert payload['export_filename'] == 'cancellation-rescue-agent.assert.yml'
+    assert payload['assert_validator'] == 'assert-ai'
+    assert payload['assert_validated'] is True
+    parsed = yaml.safe_load(payload['yaml'])
+    assert set(parsed) <= {'suite', 'run', 'behavior', 'context', 'default_model', 'artifacts_root', 'results_dir', 'pipeline'}
+    assert parsed['behavior']['name'] == 'cancellation-rescue-agent'
+    assert parsed['pipeline']['systematize'] == {}
+    assert parsed['pipeline']['test_set']['scenario']['sample_size'] == 1
+    assert 'agentic_contact_center' in parsed['context']
+    assert payload['export_filename'] == 'cancellation-rescue-agent.eval_config.yaml'
     assert payload['warnings'][0]['field'] == 'extensions.agentic_contact_center'
 
 
-def test_save_rejects_unapproved_generated_draft_and_versions_approved_spec(tmp_path, monkeypatch):
-    monkeypatch.setenv('EDITABLE_ASSERT_SPEC_STORE_DIR', str(tmp_path))
+def test_save_rejects_unapproved_generated_draft_and_versions_approved_spec_in_project_store():
+    suffix = uuid4().hex
+    user_id = f'spec-user-{suffix}'
+    project_id = f'spec-project-{suffix}'
     draft = _valid_spec(
         generated_content_status='draft',
         required_behaviors=[{'id': 'generated-task', 'label': 'Completes task', 'description': 'Generated suggestion still needs approval.', 'draft': True}],
     )
 
-    rejected = client.post('/api/specs', json={'user_id': 'demo-user', 'project_id': 'demo-project', 'spec': draft})
+    rejected = client.post('/api/specs', json={'user_id': user_id, 'project_id': project_id, 'spec': draft})
 
     assert rejected.status_code == 422
     assert 'Generated suggestions must be approved' in rejected.json()['detail']
 
     approved = _valid_spec(generated_content_status='approved')
-    first = client.post('/api/specs', json={'user_id': 'demo-user', 'project_id': 'demo-project', 'spec': approved})
+    first = client.post('/api/specs', json={'user_id': user_id, 'project_id': project_id, 'spec': approved})
     second = client.post(
         '/api/specs/cancellation-rescue-agent/versions',
-        json={'user_id': 'demo-user', 'project_id': 'demo-project', 'spec': {**approved, 'objective': 'Save eligible callers while documenting policy-safe evidence.'}},
+        json={'user_id': user_id, 'project_id': project_id, 'spec': {**approved, 'objective': 'Save eligible callers while documenting policy-safe evidence.'}},
     )
 
     assert first.status_code == 200
     assert first.json()['version'] == 1
     assert second.status_code == 200
     assert second.json()['version'] == 2
-    exported = client.get('/api/specs/cancellation-rescue-agent/export', params={'user_id': 'demo-user', 'project_id': 'demo-project', 'format': 'yaml'})
+    exported = client.get('/api/specs/cancellation-rescue-agent/export', params={'user_id': user_id, 'project_id': project_id, 'format': 'yaml'})
     assert exported.status_code == 200
     assert 'Save eligible callers while documenting policy-safe evidence.' in exported.text
+    with SessionLocal() as db:
+        project = db.query(ProductProject).filter(ProductProject.user_id == user_id, ProductProject.project_key == project_id).one()
+        versions = db.query(EditableAssertSpecVersion).filter(EditableAssertSpecVersion.project_id == project.id).all()
+        assert sorted(item.version for item in versions) == [1, 2]
 
 
-def test_saved_specs_are_scoped_by_owner_and_project(tmp_path, monkeypatch):
-    monkeypatch.setenv('EDITABLE_ASSERT_SPEC_STORE_DIR', str(tmp_path))
-    first = client.post('/api/specs', json={'user_id': 'demo-user', 'project_id': 'demo-project', 'spec': _valid_spec(objective='Save eligible callers while documenting owner scoped evidence.')})
-    second = client.post('/api/specs', json={'user_id': 'other-user', 'project_id': 'demo-project', 'spec': _valid_spec(objective='Save eligible callers while documenting other owner evidence.')})
+def test_saved_specs_are_scoped_by_owner_and_project():
+    suffix = uuid4().hex
+    first_user = f'owner-{suffix}'
+    other_user = f'other-{suffix}'
+    project_id = f'project-{suffix}'
+    first = client.post('/api/specs', json={'user_id': first_user, 'project_id': project_id, 'spec': _valid_spec(objective='Save eligible callers while documenting owner scoped evidence.')})
+    second = client.post('/api/specs', json={'user_id': other_user, 'project_id': project_id, 'spec': _valid_spec(objective='Save eligible callers while documenting other owner evidence.')})
 
     assert first.status_code == 200
     assert second.status_code == 200
     assert first.json()['version'] == 1
     assert second.json()['version'] == 1
 
-    visible = client.get('/api/specs/cancellation-rescue-agent', params={'user_id': 'demo-user', 'project_id': 'demo-project'})
-    other_project = client.get('/api/specs/cancellation-rescue-agent', params={'user_id': 'demo-user', 'project_id': 'other-project'})
-    other_owner_export = client.get('/api/specs/cancellation-rescue-agent/export', params={'user_id': 'other-user', 'project_id': 'demo-project', 'format': 'yaml'})
+    visible = client.get('/api/specs/cancellation-rescue-agent', params={'user_id': first_user, 'project_id': project_id})
+    other_project = client.get('/api/specs/cancellation-rescue-agent', params={'user_id': first_user, 'project_id': 'other-project'})
+    other_owner_export = client.get('/api/specs/cancellation-rescue-agent/export', params={'user_id': other_user, 'project_id': project_id, 'format': 'yaml'})
 
     assert visible.status_code == 200
     assert visible.json()['spec']['objective'] == 'Save eligible callers while documenting owner scoped evidence.'
@@ -138,11 +199,13 @@ def test_preview_quotes_yaml_scalars_that_look_like_list_markers():
     response = client.post('/api/specs/preview', json={'spec': spec})
 
     assert response.status_code == 200
-    yaml = response.json()['yaml']
-    assert 'label: "- do not parse me as a list"' in yaml
-    assert 'description: "? keep pasted checklist text scalar"' in yaml
-    assert '- ": still scalar"' in yaml
-    assert '- "--- not a document marker"' in yaml
+    exported_yaml = response.json()['yaml']
+    parsed = yaml.safe_load(exported_yaml)
+    behavior = parsed['behavior']['description']
+    assert '- do not parse me as a list' in behavior
+    assert '? keep pasted checklist text scalar' in behavior
+    assert ': still scalar' in behavior
+    assert '--- not a document marker' in behavior
 
 
 def test_preview_preserves_empty_yaml_mappings_as_objects():
@@ -152,8 +215,35 @@ def test_preview_preserves_empty_yaml_mappings_as_objects():
 
     assert response.status_code == 200
     exported_yaml = response.json()['yaml']
-    assert 'runtime_overrides: {}' in exported_yaml
-    assert 'extensions: {}' in exported_yaml
     parsed = yaml.safe_load(exported_yaml)
-    assert parsed['runtime_overrides'] == {}
-    assert parsed['extensions'] == {}
+    assert parsed['pipeline']['systematize'] == {}
+
+
+def test_preview_safely_preserves_arbitrary_extension_keys_in_canonical_context():
+    response = client.post('/api/specs/preview', json={'spec': _valid_spec(runtime_overrides={'foo: bar': {}}, extensions={'? odd': {'nested: key': {}}})})
+
+    assert response.status_code == 200
+    parsed = yaml.safe_load(response.json()['yaml'])
+    assert '"foo: bar": {}' in parsed['context']
+    assert '"? odd"' in parsed['context']
+
+
+def test_atomic_version_allocation_keeps_both_concurrent_edits():
+    suffix = uuid4().hex
+    user_id = f'atomic-user-{suffix}'
+    project_id = f'atomic-project-{suffix}'
+    base = EditableAssertSpec.model_validate(_valid_spec())
+    with SessionLocal() as db:
+        assert save_spec(db=db, user_id=user_id, project_id=project_id, spec=base).version == 1
+
+    def save_objective(objective: str) -> int:
+        with SessionLocal() as db:
+            return save_spec(db=db, user_id=user_id, project_id=project_id, spec=base.model_copy(update={'objective': objective})).version
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        versions = sorted(pool.map(save_objective, [
+            'Save eligible callers while preserving the first concurrent edit.',
+            'Save eligible callers while preserving the second concurrent edit.',
+        ]))
+
+    assert versions == [2, 3]
