@@ -114,12 +114,21 @@ test('launch evaluation streams conversations into the live list', async ({ page
             description: 'Sample agent profile',
             metadata: { model_name: 'gpt-5.4' },
           },
+          {
+            id: 'generalist-voice-agent',
+            name: 'Built-in generalist voice agent',
+            channel: 'voice',
+            target: 'builtin_sample_voice',
+            description: 'Reference voice target',
+            metadata: { model_name: 'registry-seed-must-not-override-env' },
+          },
         ],
       }),
     });
   });
 
   let posted: Record<string, unknown> | null = null;
+  let voicePosted: Record<string, unknown> | null = null;
   let postAttempts = 0;
   await page.route('**/api/benchmarks/suite-runs**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
@@ -128,6 +137,27 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await page.route('**/api/execution/runs**', async (route) => {
     if (route.request().method() === 'POST') {
       const body = route.request().postDataJSON() as Record<string, unknown>;
+      if (body.agent_id === 'generalist-voice-agent') {
+        voicePosted = body;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            execution_run_id: 'exec-ui-voice',
+            status: 'queued',
+            mode: 'pipecat_webrtc',
+            suite_id: 'call-center-voice-ai',
+            scenario_ids: ['cancellation-rescue'],
+            user_id: 'demo-user',
+            project_id: 'call-center-demo',
+            progress: { phase: 'queued', completed_conversations: 0, total_conversations: 1, percent: 0 },
+            conversations: [],
+            created_at: '2026-07-18T00:00:00Z',
+            updated_at: '2026-07-18T00:00:00Z',
+          }),
+        });
+        return;
+      }
       postAttempts += 1;
       if (postAttempts === 1) {
         await route.fulfill({
@@ -317,6 +347,16 @@ test('launch evaluation streams conversations into the live list', async ({ page
   });
   await expect(launch.getByLabel('Execution conversations')).toContainText('Billing Address Change');
   await expect(launch.getByLabel('Execution conversations')).toContainText(/pass/i, { timeout: 8000 });
+  await launch.getByLabel('Execution agent target').selectOption('generalist-voice-agent');
+  await launch.getByRole('button', { name: 'Run generalist voice evaluation' }).click();
+  await expect.poll(() => voicePosted).not.toBeNull();
+  expect(voicePosted).toMatchObject({
+    mode: 'pipecat_webrtc',
+    agent_id: 'generalist-voice-agent',
+    tester_id: 'pipecat_tester',
+    executor_id: 'cae_local_audio_loop',
+  });
+  expect(voicePosted).not.toHaveProperty('model_name');
   await expect(page.getByRole('heading', { name: 'Recent runs' })).toBeVisible();
   await expect(page.getByRole('link', { name: /Mock text agent/ })).toContainText('queued');
 });
