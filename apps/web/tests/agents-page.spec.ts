@@ -172,6 +172,7 @@ test('targets page shows agent target cards and try-it-out deep links', async ({
 
   const voiceCard = page.getByRole('article').filter({ hasText: 'Built-in sample voice agent' });
   await expect(voiceCard.locator('.agents-badge-channel').first()).toHaveText('Voice');
+  await expect(voiceCard.getByText('Built-in testing target')).toBeVisible();
   await expect(voiceCard).toContainText('Local capture · fixture-backed scoring');
   await expect(voiceCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
     'href',
