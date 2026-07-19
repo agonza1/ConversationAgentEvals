@@ -30,6 +30,25 @@ test('spec editor generates draft checks, requires approval, previews YAML, and 
               extensions: {},
             },
           },
+          {
+            id: 'agentic-contact-center-cancellation-rescue',
+            label: 'ACC cancellation-rescue handoff',
+            description: 'Optional example',
+            spec: {
+              title: 'Cancellation rescue agent',
+              role: 'insurance retention voice agent',
+              objective: 'Save eligible callers without making unauthorized billing promises.',
+              generated_content_status: 'none',
+              required_behaviors: [],
+              forbidden_behaviors: [],
+              scenario_seeds: [],
+              scenarios: [],
+              deterministic_checks: [],
+              evidence_requirements: ['conversation transcript'],
+              judges: [{ id: 'semantic-policy-judge', name: 'Semantic policy judge', kind: 'semantic', rubric: 'Score success and forbidden checks.', weight: 1, provider: 'configured-default' }],
+              extensions: { agentic_contact_center: { template: 'cancellation_rescue' } },
+            },
+          },
         ],
       }),
     });
@@ -101,8 +120,12 @@ test('spec editor generates draft checks, requires approval, previews YAML, and 
   });
 
   await page.goto('/specs/new?api_base=http%3A%2F%2Fapi.example.test');
-  await expect(page.getByRole('heading', { name: 'Friendly editable ASSERT YAML' })).toBeVisible();
-  await expect(page.getByText('CAE-owned')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Create an evaluation design' })).toBeVisible();
+  await expect(page.getByText('Evaluation design · Experimental')).toBeVisible();
+  await expect(page.getByLabel('Title')).toHaveValue('Conversation agent quality gate');
+  await expect(page.getByLabel('Title')).not.toHaveValue('Cancellation rescue agent');
+  await page.getByLabel('Template').selectOption('agentic-contact-center-cancellation-rescue');
+  await expect(page.getByLabel('Title')).toHaveValue('Cancellation rescue agent');
   await page.getByRole('button', { name: 'Generate draft checks/scenarios' }).click();
   await expect(page.getByText('Generated suggestions are draft content')).toBeVisible();
   await expect(page.getByLabel('Success checks')).toHaveValue(/Completes the stated task/);
@@ -113,6 +136,22 @@ test('spec editor generates draft checks, requires approval, previews YAML, and 
   await expect(page.getByText('Workspace: workspace-project')).toBeVisible();
   await page.getByRole('button', { name: 'Save version' }).click();
   await expect(page.getByText(/Saved `cancellation-rescue-agent` version 1/)).toBeVisible();
+});
+
+test('evaluation guidance labels distinguish suggestions from enforced runtime checks', async ({ page }) => {
+  await page.route('**/api/specs/templates', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ templates: [] }) }));
+  await page.route('**/api/specs/preview', async (route) => {
+    const spec = JSON.parse(route.request().postData() || '{}').spec;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ valid: false, errors: [], warnings: [], normalized: spec, yaml: 'suite: conversation-agent-quality-gate\n', json_preview: {}, export_filename: 'conversation-agent-quality-gate.eval_config.yaml', assert_validator: 'assert-ai', assert_validated: true }) });
+  });
+
+  await page.goto('/specs/new?api_base=http%3A%2F%2Fapi.example.test');
+  await expect(page.getByLabel('Scenario guidance')).toBeVisible();
+  await expect(page.getByLabel('Scenario examples')).toBeVisible();
+  await expect(page.getByLabel('Programmatic check guidance (not yet enforced)')).toBeVisible();
+  await expect(page.getByLabel('Evidence guidance (not yet enforced)')).toBeVisible();
+  await expect(page.getByLabel('Advanced ASSERT preview and validation')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Evaluation design' })).toHaveAttribute('aria-current', 'page');
 });
 
 test('loading and previewing a rich template preserves structured fields', async ({ page }) => {

@@ -65,12 +65,37 @@ Conversation demos use `rtc-asr` as the speech-to-text provider contract. Pipeca
 RTC_ASR_BASE_URL=http://localhost:8000
 RTC_ASR_HEALTH_PATH=/health
 RTC_ASR_STREAM_PATH=/v1/stt/stream
+KOKORO_BASE_URL=http://localhost:8880
+KOKORO_MODEL=kokoro
+KOKORO_VOICE=af_heart
+REFERENCE_STT_BACKEND=whisper
+REFERENCE_STT_MODEL=base
+REFERENCE_LLM_MODEL=gpt-5.4-mini
 ```
 
-When Pipecat runs in the Compose `voice` profile and rtc-asr runs on the host, use the host-reachable base URL:
+The built-in generalist voice target is a real local reference pipeline:
+Pipecat tester → Kokoro caller audio → separate Pipecat agent → rtc-asr → configured
+OpenAI-compatible/Codex LLM → Kokoro reply audio → tester observation. Select
+`REFERENCE_STT_BACKEND=whisper` for rtc-asr Whisper base (the service may report
+`faster-whisper` / `base.en`) or `REFERENCE_STT_BACKEND=parakeet` for the existing
+MLX Parakeet rtc-asr lane. The API fails closed if the configured backend does not
+match the healthy rtc-asr service.
+
+API and Pipecat protect the local completion callback with
+`REFERENCE_AGENT_INTERNAL_TOKEN`. `npm run dev` creates one ephemeral token and passes
+it to both processes when the variable is absent. Managed or separately started
+processes must set the same non-empty value explicitly; it is never included in run
+artifacts or provenance.
+
+When the API and Pipecat run in the Compose `voice` profile while rtc-asr and
+Kokoro run on the host, give both containers host-reachable service URLs and the
+same non-empty internal token:
 
 ```bash
-RTC_ASR_BASE_URL=http://host.docker.internal:8000 docker compose --profile voice up --build
+RTC_ASR_BASE_URL=http://host.docker.internal:8000 \
+KOKORO_BASE_URL=http://host.docker.internal:8880 \
+REFERENCE_AGENT_INTERNAL_TOKEN=replace-with-a-random-local-token \
+docker compose --profile voice up --build
 ```
 
 When `RTC_ASR_BASE_URL` is empty or unhealthy, live session startup records ASR as `not_configured` or `unavailable` and logs a `rtc_asr_skipped` event. The `/sessions/{id}/ask` transcript loop remains non-production demo support, not the ASR provider contract.
@@ -81,6 +106,7 @@ These are not needed for the minimal local demo. Set them only when working on t
 
 ```bash
 OPENAI_API_KEY=
+OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_REALTIME_MODEL=gpt-realtime-mini
 OPENAI_RESPONSES_MODEL=gpt-4.1-mini
 LLM_JUDGE_PROVIDER=openai_codex

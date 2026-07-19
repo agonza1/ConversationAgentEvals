@@ -43,7 +43,7 @@ the target, and a saved conversation replay is evidence—not a new agent target
   environment-variable name or raw secret. The server resolves only the dedicated
   `CAE_HTTP_TARGET_SECRET_*` namespace: for example, credential ID `support-staging`
   resolves from `CAE_HTTP_TARGET_SECRET_SUPPORT_STAGING`.
-- The built-in sample voice agent uses the CAE local audio loop and is labeled honestly: no
+- The built-in generalist voice agent uses the CAE local audio loop and is labeled honestly: no
   browser, SIP, or phone call occurs.
 - Browser WebRTC, SIP URI, and E.164 phone are separate destination types and validators.
 - ACC remains the formal live media owner. Its readiness endpoint may report media healthy,

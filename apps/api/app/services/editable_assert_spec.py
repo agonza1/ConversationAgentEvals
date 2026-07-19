@@ -237,6 +237,10 @@ def validate_spec(spec: EditableAssertSpec) -> SpecValidationResult:
         errors.append(SpecValidationMessage(field='runtime_overrides.max_turns', message='max_turns must be a whole number from 1 through 100.'))
     if isinstance(normalized.extensions.get('agentic_contact_center'), dict):
         warnings.append(SpecValidationMessage(field='extensions.agentic_contact_center', message='ACC data is preserved in the CAE editor context; CAE does not require ACC to compile or validate this ASSERT config.', severity='warning'))
+    if normalized.deterministic_checks:
+        warnings.append(SpecValidationMessage(field='deterministic_checks', message='Programmatic checks are preserved as CAE design metadata but are not enforced by this foundation flow.', severity='warning'))
+    if normalized.evidence_requirements:
+        warnings.append(SpecValidationMessage(field='evidence_requirements', message='Evidence requirements are preserved as CAE design metadata but are not enforced by this foundation flow.', severity='warning'))
     return SpecValidationResult(valid=not errors, errors=errors, warnings=warnings, normalized=normalized)
 
 
@@ -350,12 +354,10 @@ def _compile_assert_config(spec: EditableAssertSpec) -> dict[str, Any]:
         '## Forbidden behaviors',
         *[f'- {item.label.strip()}: {item.description.strip()}'.rstrip(': ') for item in spec.forbidden_behaviors],
     ]
-    if spec.evidence_requirements:
-        behavior_sections.extend(['', '## Required evidence', *[f'- {item.strip()}' for item in spec.evidence_requirements if item.strip()]])
     if spec.scenario_seeds:
-        behavior_sections.extend(['', '## Scenario seeds', *[f'- {item.strip()}' for item in spec.scenario_seeds if item.strip()]])
+        behavior_sections.extend(['', '## Scenario guidance', *[f'- {item.strip()}' for item in spec.scenario_seeds if item.strip()]])
     if spec.scenarios:
-        behavior_sections.extend(['', '## Approved scenarios'])
+        behavior_sections.extend(['', '## Scenario examples'])
         for scenario in spec.scenarios:
             behavior_sections.extend([
                 f'### {scenario.title.strip()}',
@@ -364,21 +366,7 @@ def _compile_assert_config(spec: EditableAssertSpec) -> dict[str, Any]:
                 *[f'- {step.strip()}' for step in scenario.steps if step.strip()],
                 f'Expected outcome: {scenario.expected_outcome.strip()}',
             ])
-    if spec.deterministic_checks:
-        behavior_sections.extend([
-            '',
-            '## Deterministic checks',
-            *[
-                f'- [{item.severity}] {item.label.strip()}: {item.description.strip()}'.rstrip(': ')
-                for item in spec.deterministic_checks
-            ],
-        ])
-
     context_lines = [f'Target role: {spec.role.strip()}']
-    if spec.runtime_overrides:
-        context_lines.append(f'CAE runtime overrides: {json.dumps(spec.runtime_overrides, sort_keys=True)}')
-    if spec.extensions:
-        context_lines.append(f'CAE integration extensions: {json.dumps(spec.extensions, sort_keys=True)}')
 
     pipeline: dict[str, Any] = {
         'systematize': {},

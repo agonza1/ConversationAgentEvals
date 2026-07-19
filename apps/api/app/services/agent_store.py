@@ -33,16 +33,36 @@ SEED_AGENTS: list[dict[str, Any]] = [
     },
     {
         'id': 'acc-voice-fixture-agent',
-        'name': 'Built-in sample voice agent',
+        'name': 'Saved cancellation voice replay',
+        'channel': 'voice',
+        'target': 'voice_fixture',
+        'environment': 'local',
+        'connection': {},
+        'description': 'Explicit saved evidence replay for the cancellation-rescue example; no live target runs.',
+        'metadata': {'model_name': 'saved-replay', 'prompt_version': 'fixture-v1'},
+    },
+    {
+        'id': 'generalist-voice-agent',
+        'name': 'Built-in generalist voice agent',
         'channel': 'voice',
         'target': 'builtin_sample_voice',
         'environment': 'local',
         'connection': {},
         'description': (
-            'Predictable sample voice agent for the CAE local audio loop. '
-            'It does not place a browser, SIP, or phone call.'
+            'Real LLM-backed reference agent for CAE tester-to-agent local audio evaluation. '
+            'Requires rtc-asr, Kokoro, and OpenAI API-key or Codex OAuth configuration.'
         ),
-        'metadata': {'model_name': 'builtin-sample-voice', 'prompt_version': 'seed'},
+        'metadata': {'model_name': 'gpt-5.4-mini', 'prompt_version': 'generalist-v1'},
+    },
+    {
+        'id': 'generalist-text-agent',
+        'name': 'Built-in generalist text agent',
+        'channel': 'text',
+        'target': 'openai_codex',
+        'environment': 'local',
+        'connection': {},
+        'description': 'Real generalist text target using OPENAI_API_KEY or connected OpenAI/Codex OAuth.',
+        'metadata': {'model_name': 'gpt-5.4-mini', 'prompt_version': 'generalist-v1'},
     },
 ]
 

@@ -6,7 +6,8 @@ import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+from urllib.parse import quote
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -17,6 +18,7 @@ from app.schemas.execution import (
     ExecutionRunCreateRequest,
     ExecutionRunProgress,
     ExecutionRunRecord,
+    LiveExecutionEvent,
 )
 from app.services import execution_run_store
 from app.services.agent_store import get_agent
@@ -33,13 +35,17 @@ from app.services.agentic_contact_center_example import build_benchmark_run_requ
 from app.services.benchmark_catalog_extensions import register_builtin_benchmark_extensions
 from app.services.benchmark_service import get_suite, run_scenario, simulate_scenario
 from app.services.execution_audio import (
-    DeterministicExecutionTtsRenderer,
     ExecutionAudioTargetAdapter,
-    LocalPipecatSmallWebRtcTransport,
 )
 from app.services.execution_vcon import build_execution_vcon, vcon_summary
-from app.services.llm_providers import get_provider
 from app.services.pipecat_tester_agent import PipecatTesterAgentRunner
+from app.services.reference_generalist_agent import (
+    KokoroTesterTtsRenderer,
+    ReferencePipecatAgentTransport,
+    ReferenceMediaServices,
+    ReferenceRuntimeConfig,
+    resolve_reference_completion_provider,
+)
 from app.services.run_provenance import (
     assert_execution_compatible,
     build_run_provenance,
@@ -209,6 +215,52 @@ def execute_execution_run(execution_run_id: str, payload: ExecutionRunCreateRequ
         }
 
 
+def _live_event_publisher(
+    *,
+    execution_run_id: str,
+    conversation_id: str,
+    user_id: str,
+) -> Callable[[dict[str, Any]], None]:
+    sequence = 0
+
+    def publish(payload: dict[str, Any]) -> None:
+        nonlocal sequence
+        speaker = str(payload.get('speaker') or 'System').strip()
+        text = str(payload.get('text') or '').strip()
+        if not text:
+            return
+        sequence += 1
+        audio = payload.get('audio')
+        media_url = None
+        mime_type = None
+        kind = 'message'
+        if isinstance(audio, bytes) and audio:
+            kind = 'audio'
+            mime_type = 'audio/wav'
+            live_dir = REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id / 'audio' / 'live'
+            live_dir.mkdir(parents=True, exist_ok=True)
+            (live_dir / f'{conversation_id}-{sequence}.wav').write_bytes(audio)
+            media_url = (
+                f'/api/execution/runs/{quote(execution_run_id)}/conversations/'
+                f'{quote(conversation_id)}/audio/{sequence}?user_id={quote(user_id)}'
+            )
+        execution_run_store.append_live_event(
+            execution_run_id,
+            conversation_id,
+            LiveExecutionEvent(
+                sequence=sequence,
+                kind=kind,
+                speaker=speaker,
+                text=text,
+                media_url=media_url,
+                mime_type=mime_type,
+                created_at=datetime.now(UTC).isoformat(),
+            ),
+        )
+
+    return publish
+
+
 def _run_one_conversation(
     *,
     execution_run_id: str,
@@ -222,6 +274,11 @@ def _run_one_conversation(
     conversation_id = f'{execution_run_id}-{scenario_id}-{iteration}'
     suite = get_suite(suite_id) or {}
     scenario_title = _scenario_title(suite, scenario_id)
+    publish = _live_event_publisher(
+        execution_run_id=execution_run_id,
+        conversation_id=conversation_id,
+        user_id=payload.user_id,
+    )
 
     try:
         if payload.mode == 'text_callable':
@@ -230,6 +287,7 @@ def _run_one_conversation(
                 scenario_id,
                 payload,
                 agent_snapshot=agent_snapshot,
+                event_observer=publish,
             )
         elif payload.mode == 'pipecat_webrtc':
             result = asyncio.run(
@@ -239,6 +297,7 @@ def _run_one_conversation(
                     suite_id=suite_id,
                     scenario_id=scenario_id,
                     payload=payload,
+                    event_observer=publish,
                 )
             )
         else:
@@ -249,6 +308,7 @@ def _run_one_conversation(
             verdict=result.get('verdict'),
             score=result.get('score'),
         )
+        current = execution_run_store.get_conversation(execution_run_id, conversation_id) or {}
         return ConversationRecord(
             conversation_id=conversation_id,
             execution_run_id=execution_run_id,
@@ -259,6 +319,7 @@ def _run_one_conversation(
             status='failed' if result.get('verdict') in {'fail', 'failed'} else 'completed',
             iteration=iteration,
             turns=result['turns'],
+            live_events=current.get('live_events') or [],
             transcript=result.get('transcript'),
             action_trace=result.get('action_trace') or [],
             final_state=result.get('final_state') or {},
@@ -289,6 +350,9 @@ def _run_one_conversation(
             mode=payload.mode,
             status='failed',
             iteration=iteration,
+            live_events=(
+                execution_run_store.get_conversation(execution_run_id, conversation_id) or {}
+            ).get('live_events') or [],
             error=str(exc),
             started_at=started,
             completed_at=datetime.now(UTC).isoformat(),
@@ -309,9 +373,9 @@ def _execution_target(
 
 
 def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCreateRequest:
-    model_name = (payload.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
     if not payload.agent_id:
         target = _execution_target(payload)
+        model_name = _execution_model_name(payload, target=target)
         assert_execution_compatible(
             agent_target=target,
             mode=payload.mode,
@@ -324,6 +388,7 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
     if agent is None:
         raise ValueError(f'Unknown agent: {payload.agent_id}')
     target = _execution_target(payload, agent)
+    model_name = _execution_model_name(payload, target=target)
     defaults = execution_defaults_for_target(target)
     request_placeholders = {
         'mode': 'text_callable',
@@ -371,6 +436,15 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
     })
 
 
+def _execution_model_name(payload: ExecutionRunCreateRequest, *, target: str) -> str:
+    explicit = (payload.model_name or '').strip()
+    if explicit:
+        return explicit
+    if target == 'builtin_sample_voice':
+        return ReferenceRuntimeConfig().llm_model
+    return DEFAULT_EXECUTION_MODEL
+
+
 def _queued_execution_context(
     run: dict[str, Any],
     *,
@@ -392,6 +466,7 @@ def _execute_text_callable(
     payload: ExecutionRunCreateRequest,
     *,
     agent_snapshot: dict[str, Any] | None = None,
+    event_observer: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     callable_id = payload.text_callable
     if callable_id == 'offline_acc_fixture':
@@ -402,6 +477,7 @@ def _execute_text_callable(
             scenario_id,
             payload,
             agent_snapshot=agent_snapshot,
+            event_observer=event_observer,
         )
     if callable_id == 'http_endpoint':
         return _execute_http_text_agent(
@@ -409,6 +485,7 @@ def _execute_text_callable(
             scenario_id,
             payload,
             agent_snapshot=agent_snapshot,
+            event_observer=event_observer,
         )
     if callable_id != 'mock_agent':
         raise ValueError(f'Unsupported text callable: {callable_id}')
@@ -427,6 +504,9 @@ def _execute_text_callable(
     action_trace = simulation.get('action_trace') if isinstance(simulation.get('action_trace'), list) else []
     final_state = simulation.get('final_state') if isinstance(simulation.get('final_state'), dict) else {}
     turns = _turns_from_transcript(transcript)
+    if event_observer is not None:
+        for turn in turns:
+            event_observer({'speaker': turn.speaker, 'text': turn.text})
     report: dict[str, Any] = {}
     if payload.evaluate:
         # simulate_scenario always evaluates; only surface the report when evaluate=true.
@@ -459,6 +539,7 @@ def _execute_http_text_agent(
     payload: ExecutionRunCreateRequest,
     *,
     agent_snapshot: dict[str, Any] | None = None,
+    event_observer: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Invoke a black-box HTTP chat target using the documented ASSERT-style boundary."""
     if not payload.agent_id:
@@ -482,6 +563,8 @@ def _execute_http_text_agent(
             'goal': scenario.get('goal'),
         },
     }
+    if event_observer is not None:
+        event_observer({'speaker': 'User', 'text': caller_text})
     headers = {'content-type': 'application/json', 'accept': 'application/json'}
     auth_type = str(connection.get('auth_type') or 'none')
     if auth_type != 'none':
@@ -517,6 +600,8 @@ def _execute_http_text_agent(
     if not isinstance(response_text, str) or not response_text.strip():
         raise RuntimeError(f'HTTP target response path "{response_path}" did not contain reply text.')
     response_text = response_text.strip()
+    if event_observer is not None:
+        event_observer({'speaker': 'Agent', 'text': response_text})
     transcript = f'User: {caller_text}\nAgent: {response_text}'
     final_state = {
         'complete': False,
@@ -579,6 +664,7 @@ def _execute_openai_codex_text_agent(
     payload: ExecutionRunCreateRequest,
     *,
     agent_snapshot: dict[str, Any] | None = None,
+    event_observer: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Run a connected OpenAI Codex text agent and persist only real model evidence.
 
@@ -592,26 +678,30 @@ def _execute_openai_codex_text_agent(
         raise ValueError(f'Unknown agent: {payload.agent_id}')
     scenario = _scenario_definition(suite_id, scenario_id)
 
-    provider = get_provider('openai')
+    provider = resolve_reference_completion_provider()
     status = provider.status()
     if status.get('status') != 'connected':
         raise ValueError(
             status.get('message')
-            or 'Connect OpenAI (Codex OAuth) before launching an openai_codex agent.'
+            or 'Set OPENAI_API_KEY or connect OpenAI/Codex OAuth before launching this agent.'
         )
     model_name = (payload.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
+    caller_text = _scenario_user_opener(scenario)
+    if event_observer is not None:
+        event_observer({'speaker': 'User', 'text': caller_text})
     response_text = provider.complete(_openai_agent_prompt(agent, scenario), model_name=model_name).strip()
     if not response_text:
         raise RuntimeError('OpenAI Codex returned an empty agent response.')
 
-    caller_text = _scenario_user_opener(scenario)
+    if event_observer is not None:
+        event_observer({'speaker': 'Agent', 'text': response_text})
     transcript = f'User: {caller_text}\nAgent: {response_text}'
     final_state = {
         'complete': False,
         'outcome': 'model_response_recorded',
         'runtime_provenance': {
             'target': 'openai_codex',
-            'provider': status.get('provider') or 'openai_codex',
+            'provider': status.get('provider') or provider.provider_id,
             'model_name': model_name,
             'fixture_backed': False,
             'live_tool_execution': False,
@@ -677,6 +767,7 @@ def _openai_agent_prompt(agent: dict[str, Any], scenario: dict[str, Any]) -> str
         f'Agent description: {description or "No additional instructions provided."}\n\n'
         f'Scenario: {scenario.get("title") or scenario.get("id")}\n'
         f'Caller context: {scenario.get("persona") or "Not provided."}\n'
+        f'Caller message: {_scenario_user_opener(scenario)}\n'
         f'Goal: {scenario.get("goal") or "Not provided."}\n'
         f'Required behavior to cover where possible: {required_actions}.\n'
         f'Forbidden behavior: {forbidden_actions}.\n\n'
@@ -736,8 +827,9 @@ async def _execute_pipecat_webrtc(
     suite_id: str,
     scenario_id: str,
     payload: ExecutionRunCreateRequest,
+    event_observer: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """Drive Pipecat tester over local small WebRTC hooks and emit vCon evidence."""
+    """Drive the Pipecat tester against a separate reference agent participant."""
     if payload.audio_transport != 'pipecat_small_webrtc':
         raise ValueError(
             'pipecat_webrtc execution currently supports audio_transport=pipecat_small_webrtc only; '
@@ -745,11 +837,24 @@ async def _execute_pipecat_webrtc(
         )
 
     artifact_dir = REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id / 'audio'
-    transport = LocalPipecatSmallWebRtcTransport(artifact_dir=artifact_dir)
+    config = (
+        ReferenceRuntimeConfig(llm_model=payload.model_name)
+        if payload.model_name
+        else ReferenceRuntimeConfig()
+    )
+    completion = resolve_reference_completion_provider()
+    # Construction performs fail-closed readiness checks before a session is opened.
+    transport = ReferencePipecatAgentTransport(
+        artifact_dir=artifact_dir,
+        media=ReferenceMediaServices(config),
+        completion=completion,
+        config=config,
+        event_observer=event_observer,
+    )
     target = ExecutionAudioTargetAdapter(transport)
     runner = PipecatTesterAgentRunner(
         target=target,
-        tts_renderer=DeterministicExecutionTtsRenderer(),
+        tts_renderer=KokoroTesterTtsRenderer(transport.media),
     )
     tester_result = await runner.run(_pipecat_webrtc_tester_config(scenario_id))
     session_id = str(tester_result.get('session_id') or '')
@@ -762,8 +867,10 @@ async def _execute_pipecat_webrtc(
 
     transcription = transport.transcription_turns(session_id)
     recording = transport.recording_handle(session_id)
-    if recording is None:
+    if recording is None and not tester_failed:
         recording = await transport.stop_recording(session_id)
+    if recording is None:
+        raise RuntimeError(str(tester_error or 'Reference voice run produced no current-run recording.'))
 
     vcon_export = build_execution_vcon(
         conversation_id=conversation_id,
@@ -798,48 +905,61 @@ async def _execute_pipecat_webrtc(
         f'{item.speaker}: {item.text}' for item in transcription if item.text.strip()
     )
 
-    # Scoring remains fixture-backed for cancellation-rescue until a live SUT proof
-    # path lands; capture (recording + dialog + vCon) comes from the WebRTC session.
-    # Do not let offline fixture pass mask a failed/needs_review tester run.
-    evidence = _evidence_from_offline_fixture(
-        suite_id,
-        scenario_id,
-        payload,
-        evaluate=payload.evaluate and not tester_failed,
-    )
+    current_final_state = {
+        'complete': False,
+        'outcome': 'reference_conversation_captured',
+        'evidence_scope': 'current_run_only',
+    }
+    report: dict[str, Any] = {}
+    if payload.evaluate and not tester_failed:
+        report = run_scenario(
+            BenchmarkRunRequest(
+                suite_id=suite_id,
+                scenario_id=scenario_id,
+                transcript=transcript,
+                action_trace=[],
+                final_state=current_final_state,
+                user_id=payload.user_id,
+                project_id=payload.project_id,
+            )
+        )
     if tester_failed:
         verdict = 'fail' if tester_status == 'failed' else 'needs_review'
         score = None
     else:
-        verdict = evidence.get('verdict')
-        score = evidence.get('score')
+        verdict = report.get('verdict')
+        score = report.get('overall_score')
     runtime_provenance = {
         'execution_engine': 'run_agent',
         'target_agent_id': payload.agent_id,
         'mode': payload.mode,
         'audio_transport': transport.transport_id,
-        'capture_surface': 'local_pipecat_small_webrtc_hooks',
+        'capture_surface': 'cae_reference_local_audio_loop',
+        'tester': {'participant': 'pipecat_tester', 'tts_provider': 'kokoro'},
+        'target': {'participant': 'reference_pipecat_agent', **transport.runtime},
         'live_media': False,
         'browser_peer': False,
         'sip_pstn': False,
-        'fixture_backed_scoring': True,
+        'saved_evidence': False,
+        'fixture_backed_scoring': False,
+        'evidence_source': 'current_run',
         'note': (
-            'This run exercises Run Agent plus local Pipecat capture hooks. '
-            'Browser microphone media, live Pipecat service media, and SIP/PSTN calling are not proven by this artifact.'
+            'Local synthetic media between separate Pipecat tester and reference agent participants. '
+            'Browser, SIP, PSTN, and external network behavior are not proven.'
         ),
     }
     return {
-        'turns': turns or evidence['turns'],
-        'transcript': transcript or evidence.get('transcript'),
-        'action_trace': evidence.get('action_trace') or [],
+        'turns': turns,
+        'transcript': transcript,
+        'action_trace': [],
         'final_state': {
-            **(evidence.get('final_state') or {}),
+            **current_final_state,
             'audio_transport': transport.transport_id,
             'tester_termination_reason': tester_result.get('termination_reason'),
             'tester_error': tester_error,
             'runtime_provenance': runtime_provenance,
         },
-        'latency_marks': evidence.get('latency_marks') or [],
+        'latency_marks': transport.latency_marks(session_id),
         'recording': recording.as_call_media(),
         'vcon_export': vcon_export,
         'vcon_export_summary': vcon_summary(vcon_export),
@@ -850,12 +970,13 @@ async def _execute_pipecat_webrtc(
             'proof': tester_result.get('proof'),
             'runtime_provenance': runtime_provenance,
             'real_call_readiness': {
-                'run_agent_execution': 'proven',
-                'pipecat_capture_hooks': 'proven',
+                'tester_to_agent_audio': 'proven',
+                'rtc_asr_transcription': 'proven',
+                'llm_response': 'proven',
+                'kokoro_playback': 'proven',
                 'browser_webrtc_peer': 'not_connected',
-                'live_media': 'not_proven',
                 'sip_pstn': 'deferred',
-                'scoring': 'fixture_backed',
+                'scoring': 'current_run_transcript',
             },
             'extension_points': {
                 'freeswitch_verto_sip': {
@@ -1009,8 +1130,16 @@ def _validate_scenarios(suite: dict[str, Any], scenario_ids: list[str]) -> None:
 
 
 def _validate_fixture_mode_scenarios(payload: ExecutionRunCreateRequest, scenario_ids: list[str]) -> None:
+    if payload.mode == 'pipecat_webrtc':
+        unsupported = [item for item in scenario_ids if item != 'cancellation-rescue']
+        if unsupported:
+            raise ValueError(
+                'pipecat_webrtc currently supports only scenario cancellation-rescue; '
+                'its tester act plan is scenario-specific.'
+            )
+        return
     uses_fixture = (
-        payload.mode in {'voice_fixture', 'pipecat_webrtc'}
+        payload.mode == 'voice_fixture'
         or payload.text_callable == 'offline_acc_fixture'
     )
     if not uses_fixture:
@@ -1026,7 +1155,7 @@ def _validate_fixture_mode_scenarios(payload: ExecutionRunCreateRequest, scenari
 def _pipecat_webrtc_tester_config(scenario_id: str) -> TesterScenarioConfig:
     return TesterScenarioConfig(
         scenario_id=scenario_id,
-        goal='Drive local Pipecat small WebRTC audio in/out and capture vCon evidence.',
+        goal='Evaluate a separate reference voice agent using current-run audio and evidence.',
         allowed_caller_acts=[
             'request_cancellation',
             'explain_renewal_increase',

@@ -30,9 +30,9 @@ const defaultJudge: AssertJudge = {
 };
 
 const starterSpec: EditableAssertSpec = {
-  title: 'Cancellation rescue agent',
-  role: 'insurance retention voice agent',
-  objective: 'Save eligible callers without making unauthorized billing promises.',
+  title: 'Conversation agent quality gate',
+  role: 'customer support conversation agent',
+  objective: 'Resolve the user request accurately while following policy constraints.',
   status: 'draft',
   generated_content_status: 'none',
   required_behaviors: [],
@@ -41,7 +41,7 @@ const starterSpec: EditableAssertSpec = {
   scenario_seeds: [],
   scenarios: [],
   deterministic_checks: [],
-  evidence_requirements: ['conversation transcript', 'final state or action trace'],
+  evidence_requirements: ['conversation transcript', 'final state or tool trace when tools are used'],
   judges: [defaultJudge],
   runtime_overrides: {},
   extensions: {},
@@ -249,9 +249,9 @@ export function SpecEditorPage() {
     <main className="page-shell spec-editor-shell">
       <SiteNav current="specs" />
       <section className="minimal-hero spec-hero" aria-labelledby="spec-title">
-        <p className="eyebrow">ASSERT spec builder · CAE-owned</p>
-        <h1 id="spec-title">Friendly editable ASSERT YAML</h1>
-        <p>Generate draft success checks, failure checks and scenarios from plain language, edit them, approve them, then preview and save versioned ASSERT YAML.</p>
+        <p className="eyebrow">Evaluation design · Experimental</p>
+        <h1 id="spec-title">Create an evaluation design</h1>
+        <p>Define what an agent must accomplish, avoid, and handle. Generate or edit guidance in plain language, then review the advanced ASSERT preview and save a versioned design.</p>
       </section>
 
       <section className="spec-editor-toolbar card" aria-label="Spec editor controls">
@@ -272,7 +272,7 @@ export function SpecEditorPage() {
       {saved ? <div className="spec-save-banner" role="status">Saved `{saved.id}` version {saved.version}. YAML is ready to export or hand to ASSERT.</div> : null}
 
       <div className="spec-editor-grid">
-        <section className="card spec-form-card" aria-label="Editable ASSERT fields">
+        <section className="card spec-form-card" aria-label="Editable evaluation design fields">
           <div className="spec-field-row">
             <label>Title<input value={spec.title} onChange={(event) => setSpec({ ...spec, title: event.target.value })} /></label>
             <label>Agent role<input value={spec.role} onChange={(event) => setSpec({ ...spec, role: event.target.value })} /></label>
@@ -283,17 +283,18 @@ export function SpecEditorPage() {
             <label>Failure / forbidden checks<textarea rows={8} value={failureChecks} onChange={(event) => setFailureChecks(event.target.value)} /></label>
           </div>
           <div className="spec-field-row">
-            <label>Scenario seeds<textarea rows={6} value={scenarioSeeds} onChange={(event) => setScenarioSeeds(event.target.value)} /></label>
-            <label>Generated scenarios<textarea rows={6} value={scenarios} onChange={(event) => setScenarios(event.target.value)} /></label>
+            <label>Scenario guidance<textarea rows={6} value={scenarioSeeds} onChange={(event) => setScenarioSeeds(event.target.value)} /></label>
+            <label>Scenario examples<textarea rows={6} value={scenarios} onChange={(event) => setScenarios(event.target.value)} /></label>
           </div>
           <div className="spec-field-row">
-            <label>Deterministic checks<textarea rows={5} value={deterministicChecks} onChange={(event) => setDeterministicChecks(event.target.value)} /></label>
-            <label>Evidence requirements<textarea rows={5} value={evidenceRequirements} onChange={(event) => setEvidenceRequirements(event.target.value)} /></label>
+            <label>Programmatic check guidance (not yet enforced)<textarea rows={5} value={deterministicChecks} onChange={(event) => setDeterministicChecks(event.target.value)} /></label>
+            <label>Evidence guidance (not yet enforced)<textarea rows={5} value={evidenceRequirements} onChange={(event) => setEvidenceRequirements(event.target.value)} /></label>
           </div>
           <label>Judge rubric<textarea rows={4} value={judgeRubric} onChange={(event) => setJudgeRubric(event.target.value)} /></label>
         </section>
 
-        <aside className="spec-preview-panel" aria-label="YAML preview and validation">
+        <aside className="spec-preview-panel" aria-label="Advanced ASSERT preview and validation">
+          <p className="eyebrow">Advanced ASSERT preview</p>
           <div className="spec-preview-status">
             <span data-valid={preview?.valid === true}>{preview?.valid ? 'Valid preview' : 'Needs edits'}</span>
             <span>{workingSpec.generated_content_status === 'draft' ? 'Generated draft' : 'User-approved'}</span>

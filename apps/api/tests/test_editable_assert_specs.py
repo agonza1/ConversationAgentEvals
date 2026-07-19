@@ -145,11 +145,17 @@ def test_preview_compiles_canonical_assert_yaml_and_validates_with_assert():
     assert parsed['pipeline']['systematize'] == {}
     assert parsed['pipeline']['test_set']['scenario']['sample_size'] == 1
     assert parsed['pipeline']['judge']['dimensions']['semantic-policy-judge']['rubric'] == 'Check that the agent satisfies required behaviors and avoids forbidden behaviors.'
-    assert '## Deterministic checks' in parsed['behavior']['description']
-    assert '[warning] Final state evidence present: Run artifacts include final state evidence.' in parsed['behavior']['description']
-    assert 'agentic_contact_center' in parsed['context']
+    assert '## Scenario examples' in parsed['behavior']['description']
+    assert '## Deterministic checks' not in parsed['behavior']['description']
+    assert 'Final state evidence present' not in parsed['behavior']['description']
+    assert 'agentic_contact_center' not in parsed['context']
+    assert 'runtime overrides' not in parsed['context'].lower()
     assert payload['export_filename'] == 'cancellation-rescue-agent.eval_config.yaml'
-    assert payload['warnings'][0]['field'] == 'extensions.agentic_contact_center'
+    assert {warning['field'] for warning in payload['warnings']} == {
+        'extensions.agentic_contact_center',
+        'deterministic_checks',
+        'evidence_requirements',
+    }
 
 
 def test_save_without_id_preserves_the_suite_name_shown_in_preview():
@@ -372,13 +378,15 @@ def test_preview_preserves_empty_yaml_mappings_as_objects():
     assert parsed['pipeline']['systematize'] == {}
 
 
-def test_preview_safely_preserves_arbitrary_extension_keys_in_canonical_context():
+def test_preview_keeps_arbitrary_cae_metadata_out_of_assert_prompt_context():
     response = client.post('/api/specs/preview', json={'spec': _valid_spec(runtime_overrides={'foo: bar': {}}, extensions={'? odd': {'nested: key': {}}})})
 
     assert response.status_code == 200
-    parsed = yaml.safe_load(response.json()['yaml'])
-    assert '"foo: bar": {}' in parsed['context']
-    assert '"? odd"' in parsed['context']
+    payload = response.json()
+    parsed = yaml.safe_load(payload['yaml'])
+    assert parsed['context'] == 'Target role: insurance retention voice agent'
+    assert payload['normalized']['runtime_overrides'] == {'foo: bar': {}}
+    assert payload['normalized']['extensions'] == {'? odd': {'nested: key': {}}}
 
 
 def test_preview_reports_multiple_judges_as_an_inline_validation_error():

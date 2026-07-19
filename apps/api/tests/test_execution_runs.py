@@ -7,7 +7,10 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.schemas.execution import ConversationRecord, ExecutionRunCreateRequest, LiveExecutionEvent
+from app.services import execution_run_store
 from app.services.execution_run_store import reset_execution_runs_for_tests
+from app.services.execution_runner import start_execution_run
 
 
 client = TestClient(app)
@@ -43,6 +46,10 @@ def test_text_callable_execution_appends_conversations_and_writes_inference_set(
     assert conversation['scenario_id'] == 'billing-address-change'
     assert conversation['turns']
     assert conversation['transcript']
+    assert [event['speaker'].lower() for event in conversation['live_events']] == [
+        turn['speaker'].lower() for turn in conversation['turns']
+    ]
+    assert all(event['kind'] == 'message' for event in conversation['live_events'])
     assert conversation['verdict'] in {'pass', 'needs_review'}
     assert completed['inference_set_path']
     inference_path = Path(completed['inference_set_path'])
@@ -51,6 +58,51 @@ def test_text_callable_execution_appends_conversations_and_writes_inference_set(
     assert inference_path.is_file()
     lines = [line for line in inference_path.read_text().splitlines() if line.strip()]
     assert len(lines) == 1
+
+
+def test_live_audio_segment_requires_run_owner_and_observed_event():
+    queued = start_execution_run(ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        user_id='audio-owner',
+        project_id='audio-project',
+    ))
+    run_id = queued['execution_run_id']
+    conversation_id = f'{run_id}-cancellation-rescue-1'
+    execution_run_store.upsert_conversation(run_id, ConversationRecord(
+        conversation_id=conversation_id,
+        execution_run_id=run_id,
+        suite_id='call-center-voice-ai',
+        scenario_id='cancellation-rescue',
+        mode='pipecat_webrtc',
+        status='running',
+    ))
+    execution_run_store.append_live_event(run_id, conversation_id, LiveExecutionEvent(
+        sequence=1,
+        kind='audio',
+        speaker='Caller',
+        text='Current-run caller audio.',
+        media_url=f'/api/execution/runs/{run_id}/conversations/{conversation_id}/audio/1?user_id=audio-owner',
+        mime_type='audio/wav',
+        created_at='2026-07-18T20:00:00+00:00',
+    ))
+    live_dir = execution_run_store.RUNS_DIR / run_id / 'audio' / 'live'
+    live_dir.mkdir(parents=True)
+    payload = b'RIFF-current-run-wav'
+    (live_dir / f'{conversation_id}-1.wav').write_bytes(payload)
+
+    allowed = client.get(
+        f'/api/execution/runs/{run_id}/conversations/{conversation_id}/audio/1',
+        params={'user_id': 'audio-owner'},
+    )
+    assert allowed.status_code == 200
+    assert allowed.content == payload
+    assert allowed.headers['content-type'].startswith('audio/wav')
+    denied = client.get(
+        f'/api/execution/runs/{run_id}/conversations/{conversation_id}/audio/1',
+        params={'user_id': 'someone-else'},
+    )
+    assert denied.status_code == 404
 
 
 def test_failed_conversation_is_preserved_in_inference_set(monkeypatch):
@@ -196,6 +248,24 @@ def test_voice_fixture_rejects_non_cancellation_scenario():
     )
     assert response.status_code == 400
     assert 'cancellation-rescue' in response.json()['detail']
+
+
+def test_pipecat_reference_rejects_scenario_without_matching_tester_plan():
+    response = client.post(
+        '/api/execution/runs',
+        json={
+            'suite_id': 'call-center-voice-ai',
+            'scenario_ids': ['billing-address-change'],
+            'mode': 'pipecat_webrtc',
+            'user_id': 'exec-user',
+            'project_id': 'exec-project',
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()['detail'] == (
+        'pipecat_webrtc currently supports only scenario cancellation-rescue; '
+        'its tester act plan is scenario-specific.'
+    )
 
 
 def test_offline_acc_fixture_rejects_non_cancellation_scenario():
