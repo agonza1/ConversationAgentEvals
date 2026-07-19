@@ -137,6 +137,10 @@ def test_reference_tester_to_agent_contract_uses_only_current_run(tmp_path: Path
         assert [turn.speaker for turn in turns] == ['Caller', 'Agent']
         assert turns[0].source == 'rtc-asr.current_run'
         assert turns[1].source == 'reference_pipecat_agent.current_run'
+        assert [turn.direction for turn in turns] == ['tester_to_target', 'target_to_tester']
+        assert [turn.evidence_role for turn in turns] == ['target_asr_receipt', 'target_llm_output']
+        assert turns[0].frame_metadata['source'] == 'tester_kokoro_audio'
+        assert turns[1].frame_metadata['source'] == 'target_kokoro_audio'
         assert media.transcriptions == 1
         proof = transport.session_proof(session_id)
         assert proof['tester_participant'] == 'pipecat_tester'

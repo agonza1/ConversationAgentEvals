@@ -213,6 +213,7 @@ def test_build_execution_vcon_reuses_cae_dialog_and_recording_shape():
         assert exported['source_format'] == 'pipecat_execution'
         assert exported['appended_analysis_type'] == 'execution_audio_capture'
         assert len(exported['dialog']) >= 2
+        assert exported['dialog'][0]['source'] == 'pipecat_execution'
         assert exported['attachments']
         assert exported['attachments'][0]['type'] == 'recording'
         assert exported['attachments'][0]['url'] == recording.uri
@@ -222,6 +223,41 @@ def test_build_execution_vcon_reuses_cae_dialog_and_recording_shape():
         assert summary['dialog_turns'] >= 2
 
     asyncio.run(run())
+
+
+def test_build_execution_vcon_preserves_dict_directional_evidence():
+    exported = build_execution_vcon(
+        conversation_id='c-direction',
+        execution_run_id='exec-direction',
+        suite_id='call-center-voice-ai',
+        scenario_id='cancellation-rescue',
+        transport='pipecat_small_webrtc',
+        transcription_turns=[
+            {
+                'speaker': 'tester',
+                'text': 'I need to cancel.',
+                'source': 'tester.llm_output',
+                'direction': 'tester_to_target',
+                'evidence_role': 'llm_output',
+                'frame_metadata': {'sequence': 1, 'bytes': 123},
+            },
+            {
+                'speaker': 'target',
+                'text': 'I need to cancel.',
+                'source': 'target.asr_receipt',
+                'direction': 'tester_to_target',
+                'evidence_role': 'asr_receipt',
+                'frame_metadata': {'sequence': 1, 'bytes': 123},
+            },
+        ],
+        recording=None,
+    )
+
+    assert exported['source_format'] == 'pipecat_execution'
+    assert exported['dialog'][0]['source'] == 'tester.llm_output'
+    assert exported['dialog'][0]['direction'] == 'tester_to_target'
+    assert exported['dialog'][1]['evidence_role'] == 'asr_receipt'
+    assert exported['dialog'][1]['frame_metadata'] == {'sequence': 1, 'bytes': 123}
 
 
 def test_pipecat_tester_over_execution_audio_target_captures_proof():

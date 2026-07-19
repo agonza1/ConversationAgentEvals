@@ -367,6 +367,13 @@ class ReferencePipecatAgentTransport:
                 act_id=step.expected_caller_act,
                 source='rtc-asr.current_run',
                 event_types=['tester_audio_received', 'rtc_asr_transcript'],
+                direction='tester_to_target',
+                evidence_role='target_asr_receipt',
+                frame_metadata={
+                    'audio_bytes': len(wav_bytes),
+                    'transport': self.transport_id,
+                    'source': 'tester_kokoro_audio',
+                },
             ),
             TranscriptionTurn(
                 turn_index=caller_index + 1,
@@ -374,6 +381,13 @@ class ReferencePipecatAgentTransport:
                 text=agent_text,
                 source='reference_pipecat_agent.current_run',
                 event_types=['llm_response_completed', 'kokoro_audio_synthesized'],
+                direction='target_to_tester',
+                evidence_role='target_llm_output',
+                frame_metadata={
+                    'audio_bytes': len(agent_wav),
+                    'transport': self.transport_id,
+                    'source': 'target_kokoro_audio',
+                },
             ),
         ])
         state.recording_wavs.extend([wav_bytes, agent_wav])
