@@ -218,6 +218,18 @@ select {
   line-height: 1.6;
 }
 
+.product-flow-visual {
+  width: 100%;
+  aspect-ratio: 1774 / 887;
+  overflow: hidden;
+}
+
+.product-flow-visual img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
 .signal-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

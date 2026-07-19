@@ -1,3 +1,5 @@
+import Image from 'next/image';
+
 import { ApiAwareLink } from '@/components/ApiAwareLink';
 
 const domains = [
@@ -149,6 +151,15 @@ export default function HomePage() {
             in the correct state.
           </p>
         </div>
+        <div className="product-flow-visual">
+          <Image
+            src="/images/agentbench-evaluation-pipeline.png"
+            alt="Run an agent or import transcript or vCon evidence, then evaluate and report"
+            width={1774}
+            height={887}
+            sizes="(max-width: 640px) calc(100vw - 28px), (max-width: 1160px) calc(100vw - 40px), 1120px"
+          />
+        </div>
         <div className="signal-grid">
           {signals.map((signal) => (
             <div className="signal-item" key={signal}>{signal}</div>
@@ -241,14 +252,6 @@ export default function HomePage() {
         </div>
       </section>
 
-      <section className="cta-band">
-        <div>
-          <p className="eyebrow">MVP</p>
-          <h2>Run the first scenario benchmark.</h2>
-          <p>Choose a scenario, then run an agent or evaluate existing evidence.</p>
-        </div>
-        <ApiAwareLink className="primary-link" href="/scenarios">Browse scenarios</ApiAwareLink>
-      </section>
     </main>
   );
 }

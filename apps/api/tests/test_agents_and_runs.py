@@ -32,7 +32,7 @@ def test_agent_crud_round_trip():
     listed = client.get('/api/agents')
     assert listed.status_code == 200
     agents = listed.json()['agents']
-    assert {item['id'] for item in agents} >= {'mock-text-agent', 'acc-voice-fixture-agent'}
+    assert {item['id'] for item in agents} >= {'mock-text-agent', 'acc-voice-fixture-agent', 'generalist-voice-agent'}
 
     created = client.post(
         '/api/agents',
@@ -233,7 +233,7 @@ def test_builtin_sample_voice_agent_run_uses_local_audio_loop_provenance():
         ExecutionRunCreateRequest(
             suite_id='call-center-voice-ai',
             scenario_ids=['cancellation-rescue'],
-            agent_id='acc-voice-fixture-agent',
+            agent_id='generalist-voice-agent',
             user_id='agent-runs-user',
             project_id='agent-runs-project',
             iterations=1,
@@ -244,20 +244,19 @@ def test_builtin_sample_voice_agent_run_uses_local_audio_loop_provenance():
     assert provenance['target_kind'] == 'builtin_sample_voice'
     assert provenance['tester_id'] == 'pipecat_tester'
     assert provenance['executor_id'] == 'cae_local_audio_loop'
-    assert provenance['evidence_source'] == 'saved_replay'
+    assert provenance['evidence_source'] == 'local_audio_loop'
     assert provenance['live_external_connection'] is False
-    assert provenance['saved_evidence'] is True
+    assert provenance['saved_evidence'] is False
     assert provenance['synthetic_media'] is True
     assert provenance['honesty_label'] == (
-        'Built-in sample agent · local audio-loop capture · saved fixture scoring and structured evidence · '
-        'no phone or SIP call'
+        'Built-in generalist agent · current-run local audio and scoring · no browser, phone, or SIP call'
     )
     finished = execute_execution_run(
         queued['execution_run_id'],
         ExecutionRunCreateRequest(
             suite_id='call-center-voice-ai',
             scenario_ids=['cancellation-rescue'],
-            agent_id='acc-voice-fixture-agent',
+            agent_id='generalist-voice-agent',
             user_id='agent-runs-user',
             project_id='agent-runs-project',
             iterations=1,
@@ -275,7 +274,7 @@ def test_saved_voice_agent_ignores_serialized_request_placeholders():
         ExecutionRunCreateRequest(
             suite_id='call-center-voice-ai',
             scenario_ids=['cancellation-rescue'],
-            agent_id='acc-voice-fixture-agent',
+            agent_id='generalist-voice-agent',
             mode='text_callable',
             tester_id='scenario_simulator',
             executor_id='local_async_runner',
@@ -425,7 +424,7 @@ def test_rejects_incompatible_executor_for_builtin_sample_voice():
         json={
             'suite_id': 'call-center-voice-ai',
             'scenario_ids': ['cancellation-rescue'],
-            'agent_id': 'acc-voice-fixture-agent',
+            'agent_id': 'generalist-voice-agent',
             'executor_id': 'acc_sip',
             'mode': 'pipecat_webrtc',
             'user_id': 'agent-runs-user',
@@ -477,6 +476,28 @@ def test_execution_persists_model_name_default_and_override():
     )
     assert via_api.status_code == 200, via_api.text
     assert via_api.json()['model_name'] == 'gpt-4.1'
+
+
+def test_generalist_voice_honors_reference_model_env_and_explicit_override(monkeypatch):
+    monkeypatch.setenv('REFERENCE_LLM_MODEL', 'compatible-local-model')
+    base = {
+        'suite_id': 'call-center-voice-ai',
+        'scenario_ids': ['cancellation-rescue'],
+        'agent_id': 'generalist-voice-agent',
+        'user_id': 'agent-runs-user',
+        'project_id': 'agent-runs-project',
+        'iterations': 1,
+    }
+
+    from_env = start_execution_run(ExecutionRunCreateRequest(**base))
+    assert from_env['model_name'] == 'compatible-local-model'
+    assert from_env['execution_snapshot']['request']['model_name'] == 'compatible-local-model'
+
+    explicit = start_execution_run(
+        ExecutionRunCreateRequest(**base, model_name='per-run-model')
+    )
+    assert explicit['model_name'] == 'per-run-model'
+    assert explicit['execution_snapshot']['request']['model_name'] == 'per-run-model'
 
 
 def test_rejects_unsafe_agent_id_and_seed_mutations():
@@ -579,7 +600,7 @@ def test_voice_fixture_target_allows_pipecat_capture_proof_mode():
         ExecutionRunCreateRequest(
             suite_id='call-center-voice-ai',
             scenario_ids=['cancellation-rescue'],
-            agent_id='acc-voice-fixture-agent',
+            agent_id='generalist-voice-agent',
             mode='pipecat_webrtc',
             user_id='agent-runs-user',
             project_id='agent-runs-project',

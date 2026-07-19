@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import os
+import secrets
+import wave
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,9 +14,9 @@ from urllib.parse import quote
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 _env_candidates = [*Path(__file__).resolve().parents, Path.cwd()]
 for _parent in _env_candidates:
@@ -27,11 +31,12 @@ try:
     from aiortc.sdp import candidate_from_sdp
     from pipecat.adapters.schemas.function_schema import FunctionSchema
     from pipecat.adapters.schemas.tools_schema import ToolsSchema
-    from pipecat.frames.frames import ErrorFrame, LLMContextFrame
+    from pipecat.frames.frames import EndFrame, ErrorFrame, Frame, InputAudioRawFrame, LLMContextFrame, OutputAudioRawFrame, TextFrame
     from pipecat.pipeline.pipeline import Pipeline
     from pipecat.pipeline.runner import PipelineRunner
     from pipecat.pipeline.task import PipelineParams, PipelineTask
     from pipecat.processors.aggregators.llm_context import LLMContext
+    from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
     from pipecat.services.llm_service import FunctionCallParams
     from pipecat.services.openai.realtime.events import (
         AudioConfiguration,
@@ -65,6 +70,13 @@ except Exception:  # pragma: no cover - fallback for non-pipecat test envs
     HeyGenVideoService = None  # type: ignore[assignment]
     ServiceType = None  # type: ignore[assignment]
     ErrorFrame = None  # type: ignore[assignment]
+    Frame = None  # type: ignore[assignment]
+    FrameDirection = None  # type: ignore[assignment]
+    FrameProcessor = None  # type: ignore[assignment]
+    InputAudioRawFrame = None  # type: ignore[assignment]
+    OutputAudioRawFrame = None  # type: ignore[assignment]
+    TextFrame = None  # type: ignore[assignment]
+    EndFrame = None  # type: ignore[assignment]
     LLMContext = None  # type: ignore[assignment]
     LLMContextFrame = None  # type: ignore[assignment]
     Pipeline = None  # type: ignore[assignment]
@@ -178,6 +190,11 @@ RTC_ASR_STREAM_PATH = os.getenv('RTC_ASR_STREAM_PATH', '/v1/stt/stream')
 RTC_ASR_SAMPLE_RATE = 16000
 RTC_ASR_CHANNELS = 1
 RTC_ASR_ENCODING = 'pcm16le'
+KOKORO_BASE_URL = os.getenv('KOKORO_BASE_URL', '').rstrip('/')
+KOKORO_MODEL = os.getenv('KOKORO_MODEL', 'kokoro')
+KOKORO_VOICE = os.getenv('KOKORO_VOICE', 'af_heart')
+REFERENCE_LLM_MODEL = os.getenv('REFERENCE_LLM_MODEL', 'gpt-5.4-mini')
+REFERENCE_AGENT_INTERNAL_TOKEN = os.getenv('REFERENCE_AGENT_INTERNAL_TOKEN', '').strip()
 HEYGEN_LIVE_AVATAR_API_KEY = os.getenv('HEYGEN_LIVE_AVATAR_API_KEY') or os.getenv('HEYGEN_API_KEY')
 HEYGEN_AVATAR_ID = os.getenv('HEYGEN_AVATAR_ID', 'dd73ea75-1218-4ef3-92ce-606d5f7fbc0a')
 HEYGEN_SANDBOX = os.getenv('HEYGEN_SANDBOX', 'true').lower() == 'true'
@@ -219,6 +236,194 @@ class LiveSessionJoinRequest(BaseModel):
 
 class IceCandidateRequest(BaseModel):
     candidate: dict[str, Any]
+
+
+class ReferenceAgentTurnRequest(BaseModel):
+    audio_wav_base64: str
+    history: list[dict[str, str]] = Field(default_factory=list)
+    model_name: str | None = None
+
+
+if PIPECAT_RUNTIME_AVAILABLE:
+    class _AgentTextFrame(TextFrame):
+        pass
+
+
+    class _ReferenceAsrProcessor(FrameProcessor):
+        def __init__(self):
+            super().__init__()
+            self.transcript = ''
+
+        async def process_frame(self, frame: Frame, direction: FrameDirection):
+            await super().process_frame(frame, direction)
+            if not isinstance(frame, InputAudioRawFrame):
+                await self.push_frame(frame, direction)
+                return
+            wav_payload = _pcm_to_wav(frame.audio, frame.sample_rate, frame.num_channels)
+            async with httpx.AsyncClient(timeout=60) as client:
+                response = await client.post(
+                    f'{RTC_ASR_BASE_URL}/api/transcribe/file',
+                    files={'file': ('tester-turn.wav', wav_payload, 'audio/wav')},
+                )
+                response.raise_for_status()
+                payload = response.json()
+            transcription = payload.get('transcription') if isinstance(payload.get('transcription'), dict) else {}
+            transcript = str(payload.get('text') or transcription.get('text') or payload.get('transcript') or '').strip()
+            if not transcript:
+                raise RuntimeError('rtc-asr returned no transcript for tester audio')
+            self.transcript = transcript
+            await self.push_frame(TextFrame(transcript), direction)
+
+
+    class _ReferenceLlmProcessor(FrameProcessor):
+        def __init__(self, history: list[dict[str, str]], model_name: str):
+            super().__init__()
+            self.history = history
+            self.model_name = model_name
+
+        async def process_frame(self, frame: Frame, direction: FrameDirection):
+            await super().process_frame(frame, direction)
+            if type(frame) is not TextFrame:
+                await self.push_frame(frame, direction)
+                return
+            history = '\n'.join(f'{item.get("speaker")}: {item.get("text")}' for item in self.history)
+            prompt = (
+                'You are the CAE built-in generalist voice agent. Respond naturally and concisely. '
+                'Never claim an external action occurred unless the conversation proves it.\n'
+                f'Conversation so far:\n{history}\nCaller: {frame.text}\nAgent:'
+            )
+            async with httpx.AsyncClient(timeout=90) as client:
+                response = await client.post(
+                    f'{API_BASE_URL}/api/execution/reference/complete',
+                    json={'prompt': prompt, 'model_name': self.model_name},
+                    headers={'x-cae-reference-token': REFERENCE_AGENT_INTERNAL_TOKEN},
+                )
+                response.raise_for_status()
+                payload = response.json()
+            text = str(payload.get('text') or '').strip()
+            if not text:
+                raise RuntimeError('reference completion callback returned no text')
+            await self.push_frame(_AgentTextFrame(text), direction)
+
+
+    class _ReferenceKokoroProcessor(FrameProcessor):
+        async def process_frame(self, frame: Frame, direction: FrameDirection):
+            await super().process_frame(frame, direction)
+            if not isinstance(frame, _AgentTextFrame):
+                await self.push_frame(frame, direction)
+                return
+            async with httpx.AsyncClient(timeout=60) as client:
+                response = await client.post(
+                    f'{KOKORO_BASE_URL}/v1/audio/speech',
+                    json={
+                        'model': KOKORO_MODEL,
+                        'voice': KOKORO_VOICE,
+                        'input': frame.text,
+                        'response_format': 'wav',
+                    },
+                )
+                response.raise_for_status()
+            pcm, sample_rate, channels = _wav_to_pcm(response.content)
+            await self.push_frame(frame, direction)
+            await self.push_frame(OutputAudioRawFrame(pcm, sample_rate, channels), direction)
+
+
+    class _ReferenceCollector(FrameProcessor):
+        def __init__(self):
+            super().__init__()
+            self.agent_text = ''
+            self.audio = b''
+            self.sample_rate = 24000
+            self.channels = 1
+
+        async def process_frame(self, frame: Frame, direction: FrameDirection):
+            await super().process_frame(frame, direction)
+            if isinstance(frame, _AgentTextFrame):
+                self.agent_text = frame.text
+            elif isinstance(frame, OutputAudioRawFrame):
+                self.audio += frame.audio
+                self.sample_rate = frame.sample_rate
+                self.channels = frame.num_channels
+            await self.push_frame(frame, direction)
+
+
+def _require_reference_token(value: str | None) -> None:
+    if not REFERENCE_AGENT_INTERNAL_TOKEN:
+        raise HTTPException(status_code=503, detail='Set REFERENCE_AGENT_INTERNAL_TOKEN in API and Pipecat.')
+    if not value or not secrets.compare_digest(value, REFERENCE_AGENT_INTERNAL_TOKEN):
+        raise HTTPException(status_code=403, detail='Invalid local reference-agent token.')
+
+
+@app.get('/reference-agent/readiness')
+async def reference_agent_readiness(x_cae_reference_token: str | None = Header(default=None)):
+    _require_reference_token(x_cae_reference_token)
+    return {
+        'ready': bool(PIPECAT_RUNTIME_AVAILABLE and RTC_ASR_BASE_URL and KOKORO_BASE_URL),
+        'pipeline_runtime': PIPECAT_RUNTIME_AVAILABLE,
+        'rtc_asr_configured': bool(RTC_ASR_BASE_URL),
+        'kokoro_configured': bool(KOKORO_BASE_URL),
+        'route': '/reference-agent/turn',
+    }
+
+
+@app.post('/reference-agent/turn')
+async def reference_agent_turn(
+    payload: ReferenceAgentTurnRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+):
+    """Run one target turn through a real Pipecat Pipeline object."""
+    _require_reference_token(x_cae_reference_token)
+    if not PIPECAT_RUNTIME_AVAILABLE:
+        raise HTTPException(status_code=503, detail='Pipecat runtime is unavailable.')
+    missing = []
+    if not RTC_ASR_BASE_URL:
+        missing.append('RTC_ASR_BASE_URL')
+    if not KOKORO_BASE_URL:
+        missing.append('KOKORO_BASE_URL')
+    if missing:
+        raise HTTPException(status_code=503, detail=f'Reference agent missing configuration: {", ".join(missing)}')
+    try:
+        wav_payload = base64.b64decode(payload.audio_wav_base64, validate=True)
+        pcm, sample_rate, channels = _wav_to_pcm(wav_payload)
+        collector = _ReferenceCollector()
+        asr_processor = _ReferenceAsrProcessor()
+        pipeline = Pipeline([
+            asr_processor,
+            _ReferenceLlmProcessor(payload.history, payload.model_name or REFERENCE_LLM_MODEL),
+            _ReferenceKokoroProcessor(),
+            collector,
+        ])
+        task = PipelineTask(pipeline, enable_rtvi=False, enable_turn_tracking=False)
+        await task.queue_frames([InputAudioRawFrame(pcm, sample_rate, channels), EndFrame()])
+        await PipelineRunner(handle_sigint=False, handle_sigterm=False).run(task)
+        if not collector.agent_text or not collector.audio:
+            raise RuntimeError('Pipecat reference pipeline produced incomplete output')
+        output_wav = _pcm_to_wav(collector.audio, collector.sample_rate, collector.channels)
+        return {
+            'caller_transcript': asr_processor.transcript,
+            'agent_text': collector.agent_text,
+            'agent_audio_wav_base64': base64.b64encode(output_wav).decode('ascii'),
+            'pipeline': {'provider': 'pipecat', 'processors': ['rtc-asr', 'llm', 'kokoro'], 'current_run': True},
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f'Reference Pipecat pipeline failed: {exc}') from exc
+
+
+def _wav_to_pcm(payload: bytes) -> tuple[bytes, int, int]:
+    with wave.open(io.BytesIO(payload), 'rb') as source:
+        return source.readframes(source.getnframes()), source.getframerate(), source.getnchannels()
+
+
+def _pcm_to_wav(payload: bytes, sample_rate: int, channels: int) -> bytes:
+    output = io.BytesIO()
+    with wave.open(output, 'wb') as target:
+        target.setnchannels(channels)
+        target.setsampwidth(2)
+        target.setframerate(sample_rate)
+        target.writeframes(payload)
+    return output.getvalue()
 
 
 @dataclass

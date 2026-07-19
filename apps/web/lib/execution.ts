@@ -188,10 +188,11 @@ async function handleJson<T>(response: Response): Promise<T> {
   return (text ? JSON.parse(text) : {}) as T;
 }
 
-const BUILT_IN_AGENT_IDS = new Set(['mock-text-agent', 'acc-voice-fixture-agent']);
+const BUILT_IN_AGENT_IDS = new Set(['mock-text-agent', 'generalist-text-agent', 'generalist-voice-agent']);
+const BUILT_IN_AGENT_TARGETS = new Set<AgentTarget>(['mock_agent', 'builtin_sample_voice']);
 
-export function isBuiltInAgent(agent: Pick<AgentRecord, 'id'>) {
-  return BUILT_IN_AGENT_IDS.has(agent.id);
+export function isBuiltInAgent(agent: Pick<AgentRecord, 'id' | 'target'>) {
+  return BUILT_IN_AGENT_IDS.has(agent.id) || BUILT_IN_AGENT_TARGETS.has(agent.target);
 }
 
 export function agentTryItOutHref(agentId: string, apiBase?: string | null) {

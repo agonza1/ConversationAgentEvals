@@ -223,7 +223,7 @@ function formatTargetId(value: string) {
   if (value === 'mock_agent') return 'Built-in Sample Agent';
   if (value === 'offline_acc_fixture') return 'Saved ACC Text Replay';
   if (value === 'voice_fixture') return 'Saved ACC Voice Replay';
-  if (value === 'builtin_sample_voice') return 'Built-in Sample Voice Agent';
+  if (value === 'builtin_sample_voice') return 'Built-in Generalist Voice Agent';
   if (value === 'sip_agent') return 'SIP Agent Destination';
   if (value === 'phone_agent') return 'Phone Agent Destination';
   if (value === 'browser_webrtc_agent') return 'Browser WebRTC Agent Destination';
@@ -240,9 +240,12 @@ function runTargetSummary(run: ExecutionRunRecord) {
   const target = typeof agent?.target === 'string' ? agent.target : run.mode;
   const environment = typeof agent?.environment === 'string' ? agent.environment : null;
   const evidenceOnly = target === 'offline_acc_fixture' || target === 'voice_fixture';
-  const builtInSample = target === 'mock_agent' || target === 'builtin_sample_voice';
+  const builtInSample = target === 'mock_agent';
+  const builtInReference = target === 'builtin_sample_voice';
   const evidenceLabel = evidenceOnly
     ? 'saved evidence replay'
+    : builtInReference
+      ? 'current-run local reference evidence'
     : builtInSample
       ? 'built-in sample evidence'
       : 'live target evidence';

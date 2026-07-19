@@ -47,6 +47,9 @@ services:
       DATABASE_URL: ${COMPOSE_DATABASE_URL:-sqlite:////workspace/storage/conversation_agent_evals.db}
       API_BASE_URL: http://api:8000
       PIPECAT_SERVICE_URL: http://pipecat:8110
+      RTC_ASR_BASE_URL: ${RTC_ASR_BASE_URL:-}
+      KOKORO_BASE_URL: ${KOKORO_BASE_URL:-}
+      REFERENCE_AGENT_INTERNAL_TOKEN: ${REFERENCE_AGENT_INTERNAL_TOKEN:-}
       APP_ENV: ${APP_ENV:-development}
     ports:
       - "${API_PORT:-8025}:8000"
@@ -57,6 +60,8 @@ services:
       - ./storage:/workspace/storage
       - ./.local:/workspace/.local
       - ./artifacts:/workspace/artifacts
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       db:
         condition: service_healthy
@@ -112,6 +117,8 @@ services:
       RTC_ASR_BASE_URL: ${RTC_ASR_BASE_URL:-}
       RTC_ASR_HEALTH_PATH: ${RTC_ASR_HEALTH_PATH:-/health}
       RTC_ASR_STREAM_PATH: ${RTC_ASR_STREAM_PATH:-/v1/stt/stream}
+      KOKORO_BASE_URL: ${KOKORO_BASE_URL:-}
+      REFERENCE_AGENT_INTERNAL_TOKEN: ${REFERENCE_AGENT_INTERNAL_TOKEN:-}
     ports:
       - "${PIPECAT_PORT:-8110}:8110"
     extra_hosts:

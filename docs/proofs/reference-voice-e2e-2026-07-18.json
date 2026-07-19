@@ -1,0 +1,43 @@
+{
+  "proof_type": "cae_reference_voice_e2e",
+  "captured_at": "2026-07-18T19:13:14Z",
+  "verified_code_sha": "83a01834f41e47d297b3e803db4f508bf46e1ed5",
+  "execution_run_id": "exec-79dc2a27e192",
+  "agent_id": "generalist-voice-agent",
+  "status": "needs_review",
+  "evaluation": {
+    "score": 0.0,
+    "meaning": "The media pipeline completed, while business action and final-state evidence remained unproven."
+  },
+  "current_run": {
+    "dialog_turns": 6,
+    "recording_attached": true,
+    "recording_sha256": "9574012fb8fa18ae85ce14c37be6213b0f00519e9ff43b27fe55a8283393e2f6",
+    "vcon_available": true,
+    "fixture_backed_scoring": false,
+    "saved_evidence": false
+  },
+  "participants": {
+    "tester": "pipecat_tester",
+    "target": "reference_pipecat_agent"
+  },
+  "runtime": {
+    "pipeline": "pipecat",
+    "stt_provider": "rtc-asr",
+    "stt_backend": "faster-whisper",
+    "stt_model": "base.en",
+    "llm_provider": "openai_codex",
+    "llm_model": "gpt-5.4-mini",
+    "tts_provider": "kokoro",
+    "tts_model": "kokoro",
+    "tts_voice": "af_heart",
+    "media": "synthetic_local"
+  },
+  "not_proven": [
+    "browser WebRTC peer behavior",
+    "SIP or PSTN routing",
+    "external network behavior",
+    "business tool actions or terminal account state"
+  ],
+  "reproduce": "RTC_ASR_BASE_URL=http://127.0.0.1:8080 KOKORO_BASE_URL=http://127.0.0.1:8880 npm run dev; npm run test:reference-voice-smoke"
+}

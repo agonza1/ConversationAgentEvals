@@ -139,6 +139,20 @@ class TimelineEvent(BaseModel):
     kind: str = 'mark'
 
 
+class LiveExecutionEvent(BaseModel):
+    """Observable current-run evidence emitted before evaluation completes."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    sequence: int = Field(ge=1)
+    kind: Literal['message', 'audio']
+    speaker: str
+    text: str
+    media_url: str | None = None
+    mime_type: str | None = None
+    created_at: str
+
+
 class ConversationRecord(BaseModel):
     """One inference_set.jsonl-shaped conversation row produced during Execute."""
 
@@ -153,6 +167,7 @@ class ConversationRecord(BaseModel):
     status: ConversationStatus
     iteration: int = 1
     turns: list[ConversationTurn] = Field(default_factory=list)
+    live_events: list[LiveExecutionEvent] = Field(default_factory=list)
     transcript: str | None = None
     action_trace: list[dict[str, Any]] = Field(default_factory=list)
     final_state: dict[str, Any] = Field(default_factory=dict)
