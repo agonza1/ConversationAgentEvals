@@ -4712,6 +4712,9 @@ export function BenchmarkRunner({
               conversations={executionRun.conversations || []}
               apiBase={getApiBase()}
               voice={executionRun.mode === 'pipecat_webrtc'}
+              executionRunId={executionRun.execution_run_id}
+              userId={userId}
+              runStatus={executionRun.status}
             />
 
             <div aria-label="Execution conversations" style={{ display: 'grid', gap: 8, maxHeight: 420, overflow: 'auto' }}>

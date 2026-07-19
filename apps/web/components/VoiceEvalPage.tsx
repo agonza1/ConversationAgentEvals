@@ -56,6 +56,7 @@ interface ExecutionConversation {
 interface ExecutionRun {
   execution_run_id: string;
   status: string;
+  user_id?: string;
   progress: {
     completed_conversations: number;
     total_conversations: number;
@@ -444,7 +445,14 @@ export function VoiceEvalPage() {
                 <span style={{ width: `${Math.max(0, Math.min(100, run.progress.percent))}%` }} />
               </div>
 
-              <LiveRunFeedback conversations={run.conversations || []} apiBase={getApiBase()} voice />
+              <LiveRunFeedback
+                conversations={run.conversations || []}
+                apiBase={getApiBase()}
+                voice
+                executionRunId={run.execution_run_id}
+                userId={run.user_id || ensureDemoIdentity().userId}
+                runStatus={run.status}
+              />
 
               <div aria-label="Voice eval conversations" className="voice-conversation-list">
                 {(run.conversations || []).length ? (

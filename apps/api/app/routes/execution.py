@@ -153,12 +153,24 @@ def create_execution_listener_token(
 @router.get('/listeners/{token}')
 def get_execution_listener_state(token: str):
     run, _grant = _listener_run_or_403(token)
+    def listener_event(conversation_id: str, event: dict[str, Any]) -> dict[str, Any]:
+        next_event = dict(event)
+        if next_event.get('kind') == 'audio' and next_event.get('sequence') is not None:
+            next_event['media_url'] = (
+                f'/api/execution/listeners/{token}/conversations/'
+                f'{conversation_id}/audio/{next_event["sequence"]}'
+            )
+        return next_event
+
     conversations = [
         {
             'conversation_id': item.get('conversation_id'),
             'status': item.get('status'),
             'scenario_id': item.get('scenario_id'),
-            'live_events': item.get('live_events') or [],
+            'live_events': [
+                listener_event(str(item.get('conversation_id') or ''), event)
+                for event in item.get('live_events') or []
+            ],
             'turns': item.get('turns') or [],
             'recording': item.get('recording'),
             'audio_session': item.get('audio_session'),

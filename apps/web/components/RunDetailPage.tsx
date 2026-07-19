@@ -3,12 +3,14 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { ApiAwareLink } from '@/components/ApiAwareLink';
+import { LiveRunFeedback } from '@/components/LiveRunFeedback';
 import { SiteNav } from '@/components/SiteNav';
 import {
   ConversationRecord,
   demoProjectId,
   demoUserId,
   ExecutionRunRecord,
+  getApiBase,
   getExecutionRun,
   TimelineEvent,
 } from '@/lib/execution';
@@ -189,6 +191,16 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
             <section className="card runs-transcript" aria-label="Transcript">
               <p className="eyebrow">Transcript</p>
               <h2>{conversation?.scenario_title || conversation?.scenario_id || 'Conversation'}</h2>
+              {run.mode === 'pipecat_webrtc' ? (
+                <LiveRunFeedback
+                  conversations={run.conversations || []}
+                  apiBase={getApiBase()}
+                  voice
+                  executionRunId={run.execution_run_id}
+                  userId={run.user_id || userId}
+                  runStatus={run.status}
+                />
+              ) : null}
               {(conversation?.turns || []).length ? (
                 <ol>
                   {(conversation?.turns || []).map((turn) => (

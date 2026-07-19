@@ -81,6 +81,16 @@ export interface ConversationTurn {
   event_types?: string[];
 }
 
+export interface ConversationLiveEvent {
+  sequence: number;
+  kind: 'message' | 'audio';
+  speaker: string;
+  text: string;
+  media_url?: string | null;
+  mime_type?: string | null;
+  created_at?: string | null;
+}
+
 export interface ConversationRecord {
   conversation_id: string;
   execution_run_id: string;
@@ -91,7 +101,10 @@ export interface ConversationRecord {
   status: string;
   iteration?: number;
   turns?: ConversationTurn[];
+  live_events?: ConversationLiveEvent[];
   transcript?: string | null;
+  recording?: Record<string, unknown> | null;
+  audio_session?: Record<string, unknown> | null;
   latency_marks?: Array<Record<string, unknown>>;
   metrics_summary?: ConversationMetricsSummary | null;
   timeline?: TimelineEvent[];

@@ -12,7 +12,9 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
       }
       play() {
         state.__audioPlayAttempts.push(this.url);
-        if (this.url.includes('/audio/1?') && state.__audioPlayAttempts.filter((item) => item === this.url).length === 1) {
+        const firstAudioSegment = this.url.includes('/audio/1?')
+          || (this.url.includes('/listeners/listener-token/') && this.url.includes('/audio/1'));
+        if (firstAudioSegment && state.__audioPlayAttempts.filter((item) => item === this.url).length === 1) {
           return Promise.reject(new Error('autoplay blocked'));
         }
         queueMicrotask(() => this.dispatchEvent(new Event('ended')));
@@ -72,6 +74,46 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
     });
   });
 
+  await page.route('**/api/execution/listeners/listener-token', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        listener: {
+          execution_run_id: 'voice-run-1',
+          run_status: 'running',
+          read_only: true,
+          can_inject_audio: false,
+          requires_microphone: false,
+        },
+        conversations: [
+          {
+            conversation_id: 'voice-run-1-cancellation-rescue-1',
+            status: 'running',
+            scenario_id: 'cancellation-rescue',
+            turns: [],
+            live_events: [
+              {
+                sequence: 1,
+                kind: 'audio',
+                speaker: 'Caller',
+                text: 'I want to cancel.',
+                media_url: '/api/execution/listeners/listener-token/conversations/voice-run-1-cancellation-rescue-1/audio/1',
+              },
+              {
+                sequence: 2,
+                kind: 'audio',
+                speaker: 'Agent',
+                text: 'I can help with that.',
+                media_url: '/api/execution/listeners/listener-token/conversations/voice-run-1-cancellation-rescue-1/audio/2',
+              },
+            ],
+          },
+        ],
+      }),
+    });
+  });
+
   await page.route('**/api/execution/runs**', async (route) => {
     const url = route.request().url();
     if (route.request().method() === 'POST' && url.endsWith('/api/execution/runs')) {
@@ -107,6 +149,26 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
           conversations: [],
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
+        }),
+      });
+      return;
+    }
+
+    if (route.request().method() === 'POST' && url.includes('/api/execution/runs/voice-run-1/listener-token')) {
+      expect(url).toContain('user_id=voice-user');
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          listener: {
+            token: 'listener-token',
+            execution_run_id: 'voice-run-1',
+            expires_at: '2026-07-19T21:00:00.000Z',
+            listen_url: '/api/execution/listeners/listener-token',
+            read_only: true,
+            can_inject_audio: false,
+            requires_microphone: false,
+          },
         }),
       });
       return;
@@ -220,18 +282,21 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
   await page.getByRole('button', { name: 'Run generalist voice evaluation' }).click();
   const results = page.getByRole('region', { name: 'Run results' });
   await expect(results.getByText('voice-run-1')).toBeVisible();
-  await results.getByRole('button', { name: 'Show live exchange' }).click();
+  await results.getByRole('button', { name: 'Create listener link' }).click();
+  await expect(results.getByLabel('Read-only browser listener')).toContainText('/api/execution/listeners/listener-token');
+  await expect(results.getByLabel('Read-only browser listener')).toContainText('cannot inject audio');
+  await expect(results.getByLabel('Read-only browser listener')).toContainText('no microphone');
   await expect(results.getByLabel('Observed live exchange')).toContainText('I want to cancel.', { timeout: 10000 });
   await results.getByRole('button', { name: 'Unmute live conversation' }).click();
   await expect(results.getByRole('button', { name: 'Mute live conversation' })).toBeVisible();
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __audioPlayAttempts: string[] }
-  ).__audioPlayAttempts.filter((url) => url.includes('/audio/1?')).length)).toBe(1);
+  ).__audioPlayAttempts.filter((url) => url.includes('/listeners/listener-token/') && url.includes('/audio/1')).length)).toBe(1);
   await results.getByRole('button', { name: 'Mute live conversation' }).click();
   await results.getByRole('button', { name: 'Unmute live conversation' }).click();
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __audioPlayAttempts: string[] }
-  ).__audioPlayAttempts.filter((url) => url.includes('/audio/1?')).length)).toBeGreaterThan(1);
+  ).__audioPlayAttempts.filter((url) => url.includes('/listeners/listener-token/') && url.includes('/audio/1')).length)).toBeGreaterThan(1);
   await expect(results.getByRole('link', { name: 'Open Run Agent detail' })).toHaveAttribute(
     'href',
     '/runs/voice-run-1?api_base=http%3A%2F%2Fapi.example.test',

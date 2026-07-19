@@ -162,6 +162,9 @@ def test_execution_listener_token_is_receive_only_owner_scoped_and_ephemeral():
     assert state.json()['listener']['read_only'] is True
     assert state.json()['listener']['can_inject_audio'] is False
     assert state.json()['conversations'][0]['live_events'][0]['speaker'] == 'Agent'
+    assert state.json()['conversations'][0]['live_events'][0]['media_url'] == (
+        f'/api/execution/listeners/{token}/conversations/{conversation_id}/audio/1'
+    )
 
     blocked_write = client.post(f'/api/execution/listeners/{token}')
     assert blocked_write.status_code == 405
