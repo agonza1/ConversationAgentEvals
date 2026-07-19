@@ -253,6 +253,104 @@ export interface DefaultDeckMeta {
   available: boolean;
   name: string;
 }
+
+export interface AssertCheck {
+  id: string;
+  label: string;
+  description: string;
+  severity?: 'info' | 'warning' | 'error';
+  draft?: boolean;
+}
+
+export interface AssertScenario {
+  id: string;
+  title: string;
+  persona?: string;
+  description: string;
+  steps?: string[];
+  expected_outcome?: string;
+  draft?: boolean;
+}
+
+export interface AssertJudge {
+  id: string;
+  name: string;
+  kind: 'semantic' | 'deterministic';
+  rubric: string;
+  weight: number;
+  provider: string;
+  model?: string | null;
+}
+
+export interface EditableAssertSpec {
+  id?: string | null;
+  version?: number | null;
+  title: string;
+  role: string;
+  objective: string;
+  status?: 'draft' | 'published';
+  generated_content_status?: 'none' | 'draft' | 'approved';
+  required_behaviors: AssertCheck[];
+  forbidden_behaviors: AssertCheck[];
+  reusable_blocks?: string[];
+  scenario_seeds: string[];
+  scenarios: AssertScenario[];
+  deterministic_checks?: AssertCheck[];
+  evidence_requirements?: string[];
+  judges: AssertJudge[];
+  runtime_overrides?: Record<string, unknown>;
+  extensions?: Record<string, unknown>;
+}
+
+export interface EditableAssertValidationMessage {
+  field: string;
+  message: string;
+  severity: 'error' | 'warning';
+}
+
+export interface EditableAssertPreview {
+  valid: boolean;
+  errors: EditableAssertValidationMessage[];
+  warnings: EditableAssertValidationMessage[];
+  normalized: EditableAssertSpec;
+  yaml: string;
+  json_preview: Record<string, unknown>;
+  export_filename: string;
+  assert_validator: 'assert-ai' | string;
+  assert_validated: boolean;
+}
+
+export interface EditableAssertGeneratedDraft {
+  provider: string;
+  model: string;
+  status: 'draft';
+  requires_user_approval: boolean;
+  required_behaviors: AssertCheck[];
+  forbidden_behaviors: AssertCheck[];
+  scenario_seeds: string[];
+  scenarios: AssertScenario[];
+  deterministic_checks: AssertCheck[];
+  judges: AssertJudge[];
+  note: string;
+}
+
+export interface EditableAssertTemplate {
+  id: string;
+  label: string;
+  description: string;
+  spec: EditableAssertSpec;
+}
+
+export interface SavedEditableAssertSpec {
+  id: string;
+  version: number;
+  user_id: string;
+  project_id: string;
+  created_at: string;
+  updated_at: string;
+  spec: EditableAssertSpec;
+  yaml: string;
+}
 export interface BenchmarkScenarioAction {
   name: string;
   description?: string;

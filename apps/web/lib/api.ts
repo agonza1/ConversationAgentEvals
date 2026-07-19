@@ -8,8 +8,13 @@ import {
   DeckSlidesResponse,
   DeckSummary,
   DefaultDeckMeta,
+  EditableAssertGeneratedDraft,
+  EditableAssertPreview,
+  EditableAssertSpec,
+  EditableAssertTemplate,
   PipecatAgentStatus,
   PipecatLiveCreateResponse,
+  SavedEditableAssertSpec,
   SessionCreateResponse,
   SessionLiveState,
   SessionSnapshot,
@@ -164,6 +169,47 @@ export async function createDefaultDeck(): Promise<DeckSummary> {
   });
 
   return handleResponse<DeckSummary>(response);
+}
+
+export async function listEditableAssertTemplates(): Promise<EditableAssertTemplate[]> {
+  const response = await fetch(`${getApiBase()}/api/specs/templates`, { cache: 'no-store' });
+  const payload = await handleResponse<{ templates: EditableAssertTemplate[] }>(response);
+  return payload.templates;
+}
+
+export async function generateEditableAssertDraft(payload: {
+  title: string;
+  role: string;
+  objective: string;
+}): Promise<EditableAssertGeneratedDraft> {
+  const response = await fetch(`${getApiBase()}/api/specs/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return handleResponse<EditableAssertGeneratedDraft>(response);
+}
+
+export async function previewEditableAssertSpec(spec: EditableAssertSpec): Promise<EditableAssertPreview> {
+  const response = await fetch(`${getApiBase()}/api/specs/preview`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ spec }),
+  });
+  return handleResponse<EditableAssertPreview>(response);
+}
+
+export async function saveEditableAssertSpec(payload: {
+  user_id: string;
+  project_id: string;
+  spec: EditableAssertSpec;
+}): Promise<SavedEditableAssertSpec> {
+  const response = await fetch(`${getApiBase()}/api/specs`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return handleResponse<SavedEditableAssertSpec>(response);
 }
 
 export async function getDeck(deckId: string): Promise<DeckSummary> {
