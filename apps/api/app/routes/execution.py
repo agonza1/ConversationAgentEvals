@@ -69,8 +69,8 @@ def execution_reference_complete(
 @router.post('/runs')
 def create_execution_run(payload: ExecutionRunCreateRequest, background_tasks: BackgroundTasks):
     try:
-        queued = start_execution_run(payload)
-    except ValueError as exc:
+        queued = start_execution_run(payload, preflight=True)
+    except (ValueError, ReferenceRuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     background_tasks.add_task(execute_execution_run, queued['execution_run_id'], payload)
     return queued

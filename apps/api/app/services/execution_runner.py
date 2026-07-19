@@ -44,6 +44,7 @@ from app.services.reference_generalist_agent import (
     ReferencePipecatAgentTransport,
     ReferenceMediaServices,
     ReferenceRuntimeConfig,
+    ReferenceTesterLlmWordingRenderer,
     resolve_reference_completion_provider,
 )
 from app.services.run_provenance import (
@@ -66,7 +67,7 @@ ALLOWED_FIXTURE_ROOTS = (
 )
 
 
-def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
+def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool = False) -> dict[str, Any]:
     register_builtin_benchmark_extensions()
     resolved = _resolve_agent_payload(payload)
     if (
@@ -101,6 +102,8 @@ def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
         _repo_path(resolved.voice_fixture_path)
     if resolved.audio_plan_path:
         _repo_path(resolved.audio_plan_path)
+    if preflight and resolved.mode == 'pipecat_webrtc':
+        _preflight_reference_runtime(resolved, execution_run_id=f'preflight-{uuid.uuid4().hex[:12]}')
     total = len(scenario_ids) * resolved.iterations
     now = datetime.now(UTC).isoformat()
     execution_run_id = f'exec-{uuid.uuid4().hex[:12]}'
@@ -443,6 +446,31 @@ def _execution_model_name(payload: ExecutionRunCreateRequest, *, target: str) ->
     if target == 'builtin_sample_voice':
         return ReferenceRuntimeConfig().llm_model
     return DEFAULT_EXECUTION_MODEL
+
+
+def _reference_runtime_config(payload: ExecutionRunCreateRequest) -> ReferenceRuntimeConfig:
+    updates: dict[str, str] = {}
+    if payload.model_name:
+        updates['llm_model'] = payload.model_name
+    if payload.tester_model_name:
+        updates['tester_llm_model'] = payload.tester_model_name
+    return ReferenceRuntimeConfig(**updates)
+
+
+def _preflight_reference_runtime(
+    payload: ExecutionRunCreateRequest,
+    *,
+    execution_run_id: str,
+) -> None:
+    """Fail closed before queueing a built-in voice run."""
+    config = _reference_runtime_config(payload)
+    completion = resolve_reference_completion_provider()
+    ReferencePipecatAgentTransport(
+        artifact_dir=REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id / 'audio',
+        media=ReferenceMediaServices(config),
+        completion=completion,
+        config=config,
+    )
 
 
 def _queued_execution_context(
@@ -837,11 +865,7 @@ async def _execute_pipecat_webrtc(
         )
 
     artifact_dir = REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id / 'audio'
-    config = (
-        ReferenceRuntimeConfig(llm_model=payload.model_name)
-        if payload.model_name
-        else ReferenceRuntimeConfig()
-    )
+    config = _reference_runtime_config(payload)
     completion = resolve_reference_completion_provider()
     # Construction performs fail-closed readiness checks before a session is opened.
     transport = ReferencePipecatAgentTransport(
@@ -855,6 +879,10 @@ async def _execute_pipecat_webrtc(
     runner = PipecatTesterAgentRunner(
         target=target,
         tts_renderer=KokoroTesterTtsRenderer(transport.media),
+        wording_renderer=ReferenceTesterLlmWordingRenderer(
+            completion,
+            model_name=config.tester_llm_model,
+        ),
     )
     tester_result = await runner.run(_pipecat_webrtc_tester_config(scenario_id))
     session_id = str(tester_result.get('session_id') or '')
@@ -929,6 +957,17 @@ async def _execute_pipecat_webrtc(
     else:
         verdict = report.get('verdict')
         score = report.get('overall_score')
+    transport_graphs = getattr(transport, 'graphs', {})
+    tester_processors = (
+        transport_graphs.get('tester', {}).get('processors')
+        if isinstance(transport_graphs, dict)
+        else None
+    ) or []
+    tester_llm = (
+        tester_processors[1]
+        if len(tester_processors) > 1 and isinstance(tester_processors[1], dict)
+        else {}
+    )
     runtime_provenance = {
         'execution_engine': 'run_agent',
         'target_agent_id': payload.agent_id,
@@ -936,7 +975,16 @@ async def _execute_pipecat_webrtc(
         'audio_transport': transport.transport_id,
         'capture_surface': 'cae_reference_local_audio_loop',
         'tester': {'participant': 'pipecat_tester', 'tts_provider': 'kokoro'},
-        'target': {'participant': 'reference_pipecat_agent', **transport.runtime},
+        'tester_llm': {
+            'participant': 'pipecat_tester',
+            'provider': tester_llm.get('provider'),
+            'model': tester_llm.get('model') or config.tester_llm_model,
+            'llm_mode': (transport_graphs.get('tester') or {}).get('llm_mode')
+            if isinstance(transport_graphs, dict)
+            else 'real',
+        },
+        'target': {'participant': 'pipecat_target', 'reference_endpoint': 'reference_pipecat_agent', **transport.runtime},
+        'graphs': transport_graphs,
         'live_media': False,
         'browser_peer': False,
         'sip_pstn': False,

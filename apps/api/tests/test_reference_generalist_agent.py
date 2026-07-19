@@ -144,8 +144,17 @@ def test_reference_tester_to_agent_contract_uses_only_current_run(tmp_path: Path
         assert media.transcriptions == 1
         proof = transport.session_proof(session_id)
         assert proof['tester_participant'] == 'pipecat_tester'
-        assert proof['target_participant'] == 'reference_pipecat_agent'
+        assert proof['target_participant'] == 'pipecat_target'
+        assert proof['reference_endpoint'] == 'reference_pipecat_agent'
         assert proof['evidence_source'] == 'current_run'
+        assert proof['architecture'] == 'two_independent_pipecat_graphs_duplex_frames'
+        assert proof['graphs']['tester']['participant_id'] == 'pipecat_tester'
+        assert proof['graphs']['target']['participant_id'] == 'pipecat_target'
+        assert proof['duplex']['frame_count'] == 2
+        assert [frame['direction'] for frame in proof['duplex']['frames']] == [
+            'tester_to_target',
+            'target_to_tester',
+        ]
         assert transport.recording_handle(session_id).uri.endswith('.wav')
         assert len(transport.latency_marks(session_id)) == 1
         assert [event['speaker'] for event in observed] == ['Caller', 'Agent']

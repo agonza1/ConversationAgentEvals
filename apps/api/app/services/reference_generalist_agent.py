@@ -23,6 +23,10 @@ import httpx
 from app.services.acc_realtime_target import AccAudioFixture, AccAudioStep
 from app.services.execution_audio import AudioRecordingHandle, TranscriptionTurn
 from app.services.llm_providers import get_provider
+from app.services.two_agent_pipecat_duplex import (
+    InMemoryDuplexFrameTransport,
+    build_builtin_sample_voice_graphs,
+)
 
 
 class ReferenceRuntimeError(RuntimeError):
@@ -69,6 +73,13 @@ class ReferenceRuntimeConfig:
     )
     llm_model: str = field(
         default_factory=lambda: os.getenv('REFERENCE_LLM_MODEL', 'gpt-5.4-mini').strip()
+    )
+    tester_llm_model: str = field(
+        default_factory=lambda: (
+            os.getenv('REFERENCE_TESTER_LLM_MODEL')
+            or os.getenv('REFERENCE_LLM_MODEL')
+            or 'gpt-5.4-mini'
+        ).strip()
     )
     timeout_seconds: float = field(
         default_factory=lambda: float(os.getenv('REFERENCE_AGENT_TIMEOUT_SECONDS', '60'))
@@ -230,6 +241,39 @@ class KokoroTesterTtsRenderer:
         )
 
 
+class ReferenceTesterLlmWordingRenderer:
+    """Render tester caller turns with the configured real LLM provider."""
+
+    def __init__(self, completion: CompletionProvider, *, model_name: str) -> None:
+        self.completion = completion
+        self.model_name = model_name
+
+    async def render(self, act, observation, config) -> str:  # noqa: ANN001 - protocol accepts app models
+        observed = (
+            f'Target observation: {observation.agent_text}'
+            if observation is not None and observation.agent_text
+            else 'Target observation: none yet.'
+        )
+        prompt = (
+            'You are the Pipecat scenario tester in a two-agent voice evaluation. '
+            'Render exactly one concise caller utterance for the next spoken turn. '
+            'Do not narrate, score, or include labels.\n\n'
+            f'Scenario: {config.scenario_id}\n'
+            f'Goal: {config.goal}\n'
+            f'Allowed caller act: {act.act_id}\n'
+            f'Act objective: {act.objective}\n'
+            f'Example utterance: {act.example_utterance}\n'
+            f'{observed}\n\n'
+            'Caller utterance:'
+        )
+        text = await asyncio.to_thread(
+            self.completion.complete,
+            prompt,
+            model_name=self.model_name,
+        )
+        return text.strip()
+
+
 @dataclass
 class _ReferenceSession:
     session_id: str
@@ -237,6 +281,7 @@ class _ReferenceSession:
     inbound: list[dict[str, Any]] = field(default_factory=list)
     recording_wavs: list[bytes] = field(default_factory=list)
     latency_marks: list[dict[str, Any]] = field(default_factory=list)
+    duplex_transport: InMemoryDuplexFrameTransport | None = None
     closed: bool = False
     recording: AudioRecordingHandle | None = None
 
@@ -275,6 +320,19 @@ class ReferencePipecatAgentTransport:
             'model': config.llm_model,
             'status': 'ready',
         }
+        tester_graph, target_graph = build_builtin_sample_voice_graphs(
+            tester_llm_provider=str(llm_status.get('provider') or completion.provider_id),
+            tester_llm_model=config.tester_llm_model,
+            target_llm_provider=str(llm_status.get('provider') or completion.provider_id),
+            target_llm_model=config.llm_model,
+            stt_model=config.rtc_asr_model,
+            tts_model=config.kokoro_model,
+            llm_mode='real',
+        )
+        self.graphs = {
+            'tester': tester_graph.as_dict(),
+            'target': target_graph.as_dict(),
+        }
         try:
             pipecat_health = media.client.get(
                 f'{config.pipecat_service_url}/reference-agent/readiness',
@@ -306,8 +364,17 @@ class ReferencePipecatAgentTransport:
 
     async def connect(self, session_id: str, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         del metadata
-        self._sessions[session_id] = _ReferenceSession(session_id=session_id)
-        return {'session_id': session_id, 'ready': True, 'participant': 'reference_pipecat_agent', 'runtime': self.runtime}
+        self._sessions[session_id] = _ReferenceSession(
+            session_id=session_id,
+            duplex_transport=InMemoryDuplexFrameTransport(run_id=session_id),
+        )
+        return {
+            'session_id': session_id,
+            'ready': True,
+            'participant': 'reference_pipecat_agent',
+            'runtime': self.runtime,
+            'graphs': self.graphs,
+        }
 
     async def start_recording(self, session_id: str) -> dict[str, Any]:
         self._require(session_id)
@@ -357,6 +424,23 @@ class ReferencePipecatAgentTransport:
         if not caller_text or not agent_text or not agent_wav:
             raise ReferenceRuntimeError('Pipecat reference agent returned incomplete current-run evidence.')
         pipeline_ms = round((time.perf_counter() - started) * 1000, 2)
+        rendered_text = str(fixture.metadata.get('rendered_text') or '').strip() or caller_text
+        duplex = state.duplex_transport or InMemoryDuplexFrameTransport(run_id=session_id)
+        state.duplex_transport = duplex
+        tester_frame = duplex.send(
+            direction='tester_to_target',
+            sender='pipecat_tester',
+            receiver='pipecat_target',
+            audio_bytes=wav_bytes,
+            source_text=rendered_text,
+        )
+        target_frame = duplex.send(
+            direction='target_to_tester',
+            sender='pipecat_target',
+            receiver='pipecat_tester',
+            audio_bytes=agent_wav,
+            source_text=agent_text,
+        )
 
         caller_index = len(state.transcription) + 1
         state.transcription.extend([
@@ -370,9 +454,11 @@ class ReferencePipecatAgentTransport:
                 direction='tester_to_target',
                 evidence_role='target_asr_receipt',
                 frame_metadata={
-                    'audio_bytes': len(wav_bytes),
+                    **tester_frame.metadata(),
                     'transport': self.transport_id,
                     'source': 'tester_kokoro_audio',
+                    'source_text': rendered_text,
+                    'asr_receipt': caller_text,
                 },
             ),
             TranscriptionTurn(
@@ -384,9 +470,10 @@ class ReferencePipecatAgentTransport:
                 direction='target_to_tester',
                 evidence_role='target_llm_output',
                 frame_metadata={
-                    'audio_bytes': len(agent_wav),
+                    **target_frame.metadata(),
                     'transport': self.transport_id,
                     'source': 'target_kokoro_audio',
+                    'source_text': agent_text,
                 },
             ),
         ])
@@ -455,12 +542,23 @@ class ReferencePipecatAgentTransport:
             'session_id': session_id,
             'transport': self.transport_id,
             'tester_participant': 'pipecat_tester',
-            'target_participant': 'reference_pipecat_agent',
+            'target_participant': 'pipecat_target',
+            'reference_endpoint': 'reference_pipecat_agent',
             'frames_sent': len(state.recording_wavs[::2]),
             'frames_received': len(state.inbound),
             'closed': state.closed,
             'runtime': self.runtime,
             'evidence_source': 'current_run',
+            'architecture': 'two_independent_pipecat_graphs_duplex_frames',
+            'graphs': self.graphs,
+            'duplex': {
+                'transport': 'local_duplex_frame_transport',
+                'frame_count': len((state.duplex_transport or InMemoryDuplexFrameTransport()).frames),
+                'frames': [
+                    frame.metadata()
+                    for frame in ((state.duplex_transport.frames if state.duplex_transport else []))
+                ],
+            },
         }
 
     def _require(self, session_id: str) -> _ReferenceSession:

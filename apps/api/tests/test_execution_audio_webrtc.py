@@ -324,17 +324,8 @@ def test_pipecat_webrtc_execution_fails_closed_without_reference_services(monkey
             'evaluate': True,
         },
     )
-    assert queued.status_code == 200, queued.text
-    run_id = queued.json()['execution_run_id']
-    assert queued.json()['mode'] == 'pipecat_webrtc'
-
-    completed = _wait_for_terminal(run_id, user_id='webrtc-user')
-    assert completed['status'] == 'failed'
-    assert len(completed['conversations']) == 1
-    conversation = completed['conversations'][0]
-    assert conversation['scenario_id'] == 'cancellation-rescue'
-    assert not conversation['turns']
-    assert 'RTC_ASR_BASE_URL' in conversation['error']
+    assert queued.status_code == 400, queued.text
+    assert 'RTC_ASR_BASE_URL' in queued.json()['detail']
 
 
 def test_pipecat_webrtc_propagates_tester_needs_review(monkeypatch, tmp_path):
