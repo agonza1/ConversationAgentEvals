@@ -128,6 +128,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   });
 
   let posted: Record<string, unknown> | null = null;
+  const textPostAttempts: Record<string, unknown>[] = [];
   let voicePosted: Record<string, unknown> | null = null;
   let postAttempts = 0;
   await page.route('**/api/benchmarks/suite-runs**', async (route) => {
@@ -159,6 +160,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
         return;
       }
       postAttempts += 1;
+      textPostAttempts.push(body);
       if (postAttempts === 1) {
         await route.fulfill({
           status: 422,
@@ -315,17 +317,24 @@ test('launch evaluation streams conversations into the live list', async ({ page
 
   const launch = page.getByLabel('Launch agent run');
   await expect(launch.getByRole('heading', { name: 'Configure this run' })).toBeVisible();
-  await expect(launch.getByLabel('Default scenario for launch')).toContainText('Cancellation Rescue');
+  await expect(launch.getByLabel('Selected run scope')).toContainText('Cancellation Rescue');
   await expect(launch.getByLabel('Execution tester')).toHaveValue('scenario_simulator');
   await expect(launch.getByLabel('Execution runner')).toContainText(/local async runner/i);
   await expect(launch.getByText('System under test')).toBeVisible();
-  await expect(launch.getByText('Advanced')).toBeVisible();
-  await expect(launch.getByLabel('Execution scenario scope')).not.toBeVisible();
-  await launch.getByText('Advanced').click();
-  await expect(launch.getByLabel('Execution scenario scope')).toBeVisible();
+  await expect(launch.getByText('Advanced', { exact: true })).toHaveCount(0);
+  await expect(launch.getByLabel('Execution scenario scope')).toHaveCount(0);
+  const runScope = launch.getByRole('group', { name: 'Run scope' });
+  await expect(runScope.getByRole('button', { name: /Single scenario/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(runScope.getByRole('button', { name: /Entire suite/ })).toHaveAttribute('aria-pressed', 'false');
   await launch.getByRole('button', { name: 'Run sample evaluation' }).click();
   await expect(launch).toContainText('tester_id: Extra inputs are not permitted; executor_id: Extra inputs are not permitted');
   await expect(launch).not.toContainText('[object Object]');
+  expect(textPostAttempts[0]).toMatchObject({ scenario_ids: ['cancellation-rescue'] });
+  await runScope.getByRole('button', { name: /Entire suite/ }).click();
+  await expect(runScope.getByRole('button', { name: /Entire suite/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(launch.getByLabel('Selected run scope')).toContainText('Call Center Voice AI');
+  await expect(launch.getByLabel('Selected run scope')).toContainText('2 scenarios');
+  await expect(launch).toContainText('2 scenarios × 1 iteration · 2 conversations');
   await launch.getByRole('button', { name: 'Run sample evaluation' }).click();
   await expect(launch.getByText('exec-ui-demo', { exact: true })).toBeVisible();
   await launch.getByRole('button', { name: 'Show live exchange' }).click();
@@ -343,7 +352,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
     model_name: 'gpt-5.4',
     tester_id: 'scenario_simulator',
     executor_id: 'local_async_runner',
-    scenario_ids: ['cancellation-rescue'],
+    scenario_ids: ['billing-address-change', 'cancellation-rescue'],
   });
   await expect(launch.getByLabel('Execution conversations')).toContainText('Billing Address Change');
   await expect(launch.getByLabel('Execution conversations')).toContainText(/pass/i, { timeout: 8000 });
