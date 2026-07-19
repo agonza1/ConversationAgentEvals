@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import secrets
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -21,6 +23,7 @@ from app.services.acc_connection import acc_connection_status, test_acc_connecti
 
 
 router = APIRouter(prefix='/api/execution', tags=['execution'])
+_LISTENER_TOKENS: dict[str, dict[str, Any]] = {}
 
 
 class AccConnectionTestRequest(BaseModel):
@@ -34,6 +37,12 @@ class ReferenceCompletionRequest(BaseModel):
 
     prompt: str = Field(min_length=1, max_length=50000)
     model_name: str = Field(min_length=1, max_length=128)
+
+
+class ListenerTokenRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    ttl_seconds: int = Field(default=600, ge=30, le=1800)
 
 
 @router.post('/reference/complete')
@@ -108,6 +117,92 @@ def get_conversation(execution_run_id: str, conversation_id: str, user_id: str =
     return conversation
 
 
+@router.post('/runs/{execution_run_id}/listener-token')
+def create_execution_listener_token(
+    execution_run_id: str,
+    payload: ListenerTokenRequest | None = None,
+    user_id: str = Query(...),
+):
+    run = execution_run_store.get_execution_run(execution_run_id)
+    if run is None or run.get('user_id') != user_id:
+        raise HTTPException(status_code=404, detail='Execution run not found.')
+    if run.get('status') not in {'queued', 'running'}:
+        raise HTTPException(status_code=409, detail='Execution listener tokens are only issued for active runs.')
+    _prune_listener_tokens()
+    ttl_seconds = (payload or ListenerTokenRequest()).ttl_seconds
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
+    _LISTENER_TOKENS[token] = {
+        'execution_run_id': execution_run_id,
+        'user_id': user_id,
+        'expires_at': expires_at,
+    }
+    return {
+        'listener': {
+            'token': token,
+            'execution_run_id': execution_run_id,
+            'expires_at': expires_at.isoformat(),
+            'listen_url': f'/api/execution/listeners/{token}',
+            'read_only': True,
+            'can_inject_audio': False,
+            'requires_microphone': False,
+        }
+    }
+
+
+@router.get('/listeners/{token}')
+def get_execution_listener_state(token: str):
+    run, _grant = _listener_run_or_403(token)
+    conversations = [
+        {
+            'conversation_id': item.get('conversation_id'),
+            'status': item.get('status'),
+            'scenario_id': item.get('scenario_id'),
+            'live_events': item.get('live_events') or [],
+            'turns': item.get('turns') or [],
+            'recording': item.get('recording'),
+            'audio_session': item.get('audio_session'),
+        }
+        for item in run.get('conversations') or []
+    ]
+    return {
+        'listener': {
+            'execution_run_id': run.get('execution_run_id'),
+            'run_status': run.get('status'),
+            'read_only': True,
+            'can_inject_audio': False,
+            'requires_microphone': False,
+        },
+        'conversations': conversations,
+    }
+
+
+@router.get('/listeners/{token}/conversations/{conversation_id}/audio/{sequence}')
+def get_listener_live_audio(token: str, conversation_id: str, sequence: int):
+    run, _grant = _listener_run_or_403(token)
+    execution_run_id = str(run.get('execution_run_id') or '')
+    conversation = execution_run_store.get_conversation(execution_run_id, conversation_id)
+    matching = next(
+        (
+            event for event in (conversation or {}).get('live_events') or []
+            if event.get('sequence') == sequence and event.get('kind') == 'audio'
+        ),
+        None,
+    )
+    if matching is None:
+        raise HTTPException(status_code=404, detail='Live audio segment not found.')
+    root = (execution_run_store.RUNS_DIR / execution_run_id).resolve()
+    path = (
+        root
+        / 'audio'
+        / 'live'
+        / f'{conversation_id}-{sequence}.wav'
+    ).resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        raise HTTPException(status_code=404, detail='Live audio segment not found.')
+    return FileResponse(path, media_type='audio/wav')
+
+
 @router.get('/runs/{execution_run_id}/conversations/{conversation_id}/audio/{sequence}')
 def get_live_conversation_audio(
     execution_run_id: str,
@@ -138,6 +233,28 @@ def get_live_conversation_audio(
     if not path.is_relative_to(root) or not path.is_file():
         raise HTTPException(status_code=404, detail='Live audio segment not found.')
     return FileResponse(path, media_type='audio/wav')
+
+
+def _listener_run_or_403(token: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    _prune_listener_tokens()
+    grant = _LISTENER_TOKENS.get(token)
+    if grant is None:
+        raise HTTPException(status_code=403, detail='Execution listener token is invalid or expired.')
+    run = execution_run_store.get_execution_run(str(grant['execution_run_id']))
+    if run is None or run.get('user_id') != grant.get('user_id'):
+        _LISTENER_TOKENS.pop(token, None)
+        raise HTTPException(status_code=403, detail='Execution listener token is stale.')
+    return run, grant
+
+
+def _prune_listener_tokens() -> None:
+    now = datetime.now(UTC)
+    expired = [
+        token for token, grant in _LISTENER_TOKENS.items()
+        if grant.get('expires_at') <= now
+    ]
+    for token in expired:
+        _LISTENER_TOKENS.pop(token, None)
 
 
 @router.get('/audio/capabilities')
