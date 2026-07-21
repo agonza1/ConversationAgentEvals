@@ -174,12 +174,13 @@ export function LiveRunFeedback({
 
   useEffect(() => {
     if (!listenerToken) return undefined;
+    const token = listenerToken.token;
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     async function poll() {
       try {
-        const status = await refreshListener(listenerToken.token);
+        const status = await refreshListener(token);
         if (!active) return;
         if (status === undefined || status === 'queued' || status === 'running') {
           timer = setTimeout(() => void poll(), 1500);
