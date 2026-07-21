@@ -27,6 +27,7 @@ from app.routes.product import router as product_router
 from app.routes.realtime import router as realtime_router
 from app.routes.scenarios import router as scenarios_router
 from app.routes.sessions import router as sessions_router
+from app.routes.specs import router as specs_router
 from app.services.agent_store import ensure_seeded as ensure_agents_seeded
 
 ensure_agents_seeded()
@@ -125,6 +126,7 @@ app.include_router(scenarios_router)
 app.include_router(execution_router)
 app.include_router(agents_router)
 app.include_router(product_router)
+app.include_router(specs_router)
 
 BASE_DIR = Path(__file__).resolve().parents[3]
 STORAGE_DIR = BASE_DIR / 'storage'

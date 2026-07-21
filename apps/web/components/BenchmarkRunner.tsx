@@ -2280,6 +2280,10 @@ export function BenchmarkRunner({
     () => selectedSuite?.scenarios.find((scenario) => scenario.id === selectedScenarioId) ?? selectedSuite?.scenarios[0] ?? null,
     [selectedScenarioId, selectedSuite],
   );
+  const supportsSuiteExecutionScope = Boolean(
+    selectedScoreAgent?.channel === 'text'
+    && !isSavedReplayTargetId(selectedScoreAgent.target),
+  );
   function clearStructuredEvidenceFields() {
     setActionTrace('');
     setFinalState('');
@@ -4505,14 +4509,50 @@ export function BenchmarkRunner({
         ) : null}
 
         {view === 'run' && selectedSuite && !loadError ? (
-          <div className="run-scenario-context" aria-label="Default scenario for launch">
+          <div className="run-scenario-context" aria-label="Selected run scope">
             <div>
-              <span>Scenario</span>
-              <strong>{selectedScenario?.title || 'Select a scenario'}</strong>
-              <small>{selectedSuite.title}</small>
+              <span>{executionScope === 'suite' && supportsSuiteExecutionScope ? 'Suite' : 'Scenario'}</span>
+              <strong>
+                {executionScope === 'suite' && supportsSuiteExecutionScope
+                  ? selectedSuite.title
+                  : selectedScenario?.title || 'Select a scenario'}
+              </strong>
+              <small>
+                {executionScope === 'suite' && supportsSuiteExecutionScope
+                  ? `${selectedSuite.scenarios.length} ${selectedSuite.scenarios.length === 1 ? 'scenario' : 'scenarios'}`
+                  : selectedSuite.title}
+              </small>
             </div>
-            <ApiAwareLink href="/scenarios">Change scenario</ApiAwareLink>
+            <ApiAwareLink href="/scenarios">
+              {executionScope === 'suite' && supportsSuiteExecutionScope ? 'Review scenarios' : 'Change scenario'}
+            </ApiAwareLink>
           </div>
+        ) : null}
+
+        {supportsSuiteExecutionScope ? (
+          <fieldset className="run-scope-control">
+            <legend>Run scope</legend>
+            <div className="run-scope-toggle" role="group" aria-label="Run scope">
+              <button
+                type="button"
+                className={executionScope === 'selected' ? 'is-active' : ''}
+                aria-pressed={executionScope === 'selected'}
+                onClick={() => setExecutionScope('selected')}
+              >
+                <strong>Single scenario</strong>
+                <span>{selectedScenario?.title || 'Selected scenario'}</span>
+              </button>
+              <button
+                type="button"
+                className={executionScope === 'suite' ? 'is-active' : ''}
+                aria-pressed={executionScope === 'suite'}
+                onClick={() => setExecutionScope('suite')}
+              >
+                <strong>Entire suite</strong>
+                <span>{selectedSuite?.scenarios.length || 0} scenarios</span>
+              </button>
+            </div>
+          </fieldset>
         ) : null}
 
         <div className="run-config-grid">
@@ -4671,31 +4711,15 @@ export function BenchmarkRunner({
             </span>
           </div>
         ) : null}
-
-        <details>
-          <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Advanced</summary>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginTop: 12 }}>
-            {selectedScoreAgent?.channel === 'text' ? (
-              <label style={{ display: 'grid', gap: 8 }}>
-                <span style={{ fontWeight: 700 }}>Scenario scope</span>
-                <select
-                  aria-label="Execution scenario scope"
-                  value={executionScope}
-                  onChange={(event) => setExecutionScope(event.target.value as 'selected' | 'suite')}
-                  style={{ border: '1px solid var(--border)', borderRadius: 8, padding: '10px 12px' }}
-                >
-                  <option value="selected">Selected scenario</option>
-                  <option value="suite">Entire suite</option>
-                </select>
-              </label>
-            ) : null}
-          </div>
-        </details>
-
         <div className="run-launch-actions">
           <div>
             <strong>{selectedScoreAgent ? `Ready to test ${selectedScoreAgent.name}` : 'Choose a target to continue'}</strong>
-            <span>{executionIterations} {executionIterations === 1 ? 'conversation' : 'conversations'} · results appear below</span>
+            <span>
+              {executionScope === 'suite' && supportsSuiteExecutionScope
+                ? `${selectedSuite?.scenarios.length || 0} scenarios × ${executionIterations} ${executionIterations === 1 ? 'iteration' : 'iterations'} · ${(selectedSuite?.scenarios.length || 0) * executionIterations} conversations`
+                : `${executionIterations} ${executionIterations === 1 ? 'conversation' : 'conversations'}`}
+              {' · results appear below'}
+            </span>
           </div>
           <button
             type="button"
