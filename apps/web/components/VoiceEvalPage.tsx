@@ -150,7 +150,7 @@ const localVoiceOption = {
   eyebrow: 'Live two-agent Pipecat',
   description: 'Runs a Pipecat tester against a separate Pipecat agent through rtc-asr, a configured LLM, and Kokoro; evaluation uses only evidence captured in this run.',
   detail: 'In-process duplex audio; optional read-only listener; no browser mic, SIP, or phone target',
-  button: 'Run generalist voice evaluation',
+  button: 'Run evaluation',
 } as const;
 
 function transportStatus(health: ExecutionHealth | null, id: string) {

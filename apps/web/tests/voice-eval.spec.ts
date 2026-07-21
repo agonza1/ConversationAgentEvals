@@ -307,7 +307,7 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
   );
   await expect(page.getByText('Browser microphone/target')).toBeVisible();
   await expect(page.getByText('Unavailable; listener is receive-only')).toBeVisible();
-  await page.getByRole('button', { name: 'Run generalist voice evaluation' }).click();
+  await page.getByRole('button', { name: 'Run evaluation' }).click();
   const results = page.getByRole('region', { name: 'Run results' });
   await expect(results.getByText('voice-run-1')).toBeVisible();
   await results.getByRole('button', { name: 'Create listener link' }).click();
@@ -478,7 +478,7 @@ test('voice page blocks before queueing when real dependencies are unavailable',
   await page.goto('/voice?api_base=http://api.example.test');
   await expect(page.getByLabel('Voice preflight blocked')).toContainText('Set OPENAI_API_KEY');
   await expect(page.getByLabel('Voice preflight blocked')).toContainText('Set RTC_ASR_BASE_URL');
-  await expect(page.getByRole('button', { name: 'Run generalist voice evaluation' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Run evaluation' })).toBeDisabled();
   await expect(page.getByText('Current-run duplex capture')).toBeVisible();
   await expect(page.getByText('Sample-based capture')).toHaveCount(0);
 });

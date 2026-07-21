@@ -4738,14 +4738,10 @@ export function BenchmarkRunner({
             onClick={() => void onLaunchExecution()}
           >
             {isLaunchingExecution
-              ? 'Launching...'
+              ? 'Starting evaluation...'
               : executionRun && isActiveExecutionStatus(executionRun.status)
-                ? 'Execution running...'
-                : selectedScoreAgent?.target === 'builtin_sample_voice'
-                  ? 'Run generalist voice evaluation'
-                  : isFixtureTargetId(selectedScoreAgent?.target)
-                    ? 'Run sample evaluation'
-                  : 'Run evaluation'}
+                ? 'Evaluation running...'
+                : 'Run evaluation'}
           </button>
         </div>
 

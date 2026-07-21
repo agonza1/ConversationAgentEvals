@@ -76,7 +76,7 @@ test('dedicated paths expose only their primary workflow', async ({ page }) => {
   await page.goto('/runs');
   await expect(page.getByRole('heading', { name: 'Run an agent' })).toBeVisible();
   await expect(page.getByLabel('Launch agent run')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Run sample evaluation' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Run evaluation' })).toBeVisible();
   await expect(page.getByLabel('Execution tester')).toContainText('Scenario user (AI)');
   await expect(page.getByLabel('Execution runner')).toContainText(/local async runner/i);
   await expect(page.getByLabel('Saved runs and e2e validation')).toHaveCount(0);
