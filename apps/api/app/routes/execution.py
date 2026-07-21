@@ -426,8 +426,29 @@ def _reference_voice_preflight() -> dict[str, Any]:
             try:
                 response = httpx.get(f'{base_url}{path}', timeout=2)
                 response.raise_for_status()
-                ready = True
-                detail = f'Reachable at {base_url}.'
+                if dependency_id == 'rtc_asr':
+                    asr_payload = response.json()
+                    actual_backend = str(asr_payload.get('backend') or '').lower()
+                    requested_backend = config.rtc_asr_backend
+                    compatible = (
+                        (requested_backend == 'whisper' and 'whisper' in actual_backend)
+                        or (
+                            requested_backend in {'parakeet', 'mlx_parakeet'}
+                            and ('parakeet' in actual_backend or 'mlx' in actual_backend)
+                        )
+                    )
+                    ready = compatible
+                    detail = (
+                        f'Reachable at {base_url}; backend {actual_backend or requested_backend} is compatible.'
+                        if compatible
+                        else (
+                            f'rtc-asr backend mismatch: requested {requested_backend}, '
+                            f'service reports {actual_backend or "unknown"}.'
+                        )
+                    )
+                else:
+                    ready = True
+                    detail = f'Reachable at {base_url}.'
             except Exception as exc:  # noqa: BLE001
                 detail = f'Unreachable at {base_url}: {exc}'
         dependencies.append({'id': dependency_id, 'label': label, 'ready': ready, 'detail': detail})

@@ -71,6 +71,48 @@ def test_execution_health_includes_audio_capabilities():
     assert all(item['detail'] for item in preflight['dependencies'])
 
 
+def test_reference_voice_preflight_blocks_incompatible_rtc_asr_backend(monkeypatch):
+    import app.routes.execution as execution_routes
+
+    class _Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    def fake_get(url, **_kwargs):
+        if url.endswith('/reference-agent/readiness'):
+            return _Response({
+                'ready': True,
+                'duplex_route_ready': True,
+                'listener_webrtc_ready': True,
+            })
+        if url == 'http://rtc-asr.test/health':
+            return _Response({'backend': 'mlx-parakeet', 'model': 'parakeet-tdt'})
+        if url == 'http://kokoro.test/health':
+            return _Response({'status': 'ready'})
+        raise AssertionError(url)
+
+    monkeypatch.setenv('OPENAI_API_KEY', 'offline-status-only')
+    monkeypatch.setenv('REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
+    monkeypatch.setenv('PIPECAT_SERVICE_URL', 'http://pipecat.test')
+    monkeypatch.setenv('RTC_ASR_BASE_URL', 'http://rtc-asr.test')
+    monkeypatch.setenv('RTC_ASR_HEALTH_PATH', '/health')
+    monkeypatch.setenv('REFERENCE_STT_BACKEND', 'whisper')
+    monkeypatch.setenv('KOKORO_BASE_URL', 'http://kokoro.test')
+    monkeypatch.setattr(execution_routes.httpx, 'get', fake_get)
+
+    report = execution_routes._reference_voice_preflight()
+    rtc_asr = next(item for item in report['dependencies'] if item['id'] == 'rtc_asr')
+    assert report['ready'] is False
+    assert rtc_asr['ready'] is False
+    assert rtc_asr['detail'] == 'rtc-asr backend mismatch: requested whisper, service reports mlx-parakeet.'
+
+
 def test_pipecat_webrtc_mode_defaults_transport_and_rejects_verto():
     ok = ExecutionRunCreateRequest(
         mode='pipecat_webrtc',
