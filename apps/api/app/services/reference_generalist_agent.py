@@ -8,10 +8,11 @@ execution.  No saved benchmark fixture is consulted here.
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import io
 import json
 import os
-import base64
 import time
 import wave
 from dataclasses import dataclass, field
