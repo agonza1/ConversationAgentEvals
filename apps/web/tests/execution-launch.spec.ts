@@ -318,6 +318,11 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect(launch.getByLabel('Default scenario for launch')).toContainText('Cancellation Rescue');
   await expect(launch.getByLabel('Execution tester')).toHaveValue('scenario_simulator');
   await expect(launch.getByLabel('Execution runner')).toContainText(/local async runner/i);
+  await expect(launch.locator('.run-config-step-heading strong')).toHaveText([
+    'Tester',
+    'Agent target',
+    'Execution',
+  ]);
   await expect(launch.getByText('System under test')).toBeVisible();
   await expect(launch.getByText('Advanced')).toBeVisible();
   await expect(launch.getByLabel('Execution scenario scope')).not.toBeVisible();

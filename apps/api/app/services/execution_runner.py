@@ -28,19 +28,12 @@ from app.services.acc_realtime_target import (
     AccAudioFixtureScheduler,
     AccAudioPlan,
     AccAudioStep,
-    TesterAct,
-    TesterScenarioConfig,
 )
 from app.services.agentic_contact_center_example import build_benchmark_run_request, normalize_acc_run
 from app.services.benchmark_catalog_extensions import register_builtin_benchmark_extensions
 from app.services.benchmark_service import get_suite, run_scenario, simulate_scenario
-from app.services.execution_audio import (
-    ExecutionAudioTargetAdapter,
-)
 from app.services.execution_vcon import build_execution_vcon, vcon_summary
-from app.services.pipecat_tester_agent import PipecatTesterAgentRunner
 from app.services.reference_generalist_agent import (
-    ReferencePipecatTesterGraphRenderer,
     ReferencePipecatAgentTransport,
     ReferenceMediaServices,
     ReferenceRuntimeConfig,
@@ -256,6 +249,14 @@ def _live_event_publisher(
                 text=text,
                 media_url=media_url,
                 mime_type=mime_type,
+                direction=payload.get('direction'),
+                llm_output=(str(payload.get('llm_output')).strip() if payload.get('llm_output') else None),
+                asr_receipt=(str(payload.get('asr_receipt')).strip() if payload.get('asr_receipt') else None),
+                frame_metadata=(
+                    payload.get('frame_metadata')
+                    if isinstance(payload.get('frame_metadata'), dict)
+                    else {}
+                ),
                 created_at=datetime.now(UTC).isoformat(),
             ),
         )
@@ -874,14 +875,23 @@ async def _execute_pipecat_webrtc(
         config=config,
         event_observer=event_observer,
     )
-    target = ExecutionAudioTargetAdapter(transport)
-    tester_graph = ReferencePipecatTesterGraphRenderer(transport)
-    runner = PipecatTesterAgentRunner(
-        target=target,
-        tts_renderer=tester_graph,
-        wording_renderer=tester_graph,
+    session_id = conversation_id
+    await transport.connect(
+        session_id,
+        metadata={'scenario_id': scenario_id, 'execution_run_id': execution_run_id},
     )
-    tester_result = await runner.run(_pipecat_webrtc_tester_config(scenario_id))
+    await transport.start_recording(session_id)
+    scenario = _scenario_definition(suite_id, scenario_id)
+    tester_result = await transport.run_duplex_session(
+        session_id,
+        scenario=scenario,
+        max_turn_pairs=3,
+        total_timeout_seconds=90,
+    )
+    await transport.disconnect(
+        session_id,
+        reason=str(tester_result.get('termination_reason') or 'tester_complete'),
+    )
     session_id = str(tester_result.get('session_id') or '')
     if not session_id:
         raise RuntimeError('pipecat_webrtc execution did not produce a session id')
@@ -923,6 +933,9 @@ async def _execute_pipecat_webrtc(
             text=item.text,
             act_id=item.act_id,
             event_types=list(item.event_types),
+            direction=item.direction,
+            evidence_role=item.evidence_role,
+            frame_metadata=dict(item.frame_metadata),
         )
         for item in transcription
     ]
@@ -970,7 +983,7 @@ async def _execute_pipecat_webrtc(
         'target_agent_id': payload.agent_id,
         'mode': payload.mode,
         'audio_transport': transport.transport_id,
-        'capture_surface': 'cae_reference_local_audio_loop',
+        'capture_surface': 'pipecat_in_process_duplex_bus',
         'tester': {'participant': 'pipecat_tester', 'tts_provider': 'kokoro'},
         'tester_llm': {
             'participant': 'pipecat_tester',
@@ -982,14 +995,14 @@ async def _execute_pipecat_webrtc(
         },
         'target': {'participant': 'pipecat_target', 'reference_endpoint': 'reference_pipecat_agent', **transport.runtime},
         'graphs': transport_graphs,
-        'live_media': False,
+        'live_media': True,
         'browser_peer': False,
         'sip_pstn': False,
         'saved_evidence': False,
         'fixture_backed_scoring': False,
         'evidence_source': 'current_run',
         'note': (
-            'Local synthetic media between separate Pipecat tester and reference agent participants. '
+            'Current-run local duplex media between separate Pipecat tester and target participants. '
             'Browser, SIP, PSTN, and external network behavior are not proven.'
         ),
     }
@@ -1195,45 +1208,6 @@ def _validate_fixture_mode_scenarios(payload: ExecutionRunCreateRequest, scenari
             'Fixture-backed execution only supports cancellation-rescue; '
             f'unsupported: {", ".join(unsupported)}'
         )
-
-
-def _pipecat_webrtc_tester_config(scenario_id: str) -> TesterScenarioConfig:
-    return TesterScenarioConfig(
-        scenario_id=scenario_id,
-        goal='Evaluate a separate reference voice agent using current-run audio and evidence.',
-        allowed_caller_acts=[
-            'request_cancellation',
-            'explain_renewal_increase',
-            'request_final_disposition',
-        ],
-        acts=[
-            TesterAct(
-                act_id='request_cancellation',
-                objective='Request cancellation.',
-                example_utterance='I want to cancel my policy today.',
-            ),
-            TesterAct(
-                act_id='explain_renewal_increase',
-                objective='Explain the renewal concern.',
-                example_utterance='The renewal increase is too high.',
-                metadata={'barge_in': True},
-            ),
-            TesterAct(
-                act_id='request_final_disposition',
-                objective='Request safe closeout.',
-                example_utterance='Please record the approved follow-up and close the call.',
-                terminal_after=True,
-            ),
-        ],
-        max_turns=3,
-        total_timeout_seconds=30,
-        terminal_event_types=['call_wrapped', 'human_handoff_started'],
-        terminal_final_states=['scripted_wrap_complete', 'human_handoff'],
-        observation_mode='semantic',
-        seed=20260715,
-        model_version='execution-caller-v1',
-        prompt_version='execution-caller-prompt-v1',
-    )
 
 
 def _scenario_title(suite: dict[str, Any], scenario_id: str) -> str | None:

@@ -344,6 +344,28 @@ def test_pipecat_webrtc_propagates_tester_needs_review(monkeypatch, tmp_path):
         def latency_marks(self, session_id):
             return []
 
+        async def run_duplex_session(
+            self,
+            session_id,
+            *,
+            scenario,
+            max_turn_pairs,
+            total_timeout_seconds,
+        ):
+            assert scenario['id'] == 'cancellation-rescue'
+            assert max_turn_pairs == 3
+            assert total_timeout_seconds == 90
+            return {
+                'scenario_id': scenario['id'],
+                'session_id': session_id,
+                'status': 'needs_review',
+                'termination_reason': 'runner_error',
+                'error': 'injected tester failure',
+                'tester_provenance': {},
+                'turns': [],
+                'proof': {},
+            }
+
     class _FakeCompletion:
         provider_id = 'fake'
 
@@ -352,22 +374,6 @@ def test_pipecat_webrtc_propagates_tester_needs_review(monkeypatch, tmp_path):
 
     monkeypatch.setattr(execution_runner, 'ReferencePipecatAgentTransport', _FakeReferenceTransport)
     monkeypatch.setattr(execution_runner, 'resolve_reference_completion_provider', lambda: _FakeCompletion())
-    async def _failing_run(self, config):  # noqa: ANN001
-        return {
-            'scenario_id': config.scenario_id,
-            'session_id': 'sess-failed',
-            'status': 'needs_review',
-            'termination_reason': 'runner_error',
-            'error': 'injected tester failure',
-            'tester_provenance': {},
-            'session': {},
-            'turns': [],
-            'close': {},
-            'proof': {},
-        }
-
-    monkeypatch.setattr(PipecatTesterAgentRunner, 'run', _failing_run)
-
     def _turns(self, session_id):  # noqa: ANN001
         return [
             TranscriptionTurn(turn_index=1, speaker='Caller', text='hi', act_id='a'),

@@ -9,7 +9,17 @@ export interface LiveRunEvent {
   text: string;
   media_url?: string | null;
   mime_type?: string | null;
+  direction?: 'tester_to_target' | 'target_to_tester' | null;
+  llm_output?: string | null;
+  asr_receipt?: string | null;
+  frame_metadata?: Record<string, unknown> | null;
   created_at?: string | null;
+}
+
+function directionLabel(direction?: LiveRunEvent['direction']) {
+  if (direction === 'tester_to_target') return 'tester → target';
+  if (direction === 'target_to_tester') return 'target → tester';
+  return null;
 }
 
 export interface LiveRunConversation {
@@ -258,8 +268,15 @@ export function LiveRunFeedback({
         >
           {events.length ? events.map((event) => (
             <div key={`${event.conversationId}-${event.sequence}`} style={{ display: 'grid', gap: 2 }}>
-              <strong style={{ fontSize: 13 }}>{event.speaker}</strong>
+              <strong style={{ fontSize: 13 }}>
+                {event.speaker}{directionLabel(event.direction) ? ` · ${directionLabel(event.direction)}` : ''}
+              </strong>
               <span style={{ whiteSpace: 'pre-wrap' }}>{event.text}</span>
+              {event.llm_output && event.asr_receipt ? (
+                <span style={{ color: 'var(--muted)', fontSize: 12 }}>
+                  LLM output: {event.llm_output} · ASR receipt: {event.asr_receipt}
+                </span>
+              ) : null}
             </div>
           )) : (
             <span style={{ color: 'var(--muted)' }}>Waiting for the first observed message from this run…</span>

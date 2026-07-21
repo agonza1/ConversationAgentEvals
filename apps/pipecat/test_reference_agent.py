@@ -99,3 +99,56 @@ def test_reference_tester_turn_runs_real_pipecat_pipeline(monkeypatch):
     assert payload['tester_text'] == 'Of course.'
     assert payload['pipeline']['processors'] == ['rtc-asr', 'llm', 'kokoro']
     assert base64.b64decode(payload['tester_audio_wav_base64']).startswith(b'RIFF')
+
+
+def test_reference_duplex_stream_runs_two_graphs_over_local_frames(monkeypatch):
+    monkeypatch.setattr(server, 'RTC_ASR_BASE_URL', 'http://rtc-asr.test')
+    monkeypatch.setattr(server, 'KOKORO_BASE_URL', 'http://kokoro.test')
+    monkeypatch.setattr(server, 'REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
+    monkeypatch.setattr(server.httpx, 'AsyncClient', _AsyncClient)
+    client = TestClient(server.app)
+
+    request = {
+        'session_id': 'offline-duplex-proof',
+        'scenario': {
+            'id': 'cancellation-rescue',
+            'title': 'Cancellation Rescue',
+            'persona': 'A policyholder who wants to cancel.',
+            'goal': 'Reach a safe disposition.',
+            'required_actions': ['detect cancellation intent', 'record final disposition'],
+            'forbidden_actions': ['make unapproved retention offer'],
+            'expected_final_state': 'A safe disposition is recorded.',
+        },
+        'tester_model_name': 'tester-model',
+        'target_model_name': 'target-model',
+        'llm_provider': 'offline-fake-openai',
+        'llm_mode': 'mock',
+        'max_turn_pairs': 2,
+        'total_timeout_seconds': 20,
+    }
+    assert 'audio' not in str(request).lower()
+    response = client.post(
+        '/reference-duplex/run',
+        headers={'x-cae-reference-token': 'test-token'},
+        json=request,
+    )
+
+    assert response.status_code == 200, response.text
+    events = [server.json.loads(line) for line in response.text.splitlines() if line.strip()]
+    exchanges = [event for event in events if event['type'] == 'exchange']
+    completed = events[-1]
+    assert len(exchanges) == 2
+    assert completed['type'] == 'complete'
+    assert completed['architecture'] == 'two_independent_pipecat_graphs_in_process_duplex_frames'
+    assert [frame['direction'] for frame in completed['frames']] == [
+        'tester_to_target',
+        'target_to_tester',
+        'tester_to_target',
+        'target_to_tester',
+    ]
+    assert all(frame['transport'] == 'in_process_pipecat_frame_bus' for frame in completed['frames'])
+    assert completed['graphs']['tester']['processors'][1]['model'] == 'tester-model'
+    assert completed['graphs']['target']['processors'][1]['model'] == 'target-model'
+    assert completed['graphs']['tester']['llm_mode'] == 'mock'
+    assert exchanges[0]['target']['asr_receipt'] == 'Please help me.'
+    assert exchanges[0]['target']['tester_asr_receipt'] == 'Please help me.'

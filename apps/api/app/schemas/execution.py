@@ -150,6 +150,10 @@ class LiveExecutionEvent(BaseModel):
     text: str
     media_url: str | None = None
     mime_type: str | None = None
+    direction: Literal['tester_to_target', 'target_to_tester'] | None = None
+    llm_output: str | None = None
+    asr_receipt: str | None = None
+    frame_metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str
 
 

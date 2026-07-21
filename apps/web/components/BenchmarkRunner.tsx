@@ -3423,12 +3423,12 @@ export function BenchmarkRunner({
     const voiceModes = runMode === 'voice_fixture' || runMode === 'pipecat_webrtc';
     const offlineFixtureText =
       runMode === 'text_callable' && runTextCallable === 'offline_acc_fixture';
-    // Voice fixture, Pipecat WebRTC, and text offline_acc_fixture require the optional
-    // cancellation-rescue scenario on call-center-voice-ai; do not post other scenario ids.
-    const fixtureBackedRun = voiceModes || offlineFixtureText;
+    // The current two-agent Pipecat contract and the legacy replays are scoped to
+    // cancellation-rescue, but only the replay paths are fixture-backed.
+    const cancellationScopedRun = voiceModes || offlineFixtureText;
     const voiceSuiteId = 'call-center-voice-ai';
-    const suiteForRun = fixtureBackedRun ? voiceSuiteId : selectedSuite.id;
-    const scenarioIds = fixtureBackedRun
+    const suiteForRun = cancellationScopedRun ? voiceSuiteId : selectedSuite.id;
+    const scenarioIds = cancellationScopedRun
       ? ['cancellation-rescue']
       : executionScope === 'suite'
         ? selectedSuite.scenarios.map((scenario) => scenario.id)
@@ -3442,8 +3442,8 @@ export function BenchmarkRunner({
     }
 
     const suiteNote =
-      fixtureBackedRun && (selectedSuite.id !== voiceSuiteId || offlineFixtureText)
-        ? `Using suite ${voiceSuiteId} / cancellation-rescue for the built-in sample run. `
+      cancellationScopedRun && (selectedSuite.id !== voiceSuiteId || offlineFixtureText)
+        ? `Using suite ${voiceSuiteId} / cancellation-rescue for this scoped run. `
         : '';
 
     setIsLaunchingExecution(true);
@@ -4474,6 +4474,29 @@ export function BenchmarkRunner({
           <div className="run-config-step">
             <div className="run-config-step-heading">
               <span>1</span>
+              <div><strong>Tester</strong><small>Scenario driver</small></div>
+            </div>
+            <label>
+              <span className="sr-only">Tester</span>
+            <select
+              aria-label="Execution tester"
+              value={executionTesterId}
+              onChange={(event) => setExecutionTesterId(event.target.value as typeof executionTesterId)}
+            >
+              {selectedScoreAgent?.target === 'builtin_sample_voice' ? (
+                <option value="pipecat_tester">Voice scenario tester</option>
+              ) : selectedScoreAgent?.target === 'voice_fixture' ? (
+                <option value="fixture_replay">Saved conversation replay</option>
+              ) : (
+                <option value="scenario_simulator">Scenario simulator (scripted user opener)</option>
+              )}
+            </select>
+            </label>
+            <p>Plays the caller or user; it is never the target being scored.</p>
+          </div>
+          <div className="run-config-step">
+            <div className="run-config-step-heading">
+              <span>2</span>
               <div><strong>Agent target</strong><small>System under test</small></div>
             </div>
             <label>
@@ -4522,29 +4545,6 @@ export function BenchmarkRunner({
             </select>
             </label>
             <p>{selectedScoreAgent ? (selectedScoreAgent.target === 'builtin_sample_voice' ? 'Built-in reference agent' : isFixtureTargetId(selectedScoreAgent.target) ? 'Built-in sample agent' : 'Live target') : 'Choose a configured target'}</p>
-          </div>
-          <div className="run-config-step">
-            <div className="run-config-step-heading">
-              <span>2</span>
-              <div><strong>Tester</strong><small>Scenario driver</small></div>
-            </div>
-            <label>
-              <span className="sr-only">Tester</span>
-            <select
-              aria-label="Execution tester"
-              value={executionTesterId}
-              onChange={(event) => setExecutionTesterId(event.target.value as typeof executionTesterId)}
-            >
-              {selectedScoreAgent?.target === 'builtin_sample_voice' ? (
-                <option value="pipecat_tester">Voice scenario tester</option>
-              ) : selectedScoreAgent?.target === 'voice_fixture' ? (
-                <option value="fixture_replay">Saved conversation replay</option>
-              ) : (
-                <option value="scenario_simulator">Scenario simulator (scripted user opener)</option>
-              )}
-            </select>
-            </label>
-            <p>Plays the caller or user; it is never the target being scored.</p>
           </div>
           <div className="run-config-step">
             <div className="run-config-step-heading">
@@ -4758,7 +4758,7 @@ export function BenchmarkRunner({
                           <span style={{ color: executionStatusColor(conversation.verdict), textTransform: 'capitalize' }}>
                             {conversation.verdict}
                             {typeof conversation.score === 'number' ? ` · ${conversation.score}` : ''}
-                            {conversation.mode === 'pipecat_webrtc' ? ' (sample-based)' : ''}
+                            {conversation.mode === 'pipecat_webrtc' ? ' · current-run duplex evidence' : ''}
                           </span>
                         ) : null}
                         {conversation.error ? <span style={{ color: 'var(--error-text)' }}>{conversation.error}</span> : null}

@@ -11,6 +11,15 @@ interface ListenerEvent {
   speaker: string;
   text: string;
   media_url?: string | null;
+  direction?: 'tester_to_target' | 'target_to_tester' | null;
+  llm_output?: string | null;
+  asr_receipt?: string | null;
+}
+
+function directionLabel(direction?: ListenerEvent['direction']) {
+  if (direction === 'tester_to_target') return 'tester → target';
+  if (direction === 'target_to_tester') return 'target → tester';
+  return null;
 }
 
 interface ListenerConversation {
@@ -97,8 +106,15 @@ export function BrowserListenerPage({ token }: { token: string }) {
       <section aria-label="Observed live exchange" style={{ display: 'grid', gap: 10 }}>
         {events.length ? events.map((event) => (
           <article key={`${event.conversationId}-${event.sequence}`} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, display: 'grid', gap: 4 }}>
-            <strong>{event.speaker}</strong>
+            <strong>
+              {event.speaker}{directionLabel(event.direction) ? ` · ${directionLabel(event.direction)}` : ''}
+            </strong>
             <span style={{ whiteSpace: 'pre-wrap' }}>{event.text}</span>
+            {event.llm_output && event.asr_receipt ? (
+              <span style={{ color: 'var(--muted)', fontSize: 12 }}>
+                LLM output: {event.llm_output} · ASR receipt: {event.asr_receipt}
+              </span>
+            ) : null}
             {event.kind === 'audio' && event.media_url ? (
               <audio controls src={mediaUrl(apiBase, event.media_url)} aria-label={`${event.speaker} audio ${event.sequence}`} />
             ) : null}

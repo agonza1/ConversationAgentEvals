@@ -142,9 +142,9 @@ function evidenceLine(conversation: ExecutionConversation) {
 const localVoiceOption = {
   id: 'pipecat_webrtc',
   label: 'Built-in generalist voice evaluation',
-  eyebrow: 'CAE local audio loop',
+  eyebrow: 'Live two-agent Pipecat',
   description: 'Runs a Pipecat tester against a separate Pipecat agent through rtc-asr, a configured LLM, and Kokoro; evaluation uses only evidence captured in this run.',
-  detail: 'Synthetic local media; no browser mic, SIP, or phone call',
+  detail: 'In-process duplex audio; optional read-only listener; no browser mic, SIP, or phone target',
   button: 'Run generalist voice evaluation',
 } as const;
 

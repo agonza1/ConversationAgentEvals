@@ -98,6 +98,9 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
                 kind: 'audio',
                 speaker: 'Caller',
                 text: 'I want to cancel.',
+                direction: 'tester_to_target',
+                llm_output: 'I want to cancel.',
+                asr_receipt: 'I want to cancel.',
                 media_url: '/api/execution/listeners/listener-token/conversations/voice-run-1-cancellation-rescue-1/audio/1',
               },
               {
@@ -105,6 +108,9 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
                 kind: 'audio',
                 speaker: 'Agent',
                 text: 'I can help with that.',
+                direction: 'target_to_tester',
+                llm_output: 'I can help with that.',
+                asr_receipt: 'I can help with that.',
                 media_url: '/api/execution/listeners/listener-token/conversations/voice-run-1-cancellation-rescue-1/audio/2',
               },
             ],
@@ -212,6 +218,9 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
                         kind: 'audio',
                         speaker: 'Caller',
                         text: 'I want to cancel.',
+                        direction: 'tester_to_target',
+                        llm_output: 'I want to cancel.',
+                        asr_receipt: 'I want to cancel.',
                         media_url: '/api/execution/runs/voice-run-1/conversations/voice-run-1-cancellation-rescue-1/audio/1?user_id=voice-user',
                       },
                       {
@@ -219,6 +228,9 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
                         kind: 'audio',
                         speaker: 'Agent',
                         text: 'I can help with that.',
+                        direction: 'target_to_tester',
+                        llm_output: 'I can help with that.',
+                        asr_receipt: 'I can help with that.',
                         media_url: '/api/execution/runs/voice-run-1/conversations/voice-run-1-cancellation-rescue-1/audio/2?user_id=voice-user',
                       },
                     ],
@@ -235,9 +247,9 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
                       tester_status: 'completed',
                       runtime_provenance: {
                         execution_engine: 'run_agent',
-                        live_media: false,
+                        live_media: true,
                         browser_peer: false,
-                        fixture_backed_scoring: true,
+                        fixture_backed_scoring: false,
                       },
                       real_call_readiness: {
                         run_agent_execution: 'proven',
@@ -288,6 +300,9 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
   await expect(results.getByLabel('Read-only browser listener')).toContainText('cannot inject audio');
   await expect(results.getByLabel('Read-only browser listener')).toContainText('no microphone');
   await expect(results.getByLabel('Observed live exchange')).toContainText('I want to cancel.', { timeout: 10000 });
+  await expect(results.getByLabel('Observed live exchange')).toContainText('tester → target');
+  await expect(results.getByLabel('Observed live exchange')).toContainText('LLM output: I want to cancel.');
+  await expect(results.getByLabel('Observed live exchange')).toContainText('ASR receipt: I want to cancel.');
   await results.getByRole('button', { name: 'Unmute live conversation' }).click();
   await expect(results.getByRole('button', { name: 'Mute live conversation' })).toBeVisible();
   await expect.poll(() => page.evaluate(() => (
@@ -331,12 +346,18 @@ test('browser listener page polls token-scoped live events', async ({ page }) =>
                 kind: 'message',
                 speaker: 'Caller',
                 text: 'I want to cancel.',
+                direction: 'tester_to_target',
+                llm_output: 'I want to cancel.',
+                asr_receipt: 'I want to cancel.',
               },
               ...(listenerPolls > 1 ? [{
                 sequence: 2,
                 kind: 'message',
                 speaker: 'Agent',
                 text: 'I can help with that.',
+                direction: 'target_to_tester',
+                llm_output: 'I can help with that.',
+                asr_receipt: 'I can help with that.',
               }] : []),
             ],
           },
@@ -349,5 +370,9 @@ test('browser listener page polls token-scoped live events', async ({ page }) =>
   await expect(page.getByRole('heading', { name: 'Read-only browser listener' })).toBeVisible();
   await expect(page.getByLabel('Observed live exchange')).toContainText('I want to cancel.');
   await expect(page.getByLabel('Observed live exchange')).toContainText('I can help with that.', { timeout: 5000 });
+  await expect(page.getByLabel('Observed live exchange')).toContainText('tester → target');
+  await expect(page.getByLabel('Observed live exchange')).toContainText('target → tester');
+  await expect(page.getByLabel('Observed live exchange')).toContainText('LLM output: I can help with that.');
+  await expect(page.getByLabel('Observed live exchange')).toContainText('ASR receipt: I can help with that.');
   expect(listenerPolls).toBeGreaterThan(1);
 });
