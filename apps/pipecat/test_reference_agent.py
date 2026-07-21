@@ -217,6 +217,11 @@ def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(m
     broadcast.publish(b'\x01\x00' * 240, sample_rate=24000)
     assert _Connection.last._presenter_answer_audio_track.audio
 
+    _Connection.last._presenter_answer_audio_track.audio.clear()
+    broadcast.publish(b'\x02\x00' * 160, sample_rate=16000)
+    assert len(_Connection.last._presenter_answer_audio_track.audio) == 1
+    assert len(_Connection.last._presenter_answer_audio_track.audio[0]) == 480
+
     stopped = client.post(
         '/reference-duplex/listen/stop',
         headers={'x-cae-reference-token': 'test-token'},

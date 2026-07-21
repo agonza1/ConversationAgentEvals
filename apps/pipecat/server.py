@@ -6,6 +6,7 @@ import io
 import json
 import os
 import secrets
+import struct
 import time
 import wave
 from dataclasses import dataclass, field
@@ -313,12 +314,42 @@ class _ReferenceDuplexBroadcast:
         for listener in tuple(self.listeners.values()):
             track = listener.track
             track_rate = int(getattr(track, '_sample_rate', sample_rate))
-            if track_rate != sample_rate:
-                continue
+            listener_audio = (
+                _resample_pcm16_mono(audio, sample_rate, track_rate)
+                if track_rate != sample_rate
+                else audio
+            )
             ten_ms_bytes = max(2, track_rate // 100 * 2)
-            remainder = len(audio) % ten_ms_bytes
-            payload = audio if remainder == 0 else audio + bytes(ten_ms_bytes - remainder)
+            remainder = len(listener_audio) % ten_ms_bytes
+            payload = listener_audio if remainder == 0 else listener_audio + bytes(ten_ms_bytes - remainder)
             track.add_audio_bytes(payload)
+
+
+def _resample_pcm16_mono(payload: bytes, source_rate: int, target_rate: int) -> bytes:
+    """Linearly resample little-endian PCM16 mono without optional DSP packages."""
+    if source_rate <= 0 or target_rate <= 0:
+        raise ValueError('Audio sample rates must be positive.')
+    sample_count = len(payload) // 2
+    if sample_count == 0:
+        return b''
+    payload = payload[:sample_count * 2]
+    if source_rate == target_rate:
+        return payload
+
+    samples = struct.unpack(f'<{sample_count}h', payload)
+    output_count = max(1, round(sample_count * target_rate / source_rate))
+    if sample_count == 1:
+        return struct.pack(f'<{output_count}h', *([samples[0]] * output_count))
+
+    source_step = source_rate / target_rate
+    output: list[int] = []
+    for output_index in range(output_count):
+        source_position = min(output_index * source_step, sample_count - 1)
+        left_index = int(source_position)
+        right_index = min(left_index + 1, sample_count - 1)
+        fraction = source_position - left_index
+        output.append(round(samples[left_index] + (samples[right_index] - samples[left_index]) * fraction))
+    return struct.pack(f'<{output_count}h', *output)
 
 
 REFERENCE_DUPLEX_RUNS: dict[str, _ReferenceDuplexBroadcast] = {}
