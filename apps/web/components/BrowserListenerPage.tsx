@@ -108,9 +108,27 @@ export function BrowserListenerPage({ token }: { token: string }) {
       setError('This listener token does not expose WebRTC signaling. Issue a fresh token.');
       return;
     }
-    peerRef.current?.close();
+    const existingPeer = peerRef.current;
+    if (existingPeer) {
+      if (!listener.webrtc_stop_url) {
+        setError('This listener token cannot stop the existing WebRTC session. Issue a fresh token.');
+        return;
+      }
+      try {
+        await fetchJson(mediaUrl(apiBase, listener.webrtc_stop_url), { method: 'POST' });
+      } catch (err) {
+        setWebrtcStatus('error');
+        setError(err instanceof Error ? err.message : 'Could not stop the existing WebRTC listener.');
+        return;
+      }
+      existingPeer.close();
+      peerRef.current = null;
+    }
     const peer = new RTCPeerConnection();
     peerRef.current = peer;
+    const iceUrl = listener.webrtc_ice_url;
+    const pendingIceCandidates: RTCIceCandidateInit[] = [];
+    let signalingReady = false;
     setWebrtcStatus('connecting');
     setError(null);
     peer.addTransceiver('audio', { direction: 'recvonly' });
@@ -126,13 +144,26 @@ export function BrowserListenerPage({ token }: { token: string }) {
         setError('The receive-only WebRTC listener failed. Issue a fresh token and retry while the run is active.');
       }
     };
-    peer.onicecandidate = (event) => {
-      if (!event.candidate || !listener.webrtc_ice_url) return;
-      void fetch(mediaUrl(apiBase, listener.webrtc_ice_url), {
+    async function sendIceCandidate(candidate: RTCIceCandidateInit) {
+      if (!iceUrl) return;
+      await fetchJson(mediaUrl(apiBase, iceUrl), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ candidate: event.candidate.toJSON() }),
-      }).catch(() => undefined);
+        body: JSON.stringify({ candidate }),
+      });
+    }
+    function reportIceFailure(err: unknown) {
+      setWebrtcStatus('error');
+      setError(err instanceof Error ? err.message : 'Could not send a WebRTC ICE candidate.');
+    }
+    peer.onicecandidate = (event) => {
+      if (!event.candidate || !iceUrl) return;
+      const candidate = event.candidate.toJSON();
+      if (!signalingReady) {
+        pendingIceCandidates.push(candidate);
+        return;
+      }
+      void sendIceCandidate(candidate).catch(reportIceFailure);
     };
     try {
       const offer = await peer.createOffer();
@@ -146,6 +177,8 @@ export function BrowserListenerPage({ token }: { token: string }) {
         },
       );
       await peer.setRemoteDescription(answer.answer);
+      signalingReady = true;
+      for (const candidate of pendingIceCandidates) await sendIceCandidate(candidate);
       setWebrtcStatus(answer.status === 'listening' ? 'listening' : 'connecting');
     } catch (err) {
       peer.close();

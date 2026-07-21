@@ -341,6 +341,8 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
 test('browser listener page polls token-scoped live events', async ({ page }) => {
   let listenerPolls = 0;
   let webrtcOffers = 0;
+  let iceCandidates = 0;
+  let listenerStops = 0;
   await page.addInitScript(() => {
     const runtime = window as Window & { __getUserMediaCalls: number };
     runtime.__getUserMediaCalls = 0;
@@ -351,14 +353,16 @@ test('browser listener page polls token-scoped live events', async ({ page }) =>
     class ListenerPeer {
       connectionState = 'new';
       onconnectionstatechange: (() => void) | null = null;
-      onicecandidate = null;
+      onicecandidate: ((event: { candidate: { toJSON: () => RTCIceCandidateInit } }) => void) | null = null;
       ontrack = null;
       addTransceiver(kind: string, init: RTCRtpTransceiverInit) {
         if (kind !== 'audio' || init.direction !== 'recvonly') throw new Error('Listener must offer receive-only audio.');
         return {};
       }
       async createOffer() { return { sdp: 'receive-only-offer', type: 'offer' as RTCSdpType }; }
-      async setLocalDescription() {}
+      async setLocalDescription() {
+        this.onicecandidate?.({ candidate: { toJSON: () => ({ candidate: 'early-candidate' }) } });
+      }
       async setRemoteDescription() {
         this.connectionState = 'connected';
         this.onconnectionstatechange?.();
@@ -367,7 +371,7 @@ test('browser listener page polls token-scoped live events', async ({ page }) =>
     }
     Object.defineProperty(window, 'RTCPeerConnection', { value: ListenerPeer, configurable: true });
   });
-  await page.route('**/api/execution/listeners/listener-token/webrtc', async (route) => {
+  await page.route(/\/api\/execution\/listeners\/listener-token\/webrtc$/, async (route) => {
     webrtcOffers += 1;
     const payload = JSON.parse(route.request().postData() ?? '{}');
     expect(payload).toEqual({ sdp: 'receive-only-offer', type: 'offer' });
@@ -376,6 +380,15 @@ test('browser listener page polls token-scoped live events', async ({ page }) =>
       contentType: 'application/json',
       body: JSON.stringify({ status: 'listening', answer: { sdp: 'send-only-answer', type: 'answer' } }),
     });
+  });
+  await page.route(/\/api\/execution\/listeners\/listener-token\/webrtc\/ice$/, async (route) => {
+    iceCandidates += 1;
+    expect(JSON.parse(route.request().postData() ?? '{}')).toEqual({ candidate: { candidate: 'early-candidate' } });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+  });
+  await page.route(/\/api\/execution\/listeners\/listener-token\/webrtc\/stop$/, async (route) => {
+    listenerStops += 1;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
   });
   await page.route('**/api/execution/listeners/listener-token', async (route) => {
     listenerPolls += 1;
@@ -434,6 +447,12 @@ test('browser listener page polls token-scoped live events', async ({ page }) =>
   await page.getByRole('button', { name: 'Start WebRTC listener' }).click();
   await expect(page.getByLabel('WebRTC listener status')).toHaveText('WebRTC · listening');
   expect(webrtcOffers).toBe(1);
+  expect(iceCandidates).toBe(1);
+  await page.getByRole('button', { name: 'Reconnect WebRTC listener' }).click();
+  await expect.poll(() => webrtcOffers).toBe(2);
+  await expect(page.getByLabel('WebRTC listener status')).toHaveText('WebRTC · listening');
+  expect(iceCandidates).toBe(2);
+  expect(listenerStops).toBe(1);
   expect(await page.evaluate(() => (window as Window & { __getUserMediaCalls: number }).__getUserMediaCalls)).toBe(0);
   expect(listenerPolls).toBeGreaterThan(1);
 });
