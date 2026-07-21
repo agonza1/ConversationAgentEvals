@@ -72,3 +72,30 @@ def test_reference_turn_runs_real_pipecat_pipeline(monkeypatch):
     assert payload['pipeline']['provider'] == 'pipecat'
     assert payload['pipeline']['processors'] == ['rtc-asr', 'llm', 'kokoro']
     assert base64.b64decode(payload['agent_audio_wav_base64']).startswith(b'RIFF')
+
+
+def test_reference_tester_turn_runs_real_pipecat_pipeline(monkeypatch):
+    monkeypatch.setattr(server, 'RTC_ASR_BASE_URL', 'http://rtc-asr.test')
+    monkeypatch.setattr(server, 'KOKORO_BASE_URL', 'http://kokoro.test')
+    monkeypatch.setattr(server, 'REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
+    monkeypatch.setattr(server.httpx, 'AsyncClient', _AsyncClient)
+    client = TestClient(server.app)
+
+    response = client.post(
+        '/reference-tester/turn',
+        headers={'x-cae-reference-token': 'test-token'},
+        json={
+            'scenario_instruction': 'Test cancellation rescue.',
+            'act_id': 'request_cancellation',
+            'act_objective': 'Ask to cancel.',
+            'example_utterance': 'Please cancel.',
+            'target_audio_wav_base64': base64.b64encode(_wav()).decode('ascii'),
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload['tester_asr_receipt'] == 'Please help me.'
+    assert payload['tester_text'] == 'Of course.'
+    assert payload['pipeline']['processors'] == ['rtc-asr', 'llm', 'kokoro']
+    assert base64.b64decode(payload['tester_audio_wav_base64']).startswith(b'RIFF')

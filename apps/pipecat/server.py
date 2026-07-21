@@ -244,6 +244,15 @@ class ReferenceAgentTurnRequest(BaseModel):
     model_name: str | None = None
 
 
+class ReferenceTesterTurnRequest(BaseModel):
+    scenario_instruction: str
+    act_id: str
+    act_objective: str
+    example_utterance: str
+    target_audio_wav_base64: str | None = None
+    model_name: str | None = None
+
+
 if PIPECAT_RUNTIME_AVAILABLE:
     class _AgentTextFrame(TextFrame):
         pass
@@ -303,6 +312,41 @@ if PIPECAT_RUNTIME_AVAILABLE:
             text = str(payload.get('text') or '').strip()
             if not text:
                 raise RuntimeError('reference completion callback returned no text')
+            await self.push_frame(_AgentTextFrame(text), direction)
+
+
+    class _ReferenceTesterLlmProcessor(FrameProcessor):
+        def __init__(self, payload: ReferenceTesterTurnRequest):
+            super().__init__()
+            self.payload = payload
+
+        async def process_frame(self, frame: Frame, direction: FrameDirection):
+            await super().process_frame(frame, direction)
+            if type(frame) is not TextFrame:
+                await self.push_frame(frame, direction)
+                return
+            prompt = (
+                'You are the Pipecat scenario tester in a two-agent voice evaluation. '
+                'Render exactly one concise caller utterance for the allowed act. '
+                'Do not narrate, score, or include labels.\n\n'
+                f'Scenario: {self.payload.scenario_instruction}\n'
+                f'Allowed caller act: {self.payload.act_id}\n'
+                f'Act objective: {self.payload.act_objective}\n'
+                f'Example utterance: {self.payload.example_utterance}\n'
+                f'Tester ASR observation: {frame.text}\n\n'
+                'Caller utterance:'
+            )
+            async with httpx.AsyncClient(timeout=90) as client:
+                response = await client.post(
+                    f'{API_BASE_URL}/api/execution/reference/complete',
+                    json={'prompt': prompt, 'model_name': self.payload.model_name or REFERENCE_LLM_MODEL},
+                    headers={'x-cae-reference-token': REFERENCE_AGENT_INTERNAL_TOKEN},
+                )
+                response.raise_for_status()
+                payload = response.json()
+            text = str(payload.get('text') or '').strip()
+            if not text:
+                raise RuntimeError('reference tester completion callback returned no text')
             await self.push_frame(_AgentTextFrame(text), direction)
 
 
@@ -409,6 +453,50 @@ async def reference_agent_turn(
         raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f'Reference Pipecat pipeline failed: {exc}') from exc
+
+
+@app.post('/reference-tester/turn')
+async def reference_tester_turn(
+    payload: ReferenceTesterTurnRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+):
+    """Run tester ASR, LLM, and Kokoro through a real Pipecat Pipeline."""
+    _require_reference_token(x_cae_reference_token)
+    if not PIPECAT_RUNTIME_AVAILABLE:
+        raise HTTPException(status_code=503, detail='Pipecat runtime is unavailable.')
+    if not RTC_ASR_BASE_URL or not KOKORO_BASE_URL:
+        raise HTTPException(status_code=503, detail='Reference tester requires rtc-asr and Kokoro.')
+    try:
+        collector = _ReferenceCollector()
+        asr_processor = _ReferenceAsrProcessor()
+        pipeline = Pipeline([
+            asr_processor,
+            _ReferenceTesterLlmProcessor(payload),
+            _ReferenceKokoroProcessor(),
+            collector,
+        ])
+        task = PipelineTask(pipeline, enable_rtvi=False, enable_turn_tracking=False)
+        if payload.target_audio_wav_base64:
+            wav_payload = base64.b64decode(payload.target_audio_wav_base64, validate=True)
+            pcm, sample_rate, channels = _wav_to_pcm(wav_payload)
+            first_frame: Frame = InputAudioRawFrame(pcm, sample_rate, channels)
+        else:
+            first_frame = TextFrame('No target response yet; start the conversation from the scenario instruction.')
+        await task.queue_frames([first_frame, EndFrame()])
+        await PipelineRunner(handle_sigint=False, handle_sigterm=False).run(task)
+        if not collector.agent_text or not collector.audio:
+            raise RuntimeError('Pipecat tester pipeline produced incomplete output')
+        output_wav = _pcm_to_wav(collector.audio, collector.sample_rate, collector.channels)
+        return {
+            'tester_asr_receipt': asr_processor.transcript or None,
+            'tester_text': collector.agent_text,
+            'tester_audio_wav_base64': base64.b64encode(output_wav).decode('ascii'),
+            'pipeline': {'provider': 'pipecat', 'processors': ['rtc-asr', 'llm', 'kokoro'], 'current_run': True},
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f'Reference Pipecat tester pipeline failed: {exc}') from exc
 
 
 def _wav_to_pcm(payload: bytes) -> tuple[bytes, int, int]:

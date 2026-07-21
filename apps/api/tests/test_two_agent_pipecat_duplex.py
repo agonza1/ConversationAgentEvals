@@ -105,6 +105,47 @@ def test_two_pipecat_duplex_harness_exercises_independent_graphs_and_directions(
     assert {item['direction'] for item in transcript} == {'tester_to_target', 'target_to_tester'}
 
 
+def test_duplex_harness_records_external_live_graph_receipts():
+    tester_graph, target_graph = build_builtin_sample_voice_graphs(
+        tester_llm_provider='openai',
+        tester_llm_model='tester-model',
+        target_llm_provider='openai',
+        target_llm_model='target-model',
+        stt_model='base.en',
+        tts_model='kokoro',
+        llm_mode='mock',
+    )
+    dependency = FakeLlm(provider_id='openai', model_name='unused', replies=['unused'])
+    harness = TwoPipecatDuplexHarness(
+        tester_graph=tester_graph,
+        target_graph=target_graph,
+        tester_llm=dependency,
+        target_llm=dependency,
+        tester_tts=FakeTts(),
+        target_tts=FakeTts(),
+        tester_asr=FakeAsr(),
+        target_asr=FakeAsr(),
+        transport=InMemoryDuplexFrameTransport(run_id='live-exchange'),
+    )
+
+    tester_turn, target_turn = harness.record_exchange(
+        tester_text='Please cancel.',
+        tester_audio=b'tester-wav',
+        target_receipt='Please cancel.',
+        target_text='I can help.',
+        target_audio=b'target-wav',
+        tester_receipt='I can help with cancellation.',
+    )
+
+    assert tester_turn.asr_receipt == 'Please cancel.'
+    assert target_turn.llm_output == 'I can help.'
+    assert target_turn.asr_receipt == 'I can help with cancellation.'
+    assert [frame.direction for frame in harness.transport.frames] == [
+        'tester_to_target',
+        'target_to_tester',
+    ]
+
+
 def test_duplex_transport_rejects_wrong_direction_and_empty_audio():
     transport = InMemoryDuplexFrameTransport(run_id='direction-proof')
     with pytest.raises(ValueError, match='tester_to_target requires pipecat_tester -> pipecat_target'):

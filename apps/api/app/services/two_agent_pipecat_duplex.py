@@ -193,12 +193,12 @@ class TwoPipecatDuplexHarness:
         *,
         tester_graph: PipecatAgentGraph,
         target_graph: PipecatAgentGraph,
-        tester_llm: TextGenerator,
-        target_llm: TextGenerator,
-        tester_tts: AudioSynthesizer,
-        target_tts: AudioSynthesizer,
-        tester_asr: AudioTranscriber,
-        target_asr: AudioTranscriber,
+        tester_llm: TextGenerator | None = None,
+        target_llm: TextGenerator | None = None,
+        tester_tts: AudioSynthesizer | None = None,
+        target_tts: AudioSynthesizer | None = None,
+        tester_asr: AudioTranscriber | None = None,
+        target_asr: AudioTranscriber | None = None,
         transport: InMemoryDuplexFrameTransport | None = None,
         max_turn_pairs: int = 2,
     ) -> None:
@@ -217,48 +217,87 @@ class TwoPipecatDuplexHarness:
         self.transport = transport or InMemoryDuplexFrameTransport()
         self.max_turn_pairs = max(1, max_turn_pairs)
 
+    def record_exchange(
+        self,
+        *,
+        tester_text: str,
+        tester_audio: bytes,
+        target_receipt: str,
+        target_text: str,
+        target_audio: bytes,
+        tester_receipt: str,
+    ) -> tuple[DirectionalTurnEvidence, DirectionalTurnEvidence]:
+        """Record one live exchange after both graph pipelines have run."""
+        tester_frame = self.transport.send(
+            direction='tester_to_target',
+            sender='pipecat_tester',
+            receiver='pipecat_target',
+            audio_bytes=tester_audio,
+            source_text=tester_text,
+        )
+        target_frame = self.transport.send(
+            direction='target_to_tester',
+            sender='pipecat_target',
+            receiver='pipecat_tester',
+            audio_bytes=target_audio,
+            source_text=target_text,
+        )
+        turn_index = len(self.transport.frames) - 1
+        return (
+            DirectionalTurnEvidence(
+                turn_index=turn_index,
+                direction='tester_to_target',
+                speaker='tester',
+                llm_output=tester_text,
+                asr_receipt=target_receipt,
+                frame=tester_frame.metadata(),
+            ),
+            DirectionalTurnEvidence(
+                turn_index=turn_index + 1,
+                direction='target_to_tester',
+                speaker='target',
+                llm_output=target_text,
+                asr_receipt=tester_receipt,
+                frame=target_frame.metadata(),
+            ),
+        )
+
     def run(self, *, scenario_instruction: str) -> TwoPipecatDuplexRunResult:
+        dependencies = (
+            self.tester_llm,
+            self.target_llm,
+            self.tester_tts,
+            self.target_tts,
+            self.tester_asr,
+            self.target_asr,
+        )
+        if any(dependency is None for dependency in dependencies):
+            raise RuntimeError('Offline duplex run requires LLM, TTS, and ASR adapters for both graphs.')
+        assert self.tester_llm is not None
+        assert self.target_llm is not None
+        assert self.tester_tts is not None
+        assert self.target_tts is not None
+        assert self.tester_asr is not None
+        assert self.target_asr is not None
         history: list[dict[str, Any]] = [{'role': 'system', 'content': scenario_instruction}]
         turns: list[DirectionalTurnEvidence] = []
 
         for _ in range(1, self.max_turn_pairs + 1):
             tester_text = self.tester_llm.complete(scenario_instruction, history=history)
             tester_audio = self.tester_tts.synthesize(tester_text)
-            tester_frame = self.transport.send(
-                direction='tester_to_target',
-                sender='pipecat_tester',
-                receiver='pipecat_target',
-                audio_bytes=tester_audio,
-                source_text=tester_text,
-            )
             target_receipt = self.target_asr.transcribe(tester_audio, source_text=tester_text)
-            turns.append(DirectionalTurnEvidence(
-                turn_index=len(turns) + 1,
-                direction='tester_to_target',
-                speaker='tester',
-                llm_output=tester_text,
-                asr_receipt=target_receipt,
-                frame=tester_frame.metadata(),
-            ))
             history.append({'role': 'tester', 'content': tester_text, 'asr_receipt': target_receipt})
 
             target_text = self.target_llm.complete(target_receipt, history=history)
             target_audio = self.target_tts.synthesize(target_text)
-            target_frame = self.transport.send(
-                direction='target_to_tester',
-                sender='pipecat_target',
-                receiver='pipecat_tester',
-                audio_bytes=target_audio,
-                source_text=target_text,
-            )
             tester_receipt = self.tester_asr.transcribe(target_audio, source_text=target_text)
-            turns.append(DirectionalTurnEvidence(
-                turn_index=len(turns) + 1,
-                direction='target_to_tester',
-                speaker='target',
-                llm_output=target_text,
-                asr_receipt=tester_receipt,
-                frame=target_frame.metadata(),
+            turns.extend(self.record_exchange(
+                tester_text=tester_text,
+                tester_audio=tester_audio,
+                target_receipt=target_receipt,
+                target_text=target_text,
+                target_audio=target_audio,
+                tester_receipt=tester_receipt,
             ))
             history.append({'role': 'target', 'content': target_text, 'asr_receipt': tester_receipt})
             if _terminal_text(tester_text) or _terminal_text(target_text):

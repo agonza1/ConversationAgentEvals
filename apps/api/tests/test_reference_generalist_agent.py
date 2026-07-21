@@ -18,6 +18,7 @@ from app.services.reference_generalist_agent import (
     KokoroTesterTtsRenderer,
     ReferenceMediaServices,
     ReferencePipecatAgentTransport,
+    ReferencePipecatTesterGraphRenderer,
     ReferenceRuntimeConfig,
     ReferenceRuntimeError,
 )
@@ -60,6 +61,13 @@ class FakeMedia:
 
     def post(self, url: str, *, json=None, timeout=None, headers=None):
         del timeout, headers
+        if url.endswith('/reference-tester/turn'):
+            assert json['scenario_instruction']
+            return FakeResponse({
+                'tester_text': 'Please help me cancel.',
+                'tester_audio_wav_base64': base64.b64encode(_wav(3)).decode('ascii'),
+                'pipeline': {'provider': 'pipecat', 'processors': ['rtc-asr', 'llm', 'kokoro']},
+            })
         assert url.endswith('/reference-agent/turn')
         assert json['audio_wav_base64']
         self.transcriptions += 1
@@ -79,6 +87,11 @@ class FakeMedia:
     def synthesize(self, text: str) -> bytes:
         assert text
         return _wav(len(text) % 100 + 1)
+
+    def transcribe(self, wav_bytes: bytes) -> str:
+        assert wav_bytes
+        self.transcriptions += 1
+        return 'Tester heard a cancellable request.'
 
 
 class FakeResponse:
@@ -136,12 +149,16 @@ def test_reference_tester_to_agent_contract_uses_only_current_run(tmp_path: Path
         turns = transport.transcription_turns(session_id)
         assert [turn.speaker for turn in turns] == ['Caller', 'Agent']
         assert turns[0].source == 'rtc-asr.current_run'
-        assert turns[1].source == 'reference_pipecat_agent.current_run'
+        assert turns[1].source == 'rtc-asr.current_run'
         assert [turn.direction for turn in turns] == ['tester_to_target', 'target_to_tester']
-        assert [turn.evidence_role for turn in turns] == ['target_asr_receipt', 'target_llm_output']
+        assert [turn.evidence_role for turn in turns] == ['target_asr_receipt', 'tester_asr_receipt']
         assert turns[0].frame_metadata['source'] == 'tester_kokoro_audio'
         assert turns[1].frame_metadata['source'] == 'target_kokoro_audio'
-        assert media.transcriptions == 1
+        assert turns[1].text == 'Tester heard a cancellable request.'
+        assert turns[1].frame_metadata['source_text'] == 'I can help with that request.'
+        assert turns[1].frame_metadata['asr_receipt'] == 'Tester heard a cancellable request.'
+        assert result['turns'][0]['observation']['agent_text'] == 'Tester heard a cancellable request.'
+        assert media.transcriptions == 2
         proof = transport.session_proof(session_id)
         assert proof['tester_participant'] == 'pipecat_tester'
         assert proof['target_participant'] == 'pipecat_target'
@@ -160,6 +177,45 @@ def test_reference_tester_to_agent_contract_uses_only_current_run(tmp_path: Path
         assert [event['speaker'] for event in observed] == ['Caller', 'Agent']
         assert all(event['text'] for event in observed)
         assert all(event['audio'] for event in observed)
+
+    asyncio.run(run())
+
+
+def test_reference_tester_renderer_uses_remote_pipecat_graph(tmp_path: Path):
+    async def run():
+        media = FakeMedia()
+        transport = ReferencePipecatAgentTransport(
+            artifact_dir=tmp_path,
+            media=media,  # type: ignore[arg-type]
+            completion=FakeCompletion(),
+            config=ReferenceRuntimeConfig(
+                rtc_asr_base_url='http://rtc-asr.test',
+                kokoro_base_url='http://kokoro.test',
+                llm_model='fake-model',
+                tester_llm_model='fake-model',
+                internal_token='test-token',
+            ),
+        )
+        renderer = ReferencePipecatTesterGraphRenderer(transport)
+        config = TesterScenarioConfig(
+            scenario_id='reference-contract',
+            goal='prove tester graph execution',
+            allowed_caller_acts=['ask_for_help'],
+            acts=[],
+            seed=1,
+        )
+        act = TesterAct(
+            act_id='ask_for_help',
+            objective='ask',
+            example_utterance='Please help me.',
+        )
+
+        text = await renderer.render(act, None, config)
+        fixture = await renderer.synthesize(text, seed=1, metadata={'turn_index': 1, 'act_id': act.act_id})
+
+        assert text == 'Please help me cancel.'
+        assert fixture.metadata['source'] == 'pipecat_tester_graph'
+        assert fixture.metadata['audio_bytes'].startswith(b'RIFF')
 
     asyncio.run(run())
 

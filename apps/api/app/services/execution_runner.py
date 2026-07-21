@@ -40,11 +40,10 @@ from app.services.execution_audio import (
 from app.services.execution_vcon import build_execution_vcon, vcon_summary
 from app.services.pipecat_tester_agent import PipecatTesterAgentRunner
 from app.services.reference_generalist_agent import (
-    KokoroTesterTtsRenderer,
+    ReferencePipecatTesterGraphRenderer,
     ReferencePipecatAgentTransport,
     ReferenceMediaServices,
     ReferenceRuntimeConfig,
-    ReferenceTesterLlmWordingRenderer,
     resolve_reference_completion_provider,
 )
 from app.services.run_provenance import (
@@ -876,13 +875,11 @@ async def _execute_pipecat_webrtc(
         event_observer=event_observer,
     )
     target = ExecutionAudioTargetAdapter(transport)
+    tester_graph = ReferencePipecatTesterGraphRenderer(transport)
     runner = PipecatTesterAgentRunner(
         target=target,
-        tts_renderer=KokoroTesterTtsRenderer(transport.media),
-        wording_renderer=ReferenceTesterLlmWordingRenderer(
-            completion,
-            model_name=config.tester_llm_model,
-        ),
+        tts_renderer=tester_graph,
+        wording_renderer=tester_graph,
     )
     tester_result = await runner.run(_pipecat_webrtc_tester_config(scenario_id))
     session_id = str(tester_result.get('session_id') or '')
