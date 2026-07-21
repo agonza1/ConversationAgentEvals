@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 export interface LiveRunEvent {
   sequence: number;
@@ -29,6 +29,13 @@ interface LiveRunFeedbackProps {
 function mediaUrl(apiBase: string, value: string) {
   if (/^https?:\/\//i.test(value)) return value;
   return `${apiBase.replace(/\/$/, '')}${value.startsWith('/') ? value : `/${value}`}`;
+}
+
+function listenerBrowserUrl(token: string, apiBase: string) {
+  const params = new URLSearchParams();
+  if (apiBase) params.set('api_base', apiBase);
+  const query = params.toString();
+  return `/listeners/${encodeURIComponent(token)}${query ? `?${query}` : ''}`;
 }
 
 async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
@@ -89,7 +96,7 @@ export function LiveRunFeedback({
     [displayedConversations],
   );
 
-  async function refreshListener(token = listenerToken?.token) {
+  const refreshListener = useCallback(async (token = listenerToken?.token) => {
     if (!token) return;
     const next = await fetchJson<ListenerState>(mediaUrl(apiBase, `/api/execution/listeners/${token}`), {
       cache: 'no-store',
@@ -100,7 +107,8 @@ export function LiveRunFeedback({
         next.listener.requires_microphone ? 'microphone required' : 'no microphone'
       } · ${next.listener.run_status}`,
     );
-  }
+    return next.listener.run_status;
+  }, [apiBase, listenerToken?.token]);
 
   async function createListener() {
     if (!executionRunId || !userId) return;
@@ -164,6 +172,32 @@ export function LiveRunFeedback({
 
   useEffect(() => () => currentAudioRef.current?.pause(), []);
 
+  useEffect(() => {
+    if (!listenerToken) return undefined;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    async function poll() {
+      try {
+        const status = await refreshListener(listenerToken.token);
+        if (!active) return;
+        if (status === undefined || status === 'queued' || status === 'running') {
+          timer = setTimeout(() => void poll(), 1500);
+        }
+      } catch (error) {
+        if (!active) return;
+        setListenerMessage(error instanceof Error ? error.message : 'Could not refresh listener.');
+        timer = setTimeout(() => void poll(), 3000);
+      }
+    }
+
+    timer = setTimeout(() => void poll(), 1500);
+    return () => {
+      active = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [listenerToken, refreshListener]);
+
   return (
     <section aria-label="Live run feedback" style={{ display: 'grid', gap: 8 }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -197,8 +231,8 @@ export function LiveRunFeedback({
           <strong style={{ fontSize: 13 }}>Read-only browser listener</strong>
           {listenerToken ? (
             <>
-              <a href={mediaUrl(apiBase, listenerToken.listen_url)} target="_blank" rel="noreferrer" style={{ overflowWrap: 'anywhere', fontWeight: 760 }}>
-                {listenerToken.listen_url}
+              <a href={listenerBrowserUrl(listenerToken.token, apiBase)} target="_blank" rel="noreferrer" style={{ overflowWrap: 'anywhere', fontWeight: 760 }}>
+                {listenerBrowserUrl(listenerToken.token, apiBase)}
               </a>
               <span style={{ color: 'var(--muted)', fontSize: 13 }}>
                 {listenerToken.read_only ? 'Read-only' : 'Writable'} · {listenerToken.can_inject_audio ? 'can inject audio' : 'cannot inject audio'} · {listenerToken.requires_microphone ? 'microphone required' : 'no microphone'} · expires {new Date(listenerToken.expires_at).toLocaleTimeString()}

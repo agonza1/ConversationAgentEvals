@@ -283,7 +283,8 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
   const results = page.getByRole('region', { name: 'Run results' });
   await expect(results.getByText('voice-run-1')).toBeVisible();
   await results.getByRole('button', { name: 'Create listener link' }).click();
-  await expect(results.getByLabel('Read-only browser listener')).toContainText('/api/execution/listeners/listener-token');
+  const listenerLink = results.getByRole('link', { name: '/listeners/listener-token?api_base=http%3A%2F%2Fapi.example.test' });
+  await expect(listenerLink).toHaveAttribute('href', '/listeners/listener-token?api_base=http%3A%2F%2Fapi.example.test');
   await expect(results.getByLabel('Read-only browser listener')).toContainText('cannot inject audio');
   await expect(results.getByLabel('Read-only browser listener')).toContainText('no microphone');
   await expect(results.getByLabel('Observed live exchange')).toContainText('I want to cancel.', { timeout: 10000 });
@@ -304,4 +305,49 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
   await expect(results.getByText('Cancellation rescue', { exact: true })).toBeVisible({ timeout: 10000 });
   await expect(results.getByText(/vCon|recording metadata|Pipecat capture proof|sample-based score/i).first()).toBeVisible();
   await expect(results.getByRole('progressbar', { name: 'Voice evaluation progress' })).toHaveAttribute('aria-valuenow', '100');
+});
+
+test('browser listener page polls token-scoped live events', async ({ page }) => {
+  let listenerPolls = 0;
+  await page.route('**/api/execution/listeners/listener-token', async (route) => {
+    listenerPolls += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        listener: {
+          execution_run_id: 'voice-run-1',
+          run_status: listenerPolls < 2 ? 'running' : 'completed',
+          read_only: true,
+          can_inject_audio: false,
+          requires_microphone: false,
+        },
+        conversations: [
+          {
+            conversation_id: 'voice-run-1-cancellation-rescue-1',
+            live_events: [
+              {
+                sequence: 1,
+                kind: 'message',
+                speaker: 'Caller',
+                text: 'I want to cancel.',
+              },
+              ...(listenerPolls > 1 ? [{
+                sequence: 2,
+                kind: 'message',
+                speaker: 'Agent',
+                text: 'I can help with that.',
+              }] : []),
+            ],
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.goto('/listeners/listener-token?api_base=http%3A%2F%2Fapi.example.test');
+  await expect(page.getByRole('heading', { name: 'Read-only browser listener' })).toBeVisible();
+  await expect(page.getByLabel('Observed live exchange')).toContainText('I want to cancel.');
+  await expect(page.getByLabel('Observed live exchange')).toContainText('I can help with that.', { timeout: 5000 });
+  expect(listenerPolls).toBeGreaterThan(1);
 });
