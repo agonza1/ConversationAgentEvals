@@ -2,7 +2,8 @@
   "name": "web",
   "private": true,
   "scripts": {
-    "dev": "rm -rf .next-dev && NEXT_DIST_DIR=.next-dev next dev --port ${PORT:-3000}",
+    "dev": "NEXT_DIST_DIR=.next-dev next dev --port ${PORT:-3000}",
+    "dev:clean": "rm -rf .next-dev && npm run dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
