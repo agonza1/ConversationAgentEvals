@@ -106,8 +106,16 @@ def test_live_audio_segment_requires_run_owner_and_observed_event():
     assert denied.status_code == 404
 
 
-def test_execution_listener_token_is_receive_only_owner_scoped_and_ephemeral():
+def test_execution_listener_token_is_receive_only_owner_scoped_and_ephemeral(monkeypatch):
     import app.routes.execution as execution_routes
+
+    proxied = []
+
+    def fake_proxy(path, payload):
+        proxied.append((path, payload))
+        return {'status': 'listening', 'answer': {'sdp': 'send-only-answer', 'type': 'answer'}}
+
+    monkeypatch.setattr(execution_routes, '_proxy_reference_listener', fake_proxy)
 
     queued = start_execution_run(ExecutionRunCreateRequest(
         suite_id='call-center-voice-ai',
@@ -155,7 +163,25 @@ def test_execution_listener_token_is_receive_only_owner_scoped_and_ephemeral():
     assert listener['read_only'] is True
     assert listener['can_inject_audio'] is False
     assert listener['requires_microphone'] is False
+    assert listener['media_transport'] == 'webrtc'
+    assert listener['webrtc_url'].endswith('/webrtc')
     token = listener['token']
+
+    joined = client.post(
+        f'/api/execution/listeners/{token}/webrtc',
+        json={'sdp': 'receive-only-offer', 'type': 'offer'},
+    )
+    assert joined.status_code == 200, joined.text
+    assert joined.json()['answer']['sdp'] == 'send-only-answer'
+    assert proxied[0][0] == '/reference-duplex/listen'
+    assert proxied[0][1]['execution_run_id'] == run_id
+    assert proxied[0][1]['listener_id']
+
+    unauthorized = client.post(
+        '/api/execution/listeners/not-a-token/webrtc',
+        json={'sdp': 'receive-only-offer', 'type': 'offer'},
+    )
+    assert unauthorized.status_code == 403
 
     state = client.get(f'/api/execution/listeners/{token}')
     assert state.status_code == 200

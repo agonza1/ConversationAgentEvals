@@ -70,6 +70,17 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
             },
           ],
         },
+        reference_voice: {
+          ready: true,
+          llm_mode: 'real',
+          dependencies: [
+            { id: 'openai', label: 'OpenAI API key or Codex OAuth', ready: true, detail: 'openai ready for both agents.' },
+            { id: 'shared_token', label: 'Shared reference token', ready: true, detail: 'Token ready.' },
+            { id: 'pipecat', label: 'Pipecat service', ready: true, detail: 'Duplex and listener ready.' },
+            { id: 'rtc_asr', label: 'rtc-asr', ready: true, detail: 'Reachable.' },
+            { id: 'kokoro', label: 'Kokoro TTS', ready: true, detail: 'Reachable.' },
+          ],
+        },
       }),
     });
   });
@@ -85,6 +96,10 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
           read_only: true,
           can_inject_audio: false,
           requires_microphone: false,
+          media_transport: 'webrtc',
+          webrtc_url: '/api/execution/listeners/listener-token/webrtc',
+          webrtc_ice_url: '/api/execution/listeners/listener-token/webrtc/ice',
+          webrtc_stop_url: '/api/execution/listeners/listener-token/webrtc/stop',
         },
         conversations: [
           {
@@ -171,6 +186,7 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
             execution_run_id: 'voice-run-1',
             expires_at: '2026-07-19T21:00:00.000Z',
             listen_url: '/api/execution/listeners/listener-token',
+            media_transport: 'webrtc',
             read_only: true,
             can_inject_audio: false,
             requires_microphone: false,
@@ -289,8 +305,8 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
     'href',
     '/eval?api_base=http%3A%2F%2Fapi.example.test',
   );
-  await expect(page.getByText('Browser mic peer')).toBeVisible();
-  await expect(page.getByText('Not connected in this slice')).toBeVisible();
+  await expect(page.getByText('Browser microphone/target')).toBeVisible();
+  await expect(page.getByText('Unavailable; listener is receive-only')).toBeVisible();
   await page.getByRole('button', { name: 'Run generalist voice evaluation' }).click();
   const results = page.getByRole('region', { name: 'Run results' });
   await expect(results.getByText('voice-run-1')).toBeVisible();
@@ -324,6 +340,43 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
 
 test('browser listener page polls token-scoped live events', async ({ page }) => {
   let listenerPolls = 0;
+  let webrtcOffers = 0;
+  await page.addInitScript(() => {
+    const runtime = window as Window & { __getUserMediaCalls: number };
+    runtime.__getUserMediaCalls = 0;
+    Object.defineProperty(navigator, 'mediaDevices', {
+      value: { getUserMedia: () => { runtime.__getUserMediaCalls += 1; throw new Error('Listener must not request media.'); } },
+      configurable: true,
+    });
+    class ListenerPeer {
+      connectionState = 'new';
+      onconnectionstatechange: (() => void) | null = null;
+      onicecandidate = null;
+      ontrack = null;
+      addTransceiver(kind: string, init: RTCRtpTransceiverInit) {
+        if (kind !== 'audio' || init.direction !== 'recvonly') throw new Error('Listener must offer receive-only audio.');
+        return {};
+      }
+      async createOffer() { return { sdp: 'receive-only-offer', type: 'offer' as RTCSdpType }; }
+      async setLocalDescription() {}
+      async setRemoteDescription() {
+        this.connectionState = 'connected';
+        this.onconnectionstatechange?.();
+      }
+      close() { this.connectionState = 'closed'; }
+    }
+    Object.defineProperty(window, 'RTCPeerConnection', { value: ListenerPeer, configurable: true });
+  });
+  await page.route('**/api/execution/listeners/listener-token/webrtc', async (route) => {
+    webrtcOffers += 1;
+    const payload = JSON.parse(route.request().postData() ?? '{}');
+    expect(payload).toEqual({ sdp: 'receive-only-offer', type: 'offer' });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ status: 'listening', answer: { sdp: 'send-only-answer', type: 'answer' } }),
+    });
+  });
   await page.route('**/api/execution/listeners/listener-token', async (route) => {
     listenerPolls += 1;
     await route.fulfill({
@@ -336,6 +389,10 @@ test('browser listener page polls token-scoped live events', async ({ page }) =>
           read_only: true,
           can_inject_audio: false,
           requires_microphone: false,
+          media_transport: 'webrtc',
+          webrtc_url: '/api/execution/listeners/listener-token/webrtc',
+          webrtc_ice_url: '/api/execution/listeners/listener-token/webrtc/ice',
+          webrtc_stop_url: '/api/execution/listeners/listener-token/webrtc/stop',
         },
         conversations: [
           {
@@ -374,5 +431,54 @@ test('browser listener page polls token-scoped live events', async ({ page }) =>
   await expect(page.getByLabel('Observed live exchange')).toContainText('target → tester');
   await expect(page.getByLabel('Observed live exchange')).toContainText('LLM output: I can help with that.');
   await expect(page.getByLabel('Observed live exchange')).toContainText('ASR receipt: I can help with that.');
+  await page.getByRole('button', { name: 'Start WebRTC listener' }).click();
+  await expect(page.getByLabel('WebRTC listener status')).toHaveText('WebRTC · listening');
+  expect(webrtcOffers).toBe(1);
+  expect(await page.evaluate(() => (window as Window & { __getUserMediaCalls: number }).__getUserMediaCalls)).toBe(0);
   expect(listenerPolls).toBeGreaterThan(1);
+});
+
+test('voice page blocks before queueing when real dependencies are unavailable', async ({ page }) => {
+  await page.route('**/api/agents', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        agents: [{
+          id: 'generalist-voice-agent',
+          name: 'Built-in generalist voice agent',
+          channel: 'voice',
+          target: 'builtin_sample_voice',
+        }],
+      }),
+    });
+  });
+  await page.route('**/api/execution/health', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        audio: { transports: [{ id: 'pipecat_small_webrtc', available: true }] },
+        reference_voice: {
+          ready: false,
+          llm_mode: 'real',
+          dependencies: [
+            { id: 'openai', label: 'OpenAI API key or Codex OAuth', ready: false, detail: 'Set OPENAI_API_KEY or connect OpenAI/Codex OAuth.' },
+            { id: 'shared_token', label: 'Shared reference token', ready: false, detail: 'Set REFERENCE_AGENT_INTERNAL_TOKEN in API and Pipecat.' },
+            { id: 'pipecat', label: 'Pipecat service', ready: false, detail: 'Pipecat is unreachable at http://localhost:8110.' },
+            { id: 'rtc_asr', label: 'rtc-asr', ready: false, detail: 'Set RTC_ASR_BASE_URL.' },
+            { id: 'kokoro', label: 'Kokoro TTS', ready: false, detail: 'Set KOKORO_BASE_URL.' },
+          ],
+        },
+      }),
+    });
+  });
+
+  await page.goto('/voice?api_base=http://api.example.test');
+  await expect(page.getByLabel('Voice preflight blocked')).toContainText('Set OPENAI_API_KEY');
+  await expect(page.getByLabel('Voice preflight blocked')).toContainText('Set RTC_ASR_BASE_URL');
+  await expect(page.getByRole('button', { name: 'Run generalist voice evaluation' })).toBeDisabled();
+  await expect(page.getByText('Current-run duplex capture')).toBeVisible();
+  await expect(page.getByText('Sample-based capture')).toHaveCount(0);
 });

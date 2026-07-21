@@ -1041,6 +1041,12 @@ type ScoreAgentOption = {
   };
 };
 
+type ReferenceVoicePreflight = {
+  ready: boolean;
+  llm_mode: 'real' | 'mock';
+  dependencies: Array<{ id: string; label: string; ready: boolean; detail: string }>;
+};
+
 function isFixtureTargetId(target?: string | null) {
   return target === 'mock_agent';
 }
@@ -1065,6 +1071,14 @@ async function listAgents(): Promise<ScoreAgentOption[]> {
     await fetch(`${getApiBase()}/api/agents`, { cache: 'no-store' }),
   );
   return payload.agents ?? [];
+}
+
+async function fetchReferenceVoicePreflight(): Promise<ReferenceVoicePreflight> {
+  const payload = await handleJson<{ reference_voice?: ReferenceVoicePreflight }>(
+    await fetch(`${getApiBase()}/api/execution/health`, { cache: 'no-store' }),
+  );
+  if (!payload.reference_voice) throw new Error('Execution API did not return voice dependency preflight.');
+  return payload.reference_voice;
 }
 
 function applyAgentProfileDefaults(
@@ -2245,6 +2259,8 @@ export function BenchmarkRunner({
   const [executionModelsMessage, setExecutionModelsMessage] = useState<string | null>(null);
   const [agents, setAgents] = useState<ScoreAgentOption[]>([]);
   const [agentsLoaded, setAgentsLoaded] = useState(false);
+  const [referenceVoicePreflight, setReferenceVoicePreflight] = useState<ReferenceVoicePreflight | null>(null);
+  const [referenceVoicePreflightError, setReferenceVoicePreflightError] = useState<string | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const selectedScoreAgent = useMemo(
     () => agents.find((agent) => agent.id === selectedAgentId) ?? null,
@@ -2560,6 +2576,25 @@ export function BenchmarkRunner({
         if (!active) return;
         setAgents([]);
         setAgentsLoaded(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [view]);
+
+  useEffect(() => {
+    if (view !== 'run') return;
+    let active = true;
+    fetchReferenceVoicePreflight()
+      .then((preflight) => {
+        if (!active) return;
+        setReferenceVoicePreflight(preflight);
+        setReferenceVoicePreflightError(null);
+      })
+      .catch((error) => {
+        if (!active) return;
+        setReferenceVoicePreflight(null);
+        setReferenceVoicePreflightError(error instanceof Error ? error.message : 'Voice preflight unavailable.');
       });
     return () => {
       active = false;
@@ -3404,6 +3439,16 @@ export function BenchmarkRunner({
     }
 
     const sampleVoiceAgent = selectedScoreAgent.target === 'builtin_sample_voice';
+    if (sampleVoiceAgent && !referenceVoicePreflight?.ready) {
+      const blockers = referenceVoicePreflight?.dependencies
+        .filter((item) => !item.ready)
+        .map((item) => item.detail)
+        .join(' ');
+      setExecutionMessage(
+        blockers || referenceVoicePreflightError || 'Voice dependency preflight is unavailable. Resolve it before queueing.',
+      );
+      return null;
+    }
     const legacyVoiceReplay = selectedScoreAgent.target === 'voice_fixture';
     const runMode = sampleVoiceAgent
       ? 'pipecat_webrtc'
@@ -4476,23 +4521,14 @@ export function BenchmarkRunner({
               <span>1</span>
               <div><strong>Tester</strong><small>Scenario driver</small></div>
             </div>
-            <label>
-              <span className="sr-only">Tester</span>
-            <select
-              aria-label="Execution tester"
-              value={executionTesterId}
-              onChange={(event) => setExecutionTesterId(event.target.value as typeof executionTesterId)}
-            >
-              {selectedScoreAgent?.target === 'builtin_sample_voice' ? (
-                <option value="pipecat_tester">Voice scenario tester</option>
-              ) : selectedScoreAgent?.target === 'voice_fixture' ? (
-                <option value="fixture_replay">Saved conversation replay</option>
-              ) : (
-                <option value="scenario_simulator">Scenario simulator (scripted user opener)</option>
-              )}
-            </select>
-            </label>
-            <p>Plays the caller or user; it is never the target being scored.</p>
+            <div className="run-tester-summary" aria-label="Execution tester">
+              <span>Tester type</span>
+              <strong>Scenario user (AI)</strong>
+            </div>
+            <p>
+              Acts as the user defined by the selected scenario and adapts to the target&apos;s responses.
+              The target, not the tester, is evaluated.
+            </p>
           </div>
           <div className="run-config-step">
             <div className="run-config-step-heading">
@@ -4625,6 +4661,17 @@ export function BenchmarkRunner({
           </div>
         ) : null}
 
+        {selectedScoreAgent?.target === 'builtin_sample_voice' && !referenceVoicePreflight?.ready ? (
+          <div className="voice-error" role="alert" aria-label="Run Agent voice preflight blocked">
+            <strong>Voice run blocked before queueing</strong>
+            <span>
+              {referenceVoicePreflight
+                ? referenceVoicePreflight.dependencies.filter((item) => !item.ready).map((item) => `${item.label}: ${item.detail}`).join(' ')
+                : referenceVoicePreflightError || 'Checking OpenAI, shared token, Pipecat, rtc-asr, and Kokoro reachability.'}
+            </span>
+          </div>
+        ) : null}
+
         <details>
           <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Advanced</summary>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginTop: 12 }}>
@@ -4662,6 +4709,7 @@ export function BenchmarkRunner({
                 && selectedScoreAgent.id !== 'generalist-text-agent'
                 && openaiProvider?.status !== 'connected')
               || isExternalVoiceTargetId(selectedScoreAgent.target)
+              || (selectedScoreAgent.target === 'builtin_sample_voice' && !referenceVoicePreflight?.ready)
             }
             onClick={() => void onLaunchExecution()}
           >

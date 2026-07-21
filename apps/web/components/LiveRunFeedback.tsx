@@ -64,6 +64,7 @@ interface ListenerToken {
   read_only: boolean;
   can_inject_audio: boolean;
   requires_microphone: boolean;
+  media_transport?: 'webrtc';
 }
 
 interface ListenerState {
@@ -246,7 +247,7 @@ export function LiveRunFeedback({
                 {listenerBrowserUrl(listenerToken.token, apiBase)}
               </a>
               <span style={{ color: 'var(--muted)', fontSize: 13 }}>
-                {listenerToken.read_only ? 'Read-only' : 'Writable'} · {listenerToken.can_inject_audio ? 'can inject audio' : 'cannot inject audio'} · {listenerToken.requires_microphone ? 'microphone required' : 'no microphone'} · expires {new Date(listenerToken.expires_at).toLocaleTimeString()}
+                {listenerToken.read_only ? 'Read-only' : 'Writable'} · {listenerToken.media_transport === 'webrtc' ? 'WebRTC audio' : 'audio'} · {listenerToken.can_inject_audio ? 'can inject audio' : 'cannot inject audio'} · {listenerToken.requires_microphone ? 'microphone required' : 'no microphone'} · expires {new Date(listenerToken.expires_at).toLocaleTimeString()}
               </span>
               <button type="button" onClick={() => void refreshListener()}>
                 Refresh listener view

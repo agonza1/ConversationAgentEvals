@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { SiteNav } from '@/components/SiteNav';
 import { getApiBase } from '@/lib/execution';
@@ -33,6 +33,10 @@ interface ListenerState {
     read_only: boolean;
     can_inject_audio: boolean;
     requires_microphone: boolean;
+    media_transport?: 'webrtc';
+    webrtc_url?: string;
+    webrtc_ice_url?: string;
+    webrtc_stop_url?: string;
   };
   conversations?: ListenerConversation[];
 }
@@ -53,6 +57,11 @@ export function BrowserListenerPage({ token }: { token: string }) {
   const apiBase = useMemo(() => getApiBase(), []);
   const [state, setState] = useState<ListenerState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [webrtcStatus, setWebrtcStatus] = useState<'idle' | 'connecting' | 'listening' | 'error'>('idle');
+  const peerRef = useRef<RTCPeerConnection | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const stopUrlRef = useRef<string | null>(null);
+  stopUrlRef.current = state?.listener.webrtc_stop_url ?? null;
 
   useEffect(() => {
     let active = true;
@@ -83,6 +92,69 @@ export function BrowserListenerPage({ token }: { token: string }) {
     };
   }, [apiBase, token]);
 
+  useEffect(() => () => {
+    const peer = peerRef.current;
+    peerRef.current = null;
+    peer?.close();
+    const stopUrl = stopUrlRef.current;
+    if (stopUrl) {
+      void fetch(mediaUrl(apiBase, stopUrl), { method: 'POST', keepalive: true }).catch(() => undefined);
+    }
+  }, [apiBase, token]);
+
+  async function connectWebRTC() {
+    const listener = state?.listener;
+    if (!listener?.webrtc_url) {
+      setError('This listener token does not expose WebRTC signaling. Issue a fresh token.');
+      return;
+    }
+    peerRef.current?.close();
+    const peer = new RTCPeerConnection();
+    peerRef.current = peer;
+    setWebrtcStatus('connecting');
+    setError(null);
+    peer.addTransceiver('audio', { direction: 'recvonly' });
+    peer.ontrack = (event) => {
+      if (event.track.kind !== 'audio' || !audioRef.current) return;
+      audioRef.current.srcObject = event.streams[0] ?? new MediaStream([event.track]);
+      void audioRef.current.play().catch(() => undefined);
+    };
+    peer.onconnectionstatechange = () => {
+      if (peer.connectionState === 'connected') setWebrtcStatus('listening');
+      if (peer.connectionState === 'failed') {
+        setWebrtcStatus('error');
+        setError('The receive-only WebRTC listener failed. Issue a fresh token and retry while the run is active.');
+      }
+    };
+    peer.onicecandidate = (event) => {
+      if (!event.candidate || !listener.webrtc_ice_url) return;
+      void fetch(mediaUrl(apiBase, listener.webrtc_ice_url), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ candidate: event.candidate.toJSON() }),
+      }).catch(() => undefined);
+    };
+    try {
+      const offer = await peer.createOffer();
+      await peer.setLocalDescription(offer);
+      const answer = await fetchJson<{ answer: RTCSessionDescriptionInit; status?: string }>(
+        mediaUrl(apiBase, listener.webrtc_url),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sdp: offer.sdp, type: offer.type }),
+        },
+      );
+      await peer.setRemoteDescription(answer.answer);
+      setWebrtcStatus(answer.status === 'listening' ? 'listening' : 'connecting');
+    } catch (err) {
+      peer.close();
+      if (peerRef.current === peer) peerRef.current = null;
+      setWebrtcStatus('error');
+      setError(err instanceof Error ? err.message : 'Could not attach the WebRTC listener.');
+    }
+  }
+
   const events = useMemo(
     () => (state?.conversations ?? []).flatMap((conversation) =>
       (conversation.live_events ?? []).map((event) => ({ ...event, conversationId: conversation.conversation_id })),
@@ -102,6 +174,13 @@ export function BrowserListenerPage({ token }: { token: string }) {
             : 'Connecting to the live run.'}
         </p>
         {error ? <p role="alert" className="error-text">{error}</p> : null}
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button type="button" onClick={() => void connectWebRTC()} disabled={!state || webrtcStatus === 'connecting'}>
+            {webrtcStatus === 'listening' ? 'Reconnect WebRTC listener' : webrtcStatus === 'connecting' ? 'Connecting WebRTC…' : 'Start WebRTC listener'}
+          </button>
+          <span aria-label="WebRTC listener status">WebRTC · {webrtcStatus}</span>
+          <audio ref={audioRef} controls autoPlay aria-label="Receive-only live run audio" />
+        </div>
       </section>
       <section aria-label="Observed live exchange" style={{ display: 'grid', gap: 10 }}>
         {events.length ? events.map((event) => (
@@ -115,8 +194,8 @@ export function BrowserListenerPage({ token }: { token: string }) {
                 LLM output: {event.llm_output} · ASR receipt: {event.asr_receipt}
               </span>
             ) : null}
-            {event.kind === 'audio' && event.media_url ? (
-              <audio controls src={mediaUrl(apiBase, event.media_url)} aria-label={`${event.speaker} audio ${event.sequence}`} />
+            {event.kind === 'audio' ? (
+              <span style={{ color: 'var(--muted)', fontSize: 12 }}>Audio delivered on the receive-only WebRTC stream.</span>
             ) : null}
           </article>
         )) : (

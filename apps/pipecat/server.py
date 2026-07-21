@@ -164,6 +164,14 @@ class LivePresenterWebRTCConnection(SmallWebRTCConnection):
     def _prime_audio_sender_for_answer(self) -> None:
         if RawAudioTrack is None:
             return
+
+
+class ReferenceListenerWebRTCConnection(LivePresenterWebRTCConnection):
+    """Server-send-only WebRTC connection for an evaluation observer."""
+
+    def force_transceivers_to_send_recv(self):
+        for transceiver in self._pc.getTransceivers():
+            transceiver.direction = 'sendonly' if getattr(transceiver, 'kind', None) == 'audio' else 'inactive'
         for transceiver in self._pc.getTransceivers():
             if getattr(transceiver, 'kind', None) != 'audio' or not transceiver.sender:
                 continue
@@ -258,6 +266,7 @@ class ReferenceTesterTurnRequest(BaseModel):
 
 class ReferenceDuplexRunRequest(BaseModel):
     session_id: str
+    execution_run_id: str
     scenario: dict[str, Any]
     tester_model_name: str | None = None
     target_model_name: str | None = None
@@ -265,6 +274,54 @@ class ReferenceDuplexRunRequest(BaseModel):
     llm_mode: Literal['real', 'mock'] = 'real'
     max_turn_pairs: int = Field(default=3, ge=1, le=8)
     total_timeout_seconds: float = Field(default=90, ge=5, le=300)
+
+
+class ReferenceListenerJoinRequest(BaseModel):
+    execution_run_id: str
+    listener_id: str
+    sdp: str
+    type: str = 'offer'
+    expires_at_unix: float
+
+
+class ReferenceListenerIceRequest(BaseModel):
+    execution_run_id: str
+    listener_id: str
+    candidate: dict[str, Any]
+
+
+class ReferenceListenerStopRequest(BaseModel):
+    execution_run_id: str
+    listener_id: str
+
+
+@dataclass(slots=True)
+class _ReferenceListener:
+    listener_id: str
+    connection: Any
+    track: Any
+
+
+@dataclass(slots=True)
+class _ReferenceDuplexBroadcast:
+    execution_run_id: str
+    session_id: str
+    active: bool = True
+    listeners: dict[str, _ReferenceListener] = field(default_factory=dict)
+
+    def publish(self, audio: bytes, *, sample_rate: int) -> None:
+        for listener in tuple(self.listeners.values()):
+            track = listener.track
+            track_rate = int(getattr(track, '_sample_rate', sample_rate))
+            if track_rate != sample_rate:
+                continue
+            ten_ms_bytes = max(2, track_rate // 100 * 2)
+            remainder = len(audio) % ten_ms_bytes
+            payload = audio if remainder == 0 else audio + bytes(ten_ms_bytes - remainder)
+            track.add_audio_bytes(payload)
+
+
+REFERENCE_DUPLEX_RUNS: dict[str, _ReferenceDuplexBroadcast] = {}
 
 
 if PIPECAT_RUNTIME_AVAILABLE:
@@ -464,6 +521,7 @@ if PIPECAT_RUNTIME_AVAILABLE:
     @dataclass(slots=True)
     class _LocalDuplexFrameBus:
         session_id: str
+        broadcast: Any
         sequence: int = 0
 
         def send(
@@ -478,6 +536,7 @@ if PIPECAT_RUNTIME_AVAILABLE:
                 raise RuntimeError(f'Unsupported duplex direction: {direction}')
             if not audio:
                 raise RuntimeError('Local duplex transport cannot send an empty audio frame.')
+            self.broadcast.publish(audio, sample_rate=sample_rate)
             self.sequence += 1
             return (
                 InputAudioRawFrame(audio, sample_rate, channels),
@@ -537,7 +596,20 @@ def _duplex_event(payload: dict[str, Any]) -> bytes:
 
 async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncIterator[bytes]:
     """Run both Pipecat agents and stream evidence while media stays in-process."""
-    bus = _LocalDuplexFrameBus(payload.session_id)
+    broadcast = _ReferenceDuplexBroadcast(
+        execution_run_id=payload.execution_run_id,
+        session_id=payload.session_id,
+    )
+    existing = REFERENCE_DUPLEX_RUNS.get(payload.execution_run_id)
+    if existing is not None and existing.active:
+        yield _duplex_event({
+            'type': 'error',
+            'code': 'duplex_run_already_active',
+            'detail': f'Execution run {payload.execution_run_id} already has an active duplex session.',
+        })
+        return
+    REFERENCE_DUPLEX_RUNS[payload.execution_run_id] = broadcast
+    bus = _LocalDuplexFrameBus(payload.session_id, broadcast)
     history: list[dict[str, str]] = []
     previous_target_input = None
     pending_exchange: dict[str, Any] | None = None
@@ -679,6 +751,22 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
         })
     except Exception as exc:
         yield _duplex_event({'type': 'error', 'code': 'duplex_runtime_error', 'detail': str(exc)})
+    finally:
+        broadcast.active = False
+        asyncio.create_task(_retire_reference_broadcast(broadcast))
+
+
+async def _retire_reference_broadcast(broadcast: _ReferenceDuplexBroadcast) -> None:
+    """Let already-negotiated listeners drain queued audio, then close them."""
+    await asyncio.sleep(120)
+    if REFERENCE_DUPLEX_RUNS.get(broadcast.execution_run_id) is broadcast:
+        REFERENCE_DUPLEX_RUNS.pop(broadcast.execution_run_id, None)
+    for listener in tuple(broadcast.listeners.values()):
+        try:
+            await listener.connection.disconnect()
+        except Exception:
+            pass
+    broadcast.listeners.clear()
 
 
 @app.get('/reference-agent/readiness')
@@ -690,7 +778,9 @@ async def reference_agent_readiness(x_cae_reference_token: str | None = Header(d
         'rtc_asr_configured': bool(RTC_ASR_BASE_URL),
         'kokoro_configured': bool(KOKORO_BASE_URL),
         'duplex_route_ready': True,
+        'listener_webrtc_ready': bool(PIPECAT_RUNTIME_AVAILABLE),
         'route': '/reference-duplex/run',
+        'listener_route': '/reference-duplex/listen',
     }
 
 
@@ -715,6 +805,95 @@ async def reference_duplex_run(
         media_type='application/x-ndjson',
         headers={'Cache-Control': 'no-store'},
     )
+
+
+@app.post('/reference-duplex/listen')
+async def reference_duplex_listen(
+    payload: ReferenceListenerJoinRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Attach a receive-only browser WebRTC peer to an active duplex run."""
+    _require_reference_token(x_cae_reference_token)
+    if not PIPECAT_RUNTIME_AVAILABLE:
+        raise HTTPException(status_code=503, detail='Pipecat WebRTC runtime is unavailable.')
+    broadcast = REFERENCE_DUPLEX_RUNS.get(payload.execution_run_id)
+    if broadcast is None or not broadcast.active:
+        raise HTTPException(status_code=409, detail='The duplex run is not active; retry while it is running.')
+    if payload.listener_id in broadcast.listeners:
+        raise HTTPException(status_code=409, detail='This listener is already attached.')
+    connection = ReferenceListenerWebRTCConnection(audio_out_sample_rate=24000)
+    try:
+        await connection.initialize(payload.sdp, payload.type)
+        answer = connection.get_answer()
+        track = getattr(connection, '_presenter_answer_audio_track', None)
+        if not answer or track is None:
+            raise RuntimeError('Pipecat did not produce a send-only audio answer.')
+        broadcast.listeners[payload.listener_id] = _ReferenceListener(
+            listener_id=payload.listener_id,
+            connection=connection,
+            track=track,
+        )
+        asyncio.create_task(connection.connect())
+        asyncio.create_task(_expire_reference_listener(
+            broadcast,
+            payload.listener_id,
+            payload.expires_at_unix,
+        ))
+        return {
+            'status': 'listening',
+            'read_only': True,
+            'requires_microphone': False,
+            'answer': answer,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        try:
+            await connection.disconnect()
+        except Exception:
+            pass
+        raise HTTPException(status_code=502, detail=f'Listener WebRTC negotiation failed: {exc}') from exc
+
+
+async def _expire_reference_listener(
+    broadcast: _ReferenceDuplexBroadcast,
+    listener_id: str,
+    expires_at_unix: float,
+) -> None:
+    await asyncio.sleep(max(0.0, expires_at_unix - time.time()))
+    listener = broadcast.listeners.pop(listener_id, None)
+    if listener is not None:
+        try:
+            await listener.connection.disconnect()
+        except Exception:
+            pass
+
+
+@app.post('/reference-duplex/listen/ice')
+async def reference_duplex_listener_ice(
+    payload: ReferenceListenerIceRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+) -> dict[str, str]:
+    _require_reference_token(x_cae_reference_token)
+    broadcast = REFERENCE_DUPLEX_RUNS.get(payload.execution_run_id)
+    listener = broadcast.listeners.get(payload.listener_id) if broadcast else None
+    if listener is None:
+        raise HTTPException(status_code=404, detail='Listener WebRTC session not found.')
+    await listener.connection.add_ice_candidate(_coerce_ice_candidate(payload.candidate))
+    return {'status': 'ok'}
+
+
+@app.post('/reference-duplex/listen/stop')
+async def reference_duplex_listener_stop(
+    payload: ReferenceListenerStopRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+) -> dict[str, str]:
+    _require_reference_token(x_cae_reference_token)
+    broadcast = REFERENCE_DUPLEX_RUNS.get(payload.execution_run_id)
+    listener = broadcast.listeners.pop(payload.listener_id, None) if broadcast else None
+    if listener is not None:
+        await listener.connection.disconnect()
+    return {'status': 'stopped'}
 
 
 @app.post('/reference-agent/turn')

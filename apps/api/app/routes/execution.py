@@ -5,6 +5,7 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,6 +18,7 @@ from app.services.execution_audio import describe_execution_audio_capabilities
 from app.services.execution_runner import execute_execution_run, start_execution_run
 from app.services.reference_generalist_agent import (
     ReferenceRuntimeError,
+    ReferenceRuntimeConfig,
     resolve_reference_completion_provider,
 )
 from app.services.acc_connection import acc_connection_status, test_acc_connection
@@ -43,6 +45,19 @@ class ListenerTokenRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     ttl_seconds: int = Field(default=600, ge=30, le=1800)
+
+
+class ListenerWebRTCOffer(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    sdp: str = Field(min_length=1, max_length=200000)
+    type: str = Field(default='offer', pattern='^offer$')
+
+
+class ListenerWebRTCIce(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    candidate: dict[str, Any]
 
 
 @router.post('/reference/complete')
@@ -136,6 +151,7 @@ def create_execution_listener_token(
         'execution_run_id': execution_run_id,
         'user_id': user_id,
         'expires_at': expires_at,
+        'listener_id': secrets.token_urlsafe(18),
     }
     return {
         'listener': {
@@ -143,11 +159,57 @@ def create_execution_listener_token(
             'execution_run_id': execution_run_id,
             'expires_at': expires_at.isoformat(),
             'listen_url': f'/api/execution/listeners/{token}',
+            'webrtc_url': f'/api/execution/listeners/{token}/webrtc',
+            'webrtc_ice_url': f'/api/execution/listeners/{token}/webrtc/ice',
+            'webrtc_stop_url': f'/api/execution/listeners/{token}/webrtc/stop',
+            'media_transport': 'webrtc',
             'read_only': True,
             'can_inject_audio': False,
             'requires_microphone': False,
         }
     }
+
+
+@router.post('/listeners/{token}/webrtc')
+def join_execution_listener_webrtc(token: str, payload: ListenerWebRTCOffer):
+    run, grant = _listener_run_or_403(token)
+    if run.get('status') not in {'queued', 'running'}:
+        raise HTTPException(status_code=409, detail='The execution run is no longer active.')
+    return _proxy_reference_listener(
+        '/reference-duplex/listen',
+        {
+            'execution_run_id': str(run.get('execution_run_id') or ''),
+            'listener_id': str(grant['listener_id']),
+            'sdp': payload.sdp,
+            'type': payload.type,
+            'expires_at_unix': grant['expires_at'].timestamp(),
+        },
+    )
+
+
+@router.post('/listeners/{token}/webrtc/ice')
+def add_execution_listener_webrtc_ice(token: str, payload: ListenerWebRTCIce):
+    run, grant = _listener_run_or_403(token)
+    return _proxy_reference_listener(
+        '/reference-duplex/listen/ice',
+        {
+            'execution_run_id': str(run.get('execution_run_id') or ''),
+            'listener_id': str(grant['listener_id']),
+            'candidate': payload.candidate,
+        },
+    )
+
+
+@router.post('/listeners/{token}/webrtc/stop')
+def stop_execution_listener_webrtc(token: str):
+    run, grant = _listener_run_or_403(token)
+    return _proxy_reference_listener(
+        '/reference-duplex/listen/stop',
+        {
+            'execution_run_id': str(run.get('execution_run_id') or ''),
+            'listener_id': str(grant['listener_id']),
+        },
+    )
 
 
 @router.get('/listeners/{token}')
@@ -181,6 +243,10 @@ def get_execution_listener_state(token: str):
         'listener': {
             'execution_run_id': run.get('execution_run_id'),
             'run_status': run.get('status'),
+            'media_transport': 'webrtc',
+            'webrtc_url': f'/api/execution/listeners/{token}/webrtc',
+            'webrtc_ice_url': f'/api/execution/listeners/{token}/webrtc/ice',
+            'webrtc_stop_url': f'/api/execution/listeners/{token}/webrtc/stop',
             'read_only': True,
             'can_inject_audio': False,
             'requires_microphone': False,
@@ -269,6 +335,110 @@ def _prune_listener_tokens() -> None:
         _LISTENER_TOKENS.pop(token, None)
 
 
+def _proxy_reference_listener(path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    config = ReferenceRuntimeConfig()
+    if not config.internal_token:
+        raise HTTPException(status_code=503, detail='Set REFERENCE_AGENT_INTERNAL_TOKEN in API and Pipecat.')
+    try:
+        response = httpx.post(
+            f'{config.pipecat_service_url}{path}',
+            json=payload,
+            headers={'x-cae-reference-token': config.internal_token},
+            timeout=15,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503,
+            detail=f'Pipecat listener signaling is unavailable at {config.pipecat_service_url}: {exc}',
+        ) from exc
+    try:
+        body = response.json()
+    except Exception:  # noqa: BLE001
+        body = {'detail': response.text or f'Pipecat listener signaling failed ({response.status_code}).'}
+    if response.status_code >= 400:
+        raise HTTPException(status_code=response.status_code, detail=body.get('detail') or str(body))
+    return body
+
+
+def _reference_voice_preflight() -> dict[str, Any]:
+    """Bounded, read-only dependency probe for the real two-agent voice path."""
+    config = ReferenceRuntimeConfig()
+    dependencies: list[dict[str, Any]] = []
+
+    try:
+        provider = resolve_reference_completion_provider()
+        status = provider.status()
+        llm_ready = status.get('status') == 'connected'
+        dependencies.append({
+            'id': 'openai',
+            'label': 'OpenAI API key or Codex OAuth',
+            'ready': llm_ready,
+            'detail': (
+                f'{status.get("provider") or provider.provider_id} ready for both agents.'
+                if llm_ready else status.get('message') or 'Connect OpenAI for both agents.'
+            ),
+        })
+    except Exception as exc:  # noqa: BLE001
+        dependencies.append({'id': 'openai', 'label': 'OpenAI API key or Codex OAuth', 'ready': False, 'detail': str(exc)})
+
+    token_ready = bool(config.internal_token)
+    dependencies.append({
+        'id': 'shared_token',
+        'label': 'Shared reference token',
+        'ready': token_ready,
+        'detail': 'API and Pipecat token configured.' if token_ready else 'Set REFERENCE_AGENT_INTERNAL_TOKEN in API and Pipecat.',
+    })
+
+    pipecat_ready = False
+    if token_ready:
+        try:
+            response = httpx.get(
+                f'{config.pipecat_service_url}/reference-agent/readiness',
+                headers={'x-cae-reference-token': config.internal_token},
+                timeout=2,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            pipecat_ready = bool(
+                payload.get('ready')
+                and payload.get('duplex_route_ready')
+                and payload.get('listener_webrtc_ready')
+            )
+            pipecat_detail = (
+                'Two-agent duplex and receive-only WebRTC listener routes are ready.'
+                if pipecat_ready
+                else 'Pipecat is reachable but duplex/listener runtime dependencies are incomplete.'
+            )
+        except Exception as exc:  # noqa: BLE001
+            pipecat_detail = f'Pipecat is unreachable at {config.pipecat_service_url}: {exc}'
+    else:
+        pipecat_detail = 'Configure the shared token before probing Pipecat.'
+    dependencies.append({'id': 'pipecat', 'label': 'Pipecat service', 'ready': pipecat_ready, 'detail': pipecat_detail})
+
+    for dependency_id, label, base_url, path, missing in (
+        ('rtc_asr', 'rtc-asr', config.rtc_asr_base_url, config.rtc_asr_health_path, 'Set RTC_ASR_BASE_URL.'),
+        ('kokoro', 'Kokoro TTS', config.kokoro_base_url, '/health', 'Set KOKORO_BASE_URL.'),
+    ):
+        ready = False
+        if not base_url:
+            detail = missing
+        else:
+            try:
+                response = httpx.get(f'{base_url}{path}', timeout=2)
+                response.raise_for_status()
+                ready = True
+                detail = f'Reachable at {base_url}.'
+            except Exception as exc:  # noqa: BLE001
+                detail = f'Unreachable at {base_url}: {exc}'
+        dependencies.append({'id': dependency_id, 'label': label, 'ready': ready, 'detail': detail})
+
+    return {
+        'ready': all(item['ready'] for item in dependencies),
+        'llm_mode': 'real',
+        'dependencies': dependencies,
+    }
+
+
 @router.get('/audio/capabilities')
 def execution_audio_capabilities():
     """Describe available execution-time audio transports and vCon capture.
@@ -304,5 +474,6 @@ def execution_health(db: Session = Depends(get_db)):
         'ok': True,
         'surface': 'execution',
         'audio': describe_execution_audio_capabilities().model_dump(mode='json'),
+        'reference_voice': _reference_voice_preflight(),
         'acc_connection': acc_connection_status(),
     }

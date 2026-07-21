@@ -34,6 +34,11 @@ interface ExecutionHealth {
     transports?: AudioTransportCapability[];
     notes?: string[];
   };
+  reference_voice?: {
+    ready: boolean;
+    llm_mode: 'real' | 'mock';
+    dependencies: Array<{ id: string; label: string; ready: boolean; detail: string }>;
+  };
 }
 
 interface ExecutionConversation {
@@ -182,6 +187,8 @@ export function VoiceEvalPage() {
   );
   const selectedMode = localVoiceOption;
   const pipecat = transportStatus(health, 'pipecat_small_webrtc');
+  const voicePreflight = health?.reference_voice;
+  const preflightBlocked = !voicePreflight?.ready;
 
   useEffect(() => {
     let cancelled = false;
@@ -225,6 +232,10 @@ export function VoiceEvalPage() {
   }, [run, active]);
 
   async function onLaunch() {
+    if (!voicePreflight?.ready) {
+      setError('Voice dependency preflight is blocked. Resolve the red dependency checks before queueing.');
+      return;
+    }
     const identity = ensureDemoIdentity();
     setIsLaunching(true);
     setError(null);
@@ -259,8 +270,13 @@ export function VoiceEvalPage() {
   const readinessRows = [
     { label: 'Run Agent target', value: selectedTarget ? selectedTarget.name : 'No voice target loaded', state: selectedTarget ? 'ready' : 'warn' },
     { label: 'Execution API', value: health?.ok ? 'Ready' : 'Checking', state: health?.ok ? 'ready' : 'warn' },
-    { label: 'Pipecat capture hooks', value: pipecat?.available ? 'Available for proof capture' : 'Unavailable', state: pipecat?.available ? 'ready' : 'warn' },
-    { label: 'Browser mic peer', value: 'Not connected in this slice', state: 'blocked' },
+    ...(voicePreflight?.dependencies ?? []).map((dependency) => ({
+      label: dependency.label,
+      value: dependency.detail,
+      state: dependency.ready ? 'ready' : 'blocked',
+    })),
+    ...(!voicePreflight ? [{ label: 'Voice dependency preflight', value: pipecat?.available ? 'Checking local services' : 'Unavailable', state: 'warn' }] : []),
+    { label: 'Browser microphone/target', value: 'Unavailable; listener is receive-only', state: 'blocked' },
     { label: 'SIP/PSTN call', value: 'Deferred until FreeSWITCH/Verto bridge lands', state: 'blocked' },
   ];
 
@@ -279,7 +295,7 @@ export function VoiceEvalPage() {
         <dl className="voice-scenario-facts">
           <div><dt>Suite</dt><dd>Call center voice AI</dd></div>
           <div><dt>Execution engine</dt><dd>Run Agent</dd></div>
-          <div><dt>Current call proof</dt><dd>Sample-based capture</dd></div>
+          <div><dt>Current call proof</dt><dd>Current-run duplex capture</dd></div>
           <div><dt>Evaluation</dt><dd>Automatic scoring</dd></div>
         </dl>
         <div className="voice-evidence-list" aria-label="Expected evidence">
@@ -385,6 +401,17 @@ export function VoiceEvalPage() {
             </div>
           ) : null}
 
+          {preflightBlocked ? (
+            <div className="voice-error" role="alert" aria-label="Voice preflight blocked">
+              <strong>Voice run blocked before queueing</strong>
+              <span>
+                {voicePreflight
+                  ? voicePreflight.dependencies.filter((item) => !item.ready).map((item) => item.detail).join(' ')
+                  : 'Checking OpenAI, shared token, Pipecat, rtc-asr, and Kokoro reachability.'}
+              </span>
+            </div>
+          ) : null}
+
           <div className="voice-launch-bar">
             <div>
               <span className="voice-step">3</span>
@@ -396,7 +423,7 @@ export function VoiceEvalPage() {
               className="voice-run-button"
               aria-label={selectedMode.button}
               onClick={onLaunch}
-              disabled={isLaunching || active || !selectedTarget}
+              disabled={isLaunching || active || !selectedTarget || preflightBlocked}
             >
               {isLaunching ? 'Starting...' : active ? 'Running...' : selectedMode.button}
               {!isLaunching && !active ? <span aria-hidden="true">→</span> : null}

@@ -110,6 +110,7 @@ def test_reference_duplex_stream_runs_two_graphs_over_local_frames(monkeypatch):
 
     request = {
         'session_id': 'offline-duplex-proof',
+        'execution_run_id': 'offline-execution-proof',
         'scenario': {
             'id': 'cancellation-rescue',
             'title': 'Cancellation Rescue',
@@ -152,3 +153,75 @@ def test_reference_duplex_stream_runs_two_graphs_over_local_frames(monkeypatch):
     assert completed['graphs']['tester']['llm_mode'] == 'mock'
     assert exchanges[0]['target']['asr_receipt'] == 'Please help me.'
     assert exchanges[0]['target']['tester_asr_receipt'] == 'Please help me.'
+
+
+def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(monkeypatch):
+    class _Track:
+        _sample_rate = 24000
+
+        def __init__(self):
+            self.audio = []
+
+        def add_audio_bytes(self, payload):
+            self.audio.append(payload)
+
+    class _Connection:
+        last = None
+
+        def __init__(self, *args, **kwargs):
+            self._presenter_answer_audio_track = _Track()
+            self.disconnected = False
+            _Connection.last = self
+
+        async def initialize(self, sdp, type):
+            assert sdp == 'receive-only-offer'
+            assert type == 'offer'
+
+        def get_answer(self):
+            return {'sdp': 'send-only-answer', 'type': 'answer', 'pc_id': 'listener-pc'}
+
+        async def connect(self):
+            return None
+
+        async def disconnect(self):
+            self.disconnected = True
+
+        async def add_ice_candidate(self, candidate):
+            return None
+
+    monkeypatch.setattr(server, 'REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
+    monkeypatch.setattr(server, 'ReferenceListenerWebRTCConnection', _Connection)
+    broadcast = server._ReferenceDuplexBroadcast(
+        execution_run_id='active-run',
+        session_id='active-session',
+    )
+    server.REFERENCE_DUPLEX_RUNS['active-run'] = broadcast
+    client = TestClient(server.app)
+
+    joined = client.post(
+        '/reference-duplex/listen',
+        headers={'x-cae-reference-token': 'test-token'},
+        json={
+            'execution_run_id': 'active-run',
+            'listener_id': 'owner-listener',
+            'sdp': 'receive-only-offer',
+            'type': 'offer',
+            'expires_at_unix': server.time.time() + 120,
+        },
+    )
+    assert joined.status_code == 200, joined.text
+    assert joined.json()['read_only'] is True
+    assert joined.json()['requires_microphone'] is False
+    assert joined.json()['answer']['sdp'] == 'send-only-answer'
+
+    broadcast.publish(b'\x01\x00' * 240, sample_rate=24000)
+    assert _Connection.last._presenter_answer_audio_track.audio
+
+    stopped = client.post(
+        '/reference-duplex/listen/stop',
+        headers={'x-cae-reference-token': 'test-token'},
+        json={'execution_run_id': 'active-run', 'listener_id': 'owner-listener'},
+    )
+    assert stopped.status_code == 200
+    assert _Connection.last.disconnected is True
+    server.REFERENCE_DUPLEX_RUNS.pop('active-run', None)

@@ -338,6 +338,7 @@ class ReferencePipecatTesterGraphRenderer:
 @dataclass
 class _ReferenceSession:
     session_id: str
+    execution_run_id: str | None = None
     transcription: list[TranscriptionTurn] = field(default_factory=list)
     inbound: list[dict[str, Any]] = field(default_factory=list)
     recording_wavs: list[bytes] = field(default_factory=list)
@@ -435,10 +436,10 @@ class ReferencePipecatAgentTransport:
         self._sessions: dict[str, _ReferenceSession] = {}
 
     async def connect(self, session_id: str, *, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
-        del metadata
         duplex_transport = InMemoryDuplexFrameTransport(run_id=session_id)
         self._sessions[session_id] = _ReferenceSession(
             session_id=session_id,
+            execution_run_id=str((metadata or {}).get('execution_run_id') or session_id),
             duplex_transport=duplex_transport,
             duplex_harness=TwoPipecatDuplexHarness(
                 tester_graph=self._tester_graph,
@@ -471,6 +472,7 @@ class ReferencePipecatAgentTransport:
         llm_runtime = self.runtime.get('llm') if isinstance(self.runtime.get('llm'), dict) else {}
         request_payload = {
             'session_id': session_id,
+            'execution_run_id': state.execution_run_id or session_id,
             'scenario': scenario,
             'tester_model_name': self.config.tester_llm_model,
             'target_model_name': self.config.llm_model,

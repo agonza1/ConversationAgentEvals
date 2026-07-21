@@ -63,6 +63,12 @@ def test_execution_health_includes_audio_capabilities():
     assert response.status_code == 200
     assert response.json()['ok'] is True
     assert response.json()['audio']['vcon_capture'] is True
+    preflight = response.json()['reference_voice']
+    assert preflight['llm_mode'] == 'real'
+    assert {item['id'] for item in preflight['dependencies']} == {
+        'openai', 'shared_token', 'pipecat', 'rtc_asr', 'kokoro'
+    }
+    assert all(item['detail'] for item in preflight['dependencies'])
 
 
 def test_pipecat_webrtc_mode_defaults_transport_and_rejects_verto():

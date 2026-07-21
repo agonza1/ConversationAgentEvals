@@ -23,7 +23,7 @@ Legacy names from earlier drafts (`voice_webrtc`, `local_pipecat_webrtc`, `sip_v
 | Local Pipecat reference execution | **Available when configured** — separate tester and target participants; no browser peer |
 | `POST /api/execution/runs` mode `pipecat_webrtc` | **Available when configured** — tester rtc-asr → LLM → Kokoro and target rtc-asr → LLM → Kokoro |
 | Recording + transcription capture | **Available** — current-run WAV, rtc-asr transcript, timings, and dialog turns |
-| Live run feedback | **Available** — polling exposes observed turns while the run is active; UI can reveal text or play authenticated current-run WAV segments |
+| Live run feedback | **Available** — polling exposes directional evidence; an optional token-scoped browser receives live run audio over server-send-only WebRTC |
 | vCon export on conversation rows | **Available** — reuses `benchmark_service._vcon_export` shape; Launch UI shows summary |
 | Launch UI mode label | **Honest** — current-run local duplex media; browser/SIP/PSTN not proven |
 | First-class **`/voice`** page | **Available** — dedicated Voice eval launch + conversation/vCon/recording results |
@@ -128,7 +128,8 @@ While a run is active, each conversation's `live_events` array grows as the test
 target turns are observed. Text executions emit the actual request/reply text. Reference
 voice executions emit rtc-asr/LLM text plus one authenticated current-run WAV URL per
 speaker turn. The Launch and Voice pages keep this hidden until the user chooses **Show
-live exchange**; voice runs also expose **Unmute live conversation**.
+live exchange**. An active run can also issue a short-lived owner-scoped listener token;
+the listener negotiates a receive-only browser audio transceiver and never requests a mic.
 
 ## Code map
 
@@ -139,8 +140,8 @@ live exchange**; voice runs also expose **Unmute live conversation**.
 | `apps/api/app/services/execution_runner.py` | Wires transport into `pipecat_webrtc` Execute |
 | `apps/api/app/services/reference_generalist_agent.py` | Consumes streamed session evidence and persists live events, recordings, and directional receipts |
 | `apps/api/app/schemas/execution.py` | `pipecat_webrtc` mode + `audio_transport` field |
-| `apps/api/app/routes/execution.py` | `/audio/capabilities` and owner-scoped live WAV segments |
-| `apps/pipecat/server.py` | Runs both independent Pipecat graphs and the in-process duplex frame bus |
+| `apps/api/app/routes/execution.py` | Dependency preflight, owner-scoped listener tokens, and confined WebRTC signaling proxy |
+| `apps/pipecat/server.py` | Runs both independent Pipecat graphs, the duplex frame bus, and server-send-only listener peers |
 
 The fixture scheduler and checked-in ACC audio plan remain legacy replay paths; they are not
 used by the `builtin_sample_voice` primary execution path.
@@ -189,11 +190,11 @@ The built-in reference-agent slice proves:
 - CAE-compatible vCon export on the execution path;
 - duplex frame/byte/timing proof on `conversation.audio_session`;
 - live rtc-asr, configured LLM, and Kokoro provider boundaries when the opt-in smoke is run;
-- observed text turns and owner-scoped current-run WAV segments before terminal run status.
+- observed text turns plus an optional owner-scoped receive-only browser WebRTC audio subscriber.
 
 It does **not** prove:
 
-- a browser peer connection against `apps/pipecat`;
+- a browser microphone, browser target, or evaluation dependency on the listener;
 - FreeSWITCH Verto / SIP / PSTN;
 - barge-in against a production media server;
 - production network conditions or an externally deployed target.

@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 
 test('launch evaluation streams conversations into the live list', async ({ page }) => {
   let polled = 0;
+  let voicePreflightReady = true;
 
   await page.route('**/api/benchmarks/suites**', async (route) => {
     if (route.request().url().includes('/contract-manifest')) {
@@ -123,6 +124,27 @@ test('launch evaluation streams conversations into the live list', async ({ page
             metadata: { model_name: 'registry-seed-must-not-override-env' },
           },
         ],
+      }),
+    });
+  });
+
+  await page.route('**/api/execution/health', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        reference_voice: {
+          ready: voicePreflightReady,
+          llm_mode: 'real',
+          dependencies: [
+            { id: 'openai', label: 'OpenAI', ready: voicePreflightReady, detail: voicePreflightReady ? 'Ready for both agents.' : 'Set OPENAI_API_KEY or connect OAuth.' },
+            { id: 'shared_token', label: 'Shared token', ready: true, detail: 'Ready.' },
+            { id: 'pipecat', label: 'Pipecat', ready: true, detail: 'Reachable.' },
+            { id: 'rtc_asr', label: 'rtc-asr', ready: true, detail: 'Reachable.' },
+            { id: 'kokoro', label: 'Kokoro', ready: true, detail: 'Reachable.' },
+          ],
+        },
       }),
     });
   });
@@ -316,7 +338,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   const launch = page.getByLabel('Launch agent run');
   await expect(launch.getByRole('heading', { name: 'Configure this run' })).toBeVisible();
   await expect(launch.getByLabel('Default scenario for launch')).toContainText('Cancellation Rescue');
-  await expect(launch.getByLabel('Execution tester')).toHaveValue('scenario_simulator');
+  await expect(launch.getByLabel('Execution tester')).toContainText('Scenario user (AI)');
   await expect(launch.getByLabel('Execution runner')).toContainText(/local async runner/i);
   await expect(launch.locator('.run-config-step-heading strong')).toHaveText([
     'Tester',
@@ -353,6 +375,8 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect(launch.getByLabel('Execution conversations')).toContainText('Billing Address Change');
   await expect(launch.getByLabel('Execution conversations')).toContainText(/pass/i, { timeout: 8000 });
   await launch.getByLabel('Execution agent target').selectOption('generalist-voice-agent');
+  await expect(launch.getByLabel('Execution tester')).toContainText('Scenario user (AI)');
+  await expect(launch).toContainText('adapts to the target\'s responses');
   await launch.getByRole('button', { name: 'Run generalist voice evaluation' }).click();
   await expect.poll(() => voicePosted).not.toBeNull();
   expect(voicePosted).toMatchObject({
@@ -366,6 +390,13 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect(launch.getByRole('button', { name: 'Create listener link' })).toBeEnabled();
   await expect(page.getByRole('heading', { name: 'Recent runs' })).toBeVisible();
   await expect(page.getByRole('link', { name: /Mock text agent/ })).toContainText('queued');
+
+  voicePreflightReady = false;
+  await page.goto('/runs?api_base=http%3A%2F%2Fapi.example.test&suite_id=call-center-voice-ai&scenario_id=cancellation-rescue');
+  const blockedLaunch = page.getByRole('region', { name: 'Launch agent run' });
+  await blockedLaunch.getByLabel('Execution agent target').selectOption('generalist-voice-agent');
+  await expect(blockedLaunch.getByLabel('Run Agent voice preflight blocked')).toContainText('Set OPENAI_API_KEY');
+  await expect(blockedLaunch.getByRole('button', { name: 'Run generalist voice evaluation' })).toBeDisabled();
 });
 
 test('saved ACC evidence is not offered as a Run Agent target', async ({ page }) => {
