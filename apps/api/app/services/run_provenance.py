@@ -38,6 +38,9 @@ EvidenceSource = Literal['generated_text', 'provider_response', 'saved_replay', 
 BUILTIN_SAMPLE_VOICE_HONESTY = (
     'Built-in generalist agent · current-run local audio and scoring · no browser, phone, or SIP call'
 )
+BUILTIN_SAMPLE_TEXT_HONESTY = (
+    'Offline synthetic sample · generated transcript and scoring · no real agent or provider interaction'
+)
 
 _COMPATIBLE_EXECUTORS: dict[str, frozenset[ExecutorId]] = {
     'mock_agent': frozenset({'local_async_runner'}),
@@ -193,6 +196,11 @@ def build_run_provenance(
     elif target in {'openai_codex', 'http_endpoint'}:
         evidence_source = 'provider_response'
         honesty_label = None
+        saved_evidence = False
+        synthetic_media = False
+    elif target == 'mock_agent':
+        evidence_source = 'generated_text'
+        honesty_label = BUILTIN_SAMPLE_TEXT_HONESTY
         saved_evidence = False
         synthetic_media = False
     else:

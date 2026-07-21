@@ -202,6 +202,9 @@ def test_execution_with_agent_id_and_metrics_summary():
     )
     assert queued['agent_id'] == 'mock-text-agent'
     assert queued['mode'] == 'text_callable'
+    assert queued['provenance']['honesty_label'] == (
+        'Offline synthetic sample · generated transcript and scoring · no real agent or provider interaction'
+    )
 
     finished = execute_execution_run(
         queued['execution_run_id'],

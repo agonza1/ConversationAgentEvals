@@ -280,7 +280,11 @@ export function LiveRunFeedback({
               ) : null}
             </div>
           )) : (
-            <span style={{ color: 'var(--muted)' }}>Waiting for the first observed message from this run…</span>
+            <span style={{ color: 'var(--muted)' }}>
+              {listenerActive
+                ? 'Waiting for the first observed message from this run…'
+                : 'No observed messages were recorded for this completed run.'}
+            </span>
           )}
         </div>
       ) : null}
