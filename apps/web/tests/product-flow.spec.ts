@@ -5,7 +5,7 @@ test('homepage links to focused workflow demos', async ({ page }) => {
 
   await expect(page.getByRole('link', { name: 'Browse evaluation scenarios' })).toHaveAttribute('href', '/scenarios');
   await expect(page.getByRole('link', { name: 'Eval evidence' })).toHaveAttribute('href', '/eval?demo=sample-evidence');
-  await expect(page.getByRole('link', { name: 'Launch agent run' })).toHaveAttribute('href', '/runs?launch=demo');
+  await expect(page.getByRole('link', { name: 'Launch agent run' })).toHaveAttribute('href', '/runs');
   await expect(
     page.getByRole('img', { name: 'Run an agent or import transcript or vCon evidence, then evaluate and report' }),
   ).toBeVisible();
@@ -25,7 +25,7 @@ test('homepage navigation preserves an API base override', async ({ page }) => {
   );
   await expect(page.getByRole('link', { name: 'Launch agent run' })).toHaveAttribute(
     'href',
-    '/runs?launch=demo&api_base=http%3A%2F%2Fapi.example.test',
+    '/runs?api_base=http%3A%2F%2Fapi.example.test',
   );
 });
 
