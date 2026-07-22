@@ -146,6 +146,15 @@ def test_pipecat_webrtc_mode_defaults_transport_and_rejects_verto():
     assert 'voice_fixture' in str(voice_exc.value)
 
 
+def test_execution_request_defaults_and_bounds_max_exchanges():
+    default_request = ExecutionRunCreateRequest()
+    assert default_request.max_exchanges == 3
+
+    for invalid in (0, 11):
+        with pytest.raises(ValidationError):
+            ExecutionRunCreateRequest(max_exchanges=invalid)
+
+
 def test_local_webrtc_transport_send_receive_records_and_transcribes():
     async def run() -> None:
         transport = LocalPipecatSmallWebRtcTransport()

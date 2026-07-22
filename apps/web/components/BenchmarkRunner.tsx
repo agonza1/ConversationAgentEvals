@@ -976,6 +976,7 @@ interface ExecutionRunRecord {
   agent_id?: string | null;
   agent_name?: string | null;
   model_name?: string | null;
+  max_exchanges?: number;
   tester_id?: 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
   tester_model_name?: string | null;
   executor_id?: 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
@@ -1003,6 +1004,7 @@ async function createExecutionRun(payload: {
   mode: 'text_callable' | 'voice_fixture' | 'pipecat_webrtc';
   text_callable?: string;
   iterations?: number;
+  max_exchanges?: number;
   user_id: string;
   project_id: string;
   evaluate?: boolean;
@@ -2249,6 +2251,7 @@ export function BenchmarkRunner({
   const [executionMode, setExecutionMode] = useState<'text_callable' | 'voice_fixture' | 'pipecat_webrtc'>('text_callable');
   const [executionScope, setExecutionScope] = useState<'selected' | 'suite'>('selected');
   const [executionIterations, setExecutionIterations] = useState(1);
+  const [executionMaxExchanges, setExecutionMaxExchanges] = useState(3);
   const [executionTesterId, setExecutionTesterId] = useState<'scenario_simulator' | 'fixture_replay' | 'pipecat_tester'>('scenario_simulator');
   const [executionExecutorId, setExecutionExecutorId] = useState<NonNullable<ExecutionRunRecord['executor_id']>>('local_async_runner');
   const [executionRun, setExecutionRun] = useState<ExecutionRunRecord | null>(null);
@@ -3506,6 +3509,7 @@ export function BenchmarkRunner({
         mode: runMode,
         text_callable: runMode === 'text_callable' ? runTextCallable : undefined,
         iterations: executionIterations,
+        max_exchanges: executionMaxExchanges,
         user_id: identity.userId,
         project_id: identity.projectId,
         evaluate: true,
@@ -4640,8 +4644,26 @@ export function BenchmarkRunner({
                   onChange={(event) => setExecutionIterations(Math.max(1, Math.min(20, Number(event.target.value) || 1)))}
                 />
               </label>
+              {selectedScoreAgent?.target === 'openai_codex' || selectedScoreAgent?.target === 'builtin_sample_voice' ? (
+                <label>
+                  <span>Max exchanges</span>
+                  <input
+                    aria-label="Maximum exchanges"
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={executionMaxExchanges}
+                    onChange={(event) => setExecutionMaxExchanges(Math.max(1, Math.min(10, Number(event.target.value) || 1)))}
+                  />
+                </label>
+              ) : null}
             </div>
-            <p>Queues the run and writes the ASSERT inference set locally.</p>
+            <p>
+              Queues the run and writes the ASSERT inference set locally.
+              {selectedScoreAgent?.target === 'openai_codex' || selectedScoreAgent?.target === 'builtin_sample_voice'
+                ? ' One exchange is one tester message plus one agent response.'
+                : ''}
+            </p>
           </div>
         </div>
 
@@ -4718,6 +4740,9 @@ export function BenchmarkRunner({
               {executionScope === 'suite' && supportsSuiteExecutionScope
                 ? `${selectedSuite?.scenarios.length || 0} scenarios × ${executionIterations} ${executionIterations === 1 ? 'iteration' : 'iterations'} · ${(selectedSuite?.scenarios.length || 0) * executionIterations} conversations`
                 : `${executionIterations} ${executionIterations === 1 ? 'conversation' : 'conversations'}`}
+              {selectedScoreAgent?.target === 'openai_codex' || selectedScoreAgent?.target === 'builtin_sample_voice'
+                ? ` · up to ${executionMaxExchanges} ${executionMaxExchanges === 1 ? 'exchange' : 'exchanges'} each`
+                : ''}
               {' · results appear below'}
             </span>
           </div>

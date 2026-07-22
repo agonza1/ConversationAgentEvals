@@ -124,6 +124,7 @@ export interface ExecutionRunRecord {
   agent_id?: string | null;
   agent_name?: string | null;
   model_name?: string | null;
+  max_exchanges?: number;
   tester_id?: TesterId;
   tester_model_name?: string | null;
   executor_id?: ExecutorId;
@@ -337,6 +338,7 @@ export async function createExecutionRun(payload: {
   scenario_ids?: string[];
   mode?: ExecutionMode;
   iterations?: number;
+  max_exchanges?: number;
   user_id: string;
   project_id: string;
   agent_id?: string;

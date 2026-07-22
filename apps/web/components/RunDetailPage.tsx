@@ -90,6 +90,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
             <div><dt>Target</dt><dd>{run.provenance.target_kind}</dd></div>
             <div><dt>Tester</dt><dd>{run.provenance.tester_id}</dd></div>
             <div><dt>Executor</dt><dd>{run.provenance.executor_id}</dd></div>
+            <div><dt>Exchange cap</dt><dd>{run.max_exchanges || 3}</dd></div>
             <div><dt>Evidence</dt><dd>{run.provenance.evidence_source}</dd></div>
           </dl>
         ) : null}

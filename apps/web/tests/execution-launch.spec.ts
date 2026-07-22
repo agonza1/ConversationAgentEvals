@@ -116,6 +116,14 @@ test('launch evaluation streams conversations into the live list', async ({ page
             metadata: { model_name: 'gpt-5.4' },
           },
           {
+            id: 'generalist-text-agent',
+            name: 'Built-in generalist text agent',
+            channel: 'text',
+            target: 'openai_codex',
+            description: 'Live OpenAI text target',
+            metadata: { model_name: 'gpt-5.4' },
+          },
+          {
             id: 'generalist-voice-agent',
             name: 'Built-in generalist voice agent',
             channel: 'voice',
@@ -380,12 +388,27 @@ test('launch evaluation streams conversations into the live list', async ({ page
     tester_id: 'scenario_simulator',
     executor_id: 'local_async_runner',
     scenario_ids: ['billing-address-change', 'cancellation-rescue'],
+    max_exchanges: 3,
+  });
+  await launch.getByLabel('Execution agent target').selectOption('generalist-text-agent');
+  await expect(launch.getByLabel('Maximum exchanges')).toHaveValue('3');
+  await launch.getByLabel('Maximum exchanges').fill('4');
+  await launch.getByRole('button', { name: 'Run evaluation' }).click();
+  await expect.poll(() => textPostAttempts.length).toBe(3);
+  expect(textPostAttempts.at(-1)).toMatchObject({
+    mode: 'text_callable',
+    text_callable: 'openai_codex',
+    agent_id: 'generalist-text-agent',
+    max_exchanges: 4,
   });
   await expect(launch.getByLabel('Execution conversations')).toContainText('Billing Address Change');
   await expect(launch.getByLabel('Execution conversations')).toContainText(/pass/i, { timeout: 8000 });
   await launch.getByLabel('Execution agent target').selectOption('generalist-voice-agent');
   await expect(launch.getByLabel('Execution tester')).toContainText('Scenario user (AI)');
   await expect(launch).toContainText('adapts to the target\'s responses');
+  await expect(launch.getByLabel('Maximum exchanges')).toHaveValue('4');
+  await launch.getByLabel('Maximum exchanges').fill('5');
+  await expect(launch).toContainText('up to 5 exchanges each');
   await launch.getByRole('button', { name: 'Run evaluation' }).click();
   await expect.poll(() => voicePosted).not.toBeNull();
   expect(voicePosted).toMatchObject({
@@ -393,6 +416,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
     agent_id: 'generalist-voice-agent',
     tester_id: 'pipecat_tester',
     executor_id: 'cae_local_audio_loop',
+    max_exchanges: 5,
   });
   expect(voicePosted).not.toHaveProperty('model_name');
   await expect(launch.getByLabel('Read-only browser listener')).toContainText('Available while this run is active.');
