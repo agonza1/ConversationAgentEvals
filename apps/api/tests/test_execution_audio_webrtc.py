@@ -69,6 +69,13 @@ def test_execution_health_includes_audio_capabilities():
         'openai', 'shared_token', 'pipecat', 'rtc_asr', 'kokoro'
     }
     assert all(item['detail'] for item in preflight['dependencies'])
+    assert all(item['setup_url'].startswith('https://') for item in preflight['dependencies'])
+    assert next(item for item in preflight['dependencies'] if item['id'] == 'rtc_asr')['setup_url'] == (
+        'https://github.com/agonza1/rtc-asr'
+    )
+    assert next(item for item in preflight['dependencies'] if item['id'] == 'kokoro')['setup_url'] == (
+        'https://github.com/remsky/Kokoro-FastAPI'
+    )
 
 
 def test_reference_voice_preflight_blocks_incompatible_rtc_asr_backend(monkeypatch):

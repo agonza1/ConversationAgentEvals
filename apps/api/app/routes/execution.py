@@ -26,6 +26,13 @@ from app.services.acc_connection import acc_connection_status, test_acc_connecti
 
 router = APIRouter(prefix='/api/execution', tags=['execution'])
 _LISTENER_TOKENS: dict[str, dict[str, Any]] = {}
+_REFERENCE_DEPENDENCY_SETUP_URLS = {
+    'openai': 'https://platform.openai.com/docs/quickstart',
+    'shared_token': 'https://github.com/agonza1/ConversationAgentEvals/blob/main/docs/environment.md#live-asr-and-voice-experiments',
+    'pipecat': 'https://github.com/pipecat-ai/pipecat',
+    'rtc_asr': 'https://github.com/agonza1/rtc-asr',
+    'kokoro': 'https://github.com/remsky/Kokoro-FastAPI',
+}
 
 
 class AccConnectionTestRequest(BaseModel):
@@ -452,6 +459,9 @@ def _reference_voice_preflight() -> dict[str, Any]:
             except Exception as exc:  # noqa: BLE001
                 detail = f'Unreachable at {base_url}: {exc}'
         dependencies.append({'id': dependency_id, 'label': label, 'ready': ready, 'detail': detail})
+
+    for dependency in dependencies:
+        dependency['setup_url'] = _REFERENCE_DEPENDENCY_SETUP_URLS[dependency['id']]
 
     return {
         'ready': all(item['ready'] for item in dependencies),

@@ -37,7 +37,7 @@ interface ExecutionHealth {
   reference_voice?: {
     ready: boolean;
     llm_mode: 'real' | 'mock';
-    dependencies: Array<{ id: string; label: string; ready: boolean; detail: string }>;
+    dependencies: Array<{ id: string; label: string; ready: boolean; detail: string; setup_url?: string }>;
   };
 }
 
@@ -404,11 +404,20 @@ export function VoiceEvalPage() {
           {preflightBlocked ? (
             <div className="voice-error" role="alert" aria-label="Voice preflight blocked">
               <strong>Voice run blocked before queueing</strong>
-              <span>
-                {voicePreflight
-                  ? voicePreflight.dependencies.filter((item) => !item.ready).map((item) => item.detail).join(' ')
-                  : 'Checking OpenAI, shared token, Pipecat, rtc-asr, and Kokoro reachability.'}
-              </span>
+              {voicePreflight ? (
+                <ul className="voice-preflight-list">
+                  {voicePreflight.dependencies.filter((item) => !item.ready).map((item) => (
+                    <li key={item.id}>
+                      <strong>{item.label}:</strong> {item.detail}{' '}
+                      {item.setup_url ? (
+                        <a href={item.setup_url} target="_blank" rel="noreferrer" aria-label={`${item.label} setup`}>
+                          Setup guide ↗
+                        </a>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : <span>Checking OpenAI, shared token, Pipecat, rtc-asr, and Kokoro reachability.</span>}
             </div>
           ) : null}
 

@@ -1046,7 +1046,7 @@ type ScoreAgentOption = {
 type ReferenceVoicePreflight = {
   ready: boolean;
   llm_mode: 'real' | 'mock';
-  dependencies: Array<{ id: string; label: string; ready: boolean; detail: string }>;
+  dependencies: Array<{ id: string; label: string; ready: boolean; detail: string; setup_url?: string }>;
 };
 
 function isFixtureTargetId(target?: string | null) {
@@ -4730,11 +4730,20 @@ export function BenchmarkRunner({
         {selectedScoreAgent?.target === 'builtin_sample_voice' && !referenceVoicePreflight?.ready ? (
           <div className="voice-error" role="alert" aria-label="Run Agent voice preflight blocked">
             <strong>Voice run blocked before queueing</strong>
-            <span>
-              {referenceVoicePreflight
-                ? referenceVoicePreflight.dependencies.filter((item) => !item.ready).map((item) => `${item.label}: ${item.detail}`).join(' ')
-                : referenceVoicePreflightError || 'Checking OpenAI, shared token, Pipecat, rtc-asr, and Kokoro reachability.'}
-            </span>
+            {referenceVoicePreflight ? (
+              <ul className="voice-preflight-list">
+                {referenceVoicePreflight.dependencies.filter((item) => !item.ready).map((item) => (
+                  <li key={item.id}>
+                    <strong>{item.label}:</strong> {item.detail}{' '}
+                    {item.setup_url ? (
+                      <a href={item.setup_url} target="_blank" rel="noreferrer" aria-label={`${item.label} setup`}>
+                        Setup guide ↗
+                      </a>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : <span>{referenceVoicePreflightError || 'Checking OpenAI, shared token, Pipecat, rtc-asr, and Kokoro reachability.'}</span>}
           </div>
         ) : null}
         <div className="run-launch-actions">

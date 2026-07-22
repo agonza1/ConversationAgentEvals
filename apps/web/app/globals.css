@@ -2158,6 +2158,25 @@ select {
   font-size: 13px;
 }
 
+.voice-preflight-list {
+  display: grid;
+  gap: 6px;
+  margin: 3px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.voice-preflight-list li {
+  line-height: 1.45;
+}
+
+.voice-preflight-list a {
+  color: inherit;
+  font-weight: 800;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .voice-empty-results,
 .voice-waiting-state {
   min-height: 145px;

@@ -538,10 +538,10 @@ test('voice page blocks before queueing when real dependencies are unavailable',
           llm_mode: 'real',
           dependencies: [
             { id: 'openai', label: 'OpenAI API key or Codex OAuth', ready: false, detail: 'Set OPENAI_API_KEY or connect OpenAI/Codex OAuth.' },
-            { id: 'shared_token', label: 'Shared reference token', ready: false, detail: 'Set REFERENCE_AGENT_INTERNAL_TOKEN in API and Pipecat.' },
-            { id: 'pipecat', label: 'Pipecat service', ready: false, detail: 'Pipecat is unreachable at http://localhost:8110.' },
-            { id: 'rtc_asr', label: 'rtc-asr', ready: false, detail: 'Set RTC_ASR_BASE_URL.' },
-            { id: 'kokoro', label: 'Kokoro TTS', ready: false, detail: 'Set KOKORO_BASE_URL.' },
+            { id: 'shared_token', label: 'Shared reference token', ready: false, detail: 'Set REFERENCE_AGENT_INTERNAL_TOKEN in API and Pipecat.', setup_url: 'https://github.com/agonza1/ConversationAgentEvals/blob/main/docs/environment.md#live-asr-and-voice-experiments' },
+            { id: 'pipecat', label: 'Pipecat service', ready: false, detail: 'Pipecat is unreachable at http://localhost:8110.', setup_url: 'https://github.com/pipecat-ai/pipecat' },
+            { id: 'rtc_asr', label: 'rtc-asr', ready: false, detail: 'Set RTC_ASR_BASE_URL.', setup_url: 'https://github.com/agonza1/rtc-asr' },
+            { id: 'kokoro', label: 'Kokoro TTS', ready: false, detail: 'Set KOKORO_BASE_URL.', setup_url: 'https://github.com/remsky/Kokoro-FastAPI' },
           ],
         },
       }),
@@ -551,6 +551,8 @@ test('voice page blocks before queueing when real dependencies are unavailable',
   await page.goto('/voice?api_base=http://api.example.test');
   await expect(page.getByLabel('Voice preflight blocked')).toContainText('Set OPENAI_API_KEY');
   await expect(page.getByLabel('Voice preflight blocked')).toContainText('Set RTC_ASR_BASE_URL');
+  await expect(page.getByRole('link', { name: 'rtc-asr setup' })).toHaveAttribute('href', 'https://github.com/agonza1/rtc-asr');
+  await expect(page.getByRole('link', { name: 'Kokoro TTS setup' })).toHaveAttribute('href', 'https://github.com/remsky/Kokoro-FastAPI');
   await expect(page.getByRole('button', { name: 'Run evaluation' })).toBeDisabled();
   await expect(page.getByText('Current-run duplex capture')).toBeVisible();
   await expect(page.getByText('Sample-based capture')).toHaveCount(0);
