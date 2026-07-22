@@ -310,19 +310,41 @@ class _ReferenceDuplexBroadcast:
     active: bool = True
     listeners: dict[str, _ReferenceListener] = field(default_factory=dict)
 
-    def publish(self, audio: bytes, *, sample_rate: int) -> None:
+    def publish(self, audio: bytes, *, sample_rate: int, channels: int = 1) -> None:
+        mono_audio = _pcm16_to_mono(audio, channels)
         for listener in tuple(self.listeners.values()):
             track = listener.track
             track_rate = int(getattr(track, '_sample_rate', sample_rate))
             listener_audio = (
-                _resample_pcm16_mono(audio, sample_rate, track_rate)
+                _resample_pcm16_mono(mono_audio, sample_rate, track_rate)
                 if track_rate != sample_rate
-                else audio
+                else mono_audio
             )
             ten_ms_bytes = max(2, track_rate // 100 * 2)
             remainder = len(listener_audio) % ten_ms_bytes
             payload = listener_audio if remainder == 0 else listener_audio + bytes(ten_ms_bytes - remainder)
             track.add_audio_bytes(payload)
+
+
+def _pcm16_to_mono(payload: bytes, channels: int) -> bytes:
+    """Downmix interleaved little-endian PCM16 audio to mono."""
+    if channels <= 0:
+        raise ValueError('Audio channel count must be positive.')
+    sample_count = len(payload) // 2
+    frame_count = sample_count // channels
+    if frame_count == 0:
+        return b''
+    usable_sample_count = frame_count * channels
+    payload = payload[:usable_sample_count * 2]
+    if channels == 1:
+        return payload
+
+    samples = struct.unpack(f'<{usable_sample_count}h', payload)
+    mono = [
+        round(sum(samples[offset:offset + channels]) / channels)
+        for offset in range(0, usable_sample_count, channels)
+    ]
+    return struct.pack(f'<{frame_count}h', *mono)
 
 
 def _resample_pcm16_mono(payload: bytes, source_rate: int, target_rate: int) -> bytes:
@@ -571,7 +593,7 @@ if PIPECAT_RUNTIME_AVAILABLE:
                 raise RuntimeError(f'Unsupported duplex direction: {direction}')
             if not audio:
                 raise RuntimeError('Local duplex transport cannot send an empty audio frame.')
-            self.broadcast.publish(audio, sample_rate=sample_rate)
+            self.broadcast.publish(audio, sample_rate=sample_rate, channels=channels)
             self.sequence += 1
             return (
                 InputAudioRawFrame(audio, sample_rate, channels),
