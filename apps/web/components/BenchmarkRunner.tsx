@@ -2541,7 +2541,12 @@ export function BenchmarkRunner({
         const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
         const fromQuery = params?.get('agent_id');
         const matched = fromQuery ? availableAgents.find((item) => item.id === fromQuery) : null;
-        const fallback = availableAgents.find((a) => a.id === 'mock-text-agent') ?? availableAgents[0] ?? null;
+        const fallback = view === 'run'
+          ? availableAgents.find((agent) => agent.id === 'generalist-text-agent')
+            ?? availableAgents.find((agent) => agent.id === 'mock-text-agent')
+            ?? availableAgents[0]
+            ?? null
+          : availableAgents.find((agent) => agent.id === 'mock-text-agent') ?? availableAgents[0] ?? null;
         const selected = matched ?? fallback;
         const nextId = selected?.id || '';
         setSelectedAgentId(nextId);
@@ -4644,25 +4649,24 @@ export function BenchmarkRunner({
                   onChange={(event) => setExecutionIterations(Math.max(1, Math.min(20, Number(event.target.value) || 1)))}
                 />
               </label>
-              {selectedScoreAgent?.target === 'openai_codex' || selectedScoreAgent?.target === 'builtin_sample_voice' ? (
-                <label>
-                  <span>Max exchanges</span>
-                  <input
-                    aria-label="Maximum exchanges"
-                    type="number"
-                    min={1}
-                    max={10}
-                    value={executionMaxExchanges}
-                    onChange={(event) => setExecutionMaxExchanges(Math.max(1, Math.min(10, Number(event.target.value) || 1)))}
-                  />
-                </label>
-              ) : null}
+              <label>
+                <span>Max exchanges</span>
+                <input
+                  aria-label="Maximum exchanges"
+                  type="number"
+                  min={1}
+                  max={10}
+                  value={executionMaxExchanges}
+                  disabled={!selectedScoreAgent || (selectedScoreAgent.target !== 'openai_codex' && selectedScoreAgent.target !== 'builtin_sample_voice')}
+                  onChange={(event) => setExecutionMaxExchanges(Math.max(1, Math.min(10, Number(event.target.value) || 1)))}
+                />
+              </label>
             </div>
             <p>
               Queues the run and writes the ASSERT inference set locally.
               {selectedScoreAgent?.target === 'openai_codex' || selectedScoreAgent?.target === 'builtin_sample_voice'
                 ? ' One exchange is one tester message plus one agent response.'
-                : ''}
+                : ' Choose a generalist text or voice agent to configure exchanges; fixed sample targets replay one exchange.'}
             </p>
           </div>
         </div>

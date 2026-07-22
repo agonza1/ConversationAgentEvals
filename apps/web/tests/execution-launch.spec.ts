@@ -347,6 +347,9 @@ test('launch evaluation streams conversations into the live list', async ({ page
 
   const launch = page.getByLabel('Launch agent run');
   await expect(launch.getByRole('heading', { name: 'Configure this run' })).toBeVisible();
+  await expect(launch.getByLabel('Execution agent target')).toHaveValue('generalist-text-agent');
+  await expect(launch.getByLabel('Maximum exchanges')).toHaveValue('3');
+  await expect(launch.getByLabel('Maximum exchanges')).toBeEnabled();
   await expect(launch.getByLabel('Selected run scope')).toContainText('Cancellation Rescue');
   await expect(launch.getByLabel('Execution tester')).toContainText('Scenario user (AI)');
   await expect(launch.getByLabel('Execution runner')).toContainText(/local async runner/i);
@@ -358,6 +361,10 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect(launch.getByText('System under test')).toBeVisible();
   await expect(launch.getByText('Advanced', { exact: true })).toHaveCount(0);
   await expect(launch.getByLabel('Execution scenario scope')).toHaveCount(0);
+  await launch.getByLabel('Execution agent target').selectOption('mock-text-agent');
+  await expect(launch.getByLabel('Maximum exchanges')).toBeVisible();
+  await expect(launch.getByLabel('Maximum exchanges')).toBeDisabled();
+  await expect(launch).toContainText('fixed sample targets replay one exchange');
   const runScope = launch.getByRole('group', { name: 'Run scope' });
   await expect(runScope.getByRole('button', { name: /Single scenario/ })).toHaveAttribute('aria-pressed', 'true');
   await expect(runScope.getByRole('button', { name: /Entire suite/ })).toHaveAttribute('aria-pressed', 'false');
@@ -392,6 +399,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   });
   await launch.getByLabel('Execution agent target').selectOption('generalist-text-agent');
   await expect(launch.getByLabel('Maximum exchanges')).toHaveValue('3');
+  await expect(launch.getByLabel('Maximum exchanges')).toBeEnabled();
   await launch.getByLabel('Maximum exchanges').fill('4');
   await launch.getByRole('button', { name: 'Run evaluation' }).click();
   await expect.poll(() => textPostAttempts.length).toBe(3);
