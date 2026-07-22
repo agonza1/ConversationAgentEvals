@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import wave
@@ -230,3 +231,60 @@ def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(m
     assert stopped.status_code == 200
     assert _Connection.last.disconnected is True
     server.REFERENCE_DUPLEX_RUNS.pop('active-run', None)
+
+
+def test_reference_listener_waits_for_duplex_broadcast_registration(monkeypatch):
+    class _Track:
+        _sample_rate = 24000
+
+        def add_audio_bytes(self, payload):
+            return None
+
+    class _Connection:
+        def __init__(self, *args, **kwargs):
+            self._presenter_answer_audio_track = _Track()
+
+        async def initialize(self, sdp, type):
+            assert sdp == 'receive-only-offer'
+            assert type == 'offer'
+
+        def get_answer(self):
+            return {'sdp': 'send-only-answer', 'type': 'answer'}
+
+        async def connect(self):
+            return None
+
+        async def disconnect(self):
+            return None
+
+    async def run_join():
+        async def register_broadcast():
+            await asyncio.sleep(0.02)
+            server.REFERENCE_DUPLEX_RUNS['soon-active-run'] = server._ReferenceDuplexBroadcast(
+                execution_run_id='soon-active-run',
+                session_id='soon-active-session',
+            )
+
+        asyncio.create_task(register_broadcast())
+        return await server.reference_duplex_listen(
+            server.ReferenceListenerJoinRequest(
+                execution_run_id='soon-active-run',
+                listener_id='owner-listener',
+                sdp='receive-only-offer',
+                type='offer',
+                expires_at_unix=server.time.time() + 120,
+            ),
+            x_cae_reference_token='test-token',
+        )
+
+    monkeypatch.setattr(server, 'REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
+    monkeypatch.setattr(server, 'REFERENCE_LISTENER_BROADCAST_WAIT_SECONDS', 1.0)
+    monkeypatch.setattr(server, 'REFERENCE_LISTENER_BROADCAST_POLL_SECONDS', 0.005)
+    monkeypatch.setattr(server, 'ReferenceListenerWebRTCConnection', _Connection)
+    server.REFERENCE_DUPLEX_RUNS.pop('soon-active-run', None)
+
+    joined = asyncio.run(run_join())
+
+    assert joined['status'] == 'listening'
+    assert joined['answer']['sdp'] == 'send-only-answer'
+    server.REFERENCE_DUPLEX_RUNS.pop('soon-active-run', None)

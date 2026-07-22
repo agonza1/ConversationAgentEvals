@@ -457,6 +457,60 @@ test('browser listener page polls token-scoped live events', async ({ page }) =>
   expect(listenerPolls).toBeGreaterThan(1);
 });
 
+test('browser listener stops server peer after client negotiation failure', async ({ page }) => {
+  let listenerStops = 0;
+  await page.addInitScript(() => {
+    class FailingListenerPeer {
+      connectionState = 'new';
+      onconnectionstatechange = null;
+      onicecandidate = null;
+      addTransceiver() { return {}; }
+      async createOffer() { return { sdp: 'receive-only-offer', type: 'offer' as RTCSdpType }; }
+      async setLocalDescription() { return undefined; }
+      async setRemoteDescription() { throw new Error('remote description failed'); }
+      close() { this.connectionState = 'closed'; }
+    }
+    Object.defineProperty(window, 'RTCPeerConnection', { value: FailingListenerPeer, configurable: true });
+  });
+  await page.route(/\/api\/execution\/listeners\/listener-token\/webrtc$/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ status: 'listening', answer: { sdp: 'send-only-answer', type: 'answer' } }),
+    });
+  });
+  await page.route(/\/api\/execution\/listeners\/listener-token\/webrtc\/stop$/, async (route) => {
+    listenerStops += 1;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+  });
+  await page.route('**/api/execution/listeners/listener-token', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        listener: {
+          execution_run_id: 'voice-run-1',
+          run_status: 'running',
+          read_only: true,
+          can_inject_audio: false,
+          requires_microphone: false,
+          media_transport: 'webrtc',
+          webrtc_url: '/api/execution/listeners/listener-token/webrtc',
+          webrtc_stop_url: '/api/execution/listeners/listener-token/webrtc/stop',
+        },
+        conversations: [],
+      }),
+    });
+  });
+
+  await page.goto('/listeners/listener-token?api_base=http%3A%2F%2Fapi.example.test');
+  await page.getByRole('button', { name: 'Start WebRTC listener' }).click();
+
+  await expect(page.getByLabel('WebRTC listener status')).toHaveText('WebRTC · error');
+  await expect(page.getByText('remote description failed')).toBeVisible();
+  expect(listenerStops).toBe(1);
+});
+
 test('voice page blocks before queueing when real dependencies are unavailable', async ({ page }) => {
   await page.route('**/api/agents', async (route) => {
     await route.fulfill({

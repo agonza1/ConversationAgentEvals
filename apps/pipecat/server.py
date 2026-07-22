@@ -353,6 +353,8 @@ def _resample_pcm16_mono(payload: bytes, source_rate: int, target_rate: int) -> 
 
 
 REFERENCE_DUPLEX_RUNS: dict[str, _ReferenceDuplexBroadcast] = {}
+REFERENCE_LISTENER_BROADCAST_WAIT_SECONDS = 8.0
+REFERENCE_LISTENER_BROADCAST_POLL_SECONDS = 0.1
 
 
 if PIPECAT_RUNTIME_AVAILABLE:
@@ -800,6 +802,17 @@ async def _retire_reference_broadcast(broadcast: _ReferenceDuplexBroadcast) -> N
     broadcast.listeners.clear()
 
 
+async def _wait_for_active_reference_broadcast(execution_run_id: str) -> _ReferenceDuplexBroadcast | None:
+    deadline = time.monotonic() + REFERENCE_LISTENER_BROADCAST_WAIT_SECONDS
+    while True:
+        broadcast = REFERENCE_DUPLEX_RUNS.get(execution_run_id)
+        if broadcast is not None and broadcast.active:
+            return broadcast
+        if time.monotonic() >= deadline:
+            return None
+        await asyncio.sleep(REFERENCE_LISTENER_BROADCAST_POLL_SECONDS)
+
+
 @app.get('/reference-agent/readiness')
 async def reference_agent_readiness(x_cae_reference_token: str | None = Header(default=None)):
     _require_reference_token(x_cae_reference_token)
@@ -847,8 +860,8 @@ async def reference_duplex_listen(
     _require_reference_token(x_cae_reference_token)
     if not PIPECAT_RUNTIME_AVAILABLE:
         raise HTTPException(status_code=503, detail='Pipecat WebRTC runtime is unavailable.')
-    broadcast = REFERENCE_DUPLEX_RUNS.get(payload.execution_run_id)
-    if broadcast is None or not broadcast.active:
+    broadcast = await _wait_for_active_reference_broadcast(payload.execution_run_id)
+    if broadcast is None:
         raise HTTPException(status_code=409, detail='The duplex run is not active; retry while it is running.')
     if payload.listener_id in broadcast.listeners:
         raise HTTPException(status_code=409, detail='This listener is already attached.')

@@ -108,14 +108,17 @@ export function BrowserListenerPage({ token }: { token: string }) {
       setError('This listener token does not expose WebRTC signaling. Issue a fresh token.');
       return;
     }
+    const listenerConfig = listener;
+    const webrtcUrl = listenerConfig.webrtc_url;
+    if (!webrtcUrl) return;
     const existingPeer = peerRef.current;
     if (existingPeer) {
-      if (!listener.webrtc_stop_url) {
+      if (!listenerConfig.webrtc_stop_url) {
         setError('This listener token cannot stop the existing WebRTC session. Issue a fresh token.');
         return;
       }
       try {
-        await fetchJson(mediaUrl(apiBase, listener.webrtc_stop_url), { method: 'POST' });
+        await fetchJson(mediaUrl(apiBase, listenerConfig.webrtc_stop_url), { method: 'POST' });
       } catch (err) {
         setWebrtcStatus('error');
         setError(err instanceof Error ? err.message : 'Could not stop the existing WebRTC listener.');
@@ -126,7 +129,7 @@ export function BrowserListenerPage({ token }: { token: string }) {
     }
     const peer = new RTCPeerConnection();
     peerRef.current = peer;
-    const iceUrl = listener.webrtc_ice_url;
+    const iceUrl = listenerConfig.webrtc_ice_url;
     const pendingIceCandidates: RTCIceCandidateInit[] = [];
     let signalingReady = false;
     setWebrtcStatus('connecting');
@@ -152,6 +155,11 @@ export function BrowserListenerPage({ token }: { token: string }) {
         body: JSON.stringify({ candidate }),
       });
     }
+    async function stopServerListener() {
+      const stopUrl = listenerConfig.webrtc_stop_url;
+      if (!stopUrl) return;
+      await fetchJson(mediaUrl(apiBase, stopUrl), { method: 'POST' });
+    }
     function reportIceFailure(err: unknown) {
       setWebrtcStatus('error');
       setError(err instanceof Error ? err.message : 'Could not send a WebRTC ICE candidate.');
@@ -165,22 +173,27 @@ export function BrowserListenerPage({ token }: { token: string }) {
       }
       void sendIceCandidate(candidate).catch(reportIceFailure);
     };
+    let serverListenerAttached = false;
     try {
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
       const answer = await fetchJson<{ answer: RTCSessionDescriptionInit; status?: string }>(
-        mediaUrl(apiBase, listener.webrtc_url),
+        mediaUrl(apiBase, webrtcUrl),
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sdp: offer.sdp, type: offer.type }),
         },
       );
+      serverListenerAttached = true;
       await peer.setRemoteDescription(answer.answer);
       signalingReady = true;
       for (const candidate of pendingIceCandidates) await sendIceCandidate(candidate);
       setWebrtcStatus(answer.status === 'listening' ? 'listening' : 'connecting');
     } catch (err) {
+      if (serverListenerAttached) {
+        await stopServerListener().catch(() => undefined);
+      }
       peer.close();
       if (peerRef.current === peer) peerRef.current = null;
       setWebrtcStatus('error');
