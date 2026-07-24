@@ -51,9 +51,27 @@ else:
 if run['status'] == 'failed':
     raise SystemExit(f'Reference voice smoke failed: {run.get("error") or run["conversations"][0].get("error")}')
 conversation = run['conversations'][0]
-provenance = (conversation.get('audio_session') or {}).get('runtime_provenance') or {}
+audio_session = conversation.get('audio_session') or {}
+provenance = audio_session.get('runtime_provenance') or {}
 assert provenance.get('evidence_source') == 'current_run', provenance
 assert provenance.get('fixture_backed_scoring') is False, provenance
+assert audio_session.get('architecture') == 'two_independent_pipecat_graphs_in_process_duplex_frames', audio_session
+duplex = audio_session.get('duplex') or {}
+assert duplex.get('transport') == 'in_process_pipecat_frame_bus', duplex
+assert duplex.get('frame_count', 0) >= 2, duplex
+assert {frame.get('direction') for frame in duplex.get('frames') or []} == {
+    'tester_to_target',
+    'target_to_tester',
+}, duplex
+graphs = audio_session.get('graphs') or {}
+for participant in ('tester', 'target'):
+    graph = graphs.get(participant) or {}
+    assert [processor.get('name') for processor in graph.get('processors') or []] == [
+        'rtc-asr',
+        'llm',
+        'kokoro',
+    ], graph
+    assert graph.get('llm_mode') == 'real', graph
 assert len(conversation.get('turns') or []) >= 2, conversation
 assert conversation.get('vcon_export_summary', {}).get('recording_attached') is True, conversation
 print(json.dumps({
@@ -62,5 +80,7 @@ print(json.dumps({
     'turns': len(conversation['turns']),
     'score': conversation.get('score'),
     'recording': conversation.get('recording', {}).get('recording_url'),
+    'duplex': duplex,
+    'graphs': graphs,
     'provenance': provenance,
 }, indent=2))

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -103,6 +104,104 @@ def test_live_audio_segment_requires_run_owner_and_observed_event():
         params={'user_id': 'someone-else'},
     )
     assert denied.status_code == 404
+
+
+def test_execution_listener_token_is_receive_only_owner_scoped_and_ephemeral(monkeypatch):
+    import app.routes.execution as execution_routes
+
+    proxied = []
+
+    def fake_proxy(path, payload):
+        proxied.append((path, payload))
+        return {'status': 'listening', 'answer': {'sdp': 'send-only-answer', 'type': 'answer'}}
+
+    monkeypatch.setattr(execution_routes, '_proxy_reference_listener', fake_proxy)
+
+    queued = start_execution_run(ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        user_id='listener-owner',
+        project_id='listener-project',
+    ))
+    run_id = queued['execution_run_id']
+    conversation_id = f'{run_id}-cancellation-rescue-1'
+    execution_run_store.upsert_conversation(run_id, ConversationRecord(
+        conversation_id=conversation_id,
+        execution_run_id=run_id,
+        suite_id='call-center-voice-ai',
+        scenario_id='cancellation-rescue',
+        mode='pipecat_webrtc',
+        status='running',
+    ))
+    execution_run_store.append_live_event(run_id, conversation_id, LiveExecutionEvent(
+        sequence=1,
+        kind='audio',
+        speaker='Agent',
+        text='Current-run target audio.',
+        media_url=f'/api/execution/runs/{run_id}/conversations/{conversation_id}/audio/1?user_id=listener-owner',
+        mime_type='audio/wav',
+        created_at='2026-07-18T20:00:00+00:00',
+    ))
+    live_dir = execution_run_store.RUNS_DIR / run_id / 'audio' / 'live'
+    live_dir.mkdir(parents=True, exist_ok=True)
+    payload = b'RIFF-listener-current-run-wav'
+    (live_dir / f'{conversation_id}-1.wav').write_bytes(payload)
+
+    denied = client.post(
+        f'/api/execution/runs/{run_id}/listener-token',
+        params={'user_id': 'someone-else'},
+    )
+    assert denied.status_code == 404
+
+    issued = client.post(
+        f'/api/execution/runs/{run_id}/listener-token',
+        params={'user_id': 'listener-owner'},
+        json={'ttl_seconds': 120},
+    )
+    assert issued.status_code == 200, issued.text
+    listener = issued.json()['listener']
+    assert listener['read_only'] is True
+    assert listener['can_inject_audio'] is False
+    assert listener['requires_microphone'] is False
+    assert listener['media_transport'] == 'webrtc'
+    assert listener['webrtc_url'].endswith('/webrtc')
+    token = listener['token']
+
+    joined = client.post(
+        f'/api/execution/listeners/{token}/webrtc',
+        json={'sdp': 'receive-only-offer', 'type': 'offer'},
+    )
+    assert joined.status_code == 200, joined.text
+    assert joined.json()['answer']['sdp'] == 'send-only-answer'
+    assert proxied[0][0] == '/reference-duplex/listen'
+    assert proxied[0][1]['execution_run_id'] == run_id
+    assert proxied[0][1]['listener_id']
+
+    unauthorized = client.post(
+        '/api/execution/listeners/not-a-token/webrtc',
+        json={'sdp': 'receive-only-offer', 'type': 'offer'},
+    )
+    assert unauthorized.status_code == 403
+
+    state = client.get(f'/api/execution/listeners/{token}')
+    assert state.status_code == 200
+    assert state.json()['listener']['read_only'] is True
+    assert state.json()['listener']['can_inject_audio'] is False
+    assert state.json()['conversations'][0]['live_events'][0]['speaker'] == 'Agent'
+    assert state.json()['conversations'][0]['live_events'][0]['media_url'] == (
+        f'/api/execution/listeners/{token}/conversations/{conversation_id}/audio/1'
+    )
+
+    blocked_write = client.post(f'/api/execution/listeners/{token}')
+    assert blocked_write.status_code == 405
+
+    audio = client.get(f'/api/execution/listeners/{token}/conversations/{conversation_id}/audio/1')
+    assert audio.status_code == 200
+    assert audio.content == payload
+
+    execution_routes._LISTENER_TOKENS[token]['expires_at'] = datetime.now(UTC) - timedelta(seconds=1)
+    expired = client.get(f'/api/execution/listeners/{token}')
+    assert expired.status_code == 403
 
 
 def test_failed_conversation_is_preserved_in_inference_set(monkeypatch):

@@ -110,6 +110,12 @@ def _turn_as_dialog(turn: TranscriptionTurn | dict[str, Any]) -> dict[str, Any]:
         item['act_id'] = turn.get('act_id')
     if isinstance(turn.get('event_types'), list):
         item['event_types'] = list(turn['event_types'])
+    for key in ('source', 'direction', 'evidence_role'):
+        value = turn.get(key)
+        if value:
+            item[key] = value
+    if isinstance(turn.get('frame_metadata'), dict) and turn['frame_metadata']:
+        item['frame_metadata'] = dict(turn['frame_metadata'])
     return item
 
 

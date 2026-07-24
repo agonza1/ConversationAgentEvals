@@ -1,5 +1,36 @@
 import { test, expect } from '@playwright/test';
 
+const DEFAULT_DECK_PDF_BASE64 = [
+  'JVBERi0xLjcKJcK1wrYKCjEgMCBvYmoKPDwvVHlwZS9DYXRhbG9nL1BhZ2VzIDIgMCBSPj4KZW5kb2JqCgoy',
+  'IDAgb2JqCjw8L1R5cGUvUGFnZXMvQ291bnQgMy9LaWRzWzQgMCBSIDggMCBSIDExIDAgUl0+PgplbmRvYmoK',
+  'CjMgMCBvYmoKPDwvRm9udDw8L2hlbHYgNSAwIFI+Pj4+CmVuZG9iagoKNCAwIG9iago8PC9UeXBlL1BhZ2Uv',
+  'TWVkaWFCb3hbMCAwIDU5NSA4NDJdL1JvdGF0ZSAwL1Jlc291cmNlcyAzIDAgUi9QYXJlbnQgMiAwIFIvQ29u',
+  'dGVudHNbNiAwIFJdPj4KZW5kb2JqCgo1IDAgb2JqCjw8L1R5cGUvRm9udC9TdWJ0eXBlL1R5cGUxL0Jhc2VG',
+  'b250L0hlbHZldGljYS9FbmNvZGluZy9XaW5BbnNpRW5jb2Rpbmc+PgplbmRvYmoKCjYgMCBvYmoKPDwvTGVu',
+  'Z3RoIDE1MS9GaWx0ZXIvRmxhdGVEZWNvZGU+PgpzdHJlYW0KeNotjj0LgjEMhPf8isyC2qTtxYI4iC5uQjdx',
+  '8f3gHXRw8febVgkc5Lh7EnrTsZJw8BE2ZbPA9UXbZXp+WITrzLd9DqaYoRiQMR7u9UKB15I3IonriTyRsEOx',
+  'qOGnFiEYLbSGe9HbkyVvu/oOzKY9NaAgtUwUnTq5rtpFRTb0fO4Eax+Ydba4V5z5wGDl3zpXutIXrx0uvwpl',
+  'bmRzdHJlYW0KZW5kb2JqCgo3IDAgb2JqCjw8L0ZvbnQ8PC9oZWx2IDUgMCBSPj4+PgplbmRvYmoKCjggMCBv',
+  'YmoKPDwvVHlwZS9QYWdlL01lZGlhQm94WzAgMCA1OTUgODQyXS9Sb3RhdGUgMC9SZXNvdXJjZXMgNyAwIFIv',
+  'UGFyZW50IDIgMCBSL0NvbnRlbnRzWzkgMCBSXT4+CmVuZG9iagoKOSAwIG9iago8PC9MZW5ndGggMTUyL0Zp',
+  'bHRlci9GbGF0ZURlY29kZT4+CnN0cmVhbQp42i2OsQoCQQxE+3xFakHdZDeJC2Ih2tgJ6cTG844rtLDx+83u',
+  'SWBIwsxL4ANHB8IURWiMZgn9Ddt5fH2RCH3C216yTjqYWNEa3Xi4+wUSrkk2RAX9BOEputNqmdOilpX0aUkH',
+  'ldg1whh5aRqz6mTcXUMwS/Nk5oXsq3aTVUy7XzrBjCNjnU2xq8F8xFf1nzo7XOEHL9ovagplbmRzdHJlYW0K',
+  'ZW5kb2JqCgoxMCAwIG9iago8PC9Gb250PDwvaGVsdiA1IDAgUj4+Pj4KZW5kb2JqCgoxMSAwIG9iago8PC9U',
+  'eXBlL1BhZ2UvTWVkaWFCb3hbMCAwIDU5NSA4NDJdL1JvdGF0ZSAwL1Jlc291cmNlcyAxMCAwIFIvUGFyZW50',
+  'IDIgMCBSL0NvbnRlbnRzWzEyIDAgUl0+PgplbmRvYmoKCjEyIDAgb2JqCjw8L0xlbmd0aCAxNTEvRmlsdGVy',
+  'L0ZsYXRlRGVjb2RlPj4Kc3RyZWFtCnjaJY67CgJBDEX7fEVqQZ3M42YHxEK0sRPSiY3rLBZa2Pj9ZkYCgYST',
+  'c0MfOhgJBy9hjawa2N60fbbXl0XYFr7uimLSGgMaFtX9zc4UeC1lI5LZjuRExoSqyZnRNUHw0IAZxXcJC5pml',
+  'N59hnvioGZU5M6kFNsw26onRnjo4MswqMaePdziu+rOO2b/6n91MrrQD5xHLqIKZW5kc3RyZWFtCmVuZG9i',
+  'agoKeHJlZgowIDEzCjAwMDAwMDAwMDAgMDAwMDEgZiAKMDAwMDAwMDAxNiAwMDAwMCBuIAowMDAwMDAwMDYy',
+  'IDAwMDAwIG4gCjAwMDAwMDAxMjcgMDAwMDAgbiAKMDAwMDAwMDE2OCAwMDAwMCBuIAowMDAwMDAwMjc1IDAw',
+  'MDAwIG4gCjAwMDAwMDAzNjQgMDAwMDAgbiAKMDAwMDAwMDU4NCAwMDAwMCBuIAowMDAwMDAwNjI1IDAwMDAw',
+  'IG4gCjAwMDAwMDA3MzIgMDAwMDAgbiAKMDAwMDAwMDk1MyAwMDAwMCBuIAowMDAwMDAwOTk1IDAwMDAwIG4g',
+  'CjAwMDAwMDExMDUgMDAwMDAgbiAKCnRyYWlsZXIKPDwvU2l6ZSAxMy9Sb290IDEgMCBSL0lEWzwyRDBDMUI0',
+  'MzA2QzNBM0MzQUZDMzg5NkU0OUMyQTJDMj48NTFDNDM3Njk1MDA5OEIxNzk5RTI3OERGQUJGQzE3Njg+XT4+',
+  'CnN0YXJ0eHJlZgoxMzI2CiUlRU9GCg==',
+].join('');
+
 async function eventuallyFetch(url: string, init?: RequestInit, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
@@ -20,17 +51,38 @@ async function eventuallyFetch(url: string, init?: RequestInit, timeoutMs = 30_0
 
 async function setupSession(baseApi: string) {
   const deckResponse = await eventuallyFetch(`${baseApi}/api/decks/use-default`, { method: 'POST' });
-  expect(deckResponse.ok).toBeTruthy();
-  const deck = await deckResponse.json();
+  if (deckResponse.ok) {
+    const deck = await deckResponse.json();
+    return { deck, session: await createSession(baseApi, deck.id) };
+  }
 
+  expect(deckResponse.status).toBe(404);
+  const uploadResponse = await eventuallyFetch(`${baseApi}/api/decks`, {
+    method: 'POST',
+    body: buildDeckUpload(),
+  });
+  expect(uploadResponse.ok).toBeTruthy();
+  const deck = await uploadResponse.json();
+
+  return { deck, session: await createSession(baseApi, deck.id) };
+}
+
+async function createSession(baseApi: string, deckId: string) {
   const sessionResponse = await eventuallyFetch(`${baseApi}/api/sessions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ deck_id: deck.id }),
+    body: JSON.stringify({ deck_id: deckId }),
   });
   expect(sessionResponse.ok).toBeTruthy();
   const session = await sessionResponse.json();
-  return { deck, session };
+  return session;
+}
+
+function buildDeckUpload() {
+  const bytes = Buffer.from(DEFAULT_DECK_PDF_BASE64, 'base64');
+  const form = new FormData();
+  form.append('file', new Blob([bytes], { type: 'application/pdf' }), 'voice-proof-default-deck.pdf');
+  return form;
 }
 
 test('voice-only transcript loop and live transport handshake work', async ({ page, baseURL }) => {

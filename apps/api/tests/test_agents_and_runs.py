@@ -202,6 +202,9 @@ def test_execution_with_agent_id_and_metrics_summary():
     )
     assert queued['agent_id'] == 'mock-text-agent'
     assert queued['mode'] == 'text_callable'
+    assert queued['provenance']['honesty_label'] == (
+        'Offline synthetic sample · generated transcript and scoring · no real agent or provider interaction'
+    )
 
     finished = execute_execution_run(
         queued['execution_run_id'],
@@ -741,6 +744,15 @@ def test_explicit_openai_target_executes_selected_model_for_any_text_agent_witho
         def __init__(self) -> None:
             self.prompts: list[str] = []
             self.model_names: list[str | None] = []
+            self.target_responses = iter([
+                'Please confirm the ZIP code and phone number on the account.',
+                'Thanks. What is the new billing address?',
+                'I have recorded the requested address details for review.',
+            ])
+            self.tester_responses = iter([
+                'The ZIP is 94107 and the phone ends in 4421.',
+                'The new address is 123 Market Street, San Francisco, CA 94105.',
+            ])
 
         def status(self):
             return {'status': 'connected', 'provider': 'openai_codex'}
@@ -748,7 +760,9 @@ def test_explicit_openai_target_executes_selected_model_for_any_text_agent_witho
         def complete(self, prompt: str, *, model_name: str | None = None) -> str:
             self.prompts.append(prompt)
             self.model_names.append(model_name)
-            return 'I can help update that. Please confirm your account email and ZIP code first.'
+            if 'adaptive text-agent evaluation' in prompt:
+                return next(self.tester_responses)
+            return next(self.target_responses)
 
     created = client.post(
         '/api/agents',
@@ -787,11 +801,27 @@ def test_explicit_openai_target_executes_selected_model_for_any_text_agent_witho
         set_provider_for_tests('openai', None)
 
     assert finished['status'] == 'completed'
+    assert finished['max_exchanges'] == 3
     conversation = finished['conversations'][0]
-    assert conversation['transcript'].endswith('Please confirm your account email and ZIP code first.')
+    assert conversation['transcript'].endswith('I have recorded the requested address details for review.')
+    assert [turn['speaker'] for turn in conversation['turns']] == [
+        'user', 'agent', 'user', 'agent', 'user', 'agent',
+    ]
+    assert len(conversation['live_events']) == 6
+    assert len(conversation['latency_marks']) == 5
     assert conversation['action_trace'] == []
     assert conversation['final_state']['complete'] is False
+    assert conversation['final_state']['termination_reason'] == 'max_exchanges'
+    assert conversation['final_state']['runtime_provenance']['completed_exchanges'] == 3
     assert conversation['final_state']['runtime_provenance']['fixture_backed'] is False
     assert conversation['final_state']['runtime_provenance']['live_tool_execution'] is False
-    assert fake.model_names == ['gpt-5.4']
-    assert 'Verify the caller before account changes.' in fake.prompts[0]
+    assert fake.model_names == ['gpt-5.4'] * 5
+    target_prompts = [prompt for prompt in fake.prompts if 'adaptive text-agent evaluation' not in prompt]
+    tester_prompts = [prompt for prompt in fake.prompts if 'adaptive text-agent evaluation' in prompt]
+    assert len(target_prompts) == 3
+    assert len(tester_prompts) == 2
+    assert 'Verify the caller before account changes.' in target_prompts[0]
+    assert 'Required behavior to cover' not in '\n'.join(target_prompts)
+    assert 'verify account using at least two identifiers' not in '\n'.join(target_prompts)
+    assert 'Behaviors to probe: greet caller and identify intent' in tester_prompts[0]
+    assert 'The ZIP is 94107 and the phone ends in 4421.' in target_prompts[1]

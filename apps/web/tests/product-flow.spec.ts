@@ -5,7 +5,7 @@ test('homepage links to focused workflow demos', async ({ page }) => {
 
   await expect(page.getByRole('link', { name: 'Browse evaluation scenarios' })).toHaveAttribute('href', '/scenarios');
   await expect(page.getByRole('link', { name: 'Eval evidence' })).toHaveAttribute('href', '/eval?demo=sample-evidence');
-  await expect(page.getByRole('link', { name: 'Launch agent run' })).toHaveAttribute('href', '/runs?launch=demo');
+  await expect(page.getByRole('link', { name: 'Launch agent run' })).toHaveAttribute('href', '/runs');
   await expect(
     page.getByRole('img', { name: 'Run an agent or import transcript or vCon evidence, then evaluate and report' }),
   ).toBeVisible();
@@ -25,7 +25,7 @@ test('homepage navigation preserves an API base override', async ({ page }) => {
   );
   await expect(page.getByRole('link', { name: 'Launch agent run' })).toHaveAttribute(
     'href',
-    '/runs?launch=demo&api_base=http%3A%2F%2Fapi.example.test',
+    '/runs?api_base=http%3A%2F%2Fapi.example.test',
   );
 });
 
@@ -76,8 +76,8 @@ test('dedicated paths expose only their primary workflow', async ({ page }) => {
   await page.goto('/runs');
   await expect(page.getByRole('heading', { name: 'Run an agent' })).toBeVisible();
   await expect(page.getByLabel('Launch agent run')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Run sample evaluation' })).toBeVisible();
-  await expect(page.getByLabel('Execution tester')).toHaveValue('scenario_simulator');
+  await expect(page.getByRole('button', { name: 'Run evaluation' })).toBeVisible();
+  await expect(page.getByLabel('Execution tester')).toContainText('Scenario user (AI)');
   await expect(page.getByLabel('Execution runner')).toContainText(/local async runner/i);
   await expect(page.getByLabel('Saved runs and e2e validation')).toHaveCount(0);
   // /runs is execute/capture — not the evidence-eval contract console

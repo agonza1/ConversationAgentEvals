@@ -3,12 +3,14 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import { ApiAwareLink } from '@/components/ApiAwareLink';
+import { LiveRunFeedback } from '@/components/LiveRunFeedback';
 import { SiteNav } from '@/components/SiteNav';
 import {
   ConversationRecord,
   demoProjectId,
   demoUserId,
   ExecutionRunRecord,
+  getApiBase,
   getExecutionRun,
   TimelineEvent,
 } from '@/lib/execution';
@@ -88,6 +90,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
             <div><dt>Target</dt><dd>{run.provenance.target_kind}</dd></div>
             <div><dt>Tester</dt><dd>{run.provenance.tester_id}</dd></div>
             <div><dt>Executor</dt><dd>{run.provenance.executor_id}</dd></div>
+            <div><dt>Exchange cap</dt><dd>{run.max_exchanges || 3}</dd></div>
             <div><dt>Evidence</dt><dd>{run.provenance.evidence_source}</dd></div>
           </dl>
         ) : null}
@@ -189,6 +192,16 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
             <section className="card runs-transcript" aria-label="Transcript">
               <p className="eyebrow">Transcript</p>
               <h2>{conversation?.scenario_title || conversation?.scenario_id || 'Conversation'}</h2>
+              {run.mode === 'pipecat_webrtc' ? (
+                <LiveRunFeedback
+                  conversations={run.conversations || []}
+                  apiBase={getApiBase()}
+                  voice
+                  executionRunId={run.execution_run_id}
+                  userId={run.user_id || userId}
+                  runStatus={run.status}
+                />
+              ) : null}
               {(conversation?.turns || []).length ? (
                 <ol>
                   {(conversation?.turns || []).map((turn) => (

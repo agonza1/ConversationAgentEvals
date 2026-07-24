@@ -34,6 +34,11 @@ interface ExecutionHealth {
     transports?: AudioTransportCapability[];
     notes?: string[];
   };
+  reference_voice?: {
+    ready: boolean;
+    llm_mode: 'real' | 'mock';
+    dependencies: Array<{ id: string; label: string; ready: boolean; detail: string; setup_url?: string }>;
+  };
 }
 
 interface ExecutionConversation {
@@ -56,6 +61,7 @@ interface ExecutionConversation {
 interface ExecutionRun {
   execution_run_id: string;
   status: string;
+  user_id?: string;
   progress: {
     completed_conversations: number;
     total_conversations: number;
@@ -141,10 +147,10 @@ function evidenceLine(conversation: ExecutionConversation) {
 const localVoiceOption = {
   id: 'pipecat_webrtc',
   label: 'Built-in generalist voice evaluation',
-  eyebrow: 'CAE local audio loop',
+  eyebrow: 'Live two-agent Pipecat',
   description: 'Runs a Pipecat tester against a separate Pipecat agent through rtc-asr, a configured LLM, and Kokoro; evaluation uses only evidence captured in this run.',
-  detail: 'Synthetic local media; no browser mic, SIP, or phone call',
-  button: 'Run generalist voice evaluation',
+  detail: 'In-process duplex audio; optional read-only listener; no browser mic, SIP, or phone target',
+  button: 'Run evaluation',
 } as const;
 
 function transportStatus(health: ExecutionHealth | null, id: string) {
@@ -181,6 +187,8 @@ export function VoiceEvalPage() {
   );
   const selectedMode = localVoiceOption;
   const pipecat = transportStatus(health, 'pipecat_small_webrtc');
+  const voicePreflight = health?.reference_voice;
+  const preflightBlocked = !voicePreflight?.ready;
 
   useEffect(() => {
     let cancelled = false;
@@ -224,6 +232,10 @@ export function VoiceEvalPage() {
   }, [run, active]);
 
   async function onLaunch() {
+    if (!voicePreflight?.ready) {
+      setError('Voice dependency preflight is blocked. Resolve the red dependency checks before queueing.');
+      return;
+    }
     const identity = ensureDemoIdentity();
     setIsLaunching(true);
     setError(null);
@@ -258,8 +270,13 @@ export function VoiceEvalPage() {
   const readinessRows = [
     { label: 'Run Agent target', value: selectedTarget ? selectedTarget.name : 'No voice target loaded', state: selectedTarget ? 'ready' : 'warn' },
     { label: 'Execution API', value: health?.ok ? 'Ready' : 'Checking', state: health?.ok ? 'ready' : 'warn' },
-    { label: 'Pipecat capture hooks', value: pipecat?.available ? 'Available for proof capture' : 'Unavailable', state: pipecat?.available ? 'ready' : 'warn' },
-    { label: 'Browser mic peer', value: 'Not connected in this slice', state: 'blocked' },
+    ...(voicePreflight?.dependencies ?? []).map((dependency) => ({
+      label: dependency.label,
+      value: dependency.detail,
+      state: dependency.ready ? 'ready' : 'blocked',
+    })),
+    ...(!voicePreflight ? [{ label: 'Voice dependency preflight', value: pipecat?.available ? 'Checking local services' : 'Unavailable', state: 'warn' }] : []),
+    { label: 'Browser microphone/target', value: 'Unavailable; listener is receive-only', state: 'blocked' },
     { label: 'SIP/PSTN call', value: 'Deferred until FreeSWITCH/Verto bridge lands', state: 'blocked' },
   ];
 
@@ -278,7 +295,7 @@ export function VoiceEvalPage() {
         <dl className="voice-scenario-facts">
           <div><dt>Suite</dt><dd>Call center voice AI</dd></div>
           <div><dt>Execution engine</dt><dd>Run Agent</dd></div>
-          <div><dt>Current call proof</dt><dd>Sample-based capture</dd></div>
+          <div><dt>Current call proof</dt><dd>Current-run duplex capture</dd></div>
           <div><dt>Evaluation</dt><dd>Automatic scoring</dd></div>
         </dl>
         <div className="voice-evidence-list" aria-label="Expected evidence">
@@ -384,6 +401,26 @@ export function VoiceEvalPage() {
             </div>
           ) : null}
 
+          {preflightBlocked ? (
+            <div className="voice-error" role="alert" aria-label="Voice preflight blocked">
+              <strong>Voice run blocked before queueing</strong>
+              {voicePreflight ? (
+                <ul className="voice-preflight-list">
+                  {voicePreflight.dependencies.filter((item) => !item.ready).map((item) => (
+                    <li key={item.id}>
+                      <strong>{item.label}:</strong> {item.detail}{' '}
+                      {item.setup_url ? (
+                        <a href={item.setup_url} target="_blank" rel="noreferrer" aria-label={`${item.label} setup`}>
+                          Setup guide ↗
+                        </a>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : <span>Checking OpenAI, shared token, Pipecat, rtc-asr, and Kokoro reachability.</span>}
+            </div>
+          ) : null}
+
           <div className="voice-launch-bar">
             <div>
               <span className="voice-step">3</span>
@@ -395,7 +432,7 @@ export function VoiceEvalPage() {
               className="voice-run-button"
               aria-label={selectedMode.button}
               onClick={onLaunch}
-              disabled={isLaunching || active || !selectedTarget}
+              disabled={isLaunching || active || !selectedTarget || preflightBlocked}
             >
               {isLaunching ? 'Starting...' : active ? 'Running...' : selectedMode.button}
               {!isLaunching && !active ? <span aria-hidden="true">→</span> : null}
@@ -444,7 +481,14 @@ export function VoiceEvalPage() {
                 <span style={{ width: `${Math.max(0, Math.min(100, run.progress.percent))}%` }} />
               </div>
 
-              <LiveRunFeedback conversations={run.conversations || []} apiBase={getApiBase()} voice />
+              <LiveRunFeedback
+                conversations={run.conversations || []}
+                apiBase={getApiBase()}
+                voice
+                executionRunId={run.execution_run_id}
+                userId={run.user_id || ensureDemoIdentity().userId}
+                runStatus={run.status}
+              />
 
               <div aria-label="Voice eval conversations" className="voice-conversation-list">
                 {(run.conversations || []).length ? (

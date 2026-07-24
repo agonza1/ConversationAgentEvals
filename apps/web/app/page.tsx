@@ -93,7 +93,7 @@ const workspacePaths = [
     eyebrow: 'Exercise targets',
     title: 'Run agent',
     copy: 'Launch a configured agent target, watch conversations complete, then inspect the run analysis.',
-    href: '/runs?launch=demo',
+    href: '/runs',
     cta: 'Launch agent run',
   },
 ] as const;

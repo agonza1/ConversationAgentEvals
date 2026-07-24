@@ -2106,7 +2106,15 @@ def _structured_value_to_dialog(value: dict[str, Any]) -> list[dict[str, Any]]:
         party_key = speaker.lower()
         if party_key not in party_indexes:
             party_indexes[party_key] = len(party_indexes)
-        dialog.append({'party': party_indexes[party_key], 'originator': speaker, 'body': body})
+        dialog_item: dict[str, Any] = {'party': party_indexes[party_key], 'originator': speaker, 'body': body}
+        if isinstance(item, dict):
+            for key in ('source', 'direction', 'evidence_role'):
+                value = item.get(key)
+                if value:
+                    dialog_item[key] = value
+            if isinstance(item.get('frame_metadata'), dict) and item['frame_metadata']:
+                dialog_item['frame_metadata'] = dict(item['frame_metadata'])
+        dialog.append(dialog_item)
     return dialog
 
 

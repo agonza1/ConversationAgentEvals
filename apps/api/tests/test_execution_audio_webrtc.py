@@ -63,6 +63,61 @@ def test_execution_health_includes_audio_capabilities():
     assert response.status_code == 200
     assert response.json()['ok'] is True
     assert response.json()['audio']['vcon_capture'] is True
+    preflight = response.json()['reference_voice']
+    assert preflight['llm_mode'] == 'real'
+    assert {item['id'] for item in preflight['dependencies']} == {
+        'openai', 'shared_token', 'pipecat', 'rtc_asr', 'kokoro'
+    }
+    assert all(item['detail'] for item in preflight['dependencies'])
+    assert all(item['setup_url'].startswith('https://') for item in preflight['dependencies'])
+    assert next(item for item in preflight['dependencies'] if item['id'] == 'rtc_asr')['setup_url'] == (
+        'https://github.com/agonza1/rtc-asr'
+    )
+    assert next(item for item in preflight['dependencies'] if item['id'] == 'kokoro')['setup_url'] == (
+        'https://github.com/remsky/Kokoro-FastAPI'
+    )
+
+
+def test_reference_voice_preflight_blocks_incompatible_rtc_asr_backend(monkeypatch):
+    import app.routes.execution as execution_routes
+
+    class _Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    def fake_get(url, **_kwargs):
+        if url.endswith('/reference-agent/readiness'):
+            return _Response({
+                'ready': True,
+                'duplex_route_ready': True,
+                'listener_webrtc_ready': True,
+            })
+        if url == 'http://rtc-asr.test/health':
+            return _Response({'backend': 'mlx-parakeet', 'model': 'parakeet-tdt'})
+        if url == 'http://kokoro.test/health':
+            return _Response({'status': 'ready'})
+        raise AssertionError(url)
+
+    monkeypatch.setenv('OPENAI_API_KEY', 'offline-status-only')
+    monkeypatch.setenv('REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
+    monkeypatch.setenv('PIPECAT_SERVICE_URL', 'http://pipecat.test')
+    monkeypatch.setenv('RTC_ASR_BASE_URL', 'http://rtc-asr.test')
+    monkeypatch.setenv('RTC_ASR_HEALTH_PATH', '/health')
+    monkeypatch.setenv('REFERENCE_STT_BACKEND', 'whisper')
+    monkeypatch.setenv('KOKORO_BASE_URL', 'http://kokoro.test')
+    monkeypatch.setattr(execution_routes.httpx, 'get', fake_get)
+
+    report = execution_routes._reference_voice_preflight()
+    rtc_asr = next(item for item in report['dependencies'] if item['id'] == 'rtc_asr')
+    assert report['ready'] is False
+    assert rtc_asr['ready'] is False
+    assert rtc_asr['detail'] == 'rtc-asr backend mismatch: requested whisper, service reports mlx-parakeet.'
 
 
 def test_pipecat_webrtc_mode_defaults_transport_and_rejects_verto():
@@ -96,6 +151,15 @@ def test_pipecat_webrtc_mode_defaults_transport_and_rejects_verto():
             project_id='p',
         )
     assert 'voice_fixture' in str(voice_exc.value)
+
+
+def test_execution_request_defaults_and_bounds_max_exchanges():
+    default_request = ExecutionRunCreateRequest()
+    assert default_request.max_exchanges == 3
+
+    for invalid in (0, 11):
+        with pytest.raises(ValidationError):
+            ExecutionRunCreateRequest(max_exchanges=invalid)
 
 
 def test_local_webrtc_transport_send_receive_records_and_transcribes():
@@ -213,6 +277,7 @@ def test_build_execution_vcon_reuses_cae_dialog_and_recording_shape():
         assert exported['source_format'] == 'pipecat_execution'
         assert exported['appended_analysis_type'] == 'execution_audio_capture'
         assert len(exported['dialog']) >= 2
+        assert exported['dialog'][0]['source'] == 'pipecat_execution'
         assert exported['attachments']
         assert exported['attachments'][0]['type'] == 'recording'
         assert exported['attachments'][0]['url'] == recording.uri
@@ -222,6 +287,41 @@ def test_build_execution_vcon_reuses_cae_dialog_and_recording_shape():
         assert summary['dialog_turns'] >= 2
 
     asyncio.run(run())
+
+
+def test_build_execution_vcon_preserves_dict_directional_evidence():
+    exported = build_execution_vcon(
+        conversation_id='c-direction',
+        execution_run_id='exec-direction',
+        suite_id='call-center-voice-ai',
+        scenario_id='cancellation-rescue',
+        transport='pipecat_small_webrtc',
+        transcription_turns=[
+            {
+                'speaker': 'tester',
+                'text': 'I need to cancel.',
+                'source': 'tester.llm_output',
+                'direction': 'tester_to_target',
+                'evidence_role': 'llm_output',
+                'frame_metadata': {'sequence': 1, 'bytes': 123},
+            },
+            {
+                'speaker': 'target',
+                'text': 'I need to cancel.',
+                'source': 'target.asr_receipt',
+                'direction': 'tester_to_target',
+                'evidence_role': 'asr_receipt',
+                'frame_metadata': {'sequence': 1, 'bytes': 123},
+            },
+        ],
+        recording=None,
+    )
+
+    assert exported['source_format'] == 'pipecat_execution'
+    assert exported['dialog'][0]['source'] == 'tester.llm_output'
+    assert exported['dialog'][0]['direction'] == 'tester_to_target'
+    assert exported['dialog'][1]['evidence_role'] == 'asr_receipt'
+    assert exported['dialog'][1]['frame_metadata'] == {'sequence': 1, 'bytes': 123}
 
 
 def test_pipecat_tester_over_execution_audio_target_captures_proof():
@@ -288,17 +388,8 @@ def test_pipecat_webrtc_execution_fails_closed_without_reference_services(monkey
             'evaluate': True,
         },
     )
-    assert queued.status_code == 200, queued.text
-    run_id = queued.json()['execution_run_id']
-    assert queued.json()['mode'] == 'pipecat_webrtc'
-
-    completed = _wait_for_terminal(run_id, user_id='webrtc-user')
-    assert completed['status'] == 'failed'
-    assert len(completed['conversations']) == 1
-    conversation = completed['conversations'][0]
-    assert conversation['scenario_id'] == 'cancellation-rescue'
-    assert not conversation['turns']
-    assert 'RTC_ASR_BASE_URL' in conversation['error']
+    assert queued.status_code == 400, queued.text
+    assert 'RTC_ASR_BASE_URL' in queued.json()['detail']
 
 
 def test_pipecat_webrtc_propagates_tester_needs_review(monkeypatch, tmp_path):
@@ -317,6 +408,28 @@ def test_pipecat_webrtc_propagates_tester_needs_review(monkeypatch, tmp_path):
         def latency_marks(self, session_id):
             return []
 
+        async def run_duplex_session(
+            self,
+            session_id,
+            *,
+            scenario,
+            max_turn_pairs,
+            total_timeout_seconds,
+        ):
+            assert scenario['id'] == 'cancellation-rescue'
+            assert max_turn_pairs == 3
+            assert total_timeout_seconds == 90
+            return {
+                'scenario_id': scenario['id'],
+                'session_id': session_id,
+                'status': 'needs_review',
+                'termination_reason': 'runner_error',
+                'error': 'injected tester failure',
+                'tester_provenance': {},
+                'turns': [],
+                'proof': {},
+            }
+
     class _FakeCompletion:
         provider_id = 'fake'
 
@@ -325,22 +438,6 @@ def test_pipecat_webrtc_propagates_tester_needs_review(monkeypatch, tmp_path):
 
     monkeypatch.setattr(execution_runner, 'ReferencePipecatAgentTransport', _FakeReferenceTransport)
     monkeypatch.setattr(execution_runner, 'resolve_reference_completion_provider', lambda: _FakeCompletion())
-    async def _failing_run(self, config):  # noqa: ANN001
-        return {
-            'scenario_id': config.scenario_id,
-            'session_id': 'sess-failed',
-            'status': 'needs_review',
-            'termination_reason': 'runner_error',
-            'error': 'injected tester failure',
-            'tester_provenance': {},
-            'session': {},
-            'turns': [],
-            'close': {},
-            'proof': {},
-        }
-
-    monkeypatch.setattr(PipecatTesterAgentRunner, 'run', _failing_run)
-
     def _turns(self, session_id):  # noqa: ANN001
         return [
             TranscriptionTurn(turn_index=1, speaker='Caller', text='hi', act_id='a'),

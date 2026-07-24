@@ -156,6 +156,9 @@ class TranscriptionTurn:
     act_id: str | None = None
     source: str = 'pipecat_execution'
     event_types: list[str] = field(default_factory=list)
+    direction: str | None = None
+    evidence_role: str | None = None
+    frame_metadata: dict[str, Any] = field(default_factory=dict)
 
     def as_dialog_item(self) -> dict[str, Any]:
         item: dict[str, Any] = {
@@ -168,6 +171,12 @@ class TranscriptionTurn:
         if self.event_types:
             item['event_types'] = list(self.event_types)
         item['source'] = self.source
+        if self.direction:
+            item['direction'] = self.direction
+        if self.evidence_role:
+            item['evidence_role'] = self.evidence_role
+        if self.frame_metadata:
+            item['frame_metadata'] = dict(self.frame_metadata)
         return item
 
 

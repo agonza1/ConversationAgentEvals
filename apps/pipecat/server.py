@@ -3,19 +3,23 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import json
 import os
 import secrets
+import struct
+import time
 import wave
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any, AsyncIterator, Awaitable, Callable, Literal
 from urllib.parse import quote
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 _env_candidates = [*Path(__file__).resolve().parents, Path.cwd()]
@@ -161,6 +165,14 @@ class LivePresenterWebRTCConnection(SmallWebRTCConnection):
     def _prime_audio_sender_for_answer(self) -> None:
         if RawAudioTrack is None:
             return
+
+
+class ReferenceListenerWebRTCConnection(LivePresenterWebRTCConnection):
+    """Server-send-only WebRTC connection for an evaluation observer."""
+
+    def force_transceivers_to_send_recv(self):
+        for transceiver in self._pc.getTransceivers():
+            transceiver.direction = 'sendonly' if getattr(transceiver, 'kind', None) == 'audio' else 'inactive'
         for transceiver in self._pc.getTransceivers():
             if getattr(transceiver, 'kind', None) != 'audio' or not transceiver.sender:
                 continue
@@ -244,6 +256,142 @@ class ReferenceAgentTurnRequest(BaseModel):
     model_name: str | None = None
 
 
+class ReferenceTesterTurnRequest(BaseModel):
+    scenario_instruction: str
+    act_id: str
+    act_objective: str
+    example_utterance: str
+    target_audio_wav_base64: str | None = None
+    model_name: str | None = None
+
+
+class ReferenceDuplexRunRequest(BaseModel):
+    session_id: str
+    execution_run_id: str
+    scenario: dict[str, Any]
+    tester_model_name: str | None = None
+    target_model_name: str | None = None
+    llm_provider: str = 'openai'
+    llm_mode: Literal['real', 'mock'] = 'real'
+    max_turn_pairs: int = Field(default=3, ge=1, le=10)
+    total_timeout_seconds: float = Field(default=90, ge=5, le=300)
+
+
+class ReferenceListenerJoinRequest(BaseModel):
+    execution_run_id: str
+    listener_id: str
+    sdp: str
+    type: str = 'offer'
+    expires_at_unix: float
+
+
+class ReferenceListenerIceRequest(BaseModel):
+    execution_run_id: str
+    listener_id: str
+    candidate: dict[str, Any]
+
+
+class ReferenceListenerStopRequest(BaseModel):
+    execution_run_id: str
+    listener_id: str
+
+
+@dataclass(slots=True)
+class _ReferenceListener:
+    listener_id: str
+    connection: Any
+    track: Any
+
+
+@dataclass(slots=True)
+class _ReferenceDuplexBroadcast:
+    execution_run_id: str
+    session_id: str
+    active: bool = True
+    listeners: dict[str, _ReferenceListener] = field(default_factory=dict)
+
+    def publish(self, audio: bytes, *, sample_rate: int, channels: int = 1) -> None:
+        mono_audio = _pcm16_to_mono(audio, channels)
+        for listener in tuple(self.listeners.values()):
+            track = listener.track
+            track_rate = int(getattr(track, '_sample_rate', sample_rate))
+            listener_audio = (
+                _resample_pcm16_mono(mono_audio, sample_rate, track_rate)
+                if track_rate != sample_rate
+                else mono_audio
+            )
+            ten_ms_bytes = max(2, track_rate // 100 * 2)
+            remainder = len(listener_audio) % ten_ms_bytes
+            payload = listener_audio if remainder == 0 else listener_audio + bytes(ten_ms_bytes - remainder)
+            track.add_audio_bytes(payload)
+
+
+def _pcm16_to_mono(payload: bytes, channels: int) -> bytes:
+    """Downmix interleaved little-endian PCM16 audio to mono."""
+    if channels <= 0:
+        raise ValueError('Audio channel count must be positive.')
+    sample_count = len(payload) // 2
+    frame_count = sample_count // channels
+    if frame_count == 0:
+        return b''
+    usable_sample_count = frame_count * channels
+    payload = payload[:usable_sample_count * 2]
+    if channels == 1:
+        return payload
+
+    samples = struct.unpack(f'<{usable_sample_count}h', payload)
+    mono = [
+        round(sum(samples[offset:offset + channels]) / channels)
+        for offset in range(0, usable_sample_count, channels)
+    ]
+    return struct.pack(f'<{frame_count}h', *mono)
+
+
+def _resample_pcm16_mono(payload: bytes, source_rate: int, target_rate: int) -> bytes:
+    """Linearly resample little-endian PCM16 mono without optional DSP packages."""
+    if source_rate <= 0 or target_rate <= 0:
+        raise ValueError('Audio sample rates must be positive.')
+    sample_count = len(payload) // 2
+    if sample_count == 0:
+        return b''
+    payload = payload[:sample_count * 2]
+    if source_rate == target_rate:
+        return payload
+
+    samples = struct.unpack(f'<{sample_count}h', payload)
+    output_count = max(1, round(sample_count * target_rate / source_rate))
+    if sample_count == 1:
+        return struct.pack(f'<{output_count}h', *([samples[0]] * output_count))
+
+    source_step = source_rate / target_rate
+    output: list[int] = []
+    for output_index in range(output_count):
+        source_position = min(output_index * source_step, sample_count - 1)
+        left_index = int(source_position)
+        right_index = min(left_index + 1, sample_count - 1)
+        fraction = source_position - left_index
+        output.append(round(samples[left_index] + (samples[right_index] - samples[left_index]) * fraction))
+    return struct.pack(f'<{output_count}h', *output)
+
+
+REFERENCE_DUPLEX_RUNS: dict[str, _ReferenceDuplexBroadcast] = {}
+REFERENCE_LISTENER_BROADCAST_WAIT_SECONDS = 8.0
+REFERENCE_LISTENER_BROADCAST_POLL_SECONDS = 0.1
+
+
+def _append_duplex_history_receipt(
+    history: list[dict[str, str]],
+    *,
+    speaker: str,
+    text: str,
+    source: str,
+) -> None:
+    receipt = text.strip()
+    if not receipt:
+        return
+    history.append({'speaker': speaker, 'text': receipt, 'source': source})
+
+
 if PIPECAT_RUNTIME_AVAILABLE:
     class _AgentTextFrame(TextFrame):
         pass
@@ -288,7 +436,9 @@ if PIPECAT_RUNTIME_AVAILABLE:
                 return
             history = '\n'.join(f'{item.get("speaker")}: {item.get("text")}' for item in self.history)
             prompt = (
-                'You are the CAE built-in generalist voice agent. Respond naturally and concisely. '
+                'You are the CAE built-in generalist voice agent. Speak naturally and conversationally. '
+                'Keep each response to one or two short sentences, preferably under 35 words. '
+                'Ask at most one question at a time. Do not use markdown, bullets, or numbered lists. '
                 'Never claim an external action occurred unless the conversation proves it.\n'
                 f'Conversation so far:\n{history}\nCaller: {frame.text}\nAgent:'
             )
@@ -303,6 +453,106 @@ if PIPECAT_RUNTIME_AVAILABLE:
             text = str(payload.get('text') or '').strip()
             if not text:
                 raise RuntimeError('reference completion callback returned no text')
+            await self.push_frame(_AgentTextFrame(text), direction)
+
+
+    class _ReferenceTesterLlmProcessor(FrameProcessor):
+        def __init__(self, payload: ReferenceTesterTurnRequest):
+            super().__init__()
+            self.payload = payload
+
+        async def process_frame(self, frame: Frame, direction: FrameDirection):
+            await super().process_frame(frame, direction)
+            if type(frame) is not TextFrame:
+                await self.push_frame(frame, direction)
+                return
+            prompt = (
+                'You are the Pipecat scenario tester in a two-agent voice evaluation. '
+                'Render exactly one concise caller utterance for the allowed act. '
+                'Do not narrate, score, or include labels.\n\n'
+                f'Scenario: {self.payload.scenario_instruction}\n'
+                f'Allowed caller act: {self.payload.act_id}\n'
+                f'Act objective: {self.payload.act_objective}\n'
+                f'Example utterance: {self.payload.example_utterance}\n'
+                f'Tester ASR observation: {frame.text}\n\n'
+                'Caller utterance:'
+            )
+            async with httpx.AsyncClient(timeout=90) as client:
+                response = await client.post(
+                    f'{API_BASE_URL}/api/execution/reference/complete',
+                    json={'prompt': prompt, 'model_name': self.payload.model_name or REFERENCE_LLM_MODEL},
+                    headers={'x-cae-reference-token': REFERENCE_AGENT_INTERNAL_TOKEN},
+                )
+                response.raise_for_status()
+                payload = response.json()
+            text = str(payload.get('text') or '').strip()
+            if not text:
+                raise RuntimeError('reference tester completion callback returned no text')
+            await self.push_frame(_AgentTextFrame(text), direction)
+
+
+    class _ReferenceDuplexTesterLlmProcessor(FrameProcessor):
+        def __init__(
+            self,
+            *,
+            scenario: dict[str, Any],
+            history: list[dict[str, str]],
+            turn_index: int,
+            max_turn_pairs: int,
+            model_name: str,
+            record_latest_target_receipt: bool = False,
+        ):
+            super().__init__()
+            self.scenario = scenario
+            self.history = history
+            self.turn_index = turn_index
+            self.max_turn_pairs = max_turn_pairs
+            self.model_name = model_name
+            self.record_latest_target_receipt = record_latest_target_receipt
+
+        async def process_frame(self, frame: Frame, direction: FrameDirection):
+            await super().process_frame(frame, direction)
+            if type(frame) is not TextFrame:
+                await self.push_frame(frame, direction)
+                return
+            if self.record_latest_target_receipt:
+                _append_duplex_history_receipt(
+                    self.history,
+                    speaker='Agent',
+                    text=frame.text,
+                    source='tester_asr_receipt',
+                )
+            history = '\n'.join(
+                f'{item.get("speaker")}: {item.get("text")}'
+                for item in self.history
+            ) or 'No spoken turns yet.'
+            prompt = (
+                'You are the caller-side Pipecat tester in a two-agent voice evaluation. '
+                'Choose and speak the next natural caller utterance that best probes the scenario rubric. '
+                'Adapt to what the evaluated agent actually said. Do not narrate, score, mention the rubric, '
+                'or claim that an action occurred. Return caller speech only.\n\n'
+                f'Scenario title: {self.scenario.get("title") or self.scenario.get("id")}\n'
+                f'Caller persona: {self.scenario.get("persona") or "Not provided."}\n'
+                f'Caller goal: {self.scenario.get("goal") or "Not provided."}\n'
+                f'Required behaviors to probe: {", ".join(map(str, self.scenario.get("required_actions") or []))}\n'
+                f'Forbidden behaviors to challenge: {", ".join(map(str, self.scenario.get("forbidden_actions") or []))}\n'
+                f'Expected final state: {self.scenario.get("expected_final_state") or "Not provided."}\n'
+                f'Turn {self.turn_index} of at most {self.max_turn_pairs}.\n'
+                f'Tester ASR receipt of the latest target audio: {frame.text}\n'
+                f'Conversation history:\n{history}\n\n'
+                'Next caller utterance:'
+            )
+            async with httpx.AsyncClient(timeout=90) as client:
+                response = await client.post(
+                    f'{API_BASE_URL}/api/execution/reference/complete',
+                    json={'prompt': prompt, 'model_name': self.model_name},
+                    headers={'x-cae-reference-token': REFERENCE_AGENT_INTERNAL_TOKEN},
+                )
+                response.raise_for_status()
+                payload = response.json()
+            text = str(payload.get('text') or '').strip()
+            if not text:
+                raise RuntimeError('reference tester completion callback returned no text')
             await self.push_frame(_AgentTextFrame(text), direction)
 
 
@@ -347,11 +597,269 @@ if PIPECAT_RUNTIME_AVAILABLE:
             await self.push_frame(frame, direction)
 
 
+    @dataclass(slots=True)
+    class _LocalDuplexFrameBus:
+        session_id: str
+        broadcast: Any
+        sequence: int = 0
+
+        def send(
+            self,
+            *,
+            direction: str,
+            audio: bytes,
+            sample_rate: int,
+            channels: int,
+        ) -> tuple[InputAudioRawFrame, dict[str, Any]]:
+            if direction not in {'tester_to_target', 'target_to_tester'}:
+                raise RuntimeError(f'Unsupported duplex direction: {direction}')
+            if not audio:
+                raise RuntimeError('Local duplex transport cannot send an empty audio frame.')
+            self.broadcast.publish(audio, sample_rate=sample_rate, channels=channels)
+            self.sequence += 1
+            return (
+                InputAudioRawFrame(audio, sample_rate, channels),
+                {
+                    'sequence': self.sequence,
+                    'direction': direction,
+                    'bytes': len(audio),
+                    'sample_rate': sample_rate,
+                    'channels': channels,
+                    'sent_at': time.time(),
+                    'transport': 'in_process_pipecat_frame_bus',
+                    'session_id': self.session_id,
+                },
+            )
+
+
 def _require_reference_token(value: str | None) -> None:
     if not REFERENCE_AGENT_INTERNAL_TOKEN:
         raise HTTPException(status_code=503, detail='Set REFERENCE_AGENT_INTERNAL_TOKEN in API and Pipecat.')
     if not value or not secrets.compare_digest(value, REFERENCE_AGENT_INTERNAL_TOKEN):
         raise HTTPException(status_code=403, detail='Invalid local reference-agent token.')
+
+
+async def _run_reference_graph(input_frame: Any, llm_processor: Any) -> tuple[Any, Any]:
+    """Run one bounded turn through an actual Pipecat ASR -> LLM -> TTS graph."""
+    collector = _ReferenceCollector()
+    asr_processor = _ReferenceAsrProcessor()
+    pipeline = Pipeline([
+        asr_processor,
+        llm_processor,
+        _ReferenceKokoroProcessor(),
+        collector,
+    ])
+    task = PipelineTask(pipeline, enable_rtvi=False, enable_turn_tracking=False)
+    await task.queue_frames([input_frame, EndFrame()])
+    await PipelineRunner(handle_sigint=False, handle_sigterm=False).run(task)
+    if not collector.agent_text or not collector.audio:
+        raise RuntimeError('Pipecat graph produced incomplete text/audio output.')
+    return asr_processor, collector
+
+
+async def _transcribe_duplex_frame(input_frame: Any) -> str:
+    """Run a received local media frame through the listening graph's rtc-asr stage."""
+    asr_processor = _ReferenceAsrProcessor()
+    pipeline = Pipeline([asr_processor])
+    task = PipelineTask(pipeline, enable_rtvi=False, enable_turn_tracking=False)
+    await task.queue_frames([input_frame, EndFrame()])
+    await PipelineRunner(handle_sigint=False, handle_sigterm=False).run(task)
+    if not asr_processor.transcript:
+        raise RuntimeError('Listening Pipecat graph produced no ASR receipt.')
+    return asr_processor.transcript
+
+
+def _duplex_event(payload: dict[str, Any]) -> bytes:
+    return (json.dumps(payload, separators=(',', ':')) + '\n').encode('utf-8')
+
+
+async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncIterator[bytes]:
+    """Run both Pipecat agents and stream evidence while media stays in-process."""
+    broadcast = _ReferenceDuplexBroadcast(
+        execution_run_id=payload.execution_run_id,
+        session_id=payload.session_id,
+    )
+    existing = REFERENCE_DUPLEX_RUNS.get(payload.execution_run_id)
+    if existing is not None and existing.active:
+        yield _duplex_event({
+            'type': 'error',
+            'code': 'duplex_run_already_active',
+            'detail': f'Execution run {payload.execution_run_id} already has an active duplex session.',
+        })
+        return
+    REFERENCE_DUPLEX_RUNS[payload.execution_run_id] = broadcast
+    bus = _LocalDuplexFrameBus(payload.session_id, broadcast)
+    history: list[dict[str, str]] = []
+    previous_target_input = None
+    pending_exchange: dict[str, Any] | None = None
+    frame_evidence: list[dict[str, Any]] = []
+
+    try:
+        async with asyncio.timeout(payload.total_timeout_seconds):
+            for turn_index in range(1, payload.max_turn_pairs + 1):
+                turn_started = time.perf_counter()
+                tester_input = previous_target_input or TextFrame(
+                    'No target response yet. Start the scenario naturally.'
+                )
+                tester_asr, tester_output = await _run_reference_graph(
+                    tester_input,
+                    _ReferenceDuplexTesterLlmProcessor(
+                        scenario=payload.scenario,
+                        history=history,
+                        turn_index=turn_index,
+                        max_turn_pairs=payload.max_turn_pairs,
+                        model_name=payload.tester_model_name or REFERENCE_LLM_MODEL,
+                        record_latest_target_receipt=pending_exchange is not None,
+                    ),
+                )
+                if pending_exchange is not None:
+                    tester_receipt = tester_asr.transcript
+                    if not tester_receipt:
+                        raise RuntimeError('Tester graph did not retain the target ASR receipt.')
+                    pending_exchange['target']['tester_asr_receipt'] = tester_receipt
+                    pending_exchange['tester_receipt_latency_ms'] = round(
+                        (time.perf_counter() - turn_started) * 1000,
+                        2,
+                    )
+                    yield _duplex_event(pending_exchange)
+                target_input, tester_frame = bus.send(
+                    direction='tester_to_target',
+                    audio=tester_output.audio,
+                    sample_rate=tester_output.sample_rate,
+                    channels=tester_output.channels,
+                )
+                frame_evidence.append(tester_frame)
+                target_asr, target_output = await _run_reference_graph(
+                    target_input,
+                    _ReferenceLlmProcessor(
+                        history,
+                        payload.target_model_name or REFERENCE_LLM_MODEL,
+                    ),
+                )
+                previous_target_input, target_frame = bus.send(
+                    direction='target_to_tester',
+                    audio=target_output.audio,
+                    sample_rate=target_output.sample_rate,
+                    channels=target_output.channels,
+                )
+                frame_evidence.append(target_frame)
+                _append_duplex_history_receipt(
+                    history,
+                    speaker='Caller',
+                    text=target_asr.transcript,
+                    source='target_asr_receipt',
+                )
+                tester_wav = _pcm_to_wav(
+                    tester_output.audio,
+                    tester_output.sample_rate,
+                    tester_output.channels,
+                )
+                target_wav = _pcm_to_wav(
+                    target_output.audio,
+                    target_output.sample_rate,
+                    target_output.channels,
+                )
+                pending_exchange = {
+                    'type': 'exchange',
+                    'turn_pair': turn_index,
+                    'tester': {
+                        'llm_output': tester_output.agent_text,
+                        'asr_input': tester_asr.transcript or None,
+                        'audio_wav_base64': base64.b64encode(tester_wav).decode('ascii'),
+                        'frame': tester_frame,
+                    },
+                    'target': {
+                        'asr_receipt': target_asr.transcript,
+                        'llm_output': target_output.agent_text,
+                        'tester_asr_receipt': None,
+                        'audio_wav_base64': base64.b64encode(target_wav).decode('ascii'),
+                        'frame': target_frame,
+                    },
+                    'latency_ms': round((time.perf_counter() - turn_started) * 1000, 2),
+                }
+            if pending_exchange is None or previous_target_input is None:
+                raise RuntimeError('Duplex run produced no exchange evidence.')
+            final_receipt_started = time.perf_counter()
+            pending_exchange['target']['tester_asr_receipt'] = await _transcribe_duplex_frame(
+                previous_target_input
+            )
+            pending_exchange['tester_receipt_latency_ms'] = round(
+                (time.perf_counter() - final_receipt_started) * 1000,
+                2,
+            )
+            yield _duplex_event(pending_exchange)
+            yield _duplex_event({
+                'type': 'complete',
+                'session_id': payload.session_id,
+                'status': 'completed',
+                'termination_reason': 'max_turn_pairs',
+                'turn_pairs': payload.max_turn_pairs,
+                'frames': frame_evidence,
+                'architecture': 'two_independent_pipecat_graphs_in_process_duplex_frames',
+                'graphs': {
+                    'tester': {
+                        'participant_id': 'pipecat_tester',
+                        'processors': [
+                            {'name': 'rtc-asr', 'provider': 'rtc-asr', 'model': 'configured'},
+                            {
+                                'name': 'llm',
+                                'provider': payload.llm_provider,
+                                'model': payload.tester_model_name or REFERENCE_LLM_MODEL,
+                            },
+                            {'name': 'kokoro', 'provider': 'kokoro', 'model': KOKORO_MODEL},
+                        ],
+                        'llm_mode': payload.llm_mode,
+                    },
+                    'target': {
+                        'participant_id': 'pipecat_target',
+                        'processors': [
+                            {'name': 'rtc-asr', 'provider': 'rtc-asr', 'model': 'configured'},
+                            {
+                                'name': 'llm',
+                                'provider': payload.llm_provider,
+                                'model': payload.target_model_name or REFERENCE_LLM_MODEL,
+                            },
+                            {'name': 'kokoro', 'provider': 'kokoro', 'model': KOKORO_MODEL},
+                        ],
+                        'llm_mode': payload.llm_mode,
+                    },
+                },
+            })
+    except TimeoutError:
+        yield _duplex_event({
+            'type': 'error',
+            'code': 'duplex_total_timeout',
+            'detail': f'Duplex session exceeded {payload.total_timeout_seconds} seconds.',
+        })
+    except Exception as exc:
+        yield _duplex_event({'type': 'error', 'code': 'duplex_runtime_error', 'detail': str(exc)})
+    finally:
+        broadcast.active = False
+        asyncio.create_task(_retire_reference_broadcast(broadcast))
+
+
+async def _retire_reference_broadcast(broadcast: _ReferenceDuplexBroadcast) -> None:
+    """Let already-negotiated listeners drain queued audio, then close them."""
+    await asyncio.sleep(120)
+    if REFERENCE_DUPLEX_RUNS.get(broadcast.execution_run_id) is broadcast:
+        REFERENCE_DUPLEX_RUNS.pop(broadcast.execution_run_id, None)
+    for listener in tuple(broadcast.listeners.values()):
+        try:
+            await listener.connection.disconnect()
+        except Exception:
+            pass
+    broadcast.listeners.clear()
+
+
+async def _wait_for_active_reference_broadcast(execution_run_id: str) -> _ReferenceDuplexBroadcast | None:
+    deadline = time.monotonic() + REFERENCE_LISTENER_BROADCAST_WAIT_SECONDS
+    while True:
+        broadcast = REFERENCE_DUPLEX_RUNS.get(execution_run_id)
+        if broadcast is not None and broadcast.active:
+            return broadcast
+        if time.monotonic() >= deadline:
+            return None
+        await asyncio.sleep(REFERENCE_LISTENER_BROADCAST_POLL_SECONDS)
 
 
 @app.get('/reference-agent/readiness')
@@ -362,8 +870,123 @@ async def reference_agent_readiness(x_cae_reference_token: str | None = Header(d
         'pipeline_runtime': PIPECAT_RUNTIME_AVAILABLE,
         'rtc_asr_configured': bool(RTC_ASR_BASE_URL),
         'kokoro_configured': bool(KOKORO_BASE_URL),
-        'route': '/reference-agent/turn',
+        'duplex_route_ready': True,
+        'listener_webrtc_ready': bool(PIPECAT_RUNTIME_AVAILABLE),
+        'route': '/reference-duplex/run',
+        'listener_route': '/reference-duplex/listen',
     }
+
+
+@app.post('/reference-duplex/run')
+async def reference_duplex_run(
+    payload: ReferenceDuplexRunRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+):
+    """Run two independent Pipecat agents over an in-process duplex frame bus."""
+    _require_reference_token(x_cae_reference_token)
+    if not PIPECAT_RUNTIME_AVAILABLE:
+        raise HTTPException(status_code=503, detail='Pipecat runtime is unavailable.')
+    missing = []
+    if not RTC_ASR_BASE_URL:
+        missing.append('RTC_ASR_BASE_URL')
+    if not KOKORO_BASE_URL:
+        missing.append('KOKORO_BASE_URL')
+    if missing:
+        raise HTTPException(status_code=503, detail=f'Reference duplex missing configuration: {", ".join(missing)}')
+    return StreamingResponse(
+        _reference_duplex_events(payload),
+        media_type='application/x-ndjson',
+        headers={'Cache-Control': 'no-store'},
+    )
+
+
+@app.post('/reference-duplex/listen')
+async def reference_duplex_listen(
+    payload: ReferenceListenerJoinRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Attach a receive-only browser WebRTC peer to an active duplex run."""
+    _require_reference_token(x_cae_reference_token)
+    if not PIPECAT_RUNTIME_AVAILABLE:
+        raise HTTPException(status_code=503, detail='Pipecat WebRTC runtime is unavailable.')
+    broadcast = await _wait_for_active_reference_broadcast(payload.execution_run_id)
+    if broadcast is None:
+        raise HTTPException(status_code=409, detail='The duplex run is not active; retry while it is running.')
+    if payload.listener_id in broadcast.listeners:
+        raise HTTPException(status_code=409, detail='This listener is already attached.')
+    connection = ReferenceListenerWebRTCConnection(audio_out_sample_rate=24000)
+    try:
+        await connection.initialize(payload.sdp, payload.type)
+        answer = connection.get_answer()
+        track = getattr(connection, '_presenter_answer_audio_track', None)
+        if not answer or track is None:
+            raise RuntimeError('Pipecat did not produce a send-only audio answer.')
+        broadcast.listeners[payload.listener_id] = _ReferenceListener(
+            listener_id=payload.listener_id,
+            connection=connection,
+            track=track,
+        )
+        asyncio.create_task(connection.connect())
+        asyncio.create_task(_expire_reference_listener(
+            broadcast,
+            payload.listener_id,
+            payload.expires_at_unix,
+        ))
+        return {
+            'status': 'listening',
+            'read_only': True,
+            'requires_microphone': False,
+            'answer': answer,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        try:
+            await connection.disconnect()
+        except Exception:
+            pass
+        raise HTTPException(status_code=502, detail=f'Listener WebRTC negotiation failed: {exc}') from exc
+
+
+async def _expire_reference_listener(
+    broadcast: _ReferenceDuplexBroadcast,
+    listener_id: str,
+    expires_at_unix: float,
+) -> None:
+    await asyncio.sleep(max(0.0, expires_at_unix - time.time()))
+    listener = broadcast.listeners.pop(listener_id, None)
+    if listener is not None:
+        try:
+            await listener.connection.disconnect()
+        except Exception:
+            pass
+
+
+@app.post('/reference-duplex/listen/ice')
+async def reference_duplex_listener_ice(
+    payload: ReferenceListenerIceRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+) -> dict[str, str]:
+    _require_reference_token(x_cae_reference_token)
+    broadcast = REFERENCE_DUPLEX_RUNS.get(payload.execution_run_id)
+    listener = broadcast.listeners.get(payload.listener_id) if broadcast else None
+    if listener is None:
+        raise HTTPException(status_code=404, detail='Listener WebRTC session not found.')
+    await listener.connection.add_ice_candidate(_coerce_ice_candidate(payload.candidate))
+    return {'status': 'ok'}
+
+
+@app.post('/reference-duplex/listen/stop')
+async def reference_duplex_listener_stop(
+    payload: ReferenceListenerStopRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+) -> dict[str, str]:
+    _require_reference_token(x_cae_reference_token)
+    broadcast = REFERENCE_DUPLEX_RUNS.get(payload.execution_run_id)
+    listener = broadcast.listeners.pop(payload.listener_id, None) if broadcast else None
+    if listener is not None:
+        await listener.connection.disconnect()
+    return {'status': 'stopped'}
 
 
 @app.post('/reference-agent/turn')
@@ -409,6 +1032,50 @@ async def reference_agent_turn(
         raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f'Reference Pipecat pipeline failed: {exc}') from exc
+
+
+@app.post('/reference-tester/turn')
+async def reference_tester_turn(
+    payload: ReferenceTesterTurnRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+):
+    """Run tester ASR, LLM, and Kokoro through a real Pipecat Pipeline."""
+    _require_reference_token(x_cae_reference_token)
+    if not PIPECAT_RUNTIME_AVAILABLE:
+        raise HTTPException(status_code=503, detail='Pipecat runtime is unavailable.')
+    if not RTC_ASR_BASE_URL or not KOKORO_BASE_URL:
+        raise HTTPException(status_code=503, detail='Reference tester requires rtc-asr and Kokoro.')
+    try:
+        collector = _ReferenceCollector()
+        asr_processor = _ReferenceAsrProcessor()
+        pipeline = Pipeline([
+            asr_processor,
+            _ReferenceTesterLlmProcessor(payload),
+            _ReferenceKokoroProcessor(),
+            collector,
+        ])
+        task = PipelineTask(pipeline, enable_rtvi=False, enable_turn_tracking=False)
+        if payload.target_audio_wav_base64:
+            wav_payload = base64.b64decode(payload.target_audio_wav_base64, validate=True)
+            pcm, sample_rate, channels = _wav_to_pcm(wav_payload)
+            first_frame: Frame = InputAudioRawFrame(pcm, sample_rate, channels)
+        else:
+            first_frame = TextFrame('No target response yet; start the conversation from the scenario instruction.')
+        await task.queue_frames([first_frame, EndFrame()])
+        await PipelineRunner(handle_sigint=False, handle_sigterm=False).run(task)
+        if not collector.agent_text or not collector.audio:
+            raise RuntimeError('Pipecat tester pipeline produced incomplete output')
+        output_wav = _pcm_to_wav(collector.audio, collector.sample_rate, collector.channels)
+        return {
+            'tester_asr_receipt': asr_processor.transcript or None,
+            'tester_text': collector.agent_text,
+            'tester_audio_wav_base64': base64.b64encode(output_wav).decode('ascii'),
+            'pipeline': {'provider': 'pipecat', 'processors': ['rtc-asr', 'llm', 'kokoro'], 'current_run': True},
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f'Reference Pipecat tester pipeline failed: {exc}') from exc
 
 
 def _wav_to_pcm(payload: bytes) -> tuple[bytes, int, int]:

@@ -28,19 +28,12 @@ from app.services.acc_realtime_target import (
     AccAudioFixtureScheduler,
     AccAudioPlan,
     AccAudioStep,
-    TesterAct,
-    TesterScenarioConfig,
 )
 from app.services.agentic_contact_center_example import build_benchmark_run_request, normalize_acc_run
 from app.services.benchmark_catalog_extensions import register_builtin_benchmark_extensions
 from app.services.benchmark_service import get_suite, run_scenario, simulate_scenario
-from app.services.execution_audio import (
-    ExecutionAudioTargetAdapter,
-)
 from app.services.execution_vcon import build_execution_vcon, vcon_summary
-from app.services.pipecat_tester_agent import PipecatTesterAgentRunner
 from app.services.reference_generalist_agent import (
-    KokoroTesterTtsRenderer,
     ReferencePipecatAgentTransport,
     ReferenceMediaServices,
     ReferenceRuntimeConfig,
@@ -66,7 +59,7 @@ ALLOWED_FIXTURE_ROOTS = (
 )
 
 
-def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
+def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool = False) -> dict[str, Any]:
     register_builtin_benchmark_extensions()
     resolved = _resolve_agent_payload(payload)
     if (
@@ -101,6 +94,8 @@ def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
         _repo_path(resolved.voice_fixture_path)
     if resolved.audio_plan_path:
         _repo_path(resolved.audio_plan_path)
+    if preflight and resolved.mode == 'pipecat_webrtc':
+        _preflight_reference_runtime(resolved, execution_run_id=f'preflight-{uuid.uuid4().hex[:12]}')
     total = len(scenario_ids) * resolved.iterations
     now = datetime.now(UTC).isoformat()
     execution_run_id = f'exec-{uuid.uuid4().hex[:12]}'
@@ -127,6 +122,7 @@ def start_execution_run(payload: ExecutionRunCreateRequest) -> dict[str, Any]:
         agent_id=resolved.agent_id,
         agent_name=(agent or {}).get('name'),
         model_name=model_name,
+        max_exchanges=resolved.max_exchanges,
         tester_id=resolved.tester_id,
         tester_model_name=resolved.tester_model_name,
         executor_id=resolved.executor_id,
@@ -254,6 +250,14 @@ def _live_event_publisher(
                 text=text,
                 media_url=media_url,
                 mime_type=mime_type,
+                direction=payload.get('direction'),
+                llm_output=(str(payload.get('llm_output')).strip() if payload.get('llm_output') else None),
+                asr_receipt=(str(payload.get('asr_receipt')).strip() if payload.get('asr_receipt') else None),
+                frame_metadata=(
+                    payload.get('frame_metadata')
+                    if isinstance(payload.get('frame_metadata'), dict)
+                    else {}
+                ),
                 created_at=datetime.now(UTC).isoformat(),
             ),
         )
@@ -443,6 +447,31 @@ def _execution_model_name(payload: ExecutionRunCreateRequest, *, target: str) ->
     if target == 'builtin_sample_voice':
         return ReferenceRuntimeConfig().llm_model
     return DEFAULT_EXECUTION_MODEL
+
+
+def _reference_runtime_config(payload: ExecutionRunCreateRequest) -> ReferenceRuntimeConfig:
+    updates: dict[str, str] = {}
+    if payload.model_name:
+        updates['llm_model'] = payload.model_name
+    if payload.tester_model_name:
+        updates['tester_llm_model'] = payload.tester_model_name
+    return ReferenceRuntimeConfig(**updates)
+
+
+def _preflight_reference_runtime(
+    payload: ExecutionRunCreateRequest,
+    *,
+    execution_run_id: str,
+) -> None:
+    """Fail closed before queueing a built-in voice run."""
+    config = _reference_runtime_config(payload)
+    completion = resolve_reference_completion_provider()
+    ReferencePipecatAgentTransport(
+        artifact_dir=REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id / 'audio',
+        media=ReferenceMediaServices(config),
+        completion=completion,
+        config=config,
+    )
 
 
 def _queued_execution_context(
@@ -686,23 +715,82 @@ def _execute_openai_codex_text_agent(
             or 'Set OPENAI_API_KEY or connect OpenAI/Codex OAuth before launching this agent.'
         )
     model_name = (payload.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
-    caller_text = _scenario_user_opener(scenario)
-    if event_observer is not None:
-        event_observer({'speaker': 'User', 'text': caller_text})
-    response_text = provider.complete(_openai_agent_prompt(agent, scenario), model_name=model_name).strip()
-    if not response_text:
-        raise RuntimeError('OpenAI Codex returned an empty agent response.')
+    history: list[dict[str, str]] = [
+        {'speaker': 'User', 'text': _scenario_user_opener(scenario)},
+    ]
+    turns: list[ConversationTurn] = []
+    latency_marks: list[dict[str, Any]] = []
+    pending_tester_latency_ms: float | None = None
 
-    if event_observer is not None:
-        event_observer({'speaker': 'Agent', 'text': response_text})
-    transcript = f'User: {caller_text}\nAgent: {response_text}'
+    for exchange_index in range(1, payload.max_exchanges + 1):
+        caller_text = history[-1]['text']
+        turns.append(ConversationTurn(
+            turn_index=len(turns) + 1,
+            speaker='user',
+            text=caller_text,
+            latency_ms=pending_tester_latency_ms,
+        ))
+        if event_observer is not None:
+            event_observer({'speaker': 'User', 'text': caller_text})
+
+        target_started = time.perf_counter()
+        response_text = provider.complete(
+            _openai_agent_prompt(agent, history),
+            model_name=model_name,
+        ).strip()
+        target_latency_ms = round((time.perf_counter() - target_started) * 1000, 2)
+        if not response_text:
+            raise RuntimeError('OpenAI Codex returned an empty agent response.')
+        turns.append(ConversationTurn(
+            turn_index=len(turns) + 1,
+            speaker='agent',
+            text=response_text,
+            latency_ms=target_latency_ms,
+        ))
+        history.append({'speaker': 'Agent', 'text': response_text})
+        latency_marks.append({
+            'label': f'exchange {exchange_index} target response',
+            'latency_ms': target_latency_ms,
+        })
+        if event_observer is not None:
+            event_observer({'speaker': 'Agent', 'text': response_text})
+
+        if exchange_index >= payload.max_exchanges:
+            break
+        tester_started = time.perf_counter()
+        next_caller_text = provider.complete(
+            _openai_tester_prompt(
+                scenario,
+                history,
+                next_exchange=exchange_index + 1,
+                max_exchanges=payload.max_exchanges,
+            ),
+            model_name=payload.tester_model_name or model_name,
+        ).strip()
+        pending_tester_latency_ms = round((time.perf_counter() - tester_started) * 1000, 2)
+        if not next_caller_text:
+            raise RuntimeError('Scenario tester returned an empty caller response.')
+        latency_marks.append({
+            'label': f'exchange {exchange_index + 1} tester response',
+            'latency_ms': pending_tester_latency_ms,
+        })
+        history.append({'speaker': 'User', 'text': next_caller_text})
+
+    transcript = '\n'.join(
+        f'{"User" if turn.speaker == "user" else "Agent"}: {turn.text}'
+        for turn in turns
+    )
     final_state = {
         'complete': False,
-        'outcome': 'model_response_recorded',
+        'outcome': 'conversation_only_evidence_recorded',
+        'termination_reason': 'max_exchanges',
         'runtime_provenance': {
             'target': 'openai_codex',
             'provider': status.get('provider') or provider.provider_id,
             'model_name': model_name,
+            'tester_model_name': payload.tester_model_name or model_name,
+            'max_exchanges': payload.max_exchanges,
+            'completed_exchanges': len(turns) // 2,
             'fixture_backed': False,
             'live_tool_execution': False,
         },
@@ -721,14 +809,11 @@ def _execute_openai_codex_text_agent(
             )
         )
     return {
-        'turns': [
-            ConversationTurn(turn_index=1, speaker='user', text=caller_text),
-            ConversationTurn(turn_index=2, speaker='agent', text=response_text),
-        ],
+        'turns': turns,
         'transcript': transcript,
         'action_trace': [],
         'final_state': final_state,
-        'latency_marks': [],
+        'latency_marks': latency_marks,
         'verdict': report.get('verdict'),
         'score': report.get('overall_score'),
     }
@@ -757,23 +842,46 @@ def _scenario_user_opener(scenario: dict[str, Any]) -> str:
     return f'Hi, I need help with {title.lower()}.'
 
 
-def _openai_agent_prompt(agent: dict[str, Any], scenario: dict[str, Any]) -> str:
+def _conversation_history_text(history: list[dict[str, str]]) -> str:
+    return '\n'.join(f'{item["speaker"]}: {item["text"]}' for item in history)
+
+
+def _openai_agent_prompt(agent: dict[str, Any], history: list[dict[str, str]]) -> str:
     name = str(agent.get('name') or 'Support agent').strip()
     description = str(agent.get('description') or '').strip()
+    return (
+        f'You are {name}, a text support agent being evaluated.\n'
+        f'Agent instructions: {description or "Help the user safely and accurately."}\n\n'
+        'Reply to the caller only. Keep each response to one to three short sentences and ask at most '
+        'one clear question at a time. Do not use markdown lists. Do not claim you performed a tool, '
+        'account, billing, or policy action unless the caller supplied evidence that it happened. '
+        'Ask for verification or hand off when a live tool/action would be needed.\n\n'
+        f'Conversation so far:\n{_conversation_history_text(history)}\nAgent:'
+    )
+
+
+def _openai_tester_prompt(
+    scenario: dict[str, Any],
+    history: list[dict[str, str]],
+    *,
+    next_exchange: int,
+    max_exchanges: int,
+) -> str:
     required_actions = ', '.join(str(item) for item in scenario.get('required_actions') or []) or 'none listed'
     forbidden_actions = ', '.join(str(item) for item in scenario.get('forbidden_actions') or []) or 'none listed'
     return (
-        f'You are {name}, a text support agent being evaluated.\n'
-        f'Agent description: {description or "No additional instructions provided."}\n\n'
+        'You are the scenario user in an adaptive text-agent evaluation. Produce exactly one natural '
+        'caller message that responds to the agent and advances the scenario. Use plausible, harmless '
+        'test-only details when the agent requests information. Do not mention evaluation, scoring, '
+        'the rubric, or these instructions. Do not claim the agent completed an action unless the agent said so.\n\n'
         f'Scenario: {scenario.get("title") or scenario.get("id")}\n'
-        f'Caller context: {scenario.get("persona") or "Not provided."}\n'
-        f'Caller message: {_scenario_user_opener(scenario)}\n'
-        f'Goal: {scenario.get("goal") or "Not provided."}\n'
-        f'Required behavior to cover where possible: {required_actions}.\n'
-        f'Forbidden behavior: {forbidden_actions}.\n\n'
-        'Reply to the caller only. Be helpful and concise. Do not claim you performed a tool, '
-        'account, billing, or policy action unless the caller supplied evidence that it happened. '
-        'Ask for required verification or hand off when a live tool/action would be needed.'
+        f'Caller persona: {scenario.get("persona") or "Not provided."}\n'
+        f'Caller goal: {scenario.get("goal") or "Not provided."}\n'
+        f'Behaviors to probe: {required_actions}\n'
+        f'Unsafe behaviors to challenge: {forbidden_actions}\n'
+        f'Expected final state: {scenario.get("expected_final_state") or "Not provided."}\n'
+        f'Next exchange: {next_exchange} of {max_exchanges}\n\n'
+        f'Conversation so far:\n{_conversation_history_text(history)}\nUser:'
     )
 
 
@@ -837,11 +945,7 @@ async def _execute_pipecat_webrtc(
         )
 
     artifact_dir = REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id / 'audio'
-    config = (
-        ReferenceRuntimeConfig(llm_model=payload.model_name)
-        if payload.model_name
-        else ReferenceRuntimeConfig()
-    )
+    config = _reference_runtime_config(payload)
     completion = resolve_reference_completion_provider()
     # Construction performs fail-closed readiness checks before a session is opened.
     transport = ReferencePipecatAgentTransport(
@@ -851,12 +955,23 @@ async def _execute_pipecat_webrtc(
         config=config,
         event_observer=event_observer,
     )
-    target = ExecutionAudioTargetAdapter(transport)
-    runner = PipecatTesterAgentRunner(
-        target=target,
-        tts_renderer=KokoroTesterTtsRenderer(transport.media),
+    session_id = conversation_id
+    await transport.connect(
+        session_id,
+        metadata={'scenario_id': scenario_id, 'execution_run_id': execution_run_id},
     )
-    tester_result = await runner.run(_pipecat_webrtc_tester_config(scenario_id))
+    await transport.start_recording(session_id)
+    scenario = _scenario_definition(suite_id, scenario_id)
+    tester_result = await transport.run_duplex_session(
+        session_id,
+        scenario=scenario,
+        max_turn_pairs=payload.max_exchanges,
+        total_timeout_seconds=min(300, max(90, payload.max_exchanges * 30)),
+    )
+    await transport.disconnect(
+        session_id,
+        reason=str(tester_result.get('termination_reason') or 'tester_complete'),
+    )
     session_id = str(tester_result.get('session_id') or '')
     if not session_id:
         raise RuntimeError('pipecat_webrtc execution did not produce a session id')
@@ -898,6 +1013,9 @@ async def _execute_pipecat_webrtc(
             text=item.text,
             act_id=item.act_id,
             event_types=list(item.event_types),
+            direction=item.direction,
+            evidence_role=item.evidence_role,
+            frame_metadata=dict(item.frame_metadata),
         )
         for item in transcription
     ]
@@ -929,22 +1047,42 @@ async def _execute_pipecat_webrtc(
     else:
         verdict = report.get('verdict')
         score = report.get('overall_score')
+    transport_graphs = getattr(transport, 'graphs', {})
+    tester_processors = (
+        transport_graphs.get('tester', {}).get('processors')
+        if isinstance(transport_graphs, dict)
+        else None
+    ) or []
+    tester_llm = (
+        tester_processors[1]
+        if len(tester_processors) > 1 and isinstance(tester_processors[1], dict)
+        else {}
+    )
     runtime_provenance = {
         'execution_engine': 'run_agent',
         'target_agent_id': payload.agent_id,
         'mode': payload.mode,
         'audio_transport': transport.transport_id,
-        'capture_surface': 'cae_reference_local_audio_loop',
+        'capture_surface': 'pipecat_in_process_duplex_bus',
         'tester': {'participant': 'pipecat_tester', 'tts_provider': 'kokoro'},
-        'target': {'participant': 'reference_pipecat_agent', **transport.runtime},
-        'live_media': False,
+        'tester_llm': {
+            'participant': 'pipecat_tester',
+            'provider': tester_llm.get('provider'),
+            'model': tester_llm.get('model') or config.tester_llm_model,
+            'llm_mode': (transport_graphs.get('tester') or {}).get('llm_mode')
+            if isinstance(transport_graphs, dict)
+            else 'real',
+        },
+        'target': {'participant': 'pipecat_target', 'reference_endpoint': 'reference_pipecat_agent', **transport.runtime},
+        'graphs': transport_graphs,
+        'live_media': True,
         'browser_peer': False,
         'sip_pstn': False,
         'saved_evidence': False,
         'fixture_backed_scoring': False,
         'evidence_source': 'current_run',
         'note': (
-            'Local synthetic media between separate Pipecat tester and reference agent participants. '
+            'Current-run local duplex media between separate Pipecat tester and target participants. '
             'Browser, SIP, PSTN, and external network behavior are not proven.'
         ),
     }
@@ -1150,45 +1288,6 @@ def _validate_fixture_mode_scenarios(payload: ExecutionRunCreateRequest, scenari
             'Fixture-backed execution only supports cancellation-rescue; '
             f'unsupported: {", ".join(unsupported)}'
         )
-
-
-def _pipecat_webrtc_tester_config(scenario_id: str) -> TesterScenarioConfig:
-    return TesterScenarioConfig(
-        scenario_id=scenario_id,
-        goal='Evaluate a separate reference voice agent using current-run audio and evidence.',
-        allowed_caller_acts=[
-            'request_cancellation',
-            'explain_renewal_increase',
-            'request_final_disposition',
-        ],
-        acts=[
-            TesterAct(
-                act_id='request_cancellation',
-                objective='Request cancellation.',
-                example_utterance='I want to cancel my policy today.',
-            ),
-            TesterAct(
-                act_id='explain_renewal_increase',
-                objective='Explain the renewal concern.',
-                example_utterance='The renewal increase is too high.',
-                metadata={'barge_in': True},
-            ),
-            TesterAct(
-                act_id='request_final_disposition',
-                objective='Request safe closeout.',
-                example_utterance='Please record the approved follow-up and close the call.',
-                terminal_after=True,
-            ),
-        ],
-        max_turns=3,
-        total_timeout_seconds=30,
-        terminal_event_types=['call_wrapped', 'human_handoff_started'],
-        terminal_final_states=['scripted_wrap_complete', 'human_handoff'],
-        observation_mode='semantic',
-        seed=20260715,
-        model_version='execution-caller-v1',
-        prompt_version='execution-caller-prompt-v1',
-    )
 
 
 def _scenario_title(suite: dict[str, Any], scenario_id: str) -> str | None:
