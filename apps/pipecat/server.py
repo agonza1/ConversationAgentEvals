@@ -379,6 +379,19 @@ REFERENCE_LISTENER_BROADCAST_WAIT_SECONDS = 8.0
 REFERENCE_LISTENER_BROADCAST_POLL_SECONDS = 0.1
 
 
+def _append_duplex_history_receipt(
+    history: list[dict[str, str]],
+    *,
+    speaker: str,
+    text: str,
+    source: str,
+) -> None:
+    receipt = text.strip()
+    if not receipt:
+        return
+    history.append({'speaker': speaker, 'text': receipt, 'source': source})
+
+
 if PIPECAT_RUNTIME_AVAILABLE:
     class _AgentTextFrame(TextFrame):
         pass
@@ -487,6 +500,7 @@ if PIPECAT_RUNTIME_AVAILABLE:
             turn_index: int,
             max_turn_pairs: int,
             model_name: str,
+            record_latest_target_receipt: bool = False,
         ):
             super().__init__()
             self.scenario = scenario
@@ -494,12 +508,20 @@ if PIPECAT_RUNTIME_AVAILABLE:
             self.turn_index = turn_index
             self.max_turn_pairs = max_turn_pairs
             self.model_name = model_name
+            self.record_latest_target_receipt = record_latest_target_receipt
 
         async def process_frame(self, frame: Frame, direction: FrameDirection):
             await super().process_frame(frame, direction)
             if type(frame) is not TextFrame:
                 await self.push_frame(frame, direction)
                 return
+            if self.record_latest_target_receipt:
+                _append_duplex_history_receipt(
+                    self.history,
+                    speaker='Agent',
+                    text=frame.text,
+                    source='tester_asr_receipt',
+                )
             history = '\n'.join(
                 f'{item.get("speaker")}: {item.get("text")}'
                 for item in self.history
@@ -687,6 +709,7 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                         turn_index=turn_index,
                         max_turn_pairs=payload.max_turn_pairs,
                         model_name=payload.tester_model_name or REFERENCE_LLM_MODEL,
+                        record_latest_target_receipt=pending_exchange is not None,
                     ),
                 )
                 if pending_exchange is not None:
@@ -720,10 +743,12 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                     channels=target_output.channels,
                 )
                 frame_evidence.append(target_frame)
-                history.extend([
-                    {'speaker': 'Caller', 'text': tester_output.agent_text},
-                    {'speaker': 'Agent', 'text': target_output.agent_text},
-                ])
+                _append_duplex_history_receipt(
+                    history,
+                    speaker='Caller',
+                    text=target_asr.transcript,
+                    source='target_asr_receipt',
+                )
                 tester_wav = _pcm_to_wav(
                     tester_output.audio,
                     tester_output.sample_rate,

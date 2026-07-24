@@ -58,6 +58,48 @@ class _AsyncClient:
         raise AssertionError(url)
 
 
+class _DivergentReceiptAsyncClient:
+    completion_prompts: list[str] = []
+    transcript_index = 0
+    completion_index = 0
+    transcripts = [
+        'target heard caller receipt one',
+        'tester heard agent receipt one',
+        'target heard caller receipt two',
+        'tester heard agent receipt two',
+    ]
+    completions = [
+        'claimed caller wording one',
+        'claimed agent wording one',
+        'claimed caller wording two',
+        'claimed agent wording two',
+    ]
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def post(self, url, **kwargs):
+        if url.endswith('/api/transcribe/file'):
+            text = type(self).transcripts[type(self).transcript_index]
+            type(self).transcript_index += 1
+            return _Response(payload={'text': text})
+        if url.endswith('/api/execution/reference/complete'):
+            assert kwargs['headers']['x-cae-reference-token'] == 'test-token'
+            type(self).completion_prompts.append(kwargs['json']['prompt'])
+            text = type(self).completions[type(self).completion_index]
+            type(self).completion_index += 1
+            return _Response(payload={'text': text})
+        if url.endswith('/v1/audio/speech'):
+            return _Response(content=_wav())
+        raise AssertionError(url)
+
+
 def test_reference_turn_runs_real_pipecat_pipeline(monkeypatch):
     _AsyncClient.completion_prompts.clear()
     monkeypatch.setattr(server, 'RTC_ASR_BASE_URL', 'http://rtc-asr.test')
@@ -168,6 +210,54 @@ def test_reference_duplex_stream_runs_two_graphs_over_local_frames(monkeypatch):
     ]
     assert target_prompts
     assert all('one or two short sentences' in prompt for prompt in target_prompts)
+
+
+def test_reference_duplex_history_uses_peer_asr_receipts_for_later_prompts(monkeypatch):
+    _DivergentReceiptAsyncClient.completion_prompts.clear()
+    _DivergentReceiptAsyncClient.transcript_index = 0
+    _DivergentReceiptAsyncClient.completion_index = 0
+    monkeypatch.setattr(server, 'RTC_ASR_BASE_URL', 'http://rtc-asr.test')
+    monkeypatch.setattr(server, 'KOKORO_BASE_URL', 'http://kokoro.test')
+    monkeypatch.setattr(server, 'REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
+    monkeypatch.setattr(server.httpx, 'AsyncClient', _DivergentReceiptAsyncClient)
+    client = TestClient(server.app)
+
+    response = client.post(
+        '/reference-duplex/run',
+        headers={'x-cae-reference-token': 'test-token'},
+        json={
+            'session_id': 'offline-duplex-history-proof',
+            'execution_run_id': 'offline-execution-history-proof',
+            'scenario': {'id': 'cancellation-rescue', 'title': 'Cancellation Rescue'},
+            'tester_model_name': 'tester-model',
+            'target_model_name': 'target-model',
+            'llm_provider': 'offline-fake-openai',
+            'llm_mode': 'mock',
+            'max_turn_pairs': 2,
+            'total_timeout_seconds': 20,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    events = [server.json.loads(line) for line in response.text.splitlines() if line.strip()]
+    exchanges = [event for event in events if event['type'] == 'exchange']
+    assert [exchange['target']['asr_receipt'] for exchange in exchanges] == [
+        'target heard caller receipt one',
+        'target heard caller receipt two',
+    ]
+    assert [exchange['target']['tester_asr_receipt'] for exchange in exchanges] == [
+        'tester heard agent receipt one',
+        'tester heard agent receipt two',
+    ]
+    target_prompts = [
+        prompt for prompt in _DivergentReceiptAsyncClient.completion_prompts
+        if 'built-in generalist voice agent' in prompt
+    ]
+    assert len(target_prompts) == 2
+    assert 'Caller: target heard caller receipt one' in target_prompts[1]
+    assert 'Agent: tester heard agent receipt one' in target_prompts[1]
+    assert 'claimed caller wording one' not in target_prompts[1]
+    assert 'claimed agent wording one' not in target_prompts[1]
 
 
 def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(monkeypatch):
