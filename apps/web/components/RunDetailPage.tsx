@@ -335,6 +335,7 @@ function MetricDetail({
   async function onJudge() {
     if (!conversation || !canJudge || isJudging) return;
     setJudgeError(null);
+    setJudge(null);
     setIsJudging(true);
     try {
       setJudge(await requestLlmJudge({

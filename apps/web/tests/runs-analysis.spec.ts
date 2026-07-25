@@ -224,6 +224,14 @@ test('run detail can request the existing LLM judge with selected conversation e
   await page.route('**/api/product/judge', async (route) => {
     judgeCalls += 1;
     judgeRequest = route.request().postDataJSON() as Record<string, unknown>;
+    if (judgeCalls === 2) {
+      await route.fulfill({
+        status: 502,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: 'temporary judge failure' }),
+      });
+      return;
+    }
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -305,6 +313,10 @@ test('run detail can request the existing LLM judge with selected conversation e
   await page.getByRole('button', { name: 'What the judge saw' }).click();
   await expect(page.getByText('Deterministic verdict: needs_review')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Run LLM review again' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Run LLM review again' }).click();
+  await expect(page.getByText('temporary judge failure', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('LLM judge result')).toHaveCount(0);
 });
 
 test('resolution evidence handles failed and not-evaluated conversations without metric summaries', async ({ page }) => {
