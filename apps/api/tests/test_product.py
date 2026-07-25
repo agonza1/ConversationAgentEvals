@@ -1584,6 +1584,57 @@ def test_llm_judge_prompt_preserves_structured_execution_evidence():
     assert '"execution_error": "provider disconnected after the tool result"' in prompt
 
 
+def test_llm_judge_recomputes_missing_evaluator_findings_before_spending(monkeypatch):
+    from app.services import benchmark_service, product_service
+
+    captured = {}
+
+    def fake_run_scenario(request):
+        captured.update(request.model_dump())
+        return {
+            'missing_actions': ['policy_hold_entered'],
+            'rubric_checks': [{'name': 'retention_policy', 'status': 'failed'}],
+            'hard_check_failures': [{'category': 'policy', 'summary': 'Required hold missing.'}],
+            'scenario_contract': {
+                'required_actions': [
+                    {'id': 'policy_hold_entered', 'description': 'Enter the required policy hold.'},
+                ],
+            },
+            'expected_final_state': {'description': 'Policy hold entered.'},
+        }
+
+    monkeypatch.setattr(benchmark_service, 'run_scenario', fake_run_scenario)
+    grounded = product_service._ground_judge_report(
+        {
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'cancellation-rescue',
+            'verdict': 'needs_review',
+            'overall_score': 60,
+            'action_trace': [{'action': 'verify_identity', 'status': 'completed'}],
+            'final_state': {'complete': False},
+            'require_evaluator_findings': True,
+        },
+        transcript='Agent: I verified the caller.',
+        user_id='judge-user',
+        project_id='judge-project',
+    )
+
+    assert captured['user_id'] == 'judge-user'
+    assert captured['project_id'] == 'judge-project'
+    assert grounded['evaluator_findings_source'] == 'recomputed_current_contract'
+    assert grounded['missing_actions'] == ['policy_hold_entered']
+    prompt = product_service._build_judge_prompt(
+        report=grounded,
+        transcript='Agent: I verified the caller.',
+        citations=[],
+    )
+    assert 'Missing required actions: policy_hold_entered' in prompt
+    assert 'Failed rubric checks: retention_policy' in prompt
+    assert 'Hard-check failures:' in prompt
+    assert 'Scenario required actions:' in prompt
+    assert 'Expected final state:' in prompt
+
+
 def test_llm_judge_structured_evidence_stays_valid_and_preserves_priority_fields():
     from app.services import product_service
 

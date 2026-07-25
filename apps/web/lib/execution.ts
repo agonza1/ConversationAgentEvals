@@ -105,6 +105,7 @@ export interface ConversationRecord {
   transcript?: string | null;
   action_trace?: Array<Record<string, unknown>>;
   final_state?: Record<string, unknown>;
+  evaluation_findings?: Record<string, unknown>;
   recording?: Record<string, unknown> | null;
   audio_session?: Record<string, unknown> | null;
   latency_marks?: Array<Record<string, unknown>>;
@@ -180,7 +181,7 @@ export interface LlmJudgeResponse {
   model?: string | null;
   prompt_preview?: string | null;
   latency_ms?: number | null;
-  block_reason?: 'provider' | 'budget' | 'provider_error' | null;
+  block_reason?: 'provider' | 'budget' | 'provider_error' | 'evidence' | null;
   spend_control?: {
     estimated_credits?: number;
     daily_credit_limit?: number;

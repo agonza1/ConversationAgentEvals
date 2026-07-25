@@ -268,7 +268,13 @@ def export_run_report(run_id: str, user_id: str = Query(min_length=1), db: Sessi
 
 @router.post('/judge')
 def request_llm_judge(payload: JudgeRequest, db: Session = Depends(get_db)):
-    response = judge_gate(plan=payload.plan, report=payload.report, transcript=payload.transcript)
+    response = judge_gate(
+        plan=payload.plan,
+        report=payload.report,
+        transcript=payload.transcript,
+        user_id=payload.user_id,
+        project_id=payload.project_id,
+    )
     if payload.user_id:
         agrees = response.judge_result.agrees if response.judge_result else None
         record_judge_request(

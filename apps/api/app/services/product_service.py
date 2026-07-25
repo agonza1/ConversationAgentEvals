@@ -956,13 +956,20 @@ def _stripe_price_id(plan: str) -> str | None:
     return None
 
 
-def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> JudgeResponse:
+def judge_gate(
+    plan: str,
+    report: dict[str, Any],
+    transcript: str | None,
+    *,
+    user_id: str | None = None,
+    project_id: str | None = None,
+) -> JudgeResponse:
     del plan  # Local Codex OAuth / API-key path gates on provider + budget, not paid plan.
     spend_control = _judge_spend_control()
-    citations = _judge_citations(report, transcript)
     model_name = _judge_model_name(spend_control)
 
     if not spend_control['within_budget']:
+        citations = _judge_citations(report, transcript)
         return JudgeResponse(
             status='blocked',
             required_plan='starter',
@@ -976,6 +983,7 @@ def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> Jud
         )
 
     if not spend_control.get('provider_configured'):
+        citations = _judge_citations(report, transcript)
         return JudgeResponse(
             status='blocked',
             required_plan='starter',
@@ -988,6 +996,31 @@ def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> Jud
             block_reason='provider',
         )
 
+    report = _ground_judge_report(
+        report,
+        transcript=transcript,
+        user_id=user_id,
+        project_id=project_id,
+    )
+    citations = _judge_citations(report, transcript)
+    if report.get('require_evaluator_findings') and (
+        not report.get('verdict')
+        or not _has_judge_evaluator_findings(report)
+    ):
+        return JudgeResponse(
+            status='blocked',
+            required_plan='starter',
+            credits=10,
+            message=(
+                'LLM judge requires a deterministic verdict and evaluator findings. '
+                'Re-evaluate this conversation before requesting a second opinion.'
+            ),
+            evidence_citations=citations,
+            spend_control=spend_control,
+            provider=spend_control.get('provider'),
+            model=model_name,
+            block_reason='evidence',
+        )
     reserved, spend_control = _reserve_judge_credits(spend_control, credits=10)
     if not reserved:
         return JudgeResponse(
@@ -1116,6 +1149,86 @@ def _string_list(value: Any, *, limit: int = 8) -> list[str]:
     return items
 
 
+_JUDGE_EVALUATOR_FINDING_KEYS = (
+    'required_action_score',
+    'rubric_score',
+    'task_completion_score',
+    'forbidden_action_score',
+    'final_state_score',
+    'workflow_order_score',
+    'score_components',
+    'completed_actions',
+    'missing_actions',
+    'forbidden_action_hits',
+    'rubric_checks',
+    'hard_check_failures',
+    'failure_categories',
+    'failure_modes',
+    'suggested_fixes',
+    'scenario_contract',
+    'expected_final_state',
+)
+_JUDGE_DECISIVE_FINDING_KEYS = (
+    'score_components',
+    'missing_actions',
+    'rubric_checks',
+    'hard_check_failures',
+    'scenario_contract',
+    'expected_final_state',
+)
+
+
+def _has_judge_evaluator_findings(report: dict[str, Any]) -> bool:
+    return any(key in report for key in _JUDGE_DECISIVE_FINDING_KEYS)
+
+
+def _ground_judge_report(
+    report: dict[str, Any],
+    *,
+    transcript: str | None,
+    user_id: str | None,
+    project_id: str | None,
+) -> dict[str, Any]:
+    grounded = dict(report)
+    persisted = report.get('evaluation_findings')
+    if isinstance(persisted, dict):
+        for key in _JUDGE_EVALUATOR_FINDING_KEYS:
+            if key in persisted:
+                grounded[key] = persisted[key]
+        if _has_judge_evaluator_findings(grounded):
+            grounded['evaluator_findings_source'] = 'persisted_execution'
+            return grounded
+    if not report.get('require_evaluator_findings') or _has_judge_evaluator_findings(grounded):
+        return grounded
+
+    suite_id = report.get('suite_id')
+    scenario_id = report.get('scenario_id')
+    if not isinstance(suite_id, str) or not isinstance(scenario_id, str):
+        grounded['evaluator_findings_error'] = 'Suite and scenario identifiers are required.'
+        return grounded
+    try:
+        from app.schemas.benchmarks import BenchmarkRunRequest
+        from app.services.benchmark_service import run_scenario
+
+        evaluated = run_scenario(BenchmarkRunRequest(
+            suite_id=suite_id,
+            scenario_id=scenario_id,
+            transcript=transcript,
+            action_trace=report.get('action_trace') or [],
+            final_state=report.get('final_state') or {},
+            user_id=user_id,
+            project_id=project_id,
+        ))
+    except Exception as exc:  # noqa: BLE001 - retain the saved result and expose why grounding failed
+        grounded['evaluator_findings_error'] = str(exc)
+        return grounded
+    for key in _JUDGE_EVALUATOR_FINDING_KEYS:
+        if key in evaluated:
+            grounded[key] = evaluated[key]
+    grounded['evaluator_findings_source'] = 'recomputed_current_contract'
+    return grounded
+
+
 def _judge_failure_summary(report: dict[str, Any]) -> list[str]:
     lines: list[str] = []
     missing = _string_list(report.get('missing_actions'))
@@ -1124,9 +1237,12 @@ def _judge_failure_summary(report: dict[str, Any]) -> list[str]:
     forbidden = _string_list(report.get('forbidden_action_hits') or report.get('forbidden_actions'))
     if forbidden:
         lines.append('Forbidden action hits: ' + '; '.join(forbidden))
-    failures = _string_list(report.get('failure_categories') or report.get('hard_check_failures'))
+    failures = _string_list(report.get('failure_categories'))
     if failures:
         lines.append('Failure categories: ' + '; '.join(failures))
+    hard_failures = _string_list(report.get('hard_check_failures'))
+    if hard_failures:
+        lines.append('Hard-check failures: ' + '; '.join(hard_failures))
     rubric = report.get('rubric_checks')
     if isinstance(rubric, list):
         failed_rubric = []
@@ -1142,6 +1258,20 @@ def _judge_failure_summary(report: dict[str, Any]) -> list[str]:
     fixes = _string_list(report.get('suggested_fixes') or report.get('recommendations'), limit=5)
     if fixes:
         lines.append('Suggested fixes: ' + '; '.join(fixes))
+    scenario_contract = report.get('scenario_contract')
+    if isinstance(scenario_contract, dict):
+        requirements = _string_list(scenario_contract.get('required_actions'), limit=12)
+        if requirements:
+            lines.append('Scenario required actions: ' + '; '.join(requirements))
+    expected_final_state = report.get('expected_final_state')
+    if isinstance(expected_final_state, (dict, list, str)) and expected_final_state:
+        lines.append(
+            'Expected final state: '
+            + json.dumps(expected_final_state, ensure_ascii=False, default=str)[:500]
+        )
+    findings_error = report.get('evaluator_findings_error')
+    if findings_error:
+        lines.append(f'Evaluator findings unavailable: {str(findings_error)[:300]}')
     final_state = report.get('final_state')
     if isinstance(final_state, dict) and final_state:
         complete = final_state.get('complete')

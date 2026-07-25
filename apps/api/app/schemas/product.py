@@ -314,4 +314,4 @@ class JudgeResponse(BaseModel):
     model: str | None = None
     prompt_preview: str | None = None
     latency_ms: int | None = None
-    block_reason: Literal['provider', 'budget', 'provider_error'] | None = None
+    block_reason: Literal['provider', 'budget', 'provider_error', 'evidence'] | None = None

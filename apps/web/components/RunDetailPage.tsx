@@ -321,10 +321,15 @@ function MetricDetail({
   const [isJudging, setIsJudging] = useState(false);
   const [showJudgePrompt, setShowJudgePrompt] = useState(false);
   const summary = conversation?.metrics_summary;
-  const canJudge = Boolean(
+  const deterministicVerdict = summary?.verdict || conversation?.verdict;
+  const conversationIsTerminal = Boolean(
     conversation
     && !['queued', 'running'].includes(run.status)
     && !['queued', 'running'].includes(conversation.status),
+  );
+  const canJudge = Boolean(
+    conversationIsTerminal
+    && deterministicVerdict,
   );
 
   async function onJudge() {
@@ -404,7 +409,9 @@ function MetricDetail({
             {isJudging
               ? 'Reviewing evidence…'
               : !canJudge
-                ? 'Available after run completes'
+                ? conversationIsTerminal
+                  ? 'Unavailable without evaluator verdict'
+                  : 'Available after run completes'
                 : judge
                   ? 'Run LLM review again'
                   : 'Review with LLM judge'}
@@ -531,22 +538,29 @@ function JudgeResult({
 function judgeReport(run: ExecutionRunRecord, conversation: ConversationRecord): Record<string, unknown> {
   const evidence = resolutionEvidence(conversation);
   const summary = conversation.metrics_summary;
+  const findings = asRecord(conversation.evaluation_findings);
+  const recordedFailureCategories = Array.isArray(findings.failure_categories)
+    ? findings.failure_categories.filter((item): item is string => typeof item === 'string')
+    : [];
   const failureCategories = evidence.error
     ? [...evidence.gaps, `Execution error: ${evidence.error}`]
     : evidence.gaps;
 
   return {
+    ...findings,
     run_id: run.execution_run_id,
     suite_id: conversation.suite_id || run.suite_id,
     scenario_id: conversation.scenario_id,
     scenario_title: conversation.scenario_title,
     verdict: summary?.verdict || conversation.verdict,
     overall_score: summary?.score ?? conversation.score,
-    failure_categories: failureCategories,
+    failure_categories: [...new Set([...recordedFailureCategories, ...failureCategories])],
     evidence_citations: judgeEvidenceCitations(conversation),
     action_trace: conversation.action_trace || [],
     final_state: conversation.final_state || {},
     error: conversation.error || null,
+    evaluation_findings: findings,
+    require_evaluator_findings: true,
   };
 }
 

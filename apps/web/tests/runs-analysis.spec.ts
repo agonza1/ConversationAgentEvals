@@ -188,6 +188,14 @@ test('run detail can request the existing LLM judge with selected conversation e
     verdict: 'needs_review',
     score: 60,
     action_trace: [{ action: 'verify_identity', status: 'completed', identifiers: ['email', 'last4'] }],
+    evaluation_findings: {
+      missing_actions: ['policy_hold_entered'],
+      rubric_checks: [{ name: 'retention_policy', status: 'failed' }],
+      hard_check_failures: [{ category: 'policy', summary: 'Required policy hold was not entered.' }],
+      scenario_contract: {
+        required_actions: [{ id: 'policy_hold_entered', description: 'Enter the required policy hold.' }],
+      },
+    },
     final_state: {
       complete: false,
       outcome: 'conversation_only_evidence_recorded',
@@ -265,6 +273,12 @@ test('run detail can request the existing LLM judge with selected conversation e
       scenario_id: 'cancellation-rescue',
       verdict: 'needs_review',
       overall_score: 60,
+      missing_actions: ['policy_hold_entered'],
+      rubric_checks: [{ name: 'retention_policy', status: 'failed' }],
+      hard_check_failures: [{ category: 'policy', summary: 'Required policy hold was not entered.' }],
+      scenario_contract: {
+        required_actions: [{ id: 'policy_hold_entered', description: 'Enter the required policy hold.' }],
+      },
       evidence_citations: expect.arrayContaining([
         {
           source: 'action_trace',
@@ -277,6 +291,7 @@ test('run detail can request the existing LLM judge with selected conversation e
       ]),
       action_trace: conversation.action_trace,
       final_state: conversation.final_state,
+      require_evaluator_findings: true,
     },
   });
   const judgeReportPayload = (
@@ -300,8 +315,8 @@ test('resolution evidence handles failed and not-evaluated conversations without
     scenario_id: 'failed-target',
     scenario_title: 'Failed target',
     status: 'failed',
-    verdict: null,
-    score: null,
+    verdict: 'fail',
+    score: 0,
     error: 'simulated provider disconnect',
     metrics_summary: null,
     action_trace: [],
@@ -376,6 +391,7 @@ test('resolution evidence handles failed and not-evaluated conversations without
     'No resolution verdict is available for this conversation.',
   );
   await expect(page.getByLabel('Resolution evidence details')).toContainText('Target Terminal State');
+  await expect(page.getByRole('button', { name: 'Unavailable without evaluator verdict' })).toBeDisabled();
 });
 
 test('LLM judge stays disabled while conversation evidence is still changing', async ({ page }) => {
