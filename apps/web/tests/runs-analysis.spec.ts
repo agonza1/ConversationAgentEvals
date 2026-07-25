@@ -106,8 +106,9 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
   await expect(participants).toContainText('Evidence Replay');
   await expect(participants).toContainText('saved evidence replay');
   await expect(page.getByRole('button', { name: /Interruption Detection/ }).first()).toBeVisible();
-  await expect(page.getByRole('button', { name: /Latency/ }).first()).toBeVisible();
-  await expect(page.getByLabel('Stub dual-track waveform')).toBeVisible();
+  await expect(page.getByRole('button', { name: /Target Response Latency/ }).first()).toBeVisible();
+  await expect(page.getByLabel('Two-agent conversation timeline')).toBeVisible();
+  await expect(page.getByLabel('Conversation turn sequence')).toContainText('I can help with that.');
   await expect(page.getByLabel('Transcript')).toContainText('I want to cancel today.');
 });
 
@@ -202,7 +203,7 @@ test('run analysis preserves an API base override on the All runs link', async (
   );
 });
 
-test('text agent analysis hides the stub waveform', async ({ page }) => {
+test('text agent analysis hides the voice conversation timeline', async ({ page }) => {
   const textRun = {
     ...runFixture,
     execution_run_id: 'exec-text-demo',
@@ -235,6 +236,81 @@ test('text agent analysis hides the stub waveform', async ({ page }) => {
 
   await page.goto('/runs/exec-text-demo');
   await expect(page.getByRole('heading', { name: 'Mock text agent' })).toBeVisible();
-  await expect(page.getByLabel('Stub dual-track waveform')).toHaveCount(0);
+  await expect(page.getByLabel('Two-agent conversation timeline')).toHaveCount(0);
   await expect(page.getByLabel('Transcript')).toContainText('I want to cancel today.');
+});
+
+test('voice analysis reports target first audio byte and excludes legacy exchange duration', async ({ page }) => {
+  const accurateVoiceRun = {
+    ...runFixture,
+    execution_run_id: 'exec-voice-timing',
+    mode: 'pipecat_webrtc',
+    tester_id: 'pipecat_tester',
+    executor_id: 'cae_local_audio_loop',
+    conversations: [
+      {
+        ...runFixture.conversations[0],
+        conversation_id: 'exec-voice-timing-1',
+        execution_run_id: 'exec-voice-timing',
+        mode: 'pipecat_webrtc',
+        turns: [
+          {
+            turn_index: 1,
+            speaker: 'caller',
+            text: 'Please update my billing address.',
+            direction: 'tester_to_target',
+            frame_metadata: { bytes: 96000, sample_rate: 24000, channels: 1, duration_ms: 2000 },
+          },
+          {
+            turn_index: 2,
+            speaker: 'agent',
+            text: 'I can help with that.',
+            direction: 'target_to_tester',
+            frame_metadata: { bytes: 72000, sample_rate: 24000, channels: 1, duration_ms: 1500 },
+          },
+        ],
+        latency_marks: [
+          {
+            label: 'Target first audio byte · exchange 1',
+            kind: 'target_first_audio_byte',
+            participant: 'target',
+            latency_ms: 640,
+            exchange_elapsed_ms: 9120,
+          },
+        ],
+      },
+    ],
+  };
+  const legacyVoiceRun = {
+    ...accurateVoiceRun,
+    execution_run_id: 'exec-legacy-timing',
+    conversations: [
+      {
+        ...accurateVoiceRun.conversations[0],
+        conversation_id: 'exec-legacy-timing-1',
+        execution_run_id: 'exec-legacy-timing',
+        latency_marks: [
+          { label: 'Two Pipecat graphs over local duplex frames', latency_ms: 17_534 },
+        ],
+      },
+    ],
+  };
+
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+  });
+  await page.route('**/api/execution/runs/**', async (route) => {
+    const fixture = route.request().url().includes('exec-legacy-timing') ? legacyVoiceRun : accurateVoiceRun;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fixture) });
+  });
+
+  await page.goto('/runs/exec-voice-timing');
+  await expect(page.getByRole('button', { name: /Target Response Latency 640ms/ })).toBeVisible();
+  await expect(page.getByLabel('Per-mark latency bars')).toContainText('Target first audio byte');
+  await expect(page.getByLabel('Conversation turn sequence')).toContainText('first audio byte 640ms');
+
+  await page.goto('/runs/exec-legacy-timing');
+  await expect(page.getByRole('button', { name: /Target Response Latency n\/a/ })).toBeVisible();
+  await expect(page.getByText(/legacy marks measured a complete two-agent exchange/)).toBeVisible();
+  await expect(page.getByText('17534ms')).toHaveCount(0);
 });

@@ -572,9 +572,11 @@ if PIPECAT_RUNTIME_AVAILABLE:
 
 
     class _ReferenceKokoroProcessor(FrameProcessor):
-        def __init__(self, voice: str):
+        def __init__(self, voice: str, *, graph_started_at: float):
             super().__init__()
             self.voice = voice
+            self.graph_started_at = graph_started_at
+            self.first_audio_byte_latency_ms: float | None = None
 
         async def process_frame(self, frame: Frame, direction: FrameDirection):
             await super().process_frame(frame, direction)
@@ -582,7 +584,9 @@ if PIPECAT_RUNTIME_AVAILABLE:
                 await self.push_frame(frame, direction)
                 return
             async with httpx.AsyncClient(timeout=60) as client:
-                response = await client.post(
+                chunks: list[bytes] = []
+                async with client.stream(
+                    'POST',
                     f'{KOKORO_BASE_URL}/v1/audio/speech',
                     json={
                         'model': KOKORO_MODEL,
@@ -590,9 +594,20 @@ if PIPECAT_RUNTIME_AVAILABLE:
                         'input': frame.text,
                         'response_format': 'wav',
                     },
-                )
-                response.raise_for_status()
-            pcm, sample_rate, channels = _wav_to_pcm(response.content)
+                ) as response:
+                    response.raise_for_status()
+                    async for chunk in response.aiter_bytes():
+                        if not chunk:
+                            continue
+                        if self.first_audio_byte_latency_ms is None:
+                            self.first_audio_byte_latency_ms = round(
+                                (time.perf_counter() - self.graph_started_at) * 1000,
+                                2,
+                            )
+                        chunks.append(chunk)
+            if self.first_audio_byte_latency_ms is None:
+                raise RuntimeError('Kokoro returned no target audio bytes.')
+            pcm, sample_rate, channels = _wav_to_pcm(b''.join(chunks))
             await self.push_frame(frame, direction)
             await self.push_frame(OutputAudioRawFrame(pcm, sample_rate, channels), direction)
 
@@ -604,6 +619,8 @@ if PIPECAT_RUNTIME_AVAILABLE:
             self.audio = b''
             self.sample_rate = 24000
             self.channels = 1
+            self.first_audio_byte_latency_ms: float | None = None
+            self.total_latency_ms: float | None = None
 
         async def process_frame(self, frame: Frame, direction: FrameDirection):
             await super().process_frame(frame, direction)
@@ -636,6 +653,10 @@ if PIPECAT_RUNTIME_AVAILABLE:
                 raise RuntimeError('Local duplex transport cannot send an empty audio frame.')
             self.broadcast.publish(audio, sample_rate=sample_rate, channels=channels)
             self.sequence += 1
+            duration_ms = round(
+                len(audio) / max(1, sample_rate * channels * 2) * 1000,
+                2,
+            )
             return (
                 InputAudioRawFrame(audio, sample_rate, channels),
                 {
@@ -644,6 +665,7 @@ if PIPECAT_RUNTIME_AVAILABLE:
                     'bytes': len(audio),
                     'sample_rate': sample_rate,
                     'channels': channels,
+                    'duration_ms': duration_ms,
                     'sent_at': time.time(),
                     'transport': 'in_process_pipecat_frame_bus',
                     'session_id': self.session_id,
@@ -660,12 +682,17 @@ def _require_reference_token(value: str | None) -> None:
 
 async def _run_reference_graph(input_frame: Any, llm_processor: Any, *, voice: str) -> tuple[Any, Any]:
     """Run one bounded turn through an actual Pipecat ASR -> LLM -> TTS graph."""
+    graph_started_at = time.perf_counter()
     collector = _ReferenceCollector()
     asr_processor = _ReferenceAsrProcessor()
+    kokoro_processor = _ReferenceKokoroProcessor(
+        voice,
+        graph_started_at=graph_started_at,
+    )
     pipeline = Pipeline([
         asr_processor,
         llm_processor,
-        _ReferenceKokoroProcessor(voice),
+        kokoro_processor,
         collector,
     ])
     task = PipelineTask(pipeline, enable_rtvi=False, enable_turn_tracking=False)
@@ -673,6 +700,8 @@ async def _run_reference_graph(input_frame: Any, llm_processor: Any, *, voice: s
     await PipelineRunner(handle_sigint=False, handle_sigterm=False).run(task)
     if not collector.agent_text or not collector.audio:
         raise RuntimeError('Pipecat graph produced incomplete text/audio output.')
+    collector.first_audio_byte_latency_ms = kokoro_processor.first_audio_byte_latency_ms
+    collector.total_latency_ms = round((time.perf_counter() - graph_started_at) * 1000, 2)
     return asr_processor, collector
 
 
@@ -749,6 +778,7 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                     channels=tester_output.channels,
                 )
                 frame_evidence.append(tester_frame)
+                target_response_started_at = time.time()
                 target_asr, target_output = await _run_reference_graph(
                     target_input,
                     _ReferenceLlmProcessor(
@@ -757,12 +787,24 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                     ),
                     voice=payload.target_voice,
                 )
+                if target_output.first_audio_byte_latency_ms is None:
+                    raise RuntimeError('Target graph did not report first audio byte latency.')
                 previous_target_input, target_frame = bus.send(
                     direction='target_to_tester',
                     audio=target_output.audio,
                     sample_rate=target_output.sample_rate,
                     channels=target_output.channels,
                 )
+                target_frame.update({
+                    'response_metric': 'target_time_to_first_audio_byte',
+                    'response_latency_ms': target_output.first_audio_byte_latency_ms,
+                    'response_started_at': target_response_started_at,
+                    'first_audio_byte_at': (
+                        target_response_started_at
+                        + target_output.first_audio_byte_latency_ms / 1000
+                    ),
+                    'response_complete_latency_ms': target_output.total_latency_ms,
+                })
                 frame_evidence.append(target_frame)
                 _append_duplex_history_receipt(
                     history,
@@ -796,7 +838,9 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                         'audio_wav_base64': base64.b64encode(target_wav).decode('ascii'),
                         'frame': target_frame,
                     },
-                    'latency_ms': round((time.perf_counter() - turn_started) * 1000, 2),
+                    'latency_ms': target_output.first_audio_byte_latency_ms,
+                    'latency_kind': 'target_first_audio_byte',
+                    'exchange_elapsed_ms': round((time.perf_counter() - turn_started) * 1000, 2),
                 }
             if pending_exchange is None or previous_target_input is None:
                 raise RuntimeError('Duplex run produced no exchange evidence.')
@@ -1047,24 +1091,18 @@ async def reference_agent_turn(
     try:
         wav_payload = base64.b64decode(payload.audio_wav_base64, validate=True)
         pcm, sample_rate, channels = _wav_to_pcm(wav_payload)
-        collector = _ReferenceCollector()
-        asr_processor = _ReferenceAsrProcessor()
-        pipeline = Pipeline([
-            asr_processor,
+        asr_processor, collector = await _run_reference_graph(
+            InputAudioRawFrame(pcm, sample_rate, channels),
             _ReferenceLlmProcessor(payload.history, payload.model_name or REFERENCE_LLM_MODEL),
-            _ReferenceKokoroProcessor(payload.voice),
-            collector,
-        ])
-        task = PipelineTask(pipeline, enable_rtvi=False, enable_turn_tracking=False)
-        await task.queue_frames([InputAudioRawFrame(pcm, sample_rate, channels), EndFrame()])
-        await PipelineRunner(handle_sigint=False, handle_sigterm=False).run(task)
-        if not collector.agent_text or not collector.audio:
-            raise RuntimeError('Pipecat reference pipeline produced incomplete output')
+            voice=payload.voice,
+        )
         output_wav = _pcm_to_wav(collector.audio, collector.sample_rate, collector.channels)
         return {
             'caller_transcript': asr_processor.transcript,
             'agent_text': collector.agent_text,
             'agent_audio_wav_base64': base64.b64encode(output_wav).decode('ascii'),
+            'first_audio_byte_latency_ms': collector.first_audio_byte_latency_ms,
+            'response_complete_latency_ms': collector.total_latency_ms,
             'pipeline': {'provider': 'pipecat', 'processors': ['rtc-asr', 'llm', 'kokoro'], 'current_run': True},
         }
     except HTTPException:
@@ -1085,25 +1123,17 @@ async def reference_tester_turn(
     if not RTC_ASR_BASE_URL or not KOKORO_BASE_URL:
         raise HTTPException(status_code=503, detail='Reference tester requires rtc-asr and Kokoro.')
     try:
-        collector = _ReferenceCollector()
-        asr_processor = _ReferenceAsrProcessor()
-        pipeline = Pipeline([
-            asr_processor,
-            _ReferenceTesterLlmProcessor(payload),
-            _ReferenceKokoroProcessor(KOKORO_TESTER_VOICE),
-            collector,
-        ])
-        task = PipelineTask(pipeline, enable_rtvi=False, enable_turn_tracking=False)
         if payload.target_audio_wav_base64:
             wav_payload = base64.b64decode(payload.target_audio_wav_base64, validate=True)
             pcm, sample_rate, channels = _wav_to_pcm(wav_payload)
             first_frame: Frame = InputAudioRawFrame(pcm, sample_rate, channels)
         else:
             first_frame = TextFrame('No target response yet; start the conversation from the scenario instruction.')
-        await task.queue_frames([first_frame, EndFrame()])
-        await PipelineRunner(handle_sigint=False, handle_sigterm=False).run(task)
-        if not collector.agent_text or not collector.audio:
-            raise RuntimeError('Pipecat tester pipeline produced incomplete output')
+        asr_processor, collector = await _run_reference_graph(
+            first_frame,
+            _ReferenceTesterLlmProcessor(payload),
+            voice=KOKORO_TESTER_VOICE,
+        )
         output_wav = _pcm_to_wav(collector.audio, collector.sample_rate, collector.channels)
         return {
             'tester_asr_receipt': asr_processor.transcript or None,

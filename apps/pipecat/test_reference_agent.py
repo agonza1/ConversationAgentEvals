@@ -33,6 +33,15 @@ class _Response:
     def raise_for_status(self):
         assert self.status_code < 400
 
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+    async def aiter_bytes(self):
+        yield self.content
+
 
 class _AsyncClient:
     completion_prompts: list[str] = []
@@ -54,6 +63,10 @@ class _AsyncClient:
             assert kwargs['headers']['x-cae-reference-token'] == 'test-token'
             type(self).completion_prompts.append(kwargs['json']['prompt'])
             return _Response(payload={'text': 'Of course.'})
+        raise AssertionError(url)
+
+    def stream(self, method, url, **kwargs):
+        assert method == 'POST'
         if url.endswith('/v1/audio/speech'):
             type(self).speech_voices.append(kwargs['json']['voice'])
             return _Response(content=_wav())
@@ -97,6 +110,10 @@ class _DivergentReceiptAsyncClient:
             text = type(self).completions[type(self).completion_index]
             type(self).completion_index += 1
             return _Response(payload={'text': text})
+        raise AssertionError(url)
+
+    def stream(self, method, url, **kwargs):
+        assert method == 'POST'
         if url.endswith('/v1/audio/speech'):
             return _Response(content=_wav())
         raise AssertionError(url)
@@ -121,6 +138,8 @@ def test_reference_turn_runs_real_pipecat_pipeline(monkeypatch):
     assert payload['agent_text'] == 'Of course.'
     assert payload['pipeline']['provider'] == 'pipecat'
     assert payload['pipeline']['processors'] == ['rtc-asr', 'llm', 'kokoro']
+    assert payload['first_audio_byte_latency_ms'] >= 0
+    assert payload['response_complete_latency_ms'] >= payload['first_audio_byte_latency_ms']
     assert base64.b64decode(payload['agent_audio_wav_base64']).startswith(b'RIFF')
     assert 'one or two short sentences' in _AsyncClient.completion_prompts[0]
     assert 'Ask at most one question at a time' in _AsyncClient.completion_prompts[0]
@@ -208,6 +227,7 @@ def test_reference_duplex_stream_runs_two_graphs_over_local_frames(monkeypatch):
         'target_to_tester',
     ]
     assert all(frame['transport'] == 'in_process_pipecat_frame_bus' for frame in completed['frames'])
+    assert all(frame['duration_ms'] > 0 for frame in completed['frames'])
     assert completed['graphs']['tester']['processors'][1]['model'] == 'tester-model'
     assert completed['graphs']['target']['processors'][1]['model'] == 'target-model'
     assert completed['graphs']['tester']['processors'][2]['voice'] == 'af_heart'
@@ -215,6 +235,10 @@ def test_reference_duplex_stream_runs_two_graphs_over_local_frames(monkeypatch):
     assert completed['graphs']['tester']['llm_mode'] == 'mock'
     assert exchanges[0]['target']['asr_receipt'] == 'Please help me.'
     assert exchanges[0]['target']['tester_asr_receipt'] == 'Please help me.'
+    assert exchanges[0]['latency_kind'] == 'target_first_audio_byte'
+    assert exchanges[0]['latency_ms'] >= 0
+    assert exchanges[0]['exchange_elapsed_ms'] >= exchanges[0]['latency_ms']
+    assert exchanges[0]['target']['frame']['response_metric'] == 'target_time_to_first_audio_byte'
     target_prompts = [
         prompt for prompt in _AsyncClient.completion_prompts
         if 'built-in generalist voice agent' in prompt

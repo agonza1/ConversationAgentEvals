@@ -83,6 +83,8 @@ class FakeMedia:
             'caller_transcript': 'Please help me cancel.',
             'agent_text': 'I can help with that request.',
             'agent_audio_wav_base64': base64.b64encode(_wav(2)).decode('ascii'),
+            'first_audio_byte_latency_ms': 42.5,
+            'response_complete_latency_ms': 84.5,
             'pipeline': {'provider': 'pipecat', 'current_run': True},
         })
 
@@ -187,10 +189,15 @@ class FakeDuplexAsyncClient:
                         'sequence': 2,
                         'direction': 'target_to_tester',
                         'bytes': 320,
+                        'duration_ms': 10,
+                        'response_metric': 'target_time_to_first_audio_byte',
+                        'response_complete_latency_ms': 84.5,
                         'transport': 'in_process_pipecat_frame_bus',
                     },
                 },
                 'latency_ms': 42.5,
+                'latency_kind': 'target_first_audio_byte',
+                'exchange_elapsed_ms': 120.0,
             },
             {
                 'type': 'complete',
@@ -294,7 +301,12 @@ def test_reference_tester_to_agent_contract_uses_only_current_run(tmp_path: Path
             'target_to_tester',
         ]
         assert transport.recording_handle(session_id).uri.endswith('.wav')
-        assert len(transport.latency_marks(session_id)) == 1
+        latency_marks = transport.latency_marks(session_id)
+        assert len(latency_marks) == 1
+        assert latency_marks[0]['kind'] == 'target_first_audio_byte'
+        assert latency_marks[0]['participant'] == 'target'
+        assert latency_marks[0]['latency_ms'] == 42.5
+        assert latency_marks[0]['response_complete_latency_ms'] >= 42.5
         assert [event['speaker'] for event in observed] == ['Caller', 'Agent']
         assert all(event['text'] for event in observed)
         assert all(event['audio'] for event in observed)

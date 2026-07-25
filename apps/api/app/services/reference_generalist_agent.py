@@ -625,8 +625,13 @@ class ReferencePipecatAgentTransport:
         latency_ms = event.get('latency_ms')
         if isinstance(latency_ms, (int, float)):
             state.latency_marks.append({
-                'label': 'Two Pipecat graphs over local duplex frames',
+                'label': f'Target first audio byte · exchange {event.get("turn_pair") or len(state.latency_marks) + 1}',
+                'kind': 'target_first_audio_byte',
+                'participant': 'target',
+                'turn_pair': event.get('turn_pair'),
                 'latency_ms': float(latency_ms),
+                'exchange_elapsed_ms': event.get('exchange_elapsed_ms'),
+                'response_complete_latency_ms': target_frame.get('response_complete_latency_ms'),
             })
         if self.event_observer is not None:
             self.event_observer({
@@ -686,6 +691,11 @@ class ReferencePipecatAgentTransport:
         pipeline_payload = response.json()
         caller_text = str(pipeline_payload.get('caller_transcript') or '').strip()
         agent_text = str(pipeline_payload.get('agent_text') or '').strip()
+        first_audio_byte_latency_ms = pipeline_payload.get('first_audio_byte_latency_ms')
+        if not isinstance(first_audio_byte_latency_ms, (int, float)):
+            raise ReferenceRuntimeError(
+                'Pipecat reference agent did not report target first audio byte latency.'
+            )
         try:
             agent_wav = base64.b64decode(str(pipeline_payload.get('agent_audio_wav_base64') or ''), validate=True)
         except Exception as exc:  # noqa: BLE001
@@ -739,12 +749,22 @@ class ReferencePipecatAgentTransport:
                     'source': 'target_kokoro_audio',
                     'source_text': agent_text,
                     'asr_receipt': tester_receipt,
+                    'response_metric': 'target_time_to_first_audio_byte',
+                    'response_latency_ms': float(first_audio_byte_latency_ms),
+                    'response_complete_latency_ms': pipeline_payload.get('response_complete_latency_ms'),
                 },
             ),
         ])
         state.recording_wavs.extend([wav_bytes, agent_wav])
         state.inbound.append({'text': tester_receipt, 'audio': agent_wav, 'bytes': len(agent_wav)})
-        state.latency_marks.append({'label': 'Pipecat rtc-asr → LLM → Kokoro turn', 'latency_ms': pipeline_ms})
+        state.latency_marks.append({
+            'label': f'Target first audio byte · exchange {len(state.latency_marks) + 1}',
+            'kind': 'target_first_audio_byte',
+            'participant': 'target',
+            'latency_ms': float(first_audio_byte_latency_ms),
+            'response_complete_latency_ms': pipeline_payload.get('response_complete_latency_ms'),
+            'exchange_elapsed_ms': pipeline_ms,
+        })
         if self.event_observer is not None:
             self.event_observer({'speaker': 'Caller', 'text': caller_text, 'audio': wav_bytes})
             self.event_observer({'speaker': 'Agent', 'text': tester_receipt, 'audio': agent_wav})

@@ -79,6 +79,19 @@ export interface ConversationTurn {
   text?: string | null;
   latency_ms?: number | null;
   event_types?: string[];
+  direction?: 'tester_to_target' | 'target_to_tester' | string | null;
+  evidence_role?: string | null;
+  frame_metadata?: {
+    bytes?: number;
+    sample_rate?: number;
+    channels?: number;
+    duration_ms?: number;
+    sent_at?: number;
+    response_metric?: string;
+    response_latency_ms?: number;
+    response_complete_latency_ms?: number;
+    [key: string]: unknown;
+  };
 }
 
 export interface ConversationLiveEvent {
