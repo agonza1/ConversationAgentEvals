@@ -103,6 +103,8 @@ export interface ConversationRecord {
   turns?: ConversationTurn[];
   live_events?: ConversationLiveEvent[];
   transcript?: string | null;
+  action_trace?: Array<Record<string, unknown>>;
+  final_state?: Record<string, unknown>;
   recording?: Record<string, unknown> | null;
   audio_session?: Record<string, unknown> | null;
   latency_marks?: Array<Record<string, unknown>>;

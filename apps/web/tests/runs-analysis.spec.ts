@@ -47,6 +47,13 @@ const runFixture = {
         { turn_index: 2, speaker: 'agent', text: 'I can help with that.' },
       ],
       transcript: 'Caller: I want to cancel today.\nAgent: I can help with that.',
+      action_trace: [{ action: 'confirm cancellation outcome', status: 'completed' }],
+      final_state: {
+        complete: true,
+        outcome: 'scripted_wrap_complete',
+        termination_reason: 'plan_complete',
+        runtime_provenance: { live_tool_execution: true },
+      },
       latency_marks: [
         { label: 'first_response', latency_ms: 420 },
         { label: 'wrap', latency_ms: 880 },
@@ -107,8 +114,66 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
   await expect(participants).toContainText('saved evidence replay');
   await expect(page.getByRole('button', { name: /Interruption Detection/ }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: /Latency/ }).first()).toBeVisible();
+  await page.getByRole('button', { name: /Verified Resolution Rate/ }).click();
+  await expect(page.getByLabel('Resolution verification status')).toContainText('Verified');
+  await expect(page.getByLabel('Resolution evidence details')).toContainText('91/100');
+  await expect(page.getByLabel('Resolution evidence details')).toContainText('Complete');
   await expect(page.getByLabel('Stub dual-track waveform')).toBeVisible();
   await expect(page.getByLabel('Transcript')).toContainText('I want to cancel today.');
+});
+
+test('needs-review resolution explains score and missing proof without calling it a failed call', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+  });
+
+  const conversation = {
+    ...runFixture.conversations[0],
+    mode: 'text_callable',
+    verdict: 'needs_review',
+    score: 60,
+    action_trace: [],
+    final_state: {
+      complete: false,
+      outcome: 'conversation_only_evidence_recorded',
+      termination_reason: 'max_exchanges',
+      runtime_provenance: { live_tool_execution: false },
+    },
+    metrics_summary: {
+      ...runFixture.conversations[0].metrics_summary,
+      verdict: 'needs_review',
+      score: 60,
+      call_resolution_success: 0,
+    },
+  };
+  const reviewRun = {
+    ...runFixture,
+    status: 'needs_review',
+    mode: 'text_callable',
+    conversations: [conversation],
+  };
+
+  await page.route('**/api/execution/runs/exec-demo123**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(reviewRun) });
+  });
+
+  await page.goto('/runs/exec-demo123');
+  const resolutionTile = page.getByRole('button', { name: /Verified Resolution Rate/ });
+  await expect(resolutionTile).toContainText('0%');
+  await expect(resolutionTile).toContainText('1 unverified');
+  await resolutionTile.click();
+
+  await expect(page.getByLabel('Resolution verification status')).toContainText('Unverified');
+  const details = page.getByLabel('Resolution evidence details');
+  await expect(details).toContainText('60/100');
+  await expect(details).toContainText('Needs Review');
+  await expect(details).toContainText('Not complete');
+  await expect(details).toContainText('Max Exchanges');
+  await expect(details).toContainText('None recorded');
+  await expect(page.getByText('Why resolution is not verified')).toBeVisible();
+  await expect(page.getByText('No action or tool evidence was recorded.')).toBeVisible();
+  await expect(page.getByText('The conversation reached the configured exchange limit.')).toBeVisible();
+  await expect(page.getByText(/evaluation score is not a resolution percentage/)).toBeVisible();
 });
 
 test('active run analysis recovers after a transient polling error', async ({ page }) => {

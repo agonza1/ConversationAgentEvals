@@ -16,11 +16,12 @@ import {
 } from '@/lib/execution';
 
 type MetricKey = 'audio_interruption' | 'latency' | 'call_resolution';
+type ResolutionState = 'verified' | 'unverified' | 'failed' | 'not_evaluated';
 
 const METRICS: Array<{ id: MetricKey; group: string; label: string }> = [
   { id: 'audio_interruption', group: 'Audio', label: 'Interruption Detection' },
   { id: 'latency', group: 'Audio', label: 'Latency' },
-  { id: 'call_resolution', group: 'Other', label: 'Call Resolution Success' },
+  { id: 'call_resolution', group: 'Other', label: 'Resolution Evidence' },
 ];
 
 export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
@@ -141,9 +142,9 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
               onClick={() => setMetric('latency')}
             />
             <MetricTile
-              title="Call Resolution Success"
-              value={`${Math.round(summary.resolutionRate)}%`}
-              detail="pass verdict = 100"
+              title="Verified Resolution Rate"
+              value={summary.resolutionRate == null ? 'n/a' : `${Math.round(summary.resolutionRate)}%`}
+              detail={summary.resolutionDetail}
               selected={metric === 'call_resolution'}
               onClick={() => setMetric('call_resolution')}
             />
@@ -318,12 +319,39 @@ function MetricDetail({
   }
 
   if (metric === 'call_resolution') {
+    const evidence = resolutionEvidence(conversation);
     return (
       <div className="runs-detail-copy">
-        <h2>Call Resolution Success</h2>
-        <p>
-          Verdict <strong>{summary.verdict || 'n/a'}</strong> → {summary.call_resolution_success}% success
-          (pass = 100, otherwise 0).
+        <h2>Resolution Evidence</h2>
+        <div
+          className={`resolution-status is-${evidence.state}`}
+          role="status"
+          aria-label="Resolution verification status"
+        >
+          <span>Resolution status</span>
+          <strong>{evidence.label}</strong>
+          <p>{evidence.description}</p>
+        </div>
+        <dl className="resolution-facts" aria-label="Resolution evidence details">
+          <div><dt>Evaluation score</dt><dd>{evidence.score}</dd></div>
+          <div><dt>Evaluator verdict</dt><dd>{evidence.verdict}</dd></div>
+          <div><dt>Final state</dt><dd>{evidence.finalState}</dd></div>
+          <div><dt>Termination</dt><dd>{evidence.termination}</dd></div>
+          <div><dt>Action evidence</dt><dd>{evidence.actionEvidence}</dd></div>
+          <div><dt>Live tool execution</dt><dd>{evidence.liveToolExecution}</dd></div>
+          {evidence.outcome ? <div><dt>Recorded outcome</dt><dd>{evidence.outcome}</dd></div> : null}
+        </dl>
+        {evidence.gaps.length ? (
+          <div className="resolution-gaps">
+            <h3>Why resolution is not verified</h3>
+            <ul>
+              {evidence.gaps.map((gap) => <li key={gap}>{gap}</li>)}
+            </ul>
+          </div>
+        ) : null}
+        <p className="resolution-note">
+          The verified rate counts pass verdicts only. Needs-review outcomes stay unverified; the evaluation
+          score is not a resolution percentage.
         </p>
       </div>
     );
@@ -414,7 +442,22 @@ function aggregateRunMetrics(run: ExecutionRunRecord | null) {
   const p90s = conversations
     .map((item) => item.metrics_summary?.latency?.p90_ms)
     .filter((value): value is number => typeof value === 'number');
-  const resolutions = conversations.map((item) => Number(item.metrics_summary?.call_resolution_success || 0));
+  const resolutionCounts: Record<ResolutionState, number> = {
+    verified: 0,
+    unverified: 0,
+    failed: 0,
+    not_evaluated: 0,
+  };
+  for (const conversation of conversations) {
+    resolutionCounts[resolutionEvidence(conversation).state] += 1;
+  }
+  const evaluatedResolutionCount = resolutionCounts.verified + resolutionCounts.unverified + resolutionCounts.failed;
+  const resolutionDetail = [
+    resolutionCounts.verified ? `${resolutionCounts.verified} verified` : null,
+    resolutionCounts.unverified ? `${resolutionCounts.unverified} unverified` : null,
+    resolutionCounts.failed ? `${resolutionCounts.failed} failed` : null,
+    resolutionCounts.not_evaluated ? `${resolutionCounts.not_evaluated} not evaluated` : null,
+  ].filter(Boolean).join(' · ') || 'no evaluated conversations';
   const latencyBars = (conversations[0]?.timeline || [])
     .slice(0, 12)
     .map((item) => Math.min(100, (markLatencyMs(item) / 1000) * 100));
@@ -422,9 +465,81 @@ function aggregateRunMetrics(run: ExecutionRunRecord | null) {
     interruptionCount,
     avgLatency: latencies.length ? latencies.reduce((a, b) => a + b, 0) / latencies.length : null,
     p90Latency: p90s.length ? Math.max(...p90s) : null,
-    resolutionRate: resolutions.length ? resolutions.reduce((a, b) => a + b, 0) / resolutions.length : 0,
+    resolutionRate: evaluatedResolutionCount
+      ? (resolutionCounts.verified / evaluatedResolutionCount) * 100
+      : null,
+    resolutionDetail,
     latencyBars,
   };
+}
+
+function resolutionEvidence(conversation: ConversationRecord) {
+  const summary = conversation.metrics_summary;
+  const rawVerdict = String(summary?.verdict || conversation.verdict || '').trim().toLowerCase();
+  const state: ResolutionState = rawVerdict === 'pass' || (!rawVerdict && summary?.call_resolution_success === 100)
+    ? 'verified'
+    : rawVerdict === 'fail' || rawVerdict === 'failed' || conversation.status === 'failed'
+      ? 'failed'
+      : rawVerdict === 'needs_review'
+        ? 'unverified'
+        : 'not_evaluated';
+  const labels: Record<ResolutionState, string> = {
+    verified: 'Verified',
+    unverified: 'Unverified',
+    failed: 'Failed',
+    not_evaluated: 'Not evaluated',
+  };
+  const descriptions: Record<ResolutionState, string> = {
+    verified: 'The evaluator returned a pass verdict and counted this conversation as a verified resolution.',
+    unverified: 'The evaluator found useful evidence but could not prove the required outcome.',
+    failed: 'The run failed or the evaluator returned a failure verdict.',
+    not_evaluated: 'No resolution verdict is available for this conversation.',
+  };
+  const finalState = conversation.final_state || {};
+  const runtime = asRecord(finalState.runtime_provenance);
+  const finalComplete = typeof finalState.complete === 'boolean' ? finalState.complete : null;
+  const terminationReason = stringValue(finalState.termination_reason);
+  const outcome = stringValue(finalState.outcome);
+  const actionCount = conversation.action_trace?.length || 0;
+  const evaluationScore = summary?.score ?? conversation.score;
+  const liveToolExecution = typeof runtime.live_tool_execution === 'boolean'
+    ? runtime.live_tool_execution
+    : null;
+  const gaps: string[] = [];
+
+  if (state === 'unverified' || state === 'failed') {
+    if (finalComplete === false) gaps.push('The recorded final state was not complete.');
+    if (actionCount === 0) gaps.push('No action or tool evidence was recorded.');
+    if (liveToolExecution === false) gaps.push('The target did not execute a live business tool.');
+    if (terminationReason === 'max_exchanges') gaps.push('The conversation reached the configured exchange limit.');
+    if (!gaps.length) gaps.push('The evaluator did not return the pass verdict required for verified resolution.');
+  }
+
+  return {
+    state,
+    label: labels[state],
+    description: descriptions[state],
+    score: typeof evaluationScore === 'number'
+      ? `${Math.round(evaluationScore)}/100`
+      : 'Not reported',
+    verdict: rawVerdict ? formatRuntimeId(rawVerdict) : 'Not reported',
+    finalState: finalComplete === true ? 'Complete' : finalComplete === false ? 'Not complete' : 'Not reported',
+    termination: terminationReason ? formatRuntimeId(terminationReason) : 'Not reported',
+    actionEvidence: actionCount ? `${actionCount} recorded` : 'None recorded',
+    liveToolExecution: liveToolExecution === true ? 'Yes' : liveToolExecution === false ? 'No' : 'Not reported',
+    outcome: outcome ? formatRuntimeId(outcome) : null,
+    gaps,
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function stringValue(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 function markLatencyMs(mark: unknown): number {
