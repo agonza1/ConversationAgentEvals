@@ -6,6 +6,21 @@ FreeSWITCH, or live SIP in the default install.
 
 Tracking: [#98](https://github.com/agonza1/ConversationAgentEvals/issues/98), [#103](https://github.com/agonza1/ConversationAgentEvals/issues/103).
 
+## Execution model
+
+Every run snapshots four independent roles:
+
+- **Target**: the agent under test and its destination, such as an HTTP endpoint, built-in
+  agent, browser/WebRTC agent, SIP URI, or phone number.
+- **Tester**: the simulated user or caller that drives the scenario.
+- **Executor**: the local text runner, CAE audio loop, saved-evidence replay, or future live
+  media adapter that conducts the test.
+- **Evidence**: the responses, media capture, transcript, actions, and state that get scored.
+
+A transport is not a target, and replayed evidence is not a new agent target. Targets are
+registered under `/targets`; runs launch from `/runs` and persist snapshots under
+`artifacts/execution-runs/{id}/`.
+
 ## Public API (unified naming)
 
 | Field | Value | Notes |
@@ -102,6 +117,11 @@ Discover transports:
 curl -s localhost:8000/api/execution/audio/capabilities | jq .
 ```
 
+`POST /api/execution/runs` accepts an optional `agent_id` plus explicit `tester_id` and
+`executor_id`. The legacy `/api/agents` registry routes remain the underlying API for targets.
+Completed conversations include metric summaries and timelines, while
+`artifacts/execution-runs/{id}/inference_set.jsonl` stores completed rows.
+
 Run Execute with local WebRTC + vCon capture (cancellation-rescue):
 
 ```bash
@@ -145,6 +165,11 @@ the listener negotiates a receive-only browser audio transceiver and never reque
 
 The fixture scheduler and checked-in ACC audio plan remain legacy replay paths; they are not
 used by the `builtin_sample_voice` primary execution path.
+
+For external HTTP targets, CAE sends the message, OpenAI-style history, and scenario metadata,
+then reads reply text from a configured response path. Credentials are referenced by an opaque
+`secret_ref` and resolved only from the `CAE_HTTP_TARGET_SECRET_*` namespace; raw secrets are
+never stored in target definitions.
 
 ## Opt-in real-service smoke
 

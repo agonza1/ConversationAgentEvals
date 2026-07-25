@@ -49,7 +49,7 @@ npm run dev
 
 Open the printed web URL and visit `/benchmarks`. The basic demo uses transcript, action-trace, and final-state evidence, so it does not require live microphone ASR or any external target application. Advanced environment settings are documented in [docs/environment.md](docs/environment.md). To run multiple agents and local CAE stacks safely, follow [docs/parallel-development.md](docs/parallel-development.md).
 
-Local LLM judge auth (Codex-style OpenAI OAuth, Claude later): [docs/openai-codex-oauth-plan.md](docs/openai-codex-oauth-plan.md).
+Local LLM judge and text-target auth: [docs/openai-codex-oauth.md](docs/openai-codex-oauth.md).
 
 For the shortest standalone end-to-end walkthrough, see [docs/assert-flow-demo.md](docs/assert-flow-demo.md) or its [machine-readable example](docs/examples/assert-flow-demo.json).
 
@@ -74,6 +74,9 @@ The blessed voice-lab proof is also standalone and uses checked-in target-shaped
 ```bash
 npm run test:voice-lab-proof
 ```
+
+For a localhost-only static review surface, see
+[docs/voice-lab-private-site.md](docs/voice-lab-private-site.md).
 
 The former sibling-repository ACC execution is retained only as an explicit integration command:
 
@@ -141,7 +144,7 @@ COMPOSE_DATABASE_URL=postgresql://cae:cae_local_password@db:5432/conversation_ag
   docker compose --profile persistence up --build
 ```
 
-See [docs/environment.md](docs/environment.md) and [docs/ops-checklist.md](docs/ops-checklist.md) for configuration and deployment details.
+See [docs/environment.md](docs/environment.md) and [docs/deployment.md](docs/deployment.md) for configuration and deployment details.
 
 ## Validation
 
