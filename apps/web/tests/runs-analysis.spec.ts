@@ -161,7 +161,8 @@ test('needs-review resolution explains score and missing proof without calling i
   const resolutionTile = page.getByRole('button', { name: /Verified Resolution Rate/ });
   await expect(resolutionTile).toContainText('0%');
   await expect(resolutionTile).toContainText('1 unverified');
-  await resolutionTile.click();
+  await expect(resolutionTile).toHaveClass(/is-selected/);
+  await expect(page.getByRole('heading', { name: 'Resolution Evidence' })).toBeVisible();
 
   await expect(page.getByLabel('Resolution verification status')).toContainText('Unverified');
   const details = page.getByLabel('Resolution evidence details');

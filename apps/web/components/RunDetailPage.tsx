@@ -27,7 +27,7 @@ const METRICS: Array<{ id: MetricKey; group: string; label: string }> = [
 export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
   const [run, setRun] = useState<ExecutionRunRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [metric, setMetric] = useState<MetricKey>('latency');
+  const [metric, setMetric] = useState<MetricKey>('call_resolution');
   const [conversationId, setConversationId] = useState('');
   const userId = useMemo(() => demoUserId(), []);
 
