@@ -176,6 +176,65 @@ test('needs-review resolution explains score and missing proof without calling i
   await expect(page.getByText(/evaluation score is not a resolution percentage/)).toBeVisible();
 });
 
+test('resolution evidence handles failed and not-evaluated conversations without metric summaries', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+  });
+
+  const failedConversation = {
+    ...runFixture.conversations[0],
+    conversation_id: 'exec-demo123-failed-1',
+    scenario_id: 'failed-target',
+    scenario_title: 'Failed target',
+    status: 'failed',
+    verdict: null,
+    score: null,
+    metrics_summary: null,
+    action_trace: [],
+    final_state: {
+      complete: false,
+      outcome: 'runner_error',
+      termination_reason: 'provider_disconnect',
+    },
+  };
+  const notEvaluatedConversation = {
+    ...runFixture.conversations[0],
+    conversation_id: 'exec-demo123-not-evaluated-1',
+    scenario_id: 'not-evaluated',
+    scenario_title: 'Not evaluated',
+    status: 'completed',
+    verdict: null,
+    score: null,
+    metrics_summary: null,
+    action_trace: [],
+    final_state: {},
+  };
+  const edgeRun = {
+    ...runFixture,
+    status: 'failed',
+    conversations: [failedConversation, notEvaluatedConversation],
+  };
+
+  await page.route('**/api/execution/runs/exec-demo123**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(edgeRun) });
+  });
+
+  await page.goto('/runs/exec-demo123');
+  const resolutionTile = page.getByRole('button', { name: /Verified Resolution Rate/ });
+  await expect(resolutionTile).toContainText('0 verified · 0 unverified · 1 failed · 1 not evaluated');
+  await resolutionTile.click();
+
+  await expect(page.getByLabel('Resolution verification status')).toContainText('Failed');
+  await expect(page.getByLabel('Resolution evidence details')).toContainText('Not reported');
+  await expect(page.getByLabel('Resolution evidence details')).toContainText('Provider Disconnect');
+
+  await page.getByLabel('Conversation').selectOption('exec-demo123-not-evaluated-1');
+  await expect(page.getByLabel('Resolution verification status')).toContainText('Not evaluated');
+  await expect(page.getByLabel('Resolution verification status')).toContainText(
+    'No resolution verdict is available for this conversation.',
+  );
+});
+
 test('active run analysis recovers after a transient polling error', async ({ page }) => {
   let requests = 0;
   await page.addInitScript(() => {

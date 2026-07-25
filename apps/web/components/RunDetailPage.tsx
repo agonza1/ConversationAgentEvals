@@ -305,17 +305,8 @@ function MetricDetail({
   conversation: ConversationRecord | null;
 }) {
   const summary = conversation?.metrics_summary;
-  if (!conversation || !summary) {
+  if (!conversation) {
     return <p className="scenarios-muted">Select a conversation to inspect metrics.</p>;
-  }
-
-  if (metric === 'audio_interruption') {
-    return (
-      <div className="runs-detail-copy">
-        <h2>Interruption Detection</h2>
-        <p>{summary.interruption_count} interruption signals in this conversation (from sample data).</p>
-      </div>
-    );
   }
 
   if (metric === 'call_resolution') {
@@ -353,6 +344,19 @@ function MetricDetail({
           The verified rate counts pass verdicts only. Needs-review outcomes stay unverified; the evaluation
           score is not a resolution percentage.
         </p>
+      </div>
+    );
+  }
+
+  if (!summary) {
+    return <p className="scenarios-muted">This metric was not reported for the selected conversation.</p>;
+  }
+
+  if (metric === 'audio_interruption') {
+    return (
+      <div className="runs-detail-copy">
+        <h2>Interruption Detection</h2>
+        <p>{summary.interruption_count} interruption signals in this conversation (from sample data).</p>
       </div>
     );
   }
@@ -452,12 +456,14 @@ function aggregateRunMetrics(run: ExecutionRunRecord | null) {
     resolutionCounts[resolutionEvidence(conversation).state] += 1;
   }
   const evaluatedResolutionCount = resolutionCounts.verified + resolutionCounts.unverified + resolutionCounts.failed;
-  const resolutionDetail = [
-    resolutionCounts.verified ? `${resolutionCounts.verified} verified` : null,
-    resolutionCounts.unverified ? `${resolutionCounts.unverified} unverified` : null,
-    resolutionCounts.failed ? `${resolutionCounts.failed} failed` : null,
-    resolutionCounts.not_evaluated ? `${resolutionCounts.not_evaluated} not evaluated` : null,
-  ].filter(Boolean).join(' · ') || 'no evaluated conversations';
+  const resolutionDetail = conversations.length
+    ? [
+        `${resolutionCounts.verified} verified`,
+        `${resolutionCounts.unverified} unverified`,
+        `${resolutionCounts.failed} failed`,
+        `${resolutionCounts.not_evaluated} not evaluated`,
+      ].join(' · ')
+    : 'no conversations';
   const latencyBars = (conversations[0]?.timeline || [])
     .slice(0, 12)
     .map((item) => Math.min(100, (markLatencyMs(item) / 1000) * 100));
