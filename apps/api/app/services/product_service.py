@@ -1200,6 +1200,16 @@ def _ground_judge_report(
         if _has_judge_evaluator_findings(grounded):
             grounded['evaluator_findings_source'] = 'persisted_execution'
             return grounded
+    recorded_verdict = str(report.get('verdict') or '').strip().lower()
+    if (
+        report.get('require_evaluator_findings')
+        and recorded_verdict in {'fail', 'failed'}
+        and not _has_judge_evaluator_findings(grounded)
+    ):
+        grounded['evaluator_findings_error'] = (
+            'Execution failure has no deterministic evaluator findings to review.'
+        )
+        return grounded
     if not report.get('require_evaluator_findings') or _has_judge_evaluator_findings(grounded):
         return grounded
 

@@ -416,6 +416,10 @@ test('LLM judge stays disabled while conversation evidence is still changing', a
         score: null,
         metrics_summary: null,
       },
+      {
+        ...runFixture.conversations[0],
+        conversation_id: 'exec-demo123-completed-1',
+      },
     ],
   };
   let judgeCalls = 0;
@@ -429,6 +433,8 @@ test('LLM judge stays disabled while conversation evidence is still changing', a
   });
 
   await page.goto('/runs/exec-demo123');
+  await expect(page.getByRole('button', { name: /Verified Resolution Rate/ })).toContainText('50%');
+  await expect(page.getByRole('button', { name: /Verified Resolution Rate/ })).toContainText('1 not evaluated');
   const judgeButton = page.getByRole('button', { name: 'Available after run completes' });
   await expect(judgeButton).toBeVisible();
   await expect(judgeButton).toBeDisabled();

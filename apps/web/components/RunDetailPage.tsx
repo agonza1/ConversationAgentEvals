@@ -652,7 +652,6 @@ function aggregateRunMetrics(run: ExecutionRunRecord | null) {
   for (const conversation of conversations) {
     resolutionCounts[resolutionEvidence(conversation).state] += 1;
   }
-  const evaluatedResolutionCount = resolutionCounts.verified + resolutionCounts.unverified + resolutionCounts.failed;
   const resolutionDetail = conversations.length
     ? [
         `${resolutionCounts.verified} verified`,
@@ -668,8 +667,8 @@ function aggregateRunMetrics(run: ExecutionRunRecord | null) {
     interruptionCount,
     avgLatency: latencies.length ? latencies.reduce((a, b) => a + b, 0) / latencies.length : null,
     p90Latency: p90s.length ? Math.max(...p90s) : null,
-    resolutionRate: evaluatedResolutionCount
-      ? (resolutionCounts.verified / evaluatedResolutionCount) * 100
+    resolutionRate: conversations.length
+      ? (resolutionCounts.verified / conversations.length) * 100
       : null,
     resolutionDetail,
     latencyBars,

@@ -1639,6 +1639,36 @@ def test_llm_judge_recomputes_missing_evaluator_findings_before_spending(monkeyp
     assert 'Expected final state:' in prompt
 
 
+def test_llm_judge_does_not_recompute_execution_failure_as_evaluator_verdict(monkeypatch):
+    from app.services import benchmark_service, product_service
+
+    def fail_if_called(_request):
+        raise AssertionError('execution failures must not be reclassified by the evaluator')
+
+    monkeypatch.setattr(benchmark_service, 'run_scenario', fail_if_called)
+    grounded = product_service._ground_judge_report(
+        {
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'cancellation-rescue',
+            'verdict': 'fail',
+            'overall_score': None,
+            'action_trace': [],
+            'final_state': {'complete': False, 'outcome': 'runner_error'},
+            'require_evaluator_findings': True,
+        },
+        transcript=None,
+        user_id='judge-user',
+        project_id='judge-project',
+    )
+
+    assert grounded['verdict'] == 'fail'
+    assert grounded['overall_score'] is None
+    assert grounded['evaluator_findings_error'] == (
+        'Execution failure has no deterministic evaluator findings to review.'
+    )
+    assert not product_service._has_judge_evaluator_findings(grounded)
+
+
 def test_llm_judge_structured_evidence_stays_valid_and_preserves_priority_fields():
     from app.services import product_service
 
