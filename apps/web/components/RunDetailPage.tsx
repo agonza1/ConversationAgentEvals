@@ -331,6 +331,7 @@ function MetricDetail({
           <div><dt>Action evidence</dt><dd>{evidence.actionEvidence}</dd></div>
           <div><dt>Live tool execution</dt><dd>{evidence.liveToolExecution}</dd></div>
           {evidence.outcome ? <div><dt>Recorded outcome</dt><dd>{evidence.outcome}</dd></div> : null}
+          {evidence.error ? <div><dt>Recorded error</dt><dd>{evidence.error}</dd></div> : null}
         </dl>
         {evidence.gaps.length ? (
           <div className="resolution-gaps">
@@ -507,6 +508,7 @@ function resolutionEvidence(conversation: ConversationRecord) {
   const terminationReason = stringValue(finalState.termination_reason)
     || stringValue(finalState.tester_termination_reason);
   const outcome = stringValue(finalState.outcome);
+  const error = stringValue(conversation.error);
   const actionCount = conversation.action_trace?.length || 0;
   const evaluationScore = summary?.score ?? conversation.score;
   const liveToolExecution = typeof runtime.live_tool_execution === 'boolean'
@@ -519,6 +521,7 @@ function resolutionEvidence(conversation: ConversationRecord) {
     if (actionCount === 0) gaps.push('No action or tool evidence was recorded.');
     if (liveToolExecution === false) gaps.push('The target did not execute a live business tool.');
     if (terminationReason === 'max_exchanges') gaps.push('The conversation reached the configured exchange limit.');
+    if (error) gaps.push('The run recorded an execution error.');
     if (!gaps.length) gaps.push('The evaluator did not return the pass verdict required for verified resolution.');
   }
 
@@ -535,6 +538,7 @@ function resolutionEvidence(conversation: ConversationRecord) {
     actionEvidence: actionCount ? `${actionCount} recorded` : 'None recorded',
     liveToolExecution: liveToolExecution === true ? 'Yes' : liveToolExecution === false ? 'No' : 'Not reported',
     outcome: outcome ? formatRuntimeId(outcome) : null,
+    error,
     gaps,
   };
 }

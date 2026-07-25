@@ -189,6 +189,7 @@ test('resolution evidence handles failed and not-evaluated conversations without
     status: 'failed',
     verdict: null,
     score: null,
+    error: 'simulated provider disconnect',
     metrics_summary: null,
     action_trace: [],
     final_state: {
@@ -227,6 +228,8 @@ test('resolution evidence handles failed and not-evaluated conversations without
   await expect(page.getByLabel('Resolution verification status')).toContainText('Failed');
   await expect(page.getByLabel('Resolution evidence details')).toContainText('Not reported');
   await expect(page.getByLabel('Resolution evidence details')).toContainText('Provider Disconnect');
+  await expect(page.getByLabel('Resolution evidence details')).toContainText('simulated provider disconnect');
+  await expect(page.getByText('The run recorded an execution error.')).toBeVisible();
 
   await page.getByLabel('Conversation').selectOption('exec-demo123-not-evaluated-1');
   await expect(page.getByLabel('Resolution verification status')).toContainText('Not evaluated');
