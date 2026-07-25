@@ -400,6 +400,14 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await launch.getByLabel('Execution agent target').selectOption('generalist-text-agent');
   await expect(launch.getByLabel('Maximum exchanges')).toHaveValue('3');
   await expect(launch.getByLabel('Maximum exchanges')).toBeEnabled();
+  await launch.getByLabel('Maximum exchanges').fill('');
+  await expect(launch.getByLabel('Maximum exchanges')).toHaveValue('');
+  await expect(launch).toContainText('enter an exchange cap');
+  await expect(launch.getByRole('button', { name: 'Run evaluation' })).toBeDisabled();
+  await launch.getByLabel('Maximum exchanges').pressSequentially('5');
+  await expect(launch.getByLabel('Maximum exchanges')).toHaveValue('5');
+  await expect(launch).toContainText('up to 5 exchanges each');
+  await expect(launch.getByRole('button', { name: 'Run evaluation' })).toBeEnabled();
   await launch.getByLabel('Maximum exchanges').fill('4');
   await launch.getByRole('button', { name: 'Run evaluation' }).click();
   await expect.poll(() => textPostAttempts.length).toBe(3);
