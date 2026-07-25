@@ -549,6 +549,7 @@ function judgeReport(run: ExecutionRunRecord, conversation: ConversationRecord):
     evidence_citations: judgeEvidenceCitations(conversation),
     action_trace: conversation.action_trace || [],
     final_state: conversation.final_state || {},
+    error: conversation.error || null,
   };
 }
 

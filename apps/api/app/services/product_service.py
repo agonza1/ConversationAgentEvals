@@ -1158,6 +1158,23 @@ def _judge_failure_summary(report: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _judge_structured_evidence(report: dict[str, Any]) -> str:
+    structured: dict[str, Any] = {}
+    action_trace = report.get('action_trace')
+    if isinstance(action_trace, list) and action_trace:
+        structured['action_trace'] = action_trace[:12]
+    final_state = report.get('final_state')
+    if isinstance(final_state, dict) and final_state:
+        structured['final_state'] = final_state
+    execution_error = report.get('error')
+    if isinstance(execution_error, str) and execution_error.strip():
+        structured['execution_error'] = execution_error.strip()[:1000]
+    if not structured:
+        return '(none)'
+    serialized = json.dumps(structured, ensure_ascii=False, sort_keys=True, default=str)
+    return serialized if len(serialized) <= 8000 else serialized[:7999] + '…'
+
+
 def _judge_spend_path():
     from pathlib import Path
 
@@ -1299,6 +1316,8 @@ def _build_judge_prompt(*, report: dict[str, Any], transcript: str | None, citat
         f'Score breakdown: {", ".join(score_bits) if score_bits else "(none)"}',
         'Deterministic findings:',
         *failure_lines,
+        'Structured execution evidence (JSON):',
+        _judge_structured_evidence(report),
         'Evidence citations:',
         *citation_lines,
         'Transcript excerpt:',

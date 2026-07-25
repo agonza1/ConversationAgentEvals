@@ -1550,6 +1550,40 @@ def test_llm_judge_spend_control_respects_budget_env(monkeypatch, tmp_path):
         set_provider_for_tests('openai', None)
 
 
+def test_llm_judge_prompt_preserves_structured_execution_evidence():
+    from app.services import product_service
+
+    prompt = product_service._build_judge_prompt(
+        report={
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'billing-address-change',
+            'verdict': 'needs_review',
+            'overall_score': 60,
+            'action_trace': [
+                {
+                    'action': 'update_billing_address',
+                    'status': 'completed',
+                    'tool_result': {'confirmation_id': 'confirm-42'},
+                }
+            ],
+            'final_state': {
+                'complete': True,
+                'customer': {'subscription_status': 'retained'},
+                'billing_address': {'postal_code': '10001'},
+            },
+            'error': 'provider disconnected after the tool result',
+        },
+        transcript='Agent: I updated the billing address.',
+        citations=['source=final_state; text={"complete": true}'],
+    )
+
+    assert 'Structured execution evidence (JSON):' in prompt
+    assert '"confirmation_id": "confirm-42"' in prompt
+    assert '"subscription_status": "retained"' in prompt
+    assert '"postal_code": "10001"' in prompt
+    assert '"execution_error": "provider disconnected after the tool result"' in prompt
+
+
 def test_llm_judge_spend_reservation_is_atomic(monkeypatch, tmp_path):
     from app.services import product_service
     from app.services.llm_providers import set_provider_for_tests
