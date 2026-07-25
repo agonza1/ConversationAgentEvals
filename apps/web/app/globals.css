@@ -2659,6 +2659,104 @@ select {
   font-size: 13px;
 }
 
+.resolution-judge {
+  display: grid;
+  gap: 12px;
+  margin-top: 4px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.resolution-judge > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.resolution-judge h3 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.resolution-judge > button {
+  justify-self: start;
+}
+
+.resolution-judge > button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.resolution-judge-error {
+  color: var(--error-text) !important;
+}
+
+.resolution-judge-result {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-alt);
+}
+
+.resolution-judge-result.is-ready {
+  border-color: var(--success-border);
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.resolution-judge-result.is-blocked {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+
+.resolution-judge-result p {
+  color: inherit;
+}
+
+.resolution-judge-result ul {
+  display: grid;
+  gap: 4px;
+  margin: 5px 0 0;
+  padding-left: 20px;
+  overflow-wrap: anywhere;
+}
+
+.resolution-judge-meta {
+  font-size: 12px;
+}
+
+.resolution-judge-output {
+  white-space: pre-wrap;
+}
+
+.resolution-judge-prompt-toggle {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 760;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.resolution-judge-result pre {
+  max-height: 280px;
+  margin: 8px 0 0;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 6%);
+  color: inherit;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .latency-bars {
   display: grid;
   gap: 8px;

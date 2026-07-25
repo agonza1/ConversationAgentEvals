@@ -12,6 +12,8 @@ import {
   ExecutionRunRecord,
   getApiBase,
   getExecutionRun,
+  LlmJudgeResponse,
+  requestLlmJudge,
   TimelineEvent,
 } from '@/lib/execution';
 
@@ -184,7 +186,13 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
             </aside>
 
             <section className="card runs-metric-detail" aria-label="Metric detail">
-              <MetricDetail metric={metric} conversation={conversation} />
+              <MetricDetail
+                key={conversation?.conversation_id || 'no-conversation'}
+                metric={metric}
+                conversation={conversation}
+                run={run}
+                userId={userId}
+              />
               {run.mode === 'voice_fixture' ? (
                 <StubWaveform timeline={conversation?.timeline || []} />
               ) : null}
@@ -300,11 +308,39 @@ function MetricTile({
 function MetricDetail({
   metric,
   conversation,
+  run,
+  userId,
 }: {
   metric: MetricKey;
   conversation: ConversationRecord | null;
+  run: ExecutionRunRecord;
+  userId: string;
 }) {
+  const [judge, setJudge] = useState<LlmJudgeResponse | null>(null);
+  const [judgeError, setJudgeError] = useState<string | null>(null);
+  const [isJudging, setIsJudging] = useState(false);
+  const [showJudgePrompt, setShowJudgePrompt] = useState(false);
   const summary = conversation?.metrics_summary;
+
+  async function onJudge() {
+    if (!conversation || isJudging) return;
+    setJudgeError(null);
+    setIsJudging(true);
+    try {
+      setJudge(await requestLlmJudge({
+        plan: 'free',
+        user_id: run.user_id || userId,
+        project_id: run.project_id,
+        transcript: conversation.transcript,
+        report: judgeReport(run, conversation),
+      }));
+    } catch (err) {
+      setJudgeError(err instanceof Error ? err.message : 'Could not request the LLM judge.');
+    } finally {
+      setIsJudging(false);
+    }
+  }
+
   if (!conversation) {
     return <p className="scenarios-muted">Select a conversation to inspect metrics.</p>;
   }
@@ -345,6 +381,27 @@ function MetricDetail({
           The verified rate counts pass verdicts only. Needs-review outcomes stay unverified; the evaluation
           score is not a resolution percentage.
         </p>
+        <section className="resolution-judge" aria-label="LLM judge">
+          <div>
+            <p className="eyebrow">LLM second opinion</p>
+            <h3>Review the deterministic verdict</h3>
+            <p>
+              The score above is automatic and rule-based. The LLM judge separately reviews the transcript
+              and recorded evidence, then explains whether it agrees.
+            </p>
+          </div>
+          <button type="button" className="secondary-link" disabled={isJudging} onClick={() => void onJudge()}>
+            {isJudging ? 'Reviewing evidence…' : judge ? 'Run LLM review again' : 'Review with LLM judge'}
+          </button>
+          {judgeError ? <p className="resolution-judge-error" role="alert">{judgeError}</p> : null}
+          {judge ? (
+            <JudgeResult
+              judge={judge}
+              showPrompt={showJudgePrompt}
+              onTogglePrompt={() => setShowJudgePrompt((current) => !current)}
+            />
+          ) : null}
+        </section>
       </div>
     );
   }
@@ -388,6 +445,95 @@ function MetricDetail({
       </div>
     </div>
   );
+}
+
+function JudgeResult({
+  judge,
+  showPrompt,
+  onTogglePrompt,
+}: {
+  judge: LlmJudgeResponse;
+  showPrompt: boolean;
+  onTogglePrompt: () => void;
+}) {
+  const agrees = judge.judge_result?.agrees;
+  const title = judge.status === 'blocked'
+    ? 'LLM judge unavailable'
+    : agrees === true
+      ? 'Agrees with the deterministic verdict'
+      : agrees === false
+        ? 'Disagrees with the deterministic verdict'
+        : 'LLM review complete';
+  const remaining = judge.spend_control?.remaining_daily_credits;
+
+  return (
+    <div className={`resolution-judge-result is-${judge.status}`} aria-label="LLM judge result" role="status">
+      <strong>{title}</strong>
+      <p>{judge.message}</p>
+      {judge.provider || judge.model || judge.latency_ms != null ? (
+        <p className="resolution-judge-meta">
+          {[
+            judge.provider ? `Provider: ${judge.provider}` : null,
+            judge.model ? `Model: ${judge.model}` : null,
+            judge.latency_ms != null ? `${judge.latency_ms} ms` : null,
+            remaining != null ? `${remaining} daily credits remaining` : null,
+          ].filter(Boolean).join(' · ')}
+        </p>
+      ) : null}
+      {judge.judge_result?.rationale ? (
+        <p><b>Rationale:</b> {judge.judge_result.rationale}</p>
+      ) : null}
+      {judge.judge_result?.next_action ? (
+        <p><b>Next action:</b> {judge.judge_result.next_action}</p>
+      ) : null}
+      {!judge.judge_result?.rationale && judge.judge_output ? (
+        <p className="resolution-judge-output">{judge.judge_output}</p>
+      ) : null}
+      {judge.evidence_citations.length ? (
+        <div>
+          <p><b>Evidence reviewed</b></p>
+          <ul>
+            {judge.evidence_citations.map((citation) => <li key={citation}>{citation}</li>)}
+          </ul>
+        </div>
+      ) : null}
+      {judge.block_reason === 'provider' ? (
+        <p><ApiAwareLink href="/benchmarks">Connect OpenAI in the Full console</ApiAwareLink>, then try again.</p>
+      ) : null}
+      {judge.prompt_preview ? (
+        <div>
+          <button type="button" className="resolution-judge-prompt-toggle" onClick={onTogglePrompt}>
+            {showPrompt ? 'Hide what the judge saw' : 'What the judge saw'}
+          </button>
+          {showPrompt ? <pre>{judge.prompt_preview}</pre> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function judgeReport(run: ExecutionRunRecord, conversation: ConversationRecord): Record<string, unknown> {
+  const evidence = resolutionEvidence(conversation);
+  const summary = conversation.metrics_summary;
+  const finalState = asRecord(conversation.final_state);
+  const complete = typeof finalState.complete === 'boolean' ? finalState.complete : null;
+
+  return {
+    run_id: run.execution_run_id,
+    suite_id: conversation.suite_id || run.suite_id,
+    scenario_id: conversation.scenario_id,
+    scenario_title: conversation.scenario_title,
+    verdict: summary?.verdict || conversation.verdict,
+    overall_score: summary?.score ?? conversation.score,
+    final_state_score: complete === true ? 100 : complete === false ? 0 : null,
+    failure_categories: evidence.gaps,
+    evidence_citations: (conversation.turns || []).slice(0, 6).map((turn) => ({
+      source: turn.speaker || 'speaker',
+      text: turn.text || '',
+    })),
+    action_trace: conversation.action_trace || [],
+    final_state: conversation.final_state || {},
+  };
 }
 
 function StubWaveform({ timeline }: { timeline: TimelineEvent[] }) {

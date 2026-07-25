@@ -177,6 +177,105 @@ test('needs-review resolution explains score and missing proof without calling i
   await expect(page.getByText(/evaluation score is not a resolution percentage/)).toBeVisible();
 });
 
+test('run detail can request the existing LLM judge with selected conversation evidence', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+  });
+
+  const conversation = {
+    ...runFixture.conversations[0],
+    mode: 'text_callable',
+    verdict: 'needs_review',
+    score: 60,
+    action_trace: [],
+    final_state: {
+      complete: false,
+      outcome: 'conversation_only_evidence_recorded',
+      termination_reason: 'max_exchanges',
+      runtime_provenance: { live_tool_execution: false },
+    },
+    metrics_summary: {
+      ...runFixture.conversations[0].metrics_summary,
+      verdict: 'needs_review',
+      score: 60,
+      call_resolution_success: 0,
+    },
+  };
+  const reviewRun = {
+    ...runFixture,
+    status: 'needs_review',
+    mode: 'text_callable',
+    conversations: [conversation],
+  };
+  let judgeRequest: Record<string, unknown> | null = null;
+  let judgeCalls = 0;
+
+  await page.route('**/api/execution/runs/exec-demo123**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(reviewRun) });
+  });
+  await page.route('**/api/product/judge', async (route) => {
+    judgeCalls += 1;
+    judgeRequest = route.request().postDataJSON() as Record<string, unknown>;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'ready',
+        required_plan: 'starter',
+        credits: 10,
+        message: 'LLM judge disagrees with the deterministic verdict via openai_codex.',
+        evidence_citations: ['source=caller; text=I want to cancel today.'],
+        judge_result: {
+          agrees: false,
+          rationale: 'The exchange did not prove a completed business action.',
+          next_action: 'Capture tool output and the resulting account state.',
+        },
+        provider: 'openai_codex',
+        model: 'gpt-5.4-mini',
+        prompt_preview: 'Deterministic verdict: needs_review\nDeterministic score: 60',
+        latency_ms: 840,
+        spend_control: { remaining_daily_credits: 190 },
+      }),
+    });
+  });
+
+  await page.goto('/runs/exec-demo123');
+  await expect(page.getByRole('heading', { name: 'Review the deterministic verdict' })).toBeVisible();
+  expect(judgeCalls).toBe(0);
+
+  await page.getByRole('button', { name: 'Review with LLM judge' }).click();
+  await expect(page.getByLabel('LLM judge result')).toContainText('Disagrees with the deterministic verdict');
+  await expect(page.getByLabel('LLM judge result')).toContainText(
+    'The exchange did not prove a completed business action.',
+  );
+  await expect(page.getByLabel('LLM judge result')).toContainText(
+    'Capture tool output and the resulting account state.',
+  );
+  await expect(page.getByLabel('LLM judge result')).toContainText('gpt-5.4-mini');
+  await expect(page.getByLabel('LLM judge result')).toContainText('190 daily credits remaining');
+  expect(judgeCalls).toBe(1);
+  expect(judgeRequest).toMatchObject({
+    plan: 'free',
+    user_id: 'demo-user',
+    project_id: 'call-center-demo',
+    transcript: conversation.transcript,
+    report: {
+      run_id: 'exec-demo123',
+      suite_id: 'call-center-voice-ai',
+      scenario_id: 'cancellation-rescue',
+      verdict: 'needs_review',
+      overall_score: 60,
+      final_state_score: 0,
+      action_trace: [],
+      final_state: conversation.final_state,
+    },
+  });
+
+  await page.getByRole('button', { name: 'What the judge saw' }).click();
+  await expect(page.getByText('Deterministic verdict: needs_review')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Run LLM review again' })).toBeVisible();
+});
+
 test('resolution evidence handles failed and not-evaluated conversations without metric summaries', async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');

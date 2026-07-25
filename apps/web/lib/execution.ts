@@ -161,6 +161,37 @@ export interface ExecutionRunProvenance {
   honesty_label?: string | null;
 }
 
+export interface LlmJudgeResult {
+  agrees?: boolean | null;
+  rationale?: string | null;
+  next_action?: string | null;
+  raw_output?: string | null;
+}
+
+export interface LlmJudgeResponse {
+  status: 'blocked' | 'ready';
+  required_plan: 'free' | 'starter' | 'team';
+  credits: number;
+  message: string;
+  evidence_citations: string[];
+  judge_output?: string | null;
+  judge_result?: LlmJudgeResult | null;
+  provider?: string | null;
+  model?: string | null;
+  prompt_preview?: string | null;
+  latency_ms?: number | null;
+  block_reason?: 'provider' | 'budget' | 'provider_error' | null;
+  spend_control?: {
+    estimated_credits?: number;
+    daily_credit_limit?: number;
+    reserved_daily_credits?: number;
+    spent_daily_credits?: number;
+    remaining_daily_credits?: number;
+    provider?: string;
+    provider_configured?: boolean;
+  };
+}
+
 export interface AccConnectionStatus {
   connected: boolean;
   status: string;
@@ -265,6 +296,25 @@ export async function listAgents(): Promise<AgentRecord[]> {
     await fetch(`${getApiBase()}/api/agents`, { cache: 'no-store' }),
   );
   return payload.agents ?? [];
+}
+
+export async function requestLlmJudge(payload: {
+  plan?: 'free' | 'starter' | 'team';
+  report: Record<string, unknown>;
+  transcript?: string | null;
+  user_id?: string;
+  project_id?: string;
+}): Promise<LlmJudgeResponse> {
+  return handleJson(
+    await fetch(`${getApiBase()}/api/product/judge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...payload,
+        plan: payload.plan || 'free',
+      }),
+    }),
+  );
 }
 
 export async function createAgent(payload: {
