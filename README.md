@@ -85,17 +85,25 @@ npm run test:voice-lab-proof:acc
 
 ```mermaid
 flowchart LR
-  Scenario["Scenario + configured target"] --> Execute["Tester + executor"]
+  Scenario["Scenario contract"] --> Execute["Execution orchestrator"]
+  Target["Configured target"] --> Execute
+  Tester["Optional tester"] --> Execute
+  OptionalTarget["Optional external target"] -. "target adapter" .-> Execute
+
   Execute --> CurrentEvidence["Current-run evidence"]
-  ExistingEvidence["Existing external evidence"] --> Normalize["Evidence normalization"]
+  ExternalEvidence["Imported external evidence"] --> Normalize["Evidence normalization"]
   CurrentEvidence --> Normalize
-  Normalize --> Evaluate["ASSERT-compatible evaluation boundary"]
-  Evaluate --> Artifacts["Canonical evaluation artifacts"]
-  Normalize --> Metadata["Platform metadata + indexes"]
-  Artifacts --> Reports["Reports + exports"]
-  Metadata --> Reports
-  OptionalTargets["Optional external targets"] -. "target adapter" .-> Execute
+
+  Scenario --> Evaluate["Local ASSERT-compatible evaluation boundary"]
+  Normalize --> Evaluate
   ASSERT["Upstream ASSERT model"] -. "contract conventions" .-> Evaluate
+
+  Evaluate --> Result["Evaluation report + verdict"]
+  Result --> Artifacts["Canonical ASSERT artifacts"]
+  Result --> Persist["Run persistence + metadata index"]
+  Artifacts --> Persist
+
+  Persist --> Reports["Reports, history, comparisons + exports"]
 ```
 
 Core ownership:
