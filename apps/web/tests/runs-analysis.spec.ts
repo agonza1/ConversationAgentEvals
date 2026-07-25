@@ -339,6 +339,44 @@ test('resolution evidence handles failed and not-evaluated conversations without
   await expect(page.getByLabel('Resolution evidence details')).toContainText('Target Terminal State');
 });
 
+test('LLM judge stays disabled while conversation evidence is still changing', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+  });
+
+  const activeRun = {
+    ...runFixture,
+    status: 'running',
+    updated_at: '2026-07-16T00:00:00Z',
+    conversations: [
+      {
+        ...runFixture.conversations[0],
+        status: 'running',
+        transcript: '',
+        turns: [],
+        verdict: null,
+        score: null,
+        metrics_summary: null,
+      },
+    ],
+  };
+  let judgeCalls = 0;
+
+  await page.route('**/api/execution/runs/exec-demo123**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(activeRun) });
+  });
+  await page.route('**/api/product/judge', async (route) => {
+    judgeCalls += 1;
+    await route.fulfill({ status: 500, contentType: 'application/json', body: '{}' });
+  });
+
+  await page.goto('/runs/exec-demo123');
+  const judgeButton = page.getByRole('button', { name: 'Available after run completes' });
+  await expect(judgeButton).toBeVisible();
+  await expect(judgeButton).toBeDisabled();
+  expect(judgeCalls).toBe(0);
+});
+
 test('active run analysis recovers after a transient polling error', async ({ page }) => {
   let requests = 0;
   await page.addInitScript(() => {

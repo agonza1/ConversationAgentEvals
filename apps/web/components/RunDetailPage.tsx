@@ -187,7 +187,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
 
             <section className="card runs-metric-detail" aria-label="Metric detail">
               <MetricDetail
-                key={conversation?.conversation_id || 'no-conversation'}
+                key={`${conversation?.conversation_id || 'no-conversation'}:${run.updated_at}`}
                 metric={metric}
                 conversation={conversation}
                 run={run}
@@ -321,9 +321,14 @@ function MetricDetail({
   const [isJudging, setIsJudging] = useState(false);
   const [showJudgePrompt, setShowJudgePrompt] = useState(false);
   const summary = conversation?.metrics_summary;
+  const canJudge = Boolean(
+    conversation
+    && !['queued', 'running'].includes(run.status)
+    && !['queued', 'running'].includes(conversation.status),
+  );
 
   async function onJudge() {
-    if (!conversation || isJudging) return;
+    if (!conversation || !canJudge || isJudging) return;
     setJudgeError(null);
     setIsJudging(true);
     try {
@@ -390,8 +395,19 @@ function MetricDetail({
               and recorded evidence, then explains whether it agrees.
             </p>
           </div>
-          <button type="button" className="secondary-link" disabled={isJudging} onClick={() => void onJudge()}>
-            {isJudging ? 'Reviewing evidence…' : judge ? 'Run LLM review again' : 'Review with LLM judge'}
+          <button
+            type="button"
+            className="secondary-link"
+            disabled={isJudging || !canJudge}
+            onClick={() => void onJudge()}
+          >
+            {isJudging
+              ? 'Reviewing evidence…'
+              : !canJudge
+                ? 'Available after run completes'
+                : judge
+                  ? 'Run LLM review again'
+                  : 'Review with LLM judge'}
           </button>
           {judgeError ? <p className="resolution-judge-error" role="alert">{judgeError}</p> : null}
           {judge ? (
