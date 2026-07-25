@@ -2264,6 +2264,7 @@ export function BenchmarkRunner({
   const [agentsLoaded, setAgentsLoaded] = useState(false);
   const [referenceVoicePreflight, setReferenceVoicePreflight] = useState<ReferenceVoicePreflight | null>(null);
   const [referenceVoicePreflightError, setReferenceVoicePreflightError] = useState<string | null>(null);
+  const [referenceVoicePreflightLoaded, setReferenceVoicePreflightLoaded] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const selectedScoreAgent = useMemo(
     () => agents.find((agent) => agent.id === selectedAgentId) ?? null,
@@ -2597,16 +2598,19 @@ export function BenchmarkRunner({
   useEffect(() => {
     if (view !== 'run') return;
     let active = true;
+    setReferenceVoicePreflightLoaded(false);
     fetchReferenceVoicePreflight()
       .then((preflight) => {
         if (!active) return;
         setReferenceVoicePreflight(preflight);
         setReferenceVoicePreflightError(null);
+        setReferenceVoicePreflightLoaded(true);
       })
       .catch((error) => {
         if (!active) return;
         setReferenceVoicePreflight(null);
         setReferenceVoicePreflightError(error instanceof Error ? error.message : 'Voice preflight unavailable.');
+        setReferenceVoicePreflightLoaded(true);
       });
     return () => {
       active = false;
@@ -2622,7 +2626,19 @@ export function BenchmarkRunner({
 
   useEffect(() => {
     if (view !== 'run' || typeof window === 'undefined') return;
-    if (autoLaunchDemoRef.current || isLoading || isLaunchingExecution || !selectedSuite || !agentsLoaded || !openaiProvider) return;
+    const waitingForVoicePreflight = (
+      selectedScoreAgent?.target === 'builtin_sample_voice'
+      && !referenceVoicePreflightLoaded
+    );
+    if (
+      autoLaunchDemoRef.current
+      || isLoading
+      || isLaunchingExecution
+      || !selectedSuite
+      || !agentsLoaded
+      || !openaiProvider
+      || waitingForVoicePreflight
+    ) return;
 
     const params = new URLSearchParams(window.location.search);
     if (params.get('launch') !== 'demo') return;
@@ -2649,6 +2665,8 @@ export function BenchmarkRunner({
     agentsLoaded,
     executionMode,
     openaiProvider,
+    referenceVoicePreflightLoaded,
+    selectedScoreAgent?.target,
   ]);
 
   useEffect(() => {

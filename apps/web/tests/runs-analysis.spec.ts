@@ -249,6 +249,9 @@ test('run detail can request the existing LLM judge with selected conversation e
 
   await page.goto('/runs/exec-demo123');
   await expect(page.getByRole('heading', { name: 'Review the deterministic verdict' })).toBeVisible();
+  await expect(page.getByText('Missing required action: Policy Hold Entered.')).toBeVisible();
+  await expect(page.getByText('Failed rubric check: Retention Policy.')).toBeVisible();
+  await expect(page.getByText('Hard-check failure: Policy — Required policy hold was not entered.')).toBeVisible();
   expect(judgeCalls).toBe(0);
 
   await page.getByRole('button', { name: 'Review with LLM judge' }).click();

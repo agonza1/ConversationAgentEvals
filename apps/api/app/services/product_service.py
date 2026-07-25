@@ -1150,6 +1150,8 @@ def _string_list(value: Any, *, limit: int = 8) -> list[str]:
 
 
 _JUDGE_EVALUATOR_FINDING_KEYS = (
+    'verdict',
+    'overall_score',
     'required_action_score',
     'rubric_score',
     'task_completion_score',
@@ -1221,6 +1223,9 @@ def _ground_judge_report(
         ))
     except Exception as exc:  # noqa: BLE001 - retain the saved result and expose why grounding failed
         grounded['evaluator_findings_error'] = str(exc)
+        return grounded
+    if not evaluated.get('verdict'):
+        grounded['evaluator_findings_error'] = 'Recomputed evaluator did not return a verdict.'
         return grounded
     for key in _JUDGE_EVALUATOR_FINDING_KEYS:
         if key in evaluated:

@@ -713,6 +713,16 @@ function resolutionEvidence(conversation: ConversationRecord) {
   const gaps: string[] = [];
 
   if (state === 'unverified' || state === 'failed') {
+    const findings = asRecord(conversation.evaluation_findings);
+    for (const finding of findingLabels(findings.missing_actions)) {
+      gaps.push(`Missing required action: ${finding}.`);
+    }
+    for (const finding of failedRubricLabels(findings.rubric_checks)) {
+      gaps.push(`Failed rubric check: ${finding}.`);
+    }
+    for (const finding of findingLabels(findings.hard_check_failures)) {
+      gaps.push(`Hard-check failure: ${finding}.`);
+    }
     if (finalComplete === false) gaps.push('The recorded final state was not complete.');
     if (actionCount === 0) gaps.push('No action or tool evidence was recorded.');
     if (liveToolExecution === false) gaps.push('The target did not execute a live business tool.');
@@ -737,6 +747,47 @@ function resolutionEvidence(conversation: ConversationRecord) {
     error,
     gaps,
   };
+}
+
+function findingLabels(value: unknown, limit = 6) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => findingLabel(item))
+    .filter((item): item is string => Boolean(item))
+    .slice(0, limit);
+}
+
+function failedRubricLabels(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item) => {
+      const finding = asRecord(item);
+      const status = stringValue(finding.status)?.toLowerCase();
+      return finding.passed === false || ['fail', 'failed', 'missing'].includes(status || '');
+    })
+    .map((item) => findingLabel(item))
+    .filter((item): item is string => Boolean(item))
+    .slice(0, 6);
+}
+
+function findingLabel(value: unknown) {
+  if (typeof value === 'string') return formatRuntimeId(value);
+  const finding = asRecord(value);
+  const detail = (
+    stringValue(finding.summary)
+    || stringValue(finding.description)
+    || stringValue(finding.message)
+  );
+  const identifier = (
+    stringValue(finding.label)
+    || stringValue(finding.name)
+    || stringValue(finding.id)
+    || stringValue(finding.category)
+  );
+  if (identifier && detail && identifier.toLowerCase() !== detail.toLowerCase()) {
+    return `${formatRuntimeId(identifier)} — ${detail}`;
+  }
+  return detail || (identifier ? formatRuntimeId(identifier) : null);
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

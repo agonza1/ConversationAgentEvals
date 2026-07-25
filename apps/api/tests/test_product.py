@@ -1592,6 +1592,8 @@ def test_llm_judge_recomputes_missing_evaluator_findings_before_spending(monkeyp
     def fake_run_scenario(request):
         captured.update(request.model_dump())
         return {
+            'verdict': 'needs_review',
+            'overall_score': 45,
             'missing_actions': ['policy_hold_entered'],
             'rubric_checks': [{'name': 'retention_policy', 'status': 'failed'}],
             'hard_check_failures': [{'category': 'policy', 'summary': 'Required hold missing.'}],
@@ -1622,6 +1624,8 @@ def test_llm_judge_recomputes_missing_evaluator_findings_before_spending(monkeyp
     assert captured['user_id'] == 'judge-user'
     assert captured['project_id'] == 'judge-project'
     assert grounded['evaluator_findings_source'] == 'recomputed_current_contract'
+    assert grounded['verdict'] == 'needs_review'
+    assert grounded['overall_score'] == 45
     assert grounded['missing_actions'] == ['policy_hold_entered']
     prompt = product_service._build_judge_prompt(
         report=grounded,
