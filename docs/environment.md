@@ -2,6 +2,9 @@
 
 Use `.env.example` for the first-run local demo. It is intentionally small: copy it to `.env`, run `npm run setup`, then run `npm run dev`.
 
+For concurrent worktrees, port slots, isolated CAE state, and shared rtc-asr or
+Kokoro services, see [Parallel Development](parallel-development.md).
+
 ## Required for the minimal local demo
 
 | Variable | Default | Purpose |
@@ -62,7 +65,7 @@ The first-run benchmark demo uses transcript, action-trace, and final-state evid
 Conversation demos use `rtc-asr` as the speech-to-text provider contract. Pipecat expects a service reachable at `RTC_ASR_BASE_URL` and streams audio to `RTC_ASR_STREAM_PATH` using 16 kHz mono PCM16 little-endian input.
 
 ```bash
-RTC_ASR_BASE_URL=http://localhost:8000
+RTC_ASR_BASE_URL=http://localhost:8080
 RTC_ASR_HEALTH_PATH=/health
 RTC_ASR_STREAM_PATH=/v1/stt/stream
 KOKORO_BASE_URL=http://localhost:8880
@@ -92,7 +95,7 @@ Kokoro run on the host, give both containers host-reachable service URLs and the
 same non-empty internal token:
 
 ```bash
-RTC_ASR_BASE_URL=http://host.docker.internal:8000 \
+RTC_ASR_BASE_URL=http://host.docker.internal:8080 \
 KOKORO_BASE_URL=http://host.docker.internal:8880 \
 REFERENCE_AGENT_INTERNAL_TOKEN=replace-with-a-random-local-token \
 docker compose --profile voice up --build
