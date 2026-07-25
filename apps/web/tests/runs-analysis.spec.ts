@@ -187,7 +187,7 @@ test('run detail can request the existing LLM judge with selected conversation e
     mode: 'text_callable',
     verdict: 'needs_review',
     score: 60,
-    action_trace: [],
+    action_trace: [{ action: 'verify_identity', status: 'completed', identifiers: ['email', 'last4'] }],
     final_state: {
       complete: false,
       outcome: 'conversation_only_evidence_recorded',
@@ -266,7 +266,17 @@ test('run detail can request the existing LLM judge with selected conversation e
       verdict: 'needs_review',
       overall_score: 60,
       final_state_score: 0,
-      action_trace: [],
+      evidence_citations: expect.arrayContaining([
+        {
+          source: 'action_trace',
+          text: JSON.stringify(conversation.action_trace[0]),
+        },
+        {
+          source: 'final_state',
+          text: JSON.stringify(conversation.final_state),
+        },
+      ]),
+      action_trace: conversation.action_trace,
       final_state: conversation.final_state,
     },
   });
@@ -330,6 +340,32 @@ test('resolution evidence handles failed and not-evaluated conversations without
   await expect(page.getByLabel('Resolution evidence details')).toContainText('Provider Disconnect');
   await expect(page.getByLabel('Resolution evidence details')).toContainText('simulated provider disconnect');
   await expect(page.getByText('The run recorded an execution error.')).toBeVisible();
+
+  let judgeReport: Record<string, unknown> | null = null;
+  await page.route('**/api/product/judge', async (route) => {
+    const payload = route.request().postDataJSON() as { report?: Record<string, unknown> };
+    judgeReport = payload.report || null;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'blocked',
+        required_plan: 'starter',
+        credits: 10,
+        message: 'Connect OpenAI to run the local LLM judge.',
+        evidence_citations: [],
+        block_reason: 'provider',
+      }),
+    });
+  });
+  await page.getByRole('button', { name: 'Review with LLM judge' }).click();
+  await expect(page.getByLabel('LLM judge result')).toContainText('LLM judge unavailable');
+  expect(judgeReport).toMatchObject({
+    failure_categories: expect.arrayContaining(['Execution error: simulated provider disconnect']),
+    evidence_citations: expect.arrayContaining([
+      { source: 'execution_error', text: 'simulated provider disconnect' },
+    ]),
+  });
 
   await page.getByLabel('Conversation').selectOption('exec-demo123-not-evaluated-1');
   await expect(page.getByLabel('Resolution verification status')).toContainText('Not evaluated');

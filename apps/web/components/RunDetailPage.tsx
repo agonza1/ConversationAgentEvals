@@ -533,6 +533,9 @@ function judgeReport(run: ExecutionRunRecord, conversation: ConversationRecord):
   const summary = conversation.metrics_summary;
   const finalState = asRecord(conversation.final_state);
   const complete = typeof finalState.complete === 'boolean' ? finalState.complete : null;
+  const failureCategories = evidence.error
+    ? [...evidence.gaps, `Execution error: ${evidence.error}`]
+    : evidence.gaps;
 
   return {
     run_id: run.execution_run_id,
@@ -542,14 +545,33 @@ function judgeReport(run: ExecutionRunRecord, conversation: ConversationRecord):
     verdict: summary?.verdict || conversation.verdict,
     overall_score: summary?.score ?? conversation.score,
     final_state_score: complete === true ? 100 : complete === false ? 0 : null,
-    failure_categories: evidence.gaps,
-    evidence_citations: (conversation.turns || []).slice(0, 6).map((turn) => ({
-      source: turn.speaker || 'speaker',
-      text: turn.text || '',
-    })),
+    failure_categories: failureCategories,
+    evidence_citations: judgeEvidenceCitations(conversation),
     action_trace: conversation.action_trace || [],
     final_state: conversation.final_state || {},
   };
+}
+
+function judgeEvidenceCitations(conversation: ConversationRecord) {
+  const citations: Array<{ source: string; text: string }> = [];
+  for (const action of (conversation.action_trace || []).slice(0, 3)) {
+    citations.push({ source: 'action_trace', text: JSON.stringify(action) });
+  }
+  const finalState = asRecord(conversation.final_state);
+  if (Object.keys(finalState).length) {
+    citations.push({ source: 'final_state', text: JSON.stringify(finalState) });
+  }
+  if (conversation.error) {
+    citations.push({ source: 'execution_error', text: conversation.error });
+  }
+  for (const turn of conversation.turns || []) {
+    if (citations.length >= 6) break;
+    citations.push({
+      source: turn.speaker || 'speaker',
+      text: turn.text || '',
+    });
+  }
+  return citations.slice(0, 6);
 }
 
 function StubWaveform({ timeline }: { timeline: TimelineEvent[] }) {
