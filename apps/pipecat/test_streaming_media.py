@@ -6,8 +6,8 @@ from pipecat.audio.vad.vad_analyzer import VADState
 
 from streaming_media import (
     StreamingWavDecoder,
-    _resample_pcm16,
     _should_start_utterance,
+    resample_pcm16,
     rtc_asr_stream_url,
 )
 
@@ -44,7 +44,7 @@ def test_streaming_wav_decoder_handles_split_header_and_audio() -> None:
 
 def test_pcm_resampler_preserves_duration() -> None:
     source = struct.pack("<240h", *range(240))
-    converted = _resample_pcm16(source, 24000, 16000)
+    converted = resample_pcm16(source, 24000, 16000)
     assert len(converted) == 320
 
 

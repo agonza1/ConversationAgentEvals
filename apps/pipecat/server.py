@@ -6,7 +6,6 @@ import io
 import json
 import os
 import secrets
-import struct
 import time
 import wave
 from dataclasses import dataclass, field
@@ -59,6 +58,8 @@ try:
         StreamingKokoroProcessor,
         StreamingMediaBridge,
         StreamingRtcAsrProcessor,
+        pcm16_to_mono,
+        resample_pcm16,
     )
     try:
         from pipecat.services.heygen.api_liveavatar import LiveAvatarNewSessionRequest
@@ -338,12 +339,12 @@ class _ReferenceDuplexBroadcast:
     listeners: dict[str, _ReferenceListener] = field(default_factory=dict)
 
     def publish(self, audio: bytes, *, sample_rate: int, channels: int = 1) -> None:
-        mono_audio = _pcm16_to_mono(audio, channels)
+        mono_audio = pcm16_to_mono(audio, channels)
         for listener in tuple(self.listeners.values()):
             track = listener.track
             track_rate = int(getattr(track, '_sample_rate', sample_rate))
             listener_audio = (
-                _resample_pcm16_mono(mono_audio, sample_rate, track_rate)
+                resample_pcm16(mono_audio, sample_rate, track_rate)
                 if track_rate != sample_rate
                 else mono_audio
             )
@@ -351,55 +352,6 @@ class _ReferenceDuplexBroadcast:
             remainder = len(listener_audio) % ten_ms_bytes
             payload = listener_audio if remainder == 0 else listener_audio + bytes(ten_ms_bytes - remainder)
             track.add_audio_bytes(payload)
-
-
-def _pcm16_to_mono(payload: bytes, channels: int) -> bytes:
-    """Downmix interleaved little-endian PCM16 audio to mono."""
-    if channels <= 0:
-        raise ValueError('Audio channel count must be positive.')
-    sample_count = len(payload) // 2
-    frame_count = sample_count // channels
-    if frame_count == 0:
-        return b''
-    usable_sample_count = frame_count * channels
-    payload = payload[:usable_sample_count * 2]
-    if channels == 1:
-        return payload
-
-    samples = struct.unpack(f'<{usable_sample_count}h', payload)
-    mono = [
-        round(sum(samples[offset:offset + channels]) / channels)
-        for offset in range(0, usable_sample_count, channels)
-    ]
-    return struct.pack(f'<{frame_count}h', *mono)
-
-
-def _resample_pcm16_mono(payload: bytes, source_rate: int, target_rate: int) -> bytes:
-    """Linearly resample little-endian PCM16 mono without optional DSP packages."""
-    if source_rate <= 0 or target_rate <= 0:
-        raise ValueError('Audio sample rates must be positive.')
-    sample_count = len(payload) // 2
-    if sample_count == 0:
-        return b''
-    payload = payload[:sample_count * 2]
-    if source_rate == target_rate:
-        return payload
-
-    samples = struct.unpack(f'<{sample_count}h', payload)
-    output_count = max(1, round(sample_count * target_rate / source_rate))
-    if sample_count == 1:
-        return struct.pack(f'<{output_count}h', *([samples[0]] * output_count))
-
-    source_step = source_rate / target_rate
-    output: list[int] = []
-    for output_index in range(output_count):
-        source_position = min(output_index * source_step, sample_count - 1)
-        left_index = int(source_position)
-        right_index = min(left_index + 1, sample_count - 1)
-        fraction = source_position - left_index
-        output.append(round(samples[left_index] + (samples[right_index] - samples[left_index]) * fraction))
-    return struct.pack(f'<{output_count}h', *output)
-
 
 REFERENCE_DUPLEX_RUNS: dict[str, _ReferenceDuplexBroadcast] = {}
 REFERENCE_LISTENER_BROADCAST_WAIT_SECONDS = 8.0
@@ -650,72 +602,6 @@ if PIPECAT_RUNTIME_AVAILABLE:
                 raise RuntimeError('reference tester completion callback returned no text')
             await self.push_frame(_AgentTextFrame(text), direction)
 
-
-    class _ReferenceDuplexTesterLlmProcessor(FrameProcessor):
-        def __init__(
-            self,
-            *,
-            scenario: dict[str, Any],
-            history: list[dict[str, str]],
-            turn_index: int,
-            max_turn_pairs: int,
-            model_name: str,
-            record_latest_target_receipt: bool = False,
-        ):
-            super().__init__()
-            self.scenario = scenario
-            self.history = history
-            self.turn_index = turn_index
-            self.max_turn_pairs = max_turn_pairs
-            self.model_name = model_name
-            self.record_latest_target_receipt = record_latest_target_receipt
-
-        async def process_frame(self, frame: Frame, direction: FrameDirection):
-            await super().process_frame(frame, direction)
-            if type(frame) is not TextFrame:
-                await self.push_frame(frame, direction)
-                return
-            if self.record_latest_target_receipt:
-                _append_duplex_history_receipt(
-                    self.history,
-                    speaker='Agent',
-                    text=frame.text,
-                    source='tester_asr_receipt',
-                )
-            history = '\n'.join(
-                f'{item.get("speaker")}: {item.get("text")}'
-                for item in self.history
-            ) or 'No spoken turns yet.'
-            prompt = (
-                'You are the caller-side Pipecat tester in a two-agent voice evaluation. '
-                'Choose and speak the next natural caller utterance that best probes the scenario rubric. '
-                'Adapt to what the evaluated agent actually said. Do not narrate, score, mention the rubric, '
-                'or claim that an action occurred. Return caller speech only.\n\n'
-                f'Scenario title: {self.scenario.get("title") or self.scenario.get("id")}\n'
-                f'Caller persona: {self.scenario.get("persona") or "Not provided."}\n'
-                f'Caller goal: {self.scenario.get("goal") or "Not provided."}\n'
-                f'Required behaviors to probe: {", ".join(map(str, self.scenario.get("required_actions") or []))}\n'
-                f'Forbidden behaviors to challenge: {", ".join(map(str, self.scenario.get("forbidden_actions") or []))}\n'
-                f'Expected final state: {self.scenario.get("expected_final_state") or "Not provided."}\n'
-                f'Turn {self.turn_index} of at most {self.max_turn_pairs}.\n'
-                f'Tester ASR receipt of the latest target audio: {frame.text}\n'
-                f'Conversation history:\n{history}\n\n'
-                'Next caller utterance:'
-            )
-            async with httpx.AsyncClient(timeout=90) as client:
-                response = await client.post(
-                    f'{API_BASE_URL}/api/execution/reference/complete',
-                    json={'prompt': prompt, 'model_name': self.model_name},
-                    headers={'x-cae-reference-token': REFERENCE_AGENT_INTERNAL_TOKEN},
-                )
-                response.raise_for_status()
-                payload = response.json()
-            text = str(payload.get('text') or '').strip()
-            if not text:
-                raise RuntimeError('reference tester completion callback returned no text')
-            await self.push_frame(_AgentTextFrame(text), direction)
-
-
     class _ReferenceKokoroProcessor(FrameProcessor):
         def __init__(self, voice: str, *, graph_started_at: float):
             super().__init__()
@@ -783,26 +669,6 @@ if PIPECAT_RUNTIME_AVAILABLE:
         session_id: str
         broadcast: Any
         sequence: int = 0
-
-        def send(
-            self,
-            *,
-            direction: str,
-            audio: bytes,
-            sample_rate: int,
-            channels: int,
-        ) -> tuple[InputAudioRawFrame, dict[str, Any]]:
-            if direction not in {'tester_to_target', 'target_to_tester'}:
-                raise RuntimeError(f'Unsupported duplex direction: {direction}')
-            if not audio:
-                raise RuntimeError('Local duplex transport cannot send an empty audio frame.')
-            self.broadcast.publish(audio, sample_rate=sample_rate, channels=channels)
-            return self.evidence(
-                direction=direction,
-                audio=audio,
-                sample_rate=sample_rate,
-                channels=channels,
-            )
 
         def publish_chunk(self, audio: bytes, *, sample_rate: int, channels: int) -> None:
             self.broadcast.publish(audio, sample_rate=sample_rate, channels=channels)
@@ -1023,19 +889,6 @@ async def _run_reference_graph(input_frame: Any, llm_processor: Any, *, voice: s
     collector.first_audio_byte_latency_ms = kokoro_processor.first_audio_byte_latency_ms
     collector.total_latency_ms = round((time.perf_counter() - graph_started_at) * 1000, 2)
     return asr_processor, collector
-
-
-async def _transcribe_duplex_frame(input_frame: Any) -> str:
-    """Run a received local media frame through the listening graph's rtc-asr stage."""
-    asr_processor = _ReferenceAsrProcessor()
-    pipeline = Pipeline([asr_processor])
-    task = PipelineTask(pipeline, enable_rtvi=False, enable_turn_tracking=False)
-    await task.queue_frames([input_frame, EndFrame()])
-    await PipelineRunner(handle_sigint=False, handle_sigterm=False).run(task)
-    if not asr_processor.transcript:
-        raise RuntimeError('Listening Pipecat graph produced no ASR receipt.')
-    return asr_processor.transcript
-
 
 def _duplex_event(payload: dict[str, Any]) -> bytes:
     return (json.dumps(payload, separators=(',', ':')) + '\n').encode('utf-8')

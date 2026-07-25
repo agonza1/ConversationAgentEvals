@@ -241,8 +241,8 @@ class StreamingMediaBridge(FrameProcessor):
             duration = len(frame.audio) / max(1, frame.sample_rate * frame.num_channels * 2)
             await asyncio.sleep(duration)
             self.audio_ended_at = time.time()
-            mono = _pcm16_to_mono(frame.audio, frame.num_channels)
-            converted = _resample_pcm16(mono, frame.sample_rate, self.target_sample_rate)
+            mono = pcm16_to_mono(frame.audio, frame.num_channels)
+            converted = resample_pcm16(mono, frame.sample_rate, self.target_sample_rate)
             self._converted_pending.extend(converted)
             frame_bytes = self.target_sample_rate * 2 // 50
             while len(self._converted_pending) >= frame_bytes:
@@ -564,8 +564,11 @@ class MetricsCollector(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
-def _pcm16_to_mono(payload: bytes, channels: int) -> bytes:
-    if channels <= 1:
+def pcm16_to_mono(payload: bytes, channels: int) -> bytes:
+    """Downmix interleaved little-endian PCM16 audio to mono."""
+    if channels <= 0:
+        raise ValueError("Audio channel count must be positive.")
+    if channels == 1:
         return payload
     usable = len(payload) - len(payload) % (channels * 2)
     samples = struct.unpack(f"<{usable // 2}h", payload[:usable])
@@ -591,7 +594,10 @@ def _should_start_utterance(
     )
 
 
-def _resample_pcm16(payload: bytes, source_rate: int, target_rate: int) -> bytes:
+def resample_pcm16(payload: bytes, source_rate: int, target_rate: int) -> bytes:
+    """Linearly resample little-endian mono PCM16 audio."""
+    if source_rate <= 0 or target_rate <= 0:
+        raise ValueError("Audio sample rates must be positive.")
     if source_rate == target_rate:
         return payload
     count = len(payload) // 2
