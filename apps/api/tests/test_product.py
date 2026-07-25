@@ -1,3 +1,4 @@
+import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
@@ -1806,14 +1807,20 @@ def test_product_audit_events_track_saved_runs_exports_and_judge_requests():
 
     assert response.status_code == 200
     events = response.json()
+    judge_payload = events[0]['payload']
+    judge_result = judge_response.json()
+    judge_output = judge_result['judge_output']
     assert [event['event_type'] for event in events] == ['judge.requested', 'run.exported', 'run.saved']
-    assert events[0]['payload'] == {
+    assert judge_payload == {
         'project_id': 'call-center',
         'plan': 'starter',
-        'status': judge_response.json()['status'],
+        'status': judge_result['status'],
         'credits': 10,
-        'provider': judge_response.json()['provider'],
-        'model': judge_response.json()['model'],
+        'provider': judge_result['provider'],
+        'model': judge_result['model'],
+        'agrees': judge_result['judge_result']['agrees'],
+        'output_preview': judge_output[:400],
+        'output_sha256': hashlib.sha256(judge_output.encode('utf-8')).hexdigest()[:16],
     }
     assert events[1]['payload'] == {'run_id': saved['id'], 'export_type': 'single_run'}
     assert events[2]['payload'] == {
