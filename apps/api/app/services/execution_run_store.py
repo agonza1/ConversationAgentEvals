@@ -165,6 +165,52 @@ def append_live_event(
         return None
 
 
+def update_live_event(
+    execution_run_id: str,
+    conversation_id: str,
+    sequence: int,
+    *,
+    text: str,
+    llm_output: str,
+    asr_receipt: str,
+    frame_metadata: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Attach delayed ASR evidence to an audio event without appending a duplicate turn."""
+    with _LOCK:
+        run = _RUNS.get(execution_run_id)
+        if run is None:
+            loaded = _load_from_disk(execution_run_id)
+            if loaded is None:
+                return None
+            _RUNS[execution_run_id] = loaded
+            run = loaded
+        conversations = list(run.get('conversations') or [])
+        for conversation in conversations:
+            if conversation.get('conversation_id') != conversation_id:
+                continue
+            events = list(conversation.get('live_events') or [])
+            for index, event in enumerate(events):
+                if event.get('sequence') != sequence:
+                    continue
+                events[index] = LiveExecutionEvent.model_validate({
+                    **event,
+                    'text': text,
+                    'llm_output': llm_output,
+                    'asr_receipt': asr_receipt,
+                    'frame_metadata': {
+                        **(event.get('frame_metadata') or {}),
+                        **frame_metadata,
+                    },
+                }).model_dump(mode='json')
+                conversation['live_events'] = events
+                run['conversations'] = conversations
+                run['updated_at'] = _now()
+                _persist_unlocked(run)
+                return deepcopy(run)
+            return None
+        return None
+
+
 def complete_execution_run(
     execution_run_id: str,
     *,

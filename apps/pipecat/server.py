@@ -778,6 +778,22 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                     channels=tester_output.channels,
                 )
                 frame_evidence.append(tester_frame)
+                tester_wav = _pcm_to_wav(
+                    tester_output.audio,
+                    tester_output.sample_rate,
+                    tester_output.channels,
+                )
+                yield _duplex_event({
+                    'type': 'live_audio',
+                    'turn_pair': turn_index,
+                    'speaker': 'Caller',
+                    'direction': 'tester_to_target',
+                    'text': tester_output.agent_text,
+                    'llm_output': tester_output.agent_text,
+                    'asr_receipt': None,
+                    'audio_wav_base64': base64.b64encode(tester_wav).decode('ascii'),
+                    'frame': tester_frame,
+                })
                 target_response_started_at = time.time()
                 target_asr, target_output = await _run_reference_graph(
                     target_input,
@@ -806,21 +822,27 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                     'response_complete_latency_ms': target_output.total_latency_ms,
                 })
                 frame_evidence.append(target_frame)
+                target_wav = _pcm_to_wav(
+                    target_output.audio,
+                    target_output.sample_rate,
+                    target_output.channels,
+                )
+                yield _duplex_event({
+                    'type': 'live_audio',
+                    'turn_pair': turn_index,
+                    'speaker': 'Agent',
+                    'direction': 'target_to_tester',
+                    'text': target_output.agent_text,
+                    'llm_output': target_output.agent_text,
+                    'asr_receipt': None,
+                    'audio_wav_base64': base64.b64encode(target_wav).decode('ascii'),
+                    'frame': target_frame,
+                })
                 _append_duplex_history_receipt(
                     history,
                     speaker='Caller',
                     text=target_asr.transcript,
                     source='target_asr_receipt',
-                )
-                tester_wav = _pcm_to_wav(
-                    tester_output.audio,
-                    tester_output.sample_rate,
-                    tester_output.channels,
-                )
-                target_wav = _pcm_to_wav(
-                    target_output.audio,
-                    target_output.sample_rate,
-                    target_output.channels,
                 )
                 pending_exchange = {
                     'type': 'exchange',

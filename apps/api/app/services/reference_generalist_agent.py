@@ -539,6 +539,9 @@ class ReferencePipecatAgentTransport:
                     if event_type == 'complete':
                         completed = event
                         continue
+                    if event_type == 'live_audio':
+                        self._record_live_audio_event(event)
+                        continue
                     if event_type != 'exchange':
                         continue
                     exchanges.append(event)
@@ -567,6 +570,41 @@ class ReferencePipecatAgentTransport:
             'turns': exchanges,
             'proof': completed,
         }
+
+    def _record_live_audio_event(self, event: dict[str, Any]) -> None:
+        if self.event_observer is None:
+            return
+        speaker = str(event.get('speaker') or '').strip()
+        direction = str(event.get('direction') or '').strip()
+        text = str(event.get('text') or event.get('llm_output') or '').strip()
+        expected_direction = {
+            'Caller': 'tester_to_target',
+            'Agent': 'target_to_tester',
+        }.get(speaker)
+        if not text or expected_direction != direction:
+            raise ReferenceRuntimeError('Pipecat live audio event omitted valid speaker/direction evidence.')
+        try:
+            audio = base64.b64decode(str(event.get('audio_wav_base64') or ''), validate=True)
+        except Exception as exc:  # noqa: BLE001
+            raise ReferenceRuntimeError('Pipecat live audio event returned invalid WAV evidence.') from exc
+        if not audio:
+            raise ReferenceRuntimeError('Pipecat live audio event returned empty WAV evidence.')
+        frame = event.get('frame') if isinstance(event.get('frame'), dict) else {}
+        turn_pair = event.get('turn_pair')
+        self.event_observer({
+            'speaker': speaker,
+            'text': text,
+            'audio': audio,
+            'direction': direction,
+            'llm_output': str(event.get('llm_output') or text),
+            'asr_receipt': (
+                str(event.get('asr_receipt')).strip()
+                if event.get('asr_receipt')
+                else None
+            ),
+            'frame_metadata': frame,
+            'live_audio_key': f'{turn_pair}:{direction}',
+        })
 
     def _record_duplex_exchange(self, state: _ReferenceSession, event: dict[str, Any]) -> None:
         tester = event.get('tester') if isinstance(event.get('tester'), dict) else {}
@@ -634,25 +672,21 @@ class ReferencePipecatAgentTransport:
                 'response_complete_latency_ms': target_frame.get('response_complete_latency_ms'),
             })
         if self.event_observer is not None:
+            turn_pair = event.get('turn_pair')
             self.event_observer({
-                'speaker': 'Caller',
+                'update_live_audio_key': f'{turn_pair}:tester_to_target',
                 'text': target_receipt,
-                'audio': tester_wav,
-                'direction': 'tester_to_target',
                 'llm_output': tester_text,
                 'asr_receipt': target_receipt,
                 'frame_metadata': tester_frame,
             })
             self.event_observer({
-                'speaker': 'Agent',
+                'update_live_audio_key': f'{turn_pair}:target_to_tester',
                 'text': tester_receipt,
-                'audio': target_wav,
-                'direction': 'target_to_tester',
                 'llm_output': target_text,
                 'asr_receipt': tester_receipt,
                 'frame_metadata': target_frame,
             })
-
     async def send_audio(
         self,
         session_id: str,

@@ -430,8 +430,9 @@ test('launch evaluation streams conversations into the live list', async ({ page
     max_exchanges: 5,
   });
   expect(voicePosted).not.toHaveProperty('model_name');
-  await expect(launch.getByLabel('Read-only browser listener')).toContainText('Available while this run is active.');
-  await expect(launch.getByRole('button', { name: 'Create listener link' })).toBeEnabled();
+  await expect(launch.getByLabel('Run listener link')).toContainText('Available only while this run is active.');
+  await expect(launch.getByRole('button', { name: 'Listen live from now' })).toBeEnabled();
+  await expect(launch.getByRole('button', { name: 'Create live listener link' })).toBeEnabled();
   await expect(page.getByRole('heading', { name: 'Recent runs' })).toBeVisible();
   await expect(page.getByRole('link', { name: /Mock text agent/ })).toContainText('queued');
 

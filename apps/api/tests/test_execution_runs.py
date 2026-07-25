@@ -87,6 +87,20 @@ def test_live_audio_segment_requires_run_owner_and_observed_event():
         mime_type='audio/wav',
         created_at='2026-07-18T20:00:00+00:00',
     ))
+    execution_run_store.update_live_event(
+        run_id,
+        conversation_id,
+        1,
+        text='Current-run caller audio receipt.',
+        llm_output='Current-run caller audio.',
+        asr_receipt='Current-run caller audio receipt.',
+        frame_metadata={'direction': 'tester_to_target'},
+    )
+    updated_event = execution_run_store.get_conversation(run_id, conversation_id)['live_events'][0]
+    assert updated_event['media_url'].endswith('user_id=audio-owner')
+    assert updated_event['llm_output'] == 'Current-run caller audio.'
+    assert updated_event['asr_receipt'] == 'Current-run caller audio receipt.'
+    assert updated_event['frame_metadata']['direction'] == 'tester_to_target'
     live_dir = execution_run_store.RUNS_DIR / run_id / 'audio' / 'live'
     live_dir.mkdir(parents=True)
     payload = b'RIFF-current-run-wav'

@@ -218,9 +218,29 @@ def _live_event_publisher(
     user_id: str,
 ) -> Callable[[dict[str, Any]], None]:
     sequence = 0
+    live_audio_sequences: dict[str, int] = {}
 
     def publish(payload: dict[str, Any]) -> None:
         nonlocal sequence
+        update_key = str(payload.get('update_live_audio_key') or '').strip()
+        if update_key:
+            event_sequence = live_audio_sequences.get(update_key)
+            if event_sequence is None:
+                return
+            execution_run_store.update_live_event(
+                execution_run_id,
+                conversation_id,
+                event_sequence,
+                text=str(payload.get('text') or '').strip(),
+                llm_output=str(payload.get('llm_output') or '').strip(),
+                asr_receipt=str(payload.get('asr_receipt') or '').strip(),
+                frame_metadata=(
+                    payload.get('frame_metadata')
+                    if isinstance(payload.get('frame_metadata'), dict)
+                    else {}
+                ),
+            )
+            return
         speaker = str(payload.get('speaker') or 'System').strip()
         text = str(payload.get('text') or '').strip()
         if not text:
@@ -240,7 +260,7 @@ def _live_event_publisher(
                 f'/api/execution/runs/{quote(execution_run_id)}/conversations/'
                 f'{quote(conversation_id)}/audio/{sequence}?user_id={quote(user_id)}'
             )
-        execution_run_store.append_live_event(
+        updated = execution_run_store.append_live_event(
             execution_run_id,
             conversation_id,
             LiveExecutionEvent(
@@ -261,6 +281,9 @@ def _live_event_publisher(
                 created_at=datetime.now(UTC).isoformat(),
             ),
         )
+        live_audio_key = str(payload.get('live_audio_key') or '').strip()
+        if updated is not None and live_audio_key:
+            live_audio_sequences[live_audio_key] = sequence
 
     return publish
 

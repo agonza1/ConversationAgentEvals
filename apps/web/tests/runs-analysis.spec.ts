@@ -314,3 +314,99 @@ test('voice analysis reports target first audio byte and excludes legacy exchang
   await expect(page.getByText(/legacy marks measured a complete two-agent exchange/)).toBeVisible();
   await expect(page.getByText('17534ms')).toHaveCount(0);
 });
+
+test('active voice listening starts from now and completed playback restarts from the beginning', async ({ page }) => {
+  let polls = 0;
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    const runtime = window as Window & { __playedVoiceUrls: string[] };
+    runtime.__playedVoiceUrls = [];
+    class TestAudio extends EventTarget {
+      constructor(private readonly url: string) {
+        super();
+      }
+      play() {
+        runtime.__playedVoiceUrls.push(this.url);
+        setTimeout(() => this.dispatchEvent(new Event('ended')), 20);
+        return Promise.resolve();
+      }
+      pause() {
+        this.dispatchEvent(new Event('ended'));
+      }
+    }
+    Object.defineProperty(window, 'Audio', { value: TestAudio });
+  });
+
+  await page.route('**/api/execution/runs/exec-live-cursor**', async (route) => {
+    polls += 1;
+    const hasNewAgentAudio = polls >= 3;
+    const completed = polls >= 4;
+    const liveEvents = [
+      {
+        sequence: 1,
+        kind: 'audio',
+        speaker: 'Caller',
+        text: 'Please update my billing address.',
+        direction: 'tester_to_target',
+        media_url: '/api/execution/runs/exec-live-cursor/conversations/exec-live-cursor-1/audio/1?user_id=demo-user',
+      },
+      ...(hasNewAgentAudio ? [{
+        sequence: 2,
+        kind: 'audio',
+        speaker: 'Agent',
+        text: 'I can help with that.',
+        direction: 'target_to_tester',
+        media_url: '/api/execution/runs/exec-live-cursor/conversations/exec-live-cursor-1/audio/2?user_id=demo-user',
+      }] : []),
+    ];
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...runFixture,
+        execution_run_id: 'exec-live-cursor',
+        status: completed ? 'completed' : 'running',
+        mode: 'pipecat_webrtc',
+        tester_id: 'pipecat_tester',
+        executor_id: 'cae_local_audio_loop',
+        progress: {
+          phase: completed ? 'completed' : 'executing',
+          completed_conversations: completed ? 1 : 0,
+          total_conversations: 1,
+          percent: completed ? 100 : 50,
+        },
+        conversations: [{
+          ...runFixture.conversations[0],
+          conversation_id: 'exec-live-cursor-1',
+          execution_run_id: 'exec-live-cursor',
+          mode: 'pipecat_webrtc',
+          status: completed ? 'completed' : 'running',
+          live_events: liveEvents,
+        }],
+      }),
+    });
+  });
+
+  await page.goto('/runs/exec-live-cursor');
+  const feedback = page.getByLabel('Live run feedback');
+  await expect(feedback.getByRole('button', { name: 'Listen live from now' })).toBeVisible();
+  await feedback.getByRole('button', { name: 'Listen live from now' }).click();
+  await expect(feedback.getByRole('button', { name: 'Stop live listening' })).toBeVisible();
+  await expect(feedback.getByText('Listening for new audio only. Earlier turns will not replay.')).toBeVisible();
+
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(1);
+  expect(await page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.filter((url) => url.includes('/audio/1?')).length)).toBe(0);
+
+  await expect(feedback.getByRole('button', { name: 'Play recorded conversation' })).toBeVisible({ timeout: 10_000 });
+  await feedback.getByRole('button', { name: 'Play recorded conversation' }).click();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.filter((url) => url.includes('/audio/1?')).length)).toBe(1);
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(2);
+});

@@ -77,6 +77,8 @@ interface ListenerState {
   conversations?: LiveRunConversation[];
 }
 
+type PlaybackMode = 'idle' | 'live' | 'replay';
+
 export function LiveRunFeedback({
   conversations,
   apiBase,
@@ -86,14 +88,16 @@ export function LiveRunFeedback({
   runStatus,
 }: LiveRunFeedbackProps) {
   const [expanded, setExpanded] = useState(false);
-  const [listening, setListening] = useState(false);
+  const [playbackMode, setPlaybackMode] = useState<PlaybackMode>('idle');
+  const [playbackMessage, setPlaybackMessage] = useState<string | null>(null);
   const [listenerToken, setListenerToken] = useState<ListenerToken | null>(null);
   const [listenerConversations, setListenerConversations] = useState<LiveRunConversation[] | null>(null);
   const [listenerMessage, setListenerMessage] = useState<string | null>(null);
   const [isCreatingListener, setIsCreatingListener] = useState(false);
   const playedRef = useRef(new Set<string>());
   const queuedRef = useRef(new Set<string>());
-  const listeningRef = useRef(false);
+  const playbackModeRef = useRef<PlaybackMode>('idle');
+  const playbackGenerationRef = useRef(0);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const currentResolveRef = useRef<(() => void) | null>(null);
   const playbackRef = useRef(Promise.resolve());
@@ -105,6 +109,10 @@ export function LiveRunFeedback({
       (conversation.live_events ?? []).map((event) => ({ ...event, conversationId: conversation.conversation_id })),
     ),
     [displayedConversations],
+  );
+  const audioEvents = useMemo(
+    () => events.filter((event) => event.kind === 'audio' && event.media_url),
+    [events],
   );
 
   const refreshListener = useCallback(async (token = listenerToken?.token) => {
@@ -144,44 +152,133 @@ export function LiveRunFeedback({
     }
   }
 
-  useEffect(() => {
-    listeningRef.current = listening;
-    if (!listening) {
-      currentAudioRef.current?.pause();
-      currentAudioRef.current = null;
-      currentResolveRef.current?.();
-      currentResolveRef.current = null;
-      return;
-    }
-    for (const event of events) {
-      if (event.kind !== 'audio' || !event.media_url) continue;
-      const key = `${event.conversationId}:${event.sequence}:${event.media_url}`;
-      if (playedRef.current.has(key) || queuedRef.current.has(key)) continue;
-      queuedRef.current.add(key);
+  const stopPlayback = useCallback((message: string | null = null) => {
+    playbackGenerationRef.current += 1;
+    playbackModeRef.current = 'idle';
+    currentAudioRef.current?.pause();
+    currentAudioRef.current = null;
+    currentResolveRef.current?.();
+    currentResolveRef.current = null;
+    queuedRef.current.clear();
+    playbackRef.current = Promise.resolve();
+    setPlaybackMode('idle');
+    setPlaybackMessage(message);
+  }, []);
+
+  const queueAudioEvents = useCallback((
+    candidates: typeof audioEvents,
+    mode: Exclude<PlaybackMode, 'idle'>,
+    generation: number,
+  ) => {
+    for (const event of candidates) {
+      const eventKey = `${event.conversationId}:${event.sequence}`;
+      const queueKey = `${generation}:${eventKey}`;
+      if (
+        queuedRef.current.has(queueKey)
+        || (mode === 'live' && playedRef.current.has(eventKey))
+      ) {
+        continue;
+      }
+      queuedRef.current.add(queueKey);
       playbackRef.current = playbackRef.current.then(async () => {
-        if (!listeningRef.current) {
-          queuedRef.current.delete(key);
+        if (
+          playbackGenerationRef.current !== generation
+          || playbackModeRef.current !== mode
+        ) {
+          queuedRef.current.delete(queueKey);
           return;
         }
+        const audio = new Audio(mediaUrl(apiBase, event.media_url as string));
+        currentAudioRef.current = audio;
+        const finished = new Promise<void>((resolve) => {
+          const onFinished = () => resolve();
+          currentResolveRef.current = onFinished;
+          audio.addEventListener('ended', onFinished, { once: true });
+          audio.addEventListener('error', onFinished, { once: true });
+        });
         try {
-          const audio = new Audio(mediaUrl(apiBase, event.media_url as string));
-          currentAudioRef.current = audio;
           await audio.play();
-          playedRef.current.add(key);
-          await new Promise<void>((resolve) => {
-            currentResolveRef.current = resolve;
-            audio.addEventListener('ended', () => resolve(), { once: true });
-            audio.addEventListener('error', () => resolve(), { once: true });
-          });
-          currentResolveRef.current = null;
+          if (mode === 'live') playedRef.current.add(eventKey);
+          await finished;
+        } catch {
+          currentResolveRef.current?.();
+          setPlaybackMessage(
+            mode === 'live'
+              ? 'Live audio was blocked by the browser. Stop and start live listening again.'
+              : 'Playback was blocked by the browser. Click play to try again.',
+          );
         } finally {
-          queuedRef.current.delete(key);
+          if (currentAudioRef.current === audio) currentAudioRef.current = null;
+          currentResolveRef.current = null;
+          queuedRef.current.delete(queueKey);
         }
       }).catch(() => undefined);
     }
-  }, [apiBase, events, listening]);
+    return playbackRef.current;
+  }, [apiBase]);
 
-  useEffect(() => () => currentAudioRef.current?.pause(), []);
+  function startLiveListening() {
+    stopPlayback();
+    for (const event of audioEvents) {
+      playedRef.current.add(`${event.conversationId}:${event.sequence}`);
+    }
+    playbackModeRef.current = 'live';
+    setPlaybackMode('live');
+    setExpanded(true);
+    setPlaybackMessage('Listening for new audio only. Earlier turns will not replay.');
+  }
+
+  function startReplay() {
+    stopPlayback();
+    if (!audioEvents.length) {
+      setPlaybackMessage('No recorded conversation audio is available.');
+      return;
+    }
+    const generation = playbackGenerationRef.current;
+    playbackModeRef.current = 'replay';
+    setPlaybackMode('replay');
+    setExpanded(true);
+    setPlaybackMessage('Playing the recorded conversation from the beginning.');
+    void queueAudioEvents(audioEvents, 'replay', generation).then(() => {
+      if (
+        playbackGenerationRef.current === generation
+        && playbackModeRef.current === 'replay'
+      ) {
+        playbackModeRef.current = 'idle';
+        setPlaybackMode('idle');
+        setPlaybackMessage('Playback finished. Play again to restart from the beginning.');
+      }
+    });
+  }
+
+  useEffect(() => {
+    if (playbackMode !== 'live') return;
+    const generation = playbackGenerationRef.current;
+    const pending = queueAudioEvents(audioEvents, 'live', generation);
+    if (!listenerActive) {
+      void pending.then(() => {
+        if (
+          playbackGenerationRef.current === generation
+          && playbackModeRef.current === 'live'
+        ) {
+          playbackModeRef.current = 'idle';
+          setPlaybackMode('idle');
+          setPlaybackMessage('Live listening ended with the run. Recorded playback is now available.');
+        }
+      });
+    }
+  }, [audioEvents, listenerActive, playbackMode, queueAudioEvents]);
+
+  useEffect(() => {
+    playedRef.current.clear();
+    stopPlayback();
+  }, [executionRunId, stopPlayback]);
+
+  useEffect(() => () => {
+    playbackGenerationRef.current += 1;
+    currentAudioRef.current?.pause();
+    currentResolveRef.current?.();
+  }, []);
 
   useEffect(() => {
     if (!listenerToken) return undefined;
@@ -210,37 +307,73 @@ export function LiveRunFeedback({
     };
   }, [listenerToken, refreshListener]);
 
+  const audioButtonLabel = playbackMode === 'live'
+    ? 'Stop live listening'
+    : playbackMode === 'replay'
+      ? 'Stop playback'
+      : listenerActive
+        ? 'Listen live from now'
+        : audioEvents.length
+          ? 'Play recorded conversation'
+          : 'No recorded audio';
+  const defaultPlaybackMessage = listenerActive
+    ? 'Live listening starts with the next audio segment and never replays earlier turns.'
+    : audioEvents.length
+      ? 'Recorded playback starts at the beginning and includes the complete captured conversation.'
+      : 'No captured conversation audio is available for playback.';
+
   return (
     <section aria-label="Live run feedback" style={{ display: 'grid', gap: 8 }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
         <button type="button" onClick={() => setExpanded((value) => !value)}>
-          {expanded ? 'Hide live exchange' : 'Show live exchange'}
+          {expanded
+            ? (listenerActive ? 'Hide live exchange' : 'Hide conversation evidence')
+            : (listenerActive ? 'Show live exchange' : 'Show conversation evidence')}
         </button>
         {voice ? (
           <>
             <button
               type="button"
-              aria-pressed={listening}
+              aria-pressed={playbackMode !== 'idle'}
+              disabled={!listenerActive && !audioEvents.length}
               onClick={() => {
-                setExpanded(true);
-                setListening((value) => !value);
+                if (playbackMode !== 'idle') {
+                  stopPlayback(
+                    listenerActive
+                      ? 'Live listening stopped. Start again to hear only future audio.'
+                      : 'Playback stopped. Play again to restart from the beginning.',
+                  );
+                } else if (listenerActive) {
+                  startLiveListening();
+                } else {
+                  startReplay();
+                }
               }}
             >
-              {listening ? 'Mute live conversation' : 'Unmute live conversation'}
+              {audioButtonLabel}
             </button>
-            <button
-              type="button"
-              onClick={() => void createListener()}
-              disabled={!canCreateListener || isCreatingListener}
-            >
-              {isCreatingListener ? 'Creating listener...' : 'Create listener link'}
-            </button>
+            {listenerActive ? (
+              <button
+                type="button"
+                onClick={() => void createListener()}
+                disabled={!canCreateListener || isCreatingListener}
+              >
+                {isCreatingListener ? 'Creating live listener...' : 'Create live listener link'}
+              </button>
+            ) : null}
           </>
         ) : null}
       </div>
       {voice ? (
-        <div aria-label="Read-only browser listener" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12, display: 'grid', gap: 6 }}>
-          <strong style={{ fontSize: 13 }}>Read-only browser listener</strong>
+        <span role="status" aria-live="polite" style={{ color: 'var(--muted)', fontSize: 13 }}>
+          {playbackMessage || defaultPlaybackMessage}
+        </span>
+      ) : null}
+      {voice && (listenerActive || listenerToken) ? (
+        <div aria-label="Run listener link" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12, display: 'grid', gap: 6 }}>
+          <strong style={{ fontSize: 13 }}>
+            {listenerActive ? 'Read-only live listener' : 'Listener link · run finished'}
+          </strong>
           {listenerToken ? (
             <>
               <a href={listenerBrowserUrl(listenerToken.token, apiBase)} target="_blank" rel="noreferrer" style={{ overflowWrap: 'anywhere', fontWeight: 760 }}>
@@ -255,7 +388,7 @@ export function LiveRunFeedback({
             </>
           ) : (
             <span style={{ color: 'var(--muted)', fontSize: 13 }}>
-              {listenerActive ? 'Available while this run is active.' : 'Available while a voice run is queued or running.'}
+              Available only while this run is active.
             </span>
           )}
           {listenerMessage ? <span role="status" style={{ color: 'var(--muted)', fontSize: 13 }}>{listenerMessage}</span> : null}

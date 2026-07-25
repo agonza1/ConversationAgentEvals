@@ -167,6 +167,38 @@ class FakeDuplexAsyncClient:
         target_audio = base64.b64encode(_wav(8)).decode('ascii')
         events = [
             {
+                'type': 'live_audio',
+                'turn_pair': 1,
+                'speaker': 'Caller',
+                'direction': 'tester_to_target',
+                'text': 'I want to cancel because the renewal increased.',
+                'llm_output': 'I want to cancel because the renewal increased.',
+                'asr_receipt': None,
+                'audio_wav_base64': tester_audio,
+                'frame': {
+                    'sequence': 1,
+                    'direction': 'tester_to_target',
+                    'bytes': 320,
+                    'transport': 'in_process_pipecat_frame_bus',
+                },
+            },
+            {
+                'type': 'live_audio',
+                'turn_pair': 1,
+                'speaker': 'Agent',
+                'direction': 'target_to_tester',
+                'text': 'I can help and will keep the cancellation active.',
+                'llm_output': 'I can help and will keep the cancellation active.',
+                'asr_receipt': None,
+                'audio_wav_base64': target_audio,
+                'frame': {
+                    'sequence': 2,
+                    'direction': 'target_to_tester',
+                    'bytes': 320,
+                    'transport': 'in_process_pipecat_frame_bus',
+                },
+            },
+            {
                 'type': 'exchange',
                 'turn_pair': 1,
                 'tester': {
@@ -404,7 +436,13 @@ def test_primary_reference_path_streams_session_control_not_wav_turns(monkeypatc
             'tester_to_target',
             'target_to_tester',
         ]
-        assert [event['speaker'] for event in observed] == ['Caller', 'Agent']
+        audio_events = [event for event in observed if event.get('audio')]
+        evidence_updates = [event for event in observed if event.get('update_live_audio_key')]
+        assert [event['speaker'] for event in audio_events] == ['Caller', 'Agent']
+        assert [event['asr_receipt'] for event in evidence_updates] == [
+            'I want to cancel because the renewal increased.',
+            'I can help and will keep the cancellation active.',
+        ]
         assert transport.recording_handle('duplex-session') is not None
 
     asyncio.run(run())
