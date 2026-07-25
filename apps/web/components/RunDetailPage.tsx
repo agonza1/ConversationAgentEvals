@@ -531,8 +531,6 @@ function JudgeResult({
 function judgeReport(run: ExecutionRunRecord, conversation: ConversationRecord): Record<string, unknown> {
   const evidence = resolutionEvidence(conversation);
   const summary = conversation.metrics_summary;
-  const finalState = asRecord(conversation.final_state);
-  const complete = typeof finalState.complete === 'boolean' ? finalState.complete : null;
   const failureCategories = evidence.error
     ? [...evidence.gaps, `Execution error: ${evidence.error}`]
     : evidence.gaps;
@@ -544,7 +542,6 @@ function judgeReport(run: ExecutionRunRecord, conversation: ConversationRecord):
     scenario_title: conversation.scenario_title,
     verdict: summary?.verdict || conversation.verdict,
     overall_score: summary?.score ?? conversation.score,
-    final_state_score: complete === true ? 100 : complete === false ? 0 : null,
     failure_categories: failureCategories,
     evidence_citations: judgeEvidenceCitations(conversation),
     action_trace: conversation.action_trace || [],

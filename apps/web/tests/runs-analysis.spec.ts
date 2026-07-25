@@ -265,7 +265,6 @@ test('run detail can request the existing LLM judge with selected conversation e
       scenario_id: 'cancellation-rescue',
       verdict: 'needs_review',
       overall_score: 60,
-      final_state_score: 0,
       evidence_citations: expect.arrayContaining([
         {
           source: 'action_trace',
@@ -280,6 +279,10 @@ test('run detail can request the existing LLM judge with selected conversation e
       final_state: conversation.final_state,
     },
   });
+  const judgeReportPayload = (
+    judgeRequest as { report?: Record<string, unknown> } | null
+  )?.report;
+  expect(judgeReportPayload).not.toHaveProperty('final_state_score');
 
   await page.getByRole('button', { name: 'What the judge saw' }).click();
   await expect(page.getByText('Deterministic verdict: needs_review')).toBeVisible();

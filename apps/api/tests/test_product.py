@@ -1584,6 +1584,33 @@ def test_llm_judge_prompt_preserves_structured_execution_evidence():
     assert '"execution_error": "provider disconnected after the tool result"' in prompt
 
 
+def test_llm_judge_structured_evidence_stays_valid_and_preserves_priority_fields():
+    from app.services import product_service
+
+    serialized = product_service._judge_structured_evidence({
+        'action_trace': [
+            {
+                'action': 'update_billing_address',
+                'tool_result': {'raw_provider_payload': 'x' * 12_000},
+            }
+        ],
+        'final_state': {
+            'complete': True,
+            'outcome': 'unsupported_terminal_outcome',
+            'customer': {'subscription_status': 'retained'},
+        },
+        'error': 'provider disconnected after the tool result',
+    })
+
+    evidence = json.loads(serialized)
+    assert len(serialized) <= 8000
+    assert evidence['final_state']['outcome'] == 'unsupported_terminal_outcome'
+    assert evidence['final_state']['customer']['subscription_status'] == 'retained'
+    assert evidence['execution_error'] == 'provider disconnected after the tool result'
+    assert evidence['action_trace']['truncated'] is True
+    assert evidence['action_trace']['original_chars'] > 3000
+
+
 def test_llm_judge_spend_reservation_is_atomic(monkeypatch, tmp_path):
     from app.services import product_service
     from app.services.llm_providers import set_provider_for_tests

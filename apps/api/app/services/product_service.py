@@ -1158,21 +1158,36 @@ def _judge_failure_summary(report: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _bounded_judge_evidence_value(value: Any, *, max_chars: int) -> Any:
+    serialized = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    if len(serialized) <= max_chars:
+        return value
+    wrapper: dict[str, Any] = {
+        'truncated': True,
+        'original_chars': len(serialized),
+        'json_preview': '',
+    }
+    wrapper_overhead = len(json.dumps(wrapper, ensure_ascii=False, sort_keys=True))
+    wrapper['json_preview'] = serialized[:max(0, max_chars - wrapper_overhead)]
+    while len(json.dumps(wrapper, ensure_ascii=False, sort_keys=True)) > max_chars:
+        wrapper['json_preview'] = wrapper['json_preview'][:-1]
+    return wrapper
+
+
 def _judge_structured_evidence(report: dict[str, Any]) -> str:
     structured: dict[str, Any] = {}
-    action_trace = report.get('action_trace')
-    if isinstance(action_trace, list) and action_trace:
-        structured['action_trace'] = action_trace[:12]
     final_state = report.get('final_state')
     if isinstance(final_state, dict) and final_state:
-        structured['final_state'] = final_state
+        structured['final_state'] = _bounded_judge_evidence_value(final_state, max_chars=3500)
     execution_error = report.get('error')
     if isinstance(execution_error, str) and execution_error.strip():
-        structured['execution_error'] = execution_error.strip()[:1000]
+        structured['execution_error'] = execution_error.strip()[:900]
+    action_trace = report.get('action_trace')
+    if isinstance(action_trace, list) and action_trace:
+        structured['action_trace'] = _bounded_judge_evidence_value(action_trace[:12], max_chars=3000)
     if not structured:
         return '(none)'
-    serialized = json.dumps(structured, ensure_ascii=False, sort_keys=True, default=str)
-    return serialized if len(serialized) <= 8000 else serialized[:7999] + '…'
+    return json.dumps(structured, ensure_ascii=False, sort_keys=True, default=str)
 
 
 def _judge_spend_path():
