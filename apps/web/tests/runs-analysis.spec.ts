@@ -207,7 +207,7 @@ test('resolution evidence handles failed and not-evaluated conversations without
     score: null,
     metrics_summary: null,
     action_trace: [],
-    final_state: {},
+    final_state: { tester_termination_reason: 'target_terminal_state' },
   };
   const edgeRun = {
     ...runFixture,
@@ -233,6 +233,7 @@ test('resolution evidence handles failed and not-evaluated conversations without
   await expect(page.getByLabel('Resolution verification status')).toContainText(
     'No resolution verdict is available for this conversation.',
   );
+  await expect(page.getByLabel('Resolution evidence details')).toContainText('Target Terminal State');
 });
 
 test('active run analysis recovers after a transient polling error', async ({ page }) => {

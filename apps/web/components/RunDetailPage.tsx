@@ -504,7 +504,8 @@ function resolutionEvidence(conversation: ConversationRecord) {
   const finalState = conversation.final_state || {};
   const runtime = asRecord(finalState.runtime_provenance);
   const finalComplete = typeof finalState.complete === 'boolean' ? finalState.complete : null;
-  const terminationReason = stringValue(finalState.termination_reason);
+  const terminationReason = stringValue(finalState.termination_reason)
+    || stringValue(finalState.tester_termination_reason);
   const outcome = stringValue(finalState.outcome);
   const actionCount = conversation.action_trace?.length || 0;
   const evaluationScore = summary?.score ?? conversation.score;
