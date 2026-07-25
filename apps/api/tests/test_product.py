@@ -1589,8 +1589,9 @@ def test_llm_judge_recomputes_missing_evaluator_findings_before_spending(monkeyp
 
     captured = {}
 
-    def fake_run_scenario(request):
+    def fake_run_scenario(request, *, persist_artifacts=True):
         captured.update(request.model_dump())
+        captured['persist_artifacts'] = persist_artifacts
         return {
             'verdict': 'needs_review',
             'overall_score': 45,
@@ -1623,6 +1624,7 @@ def test_llm_judge_recomputes_missing_evaluator_findings_before_spending(monkeyp
 
     assert captured['user_id'] == 'judge-user'
     assert captured['project_id'] == 'judge-project'
+    assert captured['persist_artifacts'] is False
     assert grounded['evaluator_findings_source'] == 'recomputed_current_contract'
     assert grounded['verdict'] == 'needs_review'
     assert grounded['overall_score'] == 45
@@ -1642,7 +1644,7 @@ def test_llm_judge_recomputes_missing_evaluator_findings_before_spending(monkeyp
 def test_llm_judge_does_not_recompute_execution_failure_as_evaluator_verdict(monkeypatch):
     from app.services import benchmark_service, product_service
 
-    def fail_if_called(_request):
+    def fail_if_called(_request, **_kwargs):
         raise AssertionError('execution failures must not be reclassified by the evaluator')
 
     monkeypatch.setattr(benchmark_service, 'run_scenario', fail_if_called)

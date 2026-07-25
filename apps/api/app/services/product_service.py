@@ -1230,7 +1230,7 @@ def _ground_judge_report(
             final_state=report.get('final_state') or {},
             user_id=user_id,
             project_id=project_id,
-        ))
+        ), persist_artifacts=False)
     except Exception as exc:  # noqa: BLE001 - retain the saved result and expose why grounding failed
         grounded['evaluator_findings_error'] = str(exc)
         return grounded
