@@ -349,22 +349,19 @@ def test_voice_fixture_rejects_non_cancellation_scenario():
     assert 'cancellation-rescue' in response.json()['detail']
 
 
-def test_pipecat_reference_rejects_scenario_without_matching_tester_plan():
-    response = client.post(
-        '/api/execution/runs',
-        json={
-            'suite_id': 'call-center-voice-ai',
-            'scenario_ids': ['billing-address-change'],
-            'mode': 'pipecat_webrtc',
-            'user_id': 'exec-user',
-            'project_id': 'exec-project',
-        },
+def test_pipecat_reference_accepts_selected_catalog_scenario():
+    queued = start_execution_run(
+        ExecutionRunCreateRequest(
+            suite_id='call-center-voice-ai',
+            scenario_ids=['billing-address-change'],
+            mode='pipecat_webrtc',
+            user_id='exec-user',
+            project_id='exec-project',
+        )
     )
-    assert response.status_code == 400
-    assert response.json()['detail'] == (
-        'pipecat_webrtc currently supports only scenario cancellation-rescue; '
-        'its tester act plan is scenario-specific.'
-    )
+    assert queued['suite_id'] == 'call-center-voice-ai'
+    assert queued['scenario_ids'] == ['billing-address-change']
+    assert queued['mode'] == 'pipecat_webrtc'
 
 
 def test_offline_acc_fixture_rejects_non_cancellation_scenario():

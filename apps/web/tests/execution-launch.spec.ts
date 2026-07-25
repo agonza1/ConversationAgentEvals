@@ -178,7 +178,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
             status: 'queued',
             mode: 'pipecat_webrtc',
             suite_id: 'call-center-voice-ai',
-            scenario_ids: ['cancellation-rescue'],
+            scenario_ids: ['billing-address-change'],
             user_id: 'demo-user',
             project_id: 'call-center-demo',
             progress: { phase: 'queued', completed_conversations: 0, total_conversations: 1, percent: 0 },
@@ -339,7 +339,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
     window.localStorage.setItem('conversation-evals-demo-plan', 'free');
   });
 
-  await page.goto('/runs?api_base=http%3A%2F%2Fapi.example.test&suite_id=call-center-voice-ai&scenario_id=cancellation-rescue');
+  await page.goto('/runs?api_base=http%3A%2F%2Fapi.example.test&suite_id=call-center-voice-ai&scenario_id=billing-address-change');
   await expect(page.getByLabel('Launch agent run')).toBeVisible();
   await expect(page.getByLabel('Launch agent run').getByRole('button', { name: 'Run evaluation' })).toBeEnabled({
     timeout: 30_000,
@@ -350,7 +350,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect(launch.getByLabel('Execution agent target')).toHaveValue('generalist-text-agent');
   await expect(launch.getByLabel('Maximum exchanges')).toHaveValue('3');
   await expect(launch.getByLabel('Maximum exchanges')).toBeEnabled();
-  await expect(launch.getByLabel('Selected run scope')).toContainText('Cancellation Rescue');
+  await expect(launch.getByLabel('Selected run scope')).toContainText('Billing Address Change');
   await expect(launch.getByLabel('Execution tester')).toContainText('Scenario user (AI)');
   await expect(launch.getByLabel('Execution runner')).toContainText(/local async runner/i);
   await expect(launch.locator('.run-config-step-heading strong')).toHaveText([
@@ -371,7 +371,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await launch.getByRole('button', { name: 'Run evaluation' }).click();
   await expect(launch).toContainText('tester_id: Extra inputs are not permitted; executor_id: Extra inputs are not permitted');
   await expect(launch).not.toContainText('[object Object]');
-  expect(textPostAttempts[0]).toMatchObject({ scenario_ids: ['cancellation-rescue'] });
+  expect(textPostAttempts[0]).toMatchObject({ scenario_ids: ['billing-address-change'] });
   await runScope.getByRole('button', { name: /Entire suite/ }).click();
   await expect(runScope.getByRole('button', { name: /Entire suite/ })).toHaveAttribute('aria-pressed', 'true');
   await expect(launch.getByLabel('Selected run scope')).toContainText('Call Center Voice AI');
@@ -411,10 +411,11 @@ test('launch evaluation streams conversations into the live list', async ({ page
   });
   await expect(launch.getByLabel('Execution conversations')).toContainText('Billing Address Change');
   await expect(launch.getByLabel('Execution conversations')).toContainText(/pass/i, { timeout: 8000 });
+  await page.goto('/runs?api_base=http%3A%2F%2Fapi.example.test&suite_id=call-center-voice-ai&scenario_id=billing-address-change');
+  await expect(launch.getByLabel('Selected run scope')).toContainText('Billing Address Change');
   await launch.getByLabel('Execution agent target').selectOption('generalist-voice-agent');
   await expect(launch.getByLabel('Execution tester')).toContainText('Scenario user (AI)');
   await expect(launch).toContainText('adapts to the target\'s responses');
-  await expect(launch.getByLabel('Maximum exchanges')).toHaveValue('4');
   await launch.getByLabel('Maximum exchanges').fill('5');
   await expect(launch).toContainText('up to 5 exchanges each');
   await launch.getByRole('button', { name: 'Run evaluation' }).click();
@@ -424,6 +425,8 @@ test('launch evaluation streams conversations into the live list', async ({ page
     agent_id: 'generalist-voice-agent',
     tester_id: 'pipecat_tester',
     executor_id: 'cae_local_audio_loop',
+    suite_id: 'call-center-voice-ai',
+    scenario_ids: ['billing-address-change'],
     max_exchanges: 5,
   });
   expect(voicePosted).not.toHaveProperty('model_name');

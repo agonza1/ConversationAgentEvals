@@ -36,6 +36,7 @@ class _Response:
 
 class _AsyncClient:
     completion_prompts: list[str] = []
+    speech_voices: list[str] = []
 
     def __init__(self, *args, **kwargs):
         pass
@@ -54,6 +55,7 @@ class _AsyncClient:
             type(self).completion_prompts.append(kwargs['json']['prompt'])
             return _Response(payload={'text': 'Of course.'})
         if url.endswith('/v1/audio/speech'):
+            type(self).speech_voices.append(kwargs['json']['voice'])
             return _Response(content=_wav())
         raise AssertionError(url)
 
@@ -102,6 +104,7 @@ class _DivergentReceiptAsyncClient:
 
 def test_reference_turn_runs_real_pipecat_pipeline(monkeypatch):
     _AsyncClient.completion_prompts.clear()
+    _AsyncClient.speech_voices.clear()
     monkeypatch.setattr(server, 'RTC_ASR_BASE_URL', 'http://rtc-asr.test')
     monkeypatch.setattr(server, 'KOKORO_BASE_URL', 'http://kokoro.test')
     monkeypatch.setattr(server, 'REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
@@ -122,9 +125,11 @@ def test_reference_turn_runs_real_pipecat_pipeline(monkeypatch):
     assert 'one or two short sentences' in _AsyncClient.completion_prompts[0]
     assert 'Ask at most one question at a time' in _AsyncClient.completion_prompts[0]
     assert 'Do not use markdown, bullets, or numbered lists' in _AsyncClient.completion_prompts[0]
+    assert _AsyncClient.speech_voices == ['am_adam']
 
 
 def test_reference_tester_turn_runs_real_pipecat_pipeline(monkeypatch):
+    _AsyncClient.speech_voices.clear()
     monkeypatch.setattr(server, 'RTC_ASR_BASE_URL', 'http://rtc-asr.test')
     monkeypatch.setattr(server, 'KOKORO_BASE_URL', 'http://kokoro.test')
     monkeypatch.setattr(server, 'REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
@@ -149,10 +154,12 @@ def test_reference_tester_turn_runs_real_pipecat_pipeline(monkeypatch):
     assert payload['tester_text'] == 'Of course.'
     assert payload['pipeline']['processors'] == ['rtc-asr', 'llm', 'kokoro']
     assert base64.b64decode(payload['tester_audio_wav_base64']).startswith(b'RIFF')
+    assert _AsyncClient.speech_voices == ['af_heart']
 
 
 def test_reference_duplex_stream_runs_two_graphs_over_local_frames(monkeypatch):
     _AsyncClient.completion_prompts.clear()
+    _AsyncClient.speech_voices.clear()
     monkeypatch.setattr(server, 'RTC_ASR_BASE_URL', 'http://rtc-asr.test')
     monkeypatch.setattr(server, 'KOKORO_BASE_URL', 'http://kokoro.test')
     monkeypatch.setattr(server, 'REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
@@ -163,13 +170,13 @@ def test_reference_duplex_stream_runs_two_graphs_over_local_frames(monkeypatch):
         'session_id': 'offline-duplex-proof',
         'execution_run_id': 'offline-execution-proof',
         'scenario': {
-            'id': 'cancellation-rescue',
-            'title': 'Cancellation Rescue',
-            'persona': 'A policyholder who wants to cancel.',
-            'goal': 'Reach a safe disposition.',
-            'required_actions': ['detect cancellation intent', 'record final disposition'],
-            'forbidden_actions': ['make unapproved retention offer'],
-            'expected_final_state': 'A safe disposition is recorded.',
+            'id': 'billing-address-change',
+            'title': 'Billing Address Change',
+            'persona': 'A customer who recently moved.',
+            'goal': 'Verify the account and update the billing address.',
+            'required_actions': ['verify account', 'collect new billing address'],
+            'forbidden_actions': ['change address before verification'],
+            'expected_final_state': 'The verified account has the new billing address.',
         },
         'tester_model_name': 'tester-model',
         'target_model_name': 'target-model',
@@ -177,6 +184,8 @@ def test_reference_duplex_stream_runs_two_graphs_over_local_frames(monkeypatch):
         'llm_mode': 'mock',
         'max_turn_pairs': 2,
         'total_timeout_seconds': 20,
+        'tester_voice': 'af_heart',
+        'target_voice': 'am_adam',
     }
     assert 'audio' not in str(request).lower()
     response = client.post(
@@ -201,6 +210,8 @@ def test_reference_duplex_stream_runs_two_graphs_over_local_frames(monkeypatch):
     assert all(frame['transport'] == 'in_process_pipecat_frame_bus' for frame in completed['frames'])
     assert completed['graphs']['tester']['processors'][1]['model'] == 'tester-model'
     assert completed['graphs']['target']['processors'][1]['model'] == 'target-model'
+    assert completed['graphs']['tester']['processors'][2]['voice'] == 'af_heart'
+    assert completed['graphs']['target']['processors'][2]['voice'] == 'am_adam'
     assert completed['graphs']['tester']['llm_mode'] == 'mock'
     assert exchanges[0]['target']['asr_receipt'] == 'Please help me.'
     assert exchanges[0]['target']['tester_asr_receipt'] == 'Please help me.'
@@ -210,6 +221,31 @@ def test_reference_duplex_stream_runs_two_graphs_over_local_frames(monkeypatch):
     ]
     assert target_prompts
     assert all('one or two short sentences' in prompt for prompt in target_prompts)
+    tester_prompts = [
+        prompt for prompt in _AsyncClient.completion_prompts
+        if 'caller-side Pipecat tester' in prompt
+    ]
+    assert tester_prompts
+    assert all('Billing Address Change' in prompt for prompt in tester_prompts)
+    assert all('update the billing address' in prompt for prompt in tester_prompts)
+    assert _AsyncClient.speech_voices == ['af_heart', 'am_adam', 'af_heart', 'am_adam']
+
+
+def test_reference_duplex_rejects_matching_voices(monkeypatch):
+    monkeypatch.setattr(server, 'REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
+    client = TestClient(server.app)
+    response = client.post(
+        '/reference-duplex/run',
+        headers={'x-cae-reference-token': 'test-token'},
+        json={
+            'session_id': 'matching-voices',
+            'execution_run_id': 'matching-voices-run',
+            'scenario': {'id': 'billing-address-change', 'title': 'Billing Address Change'},
+            'tester_voice': 'af_heart',
+            'target_voice': 'af_heart',
+        },
+    )
+    assert response.status_code == 422
 
 
 def test_reference_duplex_history_uses_peer_asr_receipts_for_later_prompts(monkeypatch):

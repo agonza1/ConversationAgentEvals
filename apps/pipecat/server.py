@@ -20,7 +20,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 _env_candidates = [*Path(__file__).resolve().parents, Path.cwd()]
 for _parent in _env_candidates:
@@ -204,7 +204,13 @@ RTC_ASR_CHANNELS = 1
 RTC_ASR_ENCODING = 'pcm16le'
 KOKORO_BASE_URL = os.getenv('KOKORO_BASE_URL', '').rstrip('/')
 KOKORO_MODEL = os.getenv('KOKORO_MODEL', 'kokoro')
-KOKORO_VOICE = os.getenv('KOKORO_VOICE', 'af_heart')
+KOKORO_TESTER_VOICE = os.getenv('KOKORO_TESTER_VOICE', 'af_heart')
+_KOKORO_LEGACY_VOICE = os.getenv('KOKORO_VOICE', '').strip()
+KOKORO_TARGET_VOICE = os.getenv('KOKORO_TARGET_VOICE', '').strip() or (
+    _KOKORO_LEGACY_VOICE
+    if _KOKORO_LEGACY_VOICE and _KOKORO_LEGACY_VOICE != KOKORO_TESTER_VOICE
+    else 'am_adam'
+)
 REFERENCE_LLM_MODEL = os.getenv('REFERENCE_LLM_MODEL', 'gpt-5.4-mini')
 REFERENCE_AGENT_INTERNAL_TOKEN = os.getenv('REFERENCE_AGENT_INTERNAL_TOKEN', '').strip()
 HEYGEN_LIVE_AVATAR_API_KEY = os.getenv('HEYGEN_LIVE_AVATAR_API_KEY') or os.getenv('HEYGEN_API_KEY')
@@ -254,6 +260,7 @@ class ReferenceAgentTurnRequest(BaseModel):
     audio_wav_base64: str
     history: list[dict[str, str]] = Field(default_factory=list)
     model_name: str | None = None
+    voice: str = KOKORO_TARGET_VOICE
 
 
 class ReferenceTesterTurnRequest(BaseModel):
@@ -275,6 +282,14 @@ class ReferenceDuplexRunRequest(BaseModel):
     llm_mode: Literal['real', 'mock'] = 'real'
     max_turn_pairs: int = Field(default=3, ge=1, le=10)
     total_timeout_seconds: float = Field(default=90, ge=5, le=300)
+    tester_voice: str = KOKORO_TESTER_VOICE
+    target_voice: str = KOKORO_TARGET_VOICE
+
+    @model_validator(mode='after')
+    def validate_distinct_voices(self) -> 'ReferenceDuplexRunRequest':
+        if self.tester_voice == self.target_voice:
+            raise ValueError('tester_voice and target_voice must be different')
+        return self
 
 
 class ReferenceListenerJoinRequest(BaseModel):
@@ -557,6 +572,10 @@ if PIPECAT_RUNTIME_AVAILABLE:
 
 
     class _ReferenceKokoroProcessor(FrameProcessor):
+        def __init__(self, voice: str):
+            super().__init__()
+            self.voice = voice
+
         async def process_frame(self, frame: Frame, direction: FrameDirection):
             await super().process_frame(frame, direction)
             if not isinstance(frame, _AgentTextFrame):
@@ -567,7 +586,7 @@ if PIPECAT_RUNTIME_AVAILABLE:
                     f'{KOKORO_BASE_URL}/v1/audio/speech',
                     json={
                         'model': KOKORO_MODEL,
-                        'voice': KOKORO_VOICE,
+                        'voice': self.voice,
                         'input': frame.text,
                         'response_format': 'wav',
                     },
@@ -639,14 +658,14 @@ def _require_reference_token(value: str | None) -> None:
         raise HTTPException(status_code=403, detail='Invalid local reference-agent token.')
 
 
-async def _run_reference_graph(input_frame: Any, llm_processor: Any) -> tuple[Any, Any]:
+async def _run_reference_graph(input_frame: Any, llm_processor: Any, *, voice: str) -> tuple[Any, Any]:
     """Run one bounded turn through an actual Pipecat ASR -> LLM -> TTS graph."""
     collector = _ReferenceCollector()
     asr_processor = _ReferenceAsrProcessor()
     pipeline = Pipeline([
         asr_processor,
         llm_processor,
-        _ReferenceKokoroProcessor(),
+        _ReferenceKokoroProcessor(voice),
         collector,
     ])
     task = PipelineTask(pipeline, enable_rtvi=False, enable_turn_tracking=False)
@@ -711,6 +730,7 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                         model_name=payload.tester_model_name or REFERENCE_LLM_MODEL,
                         record_latest_target_receipt=pending_exchange is not None,
                     ),
+                    voice=payload.tester_voice,
                 )
                 if pending_exchange is not None:
                     tester_receipt = tester_asr.transcript
@@ -735,6 +755,7 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                         history,
                         payload.target_model_name or REFERENCE_LLM_MODEL,
                     ),
+                    voice=payload.target_voice,
                 )
                 previous_target_input, target_frame = bus.send(
                     direction='target_to_tester',
@@ -806,7 +827,12 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                                 'provider': payload.llm_provider,
                                 'model': payload.tester_model_name or REFERENCE_LLM_MODEL,
                             },
-                            {'name': 'kokoro', 'provider': 'kokoro', 'model': KOKORO_MODEL},
+                            {
+                                'name': 'kokoro',
+                                'provider': 'kokoro',
+                                'model': KOKORO_MODEL,
+                                'voice': payload.tester_voice,
+                            },
                         ],
                         'llm_mode': payload.llm_mode,
                     },
@@ -819,7 +845,12 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                                 'provider': payload.llm_provider,
                                 'model': payload.target_model_name or REFERENCE_LLM_MODEL,
                             },
-                            {'name': 'kokoro', 'provider': 'kokoro', 'model': KOKORO_MODEL},
+                            {
+                                'name': 'kokoro',
+                                'provider': 'kokoro',
+                                'model': KOKORO_MODEL,
+                                'voice': payload.target_voice,
+                            },
                         ],
                         'llm_mode': payload.llm_mode,
                     },
@@ -866,10 +897,18 @@ async def _wait_for_active_reference_broadcast(execution_run_id: str) -> _Refere
 async def reference_agent_readiness(x_cae_reference_token: str | None = Header(default=None)):
     _require_reference_token(x_cae_reference_token)
     return {
-        'ready': bool(PIPECAT_RUNTIME_AVAILABLE and RTC_ASR_BASE_URL and KOKORO_BASE_URL),
+        'ready': bool(
+            PIPECAT_RUNTIME_AVAILABLE
+            and RTC_ASR_BASE_URL
+            and KOKORO_BASE_URL
+            and KOKORO_TESTER_VOICE != KOKORO_TARGET_VOICE
+        ),
         'pipeline_runtime': PIPECAT_RUNTIME_AVAILABLE,
         'rtc_asr_configured': bool(RTC_ASR_BASE_URL),
         'kokoro_configured': bool(KOKORO_BASE_URL),
+        'tester_voice': KOKORO_TESTER_VOICE,
+        'target_voice': KOKORO_TARGET_VOICE,
+        'voices_distinct': KOKORO_TESTER_VOICE != KOKORO_TARGET_VOICE,
         'duplex_route_ready': True,
         'listener_webrtc_ready': bool(PIPECAT_RUNTIME_AVAILABLE),
         'route': '/reference-duplex/run',
@@ -1013,7 +1052,7 @@ async def reference_agent_turn(
         pipeline = Pipeline([
             asr_processor,
             _ReferenceLlmProcessor(payload.history, payload.model_name or REFERENCE_LLM_MODEL),
-            _ReferenceKokoroProcessor(),
+            _ReferenceKokoroProcessor(payload.voice),
             collector,
         ])
         task = PipelineTask(pipeline, enable_rtvi=False, enable_turn_tracking=False)
@@ -1051,7 +1090,7 @@ async def reference_tester_turn(
         pipeline = Pipeline([
             asr_processor,
             _ReferenceTesterLlmProcessor(payload),
-            _ReferenceKokoroProcessor(),
+            _ReferenceKokoroProcessor(KOKORO_TESTER_VOICE),
             collector,
         ])
         task = PipelineTask(pipeline, enable_rtvi=False, enable_turn_tracking=False)

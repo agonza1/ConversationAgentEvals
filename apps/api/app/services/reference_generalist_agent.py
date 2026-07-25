@@ -42,6 +42,15 @@ class CompletionProvider(Protocol):
     def complete(self, prompt: str, *, model_name: str | None = None) -> str: ...
 
 
+def _default_target_voice() -> str:
+    explicit = os.getenv('KOKORO_TARGET_VOICE', '').strip()
+    if explicit:
+        return explicit
+    tester = os.getenv('KOKORO_TESTER_VOICE', 'af_heart').strip()
+    legacy = os.getenv('KOKORO_VOICE', '').strip()
+    return legacy if legacy and legacy != tester else 'am_adam'
+
+
 @dataclass(frozen=True, slots=True)
 class ReferenceRuntimeConfig:
     pipecat_service_url: str = field(
@@ -70,8 +79,11 @@ class ReferenceRuntimeConfig:
     kokoro_model: str = field(
         default_factory=lambda: os.getenv('KOKORO_MODEL', 'kokoro').strip()
     )
-    kokoro_voice: str = field(
-        default_factory=lambda: os.getenv('KOKORO_VOICE', 'af_heart').strip()
+    kokoro_tester_voice: str = field(
+        default_factory=lambda: os.getenv('KOKORO_TESTER_VOICE', 'af_heart').strip()
+    )
+    kokoro_target_voice: str = field(
+        default_factory=_default_target_voice
     )
     llm_model: str = field(
         default_factory=lambda: os.getenv('REFERENCE_LLM_MODEL', 'gpt-5.4-mini').strip()
@@ -153,6 +165,11 @@ class ReferenceMediaServices:
             raise ReferenceRuntimeError(
                 'Built-in voice target requires Kokoro. Set KOKORO_BASE_URL (for example http://localhost:8880).'
             )
+        if self.config.kokoro_tester_voice == self.config.kokoro_target_voice:
+            raise ReferenceRuntimeError(
+                'Built-in voice evaluation requires distinct tester and target voices. '
+                'Set KOKORO_TESTER_VOICE and KOKORO_TARGET_VOICE to different Kokoro voice IDs.'
+            )
         try:
             asr = self.client.get(
                 f'{self.config.rtc_asr_base_url}{self.config.rtc_asr_health_path}'
@@ -191,17 +208,19 @@ class ReferenceMediaServices:
             'tts': {
                 'provider': 'kokoro',
                 'model': self.config.kokoro_model,
-                'voice': self.config.kokoro_voice,
+                'tester_voice': self.config.kokoro_tester_voice,
+                'target_voice': self.config.kokoro_target_voice,
+                'voices_distinct': True,
                 'status': str(kokoro_payload.get('status') or 'ready'),
             },
         }
 
-    def synthesize(self, text: str) -> bytes:
+    def synthesize(self, text: str, *, voice: str | None = None) -> bytes:
         response = self.client.post(
             f'{self.config.kokoro_base_url}/v1/audio/speech',
             json={
                 'model': self.config.kokoro_model,
-                'voice': self.config.kokoro_voice,
+                'voice': voice or self.config.kokoro_tester_voice,
                 'input': text,
                 'response_format': 'wav',
             },
@@ -393,6 +412,8 @@ class ReferencePipecatAgentTransport:
             target_llm_model=config.llm_model,
             stt_model=config.rtc_asr_model,
             tts_model=config.kokoro_model,
+            tester_tts_voice=config.kokoro_tester_voice,
+            target_tts_voice=config.kokoro_target_voice,
             llm_mode='real',
         )
         self._tester_graph = tester_graph
@@ -480,6 +501,8 @@ class ReferencePipecatAgentTransport:
             'llm_mode': 'real',
             'max_turn_pairs': max_turn_pairs,
             'total_timeout_seconds': total_timeout_seconds,
+            'tester_voice': self.config.kokoro_tester_voice,
+            'target_voice': self.config.kokoro_target_voice,
         }
         exchanges: list[dict[str, Any]] = []
         completed: dict[str, Any] | None = None
@@ -649,6 +672,7 @@ class ReferencePipecatAgentTransport:
                     for turn in state.transcription
                 ],
                 'model_name': self.config.llm_model,
+                'voice': self.config.kokoro_target_voice,
             },
             timeout=self.config.timeout_seconds,
             headers={'x-cae-reference-token': self.config.internal_token},

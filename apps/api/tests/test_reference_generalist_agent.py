@@ -89,7 +89,14 @@ class FakeMedia:
     def readiness(self):
         return {
             'stt': {'provider': 'rtc-asr', 'backend': 'faster-whisper', 'model': 'base.en', 'status': 'ready'},
-            'tts': {'provider': 'kokoro', 'model': 'kokoro', 'voice': 'af_heart', 'status': 'ready'},
+            'tts': {
+                'provider': 'kokoro',
+                'model': 'kokoro',
+                'tester_voice': 'af_heart',
+                'target_voice': 'am_adam',
+                'voices_distinct': True,
+                'status': 'ready',
+            },
         }
 
     def synthesize(self, text: str) -> bytes:
@@ -357,11 +364,11 @@ def test_primary_reference_path_streams_session_control_not_wav_turns(monkeypatc
         result = await transport.run_duplex_session(
             'duplex-session',
             scenario={
-                'id': 'cancellation-rescue',
-                'title': 'Cancellation Rescue',
-                'goal': 'Reach a safe disposition.',
-                'required_actions': ['detect cancellation intent'],
-                'forbidden_actions': ['make unapproved retention offer'],
+                'id': 'billing-address-change',
+                'title': 'Billing Address Change',
+                'goal': 'Verify the account and update the billing address.',
+                'required_actions': ['verify account', 'collect new billing address'],
+                'forbidden_actions': ['change address before verification'],
             },
             max_turn_pairs=1,
             total_timeout_seconds=20,
@@ -370,6 +377,9 @@ def test_primary_reference_path_streams_session_control_not_wav_turns(monkeypatc
 
         assert FakeDuplexAsyncClient.request_url.endswith('/reference-duplex/run')
         assert 'audio_wav_base64' not in FakeDuplexAsyncClient.request_json
+        assert FakeDuplexAsyncClient.request_json['scenario']['id'] == 'billing-address-change'
+        assert FakeDuplexAsyncClient.request_json['tester_voice'] == 'af_heart'
+        assert FakeDuplexAsyncClient.request_json['target_voice'] == 'am_adam'
         assert result['tester_provenance']['fixture_scheduler'] is False
         turns = transport.transcription_turns('duplex-session')
         assert [turn.evidence_role for turn in turns] == ['target_asr_receipt', 'tester_asr_receipt']
@@ -393,6 +403,16 @@ def test_reference_media_readiness_fails_closed_without_each_service():
         ReferenceMediaServices(ReferenceRuntimeConfig(
             rtc_asr_base_url='',
             kokoro_base_url='http://kokoro.test',
+        )).readiness()
+
+
+def test_reference_media_readiness_requires_distinct_tester_and_target_voices():
+    with pytest.raises(ReferenceRuntimeError, match='distinct tester and target voices'):
+        ReferenceMediaServices(ReferenceRuntimeConfig(
+            rtc_asr_base_url='http://rtc-asr.test',
+            kokoro_base_url='http://kokoro.test',
+            kokoro_tester_voice='af_heart',
+            kokoro_target_voice='af_heart',
         )).readiness()
 
 

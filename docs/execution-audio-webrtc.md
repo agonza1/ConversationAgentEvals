@@ -36,7 +36,7 @@ Legacy names from earlier drafts (`voice_webrtc`, `local_pipecat_webrtc`, `sip_v
 | Piece | Status |
 | --- | --- |
 | Local Pipecat reference execution | **Available when configured** — separate tester and target participants; no browser peer |
-| `POST /api/execution/runs` mode `pipecat_webrtc` | **Available when configured** — tester rtc-asr → LLM → Kokoro and target rtc-asr → LLM → Kokoro |
+| `POST /api/execution/runs` mode `pipecat_webrtc` | **Available when configured** — selected catalog scenario through tester rtc-asr → LLM → Kokoro and target rtc-asr → LLM → Kokoro |
 | Recording + transcription capture | **Available** — current-run WAV, rtc-asr transcript, timings, and dialog turns |
 | Live run feedback | **Available** — polling exposes directional evidence; an optional token-scoped browser receives live run audio over server-send-only WebRTC |
 | vCon export on conversation rows | **Available** — reuses `benchmark_service._vcon_export` shape; Launch UI shows summary |
@@ -91,6 +91,8 @@ not use `AccAudioFixtureScheduler`, a scripted transcript, or one-shot caller WA
 Pipecat owns both graph executions and the local media hop. The API request contains session
 control only; evidence WAV copies stream back after each exchange for live playback, recording,
 and vCon capture.
+The tester and target use distinct Kokoro voices (`KOKORO_TESTER_VOICE` and
+`KOKORO_TARGET_VOICE`) so their recorded turns are audibly distinguishable.
 Live Verto dialing stays optional and out of band for default installs.
 
 ## vCon wiring

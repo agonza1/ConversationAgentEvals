@@ -70,7 +70,8 @@ RTC_ASR_HEALTH_PATH=/health
 RTC_ASR_STREAM_PATH=/v1/stt/stream
 KOKORO_BASE_URL=http://localhost:8880
 KOKORO_MODEL=kokoro
-KOKORO_VOICE=af_heart
+KOKORO_TESTER_VOICE=af_heart
+KOKORO_TARGET_VOICE=am_adam
 REFERENCE_STT_BACKEND=whisper
 REFERENCE_STT_MODEL=base
 REFERENCE_LLM_MODEL=gpt-5.4-mini
@@ -79,7 +80,11 @@ REFERENCE_LLM_MODEL=gpt-5.4-mini
 The built-in generalist voice target is a real local reference pipeline:
 Pipecat tester → Kokoro caller audio → separate Pipecat agent → rtc-asr → configured
 OpenAI-compatible/Codex LLM → Kokoro reply audio → tester observation. Select
-`REFERENCE_STT_BACKEND=whisper` for rtc-asr Whisper base (the service may report
+distinct `KOKORO_TESTER_VOICE` and `KOKORO_TARGET_VOICE` values so recordings
+and live playback make the caller and evaluated agent easy to distinguish. The
+legacy `KOKORO_VOICE` variable is accepted as a target-voice fallback when it is
+different from the tester voice. Select `REFERENCE_STT_BACKEND=whisper` for
+rtc-asr Whisper base (the service may report
 `faster-whisper` / `base.en`) or `REFERENCE_STT_BACKEND=parakeet` for the existing
 MLX Parakeet rtc-asr lane. The API fails closed if the configured backend does not
 match the healthy rtc-asr service.

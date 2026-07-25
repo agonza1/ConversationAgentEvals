@@ -41,11 +41,13 @@ const ports = {
   pipecat: BASE_PORTS.pipecat + offset,
 };
 const webUrl = `http://127.0.0.1:${ports.web}`;
+const apiUrl = `http://127.0.0.1:${ports.api}`;
+const pipecatUrl = `http://127.0.0.1:${ports.pipecat}`;
 
 console.log(`CAE development slot ${slot}`);
 console.log(`  Web      ${webUrl}`);
-console.log(`  API      http://127.0.0.1:${ports.api}`);
-console.log(`  Pipecat  http://127.0.0.1:${ports.pipecat}`);
+console.log(`  API      ${apiUrl}`);
+console.log(`  Pipecat  ${pipecatUrl}`);
 
 if (printOnly) {
   process.exit(0);
@@ -60,7 +62,14 @@ const child = spawn(command, ['run', 'dev'], {
     WEB_PORT: String(ports.web),
     API_PORT: String(ports.api),
     PIPECAT_PORT: String(ports.pipecat),
+    API_BASE_URL: apiUrl,
+    PIPECAT_SERVICE_URL: pipecatUrl,
+    NEXT_PUBLIC_API_BASE_URL: apiUrl,
+    NEXT_PUBLIC_PIPECAT_SERVICE_URL: pipecatUrl,
     PLAYWRIGHT_BASE_URL: webUrl,
+    PLAYWRIGHT_API_BASE_URL: apiUrl,
+    PLAYWRIGHT_WEB_PORT: String(ports.web),
+    PLAYWRIGHT_API_PORT: String(ports.api),
     PLAYWRIGHT_REUSE_EXISTING_SERVER: '1',
   },
 });

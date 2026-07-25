@@ -3477,17 +3477,17 @@ export function BenchmarkRunner({
     const runTesterId: NonNullable<ExecutionRunRecord['tester_id']> = executionTesterId;
     const runExecutorId: NonNullable<ExecutionRunRecord['executor_id']> = executionExecutorId;
 
-    const voiceModes = runMode === 'voice_fixture' || runMode === 'pipecat_webrtc';
     const offlineFixtureText =
       runMode === 'text_callable' && runTextCallable === 'offline_acc_fixture';
-    // The current two-agent Pipecat contract and the legacy replays are scoped to
-    // cancellation-rescue, but only the replay paths are fixture-backed.
-    const cancellationScopedRun = voiceModes || offlineFixtureText;
+    // Only saved ACC replay paths are tied to the cancellation-rescue fixture.
+    // The two-agent Pipecat runner receives the selected catalog scenario.
+    const cancellationScopedRun = legacyVoiceReplay || offlineFixtureText;
     const voiceSuiteId = 'call-center-voice-ai';
     const suiteForRun = cancellationScopedRun ? voiceSuiteId : selectedSuite.id;
+    const suiteScopedRun = executionScope === 'suite' && supportsSuiteExecutionScope;
     const scenarioIds = cancellationScopedRun
       ? ['cancellation-rescue']
-      : executionScope === 'suite'
+      : suiteScopedRun
         ? selectedSuite.scenarios.map((scenario) => scenario.id)
         : selectedScenario
           ? [selectedScenario.id]
