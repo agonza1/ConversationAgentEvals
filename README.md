@@ -8,29 +8,6 @@ ConversationAgentEvals is an application and workflow wrapper around ASSERT-comp
 
 There is one product and one supported evaluation contract. Users can either run a configured agent to produce current-run evidence or submit existing evidence from an outside system; both paths converge on the same normalization, evaluation, artifact, and reporting workflow.
 
-## All voice-agent reliability projects
-
-This project is part of the [WebRTC.ventures](https://webrtc.ventures/) open-source voice-agent reliability initiative. The projects remain independently usable and integrate through explicit adapters and evidence contracts:
-
-- [ConversationAgentEvals](https://github.com/agonza1/ConversationAgentEvals) orchestrates tests, normalizes evidence, and reports regressions.
-- [Agentic Contact Center](https://github.com/agonza1/agentic-contact-center) is the reference voice-agent target and demonstration.
-- [rtc-asr](https://github.com/agonza1/rtc-asr) provides optional local streaming speech-to-text and reproducible ASR benchmarks.
-- [ASSERT](https://github.com/responsibleai/ASSERT) remains the upstream evaluation engine.
-
-```mermaid
-flowchart LR
-  CAE["ConversationAgentEvals<br/>Test orchestration + evidence"]
-  ACC["Agentic Contact Center<br/>Reference target"]
-  ASR["rtc-asr<br/>Optional local STT"]
-  ASSERT["ASSERT<br/>Upstream evaluation model"]
-
-  CAE -. "optional test execution" .-> ACC
-  ACC -. "evidence + proof bundles" .-> CAE
-  CAE -. "optional voice transcription" .-> ASR
-  ASR -. "transcripts" .-> CAE
-  ASSERT -->|"specification + artifact conventions"| CAE
-```
-
 ## Acknowledgment
 
 [Thank you to the ASSERT project and its maintainers](https://github.com/responsibleai/ASSERT) for building and sharing the evaluation foundation this project wraps.
@@ -186,3 +163,26 @@ ConversationAgentEvals is the reusable orchestration, evidence, and reporting la
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE).
+
+## All voice-agent reliability projects
+
+This project is part of the [WebRTC.ventures](https://webrtc.ventures/) open-source voice-agent reliability initiative. The projects remain independently usable and integrate through explicit adapters and evidence contracts:
+
+- [ConversationAgentEvals](https://github.com/agonza1/ConversationAgentEvals) orchestrates tests, normalizes evidence, and reports regressions.
+- [Agentic Contact Center](https://github.com/agonza1/agentic-contact-center) is the reference voice-agent target and demonstration.
+- [rtc-asr](https://github.com/agonza1/rtc-asr) provides optional local streaming speech-to-text and reproducible ASR benchmarks.
+- [ASSERT](https://github.com/responsibleai/ASSERT) remains the upstream evaluation engine.
+
+```mermaid
+flowchart LR
+  CAE["ConversationAgentEvals<br/>Test orchestration + evidence"]
+  ACC["Agentic Contact Center<br/>Reference target"]
+  ASR["rtc-asr<br/>Optional local STT"]
+  ASSERT["ASSERT<br/>Upstream evaluation model"]
+
+  CAE -. "optional test execution" .-> ACC
+  ACC -. "evidence + proof bundles" .-> CAE
+  CAE -. "optional voice transcription" .-> ASR
+  ASR -. "transcripts" .-> CAE
+  ASSERT -->|"specification + artifact conventions"| CAE
+```
