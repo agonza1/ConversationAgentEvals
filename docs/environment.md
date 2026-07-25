@@ -62,7 +62,10 @@ COMPOSE_DATABASE_URL=postgresql://cae:cae_local_password@db:5432/conversation_ag
 
 The first-run benchmark demo uses transcript, action-trace, and final-state evidence. It does not require live microphone ASR.
 
-Conversation demos use `rtc-asr` as the speech-to-text provider contract. Pipecat expects a service reachable at `RTC_ASR_BASE_URL` and streams audio to `RTC_ASR_STREAM_PATH` using 16 kHz mono PCM16 little-endian input.
+Conversation demos use `rtc-asr` as the speech-to-text provider contract. The voice
+evaluation engine connects to Local STT v1 at `/v1/stt/stream`, sends paced 20 ms,
+16 kHz mono PCM16 frames, and consumes interim plus final transcript events. Silero
+VAD supplies speech-start and speech-end; only the final transcript triggers the LLM.
 
 ```bash
 RTC_ASR_BASE_URL=http://localhost:8080
@@ -77,9 +80,9 @@ REFERENCE_STT_MODEL=base
 REFERENCE_LLM_MODEL=gpt-5.4-mini
 ```
 
-The built-in generalist voice target is a real local reference pipeline:
-Pipecat tester → Kokoro caller audio → separate Pipecat agent → rtc-asr → configured
-OpenAI-compatible/Codex LLM → Kokoro reply audio → tester observation. Select
+The built-in generalist voice target is a real local streaming pipeline:
+Pipecat tester → streaming Kokoro caller audio → Silero + rtc-asr → configured
+OpenAI-compatible/Codex LLM → streaming Kokoro reply audio → Silero + rtc-asr tester observation. Select
 distinct `KOKORO_TESTER_VOICE` and `KOKORO_TARGET_VOICE` values so recordings
 and live playback make the caller and evaluated agent easy to distinguish. The
 legacy `KOKORO_VOICE` variable is accepted as a target-voice fallback when it is
@@ -88,6 +91,9 @@ rtc-asr Whisper base (the service may report
 `faster-whisper` / `base.en`) or `REFERENCE_STT_BACKEND=parakeet` for the existing
 MLX Parakeet rtc-asr lane. The API fails closed if the configured backend does not
 match the healthy rtc-asr service.
+
+HeyGen is not part of voice evaluation. Avatar support, when separately installed and
+configured for presenter demos, is an unrelated optional Pipecat feature.
 
 API and Pipecat protect the local completion callback with
 `REFERENCE_AGENT_INTERNAL_TOKEN`. `npm run dev` creates one ephemeral token and passes

@@ -89,7 +89,7 @@ The same fields can come from another adapter or a manually assembled request.
 - [Legacy prerecorded-audio plan](examples/agentic-contact-center-audio-plan.json)
 
 The audio plan and `AccAudioFixtureScheduler` remain a replay path. The primary built-in voice
-path instead runs separate Pipecat tester and target graphs; see
+path instead runs distinct tester and target participants in one streaming Pipecat exchange graph; see
 [execution-audio-webrtc.md](execution-audio-webrtc.md).
 
 ## Honesty boundary

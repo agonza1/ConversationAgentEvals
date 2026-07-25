@@ -136,8 +136,10 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
               title="Target Response Latency"
               value={summary.avgLatency != null ? `${Math.round(summary.avgLatency)}ms` : 'n/a'}
               detail={summary.avgLatency != null
-                ? `first audio byte · p90 ${summary.p90Latency != null ? `${Math.round(summary.p90Latency)}ms` : 'n/a'}`
-                : 'first audio byte not captured'}
+                ? `${summary.usesSpeechEndMetric ? 'speech-end → first audible PCM' : 'first audio byte'} · p90 ${
+                  summary.p90Latency != null ? `${Math.round(summary.p90Latency)}ms` : 'n/a'
+                }`
+                : 'response timing not captured'}
               bars={summary.latencyBars}
               selected={metric === 'latency'}
               onClick={() => setMetric('latency')}
@@ -342,12 +344,11 @@ function MetricDetail({
       <div className="runs-detail-copy">
         <h2>Target Response Latency</h2>
         <p>
-          First-audio-byte timing was not captured for this historical run. Its legacy marks measured a complete
+          First-audible-audio timing was not captured for this historical run. Its legacy marks measured a complete
           two-agent exchange, so they are excluded rather than presented as target latency.
         </p>
         <p className="latency-definition">
-          New voice runs measure from the moment the target receives the completed caller audio frame until the
-          first byte arrives from the target&apos;s speech response.
+          New streaming voice runs measure from detected caller speech-end until the first audible target PCM frame.
         </p>
       </div>
     );
@@ -357,7 +358,7 @@ function MetricDetail({
       <h2>{conversation.mode === 'pipecat_webrtc' ? 'Target Response Latency' : 'Latency'}</h2>
       {conversation.mode === 'pipecat_webrtc' ? (
         <p className="latency-definition">
-          End of caller input → first target audio byte. Tester generation and completed speech duration are excluded.
+          Silero speech-end → first audible target PCM. ASR finalization, LLM, and TTS stage timings are shown per turn.
         </p>
       ) : null}
       <p>
@@ -375,6 +376,7 @@ function MetricDetail({
                 <i style={{ width: `${Math.min(100, (ms / max) * 100)}%` }} />
               </span>
               <strong>{fmtMs(ms)}</strong>
+              <LatencyBreakdown mark={mark} />
             </div>
           );
         })}
@@ -390,6 +392,7 @@ type FlowSegment = {
   durationMs: number;
   responseLatencyMs?: number;
   responseStartMs?: number;
+  responseLabel?: string;
 };
 
 function ConversationFlow({
@@ -413,8 +416,17 @@ function ConversationFlow({
     const mark = lane === 'agent' ? targetMarks[agentIndex++] : undefined;
     const responseLatencyMs = mark ? markLatencyMs(mark) : undefined;
     const responseStartMs = lane === 'agent' && responseLatencyMs != null ? cursorMs : undefined;
+    const responseLabel = mark ? responseMetricLabel(mark) : undefined;
     if (responseLatencyMs != null) cursorMs += responseLatencyMs;
-    const segment = { turn, lane, startMs: cursorMs, durationMs, responseLatencyMs, responseStartMs };
+    const segment = {
+      turn,
+      lane,
+      startMs: cursorMs,
+      durationMs,
+      responseLatencyMs,
+      responseStartMs,
+      responseLabel,
+    };
     cursorMs += durationMs;
     return segment;
   });
@@ -465,7 +477,7 @@ function ConversationFlow({
                     left: `${((segment.responseStartMs || 0) / totalMs) * 100}%`,
                     width: `${Math.max(1, ((segment.responseLatencyMs || 0) / totalMs) * 100)}%`,
                   }}
-                  title={`Target first audio byte: ${fmtMs(segment.responseLatencyMs)}`}
+                  title={`${segment.responseLabel}: ${fmtMs(segment.responseLatencyMs)}`}
                 />
               )) : null}
             </div>
@@ -487,7 +499,7 @@ function ConversationFlow({
             <small>
               {fmtDuration(segment.durationMs)}
               {segment.responseLatencyMs != null
-                ? ` · first audio byte ${fmtMs(segment.responseLatencyMs)}`
+                ? ` · ${String(segment.responseLabel || 'target response').toLowerCase()} ${fmtMs(segment.responseLatencyMs)}`
                 : ''}
             </small>
           </li>
@@ -506,6 +518,9 @@ function aggregateRunMetrics(run: ExecutionRunRecord | null) {
   const latencyValues = conversations.flatMap((item) => (
     responseLatencyEvidence(item).marks.map(markLatencyMs)
   )).filter((value) => Number.isFinite(value));
+  const usesSpeechEndMetric = conversations.some((item) => (
+    responseLatencyEvidence(item).marks.some(isSpeechEndToFirstAudiblePcmMark)
+  ));
   const measuredLatency = latencyStats(latencyValues);
   const resolutions = conversations.map((item) => Number(item.metrics_summary?.call_resolution_success || 0));
   const latencyBars = latencyValues
@@ -515,6 +530,7 @@ function aggregateRunMetrics(run: ExecutionRunRecord | null) {
     interruptionCount,
     avgLatency: measuredLatency.avg_ms,
     p90Latency: measuredLatency.p90_ms,
+    usesSpeechEndMetric,
     resolutionRate: resolutions.length ? resolutions.reduce((a, b) => a + b, 0) / resolutions.length : 0,
     latencyBars,
   };
@@ -534,7 +550,37 @@ function responseLatencyEvidence(conversation: ConversationRecord) {
 
 function isTargetFirstAudioByteMark(mark: Record<string, unknown>) {
   return mark.kind === 'target_first_audio_byte'
+    || mark.kind === 'speech_end_to_first_audible_pcm'
     || mark.response_metric === 'target_time_to_first_audio_byte';
+}
+
+function isSpeechEndToFirstAudiblePcmMark(mark: Record<string, unknown>) {
+  return mark.kind === 'speech_end_to_first_audible_pcm'
+    || mark.response_metric === 'speech_end_to_first_audible_pcm';
+}
+
+function responseMetricLabel(mark: Record<string, unknown>) {
+  return isSpeechEndToFirstAudiblePcmMark(mark)
+    ? 'Target first audible PCM'
+    : 'Target first audio byte';
+}
+
+function LatencyBreakdown({ mark }: { mark: Record<string, unknown> }) {
+  const stages = mark.stage_metrics;
+  if (!stages || typeof stages !== 'object') return null;
+  const values = stages as Record<string, unknown>;
+  const entries = [
+    ['ASR final', values.asr_finalize_ms],
+    ['LLM callback TTFB', values.llm_callback_ttfb_ms],
+    ['TTS TTFB', values.tts_ttfb_ms],
+  ].filter((entry): entry is [string, number] => Number.isFinite(Number(entry[1])))
+    .map(([label, value]) => [label, Number(value)] as const);
+  if (!entries.length) return null;
+  return (
+    <small className="latency-breakdown">
+      {entries.map(([label, value]) => `${label} ${fmtMs(value)}`).join(' · ')}
+    </small>
+  );
 }
 
 function latencyStats(values: number[]) {

@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
+import time
 import wave
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -18,6 +20,52 @@ def _wav() -> bytes:
         handle.setframerate(16000)
         handle.writeframes(b'\x01\x00' * 160)
     return output.getvalue()
+
+
+def _streaming_result(
+    *,
+    caller_text: str,
+    target_receipt: str,
+    target_text: str,
+    tester_receipt: str,
+):
+    pcm = b'\x01\x00' * 160
+    speech_ended_at = time.time()
+    return SimpleNamespace(
+        tester_llm=SimpleNamespace(text=caller_text),
+        caller_tts=SimpleNamespace(
+            audio=bytearray(pcm),
+            sample_rate=16000,
+            channels=1,
+        ),
+        target_asr=SimpleNamespace(
+            transcript=target_receipt,
+            interims=['partial caller'],
+            server_timing={'revision': 2},
+            speech_ended_at=speech_ended_at,
+            final_at=speech_ended_at + 0.01,
+        ),
+        target_llm=SimpleNamespace(
+            text=target_text,
+            ttfb_ms=5.0,
+            total_ms=7.0,
+        ),
+        target_tts=SimpleNamespace(
+            audio=bytearray(pcm),
+            sample_rate=16000,
+            channels=1,
+            ttfb_ms=3.0,
+            total_ms=4.0,
+        ),
+        tester_asr=SimpleNamespace(
+            transcript=tester_receipt,
+            interims=['partial target'],
+            server_timing={'revision': 2},
+        ),
+        metrics=[{'processor': 'target_llm', 'value': 0.005}],
+        target_first_audio_latency_ms=0.0,
+        target_response_complete_latency_ms=10.0,
+    )
 
 
 class _Response:
@@ -176,13 +224,38 @@ def test_reference_tester_turn_runs_real_pipecat_pipeline(monkeypatch):
     assert _AsyncClient.speech_voices == ['af_heart']
 
 
-def test_reference_duplex_stream_runs_two_graphs_over_local_frames(monkeypatch):
+def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
     _AsyncClient.completion_prompts.clear()
     _AsyncClient.speech_voices.clear()
     monkeypatch.setattr(server, 'RTC_ASR_BASE_URL', 'http://rtc-asr.test')
     monkeypatch.setattr(server, 'KOKORO_BASE_URL', 'http://kokoro.test')
     monkeypatch.setattr(server, 'REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
     monkeypatch.setattr(server.httpx, 'AsyncClient', _AsyncClient)
+
+    async def fake_exchange(**kwargs):
+        payload = kwargs['payload']
+        history = kwargs['history']
+        _AsyncClient.completion_prompts.extend([
+            (
+                'caller-side Pipecat tester\n'
+                f'{payload.scenario["title"]}\n'
+                f'{payload.scenario["goal"]}'
+            ),
+            (
+                'built-in generalist voice agent\n'
+                'one or two short sentences\n'
+                + '\n'.join(f'{item["speaker"]}: {item["text"]}' for item in history)
+            ),
+        ])
+        _AsyncClient.speech_voices.extend([payload.tester_voice, payload.target_voice])
+        return _streaming_result(
+            caller_text='Of course.',
+            target_receipt='Please help me.',
+            target_text='Of course.',
+            tester_receipt='Please help me.',
+        )
+
+    monkeypatch.setattr(server, '_run_streaming_exchange', fake_exchange)
     client = TestClient(server.app)
 
     request = {
@@ -231,7 +304,7 @@ def test_reference_duplex_stream_runs_two_graphs_over_local_frames(monkeypatch):
     assert events.index(live_audio[0]) < events.index(exchanges[0])
     assert len(exchanges) == 2
     assert completed['type'] == 'complete'
-    assert completed['architecture'] == 'two_independent_pipecat_graphs_in_process_duplex_frames'
+    assert completed['architecture'] == 'streaming_pipecat_exchange_graph_paced_pcm_local_stt_v1'
     assert [frame['direction'] for frame in completed['frames']] == [
         'tester_to_target',
         'target_to_tester',
@@ -247,10 +320,10 @@ def test_reference_duplex_stream_runs_two_graphs_over_local_frames(monkeypatch):
     assert completed['graphs']['tester']['llm_mode'] == 'mock'
     assert exchanges[0]['target']['asr_receipt'] == 'Please help me.'
     assert exchanges[0]['target']['tester_asr_receipt'] == 'Please help me.'
-    assert exchanges[0]['latency_kind'] == 'target_first_audio_byte'
+    assert exchanges[0]['latency_kind'] == 'speech_end_to_first_audible_pcm'
     assert exchanges[0]['latency_ms'] >= 0
     assert exchanges[0]['exchange_elapsed_ms'] >= exchanges[0]['latency_ms']
-    assert exchanges[0]['target']['frame']['response_metric'] == 'target_time_to_first_audio_byte'
+    assert exchanges[0]['target']['frame']['response_metric'] == 'speech_end_to_first_audible_pcm'
     target_prompts = [
         prompt for prompt in _AsyncClient.completion_prompts
         if 'built-in generalist voice agent' in prompt
@@ -292,6 +365,33 @@ def test_reference_duplex_history_uses_peer_asr_receipts_for_later_prompts(monke
     monkeypatch.setattr(server, 'KOKORO_BASE_URL', 'http://kokoro.test')
     monkeypatch.setattr(server, 'REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
     monkeypatch.setattr(server.httpx, 'AsyncClient', _DivergentReceiptAsyncClient)
+
+    async def fake_exchange(**kwargs):
+        history = kwargs['history']
+        index = kwargs['turn_index'] - 1
+        caller_text = _DivergentReceiptAsyncClient.completions[index * 2]
+        target_text = _DivergentReceiptAsyncClient.completions[index * 2 + 1]
+        target_receipt = _DivergentReceiptAsyncClient.transcripts[index * 2]
+        tester_receipt = _DivergentReceiptAsyncClient.transcripts[index * 2 + 1]
+        _DivergentReceiptAsyncClient.completion_prompts.extend([
+            (
+                'caller-side Pipecat tester\n'
+                + '\n'.join(f'{item["speaker"]}: {item["text"]}' for item in history)
+            ),
+            (
+                'built-in generalist voice agent\n'
+                + '\n'.join(f'{item["speaker"]}: {item["text"]}' for item in history)
+                + f'\nCaller: {target_receipt}'
+            ),
+        ])
+        return _streaming_result(
+            caller_text=caller_text,
+            target_receipt=target_receipt,
+            target_text=target_text,
+            tester_receipt=tester_receipt,
+        )
+
+    monkeypatch.setattr(server, '_run_streaming_exchange', fake_exchange)
     client = TestClient(server.app)
 
     response = client.post(

@@ -222,13 +222,18 @@ class FakeDuplexAsyncClient:
                         'direction': 'target_to_tester',
                         'bytes': 320,
                         'duration_ms': 10,
-                        'response_metric': 'target_time_to_first_audio_byte',
+                        'response_metric': 'speech_end_to_first_audible_pcm',
                         'response_complete_latency_ms': 84.5,
+                        'stage_metrics': {
+                            'asr_finalize_ms': 10.0,
+                            'llm_callback_ttfb_ms': 12.5,
+                            'tts_ttfb_ms': 20.0,
+                        },
                         'transport': 'in_process_pipecat_frame_bus',
                     },
                 },
                 'latency_ms': 42.5,
-                'latency_kind': 'target_first_audio_byte',
+                'latency_kind': 'speech_end_to_first_audible_pcm',
                 'exchange_elapsed_ms': 120.0,
             },
             {
@@ -236,6 +241,7 @@ class FakeDuplexAsyncClient:
                 'session_id': json['session_id'],
                 'status': 'completed',
                 'termination_reason': 'max_turn_pairs',
+                'architecture': 'streaming_pipecat_exchange_graph_paced_pcm_local_stt_v1',
                 'frames': [
                     {'sequence': 1, 'direction': 'tester_to_target', 'bytes': 320, 'transport': 'in_process_pipecat_frame_bus'},
                     {'sequence': 2, 'direction': 'target_to_tester', 'bytes': 320, 'transport': 'in_process_pipecat_frame_bus'},
@@ -430,7 +436,7 @@ def test_primary_reference_path_streams_session_control_not_wav_turns(monkeypatc
         assert turns[0].frame_metadata['source_text'].startswith('I want to cancel')
         assert turns[1].frame_metadata['source_text'].startswith('I can help')
         proof = transport.session_proof('duplex-session')
-        assert proof['architecture'] == 'two_independent_pipecat_graphs_in_process_duplex_frames'
+        assert proof['architecture'] == 'streaming_pipecat_exchange_graph_paced_pcm_local_stt_v1'
         assert proof['duplex']['transport'] == 'in_process_pipecat_frame_bus'
         assert [frame['direction'] for frame in proof['duplex']['frames']] == [
             'tester_to_target',
@@ -444,6 +450,9 @@ def test_primary_reference_path_streams_session_control_not_wav_turns(monkeypatc
             'I can help and will keep the cancellation active.',
         ]
         assert transport.recording_handle('duplex-session') is not None
+        latency = transport.latency_marks('duplex-session')
+        assert latency[0]['kind'] == 'speech_end_to_first_audible_pcm'
+        assert latency[0]['stage_metrics']['tts_ttfb_ms'] == 20.0
 
     asyncio.run(run())
 

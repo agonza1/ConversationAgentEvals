@@ -366,6 +366,7 @@ class _ReferenceSession:
     duplex_harness: TwoPipecatDuplexHarness | None = None
     duplex_frames: list[dict[str, Any]] = field(default_factory=list)
     remote_graphs: dict[str, Any] = field(default_factory=dict)
+    remote_architecture: str | None = None
     termination_reason: str | None = None
     closed: bool = False
     recording: AudioRecordingHandle | None = None
@@ -542,6 +543,10 @@ class ReferencePipecatAgentTransport:
                     if event_type == 'live_audio':
                         self._record_live_audio_event(event)
                         continue
+                    if event_type in {'transcript', 'vad', 'metric'}:
+                        # Streaming diagnostics are retained in the completion proof and
+                        # directional frame metadata. Audio events remain the concise live UI.
+                        continue
                     if event_type != 'exchange':
                         continue
                     exchanges.append(event)
@@ -553,6 +558,11 @@ class ReferencePipecatAgentTransport:
         if state.remote_graphs:
             self.graphs = state.remote_graphs
         state.duplex_frames = completed.get('frames') if isinstance(completed.get('frames'), list) else []
+        state.remote_architecture = (
+            str(completed.get('architecture'))
+            if completed.get('architecture')
+            else None
+        )
         state.termination_reason = str(completed.get('termination_reason') or 'completed')
         return {
             'scenario_id': scenario.get('id'),
@@ -662,14 +672,31 @@ class ReferencePipecatAgentTransport:
         state.inbound.append({'text': tester_receipt, 'audio': target_wav, 'bytes': len(target_wav)})
         latency_ms = event.get('latency_ms')
         if isinstance(latency_ms, (int, float)):
+            latency_kind = str(event.get('latency_kind') or 'target_first_audio_byte')
+            latency_label = (
+                'Target first audible PCM'
+                if latency_kind == 'speech_end_to_first_audible_pcm'
+                else 'Target first audio byte'
+            )
             state.latency_marks.append({
-                'label': f'Target first audio byte · exchange {event.get("turn_pair") or len(state.latency_marks) + 1}',
-                'kind': 'target_first_audio_byte',
+                'label': f'{latency_label} · exchange {event.get("turn_pair") or len(state.latency_marks) + 1}',
+                'kind': latency_kind,
                 'participant': 'target',
                 'turn_pair': event.get('turn_pair'),
                 'latency_ms': float(latency_ms),
                 'exchange_elapsed_ms': event.get('exchange_elapsed_ms'),
                 'response_complete_latency_ms': target_frame.get('response_complete_latency_ms'),
+                'response_metric': target_frame.get('response_metric'),
+                'stage_metrics': (
+                    target_frame.get('stage_metrics')
+                    if isinstance(target_frame.get('stage_metrics'), dict)
+                    else {}
+                ),
+                'pipecat_metrics': (
+                    target_frame.get('pipecat_metrics')
+                    if isinstance(target_frame.get('pipecat_metrics'), list)
+                    else []
+                ),
             })
         if self.event_observer is not None:
             turn_pair = event.get('turn_pair')
@@ -880,9 +907,12 @@ class ReferencePipecatAgentTransport:
             'runtime': self.runtime,
             'evidence_source': 'current_run',
             'architecture': (
-                'two_independent_pipecat_graphs_in_process_duplex_frames'
-                if state.duplex_frames
-                else 'two_independent_pipecat_graphs_duplex_frames'
+                state.remote_architecture
+                or (
+                    'two_independent_pipecat_graphs_in_process_duplex_frames'
+                    if state.duplex_frames
+                    else 'two_independent_pipecat_graphs_duplex_frames'
+                )
             ),
             'graphs': graphs,
             'duplex': {

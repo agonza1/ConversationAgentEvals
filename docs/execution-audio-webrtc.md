@@ -1,4 +1,4 @@
-# Execution-time audio: two-agent Pipecat local duplex (+ SIP Verto later)
+# Execution-time audio: Pipecat streaming evaluation engine
 
 ConversationAgentEvals can stream caller/target audio **during Execute** and emit
 **vCon** recording + transcription evidence without requiring Agentic Contact Center,
@@ -25,7 +25,7 @@ registered under `/targets`; runs launch from `/runs` and persist snapshots unde
 
 | Field | Value | Notes |
 | --- | --- | --- |
-| Execution mode | `pipecat_webrtc` | Runs independent tester and target Pipecat graphs over an in-process duplex frame bus |
+| Execution mode | `pipecat_webrtc` | Runs a paced streaming Pipecat exchange graph over an in-process duplex PCM bus |
 | Local transport | `pipecat_small_webrtc` | Default when mode is `pipecat_webrtc` |
 | Deferred SIP transport | `freeswitch_verto_sip` | Rejected until `FreeSwitchVertoSipTransport` is implemented |
 
@@ -36,7 +36,7 @@ Legacy names from earlier drafts (`voice_webrtc`, `local_pipecat_webrtc`, `sip_v
 | Piece | Status |
 | --- | --- |
 | Local Pipecat reference execution | **Available when configured** — separate tester and target participants; no browser peer |
-| `POST /api/execution/runs` mode `pipecat_webrtc` | **Available when configured** — selected catalog scenario through tester rtc-asr → LLM → Kokoro and target rtc-asr → LLM → Kokoro |
+| `POST /api/execution/runs` mode `pipecat_webrtc` | **Available when configured** — selected scenario through tester LLM → streaming Kokoro → target Silero/rtc-asr → LLM → streaming Kokoro → tester Silero/rtc-asr |
 | Recording + transcription capture | **Available** — current-run WAV, rtc-asr transcript, timings, and dialog turns |
 | Live run feedback | **Available** — polling exposes directional evidence; an optional token-scoped browser receives live run audio over server-send-only WebRTC |
 | vCon export on conversation rows | **Available** — reuses `benchmark_service._vcon_export` shape; Launch UI shows summary |
@@ -59,20 +59,22 @@ External caller PCM
   -> SIP / PSTN target
 ```
 
-CAE’s local two-agent path:
+CAE’s local two-agent path for each exchange:
 
 ```text
-scenario + rubric -> Pipecat tester graph (rtc-asr -> LLM -> Kokoro)
-                         |
-                         | raw OutputAudioRawFrame
-                         v
-                  in-process duplex frame bus
-                         |
-                         | raw InputAudioRawFrame
-                         v
-                    Pipecat target graph (rtc-asr -> LLM -> Kokoro)
-                         |
-                         +---- raw frames back to tester rtc-asr
+scenario + latest target receipt
+  -> tester LLM
+  -> Kokoro streaming WAV decoder
+  -> paced 20 ms PCM frames
+  -> in-process duplex frame bus + optional live listener
+  -> Silero VAD
+  -> rtc-asr /v1/stt/stream
+       -> interim transcripts (observation only)
+       -> final transcript after speech-end (canonical LLM trigger)
+  -> target LLM
+  -> Kokoro streaming WAV decoder
+  -> paced 20 ms PCM frames
+  -> tester Silero VAD + rtc-asr final receipt
   -> streamed directional evidence copies (NDJSON, not the media transport)
   -> execution_vcon.build_execution_vcon
        parties / dialog / analysis[execution_audio_capture]
@@ -86,11 +88,11 @@ Later:
 ```
 
 CAE supplies the scenario/rubric, enforces the turn/time bound, and normalizes evidence.
-The tester LLM chooses each caller turn from the rubric and observed target audio; it does
-not use `AccAudioFixtureScheduler`, a scripted transcript, or one-shot caller WAV requests.
-Pipecat owns both graph executions and the local media hop. The API request contains session
-control only; evidence WAV copies stream back after each exchange for live playback, recording,
-and vCon capture.
+The tester LLM chooses each caller turn from the rubric and the rtc-asr receipt of observed
+target audio. It does not use `AccAudioFixtureScheduler`, a scripted transcript, one-shot
+caller WAV requests, or HeyGen. Pipecat owns the exchange graph and local media hop. The API
+request contains session control only; evidence WAV copies return after each exchange for
+playback, recording, and vCon capture while the listener receives the paced PCM as it happens.
 The tester and target use distinct Kokoro voices (`KOKORO_TESTER_VOICE` and
 `KOKORO_TARGET_VOICE`) so their recorded turns are audibly distinguishable.
 Live Verto dialing stays optional and out of band for default installs.
@@ -99,8 +101,8 @@ Live Verto dialing stays optional and out of band for default installs.
 
 During `pipecat_webrtc` execution:
 
-1. The tester graph emits Kokoro `OutputAudioRawFrame` data into the local duplex bus.
-2. The target graph receives the same bytes as `InputAudioRawFrame`, then returns its Kokoro frames through the reverse direction.
+1. Kokoro response bytes are decoded incrementally and emitted as 20 ms `OutputAudioRawFrame` chunks; the entire utterance is never collected before playback begins.
+2. The paced bridge publishes each chunk and converts it to 16 kHz mono `InputAudioRawFrame` data for Silero and rtc-asr Local STT v1.
 3. Each direction retains LLM output, opposite-side rtc-asr receipt, timing, and frame metadata in `TranscriptionTurn` rows.
 4. Session close finalizes an `AudioRecordingHandle` (`uri`, `sha256`, `mime_type`, `duration_ms`).
 5. `build_execution_vcon(...)` builds a payload with `conversation.dialog` + `call.recording_*` and
@@ -163,7 +165,8 @@ the listener negotiates a receive-only browser audio transceiver and never reque
 | `apps/api/app/services/reference_generalist_agent.py` | Consumes streamed session evidence and persists live events, recordings, and directional receipts |
 | `apps/api/app/schemas/execution.py` | `pipecat_webrtc` mode + `audio_transport` field |
 | `apps/api/app/routes/execution.py` | Dependency preflight, owner-scoped listener tokens, and confined WebRTC signaling proxy |
-| `apps/pipecat/server.py` | Runs both independent Pipecat graphs, the duplex frame bus, and server-send-only listener peers |
+| `apps/pipecat/streaming_media.py` | Incremental WAV decoding, paced PCM bridges, Silero VAD, rtc-asr Local STT v1, and Pipecat metric collection |
+| `apps/pipecat/server.py` | Runs each streaming exchange graph, the duplex frame bus, and server-send-only listener peers |
 
 The fixture scheduler and checked-in ACC audio plan remain legacy replay paths; they are not
 used by the `builtin_sample_voice` primary execution path.
@@ -176,7 +179,7 @@ never stored in target definitions.
 ## Opt-in real-service smoke
 
 The default CI suite is fully offline. It replaces provider boundaries with local fakes while
-executing both Pipecat `Pipeline` graphs, both frame directions, evidence streaming, recording,
+executing the Pipecat exchange `Pipeline`, both frame directions, evidence streaming, recording,
 and vCon normalization. CI never contacts OpenAI, SIP, FreeSWITCH, a softphone, or a browser peer.
 
 To validate the configured real path explicitly:
@@ -211,7 +214,8 @@ Do not wire Verto into default CI.
 
 The built-in reference-agent slice proves:
 
-- two independent Pipecat graphs exchanging raw audio through an in-process duplex frame bus;
+- one streaming exchange graph with both participants, 20 ms paced PCM, Silero speech boundaries, and Local STT v1 interim/final transcripts;
+- speech-end → first audible target PCM latency plus ASR-final, LLM callback TTFB, TTS TTFB, and Pipecat processor metrics;
 - recording URI/hash handles;
 - transcription dialog capture;
 - CAE-compatible vCon export on the execution path;
@@ -223,5 +227,5 @@ It does **not** prove:
 
 - a browser microphone, browser target, or evaluation dependency on the listener;
 - FreeSWITCH Verto / SIP / PSTN;
-- barge-in against a production media server;
+- simultaneous-talk/barge-in policy against a production media server (the local graph currently evaluates bounded turns);
 - production network conditions or an externally deployed target.
