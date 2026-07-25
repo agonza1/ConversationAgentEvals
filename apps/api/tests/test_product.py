@@ -1656,6 +1656,11 @@ def test_llm_judge_does_not_recompute_execution_failure_as_evaluator_verdict(mon
             'overall_score': None,
             'action_trace': [],
             'final_state': {'complete': False, 'outcome': 'runner_error'},
+            'evaluation_findings': {
+                'verdict': 'pass',
+                'overall_score': 100,
+                'score_components': {'required_actions': 100},
+            },
             'require_evaluator_findings': True,
         },
         transcript=None,
@@ -1666,9 +1671,9 @@ def test_llm_judge_does_not_recompute_execution_failure_as_evaluator_verdict(mon
     assert grounded['verdict'] == 'fail'
     assert grounded['overall_score'] is None
     assert grounded['evaluator_findings_error'] == (
-        'Execution failure has no deterministic evaluator findings to review.'
+        'Execution failure is not a deterministic evaluator verdict and cannot be reviewed.'
     )
-    assert not product_service._has_judge_evaluator_findings(grounded)
+    assert 'evaluator_findings_source' not in grounded
 
 
 def test_llm_judge_structured_evidence_stays_valid_and_preserves_priority_fields():

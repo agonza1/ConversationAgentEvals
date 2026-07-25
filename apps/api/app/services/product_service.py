@@ -1004,17 +1004,18 @@ def judge_gate(
     )
     citations = _judge_citations(report, transcript)
     if report.get('require_evaluator_findings') and (
-        not report.get('verdict')
+        report.get('evaluator_findings_error')
+        or not report.get('verdict')
         or not _has_judge_evaluator_findings(report)
     ):
         return JudgeResponse(
             status='blocked',
             required_plan='starter',
             credits=10,
-            message=(
+            message=str(report.get('evaluator_findings_error') or (
                 'LLM judge requires a deterministic verdict and evaluator findings. '
                 'Re-evaluate this conversation before requesting a second opinion.'
-            ),
+            )),
             evidence_citations=citations,
             spend_control=spend_control,
             provider=spend_control.get('provider'),
@@ -1192,6 +1193,12 @@ def _ground_judge_report(
     project_id: str | None,
 ) -> dict[str, Any]:
     grounded = dict(report)
+    recorded_verdict = str(report.get('verdict') or '').strip().lower()
+    if report.get('require_evaluator_findings') and recorded_verdict in {'fail', 'failed'}:
+        grounded['evaluator_findings_error'] = (
+            'Execution failure is not a deterministic evaluator verdict and cannot be reviewed.'
+        )
+        return grounded
     persisted = report.get('evaluation_findings')
     if isinstance(persisted, dict):
         for key in _JUDGE_EVALUATOR_FINDING_KEYS:
@@ -1200,16 +1207,6 @@ def _ground_judge_report(
         if _has_judge_evaluator_findings(grounded):
             grounded['evaluator_findings_source'] = 'persisted_execution'
             return grounded
-    recorded_verdict = str(report.get('verdict') or '').strip().lower()
-    if (
-        report.get('require_evaluator_findings')
-        and recorded_verdict in {'fail', 'failed'}
-        and not _has_judge_evaluator_findings(grounded)
-    ):
-        grounded['evaluator_findings_error'] = (
-            'Execution failure has no deterministic evaluator findings to review.'
-        )
-        return grounded
     if not report.get('require_evaluator_findings') or _has_judge_evaluator_findings(grounded):
         return grounded
 
