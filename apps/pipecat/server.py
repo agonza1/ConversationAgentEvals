@@ -446,9 +446,17 @@ if PIPECAT_RUNTIME_AVAILABLE:
             self.media_finished = False
             return self.future
 
+        def fail(self, error: Any) -> None:
+            if self.future is not None and not self.future.done():
+                self.future.set_exception(
+                    RuntimeError(f'Pipecat pipeline failed: {error}')
+                )
+
         async def process_frame(self, frame: Frame, direction: FrameDirection):
             await super().process_frame(frame, direction)
-            if isinstance(frame, _TesterReceiptFrame):
+            if isinstance(frame, ErrorFrame):
+                self.fail(frame.error)
+            elif isinstance(frame, _TesterReceiptFrame):
                 self.receipt = frame.text
             elif isinstance(frame, _TargetSpeechEndFrame):
                 self.media_finished = True
@@ -481,6 +489,7 @@ if PIPECAT_RUNTIME_AVAILABLE:
             self.client = client
             self.text = ''
             self.ttft_ms: float | None = None
+            self.provider_ttft_ms: float | None = None
             self.total_ms: float | None = None
 
         def can_generate_metrics(self) -> bool:
@@ -535,6 +544,7 @@ if PIPECAT_RUNTIME_AVAILABLE:
             self.client = client
             self.text = ''
             self.ttft_ms: float | None = None
+            self.provider_ttft_ms: float | None = None
             self.total_ms: float | None = None
 
         def can_generate_metrics(self) -> bool:
@@ -575,52 +585,73 @@ if PIPECAT_RUNTIME_AVAILABLE:
         """Forward normalized API deltas using Pipecat's standard LLM frame flow."""
         processor.text = ''
         processor.ttft_ms = None
+        processor.provider_ttft_ms = None
         processor.total_ms = None
         started = time.perf_counter()
         await processor.start_processing_metrics()
         await processor.start_ttfb_metrics()
         await processor.push_frame(start_frame, direction)
         completed: dict[str, Any] = {}
-        async with processor.client.stream(
-            'POST',
-            f'{API_BASE_URL}/api/execution/reference/stream',
-            json={'prompt': prompt, 'model_name': processor.model_name},
-            headers={'x-cae-reference-token': REFERENCE_AGENT_INTERNAL_TOKEN},
-        ) as response:
-            response.raise_for_status()
-            async for line in response.aiter_lines():
-                if not line.strip():
-                    continue
-                event = json.loads(line)
-                event_type = event.get('type')
-                if event_type == 'error':
-                    raise RuntimeError(
-                        f'reference completion stream failed: {event.get("detail") or event}'
-                    )
-                if event_type == 'delta':
-                    delta = str(event.get('text') or '')
-                    if not delta:
+
+        async def consume_stream() -> dict[str, Any]:
+            stream_completed: dict[str, Any] = {}
+            async with processor.client.stream(
+                'POST',
+                f'{API_BASE_URL}/api/execution/reference/stream',
+                json={'prompt': prompt, 'model_name': processor.model_name},
+                headers={'x-cae-reference-token': REFERENCE_AGENT_INTERNAL_TOKEN},
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line.strip():
                         continue
-                    if processor.ttft_ms is None:
-                        reported = event.get('ttft_ms')
-                        processor.ttft_ms = (
-                            round(float(reported), 3)
-                            if isinstance(reported, (int, float))
-                            else round((time.perf_counter() - started) * 1000, 3)
+                    event = json.loads(line)
+                    event_type = event.get('type')
+                    if event_type == 'error':
+                        raise RuntimeError(
+                            'reference completion stream failed: '
+                            f'{event.get("detail") or event}'
                         )
-                        await processor.stop_ttfb_metrics()
-                    processor.text += delta
-                    await processor.push_frame(text_frame_type(delta), direction)
-                elif event_type == 'completed':
-                    completed = event
+                    if event_type == 'delta':
+                        delta = str(event.get('text') or '')
+                        if not delta:
+                            continue
+                        if processor.ttft_ms is None:
+                            processor.ttft_ms = round(
+                                (time.perf_counter() - started) * 1000,
+                                3,
+                            )
+                            await processor.stop_ttfb_metrics()
+                        processor.text += delta
+                        await processor.push_frame(text_frame_type(delta), direction)
+                    elif event_type == 'completed':
+                        stream_completed = event
+            return stream_completed
+
+        for attempt in range(3):
+            try:
+                completed = await consume_stream()
+                break
+            except Exception as exc:
+                can_retry = (
+                    attempt < 2
+                    and not processor.text
+                    and _is_transient_reference_completion_error(exc)
+                )
+                if not can_retry:
+                    raise
+                await asyncio.sleep(0.25 * (2 ** attempt))
         if not processor.text.strip():
             processor.text = str(completed.get('text') or '')
         if not processor.text.strip():
             raise RuntimeError('reference completion callback returned no text')
         reported_ttft = completed.get('ttft_ms')
         reported_total = completed.get('total_ms')
-        if isinstance(reported_ttft, (int, float)):
-            processor.ttft_ms = round(float(reported_ttft), 3)
+        processor.provider_ttft_ms = (
+            round(float(reported_ttft), 3)
+            if isinstance(reported_ttft, (int, float))
+            else None
+        )
         processor.total_ms = (
             round(float(reported_total), 3)
             if isinstance(reported_total, (int, float))
@@ -628,6 +659,29 @@ if PIPECAT_RUNTIME_AVAILABLE:
         )
         await processor.stop_processing_metrics()
         await processor.push_frame(end_frame, direction)
+
+
+    def _is_transient_reference_completion_error(exc: Exception) -> bool:
+        if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError)):
+            return True
+        if isinstance(exc, httpx.HTTPStatusError):
+            return exc.response.status_code in {429, 500, 502, 503, 504}
+        detail = str(exc).lower()
+        return any(
+            marker in detail
+            for marker in (
+                '(429)',
+                '(500)',
+                '(502)',
+                '(503)',
+                '(504)',
+                'connection termination',
+                'connection reset',
+                'disconnect/reset',
+                'temporarily unavailable',
+                'upstream connect error',
+            )
+        )
 
 
     class _ReferenceAsrProcessor(FrameProcessor):
@@ -985,6 +1039,10 @@ class _StreamingDuplexSession:
             ),
         )
 
+        @self.task.event_handler('on_pipeline_error')
+        async def _on_pipeline_error(_task: Any, frame: Any) -> None:
+            self.completion.fail(getattr(frame, 'error', None) or str(frame))
+
     async def start(self) -> None:
         if self.runner_task is None:
             runner = PipelineRunner(handle_sigint=False, handle_sigterm=False)
@@ -1017,6 +1075,7 @@ class _StreamingDuplexSession:
             raise RuntimeError(
                 f'Persistent Pipecat pipeline ended before the turn completed: {exception}'
             )
+        turn_complete.result()
         required = (
             self.tester_llm.text,
             self.caller_tts.audio,

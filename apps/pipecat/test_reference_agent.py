@@ -13,6 +13,119 @@ from fastapi.testclient import TestClient
 import server
 
 
+def test_transient_reference_completion_errors_are_retryable():
+    assert server._is_transient_reference_completion_error(
+        RuntimeError(
+            'Codex Responses request failed (503): upstream connect error or disconnect/reset'
+        )
+    )
+    assert not server._is_transient_reference_completion_error(
+        RuntimeError('Codex Responses request failed (403): forbidden')
+    )
+
+
+def test_streaming_completion_retries_before_first_delta(monkeypatch):
+    class _StreamResponse:
+        def __init__(self, lines):
+            self.lines = lines
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        async def aiter_lines(self):
+            for line in self.lines:
+                yield line
+
+    class _Client:
+        def __init__(self):
+            self.calls = 0
+
+        def stream(self, *args, **kwargs):
+            del args, kwargs
+            self.calls += 1
+            if self.calls == 1:
+                return _StreamResponse([
+                    '{"type":"error","detail":"Codex Responses request failed (503): '
+                    'connection termination"}',
+                ])
+            return _StreamResponse([
+                '{"type":"delta","text":"Recovered"}',
+                '{"type":"completed","text":"Recovered","ttft_ms":50,"total_ms":75}',
+            ])
+
+    class _Processor:
+        def __init__(self):
+            self.client = _Client()
+            self.model_name = 'fake-model'
+            self.frames = []
+
+        async def start_processing_metrics(self):
+            return None
+
+        async def start_ttfb_metrics(self):
+            return None
+
+        async def stop_ttfb_metrics(self):
+            return None
+
+        async def stop_processing_metrics(self):
+            return None
+
+        async def push_frame(self, frame, direction):
+            self.frames.append((frame, direction))
+
+    async def no_sleep(_seconds):
+        return None
+
+    async def run():
+        processor = _Processor()
+        monkeypatch.setattr(server.asyncio, 'sleep', no_sleep)
+        await server._stream_reference_completion(
+            processor=processor,
+            prompt='hello',
+            direction=server.FrameDirection.DOWNSTREAM,
+            start_frame=server._TesterLlmStartFrame(),
+            text_frame_type=server._TesterSpeechFrame,
+            end_frame=server._TesterLlmEndFrame(),
+        )
+        return processor
+
+    processor = asyncio.run(run())
+
+    assert processor.client.calls == 2
+    assert processor.text == 'Recovered'
+    assert processor.provider_ttft_ms == 50.0
+    assert [type(frame) for frame, _ in processor.frames] == [
+        server._TesterLlmStartFrame,
+        server._TesterSpeechFrame,
+        server._TesterLlmEndFrame,
+    ]
+
+
+def test_turn_completion_collector_fails_active_turn_on_pipeline_error():
+    async def run():
+        collector = server._TurnCompletionCollector()
+        future = collector.begin_turn()
+        collector.fail('upstream failed')
+        return future
+
+    future = asyncio.run(run())
+
+    assert future.done()
+    try:
+        future.result()
+    except RuntimeError as exc:
+        assert str(exc) == 'Pipecat pipeline failed: upstream failed'
+    else:
+        raise AssertionError('Expected the pipeline error to fail the turn future.')
+
+
 def _wav() -> bytes:
     output = io.BytesIO()
     with wave.open(output, 'wb') as handle:
