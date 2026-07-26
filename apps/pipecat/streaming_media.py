@@ -547,7 +547,19 @@ class StreamingRtcAsrProcessor(FrameProcessor):
             self.pre_roll.append(frame.audio)
             state = await self.vad.analyze_audio(frame.audio)
             started_now = False
-            if _should_start_utterance(
+            restart_after_final = (
+                self.finalizing
+                and state == VADState.SPEAKING
+                and self.previous_state != VADState.SPEAKING
+            )
+            if restart_after_final:
+                # Preserve the resumed frame in pre-roll and apply backpressure
+                # until rtc-asr finishes the prior utterance. Upstream audio then
+                # remains queued instead of being discarded while finalizing.
+                await self._wait_for_final()
+                await self._start_utterance(direction)
+                started_now = True
+            elif _should_start_utterance(
                 state=state,
                 previous_state=self.previous_state,
                 active=self.active,

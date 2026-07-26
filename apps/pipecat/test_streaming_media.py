@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import struct
 
 from pipecat.audio.vad.vad_analyzer import VADState
+from pipecat.frames.frames import InputAudioRawFrame
+from pipecat.processors.frame_processor import FrameDirection
 
 from streaming_media import (
+    StreamingRtcAsrProcessor,
     StreamingWavDecoder,
     _next_tts_chunk,
     _should_start_utterance,
@@ -65,6 +69,55 @@ def test_vad_recovery_does_not_restart_active_rtc_asr_stream() -> None:
         active=False,
         finalizing=False,
     )
+
+
+def test_vad_restarts_asr_when_speech_resumes_during_finalization() -> None:
+    async def run() -> None:
+        processor = StreamingRtcAsrProcessor(
+            base_url="http://rtc-asr.test",
+            participant="target",
+            final_frame_type=type("FinalFrame", (), {}),
+        )
+
+        class SpeakingVad:
+            async def analyze_audio(self, audio: bytes) -> VADState:
+                assert audio
+                return VADState.SPEAKING
+
+        processor.vad = SpeakingVad()
+        processor.finalizing = True
+        processor.previous_state = VADState.QUIET
+        restarted = asyncio.Event()
+
+        async def start_utterance(direction: FrameDirection) -> None:
+            assert direction == FrameDirection.DOWNSTREAM
+            assert not processor.finalizing
+            processor.active = True
+            processor.pre_roll.clear()
+            restarted.set()
+
+        processor._start_utterance = start_utterance
+        process_task = asyncio.create_task(
+            processor.process_frame(
+                InputAudioRawFrame(b"\x01\x00" * 320, 16000, 1),
+                FrameDirection.DOWNSTREAM,
+            )
+        )
+        await asyncio.sleep(0)
+
+        assert not process_task.done()
+        assert not restarted.is_set()
+        assert processor.pre_roll
+
+        processor.finalizing = False
+        processor.final_received.set()
+        await process_task
+
+        assert restarted.is_set()
+        assert processor.active
+        assert processor.previous_state == VADState.SPEAKING
+
+    asyncio.run(run())
 
 
 def test_adaptive_tts_uses_short_first_chunk_then_complete_sentences() -> None:
