@@ -333,6 +333,32 @@ test('launch evaluation streams conversations into the live list', async ({ page
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
   });
 
+  await page.route('**/api/execution/runs/exec-ui-voice**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        execution_run_id: 'exec-ui-voice',
+        status: 'running',
+        mode: 'pipecat_webrtc',
+        suite_id: 'call-center-voice-ai',
+        scenario_ids: ['billing-address-change'],
+        user_id: 'demo-user',
+        project_id: 'call-center-demo',
+        progress: {
+          phase: 'executing',
+          completed_conversations: 0,
+          total_conversations: 1,
+          percent: 0,
+          active_conversation_id: 'exec-ui-voice-billing-address-change-1',
+        },
+        conversations: [],
+        created_at: '2026-07-18T00:00:00Z',
+        updated_at: '2026-07-18T00:00:01Z',
+      }),
+    });
+  });
+
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user-exec');
     window.localStorage.setItem('conversation-evals-demo-project', 'call-center-demo');
@@ -411,6 +437,11 @@ test('launch evaluation streams conversations into the live list', async ({ page
   });
   await expect(launch.getByLabel('Execution conversations')).toContainText('Billing Address Change');
   await expect(launch.getByLabel('Execution conversations')).toContainText(/pass/i, { timeout: 8000 });
+  const recentRun = page
+    .getByRole('region', { name: 'Recent runs' })
+    .locator('a[href="/runs/exec-ui-demo?api_base=http%3A%2F%2Fapi.example.test"]');
+  await expect(recentRun).toHaveCount(1);
+  await expect(recentRun).toContainText('completed', { timeout: 8000 });
   await page.goto('/runs?api_base=http%3A%2F%2Fapi.example.test&suite_id=call-center-voice-ai&scenario_id=billing-address-change');
   await expect(launch.getByLabel('Selected run scope')).toContainText('Billing Address Change');
   await launch.getByLabel('Execution agent target').selectOption('generalist-voice-agent');
@@ -431,7 +462,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   });
   expect(voicePosted).not.toHaveProperty('model_name');
   await expect(launch.getByLabel('Run listener link')).toContainText('Available only while this run is active.');
-  await expect(launch.getByRole('button', { name: 'Listen live from now' })).toBeEnabled();
+  await expect(launch.getByRole('button', { name: 'Listen to live WebRTC' })).toBeEnabled();
   await expect(launch.getByRole('button', { name: 'Create live listener link' })).toBeEnabled();
   await expect(page.getByRole('heading', { name: 'Recent runs' })).toBeVisible();
   await expect(page.getByRole('link', { name: /Mock text agent/ })).toContainText('queued');

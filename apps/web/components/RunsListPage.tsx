@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { SiteNav } from '@/components/SiteNav';
 import { BenchmarkRunner } from '@/components/BenchmarkRunner';
@@ -95,12 +95,16 @@ export function RunsListPage() {
     return run.status === statusFilter;
   }), [runs, statusFilter]);
 
-  function onExecutionCreated(run: ExecutionRunRecord) {
+  const upsertExecutionRun = useCallback((run: ExecutionRunRecord) => {
     setRuns((current) => {
       const next = [run, ...current.filter((item) => item.execution_run_id !== run.execution_run_id)];
       hasRunsRef.current = next.length > 0;
       return next;
     });
+  }, []);
+
+  function onExecutionCreated(run: ExecutionRunRecord) {
+    upsertExecutionRun(run);
     setRefreshKey((value) => value + 1);
   }
 
@@ -113,7 +117,11 @@ export function RunsListPage() {
         <p>Launch a configured agent target, then review execution metrics, latency detail, and transcripts.</p>
       </section>
 
-      <BenchmarkRunner view="run" onExecutionCreated={onExecutionCreated} />
+      <BenchmarkRunner
+        view="run"
+        onExecutionCreated={onExecutionCreated}
+        onExecutionUpdated={upsertExecutionRun}
+      />
 
       {loading ? <p className="scenarios-muted">Loading runs…</p> : null}
       {error ? <div className="scenarios-error" role="alert">{error}</div> : null}

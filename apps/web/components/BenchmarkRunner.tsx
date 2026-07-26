@@ -2193,9 +2193,11 @@ function describeUploadedEvidence(filename: string, text: string): {
 export function BenchmarkRunner({
   view = 'all',
   onExecutionCreated,
+  onExecutionUpdated,
 }: {
   view?: BenchmarkRunnerView;
   onExecutionCreated?: (run: ExecutionRunRecord) => void;
+  onExecutionUpdated?: (run: ExecutionRunRecord) => void;
 }) {
   const loadingSavedRunRef = useRef(false);
   const autoLaunchDemoRef = useRef(false);
@@ -2805,13 +2807,22 @@ export function BenchmarkRunner({
     return () => window.clearInterval(interval);
   }, [projectId, selectedSuite?.id, suiteRunStatusFilter, suiteRuns, userId]);
 
-  useEffect(() => {
-    if (!userId || !executionRun || !isActiveExecutionStatus(executionRun.status)) return;
+  const activeExecutionRunId = executionRun && isActiveExecutionStatus(executionRun.status)
+    ? executionRun.execution_run_id
+    : null;
 
-    const interval = window.setInterval(() => {
-      fetchExecutionRun(userId, executionRun.execution_run_id)
+  useEffect(() => {
+    if (!userId || !activeExecutionRunId) return;
+    const executionRunId = activeExecutionRunId;
+    let active = true;
+    let timer: number | undefined;
+
+    async function poll() {
+      fetchExecutionRun(userId, executionRunId)
         .then((next) => {
+          if (!active) return;
           setExecutionRun(next);
+          onExecutionUpdated?.(next);
           if (!isActiveExecutionStatus(next.status)) {
             const completed = next.progress?.completed_conversations ?? 0;
             const total = next.progress?.total_conversations ?? 0;
@@ -2822,13 +2833,21 @@ export function BenchmarkRunner({
                     next.inference_set_path ? ` → ${next.inference_set_path}` : ''
                   }.`,
             );
+          } else {
+            timer = window.setTimeout(() => void poll(), 1200);
           }
         })
-        .catch(() => undefined);
-    }, 1200);
+        .catch(() => {
+          if (active) timer = window.setTimeout(() => void poll(), 2400);
+        });
+    }
 
-    return () => window.clearInterval(interval);
-  }, [executionRun, userId]);
+    timer = window.setTimeout(() => void poll(), 1200);
+    return () => {
+      active = false;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [activeExecutionRunId, onExecutionUpdated, userId]);
 
   function ensureDemoIdentity(): { userId: string; projectId: string; plan: PricingPlan['id'] } {
     const nextUser = userId || (typeof window !== 'undefined'
