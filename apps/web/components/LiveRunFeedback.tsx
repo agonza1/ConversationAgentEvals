@@ -48,6 +48,11 @@ function listenerBrowserUrl(token: string, apiBase: string) {
   return `/listeners/${encodeURIComponent(token)}${query ? `?${query}` : ''}`;
 }
 
+function listenerTokenExpired(listener: ListenerToken, now = Date.now()) {
+  const expiresAt = Date.parse(listener.expires_at);
+  return !Number.isFinite(expiresAt) || expiresAt <= now;
+}
+
 async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init);
   const text = await response.text();
@@ -108,7 +113,9 @@ export function LiveRunFeedback({
   const liveAudioRef = useRef<HTMLAudioElement | null>(null);
   const stopUrlRef = useRef<string | null>(null);
   const executionRunIdRef = useRef(executionRunId);
+  const listenerTokenRef = useRef(listenerToken);
   executionRunIdRef.current = executionRunId;
+  listenerTokenRef.current = listenerToken;
   const listenerActive = runStatus === 'queued' || runStatus === 'running';
   const canCreateListener = voice && Boolean(executionRunId && userId) && listenerActive;
   const displayedConversations = listenerActive && listenerConversations
@@ -127,9 +134,16 @@ export function LiveRunFeedback({
 
   const refreshListener = useCallback(async (token = listenerToken?.token) => {
     if (!token) return;
+    const requestedRunId = executionRunIdRef.current;
     const next = await fetchJson<ListenerState>(mediaUrl(apiBase, `/api/execution/listeners/${token}`), {
       cache: 'no-store',
     });
+    if (
+      executionRunIdRef.current !== requestedRunId
+      || listenerTokenRef.current?.token !== token
+    ) {
+      return;
+    }
     setListenerConversations(next.conversations ?? []);
     setListenerMessage(
       `${next.listener.read_only ? 'Read-only' : 'Writable'} · ${
@@ -153,6 +167,7 @@ export function LiveRunFeedback({
         },
       );
       if (executionRunIdRef.current !== executionRunId) return null;
+      listenerTokenRef.current = payload.listener;
       setListenerToken(payload.listener);
       setExpanded(true);
       await refreshListener(payload.listener.token);
@@ -316,7 +331,14 @@ export function LiveRunFeedback({
     setPlaybackMode('live');
     setExpanded(true);
     setPlaybackMessage('Connecting to the ongoing WebRTC audio stream…');
-    const token = listenerToken ?? await createListener();
+    let token = listenerToken;
+    if (token && listenerTokenExpired(token)) {
+      listenerTokenRef.current = null;
+      setListenerToken(null);
+      setListenerConversations(null);
+      token = null;
+    }
+    token = token ?? await createListener();
     if (!token) {
       playbackModeRef.current = 'idle';
       setPlaybackMode('idle');
@@ -325,6 +347,11 @@ export function LiveRunFeedback({
     try {
       await connectWebRTC(token);
     } catch (error) {
+      if (listenerTokenExpired(token)) {
+        listenerTokenRef.current = null;
+        setListenerToken(null);
+        setListenerConversations(null);
+      }
       playbackModeRef.current = 'idle';
       setPlaybackMode('idle');
       setPlaybackMessage(error instanceof Error ? error.message : 'Could not attach the live WebRTC listener.');
@@ -366,6 +393,7 @@ export function LiveRunFeedback({
 
   useEffect(() => {
     stopPlayback();
+    listenerTokenRef.current = null;
     setListenerToken(null);
     setListenerConversations(null);
     setListenerMessage(null);
@@ -384,11 +412,20 @@ export function LiveRunFeedback({
 
   useEffect(() => {
     if (!listenerToken) return undefined;
-    const token = listenerToken.token;
+    const listener = listenerToken;
+    const token = listener.token;
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     async function poll() {
+      if (listenerTokenExpired(listener)) {
+        if (!active) return;
+        listenerTokenRef.current = null;
+        setListenerToken(null);
+        setListenerConversations(null);
+        setListenerMessage('Live listener expired. Start listening to create a fresh listener.');
+        return;
+      }
       try {
         const status = await refreshListener(token);
         if (!active) return;

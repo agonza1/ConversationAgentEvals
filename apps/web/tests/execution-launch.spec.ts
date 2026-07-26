@@ -162,6 +162,11 @@ test('launch evaluation streams conversations into the live list', async ({ page
   let voicePosted: Record<string, unknown> | null = null;
   let voiceRunCount = 0;
   const listenerRunIds: string[] = [];
+  let firstListenerPollStarted = false;
+  let releaseFirstListenerPoll = () => undefined;
+  const firstListenerPoll = new Promise<void>((resolve) => {
+    releaseFirstListenerPoll = resolve;
+  });
   let postAttempts = 0;
   await page.route('**/api/benchmarks/suite-runs**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
@@ -374,7 +379,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
       body: JSON.stringify({
         listener: {
           token: `${executionRunId}-token`,
-          expires_at: '2026-07-18T01:00:00Z',
+          expires_at: '2099-07-18T01:00:00Z',
           listen_url: `/listeners/${executionRunId}-token`,
           read_only: true,
           can_inject_audio: false,
@@ -385,6 +390,11 @@ test('launch evaluation streams conversations into the live list', async ({ page
     });
   });
   await page.route('**/api/execution/listeners/exec-ui-voice-*-token', async (route) => {
+    const token = route.request().url().match(/exec-ui-voice-\d+-token/)?.[0];
+    if (token === 'exec-ui-voice-1-token') {
+      firstListenerPollStarted = true;
+      await firstListenerPoll;
+    }
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -395,7 +405,17 @@ test('launch evaluation streams conversations into the live list', async ({ page
           requires_microphone: false,
           run_status: 'running',
         },
-        conversations: [],
+        conversations: token === 'exec-ui-voice-1-token'
+          ? [{
+              conversation_id: 'stale-run-one-conversation',
+              live_events: [{
+                sequence: 1,
+                kind: 'message',
+                speaker: 'Agent',
+                text: 'stale listener response from run one',
+              }],
+            }]
+          : [],
       }),
     });
   });
@@ -519,10 +539,21 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect(launch.getByRole('button', { name: 'Create live listener link' })).toBeEnabled();
   await launch.getByRole('button', { name: 'Create live listener link' }).click();
   await expect(launch.getByLabel('Run listener link')).toContainText('exec-ui-voice-1-token');
+  await expect.poll(() => firstListenerPollStarted).toBe(true);
   await expect(launch.getByRole('button', { name: 'Run evaluation' })).toBeEnabled();
   await launch.getByRole('button', { name: 'Run evaluation' }).click();
   await expect.poll(() => voiceRunCount).toBe(2);
   await expect(launch.getByLabel('Run listener link')).toContainText('Available only while this run is active.');
+  const staleListenerResponse = page.waitForResponse((response) => (
+    response.url().includes('/api/execution/listeners/exec-ui-voice-1-token')
+    && response.request().method() === 'GET'
+  ));
+  releaseFirstListenerPoll();
+  await staleListenerResponse;
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
+  await expect(launch.getByText('stale listener response from run one')).toHaveCount(0);
   await launch.getByRole('button', { name: 'Create live listener link' }).click();
   await expect(launch.getByLabel('Run listener link')).toContainText('exec-ui-voice-2-token');
   expect(listenerRunIds).toEqual(['exec-ui-voice-1', 'exec-ui-voice-2']);

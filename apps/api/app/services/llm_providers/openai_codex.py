@@ -800,6 +800,8 @@ def _http_json_post_stream(
             timeout=90,
             context=verified_ssl_context(),
         ) as response:
+            saw_delta = False
+            completed_texts: list[str] = []
             for raw_line in response:
                 line = raw_line.decode('utf-8', errors='replace')
                 if not line.startswith('data:'):
@@ -811,7 +813,14 @@ def _http_json_post_stream(
                 event_type = str(event.get('type') or '')
                 delta = event.get('delta')
                 if event_type.endswith('.delta') and isinstance(delta, str) and delta:
+                    saw_delta = True
                     yield delta
+                    continue
+                text = event.get('text')
+                if event_type.endswith('.done') and isinstance(text, str) and text:
+                    completed_texts.append(text)
+            if not saw_delta:
+                yield from completed_texts
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode('utf-8', errors='replace')
         raise CodexResponseError(exc.code, detail, label='Codex Responses request') from exc

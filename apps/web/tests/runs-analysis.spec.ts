@@ -967,7 +967,7 @@ test('active voice listening uses WebRTC and completed playback restarts from th
         body: JSON.stringify({
           listener: {
             token: 'live-webrtc-token',
-            expires_at: '2026-07-26T12:00:00Z',
+            expires_at: '2099-07-26T12:00:00Z',
             listen_url: '/api/execution/listeners/live-webrtc-token',
             webrtc_url: '/api/execution/listeners/live-webrtc-token/webrtc',
             webrtc_ice_url: '/api/execution/listeners/live-webrtc-token/webrtc/ice',
@@ -1084,6 +1084,126 @@ test('active voice listening uses WebRTC and completed playback restarts from th
   ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(1);
 });
 
+test('expired listener tokens are renewed before WebRTC reconnects', async ({ page }) => {
+  let listenerTokenRequests = 0;
+  let freshWebrtcRequests = 0;
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    class TestPeerConnection {
+      connectionState = 'new';
+      ontrack: ((event: { track: { kind: string }; streams: MediaStream[] }) => void) | null = null;
+      onconnectionstatechange: (() => void) | null = null;
+      onicecandidate: ((event: { candidate: null }) => void) | null = null;
+      addTransceiver() {}
+      async createOffer() {
+        return { type: 'offer', sdp: 'test-offer' };
+      }
+      async setLocalDescription() {}
+      async setRemoteDescription() {
+        this.connectionState = 'connected';
+        this.onconnectionstatechange?.();
+      }
+      close() {
+        this.connectionState = 'closed';
+      }
+    }
+    Object.defineProperty(window, 'RTCPeerConnection', { value: TestPeerConnection });
+  });
+
+  await page.route('**/api/execution/runs/exec-expired-listener**', async (route) => {
+    if (route.request().url().includes('/listener-token')) {
+      listenerTokenRequests += 1;
+      const fresh = listenerTokenRequests > 1;
+      const token = fresh ? 'fresh-listener-token' : 'expired-listener-token';
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          listener: {
+            token,
+            expires_at: fresh ? '2099-07-26T12:00:00Z' : '2000-01-01T00:00:00Z',
+            listen_url: `/api/execution/listeners/${token}`,
+            webrtc_url: `/api/execution/listeners/${token}/webrtc`,
+            webrtc_ice_url: `/api/execution/listeners/${token}/webrtc/ice`,
+            webrtc_stop_url: `/api/execution/listeners/${token}/webrtc/stop`,
+            read_only: true,
+            can_inject_audio: false,
+            requires_microphone: false,
+            media_transport: 'webrtc',
+          },
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...runFixture,
+        execution_run_id: 'exec-expired-listener',
+        status: 'running',
+        mode: 'pipecat_webrtc',
+        progress: {
+          phase: 'executing',
+          completed_conversations: 0,
+          total_conversations: 1,
+          percent: 0,
+          active_conversation_id: 'exec-expired-listener-1',
+        },
+        conversations: [{
+          ...runFixture.conversations[0],
+          conversation_id: 'exec-expired-listener-1',
+          execution_run_id: 'exec-expired-listener',
+          mode: 'pipecat_webrtc',
+          status: 'running',
+          live_events: [],
+        }],
+      }),
+    });
+  });
+  await page.route('**/api/execution/listeners/**', async (route) => {
+    const url = route.request().url();
+    if (url.endsWith('/webrtc')) {
+      if (url.includes('fresh-listener-token')) freshWebrtcRequests += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          answer: { type: 'answer', sdp: 'test-answer' },
+          status: 'listening',
+        }),
+      });
+      return;
+    }
+    if (url.endsWith('/webrtc/ice') || url.endsWith('/webrtc/stop')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        listener: {
+          read_only: true,
+          can_inject_audio: false,
+          requires_microphone: false,
+          run_status: 'running',
+        },
+        conversations: [],
+      }),
+    });
+  });
+
+  await page.goto('/runs/exec-expired-listener');
+  const feedback = page.getByLabel('Live run feedback');
+  await feedback.getByRole('button', { name: 'Create live listener link' }).click();
+  await expect(feedback.getByLabel('Run listener link')).toContainText('expired-listener-token');
+  await feedback.getByRole('button', { name: 'Listen to live WebRTC' }).click();
+  await expect.poll(() => listenerTokenRequests).toBe(2);
+  await expect.poll(() => freshWebrtcRequests).toBe(1);
+  await expect(feedback.getByLabel('Run listener link')).toContainText('fresh-listener-token');
+});
+
 test('completed replay switches from listener-token audio to owner-scoped audio', async ({ page }) => {
   let runPolls = 0;
   await page.addInitScript(() => {
@@ -1125,7 +1245,7 @@ test('completed replay switches from listener-token audio to owner-scoped audio'
         body: JSON.stringify({
           listener: {
             token: 'expiring-token',
-            expires_at: '2026-07-26T12:00:00Z',
+            expires_at: '2099-07-26T12:00:00Z',
             listen_url: '/listeners/expiring-token',
             read_only: true,
             can_inject_audio: false,

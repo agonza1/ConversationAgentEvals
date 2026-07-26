@@ -309,6 +309,33 @@ def test_codex_response_stream_yields_text_deltas_without_buffering(monkeypatch)
     )) == ['Hello', ' world']
 
 
+def test_codex_response_stream_uses_done_text_when_deltas_are_absent(monkeypatch):
+    from app.services.llm_providers import openai_codex as mod
+
+    class _Stream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def __iter__(self):
+            return iter([
+                b'data: {"type":"response.created","response":{"status":"in_progress"}}\n',
+                b'data: {"type":"response.output_text.done","text":"Final answer"}\n',
+                b'data: {"type":"response.completed","response":{"status":"completed"}}\n',
+                b'data: [DONE]\n',
+            ])
+
+    monkeypatch.setattr(mod.urllib.request, 'urlopen', lambda *args, **kwargs: _Stream())
+
+    assert list(_http_json_post_stream(
+        'https://chatgpt.com/backend-api/codex/responses',
+        {'input': [], 'stream': True},
+        headers={'Authorization': 'Bearer t'},
+    )) == ['Final answer']
+
+
 def test_openai_codex_refreshes_expired_access_token(tmp_path: Path):
     token_path = tmp_path / 'openai-codex-oauth.json'
     old_access = _fake_jwt({'https://api.openai.com/auth': {'chatgpt_account_id': 'acct_refresh'}})

@@ -184,7 +184,7 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
           listener: {
             token: 'listener-token',
             execution_run_id: 'voice-run-1',
-            expires_at: '2026-07-19T21:00:00.000Z',
+            expires_at: '2099-07-19T21:00:00.000Z',
             listen_url: '/api/execution/listeners/listener-token',
             media_transport: 'webrtc',
             read_only: true,
