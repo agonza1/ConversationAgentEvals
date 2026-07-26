@@ -361,7 +361,8 @@ function MetricDetail({
       <h2>{evidence.targetSpecific ? 'Target Response Latency' : 'Latency'}</h2>
       {conversation.mode === 'pipecat_webrtc' ? (
         <p className="latency-definition">
-          Silero speech-end → first audible target PCM. ASR finalization, LLM, and TTS stage timings are shown per turn.
+          Felt latency is measured directly from the caller&apos;s estimated acoustic end to the target&apos;s first
+          audible byte. It spans EOU/ASR finalization + LLM TTLT + TTS TTFB, including pipeline handoff overhead.
         </p>
       ) : null}
       <p>
@@ -373,7 +374,7 @@ function MetricDetail({
           const max = Math.max(latency.max_ms || 1, 1);
           return (
             <div key={index} className="latency-bar-row">
-              <span>{String((mark as { label?: string }).label || `mark ${index + 1}`)}</span>
+              <span>{latencyMarkLabel(mark, index)}</span>
               <span className="latency-bar-track">
                 <i style={{ width: `${Math.min(100, (ms / max) * 100)}%` }} />
               </span>
@@ -542,9 +543,9 @@ function aggregateRunMetrics(run: ExecutionRunRecord | null) {
     targetSpecific,
     usesSpeechEndMetric,
     latencyDefinition: usesSpeechEndMetric
-      ? 'speech-end → first audible PCM'
+      ? 'speech-end → first audible byte'
       : voiceTargetSpecific
-        ? 'first audio byte'
+        ? 'first audible byte'
         : targetSpecific
           ? 'target response'
           : 'captured latency',
@@ -595,9 +596,19 @@ function isSpeechEndToFirstAudiblePcmMark(mark: Record<string, unknown>) {
 }
 
 function responseMetricLabel(mark: Record<string, unknown>) {
-  return isSpeechEndToFirstAudiblePcmMark(mark)
-    ? 'Target first audible PCM'
-    : 'Target first audio byte';
+  return isTargetFirstAudioByteMark(mark)
+    ? 'Target first audible byte'
+    : 'Target response';
+}
+
+function latencyMarkLabel(mark: Record<string, unknown>, index: number) {
+  if (isTargetFirstAudioByteMark(mark)) {
+    const turnPair = Number(mark.turn_pair);
+    return Number.isFinite(turnPair) && turnPair > 0
+      ? `Target first audible byte · exchange ${turnPair}`
+      : 'Target first audible byte';
+  }
+  return String(mark.label || `mark ${index + 1}`);
 }
 
 function LatencyBreakdown({ mark }: { mark: Record<string, unknown> }) {
@@ -605,9 +616,9 @@ function LatencyBreakdown({ mark }: { mark: Record<string, unknown> }) {
   if (!stages || typeof stages !== 'object') return null;
   const values = stages as Record<string, unknown>;
   const entries = [
-    ['ASR final', values.asr_finalize_ms],
+    ['EOU + ASR final', values.asr_finalize_ms],
     ['LLM TTFT', values.llm_ttft_ms],
-    ['LLM complete', values.llm_total_ms],
+    ['LLM TTLT', values.llm_total_ms],
     ['TTS TTFB', values.tts_ttfb_ms],
   ].filter((entry): entry is [string, number] => Number.isFinite(Number(entry[1])))
     .map(([label, value]) => [label, Number(value)] as const);

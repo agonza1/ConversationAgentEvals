@@ -703,7 +703,7 @@ class ReferencePipecatAgentTransport:
         if isinstance(latency_ms, (int, float)):
             latency_kind = str(event.get('latency_kind') or 'target_first_audio_byte')
             latency_label = (
-                'Target first audible PCM'
+                'Target first audible byte'
                 if latency_kind == 'speech_end_to_first_audible_pcm'
                 else 'Target first audio byte'
             )
