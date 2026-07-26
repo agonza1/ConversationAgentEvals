@@ -7,6 +7,7 @@ import json
 import wave
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -17,6 +18,7 @@ from app.services.execution_audio import ExecutionAudioTargetAdapter
 from app.services.pipecat_tester_agent import PipecatTesterAgentRunner
 from app.services.reference_generalist_agent import (
     KokoroTesterTtsRenderer,
+    OpenAICompatibleApiKeyProvider,
     ReferenceMediaServices,
     ReferencePipecatAgentTransport,
     ReferencePipecatTesterGraphRenderer,
@@ -27,6 +29,31 @@ from app.services.reference_generalist_agent import (
 
 
 client = TestClient(app)
+
+
+def test_api_key_stream_accepts_final_only_response_event(monkeypatch):
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-key')
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == '/v1/responses'
+        return httpx.Response(
+            200,
+            headers={'content-type': 'text/event-stream'},
+            content=(
+                b'data: {"type":"response.output_text.done",'
+                b'"text":"Final-only API response"}\n\n'
+                b'data: [DONE]\n\n'
+            ),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as stream_client:
+        provider = OpenAICompatibleApiKeyProvider(client=stream_client)
+        events = list(provider.stream_with_metrics('Hello', model_name='test-model'))
+
+    assert events[0] == {'type': 'delta', 'text': 'Final-only API response'}
+    assert events[1]['type'] == 'completed'
+    assert events[1]['text'] == 'Final-only API response'
+    assert isinstance(events[1]['ttft_ms'], float)
 
 
 def _wav(value: int = 1) -> bytes:

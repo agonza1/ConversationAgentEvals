@@ -171,6 +171,7 @@ class OpenAICompatibleApiKeyProvider:
         started_at = time.perf_counter()
         client = self._client or httpx.Client(timeout=60)
         chunks: list[str] = []
+        completed_text: str | None = None
         ttft_ms: float | None = None
         with client.stream(
             'POST',
@@ -196,6 +197,14 @@ class OpenAICompatibleApiKeyProvider:
                         ttft_ms = round((time.perf_counter() - started_at) * 1000, 3)
                     chunks.append(delta)
                     yield {'type': 'delta', 'text': delta}
+                final_text = event.get('text')
+                if event_type.endswith('.done') and isinstance(final_text, str) and final_text:
+                    completed_text = final_text
+        if not chunks and completed_text:
+            if ttft_ms is None:
+                ttft_ms = round((time.perf_counter() - started_at) * 1000, 3)
+            chunks.append(completed_text)
+            yield {'type': 'delta', 'text': completed_text}
         text = ''.join(chunks).strip()
         if not text:
             raise ReferenceRuntimeError('OpenAI-compatible provider returned no response text.')
