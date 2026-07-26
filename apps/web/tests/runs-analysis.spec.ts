@@ -106,7 +106,7 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
   await expect(participants).toContainText('Evidence Replay');
   await expect(participants).toContainText('saved evidence replay');
   await expect(page.getByRole('button', { name: /Interruption Detection/ }).first()).toBeVisible();
-  await expect(page.getByRole('button', { name: /Target Response Latency/ }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Latency/ }).first()).toBeVisible();
   await expect(page.getByLabel('Two-agent conversation timeline')).toBeVisible();
   await expect(page.getByLabel('Conversation turn sequence')).toContainText('I can help with that.');
   await expect(page.getByLabel('Transcript')).toContainText('I want to cancel today.');
@@ -240,6 +240,39 @@ test('text agent analysis hides the voice conversation timeline', async ({ page 
   await expect(page.getByLabel('Transcript')).toContainText('I want to cancel today.');
 });
 
+test('text latency excludes tester generation and missing timing marks', async ({ page }) => {
+  const textRun = {
+    ...runFixture,
+    execution_run_id: 'exec-text-latency',
+    mode: 'text_callable',
+    agent_name: 'Text latency agent',
+    conversations: [{
+      ...runFixture.conversations[0],
+      conversation_id: 'exec-text-latency-1',
+      execution_run_id: 'exec-text-latency',
+      mode: 'text_callable',
+      latency_marks: [
+        { label: 'exchange 1 target response', latency_ms: 400 },
+        { label: 'exchange 2 tester response', latency_ms: 900 },
+        { label: 'exchange 2 target response', elapsed_ms: null },
+      ],
+    }],
+  };
+
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+  });
+  await page.route('**/api/execution/runs/exec-text-latency**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(textRun) });
+  });
+
+  await page.goto('/runs/exec-text-latency');
+  await expect(page.getByRole('button', { name: /Target Response Latency 400ms/ })).toBeVisible();
+  await page.getByRole('button', { name: /Target Response Latency 400ms/ }).click();
+  await expect(page.getByText(/count 1 · avg 400ms/)).toBeVisible();
+  await expect(page.getByText('900ms')).toHaveCount(0);
+});
+
 test('voice analysis reports target first audio byte and excludes legacy exchange duration', async ({ page }) => {
   const accurateVoiceRun = {
     ...runFixture,
@@ -270,6 +303,12 @@ test('voice analysis reports target first audio byte and excludes legacy exchang
           },
         ],
         latency_marks: [
+          {
+            label: 'Missing normalized evidence',
+            kind: 'target_first_audio_byte',
+            participant: 'target',
+            elapsed_ms: null,
+          },
           {
             label: 'Target first audio byte · exchange 1',
             kind: 'target_first_audio_byte',
@@ -409,4 +448,114 @@ test('active voice listening starts from now and completed playback restarts fro
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
   ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(2);
+});
+
+test('completed replay switches from listener-token audio to owner-scoped audio', async ({ page }) => {
+  let runPolls = 0;
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    const runtime = window as Window & { __playedVoiceUrls: string[] };
+    runtime.__playedVoiceUrls = [];
+    class TestAudio extends EventTarget {
+      constructor(private readonly url: string) {
+        super();
+      }
+      play() {
+        runtime.__playedVoiceUrls.push(this.url);
+        setTimeout(() => this.dispatchEvent(new Event('ended')), 10);
+        return Promise.resolve();
+      }
+      pause() {
+        this.dispatchEvent(new Event('ended'));
+      }
+    }
+    Object.defineProperty(window, 'Audio', { value: TestAudio });
+  });
+
+  const audioEvents = (scope: 'owner' | 'listener') => [1, 2].map((sequence) => ({
+    sequence,
+    kind: 'audio',
+    speaker: sequence === 1 ? 'Caller' : 'Agent',
+    text: sequence === 1 ? 'Please update my address.' : 'I can help.',
+    direction: sequence === 1 ? 'tester_to_target' : 'target_to_tester',
+    media_url: scope === 'owner'
+      ? `/api/execution/runs/exec-listener-replay/conversations/conversation-1/audio/${sequence}?user_id=demo-user`
+      : `/api/execution/listeners/expiring-token/conversations/conversation-1/audio/${sequence}`,
+  }));
+
+  await page.route('**/api/execution/runs/exec-listener-replay**', async (route) => {
+    if (route.request().url().includes('/listener-token')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          listener: {
+            token: 'expiring-token',
+            expires_at: '2026-07-26T12:00:00Z',
+            listen_url: '/listeners/expiring-token',
+            read_only: true,
+            can_inject_audio: false,
+            requires_microphone: false,
+            media_transport: 'webrtc',
+          },
+        }),
+      });
+      return;
+    }
+    runPolls += 1;
+    const completed = runPolls >= 3;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...runFixture,
+        execution_run_id: 'exec-listener-replay',
+        status: completed ? 'completed' : 'running',
+        mode: 'pipecat_webrtc',
+        conversations: [{
+          ...runFixture.conversations[0],
+          conversation_id: 'conversation-1',
+          execution_run_id: 'exec-listener-replay',
+          mode: 'pipecat_webrtc',
+          status: completed ? 'completed' : 'running',
+          live_events: audioEvents('owner'),
+        }],
+      }),
+    });
+  });
+  await page.route('**/api/execution/listeners/expiring-token', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        listener: {
+          read_only: true,
+          can_inject_audio: false,
+          requires_microphone: false,
+          run_status: runPolls >= 3 ? 'completed' : 'running',
+        },
+        conversations: [{
+          conversation_id: 'conversation-1',
+          live_events: audioEvents('listener'),
+        }],
+      }),
+    });
+  });
+
+  await page.goto('/runs/exec-listener-replay');
+  const feedback = page.getByLabel('Live run feedback');
+  await feedback.getByRole('button', { name: 'Create live listener link' }).click();
+  await expect(feedback.getByText(/Read-only/)).toBeVisible();
+  await expect(feedback.getByRole('button', { name: 'Play recorded conversation' })).toBeVisible({
+    timeout: 10_000,
+  });
+  await feedback.getByRole('button', { name: 'Play recorded conversation' }).click();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.length)).toBe(2);
+  const playedUrls = await page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls);
+  expect(playedUrls.every((url) => url.includes('/api/execution/runs/exec-listener-replay/'))).toBe(true);
+  expect(playedUrls.some((url) => url.includes('/api/execution/listeners/'))).toBe(false);
 });

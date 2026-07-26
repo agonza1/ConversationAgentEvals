@@ -28,6 +28,9 @@ def _wav_header(*, sample_rate: int = 24000, channels: int = 1, data_size: int =
 def test_rtc_asr_stream_url_uses_local_stt_v1() -> None:
     assert rtc_asr_stream_url("http://localhost:8080/") == "ws://localhost:8080/v1/stt/stream"
     assert rtc_asr_stream_url("https://asr.example") == "wss://asr.example/v1/stt/stream"
+    assert rtc_asr_stream_url("http://localhost:8080/", "/custom/stream") == (
+        "ws://localhost:8080/custom/stream"
+    )
 
 
 def test_streaming_wav_decoder_handles_split_header_and_audio() -> None:

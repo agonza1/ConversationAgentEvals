@@ -768,6 +768,7 @@ async def _run_streaming_exchange(
     )
     target_asr = StreamingRtcAsrProcessor(
         base_url=RTC_ASR_BASE_URL,
+        stream_path=RTC_ASR_STREAM_PATH,
         participant='target',
         final_frame_type=_TargetTranscriptFrame,
         event_callback=event_callback,
@@ -790,6 +791,7 @@ async def _run_streaming_exchange(
     )
     tester_asr = StreamingRtcAsrProcessor(
         base_url=RTC_ASR_BASE_URL,
+        stream_path=RTC_ASR_STREAM_PATH,
         participant='tester',
         final_frame_type=_TesterReceiptFrame,
         event_callback=event_callback,
@@ -917,6 +919,7 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
     frame_evidence: list[dict[str, Any]] = []
     metric_evidence: list[dict[str, Any]] = []
     live_events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    exchange_task: asyncio.Task[_StreamingExchangeResult] | None = None
 
     async def record_event(event: dict[str, Any]) -> None:
         await live_events.put(event)
@@ -946,6 +949,7 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                         metric_evidence.append(dict(event))
                     yield _duplex_event(event)
                 result = await exchange_task
+                exchange_task = None
                 while not live_events.empty():
                     event = live_events.get_nowait()
                     event['turn_pair'] = turn_index
@@ -1150,6 +1154,10 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
     except Exception as exc:
         yield _duplex_event({'type': 'error', 'code': 'duplex_runtime_error', 'detail': str(exc)})
     finally:
+        if exchange_task is not None:
+            if not exchange_task.done():
+                exchange_task.cancel()
+            await asyncio.gather(exchange_task, return_exceptions=True)
         broadcast.active = False
         asyncio.create_task(_retire_reference_broadcast(broadcast))
 

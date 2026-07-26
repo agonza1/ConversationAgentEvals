@@ -103,7 +103,9 @@ export function LiveRunFeedback({
   const playbackRef = useRef(Promise.resolve());
   const listenerActive = runStatus === 'queued' || runStatus === 'running';
   const canCreateListener = voice && Boolean(executionRunId && userId) && listenerActive;
-  const displayedConversations = listenerConversations ?? conversations;
+  const displayedConversations = listenerActive && listenerConversations
+    ? listenerConversations
+    : conversations;
   const events = useMemo(
     () => displayedConversations.flatMap((conversation) =>
       (conversation.live_events ?? []).map((event) => ({ ...event, conversationId: conversation.conversation_id })),
@@ -273,6 +275,10 @@ export function LiveRunFeedback({
     playedRef.current.clear();
     stopPlayback();
   }, [executionRunId, stopPlayback]);
+
+  useEffect(() => {
+    if (!listenerActive) setListenerConversations(null);
+  }, [listenerActive]);
 
   useEffect(() => () => {
     playbackGenerationRef.current += 1;

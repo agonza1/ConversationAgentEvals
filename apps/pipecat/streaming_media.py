@@ -38,14 +38,14 @@ EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
 AudioCallback = Callable[[bytes, int, int], Awaitable[None]]
 
 
-def rtc_asr_stream_url(base_url: str) -> str:
-    """Return the canonical Local STT v1 websocket URL."""
+def rtc_asr_stream_url(base_url: str, stream_path: str = "/v1/stt/stream") -> str:
+    """Return the configured Local STT websocket URL."""
     base = base_url.rstrip("/")
     if base.startswith("https://"):
         base = "wss://" + base.removeprefix("https://")
     elif base.startswith("http://"):
         base = "ws://" + base.removeprefix("http://")
-    return f"{base}/v1/stt/stream"
+    return f"{base}/{stream_path.lstrip('/')}"
 
 
 class StreamingWavDecoder:
@@ -283,13 +283,14 @@ class StreamingRtcAsrProcessor(FrameProcessor):
         self,
         *,
         base_url: str,
+        stream_path: str = "/v1/stt/stream",
         participant: str,
         final_frame_type: type[TranscriptionFrame],
         event_callback: EventCallback | None = None,
         vad_params: VADParams | None = None,
     ) -> None:
         super().__init__(name=f"{participant}_rtc_asr")
-        self.url = rtc_asr_stream_url(base_url)
+        self.url = rtc_asr_stream_url(base_url, stream_path)
         self.participant = participant
         self.final_frame_type = final_frame_type
         self.event_callback = event_callback

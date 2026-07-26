@@ -347,6 +347,40 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
     assert _AsyncClient.speech_voices == ['af_heart', 'am_adam', 'af_heart', 'am_adam']
 
 
+def test_reference_duplex_cancels_active_exchange_when_stream_closes(monkeypatch):
+    cancelled = asyncio.Event()
+
+    async def blocking_exchange(**kwargs):
+        await kwargs['event_callback']({'type': 'vad', 'state': 'speaking'})
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    async def retire_immediately(_broadcast):
+        return None
+
+    async def run():
+        stream = server._reference_duplex_events(server.ReferenceDuplexRunRequest(
+            session_id='disconnect-session',
+            execution_run_id='disconnect-run',
+            scenario={'id': 'billing-address-change', 'title': 'Billing Address Change'},
+            llm_mode='mock',
+            max_turn_pairs=1,
+            total_timeout_seconds=20,
+        ))
+        first_event = server.json.loads((await anext(stream)).decode())
+        assert first_event['type'] == 'vad'
+        await stream.aclose()
+        assert cancelled.is_set()
+
+    monkeypatch.setattr(server, '_run_streaming_exchange', blocking_exchange)
+    monkeypatch.setattr(server, '_retire_reference_broadcast', retire_immediately)
+
+    asyncio.run(run())
+
+
 def test_reference_duplex_rejects_matching_voices(monkeypatch):
     monkeypatch.setattr(server, 'REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
     client = TestClient(server.app)
