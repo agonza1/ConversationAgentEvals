@@ -243,6 +243,45 @@ def test_codex_responses_sse_parser_uses_done_text_not_empty_created_response():
     assert payload == {'output_text': 'Final answer'}
 
 
+def test_codex_response_stream_records_actual_first_text_delta(monkeypatch):
+    from app.services.llm_providers import openai_codex as mod
+
+    class _TimedStream:
+        # The Codex proxy may omit the SSE content type; framing remains authoritative.
+        headers: dict[str, str] = {}
+
+        def __init__(self):
+            self.lines = iter([
+                b'event: response.created\n',
+                b'data: {"type":"response.created","response":{"status":"in_progress"}}\n',
+                b'event: response.output_text.delta\n',
+                b'data: {"type":"response.output_text.delta","delta":"Hello"}\n',
+                b'data: [DONE]\n',
+            ])
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def readline(self):
+            return next(self.lines, b'')
+
+    clock = iter([10.0, 10.125])
+    monkeypatch.setattr(mod.time, 'perf_counter', lambda: next(clock))
+    monkeypatch.setattr(mod.urllib.request, 'urlopen', lambda *args, **kwargs: _TimedStream())
+
+    payload = mod._http_json_post(
+        'https://chatgpt.com/backend-api/codex/responses',
+        {'input': []},
+        headers={'Authorization': 'Bearer t'},
+    )
+
+    assert payload['output_text'] == 'Hello'
+    assert payload['_completion_metrics']['ttft_ms'] == 125.0
+
+
 def test_openai_codex_refreshes_expired_access_token(tmp_path: Path):
     token_path = tmp_path / 'openai-codex-oauth.json'
     old_access = _fake_jwt({'https://api.openai.com/auth': {'chatgpt_account_id': 'acct_refresh'}})
@@ -471,7 +510,7 @@ def test_openai_codex_list_models_filters_and_uses_ssl_get(tmp_path: Path):
     assert captured['headers']['Authorization'] == 'Bearer access'
     assert captured['headers']['ChatGPT-Account-Id'] == 'acct_1'
     ids = [item['id'] for item in payload['models']]
-    assert ids[0] == 'gpt-5.4'
+    assert ids[0] == 'gpt-5.4-mini'
     assert 'gpt-5.4-mini' in ids
     assert 'o3-mini' in ids
     assert 'codex-auto-review' not in ids
@@ -510,7 +549,7 @@ def test_openai_codex_list_models_falls_back_on_403(tmp_path: Path):
     assert 'Missing scopes' not in (payload.get('message') or '')
     assert 'Could not list OpenAI models' not in (payload.get('message') or '')
     ids = [item['id'] for item in payload['models']]
-    assert ids[0] == 'gpt-5.4'
+    assert ids[0] == 'gpt-5.4-mini'
     assert 'gpt-4o' in ids
 
 

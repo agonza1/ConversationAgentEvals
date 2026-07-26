@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -85,7 +86,17 @@ def execution_reference_complete(
         raise HTTPException(status_code=403, detail='Invalid local reference-agent token.')
     try:
         provider = resolve_reference_completion_provider()
-        text = provider.complete(payload.prompt, model_name=payload.model_name).strip()
+        started_at = time.perf_counter()
+        complete_with_metrics = getattr(provider, 'complete_with_metrics', None)
+        if callable(complete_with_metrics):
+            completion = complete_with_metrics(payload.prompt, model_name=payload.model_name)
+            text = str(completion.get('text') or '').strip()
+            ttft_ms = completion.get('ttft_ms')
+            total_ms = completion.get('total_ms')
+        else:
+            text = provider.complete(payload.prompt, model_name=payload.model_name).strip()
+            ttft_ms = None
+            total_ms = round((time.perf_counter() - started_at) * 1000, 3)
     except (ReferenceRuntimeError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     if not text:
@@ -95,6 +106,8 @@ def execution_reference_complete(
         'text': text,
         'provider': status.get('provider') or provider.provider_id,
         'model_name': payload.model_name,
+        'ttft_ms': ttft_ms if isinstance(ttft_ms, (int, float)) else None,
+        'total_ms': total_ms if isinstance(total_ms, (int, float)) else None,
     }
 
 

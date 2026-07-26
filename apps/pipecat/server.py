@@ -411,7 +411,7 @@ if PIPECAT_RUNTIME_AVAILABLE:
             self.max_turn_pairs = max_turn_pairs
             self.model_name = model_name
             self.text = ''
-            self.ttfb_ms: float | None = None
+            self.ttft_ms: float | None = None
             self.total_ms: float | None = None
 
         def can_generate_metrics(self) -> bool:
@@ -444,7 +444,6 @@ if PIPECAT_RUNTIME_AVAILABLE:
             )
             started = time.perf_counter()
             await self.start_processing_metrics()
-            await self.start_ttfb_metrics()
             async with httpx.AsyncClient(timeout=90) as client:
                 async with client.stream(
                     'POST',
@@ -453,13 +452,22 @@ if PIPECAT_RUNTIME_AVAILABLE:
                     headers={'x-cae-reference-token': REFERENCE_AGENT_INTERNAL_TOKEN},
                 ) as response:
                     response.raise_for_status()
-                    self.ttfb_ms = round((time.perf_counter() - started) * 1000, 3)
-                    await self.stop_ttfb_metrics()
                     payload = json.loads((await response.aread()).decode())
             self.text = str(payload.get('text') or '').strip()
             if not self.text:
                 raise RuntimeError('reference tester completion callback returned no text')
-            self.total_ms = round((time.perf_counter() - started) * 1000, 3)
+            reported_ttft = payload.get('ttft_ms')
+            reported_total = payload.get('total_ms')
+            self.ttft_ms = (
+                round(float(reported_ttft), 3)
+                if isinstance(reported_ttft, (int, float))
+                else None
+            )
+            self.total_ms = (
+                round(float(reported_total), 3)
+                if isinstance(reported_total, (int, float))
+                else round((time.perf_counter() - started) * 1000, 3)
+            )
             await self.stop_processing_metrics()
             await self.push_frame(_TesterSpeechFrame(self.text), direction)
 
@@ -470,7 +478,7 @@ if PIPECAT_RUNTIME_AVAILABLE:
             self.history = history
             self.model_name = model_name
             self.text = ''
-            self.ttfb_ms: float | None = None
+            self.ttft_ms: float | None = None
             self.total_ms: float | None = None
 
         def can_generate_metrics(self) -> bool:
@@ -491,7 +499,6 @@ if PIPECAT_RUNTIME_AVAILABLE:
             )
             started = time.perf_counter()
             await self.start_processing_metrics()
-            await self.start_ttfb_metrics()
             async with httpx.AsyncClient(timeout=90) as client:
                 async with client.stream(
                     'POST',
@@ -500,13 +507,22 @@ if PIPECAT_RUNTIME_AVAILABLE:
                     headers={'x-cae-reference-token': REFERENCE_AGENT_INTERNAL_TOKEN},
                 ) as response:
                     response.raise_for_status()
-                    self.ttfb_ms = round((time.perf_counter() - started) * 1000, 3)
-                    await self.stop_ttfb_metrics()
                     payload = json.loads((await response.aread()).decode())
             self.text = str(payload.get('text') or '').strip()
             if not self.text:
                 raise RuntimeError('reference target completion callback returned no text')
-            self.total_ms = round((time.perf_counter() - started) * 1000, 3)
+            reported_ttft = payload.get('ttft_ms')
+            reported_total = payload.get('total_ms')
+            self.ttft_ms = (
+                round(float(reported_ttft), 3)
+                if isinstance(reported_ttft, (int, float))
+                else None
+            )
+            self.total_ms = (
+                round(float(reported_total), 3)
+                if isinstance(reported_total, (int, float))
+                else round((time.perf_counter() - started) * 1000, 3)
+            )
             await self.stop_processing_metrics()
             await self.push_frame(_TargetSpeechFrame(self.text), direction)
 
@@ -1042,7 +1058,7 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                             if result.target_asr.final_at and result.target_asr.speech_ended_at
                             else None
                         ),
-                        'llm_callback_ttfb_ms': result.target_llm.ttfb_ms,
+                        'llm_ttft_ms': result.target_llm.ttft_ms,
                         'llm_total_ms': result.target_llm.total_ms,
                         'tts_ttfb_ms': result.target_tts.ttfb_ms,
                         'tts_total_ms': result.target_tts.total_ms,

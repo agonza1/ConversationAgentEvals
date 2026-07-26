@@ -276,10 +276,10 @@ interface OpenAIProviderStatus {
   last_error?: string | null;
 }
 
-const DEFAULT_EXECUTION_MODEL = 'gpt-5.4';
+const DEFAULT_EXECUTION_MODEL = 'gpt-5.4-mini';
 const FALLBACK_EXECUTION_MODELS = [
-  'gpt-5.4',
   'gpt-5.4-mini',
+  'gpt-5.4',
   'gpt-5.2',
   'gpt-4.1',
   'gpt-4.1-mini',

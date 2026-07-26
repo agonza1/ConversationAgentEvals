@@ -29,10 +29,10 @@ OPENAI_PLATFORM_MODELS_URL = 'https://api.openai.com/v1/models'
 CALLBACK_REDIRECT_HOST = 'localhost'
 CALLBACK_PORT = 1455
 REDIRECT_URI = f'http://{CALLBACK_REDIRECT_HOST}:{CALLBACK_PORT}/auth/callback'
-DEFAULT_EXECUTION_MODEL = 'gpt-5.4'
+DEFAULT_EXECUTION_MODEL = 'gpt-5.4-mini'
 FALLBACK_CHAT_MODELS = (
-    'gpt-5.4',
     'gpt-5.4-mini',
+    'gpt-5.4',
     'gpt-5.2',
     'gpt-4.1',
     'gpt-4.1-mini',
@@ -327,7 +327,13 @@ class OpenAICodexProvider:
         self._save_tokens(refreshed)
         return str(refreshed['access_token'])
 
-    def complete(self, prompt: str, *, model_name: str | None = None) -> str:
+    def complete_with_metrics(
+        self,
+        prompt: str,
+        *,
+        model_name: str | None = None,
+    ) -> dict[str, Any]:
+        started_at = time.perf_counter()
         access = self.ensure_access_token()
         tokens = self._load_tokens() or {}
         account_id = tokens.get('account_id')
@@ -356,6 +362,7 @@ class OpenAICodexProvider:
             'Accept': 'text/event-stream',
             'originator': ORIGINATOR,
         }
+        request_started_at = time.perf_counter()
         try:
             response = self._http_post_json(CODEX_RESPONSES_URL, body, headers=headers)
         except CodexResponseError as exc:
@@ -363,11 +370,27 @@ class OpenAICodexProvider:
                 raise
             access = self._refresh_access_token(tokens)
             headers['Authorization'] = f'Bearer {access}'
+            request_started_at = time.perf_counter()
             response = self._http_post_json(CODEX_RESPONSES_URL, body, headers=headers)
         text = _extract_responses_text(response)
         if not text:
             raise RuntimeError('Codex Responses returned an empty completion.')
-        return text
+        raw_metrics = response.get('_completion_metrics')
+        metrics = raw_metrics if isinstance(raw_metrics, dict) else {}
+        ttft_ms = metrics.get('ttft_ms')
+        end_to_end_ttft_ms = (
+            (request_started_at - started_at) * 1000 + float(ttft_ms)
+            if isinstance(ttft_ms, (int, float))
+            else None
+        )
+        return {
+            'text': text,
+            'ttft_ms': round(end_to_end_ttft_ms, 3) if end_to_end_ttft_ms is not None else None,
+            'total_ms': round((time.perf_counter() - started_at) * 1000, 3),
+        }
+
+    def complete(self, prompt: str, *, model_name: str | None = None) -> str:
+        return str(self.complete_with_metrics(prompt, model_name=model_name)['text'])
 
     def complete_oauth_from_callback(self, code: str, state: str | None = None) -> dict[str, Any]:
         """Exchange an authorization code (callback or manual paste). Used by tests."""
@@ -653,15 +676,28 @@ def _http_json_post(url: str, body: dict[str, Any], *, headers: dict[str, str]) 
         headers=headers,
         method='POST',
     )
+    started_at = time.perf_counter()
     try:
         with urllib.request.urlopen(  # noqa: S310
             request,
             timeout=90,
             context=verified_ssl_context(),
         ) as response:
-            raw = response.read().decode('utf-8')
             headers_map = getattr(response, 'headers', {})
             content_type = headers_map.get('Content-Type', '')
+            ttft_ms: float | None = None
+            if hasattr(response, 'readline'):
+                raw_lines: list[bytes] = []
+                while True:
+                    raw_line = response.readline()
+                    if not raw_line:
+                        break
+                    raw_lines.append(raw_line)
+                    if ttft_ms is None and _sse_line_has_text_delta(raw_line):
+                        ttft_ms = round((time.perf_counter() - started_at) * 1000, 3)
+                raw = b''.join(raw_lines).decode('utf-8')
+            else:
+                raw = response.read().decode('utf-8')
             # The Codex backend streams its response, but some proxy paths omit
             # or rewrite Content-Type.  Trust the SSE framing too so a real
             # streamed completion is not accidentally parsed as JSON.
@@ -669,11 +705,33 @@ def _http_json_post(url: str, body: dict[str, Any], *, headers: dict[str, str]) 
                 'text/event-stream' in content_type.lower()
                 or raw.lstrip().startswith(('event:', 'data:'))
             ):
-                return _parse_responses_sse(raw)
+                payload = _parse_responses_sse(raw)
+                if ttft_ms is not None:
+                    payload['_completion_metrics'] = {'ttft_ms': ttft_ms}
+                return payload
             return json.loads(raw)
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode('utf-8', errors='replace')
         raise CodexResponseError(exc.code, detail, label='Codex Responses request') from exc
+
+
+def _sse_line_has_text_delta(raw_line: bytes) -> bool:
+    line = raw_line.decode('utf-8', errors='replace')
+    if not line.startswith('data:'):
+        return False
+    data = line.removeprefix('data:').strip()
+    if not data or data == '[DONE]':
+        return False
+    try:
+        event = json.loads(data)
+    except json.JSONDecodeError:
+        return False
+    return (
+        isinstance(event, dict)
+        and str(event.get('type') or '').endswith('.delta')
+        and isinstance(event.get('delta'), str)
+        and bool(event['delta'])
+    )
 
 
 def _http_json_get(url: str, *, headers: dict[str, str]) -> dict[str, Any]:

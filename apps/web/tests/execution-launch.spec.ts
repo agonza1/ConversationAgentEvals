@@ -417,7 +417,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
     mode: 'text_callable',
     text_callable: 'mock_agent',
     agent_id: 'mock-text-agent',
-    model_name: 'gpt-5.4',
+    model_name: 'gpt-5.4-mini',
     tester_id: 'scenario_simulator',
     executor_id: 'local_async_runner',
     scenario_ids: ['billing-address-change', 'cancellation-rescue'],

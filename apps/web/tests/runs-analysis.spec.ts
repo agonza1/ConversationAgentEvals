@@ -342,6 +342,12 @@ test('voice analysis reports target first audio byte and excludes legacy exchang
             participant: 'target',
             latency_ms: 640,
             exchange_elapsed_ms: 9120,
+            stage_metrics: {
+              asr_finalize_ms: 120,
+              llm_ttft_ms: 180,
+              llm_total_ms: 610,
+              tts_ttfb_ms: 250,
+            },
           },
         ],
       },
@@ -373,6 +379,9 @@ test('voice analysis reports target first audio byte and excludes legacy exchang
   await page.goto('/runs/exec-voice-timing');
   await expect(page.getByRole('button', { name: /Target Response Latency 640ms/ })).toBeVisible();
   await expect(page.getByLabel('Per-mark latency bars')).toContainText('Target first audio byte');
+  await expect(page.getByLabel('Per-mark latency bars')).toContainText('LLM TTFT 180ms');
+  await expect(page.getByLabel('Per-mark latency bars')).toContainText('LLM complete 610ms');
+  await expect(page.getByLabel('Per-mark latency bars')).not.toContainText('LLM callback TTFB');
   await expect(page.getByLabel('Conversation turn sequence')).toContainText('first audio byte 640ms');
 
   await page.goto('/runs/exec-legacy-timing');

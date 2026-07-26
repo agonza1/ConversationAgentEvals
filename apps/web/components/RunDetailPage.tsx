@@ -606,7 +606,8 @@ function LatencyBreakdown({ mark }: { mark: Record<string, unknown> }) {
   const values = stages as Record<string, unknown>;
   const entries = [
     ['ASR final', values.asr_finalize_ms],
-    ['LLM callback TTFB', values.llm_callback_ttfb_ms],
+    ['LLM TTFT', values.llm_ttft_ms],
+    ['LLM complete', values.llm_total_ms],
     ['TTS TTFB', values.tts_ttfb_ms],
   ].filter((entry): entry is [string, number] => Number.isFinite(Number(entry[1])))
     .map(([label, value]) => [label, Number(value)] as const);

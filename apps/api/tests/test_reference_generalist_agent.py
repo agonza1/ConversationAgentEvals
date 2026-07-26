@@ -50,6 +50,13 @@ class FakeCompletion:
         assert model_name == 'fake-model'
         return 'I can help with that request.'
 
+    def complete_with_metrics(self, prompt: str, *, model_name: str | None = None) -> dict:
+        return {
+            'text': self.complete(prompt, model_name=model_name),
+            'ttft_ms': 125.0,
+            'total_ms': 275.0,
+        }
+
 
 class FakeMedia:
     def __init__(self):
@@ -247,7 +254,8 @@ class FakeDuplexAsyncClient:
                         'response_complete_latency_ms': 84.5,
                         'stage_metrics': {
                             'asr_finalize_ms': 10.0,
-                            'llm_callback_ttfb_ms': 12.5,
+                            'llm_ttft_ms': 12.5,
+                            'llm_total_ms': 18.0,
                             'tts_ttfb_ms': 20.0,
                         },
                         'transport': 'in_process_pipecat_frame_bus',
@@ -575,6 +583,8 @@ def test_reference_completion_callback_requires_internal_token(monkeypatch):
     )
     assert accepted.status_code == 200
     assert accepted.json()['text'] == 'I can help with that request.'
+    assert accepted.json()['ttft_ms'] == 125.0
+    assert accepted.json()['total_ms'] == 275.0
     with pytest.raises(ReferenceRuntimeError, match='KOKORO_BASE_URL'):
         ReferenceMediaServices(ReferenceRuntimeConfig(
             rtc_asr_base_url='http://rtc-asr.test',

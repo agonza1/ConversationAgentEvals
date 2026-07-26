@@ -48,7 +48,7 @@ def _streaming_result(
         ),
         target_llm=SimpleNamespace(
             text=target_text,
-            ttfb_ms=5.0,
+            ttft_ms=5.0,
             total_ms=7.0,
         ),
         target_tts=SimpleNamespace(

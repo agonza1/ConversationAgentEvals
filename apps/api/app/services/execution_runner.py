@@ -51,7 +51,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_VOICE_FIXTURE = 'docs/examples/agentic-contact-center-run-fixture.json'
 DEFAULT_AUDIO_PLAN = 'docs/examples/agentic-contact-center-audio-plan.json'
 DEFAULT_CANCELLATION_SCENARIO = 'docs/examples/agentic-contact-center-cancellation-rescue.json'
-DEFAULT_EXECUTION_MODEL = 'gpt-5.4'
+DEFAULT_EXECUTION_MODEL = 'gpt-5.4-mini'
 FIXTURE_BACKED_SCENARIO_IDS = frozenset({'cancellation-rescue'})
 ALLOWED_FIXTURE_ROOTS = (
     REPO_ROOT / 'docs' / 'examples',
