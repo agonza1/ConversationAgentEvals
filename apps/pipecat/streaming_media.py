@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import struct
 import time
 from collections import deque
@@ -100,7 +101,7 @@ class StreamingWavDecoder:
 
 
 class StreamingKokoroProcessor(FrameProcessor):
-    """Turn one selected text frame into paced PCM frames without whole-WAV buffering."""
+    """Aggregate streaming LLM deltas into natural Kokoro synthesis chunks."""
 
     def __init__(
         self,
@@ -109,45 +110,160 @@ class StreamingKokoroProcessor(FrameProcessor):
         model: str,
         voice: str,
         input_type: type[Frame],
+        start_type: type[Frame] | None = None,
+        end_type: type[Frame] | None = None,
         output_frame_factory: Callable[[bytes, int, int], Frame] = OutputAudioRawFrame,
+        output_end_frame_factory: Callable[[], Frame] | None = None,
         event_callback: EventCallback | None = None,
         participant: str,
+        client: httpx.AsyncClient | None = None,
+        first_chunk_min_words: int = 6,
+        first_chunk_max_words: int = 12,
     ) -> None:
         super().__init__(name=f"{participant}_kokoro")
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.voice = voice
         self.input_type = input_type
+        self.start_type = start_type
+        self.end_type = end_type
         self.output_frame_factory = output_frame_factory
+        self.output_end_frame_factory = output_end_frame_factory
         self.event_callback = event_callback
         self.participant = participant
+        self.client = client
+        self.first_chunk_min_words = first_chunk_min_words
+        self.first_chunk_max_words = first_chunk_max_words
         self.text = ""
+        self.chunks: list[str] = []
         self.audio = bytearray()
         self.sample_rate = 24000
         self.channels = 1
         self.ttfb_ms: float | None = None
+        self.llm_to_first_audio_ms: float | None = None
         self.total_ms: float | None = None
+        self.aggregation_delay_ms: float | None = None
+        self.synthesis_ttfb_ms: float | None = None
+        self._pending_text = ""
+        self._first_chunk_emitted = False
+        self._turn_started_at: float | None = None
+        self._first_delta_at: float | None = None
+        self._synthesis_started_at: float | None = None
 
     def can_generate_metrics(self) -> bool:
         return True
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
+        if self.start_type is not None and isinstance(frame, self.start_type):
+            self._reset_turn()
+            await self.push_frame(frame, direction)
+            return
+        if self.end_type is not None and isinstance(frame, self.end_type):
+            await self._flush_pending(direction, final=True)
+            if not self.audio:
+                raise RuntimeError(f"{self.participant} Kokoro returned no PCM audio.")
+            self.total_ms = round(
+                (
+                    time.perf_counter()
+                    - (self._synthesis_started_at or time.perf_counter())
+                )
+                * 1000,
+                3,
+            )
+            await self.stop_processing_metrics()
+            if self.event_callback:
+                await self.event_callback(
+                    {
+                        "type": "metric",
+                        "participant": self.participant,
+                        "stage": "tts",
+                        "metric": "time_to_first_audio_byte",
+                        "value_ms": self.ttfb_ms,
+                        "llm_to_first_audio_ms": self.llm_to_first_audio_ms,
+                        "total_ms": self.total_ms,
+                        "aggregation_delay_ms": self.aggregation_delay_ms,
+                        "synthesis_ttfb_ms": self.synthesis_ttfb_ms,
+                        "aggregation": "adaptive_first_clause_then_sentence",
+                        "chunk_count": len(self.chunks),
+                        "source": "pipecat_metrics",
+                    }
+                )
+            if self.output_end_frame_factory is not None:
+                await self.push_frame(self.output_end_frame_factory(), direction)
+            else:
+                await self.push_frame(frame, direction)
+            return
         if not isinstance(frame, self.input_type):
             await self.push_frame(frame, direction)
             return
 
-        text = str(getattr(frame, "text", "")).strip()
+        delta = str(getattr(frame, "text", ""))
+        if not delta:
+            return
+        if self._turn_started_at is None:
+            self._reset_turn()
+        if self._first_delta_at is None:
+            self._first_delta_at = time.perf_counter()
+        self.text += delta
+        self._pending_text += delta
+        await self._flush_pending(direction, final=False)
+
+    def _reset_turn(self) -> None:
+        self.text = ""
+        self.chunks = []
+        self.audio = bytearray()
+        self.ttfb_ms = None
+        self.llm_to_first_audio_ms = None
+        self.total_ms = None
+        self.aggregation_delay_ms = None
+        self.synthesis_ttfb_ms = None
+        self._pending_text = ""
+        self._first_chunk_emitted = False
+        self._turn_started_at = time.perf_counter()
+        self._first_delta_at = None
+        self._synthesis_started_at = None
+
+    async def _flush_pending(
+        self,
+        direction: FrameDirection,
+        *,
+        final: bool,
+    ) -> None:
+        while True:
+            chunk, remainder = _next_tts_chunk(
+                self._pending_text,
+                first_chunk=not self._first_chunk_emitted,
+                min_words=self.first_chunk_min_words,
+                max_words=self.first_chunk_max_words,
+                final=final,
+            )
+            if not chunk:
+                return
+            self._pending_text = remainder
+            await self._synthesize_chunk(chunk, direction)
+            self._first_chunk_emitted = True
+
+    async def _synthesize_chunk(self, text: str, direction: FrameDirection) -> None:
+        text = text.strip()
         if not text:
-            raise RuntimeError(f"{self.participant} Kokoro received empty text.")
-        self.text = text
+            return
+        self.chunks.append(text)
         started = time.perf_counter()
-        await self.start_processing_metrics()
-        await self.start_ttfb_metrics()
+        if len(self.chunks) == 1:
+            self._synthesis_started_at = started
+            if self._first_delta_at is not None:
+                self.aggregation_delay_ms = round(
+                    (started - self._first_delta_at) * 1000,
+                    3,
+                )
+            await self.start_processing_metrics()
+            await self.start_ttfb_metrics()
         decoder = StreamingWavDecoder()
         pending = bytearray()
         first_payload = True
-        async with httpx.AsyncClient(timeout=90) as client:
+        client = self.client or httpx.AsyncClient(timeout=90)
+        try:
             async with client.stream(
                 "POST",
                 f"{self.base_url}/v1/audio/speech",
@@ -165,8 +281,16 @@ class StreamingKokoroProcessor(FrameProcessor):
                         continue
                     if first_payload:
                         first_payload = False
-                        self.ttfb_ms = round((time.perf_counter() - started) * 1000, 3)
-                        await self.stop_ttfb_metrics()
+                        if self.ttfb_ms is None:
+                            turn_started = self._turn_started_at or started
+                            first_audio_at = time.perf_counter()
+                            self.llm_to_first_audio_ms = round(
+                                (first_audio_at - turn_started) * 1000,
+                                3,
+                            )
+                            self.ttfb_ms = round((first_audio_at - started) * 1000, 3)
+                            self.synthesis_ttfb_ms = self.ttfb_ms
+                            await self.stop_ttfb_metrics()
                     self.sample_rate = decoder.sample_rate or self.sample_rate
                     self.channels = decoder.channels or self.channels
                     pending.extend(pcm)
@@ -180,6 +304,9 @@ class StreamingKokoroProcessor(FrameProcessor):
                             self.output_frame_factory(audio, self.sample_rate, self.channels),
                             direction,
                         )
+        finally:
+            if self.client is None:
+                await client.aclose()
         if pending:
             alignment = max(2, self.channels * 2)
             usable = len(pending) - len(pending) % alignment
@@ -192,20 +319,39 @@ class StreamingKokoroProcessor(FrameProcessor):
                 )
         if first_payload:
             raise RuntimeError("Kokoro returned no PCM audio.")
-        self.total_ms = round((time.perf_counter() - started) * 1000, 3)
-        await self.stop_processing_metrics()
-        if self.event_callback:
-            await self.event_callback(
-                {
-                    "type": "metric",
-                    "participant": self.participant,
-                    "stage": "tts",
-                    "metric": "time_to_first_audio_byte",
-                    "value_ms": self.ttfb_ms,
-                    "total_ms": self.total_ms,
-                    "source": "pipecat_metrics",
-                }
-            )
+
+
+def _next_tts_chunk(
+    text: str,
+    *,
+    first_chunk: bool,
+    min_words: int = 6,
+    max_words: int = 12,
+    final: bool = False,
+) -> tuple[str, str]:
+    """Return a low-latency first clause, then sentence-sized speech chunks."""
+    value = text.lstrip()
+    if not value:
+        return "", ""
+    sentence_match = re.search(r"[.!?](?:[\"')\]]+)?(?:\s+|$)", value)
+    if not first_chunk:
+        if sentence_match:
+            end = sentence_match.end()
+            return value[:end].strip(), value[end:]
+        return (value.strip(), "") if final else ("", value)
+
+    words = list(re.finditer(r"\S+", value))
+    if sentence_match:
+        sentence_word_count = len(value[: sentence_match.end()].split())
+        if sentence_word_count >= min_words or final:
+            end = sentence_match.end()
+            return value[:end].strip(), value[end:]
+    if len(words) >= max_words:
+        end = words[max_words - 1].end()
+        return value[:end].strip(), value[end:]
+    if final:
+        return value.strip(), ""
+    return "", value
 
 
 class StreamingMediaBridge(FrameProcessor):
@@ -218,71 +364,129 @@ class StreamingMediaBridge(FrameProcessor):
         audio_callback: AudioCallback,
         first_audio_callback: EventCallback | None = None,
         target_sample_rate: int = 16000,
+        end_type: type[Frame] | None = None,
+        trailing_silence_secs: float = 0.65,
     ) -> None:
         super().__init__(name=f"{participant}_media_bridge")
         self.participant = participant
         self.audio_callback = audio_callback
         self.first_audio_callback = first_audio_callback
         self.target_sample_rate = target_sample_rate
+        self.end_type = end_type
+        self.trailing_silence_secs = trailing_silence_secs
         self.audio = bytearray()
         self.sample_rate = 24000
         self.channels = 1
         self.first_audio_at: float | None = None
         self.audio_ended_at: float | None = None
         self._converted_pending = bytearray()
+        self._queue: asyncio.Queue[
+            tuple[Frame, FrameDirection, asyncio.Future[None] | None]
+        ] = asyncio.Queue()
+        self._worker_task: asyncio.Task[None] | None = None
+        self._turn_active = False
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
         if isinstance(frame, OutputAudioRawFrame):
-            if self.first_audio_at is None:
-                self.first_audio_at = time.time()
-                if self.first_audio_callback:
-                    await self.first_audio_callback(
-                        {
-                            "type": "speech_started",
-                            "participant": self.participant,
-                            "first_audible_pcm_at": self.first_audio_at,
-                        }
-                    )
-            self.sample_rate = frame.sample_rate
-            self.channels = frame.num_channels
-            self.audio.extend(frame.audio)
-            await self.audio_callback(frame.audio, frame.sample_rate, frame.num_channels)
-            duration = len(frame.audio) / max(1, frame.sample_rate * frame.num_channels * 2)
-            await asyncio.sleep(duration)
-            self.audio_ended_at = time.time()
-            mono = pcm16_to_mono(frame.audio, frame.num_channels)
-            converted = resample_pcm16(mono, frame.sample_rate, self.target_sample_rate)
-            self._converted_pending.extend(converted)
-            frame_bytes = self.target_sample_rate * 2 // 50
-            while len(self._converted_pending) >= frame_bytes:
-                audio = bytes(self._converted_pending[:frame_bytes])
-                del self._converted_pending[:frame_bytes]
-                await self.push_frame(
-                    InputAudioRawFrame(audio, self.target_sample_rate, 1),
-                    direction,
-                )
+            self._ensure_worker()
+            await self._queue.put((frame, direction, None))
             return
-        if isinstance(frame, EndFrame):
-            frame_bytes = self.target_sample_rate * 2 // 50
-            if self._converted_pending:
-                self._converted_pending.extend(
-                    b"\x00" * (frame_bytes - len(self._converted_pending))
+        if (
+            (self.end_type is not None and isinstance(frame, self.end_type))
+            or isinstance(frame, EndFrame)
+        ):
+            self._ensure_worker()
+            completed = asyncio.get_running_loop().create_future()
+            await self._queue.put((frame, direction, completed))
+            await completed
+            return
+        await self.push_frame(frame, direction)
+
+    async def cleanup(self) -> None:
+        if self._worker_task is not None:
+            self._worker_task.cancel()
+            await asyncio.gather(self._worker_task, return_exceptions=True)
+            self._worker_task = None
+        await super().cleanup()
+
+    def _ensure_worker(self) -> None:
+        if self._worker_task is None:
+            self._worker_task = asyncio.create_task(self._playback_worker())
+
+    async def _playback_worker(self) -> None:
+        while True:
+            frame, direction, completed = await self._queue.get()
+            try:
+                if isinstance(frame, OutputAudioRawFrame):
+                    await self._play_audio_frame(frame, direction)
+                else:
+                    await self._finish_turn(frame, direction)
+            finally:
+                if completed is not None and not completed.done():
+                    completed.set_result(None)
+                self._queue.task_done()
+
+    async def _play_audio_frame(
+        self,
+        frame: OutputAudioRawFrame,
+        direction: FrameDirection,
+    ) -> None:
+        if not self._turn_active:
+            self.audio = bytearray()
+            self.first_audio_at = None
+            self.audio_ended_at = None
+            self._converted_pending = bytearray()
+            self._turn_active = True
+        if self.first_audio_at is None:
+            self.first_audio_at = time.time()
+            if self.first_audio_callback:
+                await self.first_audio_callback(
+                    {
+                        "type": "speech_started",
+                        "participant": self.participant,
+                        "first_audible_byte_at": self.first_audio_at,
+                    }
                 )
-                await self.push_frame(
-                    InputAudioRawFrame(bytes(self._converted_pending), self.target_sample_rate, 1),
-                    direction,
-                )
-                self._converted_pending.clear()
-            # Give Silero enough paced trailing audio to establish the speech end
-            # without guessing from a buffered file boundary.
-            silence = b"\x00\x00" * self.target_sample_rate
-            for offset in range(0, len(silence), frame_bytes):
-                await self.push_frame(
-                    InputAudioRawFrame(silence[offset : offset + frame_bytes], self.target_sample_rate, 1),
-                    direction,
-                )
-                await asyncio.sleep(0.02)
+        self.sample_rate = frame.sample_rate
+        self.channels = frame.num_channels
+        self.audio.extend(frame.audio)
+        await self.audio_callback(frame.audio, frame.sample_rate, frame.num_channels)
+        mono = pcm16_to_mono(frame.audio, frame.num_channels)
+        converted = resample_pcm16(mono, frame.sample_rate, self.target_sample_rate)
+        self._converted_pending.extend(converted)
+        frame_bytes = self.target_sample_rate * 2 // 50
+        while len(self._converted_pending) >= frame_bytes:
+            audio = bytes(self._converted_pending[:frame_bytes])
+            del self._converted_pending[:frame_bytes]
+            await self.push_frame(
+                InputAudioRawFrame(audio, self.target_sample_rate, 1),
+                direction,
+            )
+        duration = len(frame.audio) / max(1, frame.sample_rate * frame.num_channels * 2)
+        await asyncio.sleep(duration)
+        self.audio_ended_at = time.time()
+
+    async def _finish_turn(self, frame: Frame, direction: FrameDirection) -> None:
+        frame_bytes = self.target_sample_rate * 2 // 50
+        if self._converted_pending:
+            self._converted_pending.extend(
+                b"\x00" * (frame_bytes - len(self._converted_pending))
+            )
+            await self.push_frame(
+                InputAudioRawFrame(bytes(self._converted_pending), self.target_sample_rate, 1),
+                direction,
+            )
+            self._converted_pending.clear()
+        silence_frames = max(1, round(self.trailing_silence_secs * 50))
+        silence = b"\x00" * frame_bytes
+        for _ in range(silence_frames):
+            await self.push_frame(
+                InputAudioRawFrame(silence, self.target_sample_rate, 1),
+                direction,
+            )
+            await asyncio.sleep(0.02)
+        self._turn_active = False
         await self.push_frame(frame, direction)
 
 
@@ -307,7 +511,9 @@ class StreamingRtcAsrProcessor(FrameProcessor):
         self.vad = SileroVADAnalyzer(
             sample_rate=16000,
             params=vad_params
-            or VADParams(confidence=0.7, start_secs=0.12, stop_secs=1.0, min_volume=0.4),
+            # 0.5s is responsive without treating Kokoro's natural clause pauses
+            # as separate utterances. The previous 1.0s default inflated every EOU.
+            or VADParams(confidence=0.7, start_secs=0.12, stop_secs=0.5, min_volume=0.4),
         )
         # Standalone processors do not receive TransportParams' VAD setup hook.
         self.vad.set_sample_rate(16000)
@@ -384,6 +590,12 @@ class StreamingRtcAsrProcessor(FrameProcessor):
         if self.active or self.finalizing:
             return
         await self._connect()
+        self.transcript = ""
+        self.interims = []
+        self.speech_started_at = None
+        self.speech_ended_at = None
+        self.final_at = None
+        self.server_timing = {}
         self.ready.clear()
         self.final_received.clear()
         assert self.websocket is not None

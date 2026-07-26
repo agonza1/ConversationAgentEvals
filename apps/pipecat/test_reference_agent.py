@@ -330,7 +330,7 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
     assert events.index(live_audio[0]) < events.index(exchanges[0])
     assert len(exchanges) == 2
     assert completed['type'] == 'complete'
-    assert completed['architecture'] == 'streaming_pipecat_exchange_graph_paced_pcm_local_stt_v1'
+    assert completed['architecture'] == 'persistent_streaming_pipecat_duplex_local_stt_v1'
     assert [frame['direction'] for frame in completed['frames']] == [
         'tester_to_target',
         'target_to_tester',
@@ -350,10 +350,10 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
     assert completed['graphs']['tester']['llm_mode'] == 'mock'
     assert exchanges[0]['target']['asr_receipt'] == 'Please help me.'
     assert exchanges[0]['target']['tester_asr_receipt'] == 'Please help me.'
-    assert exchanges[0]['latency_kind'] == 'speech_end_to_first_audible_pcm'
+    assert exchanges[0]['latency_kind'] == 'speech_end_to_first_audible_byte'
     assert exchanges[0]['latency_ms'] >= 0
     assert exchanges[0]['exchange_elapsed_ms'] >= exchanges[0]['latency_ms']
-    assert exchanges[0]['target']['frame']['response_metric'] == 'speech_end_to_first_audible_pcm'
+    assert exchanges[0]['target']['frame']['response_metric'] == 'speech_end_to_first_audible_byte'
     target_prompts = [
         prompt for prompt in _AsyncClient.completion_prompts
         if 'built-in generalist voice agent' in prompt

@@ -6,6 +6,7 @@ from pipecat.audio.vad.vad_analyzer import VADState
 
 from streaming_media import (
     StreamingWavDecoder,
+    _next_tts_chunk,
     _should_start_utterance,
     resample_pcm16,
     rtc_asr_stream_url,
@@ -64,3 +65,31 @@ def test_vad_recovery_does_not_restart_active_rtc_asr_stream() -> None:
         active=False,
         finalizing=False,
     )
+
+
+def test_adaptive_tts_uses_short_first_chunk_then_complete_sentences() -> None:
+    chunk, remainder = _next_tts_chunk(
+        "I can help with your billing address change today. What is your postal code?",
+        first_chunk=True,
+    )
+    assert chunk == "I can help with your billing address change today."
+    assert remainder == "What is your postal code?"
+
+    chunk, remainder = _next_tts_chunk(
+        remainder,
+        first_chunk=False,
+        final=False,
+    )
+    assert chunk == "What is your postal code?"
+    assert remainder == ""
+
+
+def test_adaptive_tts_caps_unpunctuated_first_chunk() -> None:
+    chunk, remainder = _next_tts_chunk(
+        "one two three four five six seven eight nine ten eleven twelve thirteen fourteen",
+        first_chunk=True,
+    )
+    assert chunk.split() == (
+        "one two three four five six seven eight nine ten eleven twelve".split()
+    )
+    assert remainder.strip() == "thirteen fourteen"

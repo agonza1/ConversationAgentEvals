@@ -13,6 +13,7 @@ from app.services.llm_providers.openai_codex import (
     decode_chatgpt_identity,
     disconnect_marker_path,
     _parse_responses_sse,
+    _http_json_post_stream,
 )
 from app.services.product_service import reset_saved_runs_for_tests
 
@@ -280,6 +281,32 @@ def test_codex_response_stream_records_actual_first_text_delta(monkeypatch):
 
     assert payload['output_text'] == 'Hello'
     assert payload['_completion_metrics']['ttft_ms'] == 125.0
+
+
+def test_codex_response_stream_yields_text_deltas_without_buffering(monkeypatch):
+    from app.services.llm_providers import openai_codex as mod
+
+    class _Stream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def __iter__(self):
+            return iter([
+                b'data: {"type":"response.output_text.delta","delta":"Hello"}\n',
+                b'data: {"type":"response.output_text.delta","delta":" world"}\n',
+                b'data: [DONE]\n',
+            ])
+
+    monkeypatch.setattr(mod.urllib.request, 'urlopen', lambda *args, **kwargs: _Stream())
+
+    assert list(_http_json_post_stream(
+        'https://chatgpt.com/backend-api/codex/responses',
+        {'input': [], 'stream': True},
+        headers={'Authorization': 'Bearer t'},
+    )) == ['Hello', ' world']
 
 
 def test_openai_codex_refreshes_expired_access_token(tmp_path: Path):

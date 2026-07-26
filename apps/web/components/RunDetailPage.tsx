@@ -1181,12 +1181,16 @@ function isTargetResponseMark(mark: Record<string, unknown>) {
 
 function isTargetFirstAudioByteMark(mark: Record<string, unknown>) {
   return mark.kind === 'target_first_audio_byte'
+    || mark.kind === 'speech_end_to_first_audible_byte'
     || mark.kind === 'speech_end_to_first_audible_pcm'
+    || mark.response_metric === 'speech_end_to_first_audible_byte'
     || mark.response_metric === 'target_time_to_first_audio_byte';
 }
 
 function isSpeechEndToFirstAudiblePcmMark(mark: Record<string, unknown>) {
-  return mark.kind === 'speech_end_to_first_audible_pcm'
+  return mark.kind === 'speech_end_to_first_audible_byte'
+    || mark.kind === 'speech_end_to_first_audible_pcm'
+    || mark.response_metric === 'speech_end_to_first_audible_byte'
     || mark.response_metric === 'speech_end_to_first_audible_pcm';
 }
 
@@ -1213,8 +1217,11 @@ function LatencyBreakdown({ mark }: { mark: Record<string, unknown> }) {
   const entries = [
     ['EOU + ASR final', values.asr_finalize_ms],
     ['LLM TTFT', values.llm_ttft_ms],
-    ['LLM TTLT', values.llm_total_ms],
-    ['TTS TTFB', values.tts_ttfb_ms],
+    ['TTS text aggregation', values.tts_aggregation_delay_ms],
+    [
+      'TTS synthesis TTFB',
+      values.tts_synthesis_ttfb_ms ?? values.tts_ttfb_ms,
+    ],
   ].filter((entry): entry is [string, number] => (
     typeof entry[1] === 'number' && Number.isFinite(entry[1])
   ));

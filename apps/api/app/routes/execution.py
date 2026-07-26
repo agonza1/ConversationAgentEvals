@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import secrets
 import time
@@ -8,7 +9,7 @@ from typing import Any, Literal
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
@@ -116,6 +117,62 @@ def execution_reference_complete(
         'ttft_ms': ttft_ms if isinstance(ttft_ms, (int, float)) else None,
         'total_ms': total_ms if isinstance(total_ms, (int, float)) else None,
     }
+
+
+@router.post('/reference/stream')
+def execution_reference_stream(
+    payload: ReferenceCompletionRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+):
+    """Stream normalized LLM text deltas to the local Pipecat media pipeline."""
+    expected_token = os.getenv('REFERENCE_AGENT_INTERNAL_TOKEN', '').strip()
+    if not expected_token:
+        raise HTTPException(
+            status_code=503,
+            detail='Set REFERENCE_AGENT_INTERNAL_TOKEN for the local reference pipeline.',
+        )
+    if not x_cae_reference_token or not secrets.compare_digest(
+        x_cae_reference_token,
+        expected_token,
+    ):
+        raise HTTPException(status_code=403, detail='Invalid local reference-agent token.')
+    try:
+        provider = resolve_reference_completion_provider()
+        provider_status = provider.status()
+    except (ReferenceRuntimeError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    def ndjson_events():
+        started_at = time.perf_counter()
+        stream = getattr(provider, 'stream_with_metrics', None)
+        try:
+            if callable(stream):
+                events = stream(payload.prompt, model_name=payload.model_name)
+            else:
+                text = provider.complete(payload.prompt, model_name=payload.model_name).strip()
+                events = iter((
+                    {'type': 'delta', 'text': text},
+                    {
+                        'type': 'completed',
+                        'text': text,
+                        'ttft_ms': None,
+                        'total_ms': round((time.perf_counter() - started_at) * 1000, 3),
+                    },
+                ))
+            for event in events:
+                normalized = {
+                    **event,
+                    'provider': provider_status.get('provider') or provider.provider_id,
+                    'model_name': payload.model_name,
+                }
+                yield json.dumps(normalized, separators=(',', ':')) + '\n'
+        except Exception as exc:  # noqa: BLE001 - transport errors must reach Pipecat
+            yield json.dumps(
+                {'type': 'error', 'detail': str(exc)},
+                separators=(',', ':'),
+            ) + '\n'
+
+    return StreamingResponse(ndjson_events(), media_type='application/x-ndjson')
 
 
 @router.post('/runs')

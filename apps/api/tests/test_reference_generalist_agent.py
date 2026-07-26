@@ -57,6 +57,17 @@ class FakeCompletion:
             'total_ms': 275.0,
         }
 
+    def stream_with_metrics(self, prompt: str, *, model_name: str | None = None):
+        text = self.complete(prompt, model_name=model_name)
+        yield {'type': 'delta', 'text': 'I can help '}
+        yield {'type': 'delta', 'text': 'with that request.'}
+        yield {
+            'type': 'completed',
+            'text': text,
+            'ttft_ms': 75.0,
+            'total_ms': 225.0,
+        }
+
 
 class FakeMedia:
     def __init__(self):
@@ -476,7 +487,7 @@ def test_primary_reference_path_streams_session_control_not_wav_turns(monkeypatc
         audio_events = [event for event in observed if event.get('audio')]
         speech_events = [
             event for event in observed
-            if event.get('frame_metadata', {}).get('media_event') == 'first_audible_pcm'
+            if event.get('frame_metadata', {}).get('media_event') == 'first_audible_byte'
         ]
         evidence_updates = [
             event for event in observed
@@ -590,3 +601,28 @@ def test_reference_completion_callback_requires_internal_token(monkeypatch):
             rtc_asr_base_url='http://rtc-asr.test',
             kokoro_base_url='',
         )).readiness()
+
+
+def test_reference_completion_stream_forwards_deltas_and_metrics(monkeypatch):
+    import app.routes.execution as execution_routes
+
+    monkeypatch.setenv('REFERENCE_AGENT_INTERNAL_TOKEN', 'shared-test-token')
+    monkeypatch.setattr(
+        execution_routes,
+        'resolve_reference_completion_provider',
+        lambda: FakeCompletion(),
+    )
+    response = client.post(
+        '/api/execution/reference/stream',
+        headers={'x-cae-reference-token': 'shared-test-token'},
+        json={'prompt': 'Caller: hello', 'model_name': 'fake-model'},
+    )
+
+    assert response.status_code == 200
+    events = [json.loads(line) for line in response.text.splitlines()]
+    assert [event['type'] for event in events] == ['delta', 'delta', 'completed']
+    assert ''.join(event.get('text', '') for event in events[:2]) == (
+        'I can help with that request.'
+    )
+    assert events[-1]['ttft_ms'] == 75.0
+    assert events[-1]['total_ms'] == 225.0

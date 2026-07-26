@@ -59,20 +59,21 @@ External caller PCM
   -> SIP / PSTN target
 ```
 
-CAE’s local two-agent path for each exchange:
+CAE’s local two-agent path uses one pipeline for the full duplex session:
 
 ```text
 scenario + latest target receipt
-  -> tester LLM
-  -> Kokoro streaming WAV decoder
+  -> tester LLMFullResponseStartFrame
+  -> streaming LLMTextFrame deltas
+  -> adaptive Kokoro chunks (short first clause, then sentences)
   -> paced 20 ms PCM frames
   -> in-process duplex frame bus + optional live listener
   -> Silero VAD
   -> rtc-asr /v1/stt/stream
        -> interim transcripts (observation only)
        -> final transcript after speech-end (canonical LLM trigger)
-  -> target LLM
-  -> Kokoro streaming WAV decoder
+  -> target LLMFullResponseStartFrame + LLMTextFrame deltas
+  -> adaptive Kokoro chunks
   -> paced 20 ms PCM frames
   -> tester Silero VAD + rtc-asr final receipt
   -> streamed directional evidence copies (NDJSON, not the media transport)
@@ -96,18 +97,22 @@ playback, recording, and vCon capture while the listener receives the paced PCM 
 The tester and target use distinct Kokoro voices (`KOKORO_TESTER_VOICE` and
 `KOKORO_TARGET_VOICE`) so their recorded turns are audibly distinguishable.
 Live Verto dialing stays optional and out of band for default installs.
+The session keeps its Pipecat task, both rtc-asr WebSockets, LLM/Kokoro HTTP
+connection pools, conversation history, and turn state alive across exchanges.
 
 ## vCon wiring
 
 During `pipecat_webrtc` execution:
 
-1. Kokoro response bytes are decoded incrementally and emitted as 20 ms `OutputAudioRawFrame` chunks; the entire utterance is never collected before playback begins.
-2. The paced bridge publishes each chunk and converts it to 16 kHz mono `InputAudioRawFrame` data for Silero and rtc-asr Local STT v1.
-3. Each direction retains LLM output, opposite-side rtc-asr receipt, timing, and frame metadata in `TranscriptionTurn` rows.
-4. Session close finalizes an `AudioRecordingHandle` (`uri`, `sha256`, `mime_type`, `duration_ms`).
-5. `build_execution_vcon(...)` builds a payload with `conversation.dialog` + `call.recording_*` and
+1. LLM output follows Pipecat's standard start → text-delta → end frame flow.
+2. Kokoro begins from a short 6–12-word clause, then synthesizes sentence chunks while queued audio is playing.
+3. Kokoro response bytes are decoded incrementally into 20 ms `OutputAudioRawFrame` chunks.
+4. The paced bridge publishes each chunk and converts it to 16 kHz mono `InputAudioRawFrame` data for Silero and rtc-asr Local STT v1.
+5. Each direction retains LLM output, opposite-side rtc-asr receipt, timing, and frame metadata in `TranscriptionTurn` rows.
+6. Session close finalizes an `AudioRecordingHandle` (`uri`, `sha256`, `mime_type`, `duration_ms`).
+7. `build_execution_vcon(...)` builds a payload with `conversation.dialog` + `call.recording_*` and
    calls the same `_vcon_export` helper used by benchmark/product flows.
-6. The conversation record stores `vcon_export`, `vcon_export_summary`, and `recording`.
+8. The conversation record stores `vcon_export`, `vcon_export_summary`, and `recording`.
 
 Analysis record type: `execution_audio_capture`.
 
@@ -214,8 +219,8 @@ Do not wire Verto into default CI.
 
 The built-in reference-agent slice proves:
 
-- one streaming exchange graph with both participants, 20 ms paced PCM, Silero speech boundaries, and Local STT v1 interim/final transcripts;
-- speech-end → first audible target PCM latency plus ASR-final, LLM callback TTFB, TTS TTFB, and Pipecat processor metrics;
+- one persistent streaming session graph with both participants, 20 ms paced PCM, Silero speech boundaries, and Local STT v1 interim/final transcripts;
+- speech-end → first audible target byte latency, plus separate ASR-final, LLM TTFT, TTS aggregation, TTS synthesis TTFB, and Pipecat processor metrics;
 - recording URI/hash handles;
 - transcription dialog capture;
 - CAE-compatible vCon export on the execution path;

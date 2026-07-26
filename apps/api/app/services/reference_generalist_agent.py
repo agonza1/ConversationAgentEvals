@@ -15,6 +15,7 @@ import json
 import os
 import time
 import wave
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -40,6 +41,12 @@ class CompletionProvider(Protocol):
 
     def status(self) -> dict[str, Any]: ...
     def complete(self, prompt: str, *, model_name: str | None = None) -> str: ...
+    def stream_with_metrics(
+        self,
+        prompt: str,
+        *,
+        model_name: str | None = None,
+    ) -> Iterator[dict[str, Any]]: ...
 
 
 def _default_target_voice() -> str:
@@ -151,6 +158,53 @@ class OpenAICompatibleApiKeyProvider:
         if not isinstance(text, str) or not text.strip():
             raise ReferenceRuntimeError('OpenAI-compatible provider returned no response text.')
         return text.strip()
+
+    def stream_with_metrics(
+        self,
+        prompt: str,
+        *,
+        model_name: str | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Normalize Responses API SSE into provider-independent text deltas."""
+        if not self.api_key:
+            raise ReferenceRuntimeError('Set OPENAI_API_KEY or connect OpenAI/Codex OAuth.')
+        started_at = time.perf_counter()
+        client = self._client or httpx.Client(timeout=60)
+        chunks: list[str] = []
+        ttft_ms: float | None = None
+        with client.stream(
+            'POST',
+            f'{self.base_url}/responses',
+            headers={
+                'authorization': f'Bearer {self.api_key}',
+                'accept': 'text/event-stream',
+            },
+            json={'model': model_name, 'input': prompt, 'stream': True},
+        ) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if not line.startswith('data:'):
+                    continue
+                data = line.removeprefix('data:').strip()
+                if not data or data == '[DONE]':
+                    continue
+                event = json.loads(data)
+                event_type = str(event.get('type') or '')
+                delta = event.get('delta')
+                if event_type.endswith('.delta') and isinstance(delta, str) and delta:
+                    if ttft_ms is None:
+                        ttft_ms = round((time.perf_counter() - started_at) * 1000, 3)
+                    chunks.append(delta)
+                    yield {'type': 'delta', 'text': delta}
+        text = ''.join(chunks).strip()
+        if not text:
+            raise ReferenceRuntimeError('OpenAI-compatible provider returned no response text.')
+        yield {
+            'type': 'completed',
+            'text': text,
+            'ttft_ms': ttft_ms,
+            'total_ms': round((time.perf_counter() - started_at) * 1000, 3),
+        }
 
 
 def resolve_reference_completion_provider() -> CompletionProvider:
@@ -594,8 +648,13 @@ class ReferencePipecatAgentTransport:
             'Caller': 'tester_to_target',
             'Agent': 'target_to_tester',
         }.get(speaker)
-        if not text or expected_direction != direction:
+        if expected_direction != direction:
             raise ReferenceRuntimeError('Pipecat speech-start event omitted valid speaker/direction evidence.')
+        # With streaming LLM-to-TTS, audio can legitimately start before the
+        # complete display text is available. The subsequent live-audio event
+        # replaces this provisional event with the final ASR-backed turn.
+        if not text:
+            return
         turn_pair = event.get('turn_pair')
         self.event_observer({
             'speaker': speaker,
@@ -603,8 +662,11 @@ class ReferencePipecatAgentTransport:
             'direction': direction,
             'llm_output': str(event.get('llm_output') or text),
             'frame_metadata': {
-                'media_event': 'first_audible_pcm',
-                'first_audible_pcm_at': event.get('first_audible_pcm_at'),
+                'media_event': 'first_audible_byte',
+                'first_audible_byte_at': (
+                    event.get('first_audible_byte_at')
+                    or event.get('first_audible_pcm_at')
+                ),
             },
             'live_audio_key': f'{turn_pair}:{direction}',
         })
@@ -704,7 +766,10 @@ class ReferencePipecatAgentTransport:
             latency_kind = str(event.get('latency_kind') or 'target_first_audio_byte')
             latency_label = (
                 'Target first audible byte'
-                if latency_kind == 'speech_end_to_first_audible_pcm'
+                if latency_kind in {
+                    'speech_end_to_first_audible_byte',
+                    'speech_end_to_first_audible_pcm',
+                }
                 else 'Target first audio byte'
             )
             state.latency_marks.append({

@@ -66,6 +66,9 @@ Conversation demos use `rtc-asr` as the speech-to-text provider contract. The vo
 evaluation engine connects to Local STT v1 at `/v1/stt/stream`, sends paced 20 ms,
 16 kHz mono PCM16 frames, and consumes interim plus final transcript events. Silero
 VAD supplies speech-start and speech-end; only the final transcript triggers the LLM.
+The duplex session reuses its rtc-asr WebSockets and HTTP connection pools across
+turns. Its 0.5-second speech-stop window avoids splitting Kokoro clause pauses
+while removing half a second from the former 1.0-second end-of-utterance delay.
 
 ```bash
 RTC_ASR_BASE_URL=http://localhost:8080
@@ -79,8 +82,9 @@ REFERENCE_LLM_MODEL=gpt-5.4-mini
 ```
 
 The built-in generalist voice target is a real local streaming pipeline:
-Pipecat tester → streaming Kokoro caller audio → Silero + rtc-asr → configured
-OpenAI-compatible/Codex LLM → streaming Kokoro reply audio → Silero + rtc-asr tester observation. Select
+Pipecat tester → adaptive streaming Kokoro caller audio → Silero + rtc-asr →
+streaming OpenAI-compatible/Codex LLM deltas → adaptive streaming Kokoro reply
+audio → Silero + rtc-asr tester observation. Select
 distinct `KOKORO_TESTER_VOICE` and `KOKORO_TARGET_VOICE` values so recordings
 and live playback make the caller and evaluated agent easy to distinguish. The
 legacy `KOKORO_VOICE` variable is accepted as a target-voice fallback when it is

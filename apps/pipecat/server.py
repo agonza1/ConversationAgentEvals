@@ -34,7 +34,19 @@ try:
     from aiortc.sdp import candidate_from_sdp
     from pipecat.adapters.schemas.function_schema import FunctionSchema
     from pipecat.adapters.schemas.tools_schema import ToolsSchema
-    from pipecat.frames.frames import EndFrame, ErrorFrame, Frame, InputAudioRawFrame, LLMContextFrame, OutputAudioRawFrame, TextFrame, TranscriptionFrame
+    from pipecat.frames.frames import (
+        EndFrame,
+        ErrorFrame,
+        Frame,
+        InputAudioRawFrame,
+        LLMContextFrame,
+        LLMFullResponseEndFrame,
+        LLMFullResponseStartFrame,
+        LLMTextFrame,
+        OutputAudioRawFrame,
+        TextFrame,
+        TranscriptionFrame,
+    )
     from pipecat.pipeline.pipeline import Pipeline
     from pipecat.pipeline.runner import PipelineRunner
     from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -96,6 +108,9 @@ except Exception:  # pragma: no cover - fallback for non-pipecat test envs
     EndFrame = None  # type: ignore[assignment]
     LLMContext = None  # type: ignore[assignment]
     LLMContextFrame = None  # type: ignore[assignment]
+    LLMFullResponseEndFrame = None  # type: ignore[assignment]
+    LLMFullResponseStartFrame = None  # type: ignore[assignment]
+    LLMTextFrame = None  # type: ignore[assignment]
     Pipeline = None  # type: ignore[assignment]
     PipelineParams = None  # type: ignore[assignment]
     PipelineRunner = None  # type: ignore[assignment]
@@ -378,7 +393,19 @@ if PIPECAT_RUNTIME_AVAILABLE:
         pass
 
 
-    class _TesterSpeechFrame(TextFrame):
+    class _TesterLlmStartFrame(LLMFullResponseStartFrame):
+        pass
+
+
+    class _TesterSpeechFrame(LLMTextFrame):
+        pass
+
+
+    class _TesterLlmEndFrame(LLMFullResponseEndFrame):
+        pass
+
+
+    class _TesterSpeechEndFrame(Frame):
         pass
 
 
@@ -386,12 +413,53 @@ if PIPECAT_RUNTIME_AVAILABLE:
         pass
 
 
-    class _TargetSpeechFrame(TextFrame):
+    class _TargetLlmStartFrame(LLMFullResponseStartFrame):
+        pass
+
+
+    class _TargetSpeechFrame(LLMTextFrame):
+        pass
+
+
+    class _TargetLlmEndFrame(LLMFullResponseEndFrame):
+        pass
+
+
+    class _TargetSpeechEndFrame(Frame):
         pass
 
 
     class _TesterReceiptFrame(TranscriptionFrame):
         pass
+
+
+    class _TurnCompletionCollector(FrameProcessor):
+        def __init__(self):
+            super().__init__(name='duplex_turn_completion')
+            self.future: asyncio.Future[str] | None = None
+            self.receipt: str | None = None
+            self.media_finished = False
+
+        def begin_turn(self) -> asyncio.Future[str]:
+            self.future = asyncio.get_running_loop().create_future()
+            self.receipt = None
+            self.media_finished = False
+            return self.future
+
+        async def process_frame(self, frame: Frame, direction: FrameDirection):
+            await super().process_frame(frame, direction)
+            if isinstance(frame, _TesterReceiptFrame):
+                self.receipt = frame.text
+            elif isinstance(frame, _TargetSpeechEndFrame):
+                self.media_finished = True
+            if (
+                self.receipt is not None
+                and self.media_finished
+                and self.future is not None
+                and not self.future.done()
+            ):
+                self.future.set_result(self.receipt)
+            await self.push_frame(frame, direction)
 
 
     class _StreamingTesterLlmProcessor(FrameProcessor):
@@ -400,16 +468,17 @@ if PIPECAT_RUNTIME_AVAILABLE:
             *,
             scenario: dict[str, Any],
             history: list[dict[str, str]],
-            turn_index: int,
             max_turn_pairs: int,
             model_name: str,
+            client: httpx.AsyncClient,
         ):
             super().__init__(name='tester_llm')
             self.scenario = scenario
             self.history = history
-            self.turn_index = turn_index
+            self.turn_index = 1
             self.max_turn_pairs = max_turn_pairs
             self.model_name = model_name
+            self.client = client
             self.text = ''
             self.ttft_ms: float | None = None
             self.total_ms: float | None = None
@@ -442,41 +511,28 @@ if PIPECAT_RUNTIME_AVAILABLE:
                 f'Conversation history:\n{history}\n\n'
                 'Next caller utterance:'
             )
-            started = time.perf_counter()
-            await self.start_processing_metrics()
-            async with httpx.AsyncClient(timeout=90) as client:
-                async with client.stream(
-                    'POST',
-                    f'{API_BASE_URL}/api/execution/reference/complete',
-                    json={'prompt': prompt, 'model_name': self.model_name},
-                    headers={'x-cae-reference-token': REFERENCE_AGENT_INTERNAL_TOKEN},
-                ) as response:
-                    response.raise_for_status()
-                    payload = json.loads((await response.aread()).decode())
-            self.text = str(payload.get('text') or '').strip()
-            if not self.text:
-                raise RuntimeError('reference tester completion callback returned no text')
-            reported_ttft = payload.get('ttft_ms')
-            reported_total = payload.get('total_ms')
-            self.ttft_ms = (
-                round(float(reported_ttft), 3)
-                if isinstance(reported_ttft, (int, float))
-                else None
+            await _stream_reference_completion(
+                processor=self,
+                prompt=prompt,
+                direction=direction,
+                start_frame=_TesterLlmStartFrame(),
+                text_frame_type=_TesterSpeechFrame,
+                end_frame=_TesterLlmEndFrame(),
             )
-            self.total_ms = (
-                round(float(reported_total), 3)
-                if isinstance(reported_total, (int, float))
-                else round((time.perf_counter() - started) * 1000, 3)
-            )
-            await self.stop_processing_metrics()
-            await self.push_frame(_TesterSpeechFrame(self.text), direction)
 
 
     class _StreamingTargetLlmProcessor(FrameProcessor):
-        def __init__(self, history: list[dict[str, str]], model_name: str):
+        def __init__(
+            self,
+            history: list[dict[str, str]],
+            model_name: str,
+            *,
+            client: httpx.AsyncClient,
+        ):
             super().__init__(name='target_llm')
             self.history = history
             self.model_name = model_name
+            self.client = client
             self.text = ''
             self.ttft_ms: float | None = None
             self.total_ms: float | None = None
@@ -497,34 +553,81 @@ if PIPECAT_RUNTIME_AVAILABLE:
                 'Never claim an external action occurred unless the conversation proves it.\n'
                 f'Conversation so far:\n{history}\nCaller: {frame.text}\nAgent:'
             )
-            started = time.perf_counter()
-            await self.start_processing_metrics()
-            async with httpx.AsyncClient(timeout=90) as client:
-                async with client.stream(
-                    'POST',
-                    f'{API_BASE_URL}/api/execution/reference/complete',
-                    json={'prompt': prompt, 'model_name': self.model_name},
-                    headers={'x-cae-reference-token': REFERENCE_AGENT_INTERNAL_TOKEN},
-                ) as response:
-                    response.raise_for_status()
-                    payload = json.loads((await response.aread()).decode())
-            self.text = str(payload.get('text') or '').strip()
-            if not self.text:
-                raise RuntimeError('reference target completion callback returned no text')
-            reported_ttft = payload.get('ttft_ms')
-            reported_total = payload.get('total_ms')
-            self.ttft_ms = (
-                round(float(reported_ttft), 3)
-                if isinstance(reported_ttft, (int, float))
-                else None
+            await _stream_reference_completion(
+                processor=self,
+                prompt=prompt,
+                direction=direction,
+                start_frame=_TargetLlmStartFrame(),
+                text_frame_type=_TargetSpeechFrame,
+                end_frame=_TargetLlmEndFrame(),
             )
-            self.total_ms = (
-                round(float(reported_total), 3)
-                if isinstance(reported_total, (int, float))
-                else round((time.perf_counter() - started) * 1000, 3)
-            )
-            await self.stop_processing_metrics()
-            await self.push_frame(_TargetSpeechFrame(self.text), direction)
+
+
+    async def _stream_reference_completion(
+        *,
+        processor: Any,
+        prompt: str,
+        direction: FrameDirection,
+        start_frame: Frame,
+        text_frame_type: type[LLMTextFrame],
+        end_frame: Frame,
+    ) -> None:
+        """Forward normalized API deltas using Pipecat's standard LLM frame flow."""
+        processor.text = ''
+        processor.ttft_ms = None
+        processor.total_ms = None
+        started = time.perf_counter()
+        await processor.start_processing_metrics()
+        await processor.start_ttfb_metrics()
+        await processor.push_frame(start_frame, direction)
+        completed: dict[str, Any] = {}
+        async with processor.client.stream(
+            'POST',
+            f'{API_BASE_URL}/api/execution/reference/stream',
+            json={'prompt': prompt, 'model_name': processor.model_name},
+            headers={'x-cae-reference-token': REFERENCE_AGENT_INTERNAL_TOKEN},
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line.strip():
+                    continue
+                event = json.loads(line)
+                event_type = event.get('type')
+                if event_type == 'error':
+                    raise RuntimeError(
+                        f'reference completion stream failed: {event.get("detail") or event}'
+                    )
+                if event_type == 'delta':
+                    delta = str(event.get('text') or '')
+                    if not delta:
+                        continue
+                    if processor.ttft_ms is None:
+                        reported = event.get('ttft_ms')
+                        processor.ttft_ms = (
+                            round(float(reported), 3)
+                            if isinstance(reported, (int, float))
+                            else round((time.perf_counter() - started) * 1000, 3)
+                        )
+                        await processor.stop_ttfb_metrics()
+                    processor.text += delta
+                    await processor.push_frame(text_frame_type(delta), direction)
+                elif event_type == 'completed':
+                    completed = event
+        if not processor.text.strip():
+            processor.text = str(completed.get('text') or '')
+        if not processor.text.strip():
+            raise RuntimeError('reference completion callback returned no text')
+        reported_ttft = completed.get('ttft_ms')
+        reported_total = completed.get('total_ms')
+        if isinstance(reported_ttft, (int, float)):
+            processor.ttft_ms = round(float(reported_ttft), 3)
+        processor.total_ms = (
+            round(float(reported_total), 3)
+            if isinstance(reported_total, (int, float))
+            else round((time.perf_counter() - started) * 1000, 3)
+        )
+        await processor.stop_processing_metrics()
+        await processor.push_frame(end_frame, direction)
 
 
     class _ReferenceAsrProcessor(FrameProcessor):
@@ -744,6 +847,229 @@ class _StreamingExchangeResult:
     target_response_complete_latency_ms: float
 
 
+class _StreamingDuplexSession:
+    """One session-wide Pipecat task with persistent ASR and HTTP connections."""
+
+    def __init__(
+        self,
+        *,
+        payload: ReferenceDuplexRunRequest,
+        bus: Any,
+        history: list[dict[str, str]],
+        event_callback: Callable[[dict[str, Any]], Awaitable[None]],
+    ) -> None:
+        if not PIPECAT_RUNTIME_AVAILABLE:
+            raise RuntimeError('Pipecat runtime is unavailable.')
+        self.payload = payload
+        self.bus = bus
+        self.history = history
+        self.event_callback = event_callback
+        limits = httpx.Limits(max_connections=8, max_keepalive_connections=4)
+        self.llm_client = httpx.AsyncClient(timeout=90, limits=limits)
+        self.kokoro_client = httpx.AsyncClient(timeout=90, limits=limits)
+        self.runner_task: asyncio.Task[None] | None = None
+        self.closed = False
+
+        async def publish_caller(audio: bytes, sample_rate: int, channels: int) -> None:
+            self.bus.publish_chunk(audio, sample_rate=sample_rate, channels=channels)
+
+        async def publish_target(audio: bytes, sample_rate: int, channels: int) -> None:
+            self.bus.publish_chunk(audio, sample_rate=sample_rate, channels=channels)
+
+        async def announce_caller(event: dict[str, Any]) -> None:
+            await self.event_callback({
+                **event,
+                'speaker': 'Caller',
+                'direction': 'tester_to_target',
+                'text': self.tester_llm.text,
+                'llm_output': self.tester_llm.text,
+            })
+
+        async def announce_target(event: dict[str, Any]) -> None:
+            await self.event_callback({
+                **event,
+                'speaker': 'Agent',
+                'direction': 'target_to_tester',
+                'text': self.target_llm.text,
+                'llm_output': self.target_llm.text,
+            })
+
+        self.tester_llm = _StreamingTesterLlmProcessor(
+            scenario=payload.scenario,
+            history=history,
+            max_turn_pairs=payload.max_turn_pairs,
+            model_name=payload.tester_model_name or REFERENCE_LLM_MODEL,
+            client=self.llm_client,
+        )
+        self.caller_tts = StreamingKokoroProcessor(
+            base_url=KOKORO_BASE_URL,
+            model=KOKORO_MODEL,
+            voice=payload.tester_voice,
+            input_type=_TesterSpeechFrame,
+            start_type=_TesterLlmStartFrame,
+            end_type=_TesterLlmEndFrame,
+            output_end_frame_factory=_TesterSpeechEndFrame,
+            event_callback=event_callback,
+            participant='tester',
+            client=self.kokoro_client,
+        )
+        self.caller_bridge = StreamingMediaBridge(
+            participant='tester',
+            audio_callback=publish_caller,
+            first_audio_callback=announce_caller,
+            end_type=_TesterSpeechEndFrame,
+        )
+        self.target_asr = StreamingRtcAsrProcessor(
+            base_url=RTC_ASR_BASE_URL,
+            stream_path=RTC_ASR_STREAM_PATH,
+            participant='target',
+            final_frame_type=_TargetTranscriptFrame,
+            event_callback=event_callback,
+        )
+        self.target_llm = _StreamingTargetLlmProcessor(
+            history,
+            payload.target_model_name or REFERENCE_LLM_MODEL,
+            client=self.llm_client,
+        )
+        self.target_tts = StreamingKokoroProcessor(
+            base_url=KOKORO_BASE_URL,
+            model=KOKORO_MODEL,
+            voice=payload.target_voice,
+            input_type=_TargetSpeechFrame,
+            start_type=_TargetLlmStartFrame,
+            end_type=_TargetLlmEndFrame,
+            output_end_frame_factory=_TargetSpeechEndFrame,
+            event_callback=event_callback,
+            participant='target',
+            client=self.kokoro_client,
+        )
+        self.target_bridge = StreamingMediaBridge(
+            participant='target',
+            audio_callback=publish_target,
+            first_audio_callback=announce_target,
+            end_type=_TargetSpeechEndFrame,
+        )
+        self.tester_asr = StreamingRtcAsrProcessor(
+            base_url=RTC_ASR_BASE_URL,
+            stream_path=RTC_ASR_STREAM_PATH,
+            participant='tester',
+            final_frame_type=_TesterReceiptFrame,
+            event_callback=event_callback,
+        )
+        self.metrics = MetricsCollector()
+        self.completion = _TurnCompletionCollector()
+        self.pipeline = Pipeline(
+            [
+                self.tester_llm,
+                self.caller_tts,
+                self.caller_bridge,
+                self.target_asr,
+                self.target_llm,
+                self.target_tts,
+                self.target_bridge,
+                self.tester_asr,
+                self.metrics,
+                self.completion,
+            ]
+        )
+        self.task = PipelineTask(
+            self.pipeline,
+            enable_rtvi=False,
+            enable_turn_tracking=False,
+            params=PipelineParams(
+                audio_in_sample_rate=16000,
+                audio_out_sample_rate=24000,
+                enable_metrics=True,
+                enable_usage_metrics=True,
+                report_only_initial_ttfb=False,
+            ),
+        )
+
+    async def start(self) -> None:
+        if self.runner_task is None:
+            runner = PipelineRunner(handle_sigint=False, handle_sigterm=False)
+            self.runner_task = asyncio.create_task(runner.run(self.task))
+            await asyncio.sleep(0)
+
+    async def run_turn(
+        self,
+        *,
+        turn_index: int,
+        latest_target_receipt: str,
+    ) -> _StreamingExchangeResult:
+        await self.start()
+        self.tester_llm.turn_index = turn_index
+        metrics_start = len(self.metrics.metrics)
+        turn_complete = self.completion.begin_turn()
+        await self.task.queue_frame(
+            TextFrame(
+                latest_target_receipt
+                or 'No target response yet. Start the scenario naturally.'
+            )
+        )
+        assert self.runner_task is not None
+        done, _ = await asyncio.wait(
+            (turn_complete, self.runner_task),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if self.runner_task in done:
+            exception = self.runner_task.exception()
+            raise RuntimeError(
+                f'Persistent Pipecat pipeline ended before the turn completed: {exception}'
+            )
+        required = (
+            self.tester_llm.text,
+            self.caller_tts.audio,
+            self.target_asr.transcript,
+            self.target_llm.text,
+            self.target_tts.audio,
+            self.tester_asr.transcript,
+        )
+        if not all(required):
+            raise RuntimeError('Streaming Pipecat exchange produced incomplete media or transcripts.')
+        if (
+            self.target_asr.speech_ended_at is None
+            or self.target_bridge.first_audio_at is None
+            or self.target_bridge.audio_ended_at is None
+        ):
+            raise RuntimeError(
+                'Streaming Pipecat exchange omitted speech-end, first-audio, or playback-end timing.'
+            )
+        latency_ms = round(
+            (self.target_bridge.first_audio_at - self.target_asr.speech_ended_at) * 1000,
+            3,
+        )
+        return _StreamingExchangeResult(
+            tester_llm=self.tester_llm,
+            caller_tts=self.caller_tts,
+            target_asr=self.target_asr,
+            target_llm=self.target_llm,
+            target_tts=self.target_tts,
+            tester_asr=self.tester_asr,
+            metrics=self.metrics.metrics[metrics_start:],
+            target_first_audio_latency_ms=latency_ms,
+            target_response_complete_latency_ms=round(
+                (self.target_bridge.audio_ended_at - self.target_asr.speech_ended_at) * 1000,
+                3,
+            ),
+        )
+
+    async def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        try:
+            if self.runner_task is not None and not self.runner_task.done():
+                await self.task.queue_frame(EndFrame())
+                await asyncio.wait_for(self.runner_task, timeout=10)
+        finally:
+            if self.runner_task is not None and not self.runner_task.done():
+                self.runner_task.cancel()
+                await asyncio.gather(self.runner_task, return_exceptions=True)
+            await self.llm_client.aclose()
+            await self.kokoro_client.aclose()
+
+
 async def _run_streaming_exchange(
     *,
     payload: ReferenceDuplexRunRequest,
@@ -752,158 +1078,28 @@ async def _run_streaming_exchange(
     turn_index: int,
     latest_target_receipt: str,
     event_callback: Callable[[dict[str, Any]], Awaitable[None]],
+    session_holder: dict[str, Any] | None = None,
 ) -> _StreamingExchangeResult:
-    """Run one live exchange as a single paced Pipecat media pipeline."""
-    if not PIPECAT_RUNTIME_AVAILABLE:
-        raise RuntimeError('Pipecat runtime is unavailable.')
-
-    async def publish_caller(audio: bytes, sample_rate: int, channels: int) -> None:
-        bus.publish_chunk(audio, sample_rate=sample_rate, channels=channels)
-
-    async def publish_target(audio: bytes, sample_rate: int, channels: int) -> None:
-        bus.publish_chunk(audio, sample_rate=sample_rate, channels=channels)
-
-    async def announce_caller(event: dict[str, Any]) -> None:
-        await event_callback({
-            **event,
-            'speaker': 'Caller',
-            'direction': 'tester_to_target',
-            'text': tester_llm.text,
-            'llm_output': tester_llm.text,
-        })
-
-    async def announce_target(event: dict[str, Any]) -> None:
-        await event_callback({
-            **event,
-            'speaker': 'Agent',
-            'direction': 'target_to_tester',
-            'text': target_llm.text,
-            'llm_output': target_llm.text,
-        })
-
-    tester_llm = _StreamingTesterLlmProcessor(
-        scenario=payload.scenario,
-        history=history,
-        turn_index=turn_index,
-        max_turn_pairs=payload.max_turn_pairs,
-        model_name=payload.tester_model_name or REFERENCE_LLM_MODEL,
-    )
-    caller_tts = StreamingKokoroProcessor(
-        base_url=KOKORO_BASE_URL,
-        model=KOKORO_MODEL,
-        voice=payload.tester_voice,
-        input_type=_TesterSpeechFrame,
-        event_callback=event_callback,
-        participant='tester',
-    )
-    caller_bridge = StreamingMediaBridge(
-        participant='tester',
-        audio_callback=publish_caller,
-        first_audio_callback=announce_caller,
-    )
-    target_asr = StreamingRtcAsrProcessor(
-        base_url=RTC_ASR_BASE_URL,
-        stream_path=RTC_ASR_STREAM_PATH,
-        participant='target',
-        final_frame_type=_TargetTranscriptFrame,
-        event_callback=event_callback,
-    )
-    target_llm = _StreamingTargetLlmProcessor(
-        history,
-        payload.target_model_name or REFERENCE_LLM_MODEL,
-    )
-    target_tts = StreamingKokoroProcessor(
-        base_url=KOKORO_BASE_URL,
-        model=KOKORO_MODEL,
-        voice=payload.target_voice,
-        input_type=_TargetSpeechFrame,
-        event_callback=event_callback,
-        participant='target',
-    )
-    target_bridge = StreamingMediaBridge(
-        participant='target',
-        audio_callback=publish_target,
-        first_audio_callback=announce_target,
-    )
-    tester_asr = StreamingRtcAsrProcessor(
-        base_url=RTC_ASR_BASE_URL,
-        stream_path=RTC_ASR_STREAM_PATH,
-        participant='tester',
-        final_frame_type=_TesterReceiptFrame,
-        event_callback=event_callback,
-    )
-    metrics = MetricsCollector()
-    pipeline = Pipeline(
-        [
-            tester_llm,
-            caller_tts,
-            caller_bridge,
-            target_asr,
-            target_llm,
-            target_tts,
-            target_bridge,
-            tester_asr,
-            metrics,
-        ]
-    )
-    task = PipelineTask(
-        pipeline,
-        enable_rtvi=False,
-        enable_turn_tracking=False,
-        params=PipelineParams(
-            audio_in_sample_rate=16000,
-            audio_out_sample_rate=24000,
-            enable_metrics=True,
-            enable_usage_metrics=True,
-            report_only_initial_ttfb=False,
-        ),
-    )
-    await task.queue_frames(
-        [
-            TextFrame(
-                latest_target_receipt
-                or 'No target response yet. Start the scenario naturally.'
-            ),
-            EndFrame(),
-        ]
-    )
-    await PipelineRunner(handle_sigint=False, handle_sigterm=False).run(task)
-    required = (
-        tester_llm.text,
-        caller_tts.audio,
-        target_asr.transcript,
-        target_llm.text,
-        target_tts.audio,
-        tester_asr.transcript,
-    )
-    if not all(required):
-        raise RuntimeError('Streaming Pipecat exchange produced incomplete media or transcripts.')
-    if (
-        target_asr.speech_ended_at is None
-        or target_bridge.first_audio_at is None
-        or target_bridge.audio_ended_at is None
-    ):
-        raise RuntimeError(
-            'Streaming Pipecat exchange omitted speech-end, first-audio, or playback-end timing.'
+    """Run one exchange on a session-wide persistent Pipecat media pipeline."""
+    owns_session = session_holder is None
+    holder = session_holder if session_holder is not None else {}
+    session = holder.get('session')
+    if session is None:
+        session = _StreamingDuplexSession(
+            payload=payload,
+            bus=bus,
+            history=history,
+            event_callback=event_callback,
         )
-    latency_ms = round(
-        (target_bridge.first_audio_at - target_asr.speech_ended_at) * 1000,
-        3,
-    )
-    return _StreamingExchangeResult(
-        tester_llm=tester_llm,
-        caller_tts=caller_tts,
-        target_asr=target_asr,
-        target_llm=target_llm,
-        target_tts=target_tts,
-        tester_asr=tester_asr,
-        metrics=metrics.metrics,
-        target_first_audio_latency_ms=latency_ms,
-        target_response_complete_latency_ms=round(
-            (target_bridge.audio_ended_at - target_asr.speech_ended_at) * 1000,
-            3,
-        ),
-    )
+        holder['session'] = session
+    try:
+        return await session.run_turn(
+            turn_index=turn_index,
+            latest_target_receipt=latest_target_receipt,
+        )
+    finally:
+        if owns_session:
+            await session.close()
 
 
 async def _run_reference_graph(input_frame: Any, llm_processor: Any, *, voice: str) -> tuple[Any, Any]:
@@ -959,6 +1155,7 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
     metric_evidence: list[dict[str, Any]] = []
     live_events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     exchange_task: asyncio.Task[_StreamingExchangeResult] | None = None
+    session_holder: dict[str, Any] = {}
 
     async def record_event(event: dict[str, Any]) -> None:
         await live_events.put(event)
@@ -976,6 +1173,7 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                         turn_index=turn_index,
                         latest_target_receipt=tester_input_receipt,
                         event_callback=record_event,
+                        session_holder=session_holder,
                     )
                 )
                 while not exchange_task.done():
@@ -1038,11 +1236,11 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                     'frame_duration_ms': 20,
                     'vad': 'silero',
                     'asr_protocol': 'local-stt.v1',
-                    'response_metric': 'speech_end_to_first_audible_pcm',
+                    'response_metric': 'speech_end_to_first_audible_byte',
                     'response_latency_ms': result.target_first_audio_latency_ms,
                     'response_started_at': result.target_asr.speech_ended_at,
                     'speech_ended_at': result.target_asr.speech_ended_at,
-                    'first_audible_pcm_at': (
+                    'first_audible_byte_at': (
                         result.target_asr.speech_ended_at
                         + result.target_first_audio_latency_ms / 1000
                     ),
@@ -1061,6 +1259,21 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                         'llm_ttft_ms': result.target_llm.ttft_ms,
                         'llm_total_ms': result.target_llm.total_ms,
                         'tts_ttfb_ms': result.target_tts.ttfb_ms,
+                        'tts_aggregation_delay_ms': getattr(
+                            result.target_tts,
+                            'aggregation_delay_ms',
+                            None,
+                        ),
+                        'tts_synthesis_ttfb_ms': getattr(
+                            result.target_tts,
+                            'synthesis_ttfb_ms',
+                            None,
+                        ),
+                        'llm_to_first_audio_ms': getattr(
+                            result.target_tts,
+                            'llm_to_first_audio_ms',
+                            None,
+                        ),
                         'tts_total_ms': result.target_tts.total_ms,
                     },
                     'pipecat_metrics': result.metrics,
@@ -1112,7 +1325,7 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                         'frame': target_frame,
                     },
                     'latency_ms': result.target_first_audio_latency_ms,
-                    'latency_kind': 'speech_end_to_first_audible_pcm',
+                    'latency_kind': 'speech_end_to_first_audible_byte',
                     'exchange_elapsed_ms': round((time.perf_counter() - turn_started) * 1000, 3),
                     'metrics': target_frame['stage_metrics'],
                 })
@@ -1124,7 +1337,7 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                 'turn_pairs': payload.max_turn_pairs,
                 'frames': frame_evidence,
                 'metrics': metric_evidence,
-                'architecture': 'streaming_pipecat_exchange_graph_paced_pcm_local_stt_v1',
+                'architecture': 'persistent_streaming_pipecat_duplex_local_stt_v1',
                 'graphs': {
                     'tester': {
                         'participant_id': 'pipecat_tester',
@@ -1197,6 +1410,9 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
             if not exchange_task.done():
                 exchange_task.cancel()
             await asyncio.gather(exchange_task, return_exceptions=True)
+        session = session_holder.get('session')
+        if session is not None:
+            await session.close()
         broadcast.active = False
         asyncio.create_task(_retire_reference_broadcast(broadcast))
 
