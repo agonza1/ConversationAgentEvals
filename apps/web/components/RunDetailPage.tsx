@@ -1215,8 +1215,9 @@ function LatencyBreakdown({ mark }: { mark: Record<string, unknown> }) {
     ['LLM TTFT', values.llm_ttft_ms],
     ['LLM TTLT', values.llm_total_ms],
     ['TTS TTFB', values.tts_ttfb_ms],
-  ].filter((entry): entry is [string, number] => Number.isFinite(Number(entry[1])))
-    .map(([label, value]) => [label, Number(value)] as const);
+  ].filter((entry): entry is [string, number] => (
+    typeof entry[1] === 'number' && Number.isFinite(entry[1])
+  ));
   if (!entries.length) return null;
   return (
     <small className="latency-breakdown">

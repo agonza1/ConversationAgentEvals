@@ -852,7 +852,7 @@ test('voice analysis reports target first audio byte and excludes legacy exchang
             exchange_elapsed_ms: 9120,
             stage_metrics: {
               asr_finalize_ms: 120,
-              llm_ttft_ms: 180,
+              llm_ttft_ms: null,
               llm_total_ms: 610,
               tts_ttfb_ms: 250,
             },
@@ -891,7 +891,7 @@ test('voice analysis reports target first audio byte and excludes legacy exchang
   await expect(page.getByLabel('Per-mark latency bars')).toContainText('Target first audible byte');
   await expect(page.getByText(/EOU\/ASR finalization \+ LLM TTLT \+ TTS TTFB/)).toBeVisible();
   await expect(page.getByLabel('Per-mark latency bars')).toContainText('EOU + ASR final 120ms');
-  await expect(page.getByLabel('Per-mark latency bars')).toContainText('LLM TTFT 180ms');
+  await expect(page.getByLabel('Per-mark latency bars')).not.toContainText('LLM TTFT');
   await expect(page.getByLabel('Per-mark latency bars')).toContainText('LLM TTLT 610ms');
   await expect(page.getByLabel('Per-mark latency bars')).not.toContainText('LLM callback TTFB');
   await expect(page.getByLabel('Conversation turn sequence')).toContainText('first audible byte 640ms');
