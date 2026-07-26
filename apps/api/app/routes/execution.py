@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import secrets
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
@@ -65,6 +65,13 @@ class ListenerWebRTCIce(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     candidate: dict[str, Any]
+
+
+class ApplyJudgeReviewRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    user_id: str = Field(min_length=1)
+    confirm: Literal[True]
 
 
 @router.post('/reference/complete')
@@ -137,6 +144,26 @@ def get_conversation(execution_run_id: str, conversation_id: str, user_id: str =
     if conversation is None:
         raise HTTPException(status_code=404, detail='Conversation not found.')
     return conversation
+
+
+@router.post('/runs/{execution_run_id}/conversations/{conversation_id}/judge-reviews/{review_id}/apply')
+def apply_execution_judge_review(
+    execution_run_id: str,
+    conversation_id: str,
+    review_id: str,
+    payload: ApplyJudgeReviewRequest,
+):
+    try:
+        return execution_run_store.apply_judge_review(
+            execution_run_id,
+            conversation_id,
+            user_id=payload.user_id,
+            review_id=review_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.post('/runs/{execution_run_id}/listener-token')

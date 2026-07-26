@@ -25,6 +25,7 @@ from app.services.benchmark_service import get_suite
 from app.schemas.product import (
     CheckoutResponse,
     FirebaseAuthConfig,
+    JudgeProposedEvaluation,
     JudgeResponse,
     JudgeStructuredResult,
     PricingPlan,
@@ -1194,12 +1195,22 @@ def _ground_judge_report(
 ) -> dict[str, Any]:
     grounded = dict(report)
     recorded_verdict = str(report.get('verdict') or '').strip().lower()
-    if report.get('require_evaluator_findings') and recorded_verdict in {'fail', 'failed'}:
+    persisted = report.get('evaluation_findings')
+    persisted_has_findings = (
+        isinstance(persisted, dict)
+        and _has_judge_evaluator_findings(persisted)
+    )
+    execution_only_verdict = recorded_verdict in {'fail', 'failed'} or (
+        recorded_verdict == 'needs_review'
+        and bool(report.get('error'))
+        and not _has_judge_evaluator_findings(report)
+        and not persisted_has_findings
+    )
+    if report.get('require_evaluator_findings') and execution_only_verdict:
         grounded['evaluator_findings_error'] = (
             'Execution failure is not a deterministic evaluator verdict and cannot be reviewed.'
         )
         return grounded
-    persisted = report.get('evaluation_findings')
     if isinstance(persisted, dict):
         for key in _JUDGE_EVALUATOR_FINDING_KEYS:
             if key in persisted:
@@ -1466,6 +1477,10 @@ def _build_judge_prompt(*, report: dict[str, Any], transcript: str | None, citat
         'You are an evidence-grounded LLM judge for ConversationAgentEvals.',
         'Review the deterministic ASSERT-style benchmark report and transcript.',
         'Decide whether you agree with the deterministic verdict using the evidence.',
+        'Also propose the effective evaluation a human could explicitly confirm.',
+        'Correct deterministic findings only when the supplied transcript or structured evidence directly contradicts them.',
+        'Never invent a tool call, business action, final state, or consent statement that is not in the supplied evidence.',
+        'A corrected transcript finding does not prove live tool execution or a completed final state.',
         f'Suite: {suite_id}',
         f'Scenario: {scenario_id}',
         f'Deterministic verdict: {verdict}',
@@ -1481,7 +1496,13 @@ def _build_judge_prompt(*, report: dict[str, Any], transcript: str | None, citat
         (transcript or '(empty)')[:4000],
         '',
         'Respond with ONLY compact JSON (no markdown fences):',
-        '{"agrees": true|false, "rationale": "one sentence", "next_action": "one concrete next step"}',
+        (
+            '{"agrees": true|false, "rationale": "one sentence", '
+            '"next_action": "one concrete next step", "proposed_evaluation": {'
+            '"verdict": "pass|needs_review|fail", "summary": "current evidence-based conclusion", '
+            '"corrected_findings": ["automatic finding corrected by cited evidence"], '
+            '"remaining_gaps": ["gap that still prevents verification"]}}'
+        ),
     ]
     return '\n'.join(lines)
 
@@ -1508,10 +1529,14 @@ def _parse_judge_output(raw_output: str) -> JudgeStructuredResult:
                     agrees = None
                 rationale = payload.get('rationale') or payload.get('reason')
                 next_action = payload.get('next_action') or payload.get('nextAction')
+                proposed = _parse_judge_proposed_evaluation(
+                    payload.get('proposed_evaluation') or payload.get('proposedEvaluation')
+                )
                 return JudgeStructuredResult(
                     agrees=agrees,
                     rationale=str(rationale).strip() if rationale else None,
                     next_action=str(next_action).strip() if next_action else None,
+                    proposed_evaluation=proposed,
                     raw_output=raw_output,
                 )
     except json.JSONDecodeError:
@@ -1523,6 +1548,42 @@ def _parse_judge_output(raw_output: str) -> JudgeStructuredResult:
     elif 'agree' in lowered:
         agrees = True
     return JudgeStructuredResult(agrees=agrees, rationale=text[:400], next_action=None, raw_output=raw_output)
+
+
+def _parse_judge_proposed_evaluation(value: Any) -> JudgeProposedEvaluation | None:
+    if not isinstance(value, dict):
+        return None
+    verdict = str(value.get('verdict') or '').strip().lower().replace(' ', '_')
+    if verdict == 'failed':
+        verdict = 'fail'
+    if verdict not in {'pass', 'needs_review', 'fail'}:
+        return None
+    summary = str(value.get('summary') or '').strip()
+    if not summary:
+        return None
+
+    def bounded_strings(raw: Any) -> list[str]:
+        if not isinstance(raw, list):
+            return []
+        return [
+            str(item).strip()[:500]
+            for item in raw
+            if isinstance(item, str) and item.strip()
+        ][:8]
+
+    remaining_gaps = bounded_strings(value.get('remaining_gaps') or value.get('remainingGaps'))
+    # A proposal cannot claim a verified pass while naming unresolved evidence
+    # gaps. Keep the recommendation fail-closed for the human confirmation step.
+    if verdict == 'pass' and remaining_gaps:
+        verdict = 'needs_review'
+    return JudgeProposedEvaluation(
+        verdict=verdict,
+        summary=summary[:1000],
+        corrected_findings=bounded_strings(
+            value.get('corrected_findings') or value.get('correctedFindings')
+        ),
+        remaining_gaps=remaining_gaps,
+    )
 
 
 def _execute_judge_completion(prompt: str) -> str:

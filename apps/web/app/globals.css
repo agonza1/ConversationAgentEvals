@@ -2732,6 +2732,86 @@ select {
   white-space: pre-wrap;
 }
 
+.resolution-judge-proposal,
+.resolution-applied-adjudication {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--panel) 76%, transparent);
+}
+
+.resolution-judge-proposal > button {
+  justify-self: start;
+  margin-top: 4px;
+}
+
+.resolution-applied-adjudication {
+  border-color: var(--success-border);
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.resolution-applied-adjudication h3,
+.resolution-applied-adjudication p {
+  margin: 0;
+  color: inherit;
+}
+
+.resolution-applied-adjudication ul,
+.resolution-adjudication-dialog ul {
+  display: grid;
+  gap: 5px;
+  margin: 5px 0 0;
+  padding-left: 20px;
+}
+
+.resolution-applied-adjudication details {
+  padding-top: 4px;
+}
+
+.resolution-applied-adjudication summary {
+  cursor: pointer;
+  font-weight: 760;
+}
+
+.resolution-adjudication-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(24 36 45 / 45%);
+}
+
+.resolution-adjudication-dialog {
+  display: grid;
+  gap: 13px;
+  width: min(640px, 100%);
+  max-height: calc(100vh - 48px);
+  padding: 22px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--panel);
+  box-shadow: 0 24px 54px rgb(24 36 45 / 18%);
+}
+
+.resolution-adjudication-dialog h3,
+.resolution-adjudication-dialog p {
+  margin: 0;
+}
+
+.resolution-adjudication-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 5px;
+}
+
 .resolution-judge-prompt-toggle {
   border: 0;
   padding: 0;

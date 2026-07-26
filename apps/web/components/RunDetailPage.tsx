@@ -6,6 +6,7 @@ import { ApiAwareLink } from '@/components/ApiAwareLink';
 import { LiveRunFeedback } from '@/components/LiveRunFeedback';
 import { SiteNav } from '@/components/SiteNav';
 import {
+  applyLlmJudgeReview,
   ConversationRecord,
   demoProjectId,
   demoUserId,
@@ -192,6 +193,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
                 conversation={conversation}
                 run={run}
                 userId={userId}
+                onRunUpdated={setRun}
               />
               {run.mode === 'voice_fixture' ? (
                 <StubWaveform timeline={conversation?.timeline || []} />
@@ -310,16 +312,21 @@ function MetricDetail({
   conversation,
   run,
   userId,
+  onRunUpdated,
 }: {
   metric: MetricKey;
   conversation: ConversationRecord | null;
   run: ExecutionRunRecord;
   userId: string;
+  onRunUpdated: (run: ExecutionRunRecord) => void;
 }) {
   const [judge, setJudge] = useState<LlmJudgeResponse | null>(null);
   const [judgeError, setJudgeError] = useState<string | null>(null);
   const [isJudging, setIsJudging] = useState(false);
   const [showJudgePrompt, setShowJudgePrompt] = useState(false);
+  const [reviewToApply, setReviewToApply] = useState<LlmJudgeResponse | null>(null);
+  const [isApplyingReview, setIsApplyingReview] = useState(false);
+  const [applyReviewError, setApplyReviewError] = useState<string | null>(null);
   const summary = conversation?.metrics_summary;
   const deterministicVerdict = summary?.verdict || conversation?.verdict;
   const conversationIsTerminal = Boolean(
@@ -344,11 +351,38 @@ function MetricDetail({
         project_id: run.project_id,
         transcript: conversation.transcript,
         report: judgeReport(run, conversation),
+        execution_run_id: run.execution_run_id,
+        conversation_id: conversation.conversation_id,
       }));
     } catch (err) {
       setJudgeError(err instanceof Error ? err.message : 'Could not request the LLM judge.');
     } finally {
       setIsJudging(false);
+    }
+  }
+
+  async function onApplyJudgeReview() {
+    if (
+      !conversation
+      || !reviewToApply?.review_id
+      || !reviewToApply.judge_result?.proposed_evaluation
+      || isApplyingReview
+    ) return;
+    setApplyReviewError(null);
+    setIsApplyingReview(true);
+    try {
+      const updated = await applyLlmJudgeReview({
+        executionRunId: run.execution_run_id,
+        conversationId: conversation.conversation_id,
+        reviewId: reviewToApply.review_id,
+        userId: run.user_id || userId,
+      });
+      setReviewToApply(null);
+      onRunUpdated(updated);
+    } catch (err) {
+      setApplyReviewError(err instanceof Error ? err.message : 'Could not apply the LLM adjudication.');
+    } finally {
+      setIsApplyingReview(false);
     }
   }
 
@@ -358,6 +392,8 @@ function MetricDetail({
 
   if (metric === 'call_resolution') {
     const evidence = resolutionEvidence(conversation);
+    const adjudication = conversation.evaluation_adjudication;
+    const appliedProposal = adjudication?.judge_result?.proposed_evaluation;
     return (
       <div className="runs-detail-copy">
         <h2>Resolution Evidence</h2>
@@ -373,6 +409,10 @@ function MetricDetail({
         <dl className="resolution-facts" aria-label="Resolution evidence details">
           <div><dt>Evaluation score</dt><dd>{evidence.score}</dd></div>
           <div><dt>Evaluator verdict</dt><dd>{evidence.verdict}</dd></div>
+          <div>
+            <dt>Evaluation basis</dt>
+            <dd>{adjudication ? 'Confirmed LLM adjudication' : 'Automatic rule-based evaluation'}</dd>
+          </div>
           <div><dt>Final state</dt><dd>{evidence.finalState}</dd></div>
           <div><dt>Termination</dt><dd>{evidence.termination}</dd></div>
           <div><dt>Action evidence</dt><dd>{evidence.actionEvidence}</dd></div>
@@ -382,11 +422,17 @@ function MetricDetail({
         </dl>
         {evidence.gaps.length ? (
           <div className="resolution-gaps">
-            <h3>Why resolution is not verified</h3>
+            <h3>{adjudication ? 'Remaining gaps after adjudication' : 'Why resolution is not verified'}</h3>
             <ul>
               {evidence.gaps.map((gap) => <li key={gap}>{gap}</li>)}
             </ul>
           </div>
+        ) : null}
+        {adjudication && appliedProposal ? (
+          <AppliedAdjudication
+            adjudication={adjudication}
+            originalGaps={automaticResolutionGaps(conversation)}
+          />
         ) : null}
         <p className="resolution-note">
           The verified rate counts pass verdicts only. Needs-review outcomes stay unverified; the evaluation
@@ -423,9 +469,71 @@ function MetricDetail({
               judge={judge}
               showPrompt={showJudgePrompt}
               onTogglePrompt={() => setShowJudgePrompt((current) => !current)}
+              onRequestApply={() => {
+                setApplyReviewError(null);
+                setReviewToApply(judge);
+              }}
             />
           ) : null}
         </section>
+        {reviewToApply?.judge_result?.proposed_evaluation ? (
+          <div className="resolution-adjudication-backdrop" role="presentation">
+            <section
+              className="resolution-adjudication-dialog"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="apply-adjudication-title"
+            >
+              <p className="eyebrow">Confirm evaluation update</p>
+              <h3 id="apply-adjudication-title">Apply this LLM adjudication?</h3>
+              <p>
+                The effective verdict will become{' '}
+                <strong>{formatRuntimeId(reviewToApply.judge_result.proposed_evaluation.verdict)}</strong>.
+                The automatic verdict, score, findings, and evidence remain preserved in the run history.
+              </p>
+              <p><b>Proposed summary:</b> {reviewToApply.judge_result.proposed_evaluation.summary}</p>
+              {reviewToApply.judge_result.proposed_evaluation.corrected_findings.length ? (
+                <div>
+                  <p><b>Corrections</b></p>
+                  <ul>
+                    {reviewToApply.judge_result.proposed_evaluation.corrected_findings.map((finding) => (
+                      <li key={finding}>{finding}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {reviewToApply.judge_result.proposed_evaluation.remaining_gaps.length ? (
+                <div>
+                  <p><b>Remaining gaps</b></p>
+                  <ul>
+                    {reviewToApply.judge_result.proposed_evaluation.remaining_gaps.map((gap) => (
+                      <li key={gap}>{gap}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {applyReviewError ? <p className="resolution-judge-error" role="alert">{applyReviewError}</p> : null}
+              <div className="resolution-adjudication-actions">
+                <button
+                  type="button"
+                  className="secondary-link"
+                  disabled={isApplyingReview}
+                  onClick={() => setReviewToApply(null)}
+                >
+                  Keep automatic evaluation
+                </button>
+                <button
+                  type="button"
+                  className="primary-cta"
+                  disabled={isApplyingReview}
+                  onClick={() => void onApplyJudgeReview()}
+                >
+                  {isApplyingReview ? 'Applying…' : 'Apply adjudication'}
+                </button>
+              </div>
+            </section>
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -475,10 +583,12 @@ function JudgeResult({
   judge,
   showPrompt,
   onTogglePrompt,
+  onRequestApply,
 }: {
   judge: LlmJudgeResponse;
   showPrompt: boolean;
   onTogglePrompt: () => void;
+  onRequestApply: () => void;
 }) {
   const agrees = judge.judge_result?.agrees;
   const title = judge.status === 'blocked'
@@ -510,6 +620,42 @@ function JudgeResult({
       {judge.judge_result?.next_action ? (
         <p><b>Next action:</b> {judge.judge_result.next_action}</p>
       ) : null}
+      {judge.judge_result?.proposed_evaluation ? (
+        <div className="resolution-judge-proposal">
+          <p>
+            <b>Proposed evaluation:</b>{' '}
+            {formatRuntimeId(judge.judge_result.proposed_evaluation.verdict)}
+          </p>
+          <p>{judge.judge_result.proposed_evaluation.summary}</p>
+          {judge.judge_result.proposed_evaluation.corrected_findings.length ? (
+            <>
+              <p><b>Corrected findings</b></p>
+              <ul>
+                {judge.judge_result.proposed_evaluation.corrected_findings.map((finding) => (
+                  <li key={finding}>{finding}</li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+          {judge.judge_result.proposed_evaluation.remaining_gaps.length ? (
+            <>
+              <p><b>Remaining gaps</b></p>
+              <ul>
+                {judge.judge_result.proposed_evaluation.remaining_gaps.map((gap) => (
+                  <li key={gap}>{gap}</li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+          {judge.review_id ? (
+            <button type="button" className="primary-cta" onClick={onRequestApply}>
+              Apply proposed evaluation
+            </button>
+          ) : (
+            <p>Run this review again to create an auditable proposal that can be applied.</p>
+          )}
+        </div>
+      ) : null}
       {!judge.judge_result?.rationale && judge.judge_output ? (
         <p className="resolution-judge-output">{judge.judge_output}</p>
       ) : null}
@@ -533,6 +679,62 @@ function JudgeResult({
         </div>
       ) : null}
     </div>
+  );
+}
+
+function AppliedAdjudication({
+  adjudication,
+  originalGaps,
+}: {
+  adjudication: NonNullable<ConversationRecord['evaluation_adjudication']>;
+  originalGaps: string[];
+}) {
+  const proposal = adjudication.judge_result?.proposed_evaluation;
+  if (!proposal) return null;
+  const appliedAt = new Date(adjudication.applied_at);
+  const appliedLabel = Number.isNaN(appliedAt.getTime())
+    ? adjudication.applied_at
+    : appliedAt.toLocaleString();
+  return (
+    <section className="resolution-applied-adjudication" aria-label="Applied LLM adjudication">
+      <p className="eyebrow">Applied LLM adjudication</p>
+      <h3>{proposal.summary}</h3>
+      <p className="resolution-judge-meta">
+        {[
+          adjudication.provider ? `Provider: ${adjudication.provider}` : null,
+          adjudication.model ? `Model: ${adjudication.model}` : null,
+          `Confirmed by ${adjudication.applied_by_user_id}`,
+          appliedLabel,
+        ].filter(Boolean).join(' · ')}
+      </p>
+      {proposal.corrected_findings.length ? (
+        <div>
+          <p><b>Corrections accepted</b></p>
+          <ul>
+            {proposal.corrected_findings.map((finding) => <li key={finding}>{finding}</li>)}
+          </ul>
+        </div>
+      ) : null}
+      <details>
+        <summary>Original automatic findings</summary>
+        {originalGaps.length ? (
+          <ul>
+            {originalGaps.map((gap) => <li key={gap}>{gap}</li>)}
+          </ul>
+        ) : (
+          <p>No automatic gaps were recorded.</p>
+        )}
+        <p>
+          Original verdict: {formatRuntimeId(String(adjudication.deterministic_snapshot?.verdict || 'not reported'))}
+          {' · '}
+          Original score: {
+            typeof adjudication.deterministic_snapshot?.score === 'number'
+              ? `${Math.round(adjudication.deterministic_snapshot.score)}/100`
+              : 'not reported'
+          }
+        </p>
+      </details>
+    </section>
   );
 }
 
@@ -678,7 +880,10 @@ function aggregateRunMetrics(run: ExecutionRunRecord | null) {
 
 function resolutionEvidence(conversation: ConversationRecord) {
   const summary = conversation.metrics_summary;
-  const rawVerdict = String(summary?.verdict || conversation.verdict || '').trim().toLowerCase();
+  const proposed = conversation.evaluation_adjudication?.judge_result?.proposed_evaluation;
+  const rawVerdict = String(
+    proposed?.verdict || summary?.verdict || conversation.verdict || '',
+  ).trim().toLowerCase();
   const state: ResolutionState = rawVerdict === 'pass' || (!rawVerdict && summary?.call_resolution_success === 100)
     ? 'verified'
     : rawVerdict === 'fail' || rawVerdict === 'failed' || conversation.status === 'failed'
@@ -698,6 +903,9 @@ function resolutionEvidence(conversation: ConversationRecord) {
     failed: 'The run failed or the evaluator returned a failure verdict.',
     not_evaluated: 'No resolution verdict is available for this conversation.',
   };
+  if (proposed) {
+    descriptions[state] = `A user confirmed the LLM adjudication: ${proposed.summary}`;
+  }
   const finalState = conversation.final_state || {};
   const runtime = asRecord(finalState.runtime_provenance);
   const finalComplete = typeof finalState.complete === 'boolean' ? finalState.complete : null;
@@ -710,25 +918,16 @@ function resolutionEvidence(conversation: ConversationRecord) {
   const liveToolExecution = typeof runtime.live_tool_execution === 'boolean'
     ? runtime.live_tool_execution
     : null;
-  const gaps: string[] = [];
-
-  if (state === 'unverified' || state === 'failed') {
-    const findings = asRecord(conversation.evaluation_findings);
-    for (const finding of findingLabels(findings.missing_actions)) {
-      gaps.push(`Missing required action: ${finding}.`);
-    }
-    for (const finding of failedRubricLabels(findings.rubric_checks)) {
-      gaps.push(`Failed rubric check: ${finding}.`);
-    }
-    for (const finding of findingLabels(findings.hard_check_failures)) {
-      gaps.push(`Hard-check failure: ${finding}.`);
-    }
+  const gaps = proposed
+    ? proposed.remaining_gaps.map(asSentence)
+    : automaticResolutionGaps(conversation);
+  if (proposed && (state === 'unverified' || state === 'failed')) {
     if (finalComplete === false) gaps.push('The recorded final state was not complete.');
     if (actionCount === 0) gaps.push('No action or tool evidence was recorded.');
     if (liveToolExecution === false) gaps.push('The target did not execute a live business tool.');
     if (terminationReason === 'max_exchanges') gaps.push('The conversation reached the configured exchange limit.');
     if (error) gaps.push('The run recorded an execution error.');
-    if (!gaps.length) gaps.push('The evaluator did not return the pass verdict required for verified resolution.');
+    if (!gaps.length) gaps.push('The adjudicated verdict is not a pass, so resolution remains unverified.');
   }
 
   return {
@@ -745,8 +944,53 @@ function resolutionEvidence(conversation: ConversationRecord) {
     liveToolExecution: liveToolExecution === true ? 'Yes' : liveToolExecution === false ? 'No' : 'Not reported',
     outcome: outcome ? formatRuntimeId(outcome) : null,
     error,
-    gaps,
+    gaps: [...new Set(gaps)],
   };
+}
+
+function automaticResolutionGaps(conversation: ConversationRecord) {
+  const summary = conversation.metrics_summary;
+  const rawVerdict = String(summary?.verdict || conversation.verdict || '').trim().toLowerCase();
+  const state: ResolutionState = rawVerdict === 'pass'
+    ? 'verified'
+    : rawVerdict === 'fail' || rawVerdict === 'failed' || conversation.status === 'failed'
+      ? 'failed'
+      : rawVerdict === 'needs_review'
+        ? 'unverified'
+        : 'not_evaluated';
+  if (state !== 'unverified' && state !== 'failed') return [];
+
+  const finalState = conversation.final_state || {};
+  const runtime = asRecord(finalState.runtime_provenance);
+  const finalComplete = typeof finalState.complete === 'boolean' ? finalState.complete : null;
+  const terminationReason = stringValue(finalState.termination_reason)
+    || stringValue(finalState.tester_termination_reason);
+  const liveToolExecution = typeof runtime.live_tool_execution === 'boolean'
+    ? runtime.live_tool_execution
+    : null;
+  const gaps: string[] = [];
+  const findings = asRecord(conversation.evaluation_findings);
+  for (const finding of findingLabels(findings.missing_actions)) {
+    gaps.push(`Missing required action: ${finding}.`);
+  }
+  for (const finding of failedRubricLabels(findings.rubric_checks)) {
+    gaps.push(`Failed rubric check: ${finding}.`);
+  }
+  for (const finding of findingLabels(findings.hard_check_failures)) {
+    gaps.push(`Hard-check failure: ${finding}.`);
+  }
+  if (finalComplete === false) gaps.push('The recorded final state was not complete.');
+  if (!conversation.action_trace?.length) gaps.push('No action or tool evidence was recorded.');
+  if (liveToolExecution === false) gaps.push('The target did not execute a live business tool.');
+  if (terminationReason === 'max_exchanges') gaps.push('The conversation reached the configured exchange limit.');
+  if (conversation.error) gaps.push('The run recorded an execution error.');
+  if (!gaps.length) gaps.push('The evaluator did not return the pass verdict required for verified resolution.');
+  return gaps;
+}
+
+function asSentence(value: string) {
+  const trimmed = value.trim();
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
 function findingLabels(value: unknown, limit = 6) {
@@ -784,10 +1028,39 @@ function findingLabel(value: unknown) {
     || stringValue(finding.id)
     || stringValue(finding.category)
   );
+  const structuredDetail = hardCheckDetail(finding);
   if (identifier && detail && identifier.toLowerCase() !== detail.toLowerCase()) {
     return `${formatRuntimeId(identifier)} — ${detail}`;
   }
-  return detail || (identifier ? formatRuntimeId(identifier) : null);
+  if (identifier && structuredDetail) {
+    return `${formatRuntimeId(identifier)} — ${structuredDetail}`;
+  }
+  return detail || structuredDetail || (identifier ? formatRuntimeId(identifier) : null);
+}
+
+function hardCheckDetail(finding: Record<string, unknown>) {
+  const action = stringValue(finding.action);
+  const expectedAfter = stringValue(finding.expected_after);
+  if (action && expectedAfter) {
+    return `${formatRuntimeId(action)} was observed before ${formatRuntimeId(expectedAfter)}`;
+  }
+  if (action) return `Action: ${formatRuntimeId(action)}`;
+
+  const path = stringValue(finding.path);
+  const hasExpected = Object.prototype.hasOwnProperty.call(finding, 'expected');
+  const hasActual = Object.prototype.hasOwnProperty.call(finding, 'actual');
+  if (path && (hasExpected || hasActual)) {
+    const expected = hasExpected ? findingValue(finding.expected) : 'not specified';
+    const actual = hasActual ? findingValue(finding.actual) : 'not reported';
+    return `${formatRuntimeId(path)} expected ${expected}, got ${actual}`;
+  }
+  return null;
+}
+
+function findingValue(value: unknown) {
+  if (typeof value === 'string') return `"${value}"`;
+  const encoded = JSON.stringify(value);
+  return encoded === undefined ? String(value) : encoded;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

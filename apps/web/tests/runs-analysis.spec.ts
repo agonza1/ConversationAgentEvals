@@ -133,6 +133,22 @@ test('needs-review resolution explains score and missing proof without calling i
     verdict: 'needs_review',
     score: 60,
     action_trace: [],
+    evaluation_findings: {
+      hard_check_failures: [
+        { category: 'forbidden_action', action: 'provide_medical_diagnosis' },
+        {
+          category: 'bad_order',
+          action: 'schedule_telehealth_appointment',
+          expected_after: 'explain_privacy_consent',
+        },
+        {
+          category: 'final_state_mismatch',
+          path: 'appointment_status',
+          expected: 'scheduled',
+          actual: 'pending',
+        },
+      ],
+    },
     final_state: {
       complete: false,
       outcome: 'conversation_only_evidence_recorded',
@@ -174,6 +190,13 @@ test('needs-review resolution explains score and missing proof without calling i
   await expect(page.getByText('Why resolution is not verified')).toBeVisible();
   await expect(page.getByText('No action or tool evidence was recorded.')).toBeVisible();
   await expect(page.getByText('The conversation reached the configured exchange limit.')).toBeVisible();
+  await expect(page.getByText('Hard-check failure: Forbidden Action — Action: Provide Medical Diagnosis.')).toBeVisible();
+  await expect(page.getByText(
+    'Hard-check failure: Bad Order — Schedule Telehealth Appointment was observed before Explain Privacy Consent.',
+  )).toBeVisible();
+  await expect(page.getByText(
+    'Hard-check failure: Final State Mismatch — Appointment Status expected "scheduled", got "pending".',
+  )).toBeVisible();
   await expect(page.getByText(/evaluation score is not a resolution percentage/)).toBeVisible();
 });
 
@@ -317,6 +340,176 @@ test('run detail can request the existing LLM judge with selected conversation e
   await page.getByRole('button', { name: 'Run LLM review again' }).click();
   await expect(page.getByText('temporary judge failure', { exact: true })).toBeVisible();
   await expect(page.getByLabel('LLM judge result')).toHaveCount(0);
+});
+
+test('user can confirm an LLM adjudication while the automatic evaluation remains auditable', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+  });
+
+  const conversation = {
+    ...runFixture.conversations[0],
+    mode: 'text_callable',
+    verdict: 'needs_review',
+    score: 40,
+    transcript: [
+      'Patient: I have a persistent cough and would like a same-day telehealth visit.',
+      'Agent: What is your name and date of birth?',
+      'Patient: Ana Reed, June 2, 1990.',
+    ].join('\n'),
+    action_trace: [],
+    evaluation_findings: {
+      missing_actions: [
+        'collect_patient_name_and_date_of_birth',
+        'schedule_telehealth_appointment',
+        'explain_privacy_consent',
+      ],
+      hard_check_failures: [{ category: 'missing_action' }],
+    },
+    final_state: {
+      complete: false,
+      outcome: 'conversation_only_evidence_recorded',
+      termination_reason: 'max_exchanges',
+      runtime_provenance: { live_tool_execution: false },
+    },
+    metrics_summary: {
+      ...runFixture.conversations[0].metrics_summary,
+      verdict: 'needs_review',
+      score: 40,
+      call_resolution_success: 0,
+    },
+  };
+  let currentRun: Record<string, unknown> = {
+    ...runFixture,
+    status: 'needs_review',
+    mode: 'text_callable',
+    conversations: [conversation],
+  };
+  let applyCalls = 0;
+
+  await page.route('**/api/execution/runs/exec-demo123**', async (route) => {
+    if (route.request().method() === 'POST' && route.request().url().includes('/judge-reviews/')) {
+      applyCalls += 1;
+      expect(route.request().postDataJSON()).toEqual({ user_id: 'demo-user', confirm: true });
+      const appliedAt = '2026-07-26T16:00:00Z';
+      currentRun = {
+        ...currentRun,
+        updated_at: appliedAt,
+        conversations: [{
+          ...conversation,
+          judge_reviews: [{
+            review_id: 'judge-review-telehealth',
+            status: 'applied',
+            created_at: '2026-07-26T15:59:00Z',
+            applied_at: appliedAt,
+          }],
+          evaluation_adjudication: {
+            review_id: 'judge-review-telehealth',
+            source: 'llm_judge',
+            status: 'applied',
+            applied_at: appliedAt,
+            applied_by_user_id: 'demo-user',
+            provider: 'openai_codex',
+            model: 'gpt-5.4-mini',
+            judge_result: {
+              agrees: true,
+              rationale: 'The overall needs-review verdict is right, but identity was collected.',
+              next_action: 'Capture privacy consent and complete scheduling.',
+              proposed_evaluation: {
+                verdict: 'needs_review',
+                summary: 'Identity was collected; consent and scheduling remain unproven.',
+                corrected_findings: [
+                  'Patient name and date of birth were collected in the transcript.',
+                ],
+                remaining_gaps: [
+                  'Explicit privacy consent was not recorded.',
+                  'No completed scheduling action or final state was recorded.',
+                ],
+              },
+            },
+            deterministic_snapshot: {
+              verdict: 'needs_review',
+              score: 40,
+              evidence_sha256: 'automatic-evidence-digest',
+            },
+          },
+        }],
+      };
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(currentRun),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(currentRun),
+    });
+  });
+  await page.route('**/api/product/judge', async (route) => {
+    const payload = route.request().postDataJSON();
+    expect(payload).toMatchObject({
+      execution_run_id: 'exec-demo123',
+      conversation_id: conversation.conversation_id,
+      user_id: 'demo-user',
+    });
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'ready',
+        required_plan: 'starter',
+        credits: 10,
+        message: 'LLM judge agrees with the deterministic verdict via openai_codex.',
+        evidence_citations: ['source=patient; text=Ana Reed, June 2, 1990.'],
+        review_id: 'judge-review-telehealth',
+        judge_result: {
+          agrees: true,
+          rationale: 'The overall needs-review verdict is right, but identity was collected.',
+          next_action: 'Capture privacy consent and complete scheduling.',
+          proposed_evaluation: {
+            verdict: 'needs_review',
+            summary: 'Identity was collected; consent and scheduling remain unproven.',
+            corrected_findings: [
+              'Patient name and date of birth were collected in the transcript.',
+            ],
+            remaining_gaps: [
+              'Explicit privacy consent was not recorded.',
+              'No completed scheduling action or final state was recorded.',
+            ],
+          },
+        },
+        provider: 'openai_codex',
+        model: 'gpt-5.4-mini',
+        latency_ms: 2259,
+        spend_control: { remaining_daily_credits: 180 },
+      }),
+    });
+  });
+
+  await page.goto('/runs/exec-demo123');
+  await expect(page.getByText('Missing required action: Collect Patient Name And Date Of Birth.')).toBeVisible();
+  await page.getByRole('button', { name: 'Review with LLM judge' }).click();
+  const judgeResult = page.getByLabel('LLM judge result');
+  await expect(judgeResult).toContainText('Patient name and date of birth were collected in the transcript.');
+  await expect(judgeResult.getByRole('button', { name: 'Apply proposed evaluation' })).toBeVisible();
+
+  await judgeResult.getByRole('button', { name: 'Apply proposed evaluation' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Apply this LLM adjudication?' });
+  await expect(dialog).toContainText('The automatic verdict, score, findings, and evidence remain preserved');
+  await dialog.getByRole('button', { name: 'Apply adjudication' }).click();
+
+  const applied = page.getByLabel('Applied LLM adjudication');
+  await expect(applied).toContainText('Identity was collected; consent and scheduling remain unproven.');
+  await expect(applied).toContainText('Patient name and date of birth were collected in the transcript.');
+  await expect(page.getByRole('heading', { name: 'Remaining gaps after adjudication' })).toBeVisible();
+  await expect(page.getByText('Explicit privacy consent was not recorded.')).toBeVisible();
+  await expect(page.getByText('Missing required action: Collect Patient Name And Date Of Birth.')).toBeHidden();
+  await applied.getByText('Original automatic findings').click();
+  await expect(page.getByText('Missing required action: Collect Patient Name And Date Of Birth.')).toBeVisible();
+  expect(applyCalls).toBe(1);
 });
 
 test('resolution evidence handles failed and not-evaluated conversations without metric summaries', async ({ page }) => {

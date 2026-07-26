@@ -177,6 +177,8 @@ class ConversationRecord(BaseModel):
     action_trace: list[dict[str, Any]] = Field(default_factory=list)
     final_state: dict[str, Any] = Field(default_factory=dict)
     evaluation_findings: dict[str, Any] = Field(default_factory=dict)
+    judge_reviews: list[dict[str, Any]] = Field(default_factory=list)
+    evaluation_adjudication: dict[str, Any] | None = None
     latency_marks: list[dict[str, Any]] = Field(default_factory=list)
     metrics_summary: ConversationMetricsSummary | None = None
     timeline: list[TimelineEvent] = Field(default_factory=list)

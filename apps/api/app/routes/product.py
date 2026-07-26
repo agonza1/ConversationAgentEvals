@@ -15,6 +15,7 @@ from app.schemas.product import (
     ProductWorkspaceRequest,
     SavedRunRequest,
 )
+from app.services import execution_run_store
 from app.services.product_service import (
     accept_workspace_invitation,
     checkout_gate,
@@ -268,6 +269,19 @@ def export_run_report(run_id: str, user_id: str = Query(min_length=1), db: Sessi
 
 @router.post('/judge')
 def request_llm_judge(payload: JudgeRequest, db: Session = Depends(get_db)):
+    if payload.execution_run_id and payload.conversation_id and payload.user_id:
+        run = execution_run_store.get_execution_run(payload.execution_run_id)
+        if run is None or run.get('user_id') != payload.user_id:
+            raise HTTPException(status_code=404, detail='Execution run not found.')
+        conversation = execution_run_store.get_conversation(
+            payload.execution_run_id,
+            payload.conversation_id,
+        )
+        if conversation is None:
+            raise HTTPException(status_code=404, detail='Conversation not found.')
+        if run.get('status') in {'queued', 'running'} or conversation.get('status') in {'queued', 'running'}:
+            raise HTTPException(status_code=409, detail='The conversation must be terminal before LLM review.')
+
     response = judge_gate(
         plan=payload.plan,
         report=payload.report,
@@ -289,6 +303,24 @@ def request_llm_judge(payload: JudgeRequest, db: Session = Depends(get_db)):
             judge_output=response.judge_output,
             agrees=agrees,
         )
+    if (
+        response.status == 'ready'
+        and payload.execution_run_id
+        and payload.conversation_id
+        and payload.user_id
+    ):
+        try:
+            review = execution_run_store.record_judge_review(
+                payload.execution_run_id,
+                payload.conversation_id,
+                user_id=payload.user_id,
+                response=response.model_dump(mode='json'),
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        response = response.model_copy(update={'review_id': review['review_id']})
     return response
 
 

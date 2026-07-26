@@ -106,6 +106,8 @@ export interface ConversationRecord {
   action_trace?: Array<Record<string, unknown>>;
   final_state?: Record<string, unknown>;
   evaluation_findings?: Record<string, unknown>;
+  judge_reviews?: JudgeReviewRecord[];
+  evaluation_adjudication?: EvaluationAdjudication | null;
   recording?: Record<string, unknown> | null;
   audio_session?: Record<string, unknown> | null;
   latency_marks?: Array<Record<string, unknown>>;
@@ -166,7 +168,48 @@ export interface LlmJudgeResult {
   agrees?: boolean | null;
   rationale?: string | null;
   next_action?: string | null;
+  proposed_evaluation?: JudgeProposedEvaluation | null;
   raw_output?: string | null;
+}
+
+export interface JudgeProposedEvaluation {
+  verdict: 'pass' | 'needs_review' | 'fail';
+  summary: string;
+  corrected_findings: string[];
+  remaining_gaps: string[];
+}
+
+export interface JudgeReviewRecord {
+  review_id: string;
+  status: 'pending_confirmation' | 'applied' | 'superseded';
+  created_at: string;
+  applied_at?: string | null;
+  applied_by_user_id?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  latency_ms?: number | null;
+  evidence_citations?: string[];
+  judge_result?: LlmJudgeResult | null;
+  output_sha256?: string | null;
+}
+
+export interface EvaluationAdjudication {
+  review_id: string;
+  source: 'llm_judge';
+  status: 'applied';
+  applied_at: string;
+  applied_by_user_id: string;
+  provider?: string | null;
+  model?: string | null;
+  latency_ms?: number | null;
+  evidence_citations?: string[];
+  judge_result?: LlmJudgeResult | null;
+  output_sha256?: string | null;
+  deterministic_snapshot?: {
+    verdict?: string | null;
+    score?: number | null;
+    evidence_sha256?: string | null;
+  };
 }
 
 export interface LlmJudgeResponse {
@@ -181,6 +224,7 @@ export interface LlmJudgeResponse {
   model?: string | null;
   prompt_preview?: string | null;
   latency_ms?: number | null;
+  review_id?: string | null;
   block_reason?: 'provider' | 'budget' | 'provider_error' | 'evidence' | null;
   spend_control?: {
     estimated_credits?: number;
@@ -309,6 +353,8 @@ export async function requestLlmJudge(payload: {
   transcript?: string | null;
   user_id?: string;
   project_id?: string;
+  execution_run_id?: string;
+  conversation_id?: string;
 }): Promise<LlmJudgeResponse> {
   return handleJson(
     await fetch(`${getApiBase()}/api/product/judge`, {
@@ -319,6 +365,26 @@ export async function requestLlmJudge(payload: {
         plan: payload.plan || 'free',
       }),
     }),
+  );
+}
+
+export async function applyLlmJudgeReview(payload: {
+  executionRunId: string;
+  conversationId: string;
+  reviewId: string;
+  userId: string;
+}): Promise<ExecutionRunRecord> {
+  return handleJson(
+    await fetch(
+      `${getApiBase()}/api/execution/runs/${encodeURIComponent(payload.executionRunId)}`
+      + `/conversations/${encodeURIComponent(payload.conversationId)}`
+      + `/judge-reviews/${encodeURIComponent(payload.reviewId)}/apply`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: payload.userId, confirm: true }),
+      },
+    ),
   );
 }
 

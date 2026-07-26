@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
+import uuid
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
@@ -182,6 +184,121 @@ def complete_execution_run(
     )
 
 
+def record_judge_review(
+    execution_run_id: str,
+    conversation_id: str,
+    *,
+    user_id: str,
+    response: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist a server-produced judge result as a pending, auditable review."""
+    with _LOCK:
+        run = _get_run_unlocked(execution_run_id)
+        if run is None or run.get('user_id') != user_id:
+            raise KeyError('Execution run not found.')
+        if run.get('status') in {'queued', 'running'}:
+            raise ValueError('LLM reviews can only be recorded for terminal execution runs.')
+        conversation = _find_conversation_unlocked(run, conversation_id)
+        if conversation is None:
+            raise KeyError('Conversation not found.')
+        if conversation.get('status') in {'queued', 'running'}:
+            raise ValueError('LLM reviews can only be recorded for terminal conversations.')
+        if response.get('status') != 'ready':
+            raise ValueError('Only completed LLM reviews can be recorded.')
+
+        judge_result = deepcopy(response.get('judge_result') or {})
+        raw_output = str(judge_result.pop('raw_output', '') or response.get('judge_output') or '')
+        review_id = f'judge-review-{uuid.uuid4().hex[:16]}'
+        created_at = _now()
+        review = {
+            'review_id': review_id,
+            'status': 'pending_confirmation',
+            'created_at': created_at,
+            'provider': response.get('provider'),
+            'model': response.get('model'),
+            'latency_ms': response.get('latency_ms'),
+            'message': response.get('message'),
+            'evidence_citations': list(response.get('evidence_citations') or []),
+            'judge_result': judge_result,
+            'output_sha256': hashlib.sha256(raw_output.encode('utf-8')).hexdigest() if raw_output else None,
+            'deterministic_snapshot': _deterministic_evaluation_snapshot(conversation),
+        }
+        reviews = list(conversation.get('judge_reviews') or [])
+        reviews.append(review)
+        conversation['judge_reviews'] = reviews[-20:]
+        run['updated_at'] = created_at
+        _persist_unlocked(run)
+        return deepcopy(review)
+
+
+def apply_judge_review(
+    execution_run_id: str,
+    conversation_id: str,
+    *,
+    user_id: str,
+    review_id: str,
+) -> dict[str, Any]:
+    """Apply a confirmed judge proposal without replacing deterministic evidence."""
+    with _LOCK:
+        run = _get_run_unlocked(execution_run_id)
+        if run is None or run.get('user_id') != user_id:
+            raise KeyError('Execution run not found.')
+        if run.get('status') in {'queued', 'running'}:
+            raise ValueError('The execution run must be terminal before an adjudication can be applied.')
+        conversation = _find_conversation_unlocked(run, conversation_id)
+        if conversation is None:
+            raise KeyError('Conversation not found.')
+        if conversation.get('status') in {'queued', 'running'}:
+            raise ValueError('The conversation must be terminal before an adjudication can be applied.')
+
+        reviews = list(conversation.get('judge_reviews') or [])
+        review = next((item for item in reviews if item.get('review_id') == review_id), None)
+        if review is None:
+            raise KeyError('LLM judge review not found.')
+        if review.get('status') == 'applied':
+            return deepcopy(run)
+        if review.get('status') != 'pending_confirmation':
+            raise ValueError('This LLM judge review is no longer available to apply.')
+        proposed = (review.get('judge_result') or {}).get('proposed_evaluation')
+        if not isinstance(proposed, dict):
+            raise ValueError('This LLM judge review did not provide an evaluation update.')
+        if review.get('deterministic_snapshot') != _deterministic_evaluation_snapshot(conversation):
+            raise ValueError('The deterministic evaluation changed after this LLM review. Run the review again.')
+
+        applied_at = _now()
+        previous = conversation.get('evaluation_adjudication')
+        if isinstance(previous, dict):
+            previous_id = previous.get('review_id')
+            for item in reviews:
+                if item.get('review_id') == previous_id and item.get('status') == 'applied':
+                    item['status'] = 'superseded'
+                    item['superseded_at'] = applied_at
+                    break
+
+        review['status'] = 'applied'
+        review['applied_at'] = applied_at
+        review['applied_by_user_id'] = user_id
+        conversation['judge_reviews'] = reviews
+        conversation['evaluation_adjudication'] = {
+            'review_id': review_id,
+            'source': 'llm_judge',
+            'status': 'applied',
+            'applied_at': applied_at,
+            'applied_by_user_id': user_id,
+            'provider': review.get('provider'),
+            'model': review.get('model'),
+            'latency_ms': review.get('latency_ms'),
+            'output_sha256': review.get('output_sha256'),
+            'evidence_citations': review.get('evidence_citations') or [],
+            'judge_result': deepcopy(review.get('judge_result') or {}),
+            'deterministic_snapshot': deepcopy(review.get('deterministic_snapshot') or {}),
+        }
+        run['status'] = _effective_run_status(run)
+        run['updated_at'] = applied_at
+        _persist_unlocked(run)
+        return deepcopy(run)
+
+
 def _update_run(
     execution_run_id: str,
     *,
@@ -220,6 +337,60 @@ def _update_run(
             run['progress'] = progress
         _persist_unlocked(run)
         return deepcopy(run)
+
+
+def _get_run_unlocked(execution_run_id: str) -> dict[str, Any] | None:
+    run = _RUNS.get(execution_run_id)
+    if run is not None:
+        return run
+    loaded = _load_from_disk(execution_run_id)
+    if loaded is not None:
+        _RUNS[execution_run_id] = loaded
+    return loaded
+
+
+def _find_conversation_unlocked(run: dict[str, Any], conversation_id: str) -> dict[str, Any] | None:
+    return next(
+        (
+            item for item in run.get('conversations') or []
+            if item.get('conversation_id') == conversation_id
+        ),
+        None,
+    )
+
+
+def _deterministic_evaluation_snapshot(conversation: dict[str, Any]) -> dict[str, Any]:
+    summary = conversation.get('metrics_summary') or {}
+    evidence = {
+        'verdict': summary.get('verdict') or conversation.get('verdict'),
+        'score': summary.get('score') if summary.get('score') is not None else conversation.get('score'),
+        'evaluation_findings': conversation.get('evaluation_findings') or {},
+        'action_trace': conversation.get('action_trace') or [],
+        'final_state': conversation.get('final_state') or {},
+        'transcript': conversation.get('transcript') or '',
+        'error': conversation.get('error'),
+    }
+    serialized = json.dumps(evidence, ensure_ascii=False, sort_keys=True, default=str)
+    return {
+        'verdict': evidence['verdict'],
+        'score': evidence['score'],
+        'evidence_sha256': hashlib.sha256(serialized.encode('utf-8')).hexdigest(),
+    }
+
+
+def _effective_run_status(run: dict[str, Any]) -> str:
+    conversations = list(run.get('conversations') or [])
+    if any(item.get('status') == 'failed' for item in conversations):
+        return 'failed'
+    verdicts = []
+    for conversation in conversations:
+        adjudication = conversation.get('evaluation_adjudication') or {}
+        proposal = (adjudication.get('judge_result') or {}).get('proposed_evaluation') or {}
+        summary = conversation.get('metrics_summary') or {}
+        verdicts.append(proposal.get('verdict') or summary.get('verdict') or conversation.get('verdict'))
+    if verdicts and all(verdict == 'pass' for verdict in verdicts):
+        return 'completed'
+    return 'needs_review'
 
 
 def _persist_unlocked(run: dict[str, Any]) -> None:

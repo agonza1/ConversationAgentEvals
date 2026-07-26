@@ -1583,6 +1583,52 @@ def test_llm_judge_prompt_preserves_structured_execution_evidence():
     assert '"subscription_status": "retained"' in prompt
     assert '"postal_code": "10001"' in prompt
     assert '"execution_error": "provider disconnected after the tool result"' in prompt
+    assert '"proposed_evaluation"' in prompt
+    assert 'Never invent a tool call' in prompt
+
+
+def test_llm_judge_parser_returns_a_bounded_evaluation_proposal():
+    from app.services import product_service
+
+    parsed = product_service._parse_judge_output(json.dumps({
+        'agrees': True,
+        'rationale': 'The verdict is right, but one automatic finding conflicts with the transcript.',
+        'next_action': 'Complete scheduling and capture privacy consent.',
+        'proposed_evaluation': {
+            'verdict': 'needs review',
+            'summary': 'Identity was collected, while consent and scheduling remain unproven.',
+            'corrected_findings': [
+                'Name and date of birth were collected in the transcript.',
+            ],
+            'remaining_gaps': [
+                'Privacy consent was not explicit.',
+                'No completed scheduling action or final state was recorded.',
+            ],
+        },
+    }))
+
+    assert parsed.agrees is True
+    assert parsed.proposed_evaluation is not None
+    assert parsed.proposed_evaluation.verdict == 'needs_review'
+    assert parsed.proposed_evaluation.corrected_findings == [
+        'Name and date of birth were collected in the transcript.',
+    ]
+    assert parsed.proposed_evaluation.remaining_gaps == [
+        'Privacy consent was not explicit.',
+        'No completed scheduling action or final state was recorded.',
+    ]
+
+    contradictory = product_service._parse_judge_output(json.dumps({
+        'agrees': False,
+        'rationale': 'One gap remains.',
+        'proposed_evaluation': {
+            'verdict': 'pass',
+            'summary': 'The run still lacks a final state.',
+            'remaining_gaps': ['No completed final state was recorded.'],
+        },
+    }))
+    assert contradictory.proposed_evaluation is not None
+    assert contradictory.proposed_evaluation.verdict == 'needs_review'
 
 
 def test_llm_judge_recomputes_missing_evaluator_findings_before_spending(monkeypatch):
@@ -1675,6 +1721,29 @@ def test_llm_judge_does_not_recompute_execution_failure_as_evaluator_verdict(mon
         'Execution failure is not a deterministic evaluator verdict and cannot be reviewed.'
     )
     assert 'evaluator_findings_source' not in grounded
+
+    error_backed_review = product_service._ground_judge_report(
+        {
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'cancellation-rescue',
+            'verdict': 'needs_review',
+            'overall_score': None,
+            'error': 'Pipecat tester timed out before deterministic evaluation.',
+            'action_trace': [],
+            'final_state': {'complete': False, 'outcome': 'runner_error'},
+            'evaluation_findings': {},
+            'require_evaluator_findings': True,
+        },
+        transcript=None,
+        user_id='judge-user',
+        project_id='judge-project',
+    )
+    assert error_backed_review['verdict'] == 'needs_review'
+    assert error_backed_review['overall_score'] is None
+    assert error_backed_review['evaluator_findings_error'] == (
+        'Execution failure is not a deterministic evaluator verdict and cannot be reviewed.'
+    )
+    assert 'evaluator_findings_source' not in error_backed_review
 
 
 def test_llm_judge_structured_evidence_stays_valid_and_preserves_priority_fields():
@@ -1772,7 +1841,45 @@ def test_llm_judge_spend_reservation_is_atomic(monkeypatch, tmp_path):
 
 
 
-def test_product_audit_events_track_saved_runs_exports_and_judge_requests():
+def test_product_audit_events_track_saved_runs_exports_and_judge_requests(
+    monkeypatch,
+    tmp_path,
+    request,
+):
+    from app.services import product_service
+    from app.services.llm_providers import set_provider_for_tests
+
+    class _AuditJudgeProvider:
+        provider_id = 'openai'
+
+        def status(self):
+            return {
+                'id': 'openai',
+                'provider': 'openai_codex',
+                'status': 'connected',
+                'email': 'audit-judge@example.com',
+                'account_id': 'audit-judge',
+                'message': 'connected',
+                'last_error': None,
+            }
+
+        def complete(self, _prompt: str):
+            return json.dumps({
+                'agrees': True,
+                'rationale': 'The evidence supports the automatic result.',
+                'next_action': 'Keep the recorded evaluation.',
+                'proposed_evaluation': {
+                    'verdict': 'pass',
+                    'summary': 'The recorded evidence supports a pass verdict.',
+                    'corrected_findings': [],
+                    'remaining_gaps': [],
+                },
+            })
+
+    monkeypatch.setattr(product_service, '_judge_spend_path', lambda: tmp_path / 'audit-judge-spend.json')
+    set_provider_for_tests('openai', _AuditJudgeProvider())
+    request.addfinalizer(lambda: set_provider_for_tests('openai', None))
+
     saved = client.post(
         '/api/product/runs',
         json={
