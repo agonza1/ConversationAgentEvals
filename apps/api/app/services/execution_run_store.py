@@ -174,8 +174,11 @@ def update_live_event(
     llm_output: str,
     asr_receipt: str,
     frame_metadata: dict[str, Any],
+    kind: str | None = None,
+    media_url: str | None = None,
+    mime_type: str | None = None,
 ) -> dict[str, Any] | None:
-    """Attach delayed ASR evidence to an audio event without appending a duplicate turn."""
+    """Attach delayed media/ASR evidence without appending a duplicate turn."""
     with _LOCK:
         run = _RUNS.get(execution_run_id)
         if run is None:
@@ -192,7 +195,7 @@ def update_live_event(
             for index, event in enumerate(events):
                 if event.get('sequence') != sequence:
                     continue
-                events[index] = LiveExecutionEvent.model_validate({
+                updated_fields = {
                     **event,
                     'text': text,
                     'llm_output': llm_output,
@@ -201,7 +204,14 @@ def update_live_event(
                         **(event.get('frame_metadata') or {}),
                         **frame_metadata,
                     },
-                }).model_dump(mode='json')
+                }
+                if kind is not None:
+                    updated_fields['kind'] = kind
+                if media_url is not None:
+                    updated_fields['media_url'] = media_url
+                if mime_type is not None:
+                    updated_fields['mime_type'] = mime_type
+                events[index] = LiveExecutionEvent.model_validate(updated_fields).model_dump(mode='json')
                 conversation['live_events'] = events
                 run['conversations'] = conversations
                 run['updated_at'] = _now()

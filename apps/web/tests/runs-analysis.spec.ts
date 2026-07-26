@@ -354,12 +354,16 @@ test('voice analysis reports target first audio byte and excludes legacy exchang
   await expect(page.getByText('17534ms')).toHaveCount(0);
 });
 
-test('active voice listening starts from now and completed playback restarts from the beginning', async ({ page }) => {
+test('active voice listening uses WebRTC and completed playback restarts from the beginning', async ({ page }) => {
   let polls = 0;
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
-    const runtime = window as Window & { __playedVoiceUrls: string[] };
+    const runtime = window as Window & {
+      __playedVoiceUrls: string[];
+      __liveWebrtcPlayCount: number;
+    };
     runtime.__playedVoiceUrls = [];
+    runtime.__liveWebrtcPlayCount = 0;
     class TestAudio extends EventTarget {
       constructor(private readonly url: string) {
         super();
@@ -374,9 +378,60 @@ test('active voice listening starts from now and completed playback restarts fro
       }
     }
     Object.defineProperty(window, 'Audio', { value: TestAudio });
+    Object.defineProperty(HTMLMediaElement.prototype, 'play', {
+      configurable: true,
+      value() {
+        runtime.__liveWebrtcPlayCount += 1;
+        return Promise.resolve();
+      },
+    });
+    class TestPeerConnection {
+      connectionState = 'new';
+      ontrack: ((event: { track: { kind: string }; streams: MediaStream[] }) => void) | null = null;
+      onconnectionstatechange: (() => void) | null = null;
+      onicecandidate: ((event: { candidate: null }) => void) | null = null;
+      addTransceiver() {}
+      async createOffer() {
+        return { type: 'offer', sdp: 'test-offer' };
+      }
+      async setLocalDescription() {}
+      async setRemoteDescription() {
+        this.connectionState = 'connected';
+        this.ontrack?.({
+          track: { kind: 'audio' },
+          streams: [new MediaStream()],
+        });
+        this.onconnectionstatechange?.();
+      }
+      close() {
+        this.connectionState = 'closed';
+      }
+    }
+    Object.defineProperty(window, 'RTCPeerConnection', { value: TestPeerConnection });
   });
 
   await page.route('**/api/execution/runs/exec-live-cursor**', async (route) => {
+    if (route.request().url().includes('/listener-token')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          listener: {
+            token: 'live-webrtc-token',
+            expires_at: '2026-07-26T12:00:00Z',
+            listen_url: '/api/execution/listeners/live-webrtc-token',
+            webrtc_url: '/api/execution/listeners/live-webrtc-token/webrtc',
+            webrtc_ice_url: '/api/execution/listeners/live-webrtc-token/webrtc/ice',
+            webrtc_stop_url: '/api/execution/listeners/live-webrtc-token/webrtc/stop',
+            read_only: true,
+            can_inject_audio: false,
+            requires_microphone: false,
+            media_transport: 'webrtc',
+          },
+        }),
+      });
+      return;
+    }
     polls += 1;
     const hasNewAgentAudio = polls >= 3;
     const completed = polls >= 4;
@@ -425,20 +480,50 @@ test('active voice listening starts from now and completed playback restarts fro
       }),
     });
   });
+  await page.route('**/api/execution/listeners/live-webrtc-token**', async (route) => {
+    const url = route.request().url();
+    if (url.endsWith('/webrtc')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          answer: { type: 'answer', sdp: 'test-answer' },
+          status: 'listening',
+        }),
+      });
+      return;
+    }
+    if (url.endsWith('/webrtc/ice') || url.endsWith('/webrtc/stop')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        listener: {
+          read_only: true,
+          can_inject_audio: false,
+          requires_microphone: false,
+          run_status: polls >= 4 ? 'completed' : 'running',
+        },
+        conversations: [],
+      }),
+    });
+  });
 
   await page.goto('/runs/exec-live-cursor');
   const feedback = page.getByLabel('Live run feedback');
-  await expect(feedback.getByRole('button', { name: 'Listen live from now' })).toBeVisible();
-  await feedback.getByRole('button', { name: 'Listen live from now' }).click();
-  await expect(feedback.getByRole('button', { name: 'Stop live listening' })).toBeVisible();
-  await expect(feedback.getByText('Listening for new audio only. Earlier turns will not replay.')).toBeVisible();
-
+  await expect(feedback.getByRole('button', { name: 'Listen to live WebRTC' })).toBeVisible();
+  await feedback.getByRole('button', { name: 'Listen to live WebRTC' }).click();
+  await expect(feedback.getByRole('button', { name: 'Stop live WebRTC' })).toBeVisible();
+  await expect(feedback.getByText('Listening to the ongoing WebRTC audio stream. Earlier audio is not replayed.')).toBeVisible();
   await expect.poll(() => page.evaluate(() => (
-    window as Window & { __playedVoiceUrls: string[] }
-  ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(1);
+    window as Window & { __liveWebrtcPlayCount: number }
+  ).__liveWebrtcPlayCount)).toBe(1);
   expect(await page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
-  ).__playedVoiceUrls.filter((url) => url.includes('/audio/1?')).length)).toBe(0);
+  ).__playedVoiceUrls.length)).toBe(0);
 
   await expect(feedback.getByRole('button', { name: 'Play recorded conversation' })).toBeVisible({ timeout: 10_000 });
   await feedback.getByRole('button', { name: 'Play recorded conversation' }).click();
@@ -447,7 +532,7 @@ test('active voice listening starts from now and completed playback restarts fro
   ).__playedVoiceUrls.filter((url) => url.includes('/audio/1?')).length)).toBe(1);
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
-  ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(2);
+  ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(1);
 });
 
 test('completed replay switches from listener-token audio to owner-scoped audio', async ({ page }) => {
@@ -545,7 +630,7 @@ test('completed replay switches from listener-token audio to owner-scoped audio'
   await page.goto('/runs/exec-listener-replay');
   const feedback = page.getByLabel('Live run feedback');
   await feedback.getByRole('button', { name: 'Create live listener link' }).click();
-  await expect(feedback.getByText(/Read-only/)).toBeVisible();
+  await expect(feedback.getByText('Read-only live listener')).toBeVisible();
   await expect(feedback.getByRole('button', { name: 'Play recorded conversation' })).toBeVisible({
     timeout: 10_000,
   });

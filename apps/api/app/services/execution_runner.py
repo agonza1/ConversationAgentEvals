@@ -225,22 +225,38 @@ def _live_event_publisher(
         update_key = str(payload.get('update_live_audio_key') or '').strip()
         if update_key:
             event_sequence = live_audio_sequences.get(update_key)
-            if event_sequence is None:
+            if event_sequence is not None:
+                audio = payload.get('audio')
+                media_url = None
+                mime_type = None
+                kind = None
+                if isinstance(audio, bytes) and audio:
+                    kind = 'audio'
+                    mime_type = 'audio/wav'
+                    live_dir = REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id / 'audio' / 'live'
+                    live_dir.mkdir(parents=True, exist_ok=True)
+                    (live_dir / f'{conversation_id}-{event_sequence}.wav').write_bytes(audio)
+                    media_url = (
+                        f'/api/execution/runs/{quote(execution_run_id)}/conversations/'
+                        f'{quote(conversation_id)}/audio/{event_sequence}?user_id={quote(user_id)}'
+                    )
+                execution_run_store.update_live_event(
+                    execution_run_id,
+                    conversation_id,
+                    event_sequence,
+                    text=str(payload.get('text') or '').strip(),
+                    llm_output=str(payload.get('llm_output') or '').strip(),
+                    asr_receipt=str(payload.get('asr_receipt') or '').strip(),
+                    frame_metadata=(
+                        payload.get('frame_metadata')
+                        if isinstance(payload.get('frame_metadata'), dict)
+                        else {}
+                    ),
+                    kind=kind,
+                    media_url=media_url,
+                    mime_type=mime_type,
+                )
                 return
-            execution_run_store.update_live_event(
-                execution_run_id,
-                conversation_id,
-                event_sequence,
-                text=str(payload.get('text') or '').strip(),
-                llm_output=str(payload.get('llm_output') or '').strip(),
-                asr_receipt=str(payload.get('asr_receipt') or '').strip(),
-                frame_metadata=(
-                    payload.get('frame_metadata')
-                    if isinstance(payload.get('frame_metadata'), dict)
-                    else {}
-                ),
-            )
-            return
         speaker = str(payload.get('speaker') or 'System').strip()
         text = str(payload.get('text') or '').strip()
         if not text:

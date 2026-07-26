@@ -11,7 +11,7 @@ from app.main import app
 from app.schemas.execution import ConversationRecord, ExecutionRunCreateRequest, LiveExecutionEvent
 from app.services import execution_run_store
 from app.services.execution_run_store import reset_execution_runs_for_tests
-from app.services.execution_runner import start_execution_run
+from app.services.execution_runner import _live_event_publisher, start_execution_run
 
 
 client = TestClient(app)
@@ -118,6 +118,55 @@ def test_live_audio_segment_requires_run_owner_and_observed_event():
         params={'user_id': 'someone-else'},
     )
     assert denied.status_code == 404
+
+
+def test_first_audible_text_event_is_enriched_with_completed_audio_without_duplicate():
+    queued = start_execution_run(ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        user_id='stream-owner',
+        project_id='stream-project',
+    ))
+    run_id = queued['execution_run_id']
+    conversation_id = f'{run_id}-cancellation-rescue-1'
+    execution_run_store.upsert_conversation(run_id, ConversationRecord(
+        conversation_id=conversation_id,
+        execution_run_id=run_id,
+        suite_id='call-center-voice-ai',
+        scenario_id='cancellation-rescue',
+        mode='pipecat_webrtc',
+        status='running',
+    ))
+    publish = _live_event_publisher(
+        execution_run_id=run_id,
+        conversation_id=conversation_id,
+        user_id='stream-owner',
+    )
+
+    publish({
+        'speaker': 'Caller',
+        'text': 'My full name is Jordan Lee.',
+        'direction': 'tester_to_target',
+        'llm_output': 'My full name is Jordan Lee.',
+        'live_audio_key': '1:tester_to_target',
+    })
+    first = execution_run_store.get_conversation(run_id, conversation_id)['live_events']
+    assert len(first) == 1
+    assert first[0]['kind'] == 'message'
+
+    publish({
+        'speaker': 'Caller',
+        'text': 'My full name is Jordan Lee.',
+        'direction': 'tester_to_target',
+        'llm_output': 'My full name is Jordan Lee.',
+        'audio': b'RIFF-current-run-wav',
+        'update_live_audio_key': '1:tester_to_target',
+        'live_audio_key': '1:tester_to_target',
+    })
+    enriched = execution_run_store.get_conversation(run_id, conversation_id)['live_events']
+    assert len(enriched) == 1
+    assert enriched[0]['kind'] == 'audio'
+    assert enriched[0]['media_url'].endswith('user_id=stream-owner')
 
 
 def test_execution_listener_token_is_receive_only_owner_scoped_and_ephemeral(monkeypatch):

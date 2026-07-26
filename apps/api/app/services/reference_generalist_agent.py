@@ -543,6 +543,9 @@ class ReferencePipecatAgentTransport:
                     if event_type == 'live_audio':
                         self._record_live_audio_event(event)
                         continue
+                    if event_type == 'speech_started':
+                        self._record_speech_started_event(event)
+                        continue
                     if event_type in {'transcript', 'vad', 'metric'}:
                         # Streaming diagnostics are retained in the completion proof and
                         # directional frame metadata. Audio events remain the concise live UI.
@@ -581,6 +584,31 @@ class ReferencePipecatAgentTransport:
             'proof': completed,
         }
 
+    def _record_speech_started_event(self, event: dict[str, Any]) -> None:
+        if self.event_observer is None:
+            return
+        speaker = str(event.get('speaker') or '').strip()
+        direction = str(event.get('direction') or '').strip()
+        text = str(event.get('text') or event.get('llm_output') or '').strip()
+        expected_direction = {
+            'Caller': 'tester_to_target',
+            'Agent': 'target_to_tester',
+        }.get(speaker)
+        if not text or expected_direction != direction:
+            raise ReferenceRuntimeError('Pipecat speech-start event omitted valid speaker/direction evidence.')
+        turn_pair = event.get('turn_pair')
+        self.event_observer({
+            'speaker': speaker,
+            'text': text,
+            'direction': direction,
+            'llm_output': str(event.get('llm_output') or text),
+            'frame_metadata': {
+                'media_event': 'first_audible_pcm',
+                'first_audible_pcm_at': event.get('first_audible_pcm_at'),
+            },
+            'live_audio_key': f'{turn_pair}:{direction}',
+        })
+
     def _record_live_audio_event(self, event: dict[str, Any]) -> None:
         if self.event_observer is None:
             return
@@ -613,6 +641,7 @@ class ReferencePipecatAgentTransport:
                 else None
             ),
             'frame_metadata': frame,
+            'update_live_audio_key': f'{turn_pair}:{direction}',
             'live_audio_key': f'{turn_pair}:{direction}',
         })
 

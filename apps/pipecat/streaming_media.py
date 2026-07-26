@@ -216,11 +216,13 @@ class StreamingMediaBridge(FrameProcessor):
         *,
         participant: str,
         audio_callback: AudioCallback,
+        first_audio_callback: EventCallback | None = None,
         target_sample_rate: int = 16000,
     ) -> None:
         super().__init__(name=f"{participant}_media_bridge")
         self.participant = participant
         self.audio_callback = audio_callback
+        self.first_audio_callback = first_audio_callback
         self.target_sample_rate = target_sample_rate
         self.audio = bytearray()
         self.sample_rate = 24000
@@ -234,6 +236,14 @@ class StreamingMediaBridge(FrameProcessor):
         if isinstance(frame, OutputAudioRawFrame):
             if self.first_audio_at is None:
                 self.first_audio_at = time.time()
+                if self.first_audio_callback:
+                    await self.first_audio_callback(
+                        {
+                            "type": "speech_started",
+                            "participant": self.participant,
+                            "first_audible_pcm_at": self.first_audio_at,
+                        }
+                    )
             self.sample_rate = frame.sample_rate
             self.channels = frame.num_channels
             self.audio.extend(frame.audio)

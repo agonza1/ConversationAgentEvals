@@ -747,6 +747,24 @@ async def _run_streaming_exchange(
     async def publish_target(audio: bytes, sample_rate: int, channels: int) -> None:
         bus.publish_chunk(audio, sample_rate=sample_rate, channels=channels)
 
+    async def announce_caller(event: dict[str, Any]) -> None:
+        await event_callback({
+            **event,
+            'speaker': 'Caller',
+            'direction': 'tester_to_target',
+            'text': tester_llm.text,
+            'llm_output': tester_llm.text,
+        })
+
+    async def announce_target(event: dict[str, Any]) -> None:
+        await event_callback({
+            **event,
+            'speaker': 'Agent',
+            'direction': 'target_to_tester',
+            'text': target_llm.text,
+            'llm_output': target_llm.text,
+        })
+
     tester_llm = _StreamingTesterLlmProcessor(
         scenario=payload.scenario,
         history=history,
@@ -765,6 +783,7 @@ async def _run_streaming_exchange(
     caller_bridge = StreamingMediaBridge(
         participant='tester',
         audio_callback=publish_caller,
+        first_audio_callback=announce_caller,
     )
     target_asr = StreamingRtcAsrProcessor(
         base_url=RTC_ASR_BASE_URL,
@@ -788,6 +807,7 @@ async def _run_streaming_exchange(
     target_bridge = StreamingMediaBridge(
         participant='target',
         audio_callback=publish_target,
+        first_audio_callback=announce_target,
     )
     tester_asr = StreamingRtcAsrProcessor(
         base_url=RTC_ASR_BASE_URL,

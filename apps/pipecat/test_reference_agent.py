@@ -236,6 +236,7 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
     async def fake_exchange(**kwargs):
         payload = kwargs['payload']
         history = kwargs['history']
+        event_callback = kwargs['event_callback']
         _AsyncClient.completion_prompts.extend([
             (
                 'caller-side Pipecat tester\n'
@@ -249,6 +250,24 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
             ),
         ])
         _AsyncClient.speech_voices.extend([payload.tester_voice, payload.target_voice])
+        await event_callback({
+            'type': 'speech_started',
+            'participant': 'tester',
+            'speaker': 'Caller',
+            'direction': 'tester_to_target',
+            'text': 'Of course.',
+            'llm_output': 'Of course.',
+            'first_audible_pcm_at': 10.0,
+        })
+        await event_callback({
+            'type': 'speech_started',
+            'participant': 'target',
+            'speaker': 'Agent',
+            'direction': 'target_to_tester',
+            'text': 'Of course.',
+            'llm_output': 'Of course.',
+            'first_audible_pcm_at': 11.0,
+        })
         return _streaming_result(
             caller_text='Of course.',
             target_receipt='Please help me.',
@@ -291,10 +310,14 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
 
     assert response.status_code == 200, response.text
     events = [server.json.loads(line) for line in response.text.splitlines() if line.strip()]
+    speech_started = [event for event in events if event['type'] == 'speech_started']
     live_audio = [event for event in events if event['type'] == 'live_audio']
     exchanges = [event for event in events if event['type'] == 'exchange']
     completed = events[-1]
     assert len(live_audio) == 4
+    assert len(speech_started) == 4
+    assert events.index(speech_started[0]) < events.index(speech_started[1])
+    assert events.index(speech_started[1]) < events.index(live_audio[0])
     assert [event['direction'] for event in live_audio] == [
         'tester_to_target',
         'target_to_tester',

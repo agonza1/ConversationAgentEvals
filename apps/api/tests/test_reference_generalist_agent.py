@@ -168,6 +168,26 @@ class FakeDuplexAsyncClient:
         target_audio = base64.b64encode(_wav(8)).decode('ascii')
         events = [
             {
+                'type': 'speech_started',
+                'turn_pair': 1,
+                'participant': 'tester',
+                'speaker': 'Caller',
+                'direction': 'tester_to_target',
+                'text': 'I want to cancel because the renewal increased.',
+                'llm_output': 'I want to cancel because the renewal increased.',
+                'first_audible_pcm_at': 10.0,
+            },
+            {
+                'type': 'speech_started',
+                'turn_pair': 1,
+                'participant': 'target',
+                'speaker': 'Agent',
+                'direction': 'target_to_tester',
+                'text': 'I can help and will keep the cancellation active.',
+                'llm_output': 'I can help and will keep the cancellation active.',
+                'first_audible_pcm_at': 11.0,
+            },
+            {
                 'type': 'live_audio',
                 'turn_pair': 1,
                 'speaker': 'Caller',
@@ -446,7 +466,15 @@ def test_primary_reference_path_streams_session_control_not_wav_turns(monkeypatc
             'target_to_tester',
         ]
         audio_events = [event for event in observed if event.get('audio')]
-        evidence_updates = [event for event in observed if event.get('update_live_audio_key')]
+        speech_events = [
+            event for event in observed
+            if event.get('frame_metadata', {}).get('media_event') == 'first_audible_pcm'
+        ]
+        evidence_updates = [
+            event for event in observed
+            if event.get('update_live_audio_key') and event.get('asr_receipt')
+        ]
+        assert [event['speaker'] for event in speech_events] == ['Caller', 'Agent']
         assert [event['speaker'] for event in audio_events] == ['Caller', 'Agent']
         assert [event['asr_receipt'] for event in evidence_updates] == [
             'I want to cancel because the renewal increased.',
