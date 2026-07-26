@@ -529,7 +529,7 @@ def _run_lifecycle(
     return lifecycle
 
 
-def run_scenario(request: Any) -> dict[str, Any]:
+def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, Any]:
     run_started_at = datetime.now(UTC).isoformat()
     payload = _payload_to_dict(request)
     payload, _ = normalize_assert_payload(payload)
@@ -634,7 +634,8 @@ def run_scenario(request: Any) -> dict[str, Any]:
         failure_categories=report.get('failure_categories'),
     )
     report['run_status'] = report['run_lifecycle']['status']
-    _attach_canonical_assert_artifact(report)
+    if persist_artifacts:
+        _attach_canonical_assert_artifact(report)
     report['assert_lab_report'] = _assert_lab_report(report)
     report['vcon_analysis'] = _vcon_analysis(report)
     report['vcon_export'] = _vcon_export(payload, transcript, report['vcon_analysis'])

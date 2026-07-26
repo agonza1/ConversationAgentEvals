@@ -2558,6 +2558,285 @@ select {
   overflow-wrap: anywhere;
 }
 
+.resolution-status {
+  display: grid;
+  gap: 5px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-alt);
+}
+
+.resolution-status > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.resolution-status > strong {
+  font-size: 22px;
+}
+
+.resolution-status.is-verified {
+  border-color: var(--success-border);
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.resolution-status.is-unverified {
+  border-color: color-mix(in srgb, var(--accent-2) 28%, transparent);
+  background: color-mix(in srgb, var(--accent-2) 10%, white);
+  color: var(--accent-2);
+}
+
+.resolution-status.is-failed {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+
+.resolution-status p {
+  color: inherit;
+}
+
+.resolution-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--border);
+}
+
+.resolution-facts div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px 12px;
+  background: var(--panel);
+}
+
+.resolution-facts div:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+.resolution-facts dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.resolution-facts dd {
+  margin: 0;
+  font-weight: 760;
+  overflow-wrap: anywhere;
+}
+
+.resolution-gaps {
+  display: grid;
+  gap: 6px;
+}
+
+.resolution-gaps h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.resolution-gaps ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 20px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.resolution-note {
+  padding-top: 2px;
+  font-size: 13px;
+}
+
+.resolution-judge {
+  display: grid;
+  gap: 12px;
+  margin-top: 4px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.resolution-judge > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.resolution-judge h3 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.resolution-judge > button {
+  justify-self: start;
+}
+
+.resolution-judge > button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.resolution-judge-error {
+  color: var(--error-text) !important;
+}
+
+.resolution-judge-result {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-alt);
+}
+
+.resolution-judge-result.is-ready {
+  border-color: var(--success-border);
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.resolution-judge-result.is-blocked {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+  color: var(--error-text);
+}
+
+.resolution-judge-result p {
+  color: inherit;
+}
+
+.resolution-judge-result ul {
+  display: grid;
+  gap: 4px;
+  margin: 5px 0 0;
+  padding-left: 20px;
+  overflow-wrap: anywhere;
+}
+
+.resolution-judge-meta {
+  font-size: 12px;
+}
+
+.resolution-judge-output {
+  white-space: pre-wrap;
+}
+
+.resolution-judge-proposal,
+.resolution-applied-adjudication {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--panel) 76%, transparent);
+}
+
+.resolution-judge-proposal > button {
+  justify-self: start;
+  margin-top: 4px;
+}
+
+.resolution-applied-adjudication {
+  border-color: var(--success-border);
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.resolution-applied-adjudication h3,
+.resolution-applied-adjudication p {
+  margin: 0;
+  color: inherit;
+}
+
+.resolution-applied-adjudication ul,
+.resolution-adjudication-dialog ul {
+  display: grid;
+  gap: 5px;
+  margin: 5px 0 0;
+  padding-left: 20px;
+}
+
+.resolution-applied-adjudication details {
+  padding-top: 4px;
+}
+
+.resolution-applied-adjudication summary {
+  cursor: pointer;
+  font-weight: 760;
+}
+
+.resolution-adjudication-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(24 36 45 / 45%);
+}
+
+.resolution-adjudication-dialog {
+  display: grid;
+  gap: 13px;
+  width: min(640px, 100%);
+  max-height: calc(100vh - 48px);
+  padding: 22px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--panel);
+  box-shadow: 0 24px 54px rgb(24 36 45 / 18%);
+}
+
+.resolution-adjudication-dialog h3,
+.resolution-adjudication-dialog p {
+  margin: 0;
+}
+
+.resolution-adjudication-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 5px;
+}
+
+.resolution-judge-prompt-toggle {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 760;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.resolution-judge-result pre {
+  max-height: 280px;
+  margin: 8px 0 0;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 6px;
+  background: rgb(0 0 0 / 6%);
+  color: inherit;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .latency-bars {
   display: grid;
   gap: 8px;
@@ -3446,6 +3725,10 @@ select {
   .runs-metric-detail,
   .runs-transcript {
     padding: 14px;
+  }
+
+  .resolution-facts {
+    grid-template-columns: 1fr;
   }
 }
 

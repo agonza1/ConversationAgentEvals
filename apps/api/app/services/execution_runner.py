@@ -57,6 +57,37 @@ ALLOWED_FIXTURE_ROOTS = (
     REPO_ROOT / 'docs' / 'examples',
     REPO_ROOT / 'artifacts',
 )
+EVALUATION_FINDING_KEYS = (
+    'verdict',
+    'overall_score',
+    'required_action_score',
+    'rubric_score',
+    'task_completion_score',
+    'forbidden_action_score',
+    'final_state_score',
+    'workflow_order_score',
+    'score_components',
+    'completed_actions',
+    'missing_actions',
+    'forbidden_action_hits',
+    'rubric_checks',
+    'hard_check_failures',
+    'failure_categories',
+    'failure_modes',
+    'suggested_fixes',
+    'scenario_contract',
+    'expected_final_state',
+)
+
+
+def _compact_evaluation_findings(report: Any) -> dict[str, Any]:
+    if not isinstance(report, dict):
+        return {}
+    return {
+        key: report[key]
+        for key in EVALUATION_FINDING_KEYS
+        if key in report
+    }
 
 
 def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool = False) -> dict[str, Any]:
@@ -327,6 +358,7 @@ def _run_one_conversation(
             transcript=result.get('transcript'),
             action_trace=result.get('action_trace') or [],
             final_state=result.get('final_state') or {},
+            evaluation_findings=_compact_evaluation_findings(result.get('evaluation_report')),
             latency_marks=result.get('latency_marks') or [],
             metrics_summary=metrics_summary,
             timeline=timeline,
@@ -559,6 +591,7 @@ def _execute_text_callable(
         'latency_marks': [],
         'verdict': report.get('verdict'),
         'score': report.get('overall_score'),
+        'evaluation_report': report,
     }
 
 
@@ -671,6 +704,7 @@ def _execute_http_text_agent(
         'latency_marks': [{'label': 'http target response', 'latency_ms': latency_ms}],
         'verdict': report.get('verdict'),
         'score': report.get('overall_score'),
+        'evaluation_report': report,
     }
 
 
@@ -816,6 +850,7 @@ def _execute_openai_codex_text_agent(
         'latency_marks': latency_marks,
         'verdict': report.get('verdict'),
         'score': report.get('overall_score'),
+        'evaluation_report': report,
     }
 
 
@@ -925,6 +960,7 @@ def _evidence_from_offline_fixture(
         'latency_marks': (evidence.get('latency_evidence') or {}).get('marks') or [],
         'verdict': report.get('verdict'),
         'score': report.get('overall_score'),
+        'evaluation_report': report,
     }
 
 
@@ -1128,6 +1164,7 @@ async def _execute_pipecat_webrtc(
         },
         'verdict': verdict,
         'score': score,
+        'evaluation_report': report,
     }
 
 
