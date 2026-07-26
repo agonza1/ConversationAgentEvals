@@ -348,9 +348,6 @@ function MetricDetail({
       setJudge(await requestLlmJudge({
         plan: 'free',
         user_id: run.user_id || userId,
-        project_id: run.project_id,
-        transcript: conversation.transcript,
-        report: judgeReport(run, conversation),
         execution_run_id: run.execution_run_id,
         conversation_id: conversation.conversation_id,
       }));
@@ -736,57 +733,6 @@ function AppliedAdjudication({
       </details>
     </section>
   );
-}
-
-function judgeReport(run: ExecutionRunRecord, conversation: ConversationRecord): Record<string, unknown> {
-  const evidence = resolutionEvidence(conversation);
-  const summary = conversation.metrics_summary;
-  const findings = asRecord(conversation.evaluation_findings);
-  const recordedFailureCategories = Array.isArray(findings.failure_categories)
-    ? findings.failure_categories.filter((item): item is string => typeof item === 'string')
-    : [];
-  const failureCategories = evidence.error
-    ? [...evidence.gaps, `Execution error: ${evidence.error}`]
-    : evidence.gaps;
-
-  return {
-    ...findings,
-    run_id: run.execution_run_id,
-    suite_id: conversation.suite_id || run.suite_id,
-    scenario_id: conversation.scenario_id,
-    scenario_title: conversation.scenario_title,
-    verdict: summary?.verdict || conversation.verdict,
-    overall_score: summary?.score ?? conversation.score,
-    failure_categories: [...new Set([...recordedFailureCategories, ...failureCategories])],
-    evidence_citations: judgeEvidenceCitations(conversation),
-    action_trace: conversation.action_trace || [],
-    final_state: conversation.final_state || {},
-    error: conversation.error || null,
-    evaluation_findings: findings,
-    require_evaluator_findings: true,
-  };
-}
-
-function judgeEvidenceCitations(conversation: ConversationRecord) {
-  const citations: Array<{ source: string; text: string }> = [];
-  for (const action of (conversation.action_trace || []).slice(0, 3)) {
-    citations.push({ source: 'action_trace', text: JSON.stringify(action) });
-  }
-  const finalState = asRecord(conversation.final_state);
-  if (Object.keys(finalState).length) {
-    citations.push({ source: 'final_state', text: JSON.stringify(finalState) });
-  }
-  if (conversation.error) {
-    citations.push({ source: 'execution_error', text: conversation.error });
-  }
-  for (const turn of conversation.turns || []) {
-    if (citations.length >= 6) break;
-    citations.push({
-      source: turn.speaker || 'speaker',
-      text: turn.text || '',
-    });
-  }
-  return citations.slice(0, 6);
 }
 
 function StubWaveform({ timeline }: { timeline: TimelineEvent[] }) {

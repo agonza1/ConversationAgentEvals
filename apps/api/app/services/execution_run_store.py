@@ -190,6 +190,7 @@ def record_judge_review(
     *,
     user_id: str,
     response: dict[str, Any],
+    expected_deterministic_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Persist a server-produced judge result as a pending, auditable review."""
     with _LOCK:
@@ -205,6 +206,15 @@ def record_judge_review(
             raise ValueError('LLM reviews can only be recorded for terminal conversations.')
         if response.get('status') != 'ready':
             raise ValueError('Only completed LLM reviews can be recorded.')
+        current_snapshot = deterministic_evaluation_snapshot(conversation)
+        if (
+            expected_deterministic_snapshot is not None
+            and expected_deterministic_snapshot != current_snapshot
+        ):
+            raise ValueError(
+                'The deterministic evaluation changed while the LLM review was running. '
+                'Run the review again.'
+            )
 
         judge_result = deepcopy(response.get('judge_result') or {})
         raw_output = str(judge_result.pop('raw_output', '') or response.get('judge_output') or '')
@@ -221,11 +231,11 @@ def record_judge_review(
             'evidence_citations': list(response.get('evidence_citations') or []),
             'judge_result': judge_result,
             'output_sha256': hashlib.sha256(raw_output.encode('utf-8')).hexdigest() if raw_output else None,
-            'deterministic_snapshot': _deterministic_evaluation_snapshot(conversation),
+            'deterministic_snapshot': current_snapshot,
         }
         reviews = list(conversation.get('judge_reviews') or [])
         reviews.append(review)
-        conversation['judge_reviews'] = reviews[-20:]
+        conversation['judge_reviews'] = _compact_judge_review_history(reviews)
         run['updated_at'] = created_at
         _persist_unlocked(run)
         return deepcopy(review)
@@ -262,7 +272,7 @@ def apply_judge_review(
         proposed = (review.get('judge_result') or {}).get('proposed_evaluation')
         if not isinstance(proposed, dict):
             raise ValueError('This LLM judge review did not provide an evaluation update.')
-        if review.get('deterministic_snapshot') != _deterministic_evaluation_snapshot(conversation):
+        if review.get('deterministic_snapshot') != deterministic_evaluation_snapshot(conversation):
             raise ValueError('The deterministic evaluation changed after this LLM review. Run the review again.')
 
         applied_at = _now()
@@ -359,15 +369,18 @@ def _find_conversation_unlocked(run: dict[str, Any], conversation_id: str) -> di
     )
 
 
-def _deterministic_evaluation_snapshot(conversation: dict[str, Any]) -> dict[str, Any]:
+def deterministic_evaluation_snapshot(conversation: dict[str, Any]) -> dict[str, Any]:
     summary = conversation.get('metrics_summary') or {}
     evidence = {
+        'suite_id': conversation.get('suite_id'),
+        'scenario_id': conversation.get('scenario_id'),
         'verdict': summary.get('verdict') or conversation.get('verdict'),
         'score': summary.get('score') if summary.get('score') is not None else conversation.get('score'),
         'evaluation_findings': conversation.get('evaluation_findings') or {},
         'action_trace': conversation.get('action_trace') or [],
         'final_state': conversation.get('final_state') or {},
         'transcript': conversation.get('transcript') or '',
+        'turns': conversation.get('turns') or [],
         'error': conversation.get('error'),
     }
     serialized = json.dumps(evidence, ensure_ascii=False, sort_keys=True, default=str)
@@ -376,6 +389,21 @@ def _deterministic_evaluation_snapshot(conversation: dict[str, Any]) -> dict[str
         'score': evidence['score'],
         'evidence_sha256': hashlib.sha256(serialized.encode('utf-8')).hexdigest(),
     }
+
+
+def _compact_judge_review_history(reviews: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Bound unconfirmed proposals without discarding confirmed audit history."""
+    pending_indexes = [
+        index
+        for index, review in enumerate(reviews)
+        if review.get('status') == 'pending_confirmation'
+    ]
+    retained_pending_indexes = set(pending_indexes[-20:])
+    return [
+        review
+        for index, review in enumerate(reviews)
+        if review.get('status') != 'pending_confirmation' or index in retained_pending_indexes
+    ]
 
 
 def _effective_run_status(run: dict[str, Any]) -> str:

@@ -349,7 +349,7 @@ export async function listAgents(): Promise<AgentRecord[]> {
 
 export async function requestLlmJudge(payload: {
   plan?: 'free' | 'starter' | 'team';
-  report: Record<string, unknown>;
+  report?: Record<string, unknown>;
   transcript?: string | null;
   user_id?: string;
   project_id?: string;

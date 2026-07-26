@@ -200,7 +200,7 @@ test('needs-review resolution explains score and missing proof without calling i
   await expect(page.getByText(/evaluation score is not a resolution percentage/)).toBeVisible();
 });
 
-test('run detail can request the existing LLM judge with selected conversation evidence', async ({ page }) => {
+test('run detail requests the LLM judge for the selected persisted conversation', async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
   });
@@ -299,39 +299,12 @@ test('run detail can request the existing LLM judge with selected conversation e
   expect(judgeRequest).toMatchObject({
     plan: 'free',
     user_id: 'demo-user',
-    project_id: 'call-center-demo',
-    transcript: conversation.transcript,
-    report: {
-      run_id: 'exec-demo123',
-      suite_id: 'call-center-voice-ai',
-      scenario_id: 'cancellation-rescue',
-      verdict: 'needs_review',
-      overall_score: 60,
-      missing_actions: ['policy_hold_entered'],
-      rubric_checks: [{ name: 'retention_policy', status: 'failed' }],
-      hard_check_failures: [{ category: 'policy', summary: 'Required policy hold was not entered.' }],
-      scenario_contract: {
-        required_actions: [{ id: 'policy_hold_entered', description: 'Enter the required policy hold.' }],
-      },
-      evidence_citations: expect.arrayContaining([
-        {
-          source: 'action_trace',
-          text: JSON.stringify(conversation.action_trace[0]),
-        },
-        {
-          source: 'final_state',
-          text: JSON.stringify(conversation.final_state),
-        },
-      ]),
-      action_trace: conversation.action_trace,
-      final_state: conversation.final_state,
-      require_evaluator_findings: true,
-    },
+    execution_run_id: 'exec-demo123',
+    conversation_id: conversation.conversation_id,
   });
-  const judgeReportPayload = (
-    judgeRequest as { report?: Record<string, unknown> } | null
-  )?.report;
-  expect(judgeReportPayload).not.toHaveProperty('final_state_score');
+  expect(judgeRequest).not.toHaveProperty('project_id');
+  expect(judgeRequest).not.toHaveProperty('transcript');
+  expect(judgeRequest).not.toHaveProperty('report');
 
   await page.getByRole('button', { name: 'What the judge saw' }).click();
   await expect(page.getByText('Deterministic verdict: needs_review')).toBeVisible();
@@ -567,10 +540,9 @@ test('resolution evidence handles failed and not-evaluated conversations without
   await expect(page.getByLabel('Resolution evidence details')).toContainText('simulated provider disconnect');
   await expect(page.getByText('The run recorded an execution error.')).toBeVisible();
 
-  let judgeReport: Record<string, unknown> | null = null;
+  let judgeRequest: Record<string, unknown> | null = null;
   await page.route('**/api/product/judge', async (route) => {
-    const payload = route.request().postDataJSON() as { report?: Record<string, unknown> };
-    judgeReport = payload.report || null;
+    judgeRequest = route.request().postDataJSON() as Record<string, unknown>;
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -586,12 +558,13 @@ test('resolution evidence handles failed and not-evaluated conversations without
   });
   await page.getByRole('button', { name: 'Review with LLM judge' }).click();
   await expect(page.getByLabel('LLM judge result')).toContainText('LLM judge unavailable');
-  expect(judgeReport).toMatchObject({
-    failure_categories: expect.arrayContaining(['Execution error: simulated provider disconnect']),
-    evidence_citations: expect.arrayContaining([
-      { source: 'execution_error', text: 'simulated provider disconnect' },
-    ]),
+  expect(judgeRequest).toMatchObject({
+    execution_run_id: 'exec-demo123',
+    conversation_id: failedConversation.conversation_id,
+    user_id: 'demo-user',
   });
+  expect(judgeRequest).not.toHaveProperty('report');
+  expect(judgeRequest).not.toHaveProperty('transcript');
 
   await page.getByLabel('Conversation').selectOption('exec-demo123-not-evaluated-1');
   await expect(page.getByLabel('Resolution verification status')).toContainText('Not evaluated');
