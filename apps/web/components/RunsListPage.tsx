@@ -58,6 +58,37 @@ export function RunsListPage() {
     };
   }, [projectId, refreshKey, userId]);
 
+  const hasActiveRuns = runs.some((run) => run.status === 'queued' || run.status === 'running');
+
+  useEffect(() => {
+    if (!hasActiveRuns) return undefined;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    async function poll() {
+      try {
+        const next = await listExecutionRuns(userId, projectId);
+        if (!active) return;
+        setRuns(next);
+        hasRunsRef.current = next.length > 0;
+        setError(null);
+        if (next.some((run) => run.status === 'queued' || run.status === 'running')) {
+          timer = setTimeout(() => void poll(), 1500);
+        }
+      } catch (err) {
+        if (!active) return;
+        setError(err instanceof Error ? err.message : 'Could not refresh active runs');
+        timer = setTimeout(() => void poll(), 3000);
+      }
+    }
+
+    timer = setTimeout(() => void poll(), 1500);
+    return () => {
+      active = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [hasActiveRuns, projectId, userId]);
+
   const visibleRuns = useMemo(() => runs.filter((run) => {
     if (statusFilter === 'all') return true;
     if (statusFilter === 'active') return run.status === 'queued' || run.status === 'running';

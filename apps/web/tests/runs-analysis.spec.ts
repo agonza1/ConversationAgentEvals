@@ -188,6 +188,33 @@ test('runs list exposes readable status filtering and run metadata', async ({ pa
   await expect(page.getByRole('link', { name: /Billing support staging/ })).toHaveCount(0);
 });
 
+test('runs list refreshes active executions until their terminal status is visible', async ({ page }) => {
+  let requests = 0;
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    window.localStorage.setItem('conversation-evals-demo-project', 'call-center-demo');
+  });
+  await page.route('**/api/execution/runs**', async (route) => {
+    requests += 1;
+    const status = requests === 1 ? 'running' : 'completed';
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([{
+        ...runFixture,
+        status,
+        conversations: status === 'running' ? [] : runFixture.conversations,
+      }]),
+    });
+  });
+
+  await page.goto('/runs');
+  const runLink = page.getByRole('link', { name: /ACC voice fixture agent/ });
+  await expect(runLink).toContainText('running');
+  await expect(runLink).toContainText('completed', { timeout: 10_000 });
+  expect(requests).toBeGreaterThanOrEqual(2);
+});
+
 test('run analysis preserves an API base override on the All runs link', async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
