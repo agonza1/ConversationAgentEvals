@@ -237,7 +237,7 @@ _KOKORO_LEGACY_VOICE = os.getenv('KOKORO_VOICE', '').strip()
 KOKORO_TARGET_VOICE = os.getenv('KOKORO_TARGET_VOICE', '').strip() or (
     _KOKORO_LEGACY_VOICE
     if _KOKORO_LEGACY_VOICE and _KOKORO_LEGACY_VOICE != KOKORO_TESTER_VOICE
-    else 'am_adam'
+    else 'af_bella'
 )
 REFERENCE_LLM_MODEL = os.getenv('REFERENCE_LLM_MODEL', 'gpt-5.4-mini')
 REFERENCE_AGENT_INTERNAL_TOKEN = os.getenv('REFERENCE_AGENT_INTERNAL_TOKEN', '').strip()

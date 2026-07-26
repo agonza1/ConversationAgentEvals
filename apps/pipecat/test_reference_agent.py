@@ -308,7 +308,7 @@ def test_reference_turn_runs_real_pipecat_pipeline(monkeypatch):
     assert 'one or two short sentences' in _AsyncClient.completion_prompts[0]
     assert 'Ask at most one question at a time' in _AsyncClient.completion_prompts[0]
     assert 'Do not use markdown, bullets, or numbered lists' in _AsyncClient.completion_prompts[0]
-    assert _AsyncClient.speech_voices == ['am_adam']
+    assert _AsyncClient.speech_voices == ['af_bella']
 
 
 def test_reference_tester_turn_runs_real_pipecat_pipeline(monkeypatch):
@@ -414,7 +414,7 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
         'max_turn_pairs': 2,
         'total_timeout_seconds': 20,
         'tester_voice': 'af_heart',
-        'target_voice': 'am_adam',
+        'target_voice': 'af_bella',
     }
     assert 'audio' not in str(request).lower()
     response = client.post(
@@ -461,7 +461,7 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
         'mlx-community/parakeet-tdt_ctc-110m'
     )
     assert completed['graphs']['tester']['processors'][2]['voice'] == 'af_heart'
-    assert completed['graphs']['target']['processors'][2]['voice'] == 'am_adam'
+    assert completed['graphs']['target']['processors'][2]['voice'] == 'af_bella'
     assert completed['graphs']['tester']['llm_mode'] == 'mock'
     assert exchanges[0]['target']['asr_receipt'] == 'Please help me.'
     assert exchanges[0]['target']['tester_asr_receipt'] == 'Please help me.'
@@ -484,7 +484,7 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
     assert tester_prompts
     assert all('Billing Address Change' in prompt for prompt in tester_prompts)
     assert all('update the billing address' in prompt for prompt in tester_prompts)
-    assert _AsyncClient.speech_voices == ['af_heart', 'am_adam', 'af_heart', 'am_adam']
+    assert _AsyncClient.speech_voices == ['af_heart', 'af_bella', 'af_heart', 'af_bella']
 
 
 def test_reference_duplex_cancels_active_exchange_when_stream_closes(monkeypatch):

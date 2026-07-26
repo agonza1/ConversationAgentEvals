@@ -329,7 +329,7 @@ def build_builtin_sample_voice_graphs(
     stt_model: str,
     tts_model: str,
     tester_tts_voice: str = 'af_heart',
-    target_tts_voice: str = 'am_adam',
+    target_tts_voice: str = 'af_bella',
     llm_mode: Literal['real', 'mock'],
 ) -> tuple[PipecatAgentGraph, PipecatAgentGraph]:
     tester = PipecatAgentGraph(

@@ -55,7 +55,7 @@ def _default_target_voice() -> str:
         return explicit
     tester = os.getenv('KOKORO_TESTER_VOICE', 'af_heart').strip()
     legacy = os.getenv('KOKORO_VOICE', '').strip()
-    return legacy if legacy and legacy != tester else 'am_adam'
+    return legacy if legacy and legacy != tester else 'af_bella'
 
 
 @dataclass(frozen=True, slots=True)

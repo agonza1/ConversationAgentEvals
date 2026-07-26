@@ -77,7 +77,7 @@ RTC_ASR_STREAM_PATH=/v1/stt/stream
 KOKORO_BASE_URL=http://localhost:8880
 KOKORO_MODEL=kokoro
 KOKORO_TESTER_VOICE=af_heart
-KOKORO_TARGET_VOICE=am_adam
+KOKORO_TARGET_VOICE=af_bella
 REFERENCE_LLM_MODEL=gpt-5.4-mini
 ```
 

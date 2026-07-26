@@ -141,7 +141,7 @@ class FakeMedia:
                 'provider': 'kokoro',
                 'model': 'kokoro',
                 'tester_voice': 'af_heart',
-                'target_voice': 'am_adam',
+                'target_voice': 'af_bella',
                 'voices_distinct': True,
                 'status': 'ready',
             },
@@ -496,7 +496,7 @@ def test_primary_reference_path_streams_session_control_not_wav_turns(monkeypatc
         assert 'audio_wav_base64' not in FakeDuplexAsyncClient.request_json
         assert FakeDuplexAsyncClient.request_json['scenario']['id'] == 'billing-address-change'
         assert FakeDuplexAsyncClient.request_json['tester_voice'] == 'af_heart'
-        assert FakeDuplexAsyncClient.request_json['target_voice'] == 'am_adam'
+        assert FakeDuplexAsyncClient.request_json['target_voice'] == 'af_bella'
         assert FakeDuplexAsyncClient.request_json['stt_backend'] == 'faster-whisper'
         assert FakeDuplexAsyncClient.request_json['stt_model'] == 'base.en'
         assert result['tester_provenance']['fixture_scheduler'] is False
