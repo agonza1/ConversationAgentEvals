@@ -897,6 +897,8 @@ class _StreamingExchangeResult:
     target_tts: Any
     tester_asr: Any
     metrics: list[dict[str, Any]]
+    tester_speech_ended_at: float
+    target_audio_received_at: float
     target_first_audio_latency_ms: float
     target_response_complete_latency_ms: float
 
@@ -1087,15 +1089,17 @@ class _StreamingDuplexSession:
         if not all(required):
             raise RuntimeError('Streaming Pipecat exchange produced incomplete media or transcripts.')
         if (
-            self.target_asr.speech_ended_at is None
+            self.caller_bridge.audio_ended_at is None
+            or self.target_asr.speech_ended_at is None
             or self.target_bridge.first_audio_at is None
             or self.target_bridge.audio_ended_at is None
         ):
             raise RuntimeError(
-                'Streaming Pipecat exchange omitted speech-end, first-audio, or playback-end timing.'
+                'Streaming Pipecat exchange omitted tester speech-end, target first-audio, '
+                'or playback-end timing.'
             )
         latency_ms = round(
-            (self.target_bridge.first_audio_at - self.target_asr.speech_ended_at) * 1000,
+            (self.target_bridge.first_audio_at - self.caller_bridge.audio_ended_at) * 1000,
             3,
         )
         return _StreamingExchangeResult(
@@ -1106,9 +1110,11 @@ class _StreamingDuplexSession:
             target_tts=self.target_tts,
             tester_asr=self.tester_asr,
             metrics=self.metrics.metrics[metrics_start:],
+            tester_speech_ended_at=self.caller_bridge.audio_ended_at,
+            target_audio_received_at=self.target_bridge.first_audio_at,
             target_first_audio_latency_ms=latency_ms,
             target_response_complete_latency_ms=round(
-                (self.target_bridge.audio_ended_at - self.target_asr.speech_ended_at) * 1000,
+                (self.target_bridge.audio_ended_at - self.caller_bridge.audio_ended_at) * 1000,
                 3,
             ),
         )
@@ -1295,14 +1301,14 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                     'frame_duration_ms': 20,
                     'vad': 'silero',
                     'asr_protocol': 'local-stt.v1',
-                    'response_metric': 'speech_end_to_first_audible_byte',
+                    'response_metric': 'tester_speech_end_to_first_target_audio_received',
                     'response_latency_ms': result.target_first_audio_latency_ms,
-                    'response_started_at': result.target_asr.speech_ended_at,
-                    'speech_ended_at': result.target_asr.speech_ended_at,
-                    'first_audible_byte_at': (
-                        result.target_asr.speech_ended_at
-                        + result.target_first_audio_latency_ms / 1000
-                    ),
+                    'response_started_at': result.tester_speech_ended_at,
+                    'speech_ended_at': result.tester_speech_ended_at,
+                    'tester_speech_ended_at': result.tester_speech_ended_at,
+                    'target_endpoint_speech_ended_at': result.target_asr.speech_ended_at,
+                    'first_audible_byte_at': result.target_audio_received_at,
+                    'target_audio_received_at': result.target_audio_received_at,
                     'response_complete_latency_ms': result.target_response_complete_latency_ms,
                     'asr_interim_count': len(result.tester_asr.interims),
                     'asr_timing': result.tester_asr.server_timing,
@@ -1335,6 +1341,7 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                         ),
                         'tts_total_ms': result.target_tts.total_ms,
                     },
+                    'stage_metrics_source': 'built_in_target',
                     'pipecat_metrics': result.metrics,
                 })
                 frame_evidence.append(target_frame)
@@ -1384,7 +1391,7 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                         'frame': target_frame,
                     },
                     'latency_ms': result.target_first_audio_latency_ms,
-                    'latency_kind': 'speech_end_to_first_audible_byte',
+                    'latency_kind': 'tester_speech_end_to_first_target_audio_received',
                     'exchange_elapsed_ms': round((time.perf_counter() - turn_started) * 1000, 3),
                     'metrics': target_frame['stage_metrics'],
                 })

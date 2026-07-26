@@ -177,6 +177,8 @@ def _streaming_result(
             server_timing={'revision': 2},
         ),
         metrics=[{'processor': 'target_llm', 'value': 0.005}],
+        tester_speech_ended_at=speech_ended_at,
+        target_audio_received_at=speech_ended_at,
         target_first_audio_latency_ms=0.0,
         target_response_complete_latency_ms=10.0,
     )
@@ -463,10 +465,12 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
     assert completed['graphs']['tester']['llm_mode'] == 'mock'
     assert exchanges[0]['target']['asr_receipt'] == 'Please help me.'
     assert exchanges[0]['target']['tester_asr_receipt'] == 'Please help me.'
-    assert exchanges[0]['latency_kind'] == 'speech_end_to_first_audible_byte'
+    assert exchanges[0]['latency_kind'] == 'tester_speech_end_to_first_target_audio_received'
     assert exchanges[0]['latency_ms'] >= 0
     assert exchanges[0]['exchange_elapsed_ms'] >= exchanges[0]['latency_ms']
-    assert exchanges[0]['target']['frame']['response_metric'] == 'speech_end_to_first_audible_byte'
+    assert exchanges[0]['target']['frame']['response_metric'] == (
+        'tester_speech_end_to_first_target_audio_received'
+    )
     target_prompts = [
         prompt for prompt in _AsyncClient.completion_prompts
         if 'built-in generalist voice agent' in prompt

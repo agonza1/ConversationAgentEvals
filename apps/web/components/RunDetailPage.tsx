@@ -140,7 +140,11 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
               onClick={() => setMetric('audio_interruption')}
             />
             <MetricTile
-              title={summary.targetSpecific ? 'Target Response Latency' : 'Latency'}
+              title={run.mode === 'pipecat_webrtc'
+                ? 'End-to-end target response latency'
+                : summary.targetSpecific
+                  ? 'Target Response Latency'
+                  : 'Latency'}
               value={summary.avgLatency != null ? `${Math.round(summary.avgLatency)}ms` : 'n/a'}
               detail={summary.avgLatency != null
                 ? `${summary.latencyDefinition} · p90 ${
@@ -560,6 +564,8 @@ function MetricDetail({
   }
 
   const evidence = responseLatencyEvidence(conversation);
+  const builtInTarget = run.agent_id === 'generalist-voice-agent'
+    || run.provenance?.target_kind === 'builtin_sample_voice';
   const measuredMarks = evidence.marks
     .map((mark) => ({ mark, ms: markLatencyMs(mark) }))
     .filter((item): item is { mark: Record<string, unknown>; ms: number } => item.ms != null);
@@ -567,24 +573,30 @@ function MetricDetail({
   if (conversation.mode === 'pipecat_webrtc' && !evidence.marks.length) {
     return (
       <div className="runs-detail-copy">
-        <h2>Target Response Latency</h2>
+        <h2>End-to-end target response latency</h2>
         <p>
           First-audible-audio timing was not captured for this historical run. Its legacy marks measured a complete
           two-agent exchange, so they are excluded rather than presented as target latency.
         </p>
         <p className="latency-definition">
-          New streaming voice runs measure from detected caller speech-end until the first audible target PCM frame.
+          Tester speech end → first target audio received at tester.
         </p>
       </div>
     );
   }
   return (
     <div className="runs-detail-copy">
-      <h2>{evidence.targetSpecific ? 'Target Response Latency' : 'Latency'}</h2>
+      <h2>
+        {conversation.mode === 'pipecat_webrtc'
+          ? 'End-to-end target response latency'
+          : evidence.targetSpecific
+            ? 'Target Response Latency'
+            : 'Latency'}
+      </h2>
       {conversation.mode === 'pipecat_webrtc' ? (
         <p className="latency-definition">
-          Felt latency is measured directly from the caller&apos;s estimated acoustic end to the target&apos;s first
-          audible byte. It spans EOU/ASR finalization + LLM TTLT + TTS TTFB, including pipeline handoff overhead.
+          <strong>Tester speech end → first target audio received at tester.</strong>{' '}
+          This end-to-end measurement includes transport, target processing, and media handoff overhead.
         </p>
       ) : null}
       <p>
@@ -601,7 +613,7 @@ function MetricDetail({
                 <i style={{ width: `${Math.min(100, (ms / max) * 100)}%` }} />
               </span>
               <strong>{fmtMs(ms)}</strong>
-              <LatencyBreakdown mark={mark} />
+              <LatencyBreakdown mark={mark} builtInTarget={builtInTarget} />
             </div>
           );
         })}
@@ -940,7 +952,7 @@ function aggregateRunMetrics(run: ExecutionRunRecord | null) {
     targetSpecific,
     usesSpeechEndMetric,
     latencyDefinition: usesSpeechEndMetric
-      ? 'speech-end → first audible byte'
+      ? 'Tester speech end → first target audio received at tester'
       : voiceTargetSpecific
         ? 'first audible byte'
         : targetSpecific
@@ -1180,27 +1192,43 @@ function isTargetResponseMark(mark: Record<string, unknown>) {
 }
 
 function isTargetFirstAudioByteMark(mark: Record<string, unknown>) {
-  return mark.kind === 'target_first_audio_byte'
+  return isEndToEndTargetResponseMark(mark)
+    || mark.kind === 'target_first_audio_byte'
     || mark.kind === 'speech_end_to_first_audible_byte'
     || mark.kind === 'speech_end_to_first_audible_pcm'
     || mark.response_metric === 'speech_end_to_first_audible_byte'
     || mark.response_metric === 'target_time_to_first_audio_byte';
 }
 
+function isEndToEndTargetResponseMark(mark: Record<string, unknown>) {
+  return mark.kind === 'tester_speech_end_to_first_target_audio_received'
+    || mark.response_metric === 'tester_speech_end_to_first_target_audio_received';
+}
+
 function isSpeechEndToFirstAudiblePcmMark(mark: Record<string, unknown>) {
-  return mark.kind === 'speech_end_to_first_audible_byte'
+  return isEndToEndTargetResponseMark(mark)
+    || mark.kind === 'speech_end_to_first_audible_byte'
     || mark.kind === 'speech_end_to_first_audible_pcm'
     || mark.response_metric === 'speech_end_to_first_audible_byte'
     || mark.response_metric === 'speech_end_to_first_audible_pcm';
 }
 
 function responseMetricLabel(mark: Record<string, unknown>) {
+  if (isEndToEndTargetResponseMark(mark)) {
+    return 'End-to-end target response';
+  }
   return isTargetFirstAudioByteMark(mark)
     ? 'Target first audible byte'
     : 'Target response';
 }
 
 function latencyMarkLabel(mark: Record<string, unknown>, index: number) {
+  if (isEndToEndTargetResponseMark(mark)) {
+    const turnPair = Number(mark.turn_pair);
+    return Number.isFinite(turnPair) && turnPair > 0
+      ? `End-to-end target response · exchange ${turnPair}`
+      : 'End-to-end target response';
+  }
   if (isTargetFirstAudioByteMark(mark)) {
     const turnPair = Number(mark.turn_pair);
     return Number.isFinite(turnPair) && turnPair > 0
@@ -1210,12 +1238,18 @@ function latencyMarkLabel(mark: Record<string, unknown>, index: number) {
   return String(mark.label || `mark ${index + 1}`);
 }
 
-function LatencyBreakdown({ mark }: { mark: Record<string, unknown> }) {
+function LatencyBreakdown({
+  mark,
+  builtInTarget,
+}: {
+  mark: Record<string, unknown>;
+  builtInTarget: boolean;
+}) {
   const stages = mark.stage_metrics;
   if (!stages || typeof stages !== 'object') return null;
   const values = stages as Record<string, unknown>;
   const entries = [
-    ['EOU + ASR final', values.asr_finalize_ms],
+    ['Target endpointing + ASR finalization', values.asr_finalize_ms],
     ['LLM TTFT', values.llm_ttft_ms],
     ['TTS text aggregation', values.tts_aggregation_delay_ms],
     [
@@ -1226,10 +1260,17 @@ function LatencyBreakdown({ mark }: { mark: Record<string, unknown> }) {
     typeof entry[1] === 'number' && Number.isFinite(entry[1])
   ));
   if (!entries.length) return null;
+  const source = String(
+    mark.stage_metrics_source || (builtInTarget ? 'built_in_target' : 'target_provided'),
+  );
+  const heading = source === 'built_in_target'
+    ? 'Built-in target diagnostics'
+    : 'Target-provided diagnostics';
   return (
-    <small className="latency-breakdown">
-      {entries.map(([label, value]) => `${label} ${fmtMs(value)}`).join(' · ')}
-    </small>
+    <div className="latency-breakdown">
+      <strong>{heading}</strong>
+      <small>{entries.map(([label, value]) => `${label} ${fmtMs(value)}`).join(' · ')}</small>
+    </div>
   );
 }
 

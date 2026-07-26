@@ -765,7 +765,9 @@ class ReferencePipecatAgentTransport:
         if isinstance(latency_ms, (int, float)):
             latency_kind = str(event.get('latency_kind') or 'target_first_audio_byte')
             latency_label = (
-                'Target first audible byte'
+                'End-to-end target response'
+                if latency_kind == 'tester_speech_end_to_first_target_audio_received'
+                else 'Target first audible byte'
                 if latency_kind in {
                     'speech_end_to_first_audible_byte',
                     'speech_end_to_first_audible_pcm',
@@ -781,6 +783,7 @@ class ReferencePipecatAgentTransport:
                 'exchange_elapsed_ms': event.get('exchange_elapsed_ms'),
                 'response_complete_latency_ms': target_frame.get('response_complete_latency_ms'),
                 'response_metric': target_frame.get('response_metric'),
+                'stage_metrics_source': target_frame.get('stage_metrics_source'),
                 'stage_metrics': (
                     target_frame.get('stage_metrics')
                     if isinstance(target_frame.get('stage_metrics'), dict)

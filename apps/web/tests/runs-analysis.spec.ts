@@ -808,7 +808,7 @@ test('text latency excludes tester generation and missing timing marks', async (
   await expect(page.getByText('900ms')).toHaveCount(0);
 });
 
-test('voice analysis reports target first audio byte and excludes legacy exchange duration', async ({ page }) => {
+test('voice analysis reports end-to-end target latency and scopes target diagnostics', async ({ page }) => {
   const accurateVoiceRun = {
     ...runFixture,
     execution_run_id: 'exec-voice-timing',
@@ -845,17 +845,45 @@ test('voice analysis reports target first audio byte and excludes legacy exchang
             elapsed_ms: null,
           },
           {
-            label: 'Target first audio byte · exchange 1',
-            kind: 'target_first_audio_byte',
+            label: 'End-to-end target response · exchange 1',
+            kind: 'tester_speech_end_to_first_target_audio_received',
             participant: 'target',
             latency_ms: 640,
             exchange_elapsed_ms: 9120,
+            stage_metrics_source: 'built_in_target',
             stage_metrics: {
               asr_finalize_ms: 120,
-              llm_ttft_ms: null,
+              llm_ttft_ms: 180,
               llm_total_ms: 610,
-              tts_ttfb_ms: 250,
+              tts_aggregation_delay_ms: 90,
+              tts_synthesis_ttfb_ms: 250,
             },
+          },
+        ],
+      },
+    ],
+  };
+  const remoteVoiceRun = {
+    ...accurateVoiceRun,
+    execution_run_id: 'exec-remote-timing',
+    agent_name: 'Remote voice agent',
+    provenance: {
+      ...accurateVoiceRun.provenance,
+      target_kind: 'remote_webrtc_agent',
+      live_external_connection: true,
+      synthetic_media: false,
+    },
+    conversations: [
+      {
+        ...accurateVoiceRun.conversations[0],
+        conversation_id: 'exec-remote-timing-1',
+        execution_run_id: 'exec-remote-timing',
+        latency_marks: [
+          {
+            label: 'End-to-end target response · exchange 1',
+            kind: 'tester_speech_end_to_first_target_audio_received',
+            participant: 'target',
+            latency_ms: 725,
           },
         ],
       },
@@ -880,25 +908,42 @@ test('voice analysis reports target first audio byte and excludes legacy exchang
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
   });
   await page.route('**/api/execution/runs/**', async (route) => {
-    const fixture = route.request().url().includes('exec-legacy-timing') ? legacyVoiceRun : accurateVoiceRun;
+    const url = route.request().url();
+    const fixture = url.includes('exec-legacy-timing')
+      ? legacyVoiceRun
+      : url.includes('exec-remote-timing')
+        ? remoteVoiceRun
+        : accurateVoiceRun;
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fixture) });
   });
 
   await page.goto('/runs/exec-voice-timing');
-  await expect(page.getByRole('button', { name: /Target Response Latency 640ms/ })).toBeVisible();
-  await expect(page.getByRole('button', { name: /first audible byte/ })).toBeVisible();
-  await page.getByRole('button', { name: /Target Response Latency 640ms/ }).click();
-  await expect(page.getByLabel('Per-mark latency bars')).toContainText('Target first audible byte');
-  await expect(page.getByText(/EOU\/ASR finalization \+ LLM TTLT \+ TTS TTFB/)).toBeVisible();
-  await expect(page.getByLabel('Per-mark latency bars')).toContainText('EOU + ASR final 120ms');
-  await expect(page.getByLabel('Per-mark latency bars')).not.toContainText('LLM TTFT');
-  await expect(page.getByLabel('Per-mark latency bars')).toContainText('LLM TTLT 610ms');
+  await expect(page.getByRole('button', { name: /End-to-end target response latency 640ms/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Tester speech end → first target audio received at tester/ })).toBeVisible();
+  await page.getByRole('button', { name: /End-to-end target response latency 640ms/ }).click();
+  await expect(page.getByRole('heading', { name: 'End-to-end target response latency' })).toBeVisible();
+  await expect(page.getByText('Tester speech end → first target audio received at tester.')).toBeVisible();
+  await expect(page.getByLabel('Per-mark latency bars')).toContainText('End-to-end target response');
+  await expect(page.getByLabel('Per-mark latency bars')).toContainText('Built-in target diagnostics');
+  await expect(page.getByLabel('Per-mark latency bars')).toContainText(
+    'Target endpointing + ASR finalization 120ms',
+  );
+  await expect(page.getByLabel('Per-mark latency bars')).toContainText('LLM TTFT 180ms');
+  await expect(page.getByLabel('Per-mark latency bars')).not.toContainText('LLM TTLT');
+  await expect(page.getByLabel('Per-mark latency bars')).toContainText('TTS text aggregation 90ms');
+  await expect(page.getByLabel('Per-mark latency bars')).toContainText('TTS synthesis TTFB 250ms');
   await expect(page.getByLabel('Per-mark latency bars')).not.toContainText('LLM callback TTFB');
-  await expect(page.getByLabel('Conversation turn sequence')).toContainText('first audible byte 640ms');
+  await expect(page.getByLabel('Conversation turn sequence')).toContainText(/end-to-end target response 640ms/i);
+
+  await page.goto('/runs/exec-remote-timing');
+  await page.getByRole('button', { name: /End-to-end target response latency 725ms/ }).click();
+  await expect(page.getByLabel('Per-mark latency bars')).not.toContainText('Built-in target diagnostics');
+  await expect(page.getByLabel('Per-mark latency bars')).not.toContainText('Target-provided diagnostics');
+  await expect(page.getByLabel('Per-mark latency bars')).not.toContainText('ASR finalization');
 
   await page.goto('/runs/exec-legacy-timing');
-  await expect(page.getByRole('button', { name: /Target Response Latency n\/a/ })).toBeVisible();
-  await page.getByRole('button', { name: /Target Response Latency n\/a/ }).click();
+  await expect(page.getByRole('button', { name: /End-to-end target response latency n\/a/ })).toBeVisible();
+  await page.getByRole('button', { name: /End-to-end target response latency n\/a/ }).click();
   await expect(page.getByText(/legacy marks measured a complete two-agent exchange/)).toBeVisible();
   await expect(page.getByText('17534ms')).toHaveCount(0);
 });
