@@ -138,6 +138,7 @@ export interface ExecutionRunRecord {
   agent_name?: string | null;
   model_name?: string | null;
   max_exchanges?: number;
+  duplex_timeout_seconds?: number;
   tester_id?: TesterId;
   tester_model_name?: string | null;
   executor_id?: ExecutorId;
@@ -352,6 +353,7 @@ export async function createExecutionRun(payload: {
   mode?: ExecutionMode;
   iterations?: number;
   max_exchanges?: number;
+  duplex_timeout_seconds?: number;
   user_id: string;
   project_id: string;
   agent_id?: string;

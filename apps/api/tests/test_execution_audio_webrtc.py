@@ -159,10 +159,14 @@ def test_pipecat_webrtc_mode_defaults_transport_and_rejects_verto():
 def test_execution_request_defaults_and_bounds_max_exchanges():
     default_request = ExecutionRunCreateRequest()
     assert default_request.max_exchanges == 3
+    assert default_request.duplex_timeout_seconds == 120
 
     for invalid in (0, 11):
         with pytest.raises(ValidationError):
             ExecutionRunCreateRequest(max_exchanges=invalid)
+    for invalid in (29, 301):
+        with pytest.raises(ValidationError):
+            ExecutionRunCreateRequest(duplex_timeout_seconds=invalid)
 
 
 def test_local_webrtc_transport_send_receive_records_and_transcribes():
@@ -421,7 +425,7 @@ def test_pipecat_webrtc_propagates_tester_needs_review(monkeypatch, tmp_path):
         ):
             assert scenario['id'] == 'cancellation-rescue'
             assert max_turn_pairs == 3
-            assert total_timeout_seconds == 90
+            assert total_timeout_seconds == 180
             return {
                 'scenario_id': scenario['id'],
                 'session_id': session_id,
@@ -466,10 +470,12 @@ def test_pipecat_webrtc_propagates_tester_needs_review(monkeypatch, tmp_path):
             'iterations': 1,
             'user_id': 'webrtc-fail-user',
             'project_id': 'webrtc-project',
+            'duplex_timeout_seconds': 180,
             'evaluate': True,
         },
     )
     assert queued.status_code == 200, queued.text
+    assert queued.json()['duplex_timeout_seconds'] == 180
     completed = _wait_for_terminal(queued.json()['execution_run_id'], user_id='webrtc-fail-user')
     assert completed['status'] == 'needs_review'
     conversation = completed['conversations'][0]

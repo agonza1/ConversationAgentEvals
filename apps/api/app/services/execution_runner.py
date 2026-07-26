@@ -123,6 +123,7 @@ def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool =
         agent_name=(agent or {}).get('name'),
         model_name=model_name,
         max_exchanges=resolved.max_exchanges,
+        duplex_timeout_seconds=resolved.duplex_timeout_seconds,
         tester_id=resolved.tester_id,
         tester_model_name=resolved.tester_model_name,
         executor_id=resolved.executor_id,
@@ -1005,7 +1006,7 @@ async def _execute_pipecat_webrtc(
         session_id,
         scenario=scenario,
         max_turn_pairs=payload.max_exchanges,
-        total_timeout_seconds=min(300, max(90, payload.max_exchanges * 30)),
+        total_timeout_seconds=payload.duplex_timeout_seconds,
     )
     await transport.disconnect(
         session_id,

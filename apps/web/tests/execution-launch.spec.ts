@@ -447,7 +447,10 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await launch.getByLabel('Execution agent target').selectOption('generalist-voice-agent');
   await expect(launch.getByLabel('Execution tester')).toContainText('Scenario user (AI)');
   await expect(launch).toContainText('adapts to the target\'s responses');
+  await expect(launch.getByLabel('Execution model')).toHaveValue('gpt-5.4-mini');
+  await expect(launch.getByLabel('Duplex session timeout')).toHaveValue('120');
   await launch.getByLabel('Maximum exchanges').fill('5');
+  await launch.getByLabel('Duplex session timeout').fill('180');
   await expect(launch).toContainText('up to 5 exchanges each');
   await launch.getByRole('button', { name: 'Run evaluation' }).click();
   await expect.poll(() => voicePosted).not.toBeNull();
@@ -459,8 +462,9 @@ test('launch evaluation streams conversations into the live list', async ({ page
     suite_id: 'call-center-voice-ai',
     scenario_ids: ['billing-address-change'],
     max_exchanges: 5,
+    model_name: 'gpt-5.4-mini',
+    duplex_timeout_seconds: 180,
   });
-  expect(voicePosted).not.toHaveProperty('model_name');
   await expect(launch.getByLabel('Run listener link')).toContainText('Available only while this run is active.');
   await expect(launch.getByRole('button', { name: 'Listen to live WebRTC' })).toBeEnabled();
   await expect(launch.getByRole('button', { name: 'Create live listener link' })).toBeEnabled();

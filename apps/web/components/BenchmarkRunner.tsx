@@ -977,6 +977,7 @@ interface ExecutionRunRecord {
   agent_name?: string | null;
   model_name?: string | null;
   max_exchanges?: number;
+  duplex_timeout_seconds?: number;
   tester_id?: 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
   tester_model_name?: string | null;
   executor_id?: 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
@@ -1005,6 +1006,7 @@ async function createExecutionRun(payload: {
   text_callable?: string;
   iterations?: number;
   max_exchanges?: number;
+  duplex_timeout_seconds?: number;
   user_id: string;
   project_id: string;
   evaluate?: boolean;
@@ -2254,6 +2256,7 @@ export function BenchmarkRunner({
   const [executionScope, setExecutionScope] = useState<'selected' | 'suite'>('selected');
   const [executionIterations, setExecutionIterations] = useState(1);
   const [executionMaxExchanges, setExecutionMaxExchanges] = useState(3);
+  const [executionDuplexTimeoutSeconds, setExecutionDuplexTimeoutSeconds] = useState(120);
   const [executionTesterId, setExecutionTesterId] = useState<'scenario_simulator' | 'fixture_replay' | 'pipecat_tester'>('scenario_simulator');
   const [executionExecutorId, setExecutionExecutorId] = useState<NonNullable<ExecutionRunRecord['executor_id']>>('local_async_runner');
   const [executionRun, setExecutionRun] = useState<ExecutionRunRecord | null>(null);
@@ -3534,11 +3537,12 @@ export function BenchmarkRunner({
         text_callable: runMode === 'text_callable' ? runTextCallable : undefined,
         iterations: executionIterations,
         max_exchanges: executionMaxExchanges,
+        duplex_timeout_seconds: sampleVoiceAgent ? executionDuplexTimeoutSeconds : undefined,
         user_id: identity.userId,
         project_id: identity.projectId,
         evaluate: true,
         agent_id: selectedAgentId || undefined,
-        model_name: sampleVoiceAgent ? undefined : executionModelName || DEFAULT_EXECUTION_MODEL,
+        model_name: executionModelName || DEFAULT_EXECUTION_MODEL,
         tester_id: runTesterId,
         executor_id: runExecutorId,
         audio_transport: runMode === 'pipecat_webrtc' ? 'pipecat_small_webrtc' : 'none',
@@ -4680,6 +4684,21 @@ export function BenchmarkRunner({
                   onChange={(event) => setExecutionMaxExchanges(Math.max(1, Math.min(10, Number(event.target.value) || 1)))}
                 />
               </label>
+              {selectedScoreAgent?.target === 'builtin_sample_voice' ? (
+                <label>
+                  <span>Session timeout (seconds)</span>
+                  <input
+                    aria-label="Duplex session timeout"
+                    type="number"
+                    min={30}
+                    max={300}
+                    value={executionDuplexTimeoutSeconds}
+                    onChange={(event) => setExecutionDuplexTimeoutSeconds(
+                      Math.max(30, Math.min(300, Number(event.target.value) || 120)),
+                    )}
+                  />
+                </label>
+              ) : null}
             </div>
             <p>
               Queues the run and writes the ASSERT inference set locally.
@@ -4690,7 +4709,7 @@ export function BenchmarkRunner({
           </div>
         </div>
 
-        {selectedScoreAgent?.target === 'openai_codex' ? (
+        {selectedScoreAgent?.target === 'openai_codex' || selectedScoreAgent?.target === 'builtin_sample_voice' ? (
           <label style={{ display: 'grid', gap: 8, maxWidth: 360 }}>
             <span style={{ fontWeight: 700 }}>Target model</span>
             <select
@@ -4708,7 +4727,7 @@ export function BenchmarkRunner({
             </select>
             {openaiProvider?.status !== 'connected' ? (
               <span style={{ color: 'var(--muted)', fontSize: 13 }}>
-                {selectedScoreAgent.id === 'generalist-text-agent'
+                {selectedScoreAgent.id === 'generalist-text-agent' || selectedScoreAgent.target === 'builtin_sample_voice'
                   ? 'This reference target can use OPENAI_API_KEY from the API environment, or you can connect OpenAI here. '
                   : 'Connect OpenAI to run this target. '}
                 <button type="button" className="secondary-link" disabled={isConnectingOpenAI} onClick={() => void onConnectOpenAI()} style={{ padding: 0, border: 0, background: 'transparent', color: 'var(--accent)', fontWeight: 700, cursor: 'pointer' }}>

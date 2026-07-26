@@ -296,7 +296,7 @@ class ReferenceDuplexRunRequest(BaseModel):
     stt_backend: str = 'service-selected'
     stt_model: str = 'service-selected'
     max_turn_pairs: int = Field(default=3, ge=1, le=10)
-    total_timeout_seconds: float = Field(default=90, ge=5, le=300)
+    total_timeout_seconds: float = Field(default=120, ge=5, le=300)
     tester_voice: str = KOKORO_TESTER_VOICE
     target_voice: str = KOKORO_TARGET_VOICE
 

@@ -22,6 +22,7 @@ class ExecutionRunCreateRequest(BaseModel):
     mode: ExecutionMode = 'text_callable'
     iterations: int = Field(default=1, ge=1, le=20)
     max_exchanges: int = Field(default=3, ge=1, le=10)
+    duplex_timeout_seconds: int = Field(default=120, ge=30, le=300)
     concurrent_sessions: int = Field(default=1, ge=1, le=4)
     user_id: str = Field(default='execution-user', min_length=1)
     project_id: str = Field(default='conversation-agent-evals', min_length=1)
@@ -214,6 +215,7 @@ class ExecutionRunRecord(BaseModel):
     agent_name: str | None = None
     model_name: str | None = None
     max_exchanges: int = Field(default=3, ge=1, le=10)
+    duplex_timeout_seconds: int = Field(default=120, ge=30, le=300)
     tester_id: TesterId = 'scenario_simulator'
     tester_model_name: str | None = None
     executor_id: ExecutorId = 'local_async_runner'
