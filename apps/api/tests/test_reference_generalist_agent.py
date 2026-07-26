@@ -22,6 +22,7 @@ from app.services.reference_generalist_agent import (
     ReferencePipecatTesterGraphRenderer,
     ReferenceRuntimeConfig,
     ReferenceRuntimeError,
+    discover_rtc_asr_runtime,
 )
 
 
@@ -430,6 +431,8 @@ def test_primary_reference_path_streams_session_control_not_wav_turns(monkeypatc
         assert FakeDuplexAsyncClient.request_json['scenario']['id'] == 'billing-address-change'
         assert FakeDuplexAsyncClient.request_json['tester_voice'] == 'af_heart'
         assert FakeDuplexAsyncClient.request_json['target_voice'] == 'am_adam'
+        assert FakeDuplexAsyncClient.request_json['stt_backend'] == 'faster-whisper'
+        assert FakeDuplexAsyncClient.request_json['stt_model'] == 'base.en'
         assert result['tester_provenance']['fixture_scheduler'] is False
         turns = transport.transcription_turns('duplex-session')
         assert [turn.evidence_role for turn in turns] == ['target_asr_receipt', 'tester_asr_receipt']
@@ -498,6 +501,35 @@ def test_reference_media_readiness_honors_custom_asr_health_path():
 
     assert client.urls[0] == 'http://rtc-asr.test/readyz'
     assert readiness['stt']['backend'] == 'faster-whisper'
+    assert readiness['stt']['model'] == 'base.en'
+    assert readiness['stt']['selection'] == 'service-discovery'
+
+
+def test_rtc_asr_runtime_adopts_any_ready_service_model():
+    runtime = discover_rtc_asr_runtime({
+        'status': 'ready',
+        'ready': True,
+        'model_loaded': True,
+        'backend': 'parakeet-mlx',
+        'model': 'mlx-community/parakeet-tdt_ctc-110m',
+    })
+
+    assert runtime == {
+        'provider': 'rtc-asr',
+        'backend': 'parakeet-mlx',
+        'model': 'mlx-community/parakeet-tdt_ctc-110m',
+        'status': 'ready',
+        'selection': 'service-discovery',
+    }
+
+
+def test_rtc_asr_runtime_rejects_service_without_loaded_model():
+    with pytest.raises(ReferenceRuntimeError, match='reachable but not ready'):
+        discover_rtc_asr_runtime({
+            'status': 'loading',
+            'ready': False,
+            'model_loaded': False,
+        })
 
 
 def test_reference_completion_callback_requires_internal_token(monkeypatch):

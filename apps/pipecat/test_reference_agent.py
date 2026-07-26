@@ -275,6 +275,8 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
         'target_model_name': 'target-model',
         'llm_provider': 'offline-fake-openai',
         'llm_mode': 'mock',
+        'stt_backend': 'parakeet-mlx',
+        'stt_model': 'mlx-community/parakeet-tdt_ctc-110m',
         'max_turn_pairs': 2,
         'total_timeout_seconds': 20,
         'tester_voice': 'af_heart',
@@ -316,6 +318,10 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
     assert all(frame['duration_ms'] > 0 for frame in completed['frames'])
     assert completed['graphs']['tester']['processors'][1]['model'] == 'tester-model'
     assert completed['graphs']['target']['processors'][1]['model'] == 'target-model'
+    assert completed['graphs']['tester']['processors'][0]['backend'] == 'parakeet-mlx'
+    assert completed['graphs']['target']['processors'][0]['model'] == (
+        'mlx-community/parakeet-tdt_ctc-110m'
+    )
     assert completed['graphs']['tester']['processors'][2]['voice'] == 'af_heart'
     assert completed['graphs']['target']['processors'][2]['voice'] == 'am_adam'
     assert completed['graphs']['tester']['llm_mode'] == 'mock'

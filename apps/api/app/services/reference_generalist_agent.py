@@ -67,12 +67,6 @@ class ReferenceRuntimeConfig:
             os.getenv('RTC_ASR_HEALTH_PATH', '').strip() or '/health'
         ).lstrip('/')
     )
-    rtc_asr_backend: str = field(
-        default_factory=lambda: os.getenv('REFERENCE_STT_BACKEND', 'whisper').strip().lower()
-    )
-    rtc_asr_model: str = field(
-        default_factory=lambda: os.getenv('REFERENCE_STT_MODEL', 'base').strip()
-    )
     kokoro_base_url: str = field(
         default_factory=lambda: os.getenv('KOKORO_BASE_URL', '').rstrip('/')
     )
@@ -98,6 +92,26 @@ class ReferenceRuntimeConfig:
     timeout_seconds: float = field(
         default_factory=lambda: float(os.getenv('REFERENCE_AGENT_TIMEOUT_SECONDS', '60'))
     )
+
+
+def discover_rtc_asr_runtime(payload: Any) -> dict[str, str]:
+    """Use rtc-asr health as the source of truth for its loaded backend and model."""
+    if not isinstance(payload, dict):
+        raise ReferenceRuntimeError('rtc-asr health returned an invalid payload.')
+
+    status = str(payload.get('status') or '').strip().lower()
+    explicitly_unready = payload.get('ready') is False or payload.get('model_loaded') is False
+    if explicitly_unready or status in {'error', 'failed', 'loading', 'starting', 'unavailable'}:
+        reason = str(payload.get('preload_error') or payload.get('detail') or status or 'not ready')
+        raise ReferenceRuntimeError(f'rtc-asr is reachable but not ready: {reason}.')
+
+    return {
+        'provider': 'rtc-asr',
+        'backend': str(payload.get('backend') or 'service-selected').strip().lower(),
+        'model': str(payload.get('model') or 'service-selected').strip(),
+        'status': 'ready',
+        'selection': 'service-discovery',
+    }
 
 
 class OpenAICompatibleApiKeyProvider:
@@ -185,26 +199,9 @@ class ReferenceMediaServices:
         except Exception as exc:  # noqa: BLE001
             raise ReferenceRuntimeError(f'Kokoro is unavailable at {self.config.kokoro_base_url}: {exc}') from exc
 
-        actual_backend = str(asr_payload.get('backend') or '').lower()
-        actual_model = str(asr_payload.get('model') or '')
-        requested = self.config.rtc_asr_backend
-        if requested == 'whisper' and 'whisper' not in actual_backend:
-            raise ReferenceRuntimeError(
-                f'rtc-asr backend mismatch: requested Whisper, service reports {actual_backend or "unknown"}.'
-            )
-        if requested in {'parakeet', 'mlx_parakeet'} and not (
-            'parakeet' in actual_backend or 'mlx' in actual_backend
-        ):
-            raise ReferenceRuntimeError(
-                f'rtc-asr backend mismatch: requested MLX Parakeet, service reports {actual_backend or "unknown"}.'
-            )
+        stt_runtime = discover_rtc_asr_runtime(asr_payload)
         return {
-            'stt': {
-                'provider': 'rtc-asr',
-                'backend': actual_backend or requested,
-                'model': actual_model or self.config.rtc_asr_model,
-                'status': 'ready',
-            },
+            'stt': stt_runtime,
             'tts': {
                 'provider': 'kokoro',
                 'model': self.config.kokoro_model,
@@ -406,12 +403,13 @@ class ReferencePipecatAgentTransport:
             'model': config.llm_model,
             'status': 'ready',
         }
+        stt_runtime = self.runtime.get('stt') if isinstance(self.runtime.get('stt'), dict) else {}
         tester_graph, target_graph = build_builtin_sample_voice_graphs(
             tester_llm_provider=str(llm_status.get('provider') or completion.provider_id),
             tester_llm_model=config.tester_llm_model,
             target_llm_provider=str(llm_status.get('provider') or completion.provider_id),
             target_llm_model=config.llm_model,
-            stt_model=config.rtc_asr_model,
+            stt_model=str(stt_runtime.get('model') or 'service-selected'),
             tts_model=config.kokoro_model,
             tester_tts_voice=config.kokoro_tester_voice,
             target_tts_voice=config.kokoro_target_voice,
@@ -500,6 +498,8 @@ class ReferencePipecatAgentTransport:
             'target_model_name': self.config.llm_model,
             'llm_provider': llm_runtime.get('provider') or self.completion.provider_id,
             'llm_mode': 'real',
+            'stt_backend': str(self.runtime['stt']['backend']),
+            'stt_model': str(self.runtime['stt']['model']),
             'max_turn_pairs': max_turn_pairs,
             'total_timeout_seconds': total_timeout_seconds,
             'tester_voice': self.config.kokoro_tester_voice,

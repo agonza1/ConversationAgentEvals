@@ -78,7 +78,7 @@ def test_execution_health_includes_audio_capabilities():
     )
 
 
-def test_reference_voice_preflight_blocks_incompatible_rtc_asr_backend(monkeypatch):
+def test_reference_voice_preflight_adopts_rtc_asr_backend_and_model(monkeypatch):
     import app.routes.execution as execution_routes
 
     class _Response:
@@ -115,9 +115,12 @@ def test_reference_voice_preflight_blocks_incompatible_rtc_asr_backend(monkeypat
 
     report = execution_routes._reference_voice_preflight()
     rtc_asr = next(item for item in report['dependencies'] if item['id'] == 'rtc_asr')
-    assert report['ready'] is False
-    assert rtc_asr['ready'] is False
-    assert rtc_asr['detail'] == 'rtc-asr backend mismatch: requested whisper, service reports mlx-parakeet.'
+    assert report['ready'] is True
+    assert rtc_asr['ready'] is True
+    assert rtc_asr['detail'] == (
+        'Reachable at http://rtc-asr.test; using '
+        'mlx-parakeet (parakeet-tdt) selected by rtc-asr.'
+    )
 
 
 def test_pipecat_webrtc_mode_defaults_transport_and_rejects_verto():

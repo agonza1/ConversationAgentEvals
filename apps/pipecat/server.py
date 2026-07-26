@@ -293,6 +293,8 @@ class ReferenceDuplexRunRequest(BaseModel):
     target_model_name: str | None = None
     llm_provider: str = 'openai'
     llm_mode: Literal['real', 'mock'] = 'real'
+    stt_backend: str = 'service-selected'
+    stt_model: str = 'service-selected'
     max_turn_pairs: int = Field(default=3, ge=1, le=10)
     total_timeout_seconds: float = Field(default=90, ge=5, le=300)
     tester_voice: str = KOKORO_TESTER_VOICE
@@ -1087,6 +1089,8 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                             {
                                 'name': 'rtc-asr',
                                 'provider': 'rtc-asr',
+                                'backend': payload.stt_backend,
+                                'model': payload.stt_model,
                                 'protocol': 'local-stt.v1',
                                 'streaming': True,
                                 'interim_results': True,
@@ -1113,6 +1117,8 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                             {
                                 'name': 'rtc-asr',
                                 'provider': 'rtc-asr',
+                                'backend': payload.stt_backend,
+                                'model': payload.stt_model,
                                 'protocol': 'local-stt.v1',
                                 'streaming': True,
                                 'interim_results': True,
