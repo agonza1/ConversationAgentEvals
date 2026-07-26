@@ -381,6 +381,78 @@ def test_reference_duplex_cancels_active_exchange_when_stream_closes(monkeypatch
     asyncio.run(run())
 
 
+def test_reference_duplex_migrates_suite_listener_to_next_conversation(monkeypatch):
+    class _Track:
+        _sample_rate = 24000
+
+        def __init__(self):
+            self.audio = []
+
+        def add_audio_bytes(self, payload):
+            self.audio.append(payload)
+
+    class _Connection:
+        def __init__(self):
+            self.disconnected = False
+
+        async def disconnect(self):
+            self.disconnected = True
+
+    track = _Track()
+    connection = _Connection()
+    prior = server._ReferenceDuplexBroadcast(
+        execution_run_id='suite-run',
+        session_id='suite-conversation-1',
+        active=False,
+        listeners={
+            'suite-listener': server._ReferenceListener(
+                listener_id='suite-listener',
+                connection=connection,
+                track=track,
+            ),
+        },
+    )
+    server.REFERENCE_DUPLEX_RUNS['suite-run'] = prior
+
+    async def blocking_exchange(**kwargs):
+        await kwargs['event_callback']({'type': 'vad', 'state': 'speaking'})
+        await asyncio.Event().wait()
+
+    async def retire_immediately(_broadcast):
+        return None
+
+    async def run():
+        stream = server._reference_duplex_events(server.ReferenceDuplexRunRequest(
+            session_id='suite-conversation-2',
+            execution_run_id='suite-run',
+            scenario={'id': 'second-scenario', 'title': 'Second Scenario'},
+            llm_mode='mock',
+            max_turn_pairs=1,
+            total_timeout_seconds=20,
+        ))
+        await anext(stream)
+        current = server.REFERENCE_DUPLEX_RUNS['suite-run']
+        assert current is not prior
+        assert not prior.listeners
+        assert current.listeners['suite-listener'].connection is connection
+        current.publish(b'\x01\x00' * 240, sample_rate=24000)
+        assert track.audio
+
+        await stream.aclose()
+        await server._expire_reference_listener(
+            'suite-run',
+            'suite-listener',
+            server.time.time() - 1,
+        )
+        assert connection.disconnected is True
+        assert 'suite-run' not in server.REFERENCE_DUPLEX_RUNS
+
+    monkeypatch.setattr(server, '_run_streaming_exchange', blocking_exchange)
+    monkeypatch.setattr(server, '_retire_reference_broadcast', retire_immediately)
+
+    asyncio.run(run())
+
+
 def test_reference_duplex_rejects_matching_voices(monkeypatch):
     monkeypatch.setattr(server, 'REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
     client = TestClient(server.app)

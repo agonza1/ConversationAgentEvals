@@ -912,6 +912,9 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
             'detail': f'Execution run {payload.execution_run_id} already has an active duplex session.',
         })
         return
+    if existing is not None:
+        broadcast.listeners.update(existing.listeners)
+        existing.listeners.clear()
     REFERENCE_DUPLEX_RUNS[payload.execution_run_id] = broadcast
     bus = _LocalDuplexFrameBus(payload.session_id, broadcast)
     history: list[dict[str, str]] = []
@@ -1163,16 +1166,13 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
 
 
 async def _retire_reference_broadcast(broadcast: _ReferenceDuplexBroadcast) -> None:
-    """Let already-negotiated listeners drain queued audio, then close them."""
+    """Retire listener-free broadcasts while preserving suite-scoped listeners."""
     await asyncio.sleep(120)
-    if REFERENCE_DUPLEX_RUNS.get(broadcast.execution_run_id) is broadcast:
-        REFERENCE_DUPLEX_RUNS.pop(broadcast.execution_run_id, None)
-    for listener in tuple(broadcast.listeners.values()):
-        try:
-            await listener.connection.disconnect()
-        except Exception:
-            pass
-    broadcast.listeners.clear()
+    if REFERENCE_DUPLEX_RUNS.get(broadcast.execution_run_id) is not broadcast:
+        return
+    if broadcast.listeners:
+        return
+    REFERENCE_DUPLEX_RUNS.pop(broadcast.execution_run_id, None)
 
 
 async def _wait_for_active_reference_broadcast(execution_run_id: str) -> _ReferenceDuplexBroadcast | None:
@@ -1260,7 +1260,7 @@ async def reference_duplex_listen(
         )
         asyncio.create_task(connection.connect())
         asyncio.create_task(_expire_reference_listener(
-            broadcast,
+            payload.execution_run_id,
             payload.listener_id,
             payload.expires_at_unix,
         ))
@@ -1281,17 +1281,26 @@ async def reference_duplex_listen(
 
 
 async def _expire_reference_listener(
-    broadcast: _ReferenceDuplexBroadcast,
+    execution_run_id: str,
     listener_id: str,
     expires_at_unix: float,
 ) -> None:
     await asyncio.sleep(max(0.0, expires_at_unix - time.time()))
+    broadcast = REFERENCE_DUPLEX_RUNS.get(execution_run_id)
+    if broadcast is None:
+        return
     listener = broadcast.listeners.pop(listener_id, None)
     if listener is not None:
         try:
             await listener.connection.disconnect()
         except Exception:
             pass
+    if (
+        not broadcast.active
+        and not broadcast.listeners
+        and REFERENCE_DUPLEX_RUNS.get(execution_run_id) is broadcast
+    ):
+        REFERENCE_DUPLEX_RUNS.pop(execution_run_id, None)
 
 
 @app.post('/reference-duplex/listen/ice')
@@ -1318,6 +1327,13 @@ async def reference_duplex_listener_stop(
     listener = broadcast.listeners.pop(payload.listener_id, None) if broadcast else None
     if listener is not None:
         await listener.connection.disconnect()
+    if (
+        broadcast is not None
+        and not broadcast.active
+        and not broadcast.listeners
+        and REFERENCE_DUPLEX_RUNS.get(payload.execution_run_id) is broadcast
+    ):
+        REFERENCE_DUPLEX_RUNS.pop(payload.execution_run_id, None)
     return {'status': 'stopped'}
 
 
