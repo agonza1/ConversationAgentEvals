@@ -2255,7 +2255,7 @@ export function BenchmarkRunner({
   const [executionMode, setExecutionMode] = useState<'text_callable' | 'voice_fixture' | 'pipecat_webrtc'>('text_callable');
   const [executionScope, setExecutionScope] = useState<'selected' | 'suite'>('selected');
   const [executionIterations, setExecutionIterations] = useState(1);
-  const [executionMaxExchanges, setExecutionMaxExchanges] = useState(3);
+  const [executionMaxExchanges, setExecutionMaxExchanges] = useState<number | ''>(3);
   const [executionDuplexTimeoutSeconds, setExecutionDuplexTimeoutSeconds] = useState(120);
   const [executionTesterId, setExecutionTesterId] = useState<'scenario_simulator' | 'fixture_replay' | 'pipecat_tester'>('scenario_simulator');
   const [executionExecutorId, setExecutionExecutorId] = useState<NonNullable<ExecutionRunRecord['executor_id']>>('local_async_runner');
@@ -2269,6 +2269,7 @@ export function BenchmarkRunner({
   const [agentsLoaded, setAgentsLoaded] = useState(false);
   const [referenceVoicePreflight, setReferenceVoicePreflight] = useState<ReferenceVoicePreflight | null>(null);
   const [referenceVoicePreflightError, setReferenceVoicePreflightError] = useState<string | null>(null);
+  const [referenceVoicePreflightLoaded, setReferenceVoicePreflightLoaded] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const selectedScoreAgent = useMemo(
     () => agents.find((agent) => agent.id === selectedAgentId) ?? null,
@@ -2602,16 +2603,19 @@ export function BenchmarkRunner({
   useEffect(() => {
     if (view !== 'run') return;
     let active = true;
+    setReferenceVoicePreflightLoaded(false);
     fetchReferenceVoicePreflight()
       .then((preflight) => {
         if (!active) return;
         setReferenceVoicePreflight(preflight);
         setReferenceVoicePreflightError(null);
+        setReferenceVoicePreflightLoaded(true);
       })
       .catch((error) => {
         if (!active) return;
         setReferenceVoicePreflight(null);
         setReferenceVoicePreflightError(error instanceof Error ? error.message : 'Voice preflight unavailable.');
+        setReferenceVoicePreflightLoaded(true);
       });
     return () => {
       active = false;
@@ -2627,7 +2631,19 @@ export function BenchmarkRunner({
 
   useEffect(() => {
     if (view !== 'run' || typeof window === 'undefined') return;
-    if (autoLaunchDemoRef.current || isLoading || isLaunchingExecution || !selectedSuite || !agentsLoaded || !openaiProvider) return;
+    const waitingForVoicePreflight = (
+      selectedScoreAgent?.target === 'builtin_sample_voice'
+      && !referenceVoicePreflightLoaded
+    );
+    if (
+      autoLaunchDemoRef.current
+      || isLoading
+      || isLaunchingExecution
+      || !selectedSuite
+      || !agentsLoaded
+      || !openaiProvider
+      || waitingForVoicePreflight
+    ) return;
 
     const params = new URLSearchParams(window.location.search);
     if (params.get('launch') !== 'demo') return;
@@ -2654,6 +2670,8 @@ export function BenchmarkRunner({
     agentsLoaded,
     executionMode,
     openaiProvider,
+    referenceVoicePreflightLoaded,
+    selectedScoreAgent?.target,
   ]);
 
   useEffect(() => {
@@ -3459,6 +3477,14 @@ export function BenchmarkRunner({
       setExecutionMessage('Select an agent target before launching.');
       return null;
     }
+    const supportsConfigurableExchanges =
+      selectedScoreAgent.target === 'openai_codex'
+      || selectedScoreAgent.target === 'builtin_sample_voice';
+    if (supportsConfigurableExchanges && executionMaxExchanges === '') {
+      setExecutionMessage('Enter a maximum exchange count from 1 to 10 before launching.');
+      return null;
+    }
+    const maxExchanges = executionMaxExchanges === '' ? 3 : executionMaxExchanges;
     if (selectedScoreAgent.target === 'openai_codex'
       && selectedScoreAgent.id !== 'generalist-text-agent'
       && openaiProvider?.status !== 'connected') {
@@ -3536,7 +3562,7 @@ export function BenchmarkRunner({
         mode: runMode,
         text_callable: runMode === 'text_callable' ? runTextCallable : undefined,
         iterations: executionIterations,
-        max_exchanges: executionMaxExchanges,
+        max_exchanges: maxExchanges,
         duplex_timeout_seconds: sampleVoiceAgent ? executionDuplexTimeoutSeconds : undefined,
         user_id: identity.userId,
         project_id: identity.projectId,
@@ -4680,8 +4706,14 @@ export function BenchmarkRunner({
                   min={1}
                   max={10}
                   value={executionMaxExchanges}
+                  aria-invalid={executionMaxExchanges === ''}
                   disabled={!selectedScoreAgent || (selectedScoreAgent.target !== 'openai_codex' && selectedScoreAgent.target !== 'builtin_sample_voice')}
-                  onChange={(event) => setExecutionMaxExchanges(Math.max(1, Math.min(10, Number(event.target.value) || 1)))}
+                  onChange={(event) => {
+                    const nextValue = event.target.value;
+                    setExecutionMaxExchanges(
+                      nextValue === '' ? '' : Math.max(1, Math.min(10, Number(nextValue))),
+                    );
+                  }}
                 />
               </label>
               {selectedScoreAgent?.target === 'builtin_sample_voice' ? (
@@ -4792,7 +4824,9 @@ export function BenchmarkRunner({
                 ? `${selectedSuite?.scenarios.length || 0} scenarios × ${executionIterations} ${executionIterations === 1 ? 'iteration' : 'iterations'} · ${(selectedSuite?.scenarios.length || 0) * executionIterations} conversations`
                 : `${executionIterations} ${executionIterations === 1 ? 'conversation' : 'conversations'}`}
               {selectedScoreAgent?.target === 'openai_codex' || selectedScoreAgent?.target === 'builtin_sample_voice'
-                ? ` · up to ${executionMaxExchanges} ${executionMaxExchanges === 1 ? 'exchange' : 'exchanges'} each`
+                ? executionMaxExchanges === ''
+                  ? ' · enter an exchange cap'
+                  : ` · up to ${executionMaxExchanges} ${executionMaxExchanges === 1 ? 'exchange' : 'exchanges'} each`
                 : ''}
               {' · results appear below'}
             </span>
@@ -4805,6 +4839,9 @@ export function BenchmarkRunner({
               || isSimulating
               || !selectedSuite
               || !selectedScoreAgent
+              || ((selectedScoreAgent?.target === 'openai_codex'
+                || selectedScoreAgent?.target === 'builtin_sample_voice')
+                && executionMaxExchanges === '')
               || (selectedScoreAgent.target === 'openai_codex'
                 && selectedScoreAgent.id !== 'generalist-text-agent'
                 && openaiProvider?.status !== 'connected')

@@ -25,6 +25,7 @@ from app.services.benchmark_service import get_suite
 from app.schemas.product import (
     CheckoutResponse,
     FirebaseAuthConfig,
+    JudgeProposedEvaluation,
     JudgeResponse,
     JudgeStructuredResult,
     PricingPlan,
@@ -956,13 +957,20 @@ def _stripe_price_id(plan: str) -> str | None:
     return None
 
 
-def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> JudgeResponse:
+def judge_gate(
+    plan: str,
+    report: dict[str, Any],
+    transcript: str | None,
+    *,
+    user_id: str | None = None,
+    project_id: str | None = None,
+) -> JudgeResponse:
     del plan  # Local Codex OAuth / API-key path gates on provider + budget, not paid plan.
     spend_control = _judge_spend_control()
-    citations = _judge_citations(report, transcript)
     model_name = _judge_model_name(spend_control)
 
     if not spend_control['within_budget']:
+        citations = _judge_citations(report, transcript)
         return JudgeResponse(
             status='blocked',
             required_plan='starter',
@@ -976,6 +984,7 @@ def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> Jud
         )
 
     if not spend_control.get('provider_configured'):
+        citations = _judge_citations(report, transcript)
         return JudgeResponse(
             status='blocked',
             required_plan='starter',
@@ -988,6 +997,32 @@ def judge_gate(plan: str, report: dict[str, Any], transcript: str | None) -> Jud
             block_reason='provider',
         )
 
+    report = _ground_judge_report(
+        report,
+        transcript=transcript,
+        user_id=user_id,
+        project_id=project_id,
+    )
+    citations = _judge_citations(report, transcript)
+    if report.get('require_evaluator_findings') and (
+        report.get('evaluator_findings_error')
+        or not report.get('verdict')
+        or not _has_judge_evaluator_findings(report)
+    ):
+        return JudgeResponse(
+            status='blocked',
+            required_plan='starter',
+            credits=10,
+            message=str(report.get('evaluator_findings_error') or (
+                'LLM judge requires a deterministic verdict and evaluator findings. '
+                'Re-evaluate this conversation before requesting a second opinion.'
+            )),
+            evidence_citations=citations,
+            spend_control=spend_control,
+            provider=spend_control.get('provider'),
+            model=model_name,
+            block_reason='evidence',
+        )
     reserved, spend_control = _reserve_judge_credits(spend_control, credits=10)
     if not reserved:
         return JudgeResponse(
@@ -1116,6 +1151,107 @@ def _string_list(value: Any, *, limit: int = 8) -> list[str]:
     return items
 
 
+_JUDGE_EVALUATOR_FINDING_KEYS = (
+    'verdict',
+    'overall_score',
+    'required_action_score',
+    'rubric_score',
+    'task_completion_score',
+    'forbidden_action_score',
+    'final_state_score',
+    'workflow_order_score',
+    'score_components',
+    'completed_actions',
+    'missing_actions',
+    'forbidden_action_hits',
+    'rubric_checks',
+    'hard_check_failures',
+    'failure_categories',
+    'failure_modes',
+    'suggested_fixes',
+    'scenario_contract',
+    'expected_final_state',
+)
+_JUDGE_DECISIVE_FINDING_KEYS = (
+    'score_components',
+    'missing_actions',
+    'rubric_checks',
+    'hard_check_failures',
+    'scenario_contract',
+    'expected_final_state',
+)
+
+
+def _has_judge_evaluator_findings(report: dict[str, Any]) -> bool:
+    return any(key in report for key in _JUDGE_DECISIVE_FINDING_KEYS)
+
+
+def _ground_judge_report(
+    report: dict[str, Any],
+    *,
+    transcript: str | None,
+    user_id: str | None,
+    project_id: str | None,
+) -> dict[str, Any]:
+    grounded = dict(report)
+    recorded_verdict = str(report.get('verdict') or '').strip().lower()
+    persisted = report.get('evaluation_findings')
+    persisted_has_findings = (
+        isinstance(persisted, dict)
+        and _has_judge_evaluator_findings(persisted)
+    )
+    execution_only_verdict = recorded_verdict in {'fail', 'failed'} or (
+        recorded_verdict == 'needs_review'
+        and bool(report.get('error'))
+        and not _has_judge_evaluator_findings(report)
+        and not persisted_has_findings
+    )
+    if report.get('require_evaluator_findings') and execution_only_verdict:
+        grounded['evaluator_findings_error'] = (
+            'Execution failure is not a deterministic evaluator verdict and cannot be reviewed.'
+        )
+        return grounded
+    if isinstance(persisted, dict):
+        for key in _JUDGE_EVALUATOR_FINDING_KEYS:
+            if key in persisted:
+                grounded[key] = persisted[key]
+        if _has_judge_evaluator_findings(grounded):
+            grounded['evaluator_findings_source'] = 'persisted_execution'
+            return grounded
+    if not report.get('require_evaluator_findings') or _has_judge_evaluator_findings(grounded):
+        return grounded
+
+    suite_id = report.get('suite_id')
+    scenario_id = report.get('scenario_id')
+    if not isinstance(suite_id, str) or not isinstance(scenario_id, str):
+        grounded['evaluator_findings_error'] = 'Suite and scenario identifiers are required.'
+        return grounded
+    try:
+        from app.schemas.benchmarks import BenchmarkRunRequest
+        from app.services.benchmark_service import run_scenario
+
+        evaluated = run_scenario(BenchmarkRunRequest(
+            suite_id=suite_id,
+            scenario_id=scenario_id,
+            transcript=transcript,
+            action_trace=report.get('action_trace') or [],
+            final_state=report.get('final_state') or {},
+            user_id=user_id,
+            project_id=project_id,
+        ), persist_artifacts=False)
+    except Exception as exc:  # noqa: BLE001 - retain the saved result and expose why grounding failed
+        grounded['evaluator_findings_error'] = str(exc)
+        return grounded
+    if not evaluated.get('verdict'):
+        grounded['evaluator_findings_error'] = 'Recomputed evaluator did not return a verdict.'
+        return grounded
+    for key in _JUDGE_EVALUATOR_FINDING_KEYS:
+        if key in evaluated:
+            grounded[key] = evaluated[key]
+    grounded['evaluator_findings_source'] = 'recomputed_current_contract'
+    return grounded
+
+
 def _judge_failure_summary(report: dict[str, Any]) -> list[str]:
     lines: list[str] = []
     missing = _string_list(report.get('missing_actions'))
@@ -1124,9 +1260,12 @@ def _judge_failure_summary(report: dict[str, Any]) -> list[str]:
     forbidden = _string_list(report.get('forbidden_action_hits') or report.get('forbidden_actions'))
     if forbidden:
         lines.append('Forbidden action hits: ' + '; '.join(forbidden))
-    failures = _string_list(report.get('failure_categories') or report.get('hard_check_failures'))
+    failures = _string_list(report.get('failure_categories'))
     if failures:
         lines.append('Failure categories: ' + '; '.join(failures))
+    hard_failures = _string_list(report.get('hard_check_failures'))
+    if hard_failures:
+        lines.append('Hard-check failures: ' + '; '.join(hard_failures))
     rubric = report.get('rubric_checks')
     if isinstance(rubric, list):
         failed_rubric = []
@@ -1142,6 +1281,20 @@ def _judge_failure_summary(report: dict[str, Any]) -> list[str]:
     fixes = _string_list(report.get('suggested_fixes') or report.get('recommendations'), limit=5)
     if fixes:
         lines.append('Suggested fixes: ' + '; '.join(fixes))
+    scenario_contract = report.get('scenario_contract')
+    if isinstance(scenario_contract, dict):
+        requirements = _string_list(scenario_contract.get('required_actions'), limit=12)
+        if requirements:
+            lines.append('Scenario required actions: ' + '; '.join(requirements))
+    expected_final_state = report.get('expected_final_state')
+    if isinstance(expected_final_state, (dict, list, str)) and expected_final_state:
+        lines.append(
+            'Expected final state: '
+            + json.dumps(expected_final_state, ensure_ascii=False, default=str)[:500]
+        )
+    findings_error = report.get('evaluator_findings_error')
+    if findings_error:
+        lines.append(f'Evaluator findings unavailable: {str(findings_error)[:300]}')
     final_state = report.get('final_state')
     if isinstance(final_state, dict) and final_state:
         complete = final_state.get('complete')
@@ -1156,6 +1309,38 @@ def _judge_failure_summary(report: dict[str, Any]) -> list[str]:
                 events.append(str(item)[:80])
         lines.append('Action trace sample: ' + '; '.join(events))
     return lines
+
+
+def _bounded_judge_evidence_value(value: Any, *, max_chars: int) -> Any:
+    serialized = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    if len(serialized) <= max_chars:
+        return value
+    wrapper: dict[str, Any] = {
+        'truncated': True,
+        'original_chars': len(serialized),
+        'json_preview': '',
+    }
+    wrapper_overhead = len(json.dumps(wrapper, ensure_ascii=False, sort_keys=True))
+    wrapper['json_preview'] = serialized[:max(0, max_chars - wrapper_overhead)]
+    while len(json.dumps(wrapper, ensure_ascii=False, sort_keys=True)) > max_chars:
+        wrapper['json_preview'] = wrapper['json_preview'][:-1]
+    return wrapper
+
+
+def _judge_structured_evidence(report: dict[str, Any]) -> str:
+    structured: dict[str, Any] = {}
+    final_state = report.get('final_state')
+    if isinstance(final_state, dict) and final_state:
+        structured['final_state'] = _bounded_judge_evidence_value(final_state, max_chars=3500)
+    execution_error = report.get('error')
+    if isinstance(execution_error, str) and execution_error.strip():
+        structured['execution_error'] = execution_error.strip()[:900]
+    action_trace = report.get('action_trace')
+    if isinstance(action_trace, list) and action_trace:
+        structured['action_trace'] = _bounded_judge_evidence_value(action_trace[:12], max_chars=3000)
+    if not structured:
+        return '(none)'
+    return json.dumps(structured, ensure_ascii=False, sort_keys=True, default=str)
 
 
 def _judge_spend_path():
@@ -1292,6 +1477,10 @@ def _build_judge_prompt(*, report: dict[str, Any], transcript: str | None, citat
         'You are an evidence-grounded LLM judge for ConversationAgentEvals.',
         'Review the deterministic ASSERT-style benchmark report and transcript.',
         'Decide whether you agree with the deterministic verdict using the evidence.',
+        'Also propose the effective evaluation a human could explicitly confirm.',
+        'Correct deterministic findings only when the supplied transcript or structured evidence directly contradicts them.',
+        'Never invent a tool call, business action, final state, or consent statement that is not in the supplied evidence.',
+        'A corrected transcript finding does not prove live tool execution or a completed final state.',
         f'Suite: {suite_id}',
         f'Scenario: {scenario_id}',
         f'Deterministic verdict: {verdict}',
@@ -1299,13 +1488,21 @@ def _build_judge_prompt(*, report: dict[str, Any], transcript: str | None, citat
         f'Score breakdown: {", ".join(score_bits) if score_bits else "(none)"}',
         'Deterministic findings:',
         *failure_lines,
+        'Structured execution evidence (JSON):',
+        _judge_structured_evidence(report),
         'Evidence citations:',
         *citation_lines,
         'Transcript excerpt:',
         (transcript or '(empty)')[:4000],
         '',
         'Respond with ONLY compact JSON (no markdown fences):',
-        '{"agrees": true|false, "rationale": "one sentence", "next_action": "one concrete next step"}',
+        (
+            '{"agrees": true|false, "rationale": "one sentence", '
+            '"next_action": "one concrete next step", "proposed_evaluation": {'
+            '"verdict": "pass|needs_review|fail", "summary": "current evidence-based conclusion", '
+            '"corrected_findings": ["automatic finding corrected by cited evidence"], '
+            '"remaining_gaps": ["gap that still prevents verification"]}}'
+        ),
     ]
     return '\n'.join(lines)
 
@@ -1332,10 +1529,14 @@ def _parse_judge_output(raw_output: str) -> JudgeStructuredResult:
                     agrees = None
                 rationale = payload.get('rationale') or payload.get('reason')
                 next_action = payload.get('next_action') or payload.get('nextAction')
+                proposed = _parse_judge_proposed_evaluation(
+                    payload.get('proposed_evaluation') or payload.get('proposedEvaluation')
+                )
                 return JudgeStructuredResult(
                     agrees=agrees,
                     rationale=str(rationale).strip() if rationale else None,
                     next_action=str(next_action).strip() if next_action else None,
+                    proposed_evaluation=proposed,
                     raw_output=raw_output,
                 )
     except json.JSONDecodeError:
@@ -1347,6 +1548,42 @@ def _parse_judge_output(raw_output: str) -> JudgeStructuredResult:
     elif 'agree' in lowered:
         agrees = True
     return JudgeStructuredResult(agrees=agrees, rationale=text[:400], next_action=None, raw_output=raw_output)
+
+
+def _parse_judge_proposed_evaluation(value: Any) -> JudgeProposedEvaluation | None:
+    if not isinstance(value, dict):
+        return None
+    verdict = str(value.get('verdict') or '').strip().lower().replace(' ', '_')
+    if verdict == 'failed':
+        verdict = 'fail'
+    if verdict not in {'pass', 'needs_review', 'fail'}:
+        return None
+    summary = str(value.get('summary') or '').strip()
+    if not summary:
+        return None
+
+    def bounded_strings(raw: Any) -> list[str]:
+        if not isinstance(raw, list):
+            return []
+        return [
+            str(item).strip()[:500]
+            for item in raw
+            if isinstance(item, str) and item.strip()
+        ][:8]
+
+    remaining_gaps = bounded_strings(value.get('remaining_gaps') or value.get('remainingGaps'))
+    # A proposal cannot claim a verified pass while naming unresolved evidence
+    # gaps. Keep the recommendation fail-closed for the human confirmation step.
+    if verdict == 'pass' and remaining_gaps:
+        verdict = 'needs_review'
+    return JudgeProposedEvaluation(
+        verdict=verdict,
+        summary=summary[:1000],
+        corrected_findings=bounded_strings(
+            value.get('corrected_findings') or value.get('correctedFindings')
+        ),
+        remaining_gaps=remaining_gaps,
+    )
 
 
 def _execute_judge_completion(prompt: str) -> str:

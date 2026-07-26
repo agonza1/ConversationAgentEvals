@@ -1,3 +1,4 @@
+import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
@@ -1550,6 +1551,228 @@ def test_llm_judge_spend_control_respects_budget_env(monkeypatch, tmp_path):
         set_provider_for_tests('openai', None)
 
 
+def test_llm_judge_prompt_preserves_structured_execution_evidence():
+    from app.services import product_service
+
+    prompt = product_service._build_judge_prompt(
+        report={
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'billing-address-change',
+            'verdict': 'needs_review',
+            'overall_score': 60,
+            'action_trace': [
+                {
+                    'action': 'update_billing_address',
+                    'status': 'completed',
+                    'tool_result': {'confirmation_id': 'confirm-42'},
+                }
+            ],
+            'final_state': {
+                'complete': True,
+                'customer': {'subscription_status': 'retained'},
+                'billing_address': {'postal_code': '10001'},
+            },
+            'error': 'provider disconnected after the tool result',
+        },
+        transcript='Agent: I updated the billing address.',
+        citations=['source=final_state; text={"complete": true}'],
+    )
+
+    assert 'Structured execution evidence (JSON):' in prompt
+    assert '"confirmation_id": "confirm-42"' in prompt
+    assert '"subscription_status": "retained"' in prompt
+    assert '"postal_code": "10001"' in prompt
+    assert '"execution_error": "provider disconnected after the tool result"' in prompt
+    assert '"proposed_evaluation"' in prompt
+    assert 'Never invent a tool call' in prompt
+
+
+def test_llm_judge_parser_returns_a_bounded_evaluation_proposal():
+    from app.services import product_service
+
+    parsed = product_service._parse_judge_output(json.dumps({
+        'agrees': True,
+        'rationale': 'The verdict is right, but one automatic finding conflicts with the transcript.',
+        'next_action': 'Complete scheduling and capture privacy consent.',
+        'proposed_evaluation': {
+            'verdict': 'needs review',
+            'summary': 'Identity was collected, while consent and scheduling remain unproven.',
+            'corrected_findings': [
+                'Name and date of birth were collected in the transcript.',
+            ],
+            'remaining_gaps': [
+                'Privacy consent was not explicit.',
+                'No completed scheduling action or final state was recorded.',
+            ],
+        },
+    }))
+
+    assert parsed.agrees is True
+    assert parsed.proposed_evaluation is not None
+    assert parsed.proposed_evaluation.verdict == 'needs_review'
+    assert parsed.proposed_evaluation.corrected_findings == [
+        'Name and date of birth were collected in the transcript.',
+    ]
+    assert parsed.proposed_evaluation.remaining_gaps == [
+        'Privacy consent was not explicit.',
+        'No completed scheduling action or final state was recorded.',
+    ]
+
+    contradictory = product_service._parse_judge_output(json.dumps({
+        'agrees': False,
+        'rationale': 'One gap remains.',
+        'proposed_evaluation': {
+            'verdict': 'pass',
+            'summary': 'The run still lacks a final state.',
+            'remaining_gaps': ['No completed final state was recorded.'],
+        },
+    }))
+    assert contradictory.proposed_evaluation is not None
+    assert contradictory.proposed_evaluation.verdict == 'needs_review'
+
+
+def test_llm_judge_recomputes_missing_evaluator_findings_before_spending(monkeypatch):
+    from app.services import benchmark_service, product_service
+
+    captured = {}
+
+    def fake_run_scenario(request, *, persist_artifacts=True):
+        captured.update(request.model_dump())
+        captured['persist_artifacts'] = persist_artifacts
+        return {
+            'verdict': 'needs_review',
+            'overall_score': 45,
+            'missing_actions': ['policy_hold_entered'],
+            'rubric_checks': [{'name': 'retention_policy', 'status': 'failed'}],
+            'hard_check_failures': [{'category': 'policy', 'summary': 'Required hold missing.'}],
+            'scenario_contract': {
+                'required_actions': [
+                    {'id': 'policy_hold_entered', 'description': 'Enter the required policy hold.'},
+                ],
+            },
+            'expected_final_state': {'description': 'Policy hold entered.'},
+        }
+
+    monkeypatch.setattr(benchmark_service, 'run_scenario', fake_run_scenario)
+    grounded = product_service._ground_judge_report(
+        {
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'cancellation-rescue',
+            'verdict': 'needs_review',
+            'overall_score': 60,
+            'action_trace': [{'action': 'verify_identity', 'status': 'completed'}],
+            'final_state': {'complete': False},
+            'require_evaluator_findings': True,
+        },
+        transcript='Agent: I verified the caller.',
+        user_id='judge-user',
+        project_id='judge-project',
+    )
+
+    assert captured['user_id'] == 'judge-user'
+    assert captured['project_id'] == 'judge-project'
+    assert captured['persist_artifacts'] is False
+    assert grounded['evaluator_findings_source'] == 'recomputed_current_contract'
+    assert grounded['verdict'] == 'needs_review'
+    assert grounded['overall_score'] == 45
+    assert grounded['missing_actions'] == ['policy_hold_entered']
+    prompt = product_service._build_judge_prompt(
+        report=grounded,
+        transcript='Agent: I verified the caller.',
+        citations=[],
+    )
+    assert 'Missing required actions: policy_hold_entered' in prompt
+    assert 'Failed rubric checks: retention_policy' in prompt
+    assert 'Hard-check failures:' in prompt
+    assert 'Scenario required actions:' in prompt
+    assert 'Expected final state:' in prompt
+
+
+def test_llm_judge_does_not_recompute_execution_failure_as_evaluator_verdict(monkeypatch):
+    from app.services import benchmark_service, product_service
+
+    def fail_if_called(_request, **_kwargs):
+        raise AssertionError('execution failures must not be reclassified by the evaluator')
+
+    monkeypatch.setattr(benchmark_service, 'run_scenario', fail_if_called)
+    grounded = product_service._ground_judge_report(
+        {
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'cancellation-rescue',
+            'verdict': 'fail',
+            'overall_score': None,
+            'action_trace': [],
+            'final_state': {'complete': False, 'outcome': 'runner_error'},
+            'evaluation_findings': {
+                'verdict': 'pass',
+                'overall_score': 100,
+                'score_components': {'required_actions': 100},
+            },
+            'require_evaluator_findings': True,
+        },
+        transcript=None,
+        user_id='judge-user',
+        project_id='judge-project',
+    )
+
+    assert grounded['verdict'] == 'fail'
+    assert grounded['overall_score'] is None
+    assert grounded['evaluator_findings_error'] == (
+        'Execution failure is not a deterministic evaluator verdict and cannot be reviewed.'
+    )
+    assert 'evaluator_findings_source' not in grounded
+
+    error_backed_review = product_service._ground_judge_report(
+        {
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'cancellation-rescue',
+            'verdict': 'needs_review',
+            'overall_score': None,
+            'error': 'Pipecat tester timed out before deterministic evaluation.',
+            'action_trace': [],
+            'final_state': {'complete': False, 'outcome': 'runner_error'},
+            'evaluation_findings': {},
+            'require_evaluator_findings': True,
+        },
+        transcript=None,
+        user_id='judge-user',
+        project_id='judge-project',
+    )
+    assert error_backed_review['verdict'] == 'needs_review'
+    assert error_backed_review['overall_score'] is None
+    assert error_backed_review['evaluator_findings_error'] == (
+        'Execution failure is not a deterministic evaluator verdict and cannot be reviewed.'
+    )
+    assert 'evaluator_findings_source' not in error_backed_review
+
+
+def test_llm_judge_structured_evidence_stays_valid_and_preserves_priority_fields():
+    from app.services import product_service
+
+    serialized = product_service._judge_structured_evidence({
+        'action_trace': [
+            {
+                'action': 'update_billing_address',
+                'tool_result': {'raw_provider_payload': 'x' * 12_000},
+            }
+        ],
+        'final_state': {
+            'complete': True,
+            'outcome': 'unsupported_terminal_outcome',
+            'customer': {'subscription_status': 'retained'},
+        },
+        'error': 'provider disconnected after the tool result',
+    })
+
+    evidence = json.loads(serialized)
+    assert len(serialized) <= 8000
+    assert evidence['final_state']['outcome'] == 'unsupported_terminal_outcome'
+    assert evidence['final_state']['customer']['subscription_status'] == 'retained'
+    assert evidence['execution_error'] == 'provider disconnected after the tool result'
+    assert evidence['action_trace']['truncated'] is True
+    assert evidence['action_trace']['original_chars'] > 3000
+
+
 def test_llm_judge_spend_reservation_is_atomic(monkeypatch, tmp_path):
     from app.services import product_service
     from app.services.llm_providers import set_provider_for_tests
@@ -1618,7 +1841,45 @@ def test_llm_judge_spend_reservation_is_atomic(monkeypatch, tmp_path):
 
 
 
-def test_product_audit_events_track_saved_runs_exports_and_judge_requests():
+def test_product_audit_events_track_saved_runs_exports_and_judge_requests(
+    monkeypatch,
+    tmp_path,
+    request,
+):
+    from app.services import product_service
+    from app.services.llm_providers import set_provider_for_tests
+
+    class _AuditJudgeProvider:
+        provider_id = 'openai'
+
+        def status(self):
+            return {
+                'id': 'openai',
+                'provider': 'openai_codex',
+                'status': 'connected',
+                'email': 'audit-judge@example.com',
+                'account_id': 'audit-judge',
+                'message': 'connected',
+                'last_error': None,
+            }
+
+        def complete(self, _prompt: str):
+            return json.dumps({
+                'agrees': True,
+                'rationale': 'The evidence supports the automatic result.',
+                'next_action': 'Keep the recorded evaluation.',
+                'proposed_evaluation': {
+                    'verdict': 'pass',
+                    'summary': 'The recorded evidence supports a pass verdict.',
+                    'corrected_findings': [],
+                    'remaining_gaps': [],
+                },
+            })
+
+    monkeypatch.setattr(product_service, '_judge_spend_path', lambda: tmp_path / 'audit-judge-spend.json')
+    set_provider_for_tests('openai', _AuditJudgeProvider())
+    request.addfinalizer(lambda: set_provider_for_tests('openai', None))
+
     saved = client.post(
         '/api/product/runs',
         json={
@@ -1653,14 +1914,20 @@ def test_product_audit_events_track_saved_runs_exports_and_judge_requests():
 
     assert response.status_code == 200
     events = response.json()
+    judge_payload = events[0]['payload']
+    judge_result = judge_response.json()
+    judge_output = judge_result['judge_output']
     assert [event['event_type'] for event in events] == ['judge.requested', 'run.exported', 'run.saved']
-    assert events[0]['payload'] == {
+    assert judge_payload == {
         'project_id': 'call-center',
         'plan': 'starter',
-        'status': judge_response.json()['status'],
+        'status': judge_result['status'],
         'credits': 10,
-        'provider': judge_response.json()['provider'],
-        'model': judge_response.json()['model'],
+        'provider': judge_result['provider'],
+        'model': judge_result['model'],
+        'agrees': judge_result['judge_result']['agrees'],
+        'output_preview': judge_output[:400],
+        'output_sha256': hashlib.sha256(judge_output.encode('utf-8')).hexdigest()[:16],
     }
     assert events[1]['payload'] == {'run_id': saved['id'], 'export_type': 'single_run'}
     assert events[2]['payload'] == {

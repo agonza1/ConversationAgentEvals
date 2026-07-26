@@ -10,6 +10,7 @@ import {
   createAgent,
   deleteAgent,
   isBuiltInAgent,
+  isSeedAgent,
   listAgents,
   testAccConnection,
   updateAgent,
@@ -595,6 +596,7 @@ export function AgentsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [editingAgent, setEditingAgent] = useState<AgentRecord | null>(null);
   const [apiBaseOverride, setApiBaseOverride] = useState<string | null>(null);
+  const visibleAgents = agents.filter((agent) => !isSavedReplayTarget(agent.target));
 
   async function reload() {
     const next = await listAgents();
@@ -709,7 +711,7 @@ export function AgentsPage() {
       {message ? <p className="scenarios-muted">{message}</p> : null}
 
       <section className="agents-grid" aria-label="Agent targets">
-        {agents.map((agent) => (
+        {visibleAgents.map((agent) => (
           <article key={agent.id} className="agents-card">
             <div className="agents-card-top">
               <div className="agents-card-identity">
@@ -726,11 +728,13 @@ export function AgentsPage() {
                   </div>
                 </div>
               </div>
-              <AgentCardMenu
-                agent={agent}
-                onEdit={() => setEditingAgent(agent)}
-                onDelete={() => void onDelete(agent)}
-              />
+              {isSeedAgent(agent) ? null : (
+                <AgentCardMenu
+                  agent={agent}
+                  onEdit={() => setEditingAgent(agent)}
+                  onDelete={() => void onDelete(agent)}
+                />
+              )}
             </div>
 
             <a className="agents-try-button" href={agentTryItOutHref(agent.id, apiBaseOverride)}>
@@ -755,7 +759,7 @@ export function AgentsPage() {
         ))}
       </section>
 
-      {!agents.length && !error ? (
+      {!visibleAgents.length && !error ? (
         <section className="agents-empty card">
           <h2>No agent targets yet</h2>
           <p className="scenarios-muted">

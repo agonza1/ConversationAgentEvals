@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import json
+from copy import deepcopy
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -15,6 +19,7 @@ from app.schemas.product import (
     ProductWorkspaceRequest,
     SavedRunRequest,
 )
+from app.services import execution_run_store
 from app.services.product_service import (
     accept_workspace_invitation,
     checkout_gate,
@@ -268,13 +273,39 @@ def export_run_report(run_id: str, user_id: str = Query(min_length=1), db: Sessi
 
 @router.post('/judge')
 def request_llm_judge(payload: JudgeRequest, db: Session = Depends(get_db)):
-    response = judge_gate(plan=payload.plan, report=payload.report, transcript=payload.transcript)
+    report = payload.report
+    transcript = payload.transcript
+    project_id = payload.project_id
+    deterministic_snapshot = None
+    if payload.execution_run_id and payload.conversation_id and payload.user_id:
+        run = execution_run_store.get_execution_run(payload.execution_run_id)
+        if run is None or run.get('user_id') != payload.user_id:
+            raise HTTPException(status_code=404, detail='Execution run not found.')
+        conversation = execution_run_store.get_conversation(
+            payload.execution_run_id,
+            payload.conversation_id,
+        )
+        if conversation is None:
+            raise HTTPException(status_code=404, detail='Conversation not found.')
+        if run.get('status') in {'queued', 'running'} or conversation.get('status') in {'queued', 'running'}:
+            raise HTTPException(status_code=409, detail='The conversation must be terminal before LLM review.')
+        report, transcript = _execution_judge_inputs(run, conversation)
+        project_id = str(run.get('project_id') or '') or None
+        deterministic_snapshot = execution_run_store.deterministic_evaluation_snapshot(conversation)
+
+    response = judge_gate(
+        plan=payload.plan,
+        report=report,
+        transcript=transcript,
+        user_id=payload.user_id,
+        project_id=project_id,
+    )
     if payload.user_id:
         agrees = response.judge_result.agrees if response.judge_result else None
         record_judge_request(
             db=db,
             user_id=payload.user_id,
-            project_id=payload.project_id,
+            project_id=project_id,
             plan=payload.plan,
             status=response.status,
             credits=response.credits,
@@ -283,7 +314,124 @@ def request_llm_judge(payload: JudgeRequest, db: Session = Depends(get_db)):
             judge_output=response.judge_output,
             agrees=agrees,
         )
+    if (
+        response.status == 'ready'
+        and payload.execution_run_id
+        and payload.conversation_id
+        and payload.user_id
+    ):
+        try:
+            review = execution_run_store.record_judge_review(
+                payload.execution_run_id,
+                payload.conversation_id,
+                user_id=payload.user_id,
+                response=response.model_dump(mode='json'),
+                expected_deterministic_snapshot=deterministic_snapshot,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        response = response.model_copy(update={'review_id': review['review_id']})
     return response
+
+
+def _execution_judge_inputs(
+    run: dict[str, Any],
+    conversation: dict[str, Any],
+) -> tuple[dict[str, Any], str | None]:
+    """Build an execution review exclusively from persisted server evidence."""
+    summary = conversation.get('metrics_summary')
+    summary = summary if isinstance(summary, dict) else {}
+    findings = conversation.get('evaluation_findings')
+    findings = deepcopy(findings) if isinstance(findings, dict) else {}
+    recorded_failure_categories = findings.get('failure_categories')
+    failure_categories = [
+        item
+        for item in recorded_failure_categories
+        if isinstance(item, str) and item
+    ] if isinstance(recorded_failure_categories, list) else []
+    error = conversation.get('error')
+    if isinstance(error, str) and error:
+        failure_categories.append(f'Execution error: {error}')
+
+    action_trace = conversation.get('action_trace')
+    action_trace = deepcopy(action_trace) if isinstance(action_trace, list) else []
+    final_state = conversation.get('final_state')
+    final_state = deepcopy(final_state) if isinstance(final_state, dict) else {}
+    transcript = conversation.get('transcript')
+    transcript = transcript if isinstance(transcript, str) and transcript else _transcript_from_turns(conversation)
+
+    report = {
+        **findings,
+        'run_id': run.get('execution_run_id'),
+        'suite_id': conversation.get('suite_id') or run.get('suite_id'),
+        'scenario_id': conversation.get('scenario_id'),
+        'scenario_title': conversation.get('scenario_title'),
+        'verdict': summary.get('verdict') or conversation.get('verdict'),
+        'overall_score': (
+            summary.get('score')
+            if summary.get('score') is not None
+            else conversation.get('score')
+        ),
+        'failure_categories': list(dict.fromkeys(failure_categories)),
+        'evidence_citations': _execution_judge_citations(
+            conversation,
+            action_trace=action_trace,
+            final_state=final_state,
+        ),
+        'action_trace': action_trace,
+        'final_state': final_state,
+        'error': error,
+        'evaluation_findings': findings,
+        'require_evaluator_findings': True,
+    }
+    return report, transcript
+
+
+def _transcript_from_turns(conversation: dict[str, Any]) -> str | None:
+    lines = []
+    for turn in conversation.get('turns') or []:
+        if not isinstance(turn, dict):
+            continue
+        text = turn.get('text')
+        if not isinstance(text, str) or not text.strip():
+            continue
+        speaker = str(turn.get('speaker') or 'speaker')
+        lines.append(f'{speaker}: {text.strip()}')
+    return '\n'.join(lines) or None
+
+
+def _execution_judge_citations(
+    conversation: dict[str, Any],
+    *,
+    action_trace: list[Any],
+    final_state: dict[str, Any],
+) -> list[dict[str, str]]:
+    citations: list[dict[str, str]] = []
+    for action in action_trace[:3]:
+        citations.append({
+            'source': 'action_trace',
+            'text': json.dumps(action, ensure_ascii=False, sort_keys=True, default=str),
+        })
+    if final_state:
+        citations.append({
+            'source': 'final_state',
+            'text': json.dumps(final_state, ensure_ascii=False, sort_keys=True, default=str),
+        })
+    error = conversation.get('error')
+    if isinstance(error, str) and error:
+        citations.append({'source': 'execution_error', 'text': error})
+    for turn in conversation.get('turns') or []:
+        if len(citations) >= 6 or not isinstance(turn, dict):
+            break
+        text = turn.get('text')
+        if isinstance(text, str) and text.strip():
+            citations.append({
+                'source': str(turn.get('speaker') or 'speaker'),
+                'text': text.strip(),
+            })
+    return citations[:6]
 
 
 @router.get('/providers')

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 PlanId = Literal['free', 'starter', 'team', 'business']
@@ -292,12 +292,31 @@ class JudgeRequest(BaseModel):
     transcript: str | None = None
     user_id: str | None = None
     project_id: str | None = None
+    execution_run_id: str | None = None
+    conversation_id: str | None = None
+
+    @model_validator(mode='after')
+    def validate_execution_review_target(self) -> 'JudgeRequest':
+        target_values = (self.execution_run_id, self.conversation_id)
+        if any(target_values) and not all(target_values):
+            raise ValueError('execution_run_id and conversation_id must be provided together')
+        if all(target_values) and not self.user_id:
+            raise ValueError('user_id is required when reviewing an execution conversation')
+        return self
+
+
+class JudgeProposedEvaluation(BaseModel):
+    verdict: Literal['pass', 'needs_review', 'fail']
+    summary: str = Field(min_length=1, max_length=1000)
+    corrected_findings: list[str] = Field(default_factory=list, max_length=8)
+    remaining_gaps: list[str] = Field(default_factory=list, max_length=8)
 
 
 class JudgeStructuredResult(BaseModel):
     agrees: bool | None = None
     rationale: str | None = None
     next_action: str | None = None
+    proposed_evaluation: JudgeProposedEvaluation | None = None
     raw_output: str | None = None
 
 
@@ -314,4 +333,5 @@ class JudgeResponse(BaseModel):
     model: str | None = None
     prompt_preview: str | None = None
     latency_ms: int | None = None
-    block_reason: Literal['provider', 'budget', 'provider_error'] | None = None
+    block_reason: Literal['provider', 'budget', 'provider_error', 'evidence'] | None = None
+    review_id: str | None = None

@@ -107,6 +107,8 @@ export function LiveRunFeedback({
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const liveAudioRef = useRef<HTMLAudioElement | null>(null);
   const stopUrlRef = useRef<string | null>(null);
+  const executionRunIdRef = useRef(executionRunId);
+  executionRunIdRef.current = executionRunId;
   const listenerActive = runStatus === 'queued' || runStatus === 'running';
   const canCreateListener = voice && Boolean(executionRunId && userId) && listenerActive;
   const displayedConversations = listenerActive && listenerConversations
@@ -150,6 +152,7 @@ export function LiveRunFeedback({
           body: JSON.stringify({ ttl_seconds: 600 }),
         },
       );
+      if (executionRunIdRef.current !== executionRunId) return null;
       setListenerToken(payload.listener);
       setExpanded(true);
       await refreshListener(payload.listener.token);
@@ -363,6 +366,9 @@ export function LiveRunFeedback({
 
   useEffect(() => {
     stopPlayback();
+    setListenerToken(null);
+    setListenerConversations(null);
+    setListenerMessage(null);
   }, [executionRunId, stopPlayback]);
 
   useEffect(() => {

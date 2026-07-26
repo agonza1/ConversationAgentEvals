@@ -160,6 +160,8 @@ test('launch evaluation streams conversations into the live list', async ({ page
   let posted: Record<string, unknown> | null = null;
   const textPostAttempts: Record<string, unknown>[] = [];
   let voicePosted: Record<string, unknown> | null = null;
+  let voiceRunCount = 0;
+  const listenerRunIds: string[] = [];
   let postAttempts = 0;
   await page.route('**/api/benchmarks/suite-runs**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
@@ -170,11 +172,13 @@ test('launch evaluation streams conversations into the live list', async ({ page
       const body = route.request().postDataJSON() as Record<string, unknown>;
       if (body.agent_id === 'generalist-voice-agent') {
         voicePosted = body;
+        voiceRunCount += 1;
+        const executionRunId = `exec-ui-voice-${voiceRunCount}`;
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
           body: JSON.stringify({
-            execution_run_id: 'exec-ui-voice',
+            execution_run_id: executionRunId,
             status: 'queued',
             mode: 'pipecat_webrtc',
             suite_id: 'call-center-voice-ai',
@@ -333,28 +337,65 @@ test('launch evaluation streams conversations into the live list', async ({ page
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
   });
 
-  await page.route('**/api/execution/runs/exec-ui-voice**', async (route) => {
+  await page.route('**/api/execution/runs/exec-ui-voice-*', async (route) => {
+    const executionRunId = route.request().url().match(/exec-ui-voice-\d+/)?.[0] || 'exec-ui-voice-1';
+    const completed = listenerRunIds.includes(executionRunId);
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        execution_run_id: 'exec-ui-voice',
-        status: 'running',
+        execution_run_id: executionRunId,
+        status: completed ? 'completed' : 'running',
         mode: 'pipecat_webrtc',
         suite_id: 'call-center-voice-ai',
         scenario_ids: ['billing-address-change'],
         user_id: 'demo-user',
         project_id: 'call-center-demo',
         progress: {
-          phase: 'executing',
-          completed_conversations: 0,
+          phase: completed ? 'completed' : 'executing',
+          completed_conversations: completed ? 1 : 0,
           total_conversations: 1,
-          percent: 0,
-          active_conversation_id: 'exec-ui-voice-billing-address-change-1',
+          percent: completed ? 100 : 0,
+          active_conversation_id: completed ? null : `${executionRunId}-billing-address-change-1`,
         },
         conversations: [],
         created_at: '2026-07-18T00:00:00Z',
         updated_at: '2026-07-18T00:00:01Z',
+        completed_at: completed ? '2026-07-18T00:00:02Z' : null,
+      }),
+    });
+  });
+  await page.route('**/api/execution/runs/exec-ui-voice-*/listener-token**', async (route) => {
+    const executionRunId = route.request().url().match(/exec-ui-voice-\d+/)?.[0] || 'exec-ui-voice-1';
+    listenerRunIds.push(executionRunId);
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        listener: {
+          token: `${executionRunId}-token`,
+          expires_at: '2026-07-18T01:00:00Z',
+          listen_url: `/listeners/${executionRunId}-token`,
+          read_only: true,
+          can_inject_audio: false,
+          requires_microphone: false,
+          media_transport: 'webrtc',
+        },
+      }),
+    });
+  });
+  await page.route('**/api/execution/listeners/exec-ui-voice-*-token', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        listener: {
+          read_only: true,
+          can_inject_audio: false,
+          requires_microphone: false,
+          run_status: 'running',
+        },
+        conversations: [],
       }),
     });
   });
@@ -426,6 +467,14 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await launch.getByLabel('Execution agent target').selectOption('generalist-text-agent');
   await expect(launch.getByLabel('Maximum exchanges')).toHaveValue('3');
   await expect(launch.getByLabel('Maximum exchanges')).toBeEnabled();
+  await launch.getByLabel('Maximum exchanges').fill('');
+  await expect(launch.getByLabel('Maximum exchanges')).toHaveValue('');
+  await expect(launch).toContainText('enter an exchange cap');
+  await expect(launch.getByRole('button', { name: 'Run evaluation' })).toBeDisabled();
+  await launch.getByLabel('Maximum exchanges').pressSequentially('5');
+  await expect(launch.getByLabel('Maximum exchanges')).toHaveValue('5');
+  await expect(launch).toContainText('up to 5 exchanges each');
+  await expect(launch.getByRole('button', { name: 'Run evaluation' })).toBeEnabled();
   await launch.getByLabel('Maximum exchanges').fill('4');
   await launch.getByRole('button', { name: 'Run evaluation' }).click();
   await expect.poll(() => textPostAttempts.length).toBe(3);
@@ -468,6 +517,15 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect(launch.getByLabel('Run listener link')).toContainText('Available only while this run is active.');
   await expect(launch.getByRole('button', { name: 'Listen to live WebRTC' })).toBeEnabled();
   await expect(launch.getByRole('button', { name: 'Create live listener link' })).toBeEnabled();
+  await launch.getByRole('button', { name: 'Create live listener link' }).click();
+  await expect(launch.getByLabel('Run listener link')).toContainText('exec-ui-voice-1-token');
+  await expect(launch.getByRole('button', { name: 'Run evaluation' })).toBeEnabled();
+  await launch.getByRole('button', { name: 'Run evaluation' }).click();
+  await expect.poll(() => voiceRunCount).toBe(2);
+  await expect(launch.getByLabel('Run listener link')).toContainText('Available only while this run is active.');
+  await launch.getByRole('button', { name: 'Create live listener link' }).click();
+  await expect(launch.getByLabel('Run listener link')).toContainText('exec-ui-voice-2-token');
+  expect(listenerRunIds).toEqual(['exec-ui-voice-1', 'exec-ui-voice-2']);
   await expect(page.getByRole('heading', { name: 'Recent runs' })).toBeVisible();
   await expect(page.getByRole('link', { name: /Mock text agent/ })).toContainText('queued');
 

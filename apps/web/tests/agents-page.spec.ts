@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 
 type MockRunnerOptions = {
   agentsDelayMs?: number;
+  voicePreflightDelayMs?: number;
   onExecutionLaunch?: (request: Record<string, unknown>) => void;
 };
 
@@ -82,6 +83,14 @@ async function mockRunnerApis(page: import('@playwright/test').Page, options: Mo
             description: 'Black-box HTTP target.',
             metadata: {},
           },
+          {
+            id: 'saved-voice-replay',
+            name: 'Saved voice evidence',
+            channel: 'voice',
+            target: 'voice_fixture',
+            description: 'Historical evidence, not a runnable target.',
+            metadata: { model_name: 'saved-replay', prompt_version: 'fixture-v1' },
+          },
         ],
       }),
     });
@@ -118,6 +127,23 @@ async function mockRunnerApis(page: import('@playwright/test').Page, options: Mo
 
   await page.route('**/api/benchmarks/suite-runs**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+  });
+
+  await page.route('**/api/execution/health', async (route) => {
+    if (options.voicePreflightDelayMs) {
+      await new Promise((resolve) => setTimeout(resolve, options.voicePreflightDelayMs));
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        reference_voice: {
+          ready: true,
+          llm_mode: 'real',
+          dependencies: [],
+        },
+      }),
+    });
   });
 
   await page.route('**/api/execution/runs**', async (route) => {
@@ -178,6 +204,12 @@ test('targets page shows agent target cards and try-it-out deep links', async ({
     'href',
     '/runs?launch=demo&agent_id=acc-voice-fixture-agent',
   );
+  await expect(page.getByRole('article').filter({ hasText: 'Saved voice evidence' })).toHaveCount(0);
+  await expect(mockCard.getByRole('button', { name: 'Actions for Mock text agent' })).toHaveCount(0);
+  await expect(
+    page.getByRole('article').filter({ hasText: 'Staging HTTP agent' })
+      .getByRole('button', { name: 'Actions for Staging HTTP agent' }),
+  ).toBeVisible();
 });
 
 test('targets try-it-out links preserve the api base override', async ({ page }) => {
@@ -201,6 +233,7 @@ test('legacy agents redirect preserves the api base override', async ({ page }) 
 test('targets try-it-out auto-launches and opens run analysis', async ({ page }) => {
   const launches: Record<string, unknown>[] = [];
   await mockRunnerApis(page, {
+    voicePreflightDelayMs: 300,
     onExecutionLaunch: (request) => launches.push(request),
   });
   await page.goto('/targets');
