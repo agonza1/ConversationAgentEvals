@@ -154,9 +154,10 @@ for (const advancedEnvName of [
   'OPENAI_API_KEY=',
   'OPENAI_REALTIME_MODEL=gpt-realtime-mini',
   'OPENAI_RESPONSES_MODEL=gpt-4.1-mini',
+  'SPEC_GENERATION_MODEL=gpt-5.4-mini',
   'POSTGRES_DB=conversation_agent_evals',
   'COMPOSE_DATABASE_URL=sqlite:////workspace/storage/conversation_agent_evals.db',
-  'RTC_ASR_BASE_URL=http://localhost:8000',
+  'RTC_ASR_BASE_URL=http://localhost:8080',
   'STRIPE_SECRET_KEY=',
   'FIREBASE_PROJECT_ID=',
 ]) {

@@ -24,6 +24,9 @@ from app.services.llm_providers import get_provider
 from app.services.ssl_util import verified_ssl_context
 
 
+DEFAULT_SPEC_GENERATION_MODEL = 'gpt-5.4-mini'
+
+
 class AssertCheck(BaseModel):
     id: str = Field(default_factory=lambda: _slug_id('check'))
     label: str
@@ -528,9 +531,12 @@ def _saved_response(*, record: EditableAssertSpecVersion, project: ProductProjec
 def _generation_prompt(*, title: str, role: str, objective: str) -> str:
     return '\n'.join([
         'Create a proposed conversation-agent evaluation draft as JSON.',
-        'Return JSON only, with keys required_behaviors, forbidden_behaviors, scenario_seeds, scenarios, deterministic_checks, and judges.',
-        'Each behavior/check needs id, label, description, and severity. Each scenario needs id, title, persona, description, steps, and expected_outcome.',
-        'Each judge needs id, name, kind="semantic", rubric, weight=1, provider="configured-default", and model=null.',
+        'Return one JSON object with exactly these keys: required_behaviors, forbidden_behaviors, scenario_seeds, scenarios, deterministic_checks, and judges.',
+        'required_behaviors, forbidden_behaviors, and deterministic_checks are arrays of objects with id, label, description, and severity.',
+        'Every severity must be exactly one of "info", "warning", or "error".',
+        'scenario_seeds is an array of plain strings, never objects.',
+        'scenarios is an array of objects with id, title, persona, description, steps (an array of strings), and expected_outcome.',
+        'judges must contain exactly one object with id, name, kind="semantic", rubric, weight=1, provider="configured-default", and model=null.',
         'Produce concrete, auditable checks and 2-4 realistic scenarios. Do not claim any content is already approved.',
         f'Title: {title}',
         f'Agent role: {role}',
@@ -541,7 +547,10 @@ def _generation_prompt(*, title: str, role: str, objective: str) -> str:
 def _complete_generation(prompt: str) -> tuple[str, str, str]:
     provider = get_provider('openai')
     status = provider.status()
-    model_name = (os.getenv('OPENAI_RESPONSES_MODEL') or os.getenv('LLM_JUDGE_MODEL') or 'gpt-5.4').strip()
+    model_name = (
+        os.getenv('SPEC_GENERATION_MODEL')
+        or DEFAULT_SPEC_GENERATION_MODEL
+    ).strip() or DEFAULT_SPEC_GENERATION_MODEL
     if status.get('status') == 'connected':
         try:
             return provider.complete(prompt, model_name=model_name), str(status.get('provider') or 'openai_codex'), model_name
