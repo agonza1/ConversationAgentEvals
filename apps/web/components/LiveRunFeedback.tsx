@@ -200,29 +200,54 @@ export function LiveRunFeedback({
     setWebrtcStatus('idle');
   }, [apiBase]);
 
-  const connectWebRTC = useCallback(async (token: ListenerToken) => {
+  const connectWebRTC = useCallback(async (
+    token: ListenerToken,
+    isCurrentAttempt: () => boolean,
+  ) => {
     if (!token.webrtc_url) {
       throw new Error('This listener token does not expose WebRTC signaling.');
     }
     disconnectWebRTC();
     const peer = new RTCPeerConnection();
-    peerRef.current = peer;
-    stopUrlRef.current = token.webrtc_stop_url
+    const stopUrl = token.webrtc_stop_url
       ? mediaUrl(apiBase, token.webrtc_stop_url)
       : null;
+    peerRef.current = peer;
+    stopUrlRef.current = stopUrl;
     const pendingIceCandidates: RTCIceCandidateInit[] = [];
     let signalingReady = false;
     let serverListenerAttached = false;
+    const ownsSharedConnection = () => peerRef.current === peer;
+    const cleanupAttempt = async (notifyServer: boolean) => {
+      const ownedSharedConnection = ownsSharedConnection();
+      peer.close();
+      if (ownedSharedConnection) {
+        peerRef.current = null;
+        if (liveAudioRef.current) liveAudioRef.current.srcObject = null;
+        if (stopUrlRef.current === stopUrl) stopUrlRef.current = null;
+        setWebrtcStatus('idle');
+      }
+      if (notifyServer && stopUrl) {
+        await fetch(stopUrl, { method: 'POST' }).catch(() => undefined);
+      }
+      return ownedSharedConnection;
+    };
     setWebrtcStatus('connecting');
     peer.addTransceiver('audio', { direction: 'recvonly' });
     peer.ontrack = (event) => {
-      if (event.track.kind !== 'audio' || !liveAudioRef.current) return;
+      if (
+        !ownsSharedConnection()
+        || !isCurrentAttempt()
+        || event.track.kind !== 'audio'
+        || !liveAudioRef.current
+      ) return;
       liveAudioRef.current.srcObject = event.streams[0] ?? new MediaStream([event.track]);
       void liveAudioRef.current.play().catch(() => {
         setPlaybackMessage('Live audio was blocked by the browser. Stop listening and try again.');
       });
     };
     peer.onconnectionstatechange = () => {
+      if (!ownsSharedConnection() || !isCurrentAttempt()) return;
       if (peer.connectionState === 'connected') {
         setWebrtcStatus('listening');
         setPlaybackMessage('Listening to the ongoing WebRTC audio stream. Earlier audio is not replayed.');
@@ -240,13 +265,19 @@ export function LiveRunFeedback({
       });
     };
     peer.onicecandidate = (event) => {
-      if (!event.candidate || !token.webrtc_ice_url) return;
+      if (
+        !ownsSharedConnection()
+        || !isCurrentAttempt()
+        || !event.candidate
+        || !token.webrtc_ice_url
+      ) return;
       const candidate = event.candidate.toJSON();
       if (!signalingReady) {
         pendingIceCandidates.push(candidate);
         return;
       }
       void sendIceCandidate(candidate).catch(() => {
+        if (!ownsSharedConnection() || !isCurrentAttempt()) return;
         setWebrtcStatus('error');
         setPlaybackMessage('Could not send a WebRTC ICE candidate.');
       });
@@ -263,16 +294,21 @@ export function LiveRunFeedback({
         },
       );
       serverListenerAttached = true;
+      if (!ownsSharedConnection() || !isCurrentAttempt()) {
+        await cleanupAttempt(true);
+        return;
+      }
       await peer.setRemoteDescription(answer.answer);
       signalingReady = true;
       for (const candidate of pendingIceCandidates) await sendIceCandidate(candidate);
+      if (!ownsSharedConnection() || !isCurrentAttempt()) {
+        await cleanupAttempt(true);
+        return;
+      }
       setWebrtcStatus(answer.status === 'listening' ? 'listening' : 'connecting');
     } catch (error) {
-      if (serverListenerAttached && token.webrtc_stop_url) {
-        await fetch(mediaUrl(apiBase, token.webrtc_stop_url), { method: 'POST' }).catch(() => undefined);
-      }
-      disconnectWebRTC(false);
-      setWebrtcStatus('error');
+      const ownedSharedConnection = await cleanupAttempt(serverListenerAttached);
+      if (ownedSharedConnection && isCurrentAttempt()) setWebrtcStatus('error');
       throw error;
     }
   }, [apiBase, disconnectWebRTC]);
@@ -368,13 +404,11 @@ export function LiveRunFeedback({
       return;
     }
     try {
-      await connectWebRTC(token);
-      if (
-        playbackGenerationRef.current !== generation
-        || playbackModeRef.current !== 'live'
-      ) {
-        disconnectWebRTC();
-      }
+      const isCurrentAttempt = () => (
+        playbackGenerationRef.current === generation
+        && playbackModeRef.current === 'live'
+      );
+      await connectWebRTC(token, isCurrentAttempt);
     } catch (error) {
       if (
         playbackGenerationRef.current !== generation

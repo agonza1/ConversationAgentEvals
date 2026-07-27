@@ -1135,9 +1135,17 @@ test('owner live WebRTC uses a different token from the shared listener link', a
   let sharedWebrtcRequests = 0;
   let abandonedWebrtcRequests = 0;
   let abandonedTokenDelivered = false;
+  let overlapAWebrtcRequests = 0;
+  let overlapAResponseDelivered = false;
+  let overlapBWebrtcRequests = 0;
+  let overlapBStopRequests = 0;
   let releaseAbandonedToken!: () => void;
+  let releaseOverlapA!: () => void;
   const abandonedTokenGate = new Promise<void>((resolve) => {
     releaseAbandonedToken = resolve;
+  });
+  const overlapAGate = new Promise<void>((resolve) => {
+    releaseOverlapA = resolve;
   });
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
@@ -1169,7 +1177,11 @@ test('owner live WebRTC uses a different token from the shared listener link', a
         ? 'shared-listener-token'
         : listenerTokenRequests === 2
           ? 'owner-listener-token'
-          : 'abandoned-listener-token';
+          : listenerTokenRequests === 3
+            ? 'abandoned-listener-token'
+            : listenerTokenRequests === 4
+              ? 'overlap-a-listener-token'
+              : 'overlap-b-listener-token';
       if (token === 'abandoned-listener-token') {
         await abandonedTokenGate;
       }
@@ -1228,6 +1240,18 @@ test('owner live WebRTC uses a different token from the shared listener link', a
       if (url.includes('owner-listener-token')) ownerWebrtcRequests += 1;
       if (url.includes('shared-listener-token')) sharedWebrtcRequests += 1;
       if (url.includes('abandoned-listener-token')) abandonedWebrtcRequests += 1;
+      if (url.includes('overlap-a-listener-token')) {
+        overlapAWebrtcRequests += 1;
+        await overlapAGate;
+        await route.fulfill({
+          status: 502,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: 'Attempt A failed after attempt B connected.' }),
+        });
+        overlapAResponseDelivered = true;
+        return;
+      }
+      if (url.includes('overlap-b-listener-token')) overlapBWebrtcRequests += 1;
       await route.fulfill({
         status: url.includes('shared-listener-token') ? 409 : 200,
         contentType: 'application/json',
@@ -1241,6 +1265,10 @@ test('owner live WebRTC uses a different token from the shared listener link', a
       return;
     }
     if (url.endsWith('/webrtc/ice') || url.endsWith('/webrtc/stop')) {
+      if (
+        url.endsWith('/webrtc/stop')
+        && url.includes('overlap-b-listener-token')
+      ) overlapBStopRequests += 1;
       await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
       return;
     }
@@ -1281,6 +1309,21 @@ test('owner live WebRTC uses a different token from the shared listener link', a
   }));
   expect(abandonedWebrtcRequests).toBe(0);
   await expect(feedback.getByRole('button', { name: 'Listen to live WebRTC' })).toBeVisible();
+
+  await feedback.getByRole('button', { name: 'Listen to live WebRTC' }).click();
+  await expect.poll(() => overlapAWebrtcRequests).toBe(1);
+  await feedback.getByRole('button', { name: 'Stop live WebRTC' }).click();
+  await feedback.getByRole('button', { name: 'Listen to live WebRTC' }).click();
+  await expect.poll(() => overlapBWebrtcRequests).toBe(1);
+  await expect(feedback.getByLabel('WebRTC listener status')).toContainText('listening');
+  releaseOverlapA();
+  await expect.poll(() => overlapAResponseDelivered).toBe(true);
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
+  expect(overlapBStopRequests).toBe(0);
+  await expect(feedback.getByLabel('WebRTC listener status')).toContainText('listening');
+  await expect(feedback.getByRole('button', { name: 'Stop live WebRTC' })).toBeVisible();
 });
 
 test('completed replay switches from listener-token audio to owner-scoped audio', async ({ page }) => {
