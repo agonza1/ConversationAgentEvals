@@ -192,13 +192,21 @@ class OpenAICompatibleApiKeyProvider:
                 event = json.loads(data)
                 event_type = str(event.get('type') or '')
                 delta = event.get('delta')
-                if event_type.endswith('.delta') and isinstance(delta, str) and delta:
+                if (
+                    event_type == 'response.output_text.delta'
+                    and isinstance(delta, str)
+                    and delta
+                ):
                     if ttft_ms is None:
                         ttft_ms = round((time.perf_counter() - started_at) * 1000, 3)
                     chunks.append(delta)
                     yield {'type': 'delta', 'text': delta}
                 final_text = event.get('text')
-                if event_type.endswith('.done') and isinstance(final_text, str) and final_text:
+                if (
+                    event_type == 'response.output_text.done'
+                    and isinstance(final_text, str)
+                    and final_text
+                ):
                     completed_text = final_text
         if not chunks and completed_text:
             if ttft_ms is None:

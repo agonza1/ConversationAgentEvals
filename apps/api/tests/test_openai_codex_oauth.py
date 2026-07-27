@@ -221,6 +221,8 @@ def test_openai_codex_token_store_exchange_and_complete(tmp_path: Path, monkeypa
 
 def test_codex_responses_sse_parser_collects_text_deltas():
     payload = _parse_responses_sse(
+        'event: response.reasoning_summary_text.delta\n'
+        'data: {"type":"response.reasoning_summary_text.delta","delta":"Internal reasoning"}\n\n'
         'event: response.output_text.delta\n'
         'data: {"type":"response.output_text.delta","delta":"Hello"}\n\n'
         'event: response.output_text.delta\n'
@@ -255,6 +257,7 @@ def test_codex_response_stream_records_actual_first_text_delta(monkeypatch):
             self.lines = iter([
                 b'event: response.created\n',
                 b'data: {"type":"response.created","response":{"status":"in_progress"}}\n',
+                b'data: {"type":"response.reasoning_summary_text.delta","delta":"Internal reasoning"}\n',
                 b'event: response.output_text.delta\n',
                 b'data: {"type":"response.output_text.delta","delta":"Hello"}\n',
                 b'data: [DONE]\n',
@@ -295,8 +298,10 @@ def test_codex_response_stream_yields_text_deltas_without_buffering(monkeypatch)
 
         def __iter__(self):
             return iter([
+                b'data: {"type":"response.reasoning_summary_text.delta","delta":"Internal reasoning"}\n',
                 b'data: {"type":"response.output_text.delta","delta":"Hello"}\n',
                 b'data: {"type":"response.output_text.delta","delta":" world"}\n',
+                b'data: {"type":"response.reasoning_summary_text.done","text":"Internal reasoning"}\n',
                 b'data: [DONE]\n',
             ])
 
@@ -322,6 +327,7 @@ def test_codex_response_stream_uses_done_text_when_deltas_are_absent(monkeypatch
         def __iter__(self):
             return iter([
                 b'data: {"type":"response.created","response":{"status":"in_progress"}}\n',
+                b'data: {"type":"response.reasoning_summary_text.done","text":"Internal reasoning"}\n',
                 b'data: {"type":"response.output_text.done","text":"Final answer"}\n',
                 b'data: {"type":"response.completed","response":{"status":"completed"}}\n',
                 b'data: [DONE]\n',

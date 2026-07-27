@@ -812,12 +812,20 @@ def _http_json_post_stream(
                 event = json.loads(data)
                 event_type = str(event.get('type') or '')
                 delta = event.get('delta')
-                if event_type.endswith('.delta') and isinstance(delta, str) and delta:
+                if (
+                    event_type == 'response.output_text.delta'
+                    and isinstance(delta, str)
+                    and delta
+                ):
                     saw_delta = True
                     yield delta
                     continue
                 text = event.get('text')
-                if event_type.endswith('.done') and isinstance(text, str) and text:
+                if (
+                    event_type == 'response.output_text.done'
+                    and isinstance(text, str)
+                    and text
+                ):
                     completed_texts.append(text)
             if not saw_delta:
                 yield from completed_texts
@@ -839,7 +847,7 @@ def _sse_line_has_text_delta(raw_line: bytes) -> bool:
         return False
     return (
         isinstance(event, dict)
-        and str(event.get('type') or '').endswith('.delta')
+        and event.get('type') == 'response.output_text.delta'
         and isinstance(event.get('delta'), str)
         and bool(event['delta'])
     )
@@ -884,12 +892,16 @@ def _parse_responses_sse(raw: str) -> dict[str, Any]:
         if event_type == 'response.completed' and isinstance(response, dict):
             completed_response = response
         delta = event.get('delta')
-        if isinstance(delta, str):
+        if event_type == 'response.output_text.delta' and isinstance(delta, str):
             deltas.append(delta)
         # Codex sometimes emits the full value in output_text.done rather than
         # individual delta events.  Prefer that authoritative final text below.
         text = event.get('text')
-        if event_type.endswith('.done') and isinstance(text, str) and text:
+        if (
+            event_type == 'response.output_text.done'
+            and isinstance(text, str)
+            and text
+        ):
             completed_texts.append(text)
 
     if completed_texts:

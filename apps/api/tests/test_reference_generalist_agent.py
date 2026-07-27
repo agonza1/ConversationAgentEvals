@@ -40,6 +40,10 @@ def test_api_key_stream_accepts_final_only_response_event(monkeypatch):
             200,
             headers={'content-type': 'text/event-stream'},
             content=(
+                b'data: {"type":"response.reasoning_summary_text.delta",'
+                b'"delta":"Internal reasoning"}\n\n'
+                b'data: {"type":"response.reasoning_summary_text.done",'
+                b'"text":"Internal reasoning"}\n\n'
                 b'data: {"type":"response.output_text.done",'
                 b'"text":"Final-only API response"}\n\n'
                 b'data: [DONE]\n\n'
