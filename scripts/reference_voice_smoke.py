@@ -57,7 +57,7 @@ assert provenance.get('evidence_source') == 'current_run', provenance
 assert provenance.get('fixture_backed_scoring') is False, provenance
 assert (
     audio_session.get('architecture')
-    == 'streaming_pipecat_exchange_graph_paced_pcm_local_stt_v1'
+    == 'persistent_streaming_pipecat_duplex_local_stt_v1'
 ), audio_session
 duplex = audio_session.get('duplex') or {}
 assert duplex.get('transport') == 'in_process_pipecat_frame_bus', duplex
