@@ -79,6 +79,19 @@ export interface ConversationTurn {
   text?: string | null;
   latency_ms?: number | null;
   event_types?: string[];
+  direction?: 'tester_to_target' | 'target_to_tester' | string | null;
+  evidence_role?: string | null;
+  frame_metadata?: {
+    bytes?: number;
+    sample_rate?: number;
+    channels?: number;
+    duration_ms?: number;
+    sent_at?: number;
+    response_metric?: string;
+    response_latency_ms?: number;
+    response_complete_latency_ms?: number;
+    [key: string]: unknown;
+  };
 }
 
 export interface ConversationLiveEvent {
@@ -130,6 +143,7 @@ export interface ExecutionRunRecord {
   agent_name?: string | null;
   model_name?: string | null;
   max_exchanges?: number;
+  duplex_timeout_seconds?: number;
   tester_id?: TesterId;
   tester_model_name?: string | null;
   executor_id?: ExecutorId;
@@ -462,6 +476,7 @@ export async function createExecutionRun(payload: {
   mode?: ExecutionMode;
   iterations?: number;
   max_exchanges?: number;
+  duplex_timeout_seconds?: number;
   user_id: string;
   project_id: string;
   agent_id?: string;

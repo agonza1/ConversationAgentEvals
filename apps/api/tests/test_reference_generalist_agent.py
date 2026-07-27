@@ -7,6 +7,7 @@ import json
 import wave
 from pathlib import Path
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -17,15 +18,46 @@ from app.services.execution_audio import ExecutionAudioTargetAdapter
 from app.services.pipecat_tester_agent import PipecatTesterAgentRunner
 from app.services.reference_generalist_agent import (
     KokoroTesterTtsRenderer,
+    OpenAICompatibleApiKeyProvider,
     ReferenceMediaServices,
     ReferencePipecatAgentTransport,
     ReferencePipecatTesterGraphRenderer,
     ReferenceRuntimeConfig,
     ReferenceRuntimeError,
+    discover_rtc_asr_runtime,
 )
 
 
 client = TestClient(app)
+
+
+def test_api_key_stream_accepts_final_only_response_event(monkeypatch):
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-key')
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == '/v1/responses'
+        return httpx.Response(
+            200,
+            headers={'content-type': 'text/event-stream'},
+            content=(
+                b'data: {"type":"response.reasoning_summary_text.delta",'
+                b'"delta":"Internal reasoning"}\n\n'
+                b'data: {"type":"response.reasoning_summary_text.done",'
+                b'"text":"Internal reasoning"}\n\n'
+                b'data: {"type":"response.output_text.done",'
+                b'"text":"Final-only API response"}\n\n'
+                b'data: [DONE]\n\n'
+            ),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as stream_client:
+        provider = OpenAICompatibleApiKeyProvider(client=stream_client)
+        events = list(provider.stream_with_metrics('Hello', model_name='test-model'))
+
+    assert events[0] == {'type': 'delta', 'text': 'Final-only API response'}
+    assert events[1]['type'] == 'completed'
+    assert events[1]['text'] == 'Final-only API response'
+    assert isinstance(events[1]['ttft_ms'], float)
 
 
 def _wav(value: int = 1) -> bytes:
@@ -48,6 +80,24 @@ class FakeCompletion:
         assert 'Caller:' in prompt
         assert model_name == 'fake-model'
         return 'I can help with that request.'
+
+    def complete_with_metrics(self, prompt: str, *, model_name: str | None = None) -> dict:
+        return {
+            'text': self.complete(prompt, model_name=model_name),
+            'ttft_ms': 125.0,
+            'total_ms': 275.0,
+        }
+
+    def stream_with_metrics(self, prompt: str, *, model_name: str | None = None):
+        text = self.complete(prompt, model_name=model_name)
+        yield {'type': 'delta', 'text': 'I can help '}
+        yield {'type': 'delta', 'text': 'with that request.'}
+        yield {
+            'type': 'completed',
+            'text': text,
+            'ttft_ms': 75.0,
+            'total_ms': 225.0,
+        }
 
 
 class FakeMedia:
@@ -83,13 +133,22 @@ class FakeMedia:
             'caller_transcript': 'Please help me cancel.',
             'agent_text': 'I can help with that request.',
             'agent_audio_wav_base64': base64.b64encode(_wav(2)).decode('ascii'),
+            'first_audio_byte_latency_ms': 42.5,
+            'response_complete_latency_ms': 84.5,
             'pipeline': {'provider': 'pipecat', 'current_run': True},
         })
 
     def readiness(self):
         return {
             'stt': {'provider': 'rtc-asr', 'backend': 'faster-whisper', 'model': 'base.en', 'status': 'ready'},
-            'tts': {'provider': 'kokoro', 'model': 'kokoro', 'voice': 'af_heart', 'status': 'ready'},
+            'tts': {
+                'provider': 'kokoro',
+                'model': 'kokoro',
+                'tester_voice': 'af_heart',
+                'target_voice': 'af_bella',
+                'voices_distinct': True,
+                'status': 'ready',
+            },
         }
 
     def synthesize(self, text: str) -> bytes:
@@ -158,6 +217,58 @@ class FakeDuplexAsyncClient:
         target_audio = base64.b64encode(_wav(8)).decode('ascii')
         events = [
             {
+                'type': 'speech_started',
+                'turn_pair': 1,
+                'participant': 'tester',
+                'speaker': 'Caller',
+                'direction': 'tester_to_target',
+                'text': 'I want to cancel because the renewal increased.',
+                'llm_output': 'I want to cancel because the renewal increased.',
+                'first_audible_pcm_at': 10.0,
+            },
+            {
+                'type': 'speech_started',
+                'turn_pair': 1,
+                'participant': 'target',
+                'speaker': 'Agent',
+                'direction': 'target_to_tester',
+                'text': 'I can help and will keep the cancellation active.',
+                'llm_output': 'I can help and will keep the cancellation active.',
+                'first_audible_pcm_at': 11.0,
+            },
+            {
+                'type': 'live_audio',
+                'turn_pair': 1,
+                'speaker': 'Caller',
+                'direction': 'tester_to_target',
+                'text': 'I want to cancel because the renewal increased.',
+                'llm_output': 'I want to cancel because the renewal increased.',
+                'asr_receipt': None,
+                'audio_wav_base64': tester_audio,
+                'frame': {
+                    'sequence': 1,
+                    'direction': 'tester_to_target',
+                    'bytes': 320,
+                    'transport': 'in_process_pipecat_frame_bus',
+                },
+            },
+            {
+                'type': 'live_audio',
+                'turn_pair': 1,
+                'speaker': 'Agent',
+                'direction': 'target_to_tester',
+                'text': 'I can help and will keep the cancellation active.',
+                'llm_output': 'I can help and will keep the cancellation active.',
+                'asr_receipt': None,
+                'audio_wav_base64': target_audio,
+                'frame': {
+                    'sequence': 2,
+                    'direction': 'target_to_tester',
+                    'bytes': 320,
+                    'transport': 'in_process_pipecat_frame_bus',
+                },
+            },
+            {
                 'type': 'exchange',
                 'turn_pair': 1,
                 'tester': {
@@ -180,16 +291,28 @@ class FakeDuplexAsyncClient:
                         'sequence': 2,
                         'direction': 'target_to_tester',
                         'bytes': 320,
+                        'duration_ms': 10,
+                        'response_metric': 'speech_end_to_first_audible_pcm',
+                        'response_complete_latency_ms': 84.5,
+                        'stage_metrics': {
+                            'asr_finalize_ms': 10.0,
+                            'llm_ttft_ms': 12.5,
+                            'llm_total_ms': 18.0,
+                            'tts_ttfb_ms': 20.0,
+                        },
                         'transport': 'in_process_pipecat_frame_bus',
                     },
                 },
                 'latency_ms': 42.5,
+                'latency_kind': 'speech_end_to_first_audible_pcm',
+                'exchange_elapsed_ms': 120.0,
             },
             {
                 'type': 'complete',
                 'session_id': json['session_id'],
                 'status': 'completed',
                 'termination_reason': 'max_turn_pairs',
+                'architecture': 'streaming_pipecat_exchange_graph_paced_pcm_local_stt_v1',
                 'frames': [
                     {'sequence': 1, 'direction': 'tester_to_target', 'bytes': 320, 'transport': 'in_process_pipecat_frame_bus'},
                     {'sequence': 2, 'direction': 'target_to_tester', 'bytes': 320, 'transport': 'in_process_pipecat_frame_bus'},
@@ -287,7 +410,12 @@ def test_reference_tester_to_agent_contract_uses_only_current_run(tmp_path: Path
             'target_to_tester',
         ]
         assert transport.recording_handle(session_id).uri.endswith('.wav')
-        assert len(transport.latency_marks(session_id)) == 1
+        latency_marks = transport.latency_marks(session_id)
+        assert len(latency_marks) == 1
+        assert latency_marks[0]['kind'] == 'target_first_audio_byte'
+        assert latency_marks[0]['participant'] == 'target'
+        assert latency_marks[0]['latency_ms'] == 42.5
+        assert latency_marks[0]['response_complete_latency_ms'] >= 42.5
         assert [event['speaker'] for event in observed] == ['Caller', 'Agent']
         assert all(event['text'] for event in observed)
         assert all(event['audio'] for event in observed)
@@ -357,11 +485,11 @@ def test_primary_reference_path_streams_session_control_not_wav_turns(monkeypatc
         result = await transport.run_duplex_session(
             'duplex-session',
             scenario={
-                'id': 'cancellation-rescue',
-                'title': 'Cancellation Rescue',
-                'goal': 'Reach a safe disposition.',
-                'required_actions': ['detect cancellation intent'],
-                'forbidden_actions': ['make unapproved retention offer'],
+                'id': 'billing-address-change',
+                'title': 'Billing Address Change',
+                'goal': 'Verify the account and update the billing address.',
+                'required_actions': ['verify account', 'collect new billing address'],
+                'forbidden_actions': ['change address before verification'],
             },
             max_turn_pairs=1,
             total_timeout_seconds=20,
@@ -370,20 +498,42 @@ def test_primary_reference_path_streams_session_control_not_wav_turns(monkeypatc
 
         assert FakeDuplexAsyncClient.request_url.endswith('/reference-duplex/run')
         assert 'audio_wav_base64' not in FakeDuplexAsyncClient.request_json
+        assert FakeDuplexAsyncClient.request_json['scenario']['id'] == 'billing-address-change'
+        assert FakeDuplexAsyncClient.request_json['tester_voice'] == 'af_heart'
+        assert FakeDuplexAsyncClient.request_json['target_voice'] == 'af_bella'
+        assert FakeDuplexAsyncClient.request_json['stt_backend'] == 'faster-whisper'
+        assert FakeDuplexAsyncClient.request_json['stt_model'] == 'base.en'
         assert result['tester_provenance']['fixture_scheduler'] is False
         turns = transport.transcription_turns('duplex-session')
         assert [turn.evidence_role for turn in turns] == ['target_asr_receipt', 'tester_asr_receipt']
         assert turns[0].frame_metadata['source_text'].startswith('I want to cancel')
         assert turns[1].frame_metadata['source_text'].startswith('I can help')
         proof = transport.session_proof('duplex-session')
-        assert proof['architecture'] == 'two_independent_pipecat_graphs_in_process_duplex_frames'
+        assert proof['architecture'] == 'streaming_pipecat_exchange_graph_paced_pcm_local_stt_v1'
         assert proof['duplex']['transport'] == 'in_process_pipecat_frame_bus'
         assert [frame['direction'] for frame in proof['duplex']['frames']] == [
             'tester_to_target',
             'target_to_tester',
         ]
-        assert [event['speaker'] for event in observed] == ['Caller', 'Agent']
+        audio_events = [event for event in observed if event.get('audio')]
+        speech_events = [
+            event for event in observed
+            if event.get('frame_metadata', {}).get('media_event') == 'first_audible_byte'
+        ]
+        evidence_updates = [
+            event for event in observed
+            if event.get('update_live_audio_key') and event.get('asr_receipt')
+        ]
+        assert [event['speaker'] for event in speech_events] == ['Caller', 'Agent']
+        assert [event['speaker'] for event in audio_events] == ['Caller', 'Agent']
+        assert [event['asr_receipt'] for event in evidence_updates] == [
+            'I want to cancel because the renewal increased.',
+            'I can help and will keep the cancellation active.',
+        ]
         assert transport.recording_handle('duplex-session') is not None
+        latency = transport.latency_marks('duplex-session')
+        assert latency[0]['kind'] == 'speech_end_to_first_audible_pcm'
+        assert latency[0]['stage_metrics']['tts_ttfb_ms'] == 20.0
 
     asyncio.run(run())
 
@@ -393,6 +543,16 @@ def test_reference_media_readiness_fails_closed_without_each_service():
         ReferenceMediaServices(ReferenceRuntimeConfig(
             rtc_asr_base_url='',
             kokoro_base_url='http://kokoro.test',
+        )).readiness()
+
+
+def test_reference_media_readiness_requires_distinct_tester_and_target_voices():
+    with pytest.raises(ReferenceRuntimeError, match='distinct tester and target voices'):
+        ReferenceMediaServices(ReferenceRuntimeConfig(
+            rtc_asr_base_url='http://rtc-asr.test',
+            kokoro_base_url='http://kokoro.test',
+            kokoro_tester_voice='af_heart',
+            kokoro_target_voice='af_heart',
         )).readiness()
 
 
@@ -419,6 +579,35 @@ def test_reference_media_readiness_honors_custom_asr_health_path():
 
     assert client.urls[0] == 'http://rtc-asr.test/readyz'
     assert readiness['stt']['backend'] == 'faster-whisper'
+    assert readiness['stt']['model'] == 'base.en'
+    assert readiness['stt']['selection'] == 'service-discovery'
+
+
+def test_rtc_asr_runtime_adopts_any_ready_service_model():
+    runtime = discover_rtc_asr_runtime({
+        'status': 'ready',
+        'ready': True,
+        'model_loaded': True,
+        'backend': 'parakeet-mlx',
+        'model': 'mlx-community/parakeet-tdt_ctc-110m',
+    })
+
+    assert runtime == {
+        'provider': 'rtc-asr',
+        'backend': 'parakeet-mlx',
+        'model': 'mlx-community/parakeet-tdt_ctc-110m',
+        'status': 'ready',
+        'selection': 'service-discovery',
+    }
+
+
+def test_rtc_asr_runtime_rejects_service_without_loaded_model():
+    with pytest.raises(ReferenceRuntimeError, match='reachable but not ready'):
+        discover_rtc_asr_runtime({
+            'status': 'loading',
+            'ready': False,
+            'model_loaded': False,
+        })
 
 
 def test_reference_completion_callback_requires_internal_token(monkeypatch):
@@ -436,8 +625,35 @@ def test_reference_completion_callback_requires_internal_token(monkeypatch):
     )
     assert accepted.status_code == 200
     assert accepted.json()['text'] == 'I can help with that request.'
+    assert accepted.json()['ttft_ms'] == 125.0
+    assert accepted.json()['total_ms'] == 275.0
     with pytest.raises(ReferenceRuntimeError, match='KOKORO_BASE_URL'):
         ReferenceMediaServices(ReferenceRuntimeConfig(
             rtc_asr_base_url='http://rtc-asr.test',
             kokoro_base_url='',
         )).readiness()
+
+
+def test_reference_completion_stream_forwards_deltas_and_metrics(monkeypatch):
+    import app.routes.execution as execution_routes
+
+    monkeypatch.setenv('REFERENCE_AGENT_INTERNAL_TOKEN', 'shared-test-token')
+    monkeypatch.setattr(
+        execution_routes,
+        'resolve_reference_completion_provider',
+        lambda: FakeCompletion(),
+    )
+    response = client.post(
+        '/api/execution/reference/stream',
+        headers={'x-cae-reference-token': 'shared-test-token'},
+        json={'prompt': 'Caller: hello', 'model_name': 'fake-model'},
+    )
+
+    assert response.status_code == 200
+    events = [json.loads(line) for line in response.text.splitlines()]
+    assert [event['type'] for event in events] == ['delta', 'delta', 'completed']
+    assert ''.join(event.get('text', '') for event in events[:2]) == (
+        'I can help with that request.'
+    )
+    assert events[-1]['ttft_ms'] == 75.0
+    assert events[-1]['total_ms'] == 225.0

@@ -89,6 +89,8 @@ def test_two_pipecat_duplex_harness_exercises_independent_graphs_and_directions(
     assert result.graphs['target']['participant_id'] == 'pipecat_target'
     assert [item['name'] for item in result.graphs['tester']['processors']] == ['rtc-asr', 'llm', 'kokoro']
     assert [item['name'] for item in result.graphs['target']['processors']] == ['rtc-asr', 'llm', 'kokoro']
+    assert result.graphs['tester']['processors'][2]['voice'] == 'af_heart'
+    assert result.graphs['target']['processors'][2]['voice'] == 'af_bella'
     assert [frame['direction'] for frame in result.frames] == ['tester_to_target', 'target_to_tester']
     assert transport.frames_for('pipecat_target')[0].source_text == 'I need to cancel after a renewal increase.'
     assert transport.frames_for('pipecat_tester')[0].source_text.startswith('I can help')

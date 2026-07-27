@@ -13,6 +13,7 @@ from app.services.llm_providers.openai_codex import (
     decode_chatgpt_identity,
     disconnect_marker_path,
     _parse_responses_sse,
+    _http_json_post_stream,
 )
 from app.services.product_service import reset_saved_runs_for_tests
 
@@ -220,6 +221,8 @@ def test_openai_codex_token_store_exchange_and_complete(tmp_path: Path, monkeypa
 
 def test_codex_responses_sse_parser_collects_text_deltas():
     payload = _parse_responses_sse(
+        'event: response.reasoning_summary_text.delta\n'
+        'data: {"type":"response.reasoning_summary_text.delta","delta":"Internal reasoning"}\n\n'
         'event: response.output_text.delta\n'
         'data: {"type":"response.output_text.delta","delta":"Hello"}\n\n'
         'event: response.output_text.delta\n'
@@ -241,6 +244,102 @@ def test_codex_responses_sse_parser_uses_done_text_not_empty_created_response():
         'data: [DONE]\n'
     )
     assert payload == {'output_text': 'Final answer'}
+
+
+def test_codex_response_stream_records_actual_first_text_delta(monkeypatch):
+    from app.services.llm_providers import openai_codex as mod
+
+    class _TimedStream:
+        # The Codex proxy may omit the SSE content type; framing remains authoritative.
+        headers: dict[str, str] = {}
+
+        def __init__(self):
+            self.lines = iter([
+                b'event: response.created\n',
+                b'data: {"type":"response.created","response":{"status":"in_progress"}}\n',
+                b'data: {"type":"response.reasoning_summary_text.delta","delta":"Internal reasoning"}\n',
+                b'event: response.output_text.delta\n',
+                b'data: {"type":"response.output_text.delta","delta":"Hello"}\n',
+                b'data: [DONE]\n',
+            ])
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def readline(self):
+            return next(self.lines, b'')
+
+    clock = iter([10.0, 10.125])
+    monkeypatch.setattr(mod.time, 'perf_counter', lambda: next(clock))
+    monkeypatch.setattr(mod.urllib.request, 'urlopen', lambda *args, **kwargs: _TimedStream())
+
+    payload = mod._http_json_post(
+        'https://chatgpt.com/backend-api/codex/responses',
+        {'input': []},
+        headers={'Authorization': 'Bearer t'},
+    )
+
+    assert payload['output_text'] == 'Hello'
+    assert payload['_completion_metrics']['ttft_ms'] == 125.0
+
+
+def test_codex_response_stream_yields_text_deltas_without_buffering(monkeypatch):
+    from app.services.llm_providers import openai_codex as mod
+
+    class _Stream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def __iter__(self):
+            return iter([
+                b'data: {"type":"response.reasoning_summary_text.delta","delta":"Internal reasoning"}\n',
+                b'data: {"type":"response.output_text.delta","delta":"Hello"}\n',
+                b'data: {"type":"response.output_text.delta","delta":" world"}\n',
+                b'data: {"type":"response.reasoning_summary_text.done","text":"Internal reasoning"}\n',
+                b'data: [DONE]\n',
+            ])
+
+    monkeypatch.setattr(mod.urllib.request, 'urlopen', lambda *args, **kwargs: _Stream())
+
+    assert list(_http_json_post_stream(
+        'https://chatgpt.com/backend-api/codex/responses',
+        {'input': [], 'stream': True},
+        headers={'Authorization': 'Bearer t'},
+    )) == ['Hello', ' world']
+
+
+def test_codex_response_stream_uses_done_text_when_deltas_are_absent(monkeypatch):
+    from app.services.llm_providers import openai_codex as mod
+
+    class _Stream:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def __iter__(self):
+            return iter([
+                b'data: {"type":"response.created","response":{"status":"in_progress"}}\n',
+                b'data: {"type":"response.reasoning_summary_text.done","text":"Internal reasoning"}\n',
+                b'data: {"type":"response.output_text.done","text":"Final answer"}\n',
+                b'data: {"type":"response.completed","response":{"status":"completed"}}\n',
+                b'data: [DONE]\n',
+            ])
+
+    monkeypatch.setattr(mod.urllib.request, 'urlopen', lambda *args, **kwargs: _Stream())
+
+    assert list(_http_json_post_stream(
+        'https://chatgpt.com/backend-api/codex/responses',
+        {'input': [], 'stream': True},
+        headers={'Authorization': 'Bearer t'},
+    )) == ['Final answer']
 
 
 def test_openai_codex_refreshes_expired_access_token(tmp_path: Path):
@@ -471,7 +570,7 @@ def test_openai_codex_list_models_filters_and_uses_ssl_get(tmp_path: Path):
     assert captured['headers']['Authorization'] == 'Bearer access'
     assert captured['headers']['ChatGPT-Account-Id'] == 'acct_1'
     ids = [item['id'] for item in payload['models']]
-    assert ids[0] == 'gpt-5.4'
+    assert ids[0] == 'gpt-5.4-mini'
     assert 'gpt-5.4-mini' in ids
     assert 'o3-mini' in ids
     assert 'codex-auto-review' not in ids
@@ -510,7 +609,7 @@ def test_openai_codex_list_models_falls_back_on_403(tmp_path: Path):
     assert 'Missing scopes' not in (payload.get('message') or '')
     assert 'Could not list OpenAI models' not in (payload.get('message') or '')
     ids = [item['id'] for item in payload['models']]
-    assert ids[0] == 'gpt-5.4'
+    assert ids[0] == 'gpt-5.4-mini'
     assert 'gpt-4o' in ids
 
 

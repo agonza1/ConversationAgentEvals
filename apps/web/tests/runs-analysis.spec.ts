@@ -113,12 +113,13 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
   await expect(participants).toContainText('Evidence Replay');
   await expect(participants).toContainText('saved evidence replay');
   await expect(page.getByRole('button', { name: /Interruption Detection/ }).first()).toBeVisible();
-  await expect(page.getByRole('button', { name: /Latency/ }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Latency/ }).first()).toBeVisible();
   await page.getByRole('button', { name: /Verified Resolution Rate/ }).click();
   await expect(page.getByLabel('Resolution verification status')).toContainText('Verified');
   await expect(page.getByLabel('Resolution evidence details')).toContainText('91/100');
   await expect(page.getByLabel('Resolution evidence details')).toContainText('Complete');
-  await expect(page.getByLabel('Stub dual-track waveform')).toBeVisible();
+  await expect(page.getByLabel('Two-agent conversation timeline')).toBeVisible();
+  await expect(page.getByLabel('Conversation turn sequence')).toContainText('I can help with that.');
   await expect(page.getByLabel('Transcript')).toContainText('I want to cancel today.');
 });
 
@@ -566,7 +567,7 @@ test('resolution evidence handles failed and not-evaluated conversations without
   expect(judgeRequest).not.toHaveProperty('report');
   expect(judgeRequest).not.toHaveProperty('transcript');
 
-  await page.getByLabel('Conversation').selectOption('exec-demo123-not-evaluated-1');
+  await page.getByLabel('Conversation', { exact: true }).selectOption('exec-demo123-not-evaluated-1');
   await expect(page.getByLabel('Resolution verification status')).toContainText('Not evaluated');
   await expect(page.getByLabel('Resolution verification status')).toContainText(
     'No resolution verdict is available for this conversation.',
@@ -695,6 +696,33 @@ test('runs list exposes readable status filtering and run metadata', async ({ pa
   await expect(page.getByRole('link', { name: /Billing support staging/ })).toHaveCount(0);
 });
 
+test('runs list refreshes active executions until their terminal status is visible', async ({ page }) => {
+  let requests = 0;
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    window.localStorage.setItem('conversation-evals-demo-project', 'call-center-demo');
+  });
+  await page.route('**/api/execution/runs**', async (route) => {
+    requests += 1;
+    const status = requests === 1 ? 'running' : 'completed';
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([{
+        ...runFixture,
+        status,
+        conversations: status === 'running' ? [] : runFixture.conversations,
+      }]),
+    });
+  });
+
+  await page.goto('/runs');
+  const runLink = page.getByRole('link', { name: /ACC voice fixture agent/ });
+  await expect(runLink).toContainText('running');
+  await expect(runLink).toContainText('completed', { timeout: 10_000 });
+  expect(requests).toBeGreaterThanOrEqual(2);
+});
+
 test('run analysis preserves an API base override on the All runs link', async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
@@ -710,7 +738,7 @@ test('run analysis preserves an API base override on the All runs link', async (
   );
 });
 
-test('text agent analysis hides the stub waveform', async ({ page }) => {
+test('text agent analysis hides the voice conversation timeline', async ({ page }) => {
   const textRun = {
     ...runFixture,
     execution_run_id: 'exec-text-demo',
@@ -743,6 +771,667 @@ test('text agent analysis hides the stub waveform', async ({ page }) => {
 
   await page.goto('/runs/exec-text-demo');
   await expect(page.getByRole('heading', { name: 'Mock text agent' })).toBeVisible();
-  await expect(page.getByLabel('Stub dual-track waveform')).toHaveCount(0);
+  await expect(page.getByLabel('Two-agent conversation timeline')).toHaveCount(0);
   await expect(page.getByLabel('Transcript')).toContainText('I want to cancel today.');
+});
+
+test('text latency excludes tester generation and missing timing marks', async ({ page }) => {
+  const textRun = {
+    ...runFixture,
+    execution_run_id: 'exec-text-latency',
+    mode: 'text_callable',
+    agent_name: 'Text latency agent',
+    conversations: [{
+      ...runFixture.conversations[0],
+      conversation_id: 'exec-text-latency-1',
+      execution_run_id: 'exec-text-latency',
+      mode: 'text_callable',
+      latency_marks: [
+        { label: 'exchange 1 target response', latency_ms: 400 },
+        { label: 'exchange 2 tester response', latency_ms: 900 },
+        { label: 'exchange 2 target response', elapsed_ms: null },
+      ],
+    }],
+  };
+
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+  });
+  await page.route('**/api/execution/runs/exec-text-latency**', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(textRun) });
+  });
+
+  await page.goto('/runs/exec-text-latency');
+  await expect(page.getByRole('button', { name: /Target Response Latency 400ms/ })).toBeVisible();
+  await page.getByRole('button', { name: /Target Response Latency 400ms/ }).click();
+  await expect(page.getByText(/count 1 · avg 400ms/)).toBeVisible();
+  await expect(page.getByText('900ms')).toHaveCount(0);
+});
+
+test('voice analysis reports end-to-end target latency and scopes target diagnostics', async ({ page }) => {
+  const accurateVoiceRun = {
+    ...runFixture,
+    execution_run_id: 'exec-voice-timing',
+    mode: 'pipecat_webrtc',
+    tester_id: 'pipecat_tester',
+    executor_id: 'cae_local_audio_loop',
+    conversations: [
+      {
+        ...runFixture.conversations[0],
+        conversation_id: 'exec-voice-timing-1',
+        execution_run_id: 'exec-voice-timing',
+        mode: 'pipecat_webrtc',
+        turns: [
+          {
+            turn_index: 1,
+            speaker: 'caller',
+            text: 'Please update my billing address.',
+            direction: 'tester_to_target',
+            frame_metadata: { bytes: 96000, sample_rate: 24000, channels: 1, duration_ms: 2000 },
+          },
+          {
+            turn_index: 2,
+            speaker: 'agent',
+            text: 'I can help with that.',
+            direction: 'target_to_tester',
+            frame_metadata: { bytes: 72000, sample_rate: 24000, channels: 1, duration_ms: 1500 },
+          },
+        ],
+        latency_marks: [
+          {
+            label: 'Missing normalized evidence',
+            kind: 'target_first_audio_byte',
+            participant: 'target',
+            elapsed_ms: null,
+          },
+          {
+            label: 'End-to-end target response · exchange 1',
+            kind: 'tester_speech_end_to_first_target_audio_received',
+            participant: 'target',
+            latency_ms: 640,
+            exchange_elapsed_ms: 9120,
+            stage_metrics_source: 'built_in_target',
+            stage_metrics: {
+              asr_finalize_ms: 120,
+              llm_ttft_ms: 180,
+              llm_total_ms: 610,
+              tts_aggregation_delay_ms: 90,
+              tts_synthesis_ttfb_ms: 250,
+            },
+          },
+        ],
+      },
+    ],
+  };
+  const remoteVoiceRun = {
+    ...accurateVoiceRun,
+    execution_run_id: 'exec-remote-timing',
+    agent_name: 'Remote voice agent',
+    provenance: {
+      ...accurateVoiceRun.provenance,
+      target_kind: 'remote_webrtc_agent',
+      live_external_connection: true,
+      synthetic_media: false,
+    },
+    conversations: [
+      {
+        ...accurateVoiceRun.conversations[0],
+        conversation_id: 'exec-remote-timing-1',
+        execution_run_id: 'exec-remote-timing',
+        latency_marks: [
+          {
+            label: 'End-to-end target response · exchange 1',
+            kind: 'tester_speech_end_to_first_target_audio_received',
+            participant: 'target',
+            latency_ms: 725,
+          },
+        ],
+      },
+    ],
+  };
+  const legacyVoiceRun = {
+    ...accurateVoiceRun,
+    execution_run_id: 'exec-legacy-timing',
+    conversations: [
+      {
+        ...accurateVoiceRun.conversations[0],
+        conversation_id: 'exec-legacy-timing-1',
+        execution_run_id: 'exec-legacy-timing',
+        latency_marks: [
+          { label: 'Two Pipecat graphs over local duplex frames', latency_ms: 17_534 },
+        ],
+      },
+    ],
+  };
+
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+  });
+  await page.route('**/api/execution/runs/**', async (route) => {
+    const url = route.request().url();
+    const fixture = url.includes('exec-legacy-timing')
+      ? legacyVoiceRun
+      : url.includes('exec-remote-timing')
+        ? remoteVoiceRun
+        : accurateVoiceRun;
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fixture) });
+  });
+
+  await page.goto('/runs/exec-voice-timing');
+  await expect(page.getByRole('button', { name: /End-to-end target response latency 640ms/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /Tester speech end → first target audio received at tester/ })).toBeVisible();
+  await page.getByRole('button', { name: /End-to-end target response latency 640ms/ }).click();
+  await expect(page.getByRole('heading', { name: 'End-to-end target response latency' })).toBeVisible();
+  await expect(page.getByText('Tester speech end → first target audio received at tester.')).toBeVisible();
+  await expect(page.getByLabel('Per-mark latency bars')).toContainText('End-to-end target response');
+  await expect(page.getByLabel('Per-mark latency bars')).toContainText('Built-in target diagnostics');
+  await expect(page.getByLabel('Per-mark latency bars')).toContainText(
+    'Target endpointing + ASR finalization 120ms',
+  );
+  await expect(page.getByLabel('Per-mark latency bars')).toContainText('LLM TTFT 180ms');
+  await expect(page.getByLabel('Per-mark latency bars')).not.toContainText('LLM TTLT');
+  await expect(page.getByLabel('Per-mark latency bars')).toContainText('TTS text aggregation 90ms');
+  await expect(page.getByLabel('Per-mark latency bars')).toContainText('TTS synthesis TTFB 250ms');
+  await expect(page.getByLabel('Per-mark latency bars')).not.toContainText('LLM callback TTFB');
+  await expect(page.getByLabel('Conversation turn sequence')).toContainText(/end-to-end target response 640ms/i);
+
+  await page.goto('/runs/exec-remote-timing');
+  await page.getByRole('button', { name: /End-to-end target response latency 725ms/ }).click();
+  await expect(page.getByLabel('Per-mark latency bars')).not.toContainText('Built-in target diagnostics');
+  await expect(page.getByLabel('Per-mark latency bars')).not.toContainText('Target-provided diagnostics');
+  await expect(page.getByLabel('Per-mark latency bars')).not.toContainText('ASR finalization');
+
+  await page.goto('/runs/exec-legacy-timing');
+  await expect(page.getByRole('button', { name: /End-to-end target response latency n\/a/ })).toBeVisible();
+  await page.getByRole('button', { name: /End-to-end target response latency n\/a/ }).click();
+  await expect(page.getByText(/legacy marks measured a complete two-agent exchange/)).toBeVisible();
+  await expect(page.getByText('17534ms')).toHaveCount(0);
+});
+
+test('active voice listening uses WebRTC and completed playback restarts from the beginning', async ({ page }) => {
+  let polls = 0;
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    const runtime = window as Window & {
+      __playedVoiceUrls: string[];
+      __liveWebrtcPlayCount: number;
+    };
+    runtime.__playedVoiceUrls = [];
+    runtime.__liveWebrtcPlayCount = 0;
+    class TestAudio extends EventTarget {
+      constructor(private readonly url: string) {
+        super();
+      }
+      play() {
+        runtime.__playedVoiceUrls.push(this.url);
+        setTimeout(() => this.dispatchEvent(new Event('ended')), 20);
+        return Promise.resolve();
+      }
+      pause() {
+        this.dispatchEvent(new Event('ended'));
+      }
+    }
+    Object.defineProperty(window, 'Audio', { value: TestAudio });
+    Object.defineProperty(HTMLMediaElement.prototype, 'play', {
+      configurable: true,
+      value() {
+        runtime.__liveWebrtcPlayCount += 1;
+        return Promise.resolve();
+      },
+    });
+    class TestPeerConnection {
+      connectionState = 'new';
+      ontrack: ((event: { track: { kind: string }; streams: MediaStream[] }) => void) | null = null;
+      onconnectionstatechange: (() => void) | null = null;
+      onicecandidate: ((event: { candidate: null }) => void) | null = null;
+      addTransceiver() {}
+      async createOffer() {
+        return { type: 'offer', sdp: 'test-offer' };
+      }
+      async setLocalDescription() {}
+      async setRemoteDescription() {
+        this.connectionState = 'connected';
+        this.ontrack?.({
+          track: { kind: 'audio' },
+          streams: [new MediaStream()],
+        });
+        this.onconnectionstatechange?.();
+      }
+      close() {
+        this.connectionState = 'closed';
+      }
+    }
+    Object.defineProperty(window, 'RTCPeerConnection', { value: TestPeerConnection });
+  });
+
+  await page.route('**/api/execution/runs/exec-live-cursor**', async (route) => {
+    if (route.request().url().includes('/listener-token')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          listener: {
+            token: 'live-webrtc-token',
+            expires_at: '2099-07-26T12:00:00Z',
+            listen_url: '/api/execution/listeners/live-webrtc-token',
+            webrtc_url: '/api/execution/listeners/live-webrtc-token/webrtc',
+            webrtc_ice_url: '/api/execution/listeners/live-webrtc-token/webrtc/ice',
+            webrtc_stop_url: '/api/execution/listeners/live-webrtc-token/webrtc/stop',
+            read_only: true,
+            can_inject_audio: false,
+            requires_microphone: false,
+            media_transport: 'webrtc',
+          },
+        }),
+      });
+      return;
+    }
+    polls += 1;
+    const hasNewAgentAudio = polls >= 3;
+    const completed = polls >= 4;
+    const liveEvents = [
+      {
+        sequence: 1,
+        kind: 'audio',
+        speaker: 'Caller',
+        text: 'Please update my billing address.',
+        direction: 'tester_to_target',
+        media_url: '/api/execution/runs/exec-live-cursor/conversations/exec-live-cursor-1/audio/1?user_id=demo-user',
+      },
+      ...(hasNewAgentAudio ? [{
+        sequence: 2,
+        kind: 'audio',
+        speaker: 'Agent',
+        text: 'I can help with that.',
+        direction: 'target_to_tester',
+        media_url: '/api/execution/runs/exec-live-cursor/conversations/exec-live-cursor-1/audio/2?user_id=demo-user',
+      }] : []),
+    ];
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...runFixture,
+        execution_run_id: 'exec-live-cursor',
+        status: completed ? 'completed' : 'running',
+        mode: 'pipecat_webrtc',
+        tester_id: 'pipecat_tester',
+        executor_id: 'cae_local_audio_loop',
+        progress: {
+          phase: completed ? 'completed' : 'executing',
+          completed_conversations: completed ? 1 : 0,
+          total_conversations: 1,
+          percent: completed ? 100 : 50,
+        },
+        conversations: [{
+          ...runFixture.conversations[0],
+          conversation_id: 'exec-live-cursor-1',
+          execution_run_id: 'exec-live-cursor',
+          mode: 'pipecat_webrtc',
+          status: completed ? 'completed' : 'running',
+          live_events: liveEvents,
+        }],
+      }),
+    });
+  });
+  await page.route('**/api/execution/listeners/live-webrtc-token**', async (route) => {
+    const url = route.request().url();
+    if (url.endsWith('/webrtc')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          answer: { type: 'answer', sdp: 'test-answer' },
+          status: 'listening',
+        }),
+      });
+      return;
+    }
+    if (url.endsWith('/webrtc/ice') || url.endsWith('/webrtc/stop')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        listener: {
+          read_only: true,
+          can_inject_audio: false,
+          requires_microphone: false,
+          run_status: polls >= 4 ? 'completed' : 'running',
+        },
+        conversations: [],
+      }),
+    });
+  });
+
+  await page.goto('/runs/exec-live-cursor');
+  const feedback = page.getByLabel('Live run feedback');
+  await expect(feedback.getByRole('button', { name: 'Listen to live WebRTC' })).toBeVisible();
+  await feedback.getByRole('button', { name: 'Listen to live WebRTC' }).click();
+  await expect(feedback.getByRole('button', { name: 'Stop live WebRTC' })).toBeVisible();
+  await expect(feedback.getByText('Listening to the ongoing WebRTC audio stream. Earlier audio is not replayed.')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __liveWebrtcPlayCount: number }
+  ).__liveWebrtcPlayCount)).toBe(1);
+  expect(await page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.length)).toBe(0);
+
+  await expect(feedback.getByRole('button', { name: 'Play recorded conversation' })).toBeVisible({ timeout: 10_000 });
+  await feedback.getByRole('button', { name: 'Play recorded conversation' }).click();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.filter((url) => url.includes('/audio/1?')).length)).toBe(1);
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(1);
+});
+
+test('owner live WebRTC uses a different token from the shared listener link', async ({ page }) => {
+  let listenerTokenRequests = 0;
+  let ownerWebrtcRequests = 0;
+  let sharedWebrtcRequests = 0;
+  let abandonedWebrtcRequests = 0;
+  let abandonedTokenDelivered = false;
+  let overlapAWebrtcRequests = 0;
+  let overlapAResponseDelivered = false;
+  let overlapBWebrtcRequests = 0;
+  let overlapBStopRequests = 0;
+  let releaseAbandonedToken!: () => void;
+  let releaseOverlapA!: () => void;
+  const abandonedTokenGate = new Promise<void>((resolve) => {
+    releaseAbandonedToken = resolve;
+  });
+  const overlapAGate = new Promise<void>((resolve) => {
+    releaseOverlapA = resolve;
+  });
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    class TestPeerConnection {
+      connectionState = 'new';
+      ontrack: ((event: { track: { kind: string }; streams: MediaStream[] }) => void) | null = null;
+      onconnectionstatechange: (() => void) | null = null;
+      onicecandidate: ((event: { candidate: null }) => void) | null = null;
+      addTransceiver() {}
+      async createOffer() {
+        return { type: 'offer', sdp: 'test-offer' };
+      }
+      async setLocalDescription() {}
+      async setRemoteDescription() {
+        this.connectionState = 'connected';
+        this.onconnectionstatechange?.();
+      }
+      close() {
+        this.connectionState = 'closed';
+      }
+    }
+    Object.defineProperty(window, 'RTCPeerConnection', { value: TestPeerConnection });
+  });
+
+  await page.route('**/api/execution/runs/exec-expired-listener**', async (route) => {
+    if (route.request().url().includes('/listener-token')) {
+      listenerTokenRequests += 1;
+      const token = listenerTokenRequests === 1
+        ? 'shared-listener-token'
+        : listenerTokenRequests === 2
+          ? 'owner-listener-token'
+          : listenerTokenRequests === 3
+            ? 'abandoned-listener-token'
+            : listenerTokenRequests === 4
+              ? 'overlap-a-listener-token'
+              : 'overlap-b-listener-token';
+      if (token === 'abandoned-listener-token') {
+        await abandonedTokenGate;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          listener: {
+            token,
+            expires_at: '2099-07-26T12:00:00Z',
+            listen_url: `/api/execution/listeners/${token}`,
+            webrtc_url: `/api/execution/listeners/${token}/webrtc`,
+            webrtc_ice_url: `/api/execution/listeners/${token}/webrtc/ice`,
+            webrtc_stop_url: `/api/execution/listeners/${token}/webrtc/stop`,
+            read_only: true,
+            can_inject_audio: false,
+            requires_microphone: false,
+            media_transport: 'webrtc',
+          },
+        }),
+      });
+      if (token === 'abandoned-listener-token') {
+        abandonedTokenDelivered = true;
+      }
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...runFixture,
+        execution_run_id: 'exec-expired-listener',
+        status: 'running',
+        mode: 'pipecat_webrtc',
+        progress: {
+          phase: 'executing',
+          completed_conversations: 0,
+          total_conversations: 1,
+          percent: 0,
+          active_conversation_id: 'exec-expired-listener-1',
+        },
+        conversations: [{
+          ...runFixture.conversations[0],
+          conversation_id: 'exec-expired-listener-1',
+          execution_run_id: 'exec-expired-listener',
+          mode: 'pipecat_webrtc',
+          status: 'running',
+          live_events: [],
+        }],
+      }),
+    });
+  });
+  await page.route('**/api/execution/listeners/**', async (route) => {
+    const url = route.request().url();
+    if (url.endsWith('/webrtc')) {
+      if (url.includes('owner-listener-token')) ownerWebrtcRequests += 1;
+      if (url.includes('shared-listener-token')) sharedWebrtcRequests += 1;
+      if (url.includes('abandoned-listener-token')) abandonedWebrtcRequests += 1;
+      if (url.includes('overlap-a-listener-token')) {
+        overlapAWebrtcRequests += 1;
+        await overlapAGate;
+        await route.fulfill({
+          status: 502,
+          contentType: 'application/json',
+          body: JSON.stringify({ detail: 'Attempt A failed after attempt B connected.' }),
+        });
+        overlapAResponseDelivered = true;
+        return;
+      }
+      if (url.includes('overlap-b-listener-token')) overlapBWebrtcRequests += 1;
+      await route.fulfill({
+        status: url.includes('shared-listener-token') ? 409 : 200,
+        contentType: 'application/json',
+        body: url.includes('shared-listener-token')
+          ? JSON.stringify({ detail: 'This listener is already attached.' })
+          : JSON.stringify({
+              answer: { type: 'answer', sdp: 'test-answer' },
+              status: 'listening',
+            }),
+      });
+      return;
+    }
+    if (url.endsWith('/webrtc/ice') || url.endsWith('/webrtc/stop')) {
+      if (
+        url.endsWith('/webrtc/stop')
+        && url.includes('overlap-b-listener-token')
+      ) overlapBStopRequests += 1;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        listener: {
+          read_only: true,
+          can_inject_audio: false,
+          requires_microphone: false,
+          run_status: 'running',
+        },
+        conversations: [],
+      }),
+    });
+  });
+
+  await page.goto('/runs/exec-expired-listener');
+  const feedback = page.getByLabel('Live run feedback');
+  await feedback.getByRole('button', { name: 'Create live listener link' }).click();
+  await expect(feedback.getByLabel('Run listener link')).toContainText('shared-listener-token');
+  await feedback.getByRole('button', { name: 'Listen to live WebRTC' }).click();
+  await expect.poll(() => listenerTokenRequests).toBe(2);
+  await expect.poll(() => ownerWebrtcRequests).toBe(1);
+  expect(sharedWebrtcRequests).toBe(0);
+  await expect(feedback.getByRole('button', { name: 'Stop live WebRTC' })).toBeVisible();
+  await expect(feedback.getByLabel('Run listener link')).toContainText('shared-listener-token');
+
+  await feedback.getByRole('button', { name: 'Stop live WebRTC' }).click();
+  await feedback.getByRole('button', { name: 'Listen to live WebRTC' }).click();
+  await expect.poll(() => listenerTokenRequests).toBe(3);
+  await feedback.getByRole('button', { name: 'Stop live WebRTC' }).click();
+  releaseAbandonedToken();
+  await expect.poll(() => abandonedTokenDelivered).toBe(true);
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
+  expect(abandonedWebrtcRequests).toBe(0);
+  await expect(feedback.getByRole('button', { name: 'Listen to live WebRTC' })).toBeVisible();
+
+  await feedback.getByRole('button', { name: 'Listen to live WebRTC' }).click();
+  await expect.poll(() => overlapAWebrtcRequests).toBe(1);
+  await feedback.getByRole('button', { name: 'Stop live WebRTC' }).click();
+  await feedback.getByRole('button', { name: 'Listen to live WebRTC' }).click();
+  await expect.poll(() => overlapBWebrtcRequests).toBe(1);
+  await expect(feedback.getByLabel('WebRTC listener status')).toContainText('listening');
+  releaseOverlapA();
+  await expect.poll(() => overlapAResponseDelivered).toBe(true);
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
+  expect(overlapBStopRequests).toBe(0);
+  await expect(feedback.getByLabel('WebRTC listener status')).toContainText('listening');
+  await expect(feedback.getByRole('button', { name: 'Stop live WebRTC' })).toBeVisible();
+});
+
+test('completed replay switches from listener-token audio to owner-scoped audio', async ({ page }) => {
+  let runPolls = 0;
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    const runtime = window as Window & { __playedVoiceUrls: string[] };
+    runtime.__playedVoiceUrls = [];
+    class TestAudio extends EventTarget {
+      constructor(private readonly url: string) {
+        super();
+      }
+      play() {
+        runtime.__playedVoiceUrls.push(this.url);
+        setTimeout(() => this.dispatchEvent(new Event('ended')), 10);
+        return Promise.resolve();
+      }
+      pause() {
+        this.dispatchEvent(new Event('ended'));
+      }
+    }
+    Object.defineProperty(window, 'Audio', { value: TestAudio });
+  });
+
+  const audioEvents = (scope: 'owner' | 'listener') => [1, 2].map((sequence) => ({
+    sequence,
+    kind: 'audio',
+    speaker: sequence === 1 ? 'Caller' : 'Agent',
+    text: sequence === 1 ? 'Please update my address.' : 'I can help.',
+    direction: sequence === 1 ? 'tester_to_target' : 'target_to_tester',
+    media_url: scope === 'owner'
+      ? `/api/execution/runs/exec-listener-replay/conversations/conversation-1/audio/${sequence}?user_id=demo-user`
+      : `/api/execution/listeners/expiring-token/conversations/conversation-1/audio/${sequence}`,
+  }));
+
+  await page.route('**/api/execution/runs/exec-listener-replay**', async (route) => {
+    if (route.request().url().includes('/listener-token')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          listener: {
+            token: 'expiring-token',
+            expires_at: '2099-07-26T12:00:00Z',
+            listen_url: '/listeners/expiring-token',
+            read_only: true,
+            can_inject_audio: false,
+            requires_microphone: false,
+            media_transport: 'webrtc',
+          },
+        }),
+      });
+      return;
+    }
+    runPolls += 1;
+    const completed = runPolls >= 3;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...runFixture,
+        execution_run_id: 'exec-listener-replay',
+        status: completed ? 'completed' : 'running',
+        mode: 'pipecat_webrtc',
+        conversations: [{
+          ...runFixture.conversations[0],
+          conversation_id: 'conversation-1',
+          execution_run_id: 'exec-listener-replay',
+          mode: 'pipecat_webrtc',
+          status: completed ? 'completed' : 'running',
+          live_events: audioEvents('owner'),
+        }],
+      }),
+    });
+  });
+  await page.route('**/api/execution/listeners/expiring-token', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        listener: {
+          read_only: true,
+          can_inject_audio: false,
+          requires_microphone: false,
+          run_status: runPolls >= 3 ? 'completed' : 'running',
+        },
+        conversations: [{
+          conversation_id: 'conversation-1',
+          live_events: audioEvents('listener'),
+        }],
+      }),
+    });
+  });
+
+  await page.goto('/runs/exec-listener-replay');
+  const feedback = page.getByLabel('Live run feedback');
+  await feedback.getByRole('button', { name: 'Create live listener link' }).click();
+  await expect(feedback.getByText('Read-only live listener')).toBeVisible();
+  await expect(feedback.getByRole('button', { name: 'Play recorded conversation' })).toBeVisible({
+    timeout: 10_000,
+  });
+  await feedback.getByRole('button', { name: 'Play recorded conversation' }).click();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.length)).toBe(2);
+  const playedUrls = await page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls);
+  expect(playedUrls.every((url) => url.includes('/api/execution/runs/exec-listener-replay/'))).toBe(true);
+  expect(playedUrls.some((url) => url.includes('/api/execution/listeners/'))).toBe(false);
 });

@@ -62,7 +62,13 @@ COMPOSE_DATABASE_URL=postgresql://cae:cae_local_password@db:5432/conversation_ag
 
 The first-run benchmark demo uses transcript, action-trace, and final-state evidence. It does not require live microphone ASR.
 
-Conversation demos use `rtc-asr` as the speech-to-text provider contract. Pipecat expects a service reachable at `RTC_ASR_BASE_URL` and streams audio to `RTC_ASR_STREAM_PATH` using 16 kHz mono PCM16 little-endian input.
+Conversation demos use `rtc-asr` as the speech-to-text provider contract. The voice
+evaluation engine connects to Local STT v1 at `/v1/stt/stream`, sends paced 20 ms,
+16 kHz mono PCM16 frames, and consumes interim plus final transcript events. Silero
+VAD supplies speech-start and speech-end; only the final transcript triggers the LLM.
+The duplex session reuses its rtc-asr WebSockets and HTTP connection pools across
+turns. Its 0.5-second speech-stop window avoids splitting Kokoro clause pauses
+while removing half a second from the former 1.0-second end-of-utterance delay.
 
 ```bash
 RTC_ASR_BASE_URL=http://localhost:8080
@@ -70,19 +76,25 @@ RTC_ASR_HEALTH_PATH=/health
 RTC_ASR_STREAM_PATH=/v1/stt/stream
 KOKORO_BASE_URL=http://localhost:8880
 KOKORO_MODEL=kokoro
-KOKORO_VOICE=af_heart
-REFERENCE_STT_BACKEND=whisper
-REFERENCE_STT_MODEL=base
+KOKORO_TESTER_VOICE=af_heart
+KOKORO_TARGET_VOICE=af_bella
 REFERENCE_LLM_MODEL=gpt-5.4-mini
 ```
 
-The built-in generalist voice target is a real local reference pipeline:
-Pipecat tester → Kokoro caller audio → separate Pipecat agent → rtc-asr → configured
-OpenAI-compatible/Codex LLM → Kokoro reply audio → tester observation. Select
-`REFERENCE_STT_BACKEND=whisper` for rtc-asr Whisper base (the service may report
-`faster-whisper` / `base.en`) or `REFERENCE_STT_BACKEND=parakeet` for the existing
-MLX Parakeet rtc-asr lane. The API fails closed if the configured backend does not
-match the healthy rtc-asr service.
+The built-in generalist voice target is a real local streaming pipeline:
+Pipecat tester → adaptive streaming Kokoro caller audio → Silero + rtc-asr →
+streaming OpenAI-compatible/Codex LLM deltas → adaptive streaming Kokoro reply
+audio → Silero + rtc-asr tester observation. Select
+distinct `KOKORO_TESTER_VOICE` and `KOKORO_TARGET_VOICE` values so recordings
+and live playback make the caller and evaluated agent easy to distinguish. The
+legacy `KOKORO_VOICE` variable is accepted as a target-voice fallback when it is
+different from the tester voice. CAE discovers the backend and model currently
+loaded by rtc-asr and records both in run provenance. Whisper, MLX Parakeet, and
+other backends can be used without matching CAE-side model settings, provided the
+rtc-asr service is ready and implements the configured `local-stt.v1` stream.
+
+HeyGen is not part of voice evaluation. Avatar support, when separately installed and
+configured for presenter demos, is an unrelated optional Pipecat feature.
 
 API and Pipecat protect the local completion callback with
 `REFERENCE_AGENT_INTERNAL_TOKEN`. `npm run dev` creates one ephemeral token and passes

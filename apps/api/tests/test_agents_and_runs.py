@@ -453,7 +453,7 @@ def test_execution_persists_model_name_default_and_override():
             iterations=1,
         )
     )
-    assert queued_default['model_name'] == 'gpt-5.4'
+    assert queued_default['model_name'] == 'gpt-5.4-mini'
 
     queued = start_execution_run(
         ExecutionRunCreateRequest(

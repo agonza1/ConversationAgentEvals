@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { SiteNav } from '@/components/SiteNav';
 import { BenchmarkRunner } from '@/components/BenchmarkRunner';
@@ -58,18 +58,53 @@ export function RunsListPage() {
     };
   }, [projectId, refreshKey, userId]);
 
+  const hasActiveRuns = runs.some((run) => run.status === 'queued' || run.status === 'running');
+
+  useEffect(() => {
+    if (!hasActiveRuns) return undefined;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    async function poll() {
+      try {
+        const next = await listExecutionRuns(userId, projectId);
+        if (!active) return;
+        setRuns(next);
+        hasRunsRef.current = next.length > 0;
+        setError(null);
+        if (next.some((run) => run.status === 'queued' || run.status === 'running')) {
+          timer = setTimeout(() => void poll(), 1500);
+        }
+      } catch (err) {
+        if (!active) return;
+        setError(err instanceof Error ? err.message : 'Could not refresh active runs');
+        timer = setTimeout(() => void poll(), 3000);
+      }
+    }
+
+    timer = setTimeout(() => void poll(), 1500);
+    return () => {
+      active = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [hasActiveRuns, projectId, userId]);
+
   const visibleRuns = useMemo(() => runs.filter((run) => {
     if (statusFilter === 'all') return true;
     if (statusFilter === 'active') return run.status === 'queued' || run.status === 'running';
     return run.status === statusFilter;
   }), [runs, statusFilter]);
 
-  function onExecutionCreated(run: ExecutionRunRecord) {
+  const upsertExecutionRun = useCallback((run: ExecutionRunRecord) => {
     setRuns((current) => {
       const next = [run, ...current.filter((item) => item.execution_run_id !== run.execution_run_id)];
       hasRunsRef.current = next.length > 0;
       return next;
     });
+  }, []);
+
+  function onExecutionCreated(run: ExecutionRunRecord) {
+    upsertExecutionRun(run);
     setRefreshKey((value) => value + 1);
   }
 
@@ -82,7 +117,11 @@ export function RunsListPage() {
         <p>Launch a configured agent target, then review execution metrics, latency detail, and transcripts.</p>
       </section>
 
-      <BenchmarkRunner view="run" onExecutionCreated={onExecutionCreated} />
+      <BenchmarkRunner
+        view="run"
+        onExecutionCreated={onExecutionCreated}
+        onExecutionUpdated={upsertExecutionRun}
+      />
 
       {loading ? <p className="scenarios-muted">Loading runs…</p> : null}
       {error ? <div className="scenarios-error" role="alert">{error}</div> : null}

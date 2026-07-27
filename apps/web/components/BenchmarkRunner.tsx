@@ -276,10 +276,10 @@ interface OpenAIProviderStatus {
   last_error?: string | null;
 }
 
-const DEFAULT_EXECUTION_MODEL = 'gpt-5.4';
+const DEFAULT_EXECUTION_MODEL = 'gpt-5.4-mini';
 const FALLBACK_EXECUTION_MODELS = [
-  'gpt-5.4',
   'gpt-5.4-mini',
+  'gpt-5.4',
   'gpt-5.2',
   'gpt-4.1',
   'gpt-4.1-mini',
@@ -977,6 +977,7 @@ interface ExecutionRunRecord {
   agent_name?: string | null;
   model_name?: string | null;
   max_exchanges?: number;
+  duplex_timeout_seconds?: number;
   tester_id?: 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
   tester_model_name?: string | null;
   executor_id?: 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
@@ -1005,6 +1006,7 @@ async function createExecutionRun(payload: {
   text_callable?: string;
   iterations?: number;
   max_exchanges?: number;
+  duplex_timeout_seconds?: number;
   user_id: string;
   project_id: string;
   evaluate?: boolean;
@@ -2193,9 +2195,11 @@ function describeUploadedEvidence(filename: string, text: string): {
 export function BenchmarkRunner({
   view = 'all',
   onExecutionCreated,
+  onExecutionUpdated,
 }: {
   view?: BenchmarkRunnerView;
   onExecutionCreated?: (run: ExecutionRunRecord) => void;
+  onExecutionUpdated?: (run: ExecutionRunRecord) => void;
 }) {
   const loadingSavedRunRef = useRef(false);
   const autoLaunchDemoRef = useRef(false);
@@ -2252,6 +2256,7 @@ export function BenchmarkRunner({
   const [executionScope, setExecutionScope] = useState<'selected' | 'suite'>('selected');
   const [executionIterations, setExecutionIterations] = useState(1);
   const [executionMaxExchanges, setExecutionMaxExchanges] = useState<number | ''>(3);
+  const [executionDuplexTimeoutSeconds, setExecutionDuplexTimeoutSeconds] = useState(120);
   const [executionTesterId, setExecutionTesterId] = useState<'scenario_simulator' | 'fixture_replay' | 'pipecat_tester'>('scenario_simulator');
   const [executionExecutorId, setExecutionExecutorId] = useState<NonNullable<ExecutionRunRecord['executor_id']>>('local_async_runner');
   const [executionRun, setExecutionRun] = useState<ExecutionRunRecord | null>(null);
@@ -2823,13 +2828,22 @@ export function BenchmarkRunner({
     return () => window.clearInterval(interval);
   }, [projectId, selectedSuite?.id, suiteRunStatusFilter, suiteRuns, userId]);
 
-  useEffect(() => {
-    if (!userId || !executionRun || !isActiveExecutionStatus(executionRun.status)) return;
+  const activeExecutionRunId = executionRun && isActiveExecutionStatus(executionRun.status)
+    ? executionRun.execution_run_id
+    : null;
 
-    const interval = window.setInterval(() => {
-      fetchExecutionRun(userId, executionRun.execution_run_id)
+  useEffect(() => {
+    if (!userId || !activeExecutionRunId) return;
+    const executionRunId = activeExecutionRunId;
+    let active = true;
+    let timer: number | undefined;
+
+    async function poll() {
+      fetchExecutionRun(userId, executionRunId)
         .then((next) => {
+          if (!active) return;
           setExecutionRun(next);
+          onExecutionUpdated?.(next);
           if (!isActiveExecutionStatus(next.status)) {
             const completed = next.progress?.completed_conversations ?? 0;
             const total = next.progress?.total_conversations ?? 0;
@@ -2840,13 +2854,21 @@ export function BenchmarkRunner({
                     next.inference_set_path ? ` → ${next.inference_set_path}` : ''
                   }.`,
             );
+          } else {
+            timer = window.setTimeout(() => void poll(), 1200);
           }
         })
-        .catch(() => undefined);
-    }, 1200);
+        .catch(() => {
+          if (active) timer = window.setTimeout(() => void poll(), 2400);
+        });
+    }
 
-    return () => window.clearInterval(interval);
-  }, [executionRun, userId]);
+    timer = window.setTimeout(() => void poll(), 1200);
+    return () => {
+      active = false;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [activeExecutionRunId, onExecutionUpdated, userId]);
 
   function ensureDemoIdentity(): { userId: string; projectId: string; plan: PricingPlan['id'] } {
     const nextUser = userId || (typeof window !== 'undefined'
@@ -3503,17 +3525,17 @@ export function BenchmarkRunner({
     const runTesterId: NonNullable<ExecutionRunRecord['tester_id']> = executionTesterId;
     const runExecutorId: NonNullable<ExecutionRunRecord['executor_id']> = executionExecutorId;
 
-    const voiceModes = runMode === 'voice_fixture' || runMode === 'pipecat_webrtc';
     const offlineFixtureText =
       runMode === 'text_callable' && runTextCallable === 'offline_acc_fixture';
-    // The current two-agent Pipecat contract and the legacy replays are scoped to
-    // cancellation-rescue, but only the replay paths are fixture-backed.
-    const cancellationScopedRun = voiceModes || offlineFixtureText;
+    // Only saved ACC replay paths are tied to the cancellation-rescue fixture.
+    // The two-agent Pipecat runner receives the selected catalog scenario.
+    const cancellationScopedRun = legacyVoiceReplay || offlineFixtureText;
     const voiceSuiteId = 'call-center-voice-ai';
     const suiteForRun = cancellationScopedRun ? voiceSuiteId : selectedSuite.id;
+    const suiteScopedRun = executionScope === 'suite' && supportsSuiteExecutionScope;
     const scenarioIds = cancellationScopedRun
       ? ['cancellation-rescue']
-      : executionScope === 'suite'
+      : suiteScopedRun
         ? selectedSuite.scenarios.map((scenario) => scenario.id)
         : selectedScenario
           ? [selectedScenario.id]
@@ -3541,11 +3563,12 @@ export function BenchmarkRunner({
         text_callable: runMode === 'text_callable' ? runTextCallable : undefined,
         iterations: executionIterations,
         max_exchanges: maxExchanges,
+        duplex_timeout_seconds: sampleVoiceAgent ? executionDuplexTimeoutSeconds : undefined,
         user_id: identity.userId,
         project_id: identity.projectId,
         evaluate: true,
         agent_id: selectedAgentId || undefined,
-        model_name: sampleVoiceAgent ? undefined : executionModelName || DEFAULT_EXECUTION_MODEL,
+        model_name: executionModelName || DEFAULT_EXECUTION_MODEL,
         tester_id: runTesterId,
         executor_id: runExecutorId,
         audio_transport: runMode === 'pipecat_webrtc' ? 'pipecat_small_webrtc' : 'none',
@@ -4693,6 +4716,21 @@ export function BenchmarkRunner({
                   }}
                 />
               </label>
+              {selectedScoreAgent?.target === 'builtin_sample_voice' ? (
+                <label>
+                  <span>Session timeout (seconds)</span>
+                  <input
+                    aria-label="Duplex session timeout"
+                    type="number"
+                    min={30}
+                    max={300}
+                    value={executionDuplexTimeoutSeconds}
+                    onChange={(event) => setExecutionDuplexTimeoutSeconds(
+                      Math.max(30, Math.min(300, Number(event.target.value) || 120)),
+                    )}
+                  />
+                </label>
+              ) : null}
             </div>
             <p>
               Queues the run and writes the ASSERT inference set locally.
@@ -4703,7 +4741,7 @@ export function BenchmarkRunner({
           </div>
         </div>
 
-        {selectedScoreAgent?.target === 'openai_codex' ? (
+        {selectedScoreAgent?.target === 'openai_codex' || selectedScoreAgent?.target === 'builtin_sample_voice' ? (
           <label style={{ display: 'grid', gap: 8, maxWidth: 360 }}>
             <span style={{ fontWeight: 700 }}>Target model</span>
             <select
@@ -4721,7 +4759,7 @@ export function BenchmarkRunner({
             </select>
             {openaiProvider?.status !== 'connected' ? (
               <span style={{ color: 'var(--muted)', fontSize: 13 }}>
-                {selectedScoreAgent.id === 'generalist-text-agent'
+                {selectedScoreAgent.id === 'generalist-text-agent' || selectedScoreAgent.target === 'builtin_sample_voice'
                   ? 'This reference target can use OPENAI_API_KEY from the API environment, or you can connect OpenAI here. '
                   : 'Connect OpenAI to run this target. '}
                 <button type="button" className="secondary-link" disabled={isConnectingOpenAI} onClick={() => void onConnectOpenAI()} style={{ padding: 0, border: 0, background: 'transparent', color: 'var(--accent)', fontWeight: 700, cursor: 'pointer' }}>

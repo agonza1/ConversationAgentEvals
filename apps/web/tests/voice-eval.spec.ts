@@ -184,7 +184,7 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
           listener: {
             token: 'listener-token',
             execution_run_id: 'voice-run-1',
-            expires_at: '2026-07-19T21:00:00.000Z',
+            expires_at: '2099-07-19T21:00:00.000Z',
             listen_url: '/api/execution/listeners/listener-token',
             media_transport: 'webrtc',
             read_only: true,
@@ -310,22 +310,22 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
   await page.getByRole('button', { name: 'Run evaluation' }).click();
   const results = page.getByRole('region', { name: 'Run results' });
   await expect(results.getByText('voice-run-1')).toBeVisible();
-  await results.getByRole('button', { name: 'Create listener link' }).click();
+  await results.getByRole('button', { name: 'Create live listener link' }).click();
   const listenerLink = results.getByRole('link', { name: '/listeners/listener-token?api_base=http%3A%2F%2Fapi.example.test' });
   await expect(listenerLink).toHaveAttribute('href', '/listeners/listener-token?api_base=http%3A%2F%2Fapi.example.test');
-  await expect(results.getByLabel('Read-only browser listener')).toContainText('cannot inject audio');
-  await expect(results.getByLabel('Read-only browser listener')).toContainText('no microphone');
+  await expect(results.getByLabel('Run listener link')).toContainText('cannot inject audio');
+  await expect(results.getByLabel('Run listener link')).toContainText('no microphone');
   await expect(results.getByLabel('Observed live exchange')).toContainText('I want to cancel.', { timeout: 10000 });
   await expect(results.getByLabel('Observed live exchange')).toContainText('tester → target');
   await expect(results.getByLabel('Observed live exchange')).toContainText('LLM output: I want to cancel.');
   await expect(results.getByLabel('Observed live exchange')).toContainText('ASR receipt: I want to cancel.');
-  await results.getByRole('button', { name: 'Unmute live conversation' }).click();
-  await expect(results.getByRole('button', { name: 'Mute live conversation' })).toBeVisible();
+  await expect(results.getByRole('progressbar', { name: 'Voice evaluation progress' })).toHaveAttribute('aria-valuenow', '100');
+  await results.getByRole('button', { name: 'Play recorded conversation' }).click();
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __audioPlayAttempts: string[] }
   ).__audioPlayAttempts.filter((url) => url.includes('/listeners/listener-token/') && url.includes('/audio/1')).length)).toBe(1);
-  await results.getByRole('button', { name: 'Mute live conversation' }).click();
-  await results.getByRole('button', { name: 'Unmute live conversation' }).click();
+  await expect(results.getByRole('button', { name: 'Play recorded conversation' })).toBeVisible();
+  await results.getByRole('button', { name: 'Play recorded conversation' }).click();
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __audioPlayAttempts: string[] }
   ).__audioPlayAttempts.filter((url) => url.includes('/listeners/listener-token/') && url.includes('/audio/1')).length)).toBeGreaterThan(1);
@@ -335,7 +335,6 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
   );
   await expect(results.getByText('Cancellation rescue', { exact: true })).toBeVisible({ timeout: 10000 });
   await expect(results.getByText(/vCon|recording metadata|Pipecat capture proof|sample-based score/i).first()).toBeVisible();
-  await expect(results.getByRole('progressbar', { name: 'Voice evaluation progress' })).toHaveAttribute('aria-valuenow', '100');
 });
 
 test('browser listener page polls token-scoped live events', async ({ page }) => {

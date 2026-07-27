@@ -45,9 +45,13 @@ class PipecatProcessorSpec:
     name: ProcessorName
     provider: str
     model: str
+    voice: str | None = None
 
     def as_dict(self) -> dict[str, str]:
-        return {'name': self.name, 'provider': self.provider, 'model': self.model}
+        payload = {'name': self.name, 'provider': self.provider, 'model': self.model}
+        if self.voice:
+            payload['voice'] = self.voice
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -324,6 +328,8 @@ def build_builtin_sample_voice_graphs(
     target_llm_model: str,
     stt_model: str,
     tts_model: str,
+    tester_tts_voice: str = 'af_heart',
+    target_tts_voice: str = 'af_bella',
     llm_mode: Literal['real', 'mock'],
 ) -> tuple[PipecatAgentGraph, PipecatAgentGraph]:
     tester = PipecatAgentGraph(
@@ -332,7 +338,7 @@ def build_builtin_sample_voice_graphs(
         processors=(
             PipecatProcessorSpec('rtc-asr', 'rtc-asr', stt_model),
             PipecatProcessorSpec('llm', tester_llm_provider, tester_llm_model),
-            PipecatProcessorSpec('kokoro', 'kokoro', tts_model),
+            PipecatProcessorSpec('kokoro', 'kokoro', tts_model, voice=tester_tts_voice),
         ),
         llm_mode=llm_mode,
     )
@@ -342,7 +348,7 @@ def build_builtin_sample_voice_graphs(
         processors=(
             PipecatProcessorSpec('rtc-asr', 'rtc-asr', stt_model),
             PipecatProcessorSpec('llm', target_llm_provider, target_llm_model),
-            PipecatProcessorSpec('kokoro', 'kokoro', tts_model),
+            PipecatProcessorSpec('kokoro', 'kokoro', tts_model, voice=target_tts_voice),
         ),
         llm_mode=llm_mode,
     )

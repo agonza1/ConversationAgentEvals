@@ -15,6 +15,7 @@ import json
 import os
 import time
 import wave
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -40,6 +41,21 @@ class CompletionProvider(Protocol):
 
     def status(self) -> dict[str, Any]: ...
     def complete(self, prompt: str, *, model_name: str | None = None) -> str: ...
+    def stream_with_metrics(
+        self,
+        prompt: str,
+        *,
+        model_name: str | None = None,
+    ) -> Iterator[dict[str, Any]]: ...
+
+
+def _default_target_voice() -> str:
+    explicit = os.getenv('KOKORO_TARGET_VOICE', '').strip()
+    if explicit:
+        return explicit
+    tester = os.getenv('KOKORO_TESTER_VOICE', 'af_heart').strip()
+    legacy = os.getenv('KOKORO_VOICE', '').strip()
+    return legacy if legacy and legacy != tester else 'af_bella'
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,20 +74,17 @@ class ReferenceRuntimeConfig:
             os.getenv('RTC_ASR_HEALTH_PATH', '').strip() or '/health'
         ).lstrip('/')
     )
-    rtc_asr_backend: str = field(
-        default_factory=lambda: os.getenv('REFERENCE_STT_BACKEND', 'whisper').strip().lower()
-    )
-    rtc_asr_model: str = field(
-        default_factory=lambda: os.getenv('REFERENCE_STT_MODEL', 'base').strip()
-    )
     kokoro_base_url: str = field(
         default_factory=lambda: os.getenv('KOKORO_BASE_URL', '').rstrip('/')
     )
     kokoro_model: str = field(
         default_factory=lambda: os.getenv('KOKORO_MODEL', 'kokoro').strip()
     )
-    kokoro_voice: str = field(
-        default_factory=lambda: os.getenv('KOKORO_VOICE', 'af_heart').strip()
+    kokoro_tester_voice: str = field(
+        default_factory=lambda: os.getenv('KOKORO_TESTER_VOICE', 'af_heart').strip()
+    )
+    kokoro_target_voice: str = field(
+        default_factory=_default_target_voice
     )
     llm_model: str = field(
         default_factory=lambda: os.getenv('REFERENCE_LLM_MODEL', 'gpt-5.4-mini').strip()
@@ -86,6 +99,26 @@ class ReferenceRuntimeConfig:
     timeout_seconds: float = field(
         default_factory=lambda: float(os.getenv('REFERENCE_AGENT_TIMEOUT_SECONDS', '60'))
     )
+
+
+def discover_rtc_asr_runtime(payload: Any) -> dict[str, str]:
+    """Use rtc-asr health as the source of truth for its loaded backend and model."""
+    if not isinstance(payload, dict):
+        raise ReferenceRuntimeError('rtc-asr health returned an invalid payload.')
+
+    status = str(payload.get('status') or '').strip().lower()
+    explicitly_unready = payload.get('ready') is False or payload.get('model_loaded') is False
+    if explicitly_unready or status in {'error', 'failed', 'loading', 'starting', 'unavailable'}:
+        reason = str(payload.get('preload_error') or payload.get('detail') or status or 'not ready')
+        raise ReferenceRuntimeError(f'rtc-asr is reachable but not ready: {reason}.')
+
+    return {
+        'provider': 'rtc-asr',
+        'backend': str(payload.get('backend') or 'service-selected').strip().lower(),
+        'model': str(payload.get('model') or 'service-selected').strip(),
+        'status': 'ready',
+        'selection': 'service-discovery',
+    }
 
 
 class OpenAICompatibleApiKeyProvider:
@@ -126,6 +159,70 @@ class OpenAICompatibleApiKeyProvider:
             raise ReferenceRuntimeError('OpenAI-compatible provider returned no response text.')
         return text.strip()
 
+    def stream_with_metrics(
+        self,
+        prompt: str,
+        *,
+        model_name: str | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Normalize Responses API SSE into provider-independent text deltas."""
+        if not self.api_key:
+            raise ReferenceRuntimeError('Set OPENAI_API_KEY or connect OpenAI/Codex OAuth.')
+        started_at = time.perf_counter()
+        client = self._client or httpx.Client(timeout=60)
+        chunks: list[str] = []
+        completed_text: str | None = None
+        ttft_ms: float | None = None
+        with client.stream(
+            'POST',
+            f'{self.base_url}/responses',
+            headers={
+                'authorization': f'Bearer {self.api_key}',
+                'accept': 'text/event-stream',
+            },
+            json={'model': model_name, 'input': prompt, 'stream': True},
+        ) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if not line.startswith('data:'):
+                    continue
+                data = line.removeprefix('data:').strip()
+                if not data or data == '[DONE]':
+                    continue
+                event = json.loads(data)
+                event_type = str(event.get('type') or '')
+                delta = event.get('delta')
+                if (
+                    event_type == 'response.output_text.delta'
+                    and isinstance(delta, str)
+                    and delta
+                ):
+                    if ttft_ms is None:
+                        ttft_ms = round((time.perf_counter() - started_at) * 1000, 3)
+                    chunks.append(delta)
+                    yield {'type': 'delta', 'text': delta}
+                final_text = event.get('text')
+                if (
+                    event_type == 'response.output_text.done'
+                    and isinstance(final_text, str)
+                    and final_text
+                ):
+                    completed_text = final_text
+        if not chunks and completed_text:
+            if ttft_ms is None:
+                ttft_ms = round((time.perf_counter() - started_at) * 1000, 3)
+            chunks.append(completed_text)
+            yield {'type': 'delta', 'text': completed_text}
+        text = ''.join(chunks).strip()
+        if not text:
+            raise ReferenceRuntimeError('OpenAI-compatible provider returned no response text.')
+        yield {
+            'type': 'completed',
+            'text': text,
+            'ttft_ms': ttft_ms,
+            'total_ms': round((time.perf_counter() - started_at) * 1000, 3),
+        }
+
 
 def resolve_reference_completion_provider() -> CompletionProvider:
     api_key_provider = OpenAICompatibleApiKeyProvider()
@@ -153,6 +250,11 @@ class ReferenceMediaServices:
             raise ReferenceRuntimeError(
                 'Built-in voice target requires Kokoro. Set KOKORO_BASE_URL (for example http://localhost:8880).'
             )
+        if self.config.kokoro_tester_voice == self.config.kokoro_target_voice:
+            raise ReferenceRuntimeError(
+                'Built-in voice evaluation requires distinct tester and target voices. '
+                'Set KOKORO_TESTER_VOICE and KOKORO_TARGET_VOICE to different Kokoro voice IDs.'
+            )
         try:
             asr = self.client.get(
                 f'{self.config.rtc_asr_base_url}{self.config.rtc_asr_health_path}'
@@ -168,40 +270,25 @@ class ReferenceMediaServices:
         except Exception as exc:  # noqa: BLE001
             raise ReferenceRuntimeError(f'Kokoro is unavailable at {self.config.kokoro_base_url}: {exc}') from exc
 
-        actual_backend = str(asr_payload.get('backend') or '').lower()
-        actual_model = str(asr_payload.get('model') or '')
-        requested = self.config.rtc_asr_backend
-        if requested == 'whisper' and 'whisper' not in actual_backend:
-            raise ReferenceRuntimeError(
-                f'rtc-asr backend mismatch: requested Whisper, service reports {actual_backend or "unknown"}.'
-            )
-        if requested in {'parakeet', 'mlx_parakeet'} and not (
-            'parakeet' in actual_backend or 'mlx' in actual_backend
-        ):
-            raise ReferenceRuntimeError(
-                f'rtc-asr backend mismatch: requested MLX Parakeet, service reports {actual_backend or "unknown"}.'
-            )
+        stt_runtime = discover_rtc_asr_runtime(asr_payload)
         return {
-            'stt': {
-                'provider': 'rtc-asr',
-                'backend': actual_backend or requested,
-                'model': actual_model or self.config.rtc_asr_model,
-                'status': 'ready',
-            },
+            'stt': stt_runtime,
             'tts': {
                 'provider': 'kokoro',
                 'model': self.config.kokoro_model,
-                'voice': self.config.kokoro_voice,
+                'tester_voice': self.config.kokoro_tester_voice,
+                'target_voice': self.config.kokoro_target_voice,
+                'voices_distinct': True,
                 'status': str(kokoro_payload.get('status') or 'ready'),
             },
         }
 
-    def synthesize(self, text: str) -> bytes:
+    def synthesize(self, text: str, *, voice: str | None = None) -> bytes:
         response = self.client.post(
             f'{self.config.kokoro_base_url}/v1/audio/speech',
             json={
                 'model': self.config.kokoro_model,
-                'voice': self.config.kokoro_voice,
+                'voice': voice or self.config.kokoro_tester_voice,
                 'input': text,
                 'response_format': 'wav',
             },
@@ -347,6 +434,7 @@ class _ReferenceSession:
     duplex_harness: TwoPipecatDuplexHarness | None = None
     duplex_frames: list[dict[str, Any]] = field(default_factory=list)
     remote_graphs: dict[str, Any] = field(default_factory=dict)
+    remote_architecture: str | None = None
     termination_reason: str | None = None
     closed: bool = False
     recording: AudioRecordingHandle | None = None
@@ -386,13 +474,16 @@ class ReferencePipecatAgentTransport:
             'model': config.llm_model,
             'status': 'ready',
         }
+        stt_runtime = self.runtime.get('stt') if isinstance(self.runtime.get('stt'), dict) else {}
         tester_graph, target_graph = build_builtin_sample_voice_graphs(
             tester_llm_provider=str(llm_status.get('provider') or completion.provider_id),
             tester_llm_model=config.tester_llm_model,
             target_llm_provider=str(llm_status.get('provider') or completion.provider_id),
             target_llm_model=config.llm_model,
-            stt_model=config.rtc_asr_model,
+            stt_model=str(stt_runtime.get('model') or 'service-selected'),
             tts_model=config.kokoro_model,
+            tester_tts_voice=config.kokoro_tester_voice,
+            target_tts_voice=config.kokoro_target_voice,
             llm_mode='real',
         )
         self._tester_graph = tester_graph
@@ -478,8 +569,12 @@ class ReferencePipecatAgentTransport:
             'target_model_name': self.config.llm_model,
             'llm_provider': llm_runtime.get('provider') or self.completion.provider_id,
             'llm_mode': 'real',
+            'stt_backend': str(self.runtime['stt']['backend']),
+            'stt_model': str(self.runtime['stt']['model']),
             'max_turn_pairs': max_turn_pairs,
             'total_timeout_seconds': total_timeout_seconds,
+            'tester_voice': self.config.kokoro_tester_voice,
+            'target_voice': self.config.kokoro_target_voice,
         }
         exchanges: list[dict[str, Any]] = []
         completed: dict[str, Any] | None = None
@@ -516,6 +611,16 @@ class ReferencePipecatAgentTransport:
                     if event_type == 'complete':
                         completed = event
                         continue
+                    if event_type == 'live_audio':
+                        self._record_live_audio_event(event)
+                        continue
+                    if event_type == 'speech_started':
+                        self._record_speech_started_event(event)
+                        continue
+                    if event_type in {'transcript', 'vad', 'metric'}:
+                        # Streaming diagnostics are retained in the completion proof and
+                        # directional frame metadata. Audio events remain the concise live UI.
+                        continue
                     if event_type != 'exchange':
                         continue
                     exchanges.append(event)
@@ -527,6 +632,11 @@ class ReferencePipecatAgentTransport:
         if state.remote_graphs:
             self.graphs = state.remote_graphs
         state.duplex_frames = completed.get('frames') if isinstance(completed.get('frames'), list) else []
+        state.remote_architecture = (
+            str(completed.get('architecture'))
+            if completed.get('architecture')
+            else None
+        )
         state.termination_reason = str(completed.get('termination_reason') or 'completed')
         return {
             'scenario_id': scenario.get('id'),
@@ -544,6 +654,75 @@ class ReferencePipecatAgentTransport:
             'turns': exchanges,
             'proof': completed,
         }
+
+    def _record_speech_started_event(self, event: dict[str, Any]) -> None:
+        if self.event_observer is None:
+            return
+        speaker = str(event.get('speaker') or '').strip()
+        direction = str(event.get('direction') or '').strip()
+        text = str(event.get('text') or event.get('llm_output') or '').strip()
+        expected_direction = {
+            'Caller': 'tester_to_target',
+            'Agent': 'target_to_tester',
+        }.get(speaker)
+        if expected_direction != direction:
+            raise ReferenceRuntimeError('Pipecat speech-start event omitted valid speaker/direction evidence.')
+        # With streaming LLM-to-TTS, audio can legitimately start before the
+        # complete display text is available. The subsequent live-audio event
+        # replaces this provisional event with the final ASR-backed turn.
+        if not text:
+            return
+        turn_pair = event.get('turn_pair')
+        self.event_observer({
+            'speaker': speaker,
+            'text': text,
+            'direction': direction,
+            'llm_output': str(event.get('llm_output') or text),
+            'frame_metadata': {
+                'media_event': 'first_audible_byte',
+                'first_audible_byte_at': (
+                    event.get('first_audible_byte_at')
+                    or event.get('first_audible_pcm_at')
+                ),
+            },
+            'live_audio_key': f'{turn_pair}:{direction}',
+        })
+
+    def _record_live_audio_event(self, event: dict[str, Any]) -> None:
+        if self.event_observer is None:
+            return
+        speaker = str(event.get('speaker') or '').strip()
+        direction = str(event.get('direction') or '').strip()
+        text = str(event.get('text') or event.get('llm_output') or '').strip()
+        expected_direction = {
+            'Caller': 'tester_to_target',
+            'Agent': 'target_to_tester',
+        }.get(speaker)
+        if not text or expected_direction != direction:
+            raise ReferenceRuntimeError('Pipecat live audio event omitted valid speaker/direction evidence.')
+        try:
+            audio = base64.b64decode(str(event.get('audio_wav_base64') or ''), validate=True)
+        except Exception as exc:  # noqa: BLE001
+            raise ReferenceRuntimeError('Pipecat live audio event returned invalid WAV evidence.') from exc
+        if not audio:
+            raise ReferenceRuntimeError('Pipecat live audio event returned empty WAV evidence.')
+        frame = event.get('frame') if isinstance(event.get('frame'), dict) else {}
+        turn_pair = event.get('turn_pair')
+        self.event_observer({
+            'speaker': speaker,
+            'text': text,
+            'audio': audio,
+            'direction': direction,
+            'llm_output': str(event.get('llm_output') or text),
+            'asr_receipt': (
+                str(event.get('asr_receipt')).strip()
+                if event.get('asr_receipt')
+                else None
+            ),
+            'frame_metadata': frame,
+            'update_live_audio_key': f'{turn_pair}:{direction}',
+            'live_audio_key': f'{turn_pair}:{direction}',
+        })
 
     def _record_duplex_exchange(self, state: _ReferenceSession, event: dict[str, Any]) -> None:
         tester = event.get('tester') if isinstance(event.get('tester'), dict) else {}
@@ -601,30 +780,54 @@ class ReferencePipecatAgentTransport:
         state.inbound.append({'text': tester_receipt, 'audio': target_wav, 'bytes': len(target_wav)})
         latency_ms = event.get('latency_ms')
         if isinstance(latency_ms, (int, float)):
+            latency_kind = str(event.get('latency_kind') or 'target_first_audio_byte')
+            latency_label = (
+                'End-to-end target response'
+                if latency_kind == 'tester_speech_end_to_first_target_audio_received'
+                else 'Target first audible byte'
+                if latency_kind in {
+                    'speech_end_to_first_audible_byte',
+                    'speech_end_to_first_audible_pcm',
+                }
+                else 'Target first audio byte'
+            )
             state.latency_marks.append({
-                'label': 'Two Pipecat graphs over local duplex frames',
+                'label': f'{latency_label} · exchange {event.get("turn_pair") or len(state.latency_marks) + 1}',
+                'kind': latency_kind,
+                'participant': 'target',
+                'turn_pair': event.get('turn_pair'),
                 'latency_ms': float(latency_ms),
+                'exchange_elapsed_ms': event.get('exchange_elapsed_ms'),
+                'response_complete_latency_ms': target_frame.get('response_complete_latency_ms'),
+                'response_metric': target_frame.get('response_metric'),
+                'stage_metrics_source': target_frame.get('stage_metrics_source'),
+                'stage_metrics': (
+                    target_frame.get('stage_metrics')
+                    if isinstance(target_frame.get('stage_metrics'), dict)
+                    else {}
+                ),
+                'pipecat_metrics': (
+                    target_frame.get('pipecat_metrics')
+                    if isinstance(target_frame.get('pipecat_metrics'), list)
+                    else []
+                ),
             })
         if self.event_observer is not None:
+            turn_pair = event.get('turn_pair')
             self.event_observer({
-                'speaker': 'Caller',
+                'update_live_audio_key': f'{turn_pair}:tester_to_target',
                 'text': target_receipt,
-                'audio': tester_wav,
-                'direction': 'tester_to_target',
                 'llm_output': tester_text,
                 'asr_receipt': target_receipt,
                 'frame_metadata': tester_frame,
             })
             self.event_observer({
-                'speaker': 'Agent',
+                'update_live_audio_key': f'{turn_pair}:target_to_tester',
                 'text': tester_receipt,
-                'audio': target_wav,
-                'direction': 'target_to_tester',
                 'llm_output': target_text,
                 'asr_receipt': tester_receipt,
                 'frame_metadata': target_frame,
             })
-
     async def send_audio(
         self,
         session_id: str,
@@ -649,6 +852,7 @@ class ReferencePipecatAgentTransport:
                     for turn in state.transcription
                 ],
                 'model_name': self.config.llm_model,
+                'voice': self.config.kokoro_target_voice,
             },
             timeout=self.config.timeout_seconds,
             headers={'x-cae-reference-token': self.config.internal_token},
@@ -662,6 +866,11 @@ class ReferencePipecatAgentTransport:
         pipeline_payload = response.json()
         caller_text = str(pipeline_payload.get('caller_transcript') or '').strip()
         agent_text = str(pipeline_payload.get('agent_text') or '').strip()
+        first_audio_byte_latency_ms = pipeline_payload.get('first_audio_byte_latency_ms')
+        if not isinstance(first_audio_byte_latency_ms, (int, float)):
+            raise ReferenceRuntimeError(
+                'Pipecat reference agent did not report target first audio byte latency.'
+            )
         try:
             agent_wav = base64.b64decode(str(pipeline_payload.get('agent_audio_wav_base64') or ''), validate=True)
         except Exception as exc:  # noqa: BLE001
@@ -715,12 +924,22 @@ class ReferencePipecatAgentTransport:
                     'source': 'target_kokoro_audio',
                     'source_text': agent_text,
                     'asr_receipt': tester_receipt,
+                    'response_metric': 'target_time_to_first_audio_byte',
+                    'response_latency_ms': float(first_audio_byte_latency_ms),
+                    'response_complete_latency_ms': pipeline_payload.get('response_complete_latency_ms'),
                 },
             ),
         ])
         state.recording_wavs.extend([wav_bytes, agent_wav])
         state.inbound.append({'text': tester_receipt, 'audio': agent_wav, 'bytes': len(agent_wav)})
-        state.latency_marks.append({'label': 'Pipecat rtc-asr → LLM → Kokoro turn', 'latency_ms': pipeline_ms})
+        state.latency_marks.append({
+            'label': f'Target first audio byte · exchange {len(state.latency_marks) + 1}',
+            'kind': 'target_first_audio_byte',
+            'participant': 'target',
+            'latency_ms': float(first_audio_byte_latency_ms),
+            'response_complete_latency_ms': pipeline_payload.get('response_complete_latency_ms'),
+            'exchange_elapsed_ms': pipeline_ms,
+        })
         if self.event_observer is not None:
             self.event_observer({'speaker': 'Caller', 'text': caller_text, 'audio': wav_bytes})
             self.event_observer({'speaker': 'Agent', 'text': tester_receipt, 'audio': agent_wav})
@@ -802,9 +1021,12 @@ class ReferencePipecatAgentTransport:
             'runtime': self.runtime,
             'evidence_source': 'current_run',
             'architecture': (
-                'two_independent_pipecat_graphs_in_process_duplex_frames'
-                if state.duplex_frames
-                else 'two_independent_pipecat_graphs_duplex_frames'
+                state.remote_architecture
+                or (
+                    'two_independent_pipecat_graphs_in_process_duplex_frames'
+                    if state.duplex_frames
+                    else 'two_independent_pipecat_graphs_duplex_frames'
+                )
             ),
             'graphs': graphs,
             'duplex': {

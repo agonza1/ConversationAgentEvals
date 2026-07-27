@@ -51,7 +51,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_VOICE_FIXTURE = 'docs/examples/agentic-contact-center-run-fixture.json'
 DEFAULT_AUDIO_PLAN = 'docs/examples/agentic-contact-center-audio-plan.json'
 DEFAULT_CANCELLATION_SCENARIO = 'docs/examples/agentic-contact-center-cancellation-rescue.json'
-DEFAULT_EXECUTION_MODEL = 'gpt-5.4'
+DEFAULT_EXECUTION_MODEL = 'gpt-5.4-mini'
 FIXTURE_BACKED_SCENARIO_IDS = frozenset({'cancellation-rescue'})
 ALLOWED_FIXTURE_ROOTS = (
     REPO_ROOT / 'docs' / 'examples',
@@ -154,6 +154,7 @@ def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool =
         agent_name=(agent or {}).get('name'),
         model_name=model_name,
         max_exchanges=resolved.max_exchanges,
+        duplex_timeout_seconds=resolved.duplex_timeout_seconds,
         tester_id=resolved.tester_id,
         tester_model_name=resolved.tester_model_name,
         executor_id=resolved.executor_id,
@@ -249,9 +250,45 @@ def _live_event_publisher(
     user_id: str,
 ) -> Callable[[dict[str, Any]], None]:
     sequence = 0
+    live_audio_sequences: dict[str, int] = {}
 
     def publish(payload: dict[str, Any]) -> None:
         nonlocal sequence
+        update_key = str(payload.get('update_live_audio_key') or '').strip()
+        if update_key:
+            event_sequence = live_audio_sequences.get(update_key)
+            if event_sequence is not None:
+                audio = payload.get('audio')
+                media_url = None
+                mime_type = None
+                kind = None
+                if isinstance(audio, bytes) and audio:
+                    kind = 'audio'
+                    mime_type = 'audio/wav'
+                    live_dir = REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id / 'audio' / 'live'
+                    live_dir.mkdir(parents=True, exist_ok=True)
+                    (live_dir / f'{conversation_id}-{event_sequence}.wav').write_bytes(audio)
+                    media_url = (
+                        f'/api/execution/runs/{quote(execution_run_id)}/conversations/'
+                        f'{quote(conversation_id)}/audio/{event_sequence}?user_id={quote(user_id)}'
+                    )
+                execution_run_store.update_live_event(
+                    execution_run_id,
+                    conversation_id,
+                    event_sequence,
+                    text=str(payload.get('text') or '').strip(),
+                    llm_output=str(payload.get('llm_output') or '').strip(),
+                    asr_receipt=str(payload.get('asr_receipt') or '').strip(),
+                    frame_metadata=(
+                        payload.get('frame_metadata')
+                        if isinstance(payload.get('frame_metadata'), dict)
+                        else {}
+                    ),
+                    kind=kind,
+                    media_url=media_url,
+                    mime_type=mime_type,
+                )
+                return
         speaker = str(payload.get('speaker') or 'System').strip()
         text = str(payload.get('text') or '').strip()
         if not text:
@@ -271,7 +308,7 @@ def _live_event_publisher(
                 f'/api/execution/runs/{quote(execution_run_id)}/conversations/'
                 f'{quote(conversation_id)}/audio/{sequence}?user_id={quote(user_id)}'
             )
-        execution_run_store.append_live_event(
+        updated = execution_run_store.append_live_event(
             execution_run_id,
             conversation_id,
             LiveExecutionEvent(
@@ -292,6 +329,9 @@ def _live_event_publisher(
                 created_at=datetime.now(UTC).isoformat(),
             ),
         )
+        live_audio_key = str(payload.get('live_audio_key') or '').strip()
+        if updated is not None and live_audio_key:
+            live_audio_sequences[live_audio_key] = sequence
 
     return publish
 
@@ -1002,7 +1042,7 @@ async def _execute_pipecat_webrtc(
         session_id,
         scenario=scenario,
         max_turn_pairs=payload.max_exchanges,
-        total_timeout_seconds=min(300, max(90, payload.max_exchanges * 30)),
+        total_timeout_seconds=payload.duplex_timeout_seconds,
     )
     await transport.disconnect(
         session_id,
@@ -1100,7 +1140,11 @@ async def _execute_pipecat_webrtc(
         'mode': payload.mode,
         'audio_transport': transport.transport_id,
         'capture_surface': 'pipecat_in_process_duplex_bus',
-        'tester': {'participant': 'pipecat_tester', 'tts_provider': 'kokoro'},
+        'tester': {
+            'participant': 'pipecat_tester',
+            'tts_provider': 'kokoro',
+            'tts_voice': config.kokoro_tester_voice,
+        },
         'tester_llm': {
             'participant': 'pipecat_tester',
             'provider': tester_llm.get('provider'),
@@ -1305,14 +1349,6 @@ def _validate_scenarios(suite: dict[str, Any], scenario_ids: list[str]) -> None:
 
 
 def _validate_fixture_mode_scenarios(payload: ExecutionRunCreateRequest, scenario_ids: list[str]) -> None:
-    if payload.mode == 'pipecat_webrtc':
-        unsupported = [item for item in scenario_ids if item != 'cancellation-rescue']
-        if unsupported:
-            raise ValueError(
-                'pipecat_webrtc currently supports only scenario cancellation-rescue; '
-                'its tester act plan is scenario-specific.'
-            )
-        return
     uses_fixture = (
         payload.mode == 'voice_fixture'
         or payload.text_callable == 'offline_acc_fixture'

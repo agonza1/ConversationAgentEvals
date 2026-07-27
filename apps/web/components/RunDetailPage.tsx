@@ -8,6 +8,7 @@ import { SiteNav } from '@/components/SiteNav';
 import {
   applyLlmJudgeReview,
   ConversationRecord,
+  ConversationTurn,
   demoProjectId,
   demoUserId,
   ExecutionRunRecord,
@@ -15,7 +16,6 @@ import {
   getExecutionRun,
   LlmJudgeResponse,
   requestLlmJudge,
-  TimelineEvent,
 } from '@/lib/execution';
 
 type MetricKey = 'audio_interruption' | 'latency' | 'call_resolution';
@@ -95,6 +95,9 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
             <div><dt>Tester</dt><dd>{run.provenance.tester_id}</dd></div>
             <div><dt>Executor</dt><dd>{run.provenance.executor_id}</dd></div>
             <div><dt>Exchange cap</dt><dd>{run.max_exchanges || 3}</dd></div>
+            {run.mode === 'pipecat_webrtc' ? (
+              <div><dt>Session timeout</dt><dd>{run.duplex_timeout_seconds || 120}s</dd></div>
+            ) : null}
             <div><dt>Evidence</dt><dd>{run.provenance.evidence_source}</dd></div>
           </dl>
         ) : null}
@@ -137,9 +140,17 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
               onClick={() => setMetric('audio_interruption')}
             />
             <MetricTile
-              title="Latency"
+              title={run.mode === 'pipecat_webrtc'
+                ? 'End-to-end target response latency'
+                : summary.targetSpecific
+                  ? 'Target Response Latency'
+                  : 'Latency'}
               value={summary.avgLatency != null ? `${Math.round(summary.avgLatency)}ms` : 'n/a'}
-              detail={`p90 ${summary.p90Latency != null ? `${Math.round(summary.p90Latency)}ms` : 'n/a'}`}
+              detail={summary.avgLatency != null
+                ? `${summary.latencyDefinition} · p90 ${
+                  summary.p90Latency != null ? `${Math.round(summary.p90Latency)}ms` : 'n/a'
+                }`
+                : 'response timing not captured'}
               bars={summary.latencyBars}
               selected={metric === 'latency'}
               onClick={() => setMetric('latency')}
@@ -195,8 +206,12 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
                 userId={userId}
                 onRunUpdated={setRun}
               />
-              {run.mode === 'voice_fixture' ? (
-                <StubWaveform timeline={conversation?.timeline || []} />
+              {run.mode !== 'text_callable' ? (
+                <ConversationFlow
+                  turns={conversation?.turns || []}
+                  latencyMarks={conversation?.latency_marks || []}
+                  firstByteEvidence={conversation?.mode === 'pipecat_webrtc'}
+                />
               ) : null}
             </section>
 
@@ -548,31 +563,187 @@ function MetricDetail({
     );
   }
 
-  const latency = summary.latency;
-  const marks = conversation.latency_marks || [];
+  const evidence = responseLatencyEvidence(conversation);
+  const builtInTarget = run.agent_id === 'generalist-voice-agent'
+    || run.provenance?.target_kind === 'builtin_sample_voice';
+  const measuredMarks = evidence.marks
+    .map((mark) => ({ mark, ms: markLatencyMs(mark) }))
+    .filter((item): item is { mark: Record<string, unknown>; ms: number } => item.ms != null);
+  const latency = latencyStats(measuredMarks.map((item) => item.ms));
+  if (conversation.mode === 'pipecat_webrtc' && !evidence.marks.length) {
+    return (
+      <div className="runs-detail-copy">
+        <h2>End-to-end target response latency</h2>
+        <p>
+          First-audible-audio timing was not captured for this historical run. Its legacy marks measured a complete
+          two-agent exchange, so they are excluded rather than presented as target latency.
+        </p>
+        <p className="latency-definition">
+          Tester speech end → first target audio received at tester.
+        </p>
+      </div>
+    );
+  }
   return (
     <div className="runs-detail-copy">
-      <h2>Latency</h2>
+      <h2>
+        {conversation.mode === 'pipecat_webrtc'
+          ? 'End-to-end target response latency'
+          : evidence.targetSpecific
+            ? 'Target Response Latency'
+            : 'Latency'}
+      </h2>
+      {conversation.mode === 'pipecat_webrtc' ? (
+        <p className="latency-definition">
+          <strong>Tester speech end → first target audio received at tester.</strong>{' '}
+          This end-to-end measurement includes transport, target processing, and media handoff overhead.
+        </p>
+      ) : null}
       <p>
         count {latency.count} · avg {fmtMs(latency.avg_ms)} · median {fmtMs(latency.median_ms)} · p90 {fmtMs(latency.p90_ms)} ·
         outliers {latency.outlier_count}
       </p>
       <div className="latency-bars" aria-label="Per-mark latency bars">
-        {(marks.length ? marks : conversation.timeline || []).map((mark, index) => {
-          const ms = markLatencyMs(mark);
+        {measuredMarks.map(({ mark, ms }, index) => {
           const max = Math.max(latency.max_ms || 1, 1);
           return (
             <div key={index} className="latency-bar-row">
-              <span>{String((mark as { label?: string }).label || `mark ${index + 1}`)}</span>
+              <span>{latencyMarkLabel(mark, index)}</span>
               <span className="latency-bar-track">
                 <i style={{ width: `${Math.min(100, (ms / max) * 100)}%` }} />
               </span>
               <strong>{fmtMs(ms)}</strong>
+              <LatencyBreakdown mark={mark} builtInTarget={builtInTarget} />
             </div>
           );
         })}
       </div>
     </div>
+  );
+}
+
+type FlowSegment = {
+  turn: ConversationTurn;
+  lane: 'caller' | 'agent';
+  startMs: number;
+  durationMs: number;
+  responseLatencyMs?: number;
+  responseStartMs?: number;
+  responseLabel?: string;
+};
+
+function ConversationFlow({
+  turns,
+  latencyMarks,
+  firstByteEvidence,
+}: {
+  turns: ConversationTurn[];
+  latencyMarks: Array<Record<string, unknown>>;
+  firstByteEvidence: boolean;
+}) {
+  if (!turns.length) return null;
+  const candidateMarks = firstByteEvidence
+    ? latencyMarks.filter(isTargetFirstAudioByteMark)
+    : latencyMarks;
+  const targetMarks = candidateMarks.filter((mark) => markLatencyMs(mark) != null);
+  let cursorMs = 0;
+  let agentIndex = 0;
+  const segments: FlowSegment[] = turns.map((turn) => {
+    const lane = turnLane(turn);
+    const durationMs = turnAudioDurationMs(turn);
+    const mark = lane === 'agent' ? targetMarks[agentIndex++] : undefined;
+    const responseLatencyMs = mark ? markLatencyMs(mark) ?? undefined : undefined;
+    const responseStartMs = lane === 'agent' && responseLatencyMs != null ? cursorMs : undefined;
+    const responseLabel = mark ? responseMetricLabel(mark) : undefined;
+    if (responseLatencyMs != null) cursorMs += responseLatencyMs;
+    const segment = {
+      turn,
+      lane,
+      startMs: cursorMs,
+      durationMs,
+      responseLatencyMs,
+      responseStartMs,
+      responseLabel,
+    };
+    cursorMs += durationMs;
+    return segment;
+  });
+  const totalMs = Math.max(cursorMs, 1);
+  const ticks = [0, 0.25, 0.5, 0.75, 1];
+
+  return (
+    <section className="conversation-flow" aria-label="Two-agent conversation timeline">
+      <div className="conversation-flow-heading">
+        <div>
+          <p className="eyebrow">Conversation flow</p>
+          <h3>Tester and target speech</h3>
+        </div>
+        <div className="conversation-flow-legend" aria-label="Timeline legend">
+          <span data-legend="caller">Tester · Caller</span>
+          <span data-legend="agent">Target · Agent</span>
+          {targetMarks.length ? <span data-legend="latency">Target response wait</span> : null}
+        </div>
+      </div>
+      <div className="conversation-flow-chart">
+        {(['caller', 'agent'] as const).map((lane) => (
+          <div className="conversation-flow-row" key={lane}>
+            <strong>{lane === 'caller' ? 'Caller' : 'Agent'}</strong>
+            <div className="conversation-flow-track" data-track={lane}>
+              {segments.filter((segment) => segment.lane === lane).map((segment) => (
+                <span
+                  className="conversation-speech-segment"
+                  key={segment.turn.turn_index}
+                  style={{
+                    left: `${(segment.startMs / totalMs) * 100}%`,
+                    width: `${Math.max(1.5, (segment.durationMs / totalMs) * 100)}%`,
+                  }}
+                  title={`Turn ${segment.turn.turn_index} · ${fmtDuration(segment.durationMs)} · ${segment.turn.text || ''}`}
+                >
+                  <i aria-hidden="true" />
+                  <b>{segment.turn.turn_index}</b>
+                </span>
+              ))}
+              {lane === 'agent' ? segments.filter((segment) => (
+                segment.lane === 'agent'
+                && segment.responseLatencyMs != null
+                && segment.responseStartMs != null
+              )).map((segment) => (
+                <span
+                  className="conversation-response-gap"
+                  key={`latency-${segment.turn.turn_index}`}
+                  style={{
+                    left: `${((segment.responseStartMs || 0) / totalMs) * 100}%`,
+                    width: `${Math.max(1, ((segment.responseLatencyMs || 0) / totalMs) * 100)}%`,
+                  }}
+                  title={`${segment.responseLabel}: ${fmtMs(segment.responseLatencyMs)}`}
+                />
+              )) : null}
+            </div>
+          </div>
+        ))}
+        <div className="conversation-flow-axis" aria-hidden="true">
+          <span />
+          <div>
+            {ticks.map((tick) => <span key={tick}>{fmtDuration(totalMs * tick)}</span>)}
+          </div>
+        </div>
+      </div>
+      <ol className="conversation-flow-turns" aria-label="Conversation turn sequence">
+        {segments.map((segment) => (
+          <li key={`flow-${segment.turn.turn_index}`} data-speaker={segment.lane}>
+            <span>{segment.turn.turn_index}</span>
+            <strong>{segment.lane === 'caller' ? 'Caller' : 'Agent'}</strong>
+            <p>{segment.turn.text || 'No transcript text.'}</p>
+            <small>
+              {fmtDuration(segment.durationMs)}
+              {segment.responseLatencyMs != null
+                ? ` · ${String(segment.responseLabel || 'target response').toLowerCase()} ${fmtMs(segment.responseLatencyMs)}`
+                : ''}
+            </small>
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
 
@@ -735,63 +906,25 @@ function AppliedAdjudication({
   );
 }
 
-function StubWaveform({ timeline }: { timeline: TimelineEvent[] }) {
-  const events = timeline.length
-    ? timeline
-    : [
-        { t_ms: 0, label: 'caller', latency_ms: 500, kind: 'turn' },
-        { t_ms: 500, label: 'agent', latency_ms: 700, kind: 'turn' },
-      ];
-  const total = Math.max(
-    1,
-    ...events.map((item) => Number(item.t_ms || 0) + Number(item.latency_ms || 400)),
-  );
-
-  return (
-    <div className="stub-waveform" aria-label="Stub dual-track waveform">
-      <p className="eyebrow">Waveform (stub)</p>
-      <div className="stub-track" data-track="caller">
-        {events.map((event, index) => (
-          <span
-            key={`caller-${index}`}
-            title={event.label}
-            style={{
-              left: `${(Number(event.t_ms || 0) / total) * 100}%`,
-              width: `${(Number(event.latency_ms || 400) / total) * 100}%`,
-              opacity: event.kind === 'turn' && index % 2 === 0 ? 0.9 : 0.35,
-            }}
-          />
-        ))}
-      </div>
-      <div className="stub-track" data-track="agent">
-        {events.map((event, index) => (
-          <span
-            key={`agent-${index}`}
-            title={event.label}
-            style={{
-              left: `${(Number(event.t_ms || 0) / total) * 100}%`,
-              width: `${(Number(event.latency_ms || 400) / total) * 100}%`,
-              opacity: event.kind === 'turn' && index % 2 === 1 ? 0.9 : 0.35,
-            }}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function aggregateRunMetrics(run: ExecutionRunRecord | null) {
   const conversations = run?.conversations || [];
   const interruptionCount = conversations.reduce(
     (sum, item) => sum + Number(item.metrics_summary?.interruption_count || 0),
     0,
   );
-  const latencies = conversations
-    .map((item) => item.metrics_summary?.latency?.avg_ms)
-    .filter((value): value is number => typeof value === 'number');
-  const p90s = conversations
-    .map((item) => item.metrics_summary?.latency?.p90_ms)
-    .filter((value): value is number => typeof value === 'number');
+  const latencyValues = conversations.flatMap((item) => (
+    responseLatencyEvidence(item).marks.map(markLatencyMs)
+  )).filter((value): value is number => value != null);
+  const targetSpecific = conversations.length > 0 && conversations.every((item) => (
+    responseLatencyEvidence(item).targetSpecific
+  ));
+  const usesSpeechEndMetric = conversations.some((item) => (
+    responseLatencyEvidence(item).marks.some(isSpeechEndToFirstAudiblePcmMark)
+  ));
+  const voiceTargetSpecific = conversations.length > 0 && conversations.every(
+    (item) => item.mode === 'pipecat_webrtc',
+  );
+  const measuredLatency = latencyStats(latencyValues);
   const resolutionCounts: Record<ResolutionState, number> = {
     verified: 0,
     unverified: 0,
@@ -809,13 +942,22 @@ function aggregateRunMetrics(run: ExecutionRunRecord | null) {
         `${resolutionCounts.not_evaluated} not evaluated`,
       ].join(' · ')
     : 'no conversations';
-  const latencyBars = (conversations[0]?.timeline || [])
+  const latencyBars = latencyValues
     .slice(0, 12)
-    .map((item) => Math.min(100, (markLatencyMs(item) / 1000) * 100));
+    .map((value) => Math.min(100, (value / Math.max(measuredLatency.max_ms || 1, 1)) * 100));
   return {
     interruptionCount,
-    avgLatency: latencies.length ? latencies.reduce((a, b) => a + b, 0) / latencies.length : null,
-    p90Latency: p90s.length ? Math.max(...p90s) : null,
+    avgLatency: measuredLatency.avg_ms,
+    p90Latency: measuredLatency.p90_ms,
+    targetSpecific,
+    usesSpeechEndMetric,
+    latencyDefinition: usesSpeechEndMetric
+      ? 'Tester speech end → first target audio received at tester'
+      : voiceTargetSpecific
+        ? 'first audible byte'
+        : targetSpecific
+          ? 'target response'
+          : 'captured latency',
     resolutionRate: conversations.length
       ? (resolutionCounts.verified / conversations.length) * 100
       : null,
@@ -1019,14 +1161,182 @@ function stringValue(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
-function markLatencyMs(mark: unknown): number {
-  if (!mark || typeof mark !== 'object') return 0;
+function responseLatencyEvidence(conversation: ConversationRecord) {
+  const marks = conversation.latency_marks || [];
+  if (conversation.mode === 'pipecat_webrtc') {
+    return { marks: marks.filter(isTargetFirstAudioByteMark), targetSpecific: true };
+  }
+  const targetMarks = marks.filter(isTargetResponseMark);
+  if (targetMarks.length) {
+    return { marks: targetMarks, targetSpecific: true };
+  }
+  return {
+    marks: marks.length
+      ? marks
+      : (conversation.timeline || []).map((item) => ({ ...item })),
+    targetSpecific: false,
+  };
+}
+
+function isTargetResponseMark(mark: Record<string, unknown>) {
+  if (isTargetFirstAudioByteMark(mark)) return true;
+  const participant = String(mark.participant || mark.speaker || '').toLowerCase();
+  const direction = String(mark.direction || '').toLowerCase();
+  if (['target', 'agent', 'assistant'].includes(participant) || direction === 'target_to_tester') {
+    return true;
+  }
+  const descriptor = [mark.kind, mark.type, mark.label, mark.name]
+    .map((value) => String(value || '').toLowerCase())
+    .join(' ');
+  return /\b(target|agent|assistant)\b.*\b(response|latency)\b/.test(descriptor);
+}
+
+function isTargetFirstAudioByteMark(mark: Record<string, unknown>) {
+  return isEndToEndTargetResponseMark(mark)
+    || mark.kind === 'target_first_audio_byte'
+    || mark.kind === 'speech_end_to_first_audible_byte'
+    || mark.kind === 'speech_end_to_first_audible_pcm'
+    || mark.response_metric === 'speech_end_to_first_audible_byte'
+    || mark.response_metric === 'target_time_to_first_audio_byte';
+}
+
+function isEndToEndTargetResponseMark(mark: Record<string, unknown>) {
+  return mark.kind === 'tester_speech_end_to_first_target_audio_received'
+    || mark.response_metric === 'tester_speech_end_to_first_target_audio_received';
+}
+
+function isSpeechEndToFirstAudiblePcmMark(mark: Record<string, unknown>) {
+  return isEndToEndTargetResponseMark(mark)
+    || mark.kind === 'speech_end_to_first_audible_byte'
+    || mark.kind === 'speech_end_to_first_audible_pcm'
+    || mark.response_metric === 'speech_end_to_first_audible_byte'
+    || mark.response_metric === 'speech_end_to_first_audible_pcm';
+}
+
+function responseMetricLabel(mark: Record<string, unknown>) {
+  if (isEndToEndTargetResponseMark(mark)) {
+    return 'End-to-end target response';
+  }
+  return isTargetFirstAudioByteMark(mark)
+    ? 'Target first audible byte'
+    : 'Target response';
+}
+
+function latencyMarkLabel(mark: Record<string, unknown>, index: number) {
+  if (isEndToEndTargetResponseMark(mark)) {
+    const turnPair = Number(mark.turn_pair);
+    return Number.isFinite(turnPair) && turnPair > 0
+      ? `End-to-end target response · exchange ${turnPair}`
+      : 'End-to-end target response';
+  }
+  if (isTargetFirstAudioByteMark(mark)) {
+    const turnPair = Number(mark.turn_pair);
+    return Number.isFinite(turnPair) && turnPair > 0
+      ? `Target first audible byte · exchange ${turnPair}`
+      : 'Target first audible byte';
+  }
+  return String(mark.label || `mark ${index + 1}`);
+}
+
+function LatencyBreakdown({
+  mark,
+  builtInTarget,
+}: {
+  mark: Record<string, unknown>;
+  builtInTarget: boolean;
+}) {
+  const stages = mark.stage_metrics;
+  if (!stages || typeof stages !== 'object') return null;
+  const values = stages as Record<string, unknown>;
+  const entries = [
+    ['Target endpointing + ASR finalization', values.asr_finalize_ms],
+    ['LLM TTFT', values.llm_ttft_ms],
+    ['TTS text aggregation', values.tts_aggregation_delay_ms],
+    [
+      'TTS synthesis TTFB',
+      values.tts_synthesis_ttfb_ms ?? values.tts_ttfb_ms,
+    ],
+  ].filter((entry): entry is [string, number] => (
+    typeof entry[1] === 'number' && Number.isFinite(entry[1])
+  ));
+  if (!entries.length) return null;
+  const source = String(
+    mark.stage_metrics_source || (builtInTarget ? 'built_in_target' : 'target_provided'),
+  );
+  const heading = source === 'built_in_target'
+    ? 'Built-in target diagnostics'
+    : 'Target-provided diagnostics';
+  return (
+    <div className="latency-breakdown">
+      <strong>{heading}</strong>
+      <small>{entries.map(([label, value]) => `${label} ${fmtMs(value)}`).join(' · ')}</small>
+    </div>
+  );
+}
+
+function latencyStats(values: number[]) {
+  const ordered = values.filter((value) => Number.isFinite(value) && value >= 0).sort((a, b) => a - b);
+  if (!ordered.length) {
+    return {
+      count: 0,
+      avg_ms: null,
+      median_ms: null,
+      p90_ms: null,
+      min_ms: null,
+      max_ms: null,
+      outlier_count: 0,
+    };
+  }
+  const midpoint = Math.floor(ordered.length / 2);
+  const medianMs = ordered.length % 2
+    ? ordered[midpoint]
+    : (ordered[midpoint - 1] + ordered[midpoint]) / 2;
+  const p90Index = Math.min(ordered.length - 1, Math.max(0, Math.round((ordered.length - 1) * 0.9)));
+  return {
+    count: ordered.length,
+    avg_ms: ordered.reduce((sum, value) => sum + value, 0) / ordered.length,
+    median_ms: medianMs,
+    p90_ms: ordered[p90Index],
+    min_ms: ordered[0],
+    max_ms: ordered[ordered.length - 1],
+    outlier_count: ordered.filter((value) => medianMs > 0 && value > medianMs * 1.5).length,
+  };
+}
+
+function turnLane(turn: ConversationTurn): 'caller' | 'agent' {
+  const speaker = String(turn.speaker || '').toLowerCase();
+  if (turn.direction === 'target_to_tester' || ['agent', 'assistant', 'target'].includes(speaker)) return 'agent';
+  return 'caller';
+}
+
+function turnAudioDurationMs(turn: ConversationTurn) {
+  const metadata = turn.frame_metadata || {};
+  const explicitDuration = Number(metadata.duration_ms);
+  if (Number.isFinite(explicitDuration) && explicitDuration > 0) return explicitDuration;
+  const bytes = Number(metadata.bytes);
+  const sampleRate = Number(metadata.sample_rate);
+  const channels = Number(metadata.channels || 1);
+  if (bytes > 0 && sampleRate > 0 && channels > 0) {
+    return (bytes / (sampleRate * channels * 2)) * 1000;
+  }
+  const words = String(turn.text || '').trim().split(/\s+/).filter(Boolean).length;
+  return Math.min(12_000, Math.max(700, (words / 2.6) * 1000));
+}
+
+function markLatencyMs(mark: unknown): number | null {
+  if (!mark || typeof mark !== 'object') return null;
   const record = mark as Record<string, unknown>;
   for (const key of ['latency_ms', 'elapsed_ms', 'ms', 'duration_ms']) {
-    const value = Number(record[key]);
+    const value = record[key];
+    if (typeof value !== 'number') continue;
     if (Number.isFinite(value) && value >= 0) return value;
   }
-  return 0;
+  return null;
+}
+
+function fmtDuration(value: number) {
+  if (value < 1000) return `${Math.round(value)}ms`;
+  return `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}s`;
 }
 
 function fmtMs(value?: number | null) {

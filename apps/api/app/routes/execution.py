@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import json
 import os
 import secrets
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
@@ -19,6 +21,7 @@ from app.services.execution_runner import execute_execution_run, start_execution
 from app.services.reference_generalist_agent import (
     ReferenceRuntimeError,
     ReferenceRuntimeConfig,
+    discover_rtc_asr_runtime,
     resolve_reference_completion_provider,
 )
 from app.services.acc_connection import acc_connection_status, test_acc_connection
@@ -91,7 +94,17 @@ def execution_reference_complete(
         raise HTTPException(status_code=403, detail='Invalid local reference-agent token.')
     try:
         provider = resolve_reference_completion_provider()
-        text = provider.complete(payload.prompt, model_name=payload.model_name).strip()
+        started_at = time.perf_counter()
+        complete_with_metrics = getattr(provider, 'complete_with_metrics', None)
+        if callable(complete_with_metrics):
+            completion = complete_with_metrics(payload.prompt, model_name=payload.model_name)
+            text = str(completion.get('text') or '').strip()
+            ttft_ms = completion.get('ttft_ms')
+            total_ms = completion.get('total_ms')
+        else:
+            text = provider.complete(payload.prompt, model_name=payload.model_name).strip()
+            ttft_ms = None
+            total_ms = round((time.perf_counter() - started_at) * 1000, 3)
     except (ReferenceRuntimeError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     if not text:
@@ -101,7 +114,65 @@ def execution_reference_complete(
         'text': text,
         'provider': status.get('provider') or provider.provider_id,
         'model_name': payload.model_name,
+        'ttft_ms': ttft_ms if isinstance(ttft_ms, (int, float)) else None,
+        'total_ms': total_ms if isinstance(total_ms, (int, float)) else None,
     }
+
+
+@router.post('/reference/stream')
+def execution_reference_stream(
+    payload: ReferenceCompletionRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+):
+    """Stream normalized LLM text deltas to the local Pipecat media pipeline."""
+    expected_token = os.getenv('REFERENCE_AGENT_INTERNAL_TOKEN', '').strip()
+    if not expected_token:
+        raise HTTPException(
+            status_code=503,
+            detail='Set REFERENCE_AGENT_INTERNAL_TOKEN for the local reference pipeline.',
+        )
+    if not x_cae_reference_token or not secrets.compare_digest(
+        x_cae_reference_token,
+        expected_token,
+    ):
+        raise HTTPException(status_code=403, detail='Invalid local reference-agent token.')
+    try:
+        provider = resolve_reference_completion_provider()
+        provider_status = provider.status()
+    except (ReferenceRuntimeError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    def ndjson_events():
+        started_at = time.perf_counter()
+        stream = getattr(provider, 'stream_with_metrics', None)
+        try:
+            if callable(stream):
+                events = stream(payload.prompt, model_name=payload.model_name)
+            else:
+                text = provider.complete(payload.prompt, model_name=payload.model_name).strip()
+                events = iter((
+                    {'type': 'delta', 'text': text},
+                    {
+                        'type': 'completed',
+                        'text': text,
+                        'ttft_ms': None,
+                        'total_ms': round((time.perf_counter() - started_at) * 1000, 3),
+                    },
+                ))
+            for event in events:
+                normalized = {
+                    **event,
+                    'provider': provider_status.get('provider') or provider.provider_id,
+                    'model_name': payload.model_name,
+                }
+                yield json.dumps(normalized, separators=(',', ':')) + '\n'
+        except Exception as exc:  # noqa: BLE001 - transport errors must reach Pipecat
+            yield json.dumps(
+                {'type': 'error', 'detail': str(exc)},
+                separators=(',', ':'),
+            ) + '\n'
+
+    return StreamingResponse(ndjson_events(), media_type='application/x-ndjson')
 
 
 @router.post('/runs')
@@ -461,28 +532,17 @@ def _reference_voice_preflight() -> dict[str, Any]:
                 response = httpx.get(f'{base_url}{path}', timeout=2)
                 response.raise_for_status()
                 if dependency_id == 'rtc_asr':
-                    asr_payload = response.json()
-                    actual_backend = str(asr_payload.get('backend') or '').lower()
-                    requested_backend = config.rtc_asr_backend
-                    compatible = (
-                        (requested_backend == 'whisper' and 'whisper' in actual_backend)
-                        or (
-                            requested_backend in {'parakeet', 'mlx_parakeet'}
-                            and ('parakeet' in actual_backend or 'mlx' in actual_backend)
-                        )
-                    )
-                    ready = compatible
+                    runtime = discover_rtc_asr_runtime(response.json())
+                    ready = True
                     detail = (
-                        f'Reachable at {base_url}; backend {actual_backend or requested_backend} is compatible.'
-                        if compatible
-                        else (
-                            f'rtc-asr backend mismatch: requested {requested_backend}, '
-                            f'service reports {actual_backend or "unknown"}.'
-                        )
+                        f'Reachable at {base_url}; using '
+                        f'{runtime["backend"]} ({runtime["model"]}) selected by rtc-asr.'
                     )
                 else:
                     ready = True
                     detail = f'Reachable at {base_url}.'
+            except ReferenceRuntimeError as exc:
+                detail = str(exc)
             except Exception as exc:  # noqa: BLE001
                 detail = f'Unreachable at {base_url}: {exc}'
         dependencies.append({'id': dependency_id, 'label': label, 'ready': ready, 'detail': detail})

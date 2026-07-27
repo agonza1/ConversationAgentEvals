@@ -55,7 +55,10 @@ audio_session = conversation.get('audio_session') or {}
 provenance = audio_session.get('runtime_provenance') or {}
 assert provenance.get('evidence_source') == 'current_run', provenance
 assert provenance.get('fixture_backed_scoring') is False, provenance
-assert audio_session.get('architecture') == 'two_independent_pipecat_graphs_in_process_duplex_frames', audio_session
+assert (
+    audio_session.get('architecture')
+    == 'persistent_streaming_pipecat_duplex_local_stt_v1'
+), audio_session
 duplex = audio_session.get('duplex') or {}
 assert duplex.get('transport') == 'in_process_pipecat_frame_bus', duplex
 assert duplex.get('frame_count', 0) >= 2, duplex
@@ -70,6 +73,7 @@ for participant in ('tester', 'target'):
         'rtc-asr',
         'llm',
         'kokoro',
+        'silero-vad',
     ], graph
     assert graph.get('llm_mode') == 'real', graph
 assert len(conversation.get('turns') or []) >= 2, conversation
