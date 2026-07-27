@@ -153,25 +153,32 @@ export function LiveRunFeedback({
     return next.listener.run_status;
   }, [apiBase, listenerToken?.token]);
 
-  async function createListener(): Promise<ListenerToken | null> {
+  async function requestListenerToken(): Promise<ListenerToken | null> {
     if (!executionRunId || !userId) return null;
+    const requestedRunId = executionRunId;
+    const payload = await fetchJson<{ listener: ListenerToken }>(
+      mediaUrl(apiBase, `/api/execution/runs/${encodeURIComponent(requestedRunId)}/listener-token?user_id=${encodeURIComponent(userId)}`),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ttl_seconds: 600 }),
+      },
+    );
+    if (executionRunIdRef.current !== requestedRunId) return null;
+    return payload.listener;
+  }
+
+  async function createListener(): Promise<ListenerToken | null> {
     setIsCreatingListener(true);
     setListenerMessage(null);
     try {
-      const payload = await fetchJson<{ listener: ListenerToken }>(
-        mediaUrl(apiBase, `/api/execution/runs/${encodeURIComponent(executionRunId)}/listener-token?user_id=${encodeURIComponent(userId)}`),
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ttl_seconds: 600 }),
-        },
-      );
-      if (executionRunIdRef.current !== executionRunId) return null;
-      listenerTokenRef.current = payload.listener;
-      setListenerToken(payload.listener);
+      const token = await requestListenerToken();
+      if (!token) return null;
+      listenerTokenRef.current = token;
+      setListenerToken(token);
       setExpanded(true);
-      await refreshListener(payload.listener.token);
-      return payload.listener;
+      await refreshListener(token.token);
+      return token;
     } catch (error) {
       setListenerMessage(error instanceof Error ? error.message : 'Could not create listener.');
       return null;
@@ -331,14 +338,17 @@ export function LiveRunFeedback({
     setPlaybackMode('live');
     setExpanded(true);
     setPlaybackMessage('Connecting to the ongoing WebRTC audio stream…');
-    let token = listenerToken;
-    if (token && listenerTokenExpired(token)) {
-      listenerTokenRef.current = null;
-      setListenerToken(null);
-      setListenerConversations(null);
-      token = null;
+    let token: ListenerToken | null = null;
+    try {
+      // The displayed token may already be attached in a shared browser.
+      // Give the owner's embedded listener a distinct server-side listener ID.
+      token = await requestListenerToken();
+    } catch (error) {
+      playbackModeRef.current = 'idle';
+      setPlaybackMode('idle');
+      setPlaybackMessage(error instanceof Error ? error.message : 'Could not create the owner listener.');
+      return;
     }
-    token = token ?? await createListener();
     if (!token) {
       playbackModeRef.current = 'idle';
       setPlaybackMode('idle');
@@ -347,11 +357,6 @@ export function LiveRunFeedback({
     try {
       await connectWebRTC(token);
     } catch (error) {
-      if (listenerTokenExpired(token)) {
-        listenerTokenRef.current = null;
-        setListenerToken(null);
-        setListenerConversations(null);
-      }
       playbackModeRef.current = 'idle';
       setPlaybackMode('idle');
       setPlaybackMessage(error instanceof Error ? error.message : 'Could not attach the live WebRTC listener.');

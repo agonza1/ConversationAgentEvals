@@ -1129,9 +1129,10 @@ test('active voice listening uses WebRTC and completed playback restarts from th
   ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(1);
 });
 
-test('expired listener tokens are renewed before WebRTC reconnects', async ({ page }) => {
+test('owner live WebRTC uses a different token from the shared listener link', async ({ page }) => {
   let listenerTokenRequests = 0;
-  let freshWebrtcRequests = 0;
+  let ownerWebrtcRequests = 0;
+  let sharedWebrtcRequests = 0;
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
     class TestPeerConnection {
@@ -1158,15 +1159,16 @@ test('expired listener tokens are renewed before WebRTC reconnects', async ({ pa
   await page.route('**/api/execution/runs/exec-expired-listener**', async (route) => {
     if (route.request().url().includes('/listener-token')) {
       listenerTokenRequests += 1;
-      const fresh = listenerTokenRequests > 1;
-      const token = fresh ? 'fresh-listener-token' : 'expired-listener-token';
+      const token = listenerTokenRequests > 1
+        ? 'owner-listener-token'
+        : 'shared-listener-token';
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
           listener: {
             token,
-            expires_at: fresh ? '2099-07-26T12:00:00Z' : '2000-01-01T00:00:00Z',
+            expires_at: '2099-07-26T12:00:00Z',
             listen_url: `/api/execution/listeners/${token}`,
             webrtc_url: `/api/execution/listeners/${token}/webrtc`,
             webrtc_ice_url: `/api/execution/listeners/${token}/webrtc/ice`,
@@ -1209,14 +1211,17 @@ test('expired listener tokens are renewed before WebRTC reconnects', async ({ pa
   await page.route('**/api/execution/listeners/**', async (route) => {
     const url = route.request().url();
     if (url.endsWith('/webrtc')) {
-      if (url.includes('fresh-listener-token')) freshWebrtcRequests += 1;
+      if (url.includes('owner-listener-token')) ownerWebrtcRequests += 1;
+      if (url.includes('shared-listener-token')) sharedWebrtcRequests += 1;
       await route.fulfill({
-        status: 200,
+        status: url.includes('shared-listener-token') ? 409 : 200,
         contentType: 'application/json',
-        body: JSON.stringify({
-          answer: { type: 'answer', sdp: 'test-answer' },
-          status: 'listening',
-        }),
+        body: url.includes('shared-listener-token')
+          ? JSON.stringify({ detail: 'This listener is already attached.' })
+          : JSON.stringify({
+              answer: { type: 'answer', sdp: 'test-answer' },
+              status: 'listening',
+            }),
       });
       return;
     }
@@ -1242,11 +1247,13 @@ test('expired listener tokens are renewed before WebRTC reconnects', async ({ pa
   await page.goto('/runs/exec-expired-listener');
   const feedback = page.getByLabel('Live run feedback');
   await feedback.getByRole('button', { name: 'Create live listener link' }).click();
-  await expect(feedback.getByLabel('Run listener link')).toContainText('expired-listener-token');
+  await expect(feedback.getByLabel('Run listener link')).toContainText('shared-listener-token');
   await feedback.getByRole('button', { name: 'Listen to live WebRTC' }).click();
   await expect.poll(() => listenerTokenRequests).toBe(2);
-  await expect.poll(() => freshWebrtcRequests).toBe(1);
-  await expect(feedback.getByLabel('Run listener link')).toContainText('fresh-listener-token');
+  await expect.poll(() => ownerWebrtcRequests).toBe(1);
+  expect(sharedWebrtcRequests).toBe(0);
+  await expect(feedback.getByRole('button', { name: 'Stop live WebRTC' })).toBeVisible();
+  await expect(feedback.getByLabel('Run listener link')).toContainText('shared-listener-token');
 });
 
 test('completed replay switches from listener-token audio to owner-scoped audio', async ({ page }) => {
