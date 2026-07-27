@@ -980,6 +980,7 @@ class _StreamingDuplexSession:
             stream_path=RTC_ASR_STREAM_PATH,
             participant='target',
             final_frame_type=_TargetTranscriptFrame,
+            end_type=_TesterSpeechEndFrame,
             event_callback=event_callback,
         )
         self.target_llm = _StreamingTargetLlmProcessor(
@@ -1010,6 +1011,7 @@ class _StreamingDuplexSession:
             stream_path=RTC_ASR_STREAM_PATH,
             participant='tester',
             final_frame_type=_TesterReceiptFrame,
+            end_type=_TargetSpeechEndFrame,
             event_callback=event_callback,
         )
         self.metrics = MetricsCollector()

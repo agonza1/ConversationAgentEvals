@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import struct
 
+import pytest
 from pipecat.audio.vad.vad_analyzer import VADState
-from pipecat.frames.frames import InputAudioRawFrame
+from pipecat.frames.frames import Frame, InputAudioRawFrame, OutputAudioRawFrame
 from pipecat.processors.frame_processor import FrameDirection
 
 from streaming_media import (
+    StreamingMediaBridge,
     StreamingRtcAsrProcessor,
     StreamingWavDecoder,
     _next_tts_chunk,
@@ -15,6 +17,10 @@ from streaming_media import (
     resample_pcm16,
     rtc_asr_stream_url,
 )
+
+
+class TurnEndFrame(Frame):
+    pass
 
 
 def _wav_header(*, sample_rate: int = 24000, channels: int = 1, data_size: int = 4) -> bytes:
@@ -69,6 +75,56 @@ def test_vad_recovery_does_not_restart_active_rtc_asr_stream() -> None:
         active=False,
         finalizing=False,
     )
+
+
+def test_media_bridge_surfaces_worker_failure_at_turn_boundary() -> None:
+    async def run() -> None:
+        async def disconnected_listener(
+            audio: bytes,
+            sample_rate: int,
+            channels: int,
+        ) -> None:
+            assert audio and sample_rate == 24000 and channels == 1
+            raise RuntimeError("listener disconnected")
+
+        bridge = StreamingMediaBridge(
+            participant="target",
+            audio_callback=disconnected_listener,
+            end_type=TurnEndFrame,
+        )
+        await bridge.process_frame(
+            OutputAudioRawFrame(b"\x01\x00" * 480, 24000, 1),
+            FrameDirection.DOWNSTREAM,
+        )
+
+        with pytest.raises(RuntimeError, match="listener disconnected"):
+            await asyncio.wait_for(
+                bridge.process_frame(TurnEndFrame(), FrameDirection.DOWNSTREAM),
+                timeout=1,
+            )
+        await bridge.cleanup()
+
+    asyncio.run(run())
+
+
+def test_rtc_asr_surfaces_protocol_error_at_custom_turn_boundary() -> None:
+    async def run() -> None:
+        processor = StreamingRtcAsrProcessor(
+            base_url="http://rtc-asr.test",
+            participant="target",
+            final_frame_type=type("FinalFrame", (), {}),
+            end_type=TurnEndFrame,
+        )
+        processor.protocol_error = RuntimeError("rtc-asr websocket failed")
+
+        await processor.process_frame(
+            InputAudioRawFrame(b"\x01\x00" * 320, 16000, 1),
+            FrameDirection.DOWNSTREAM,
+        )
+        with pytest.raises(RuntimeError, match="rtc-asr websocket failed"):
+            await processor.process_frame(TurnEndFrame(), FrameDirection.DOWNSTREAM)
+
+    asyncio.run(run())
 
 
 def test_vad_restarts_asr_when_speech_resumes_during_finalization() -> None:

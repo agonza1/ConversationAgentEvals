@@ -384,10 +384,12 @@ class StreamingMediaBridge(FrameProcessor):
             tuple[Frame, FrameDirection, asyncio.Future[None] | None]
         ] = asyncio.Queue()
         self._worker_task: asyncio.Task[None] | None = None
+        self._worker_error: Exception | None = None
         self._turn_active = False
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
+        self._raise_worker_error()
         if isinstance(frame, OutputAudioRawFrame):
             self._ensure_worker()
             await self._queue.put((frame, direction, None))
@@ -414,6 +416,22 @@ class StreamingMediaBridge(FrameProcessor):
         if self._worker_task is None:
             self._worker_task = asyncio.create_task(self._playback_worker())
 
+    def _raise_worker_error(self) -> None:
+        if self._worker_error is not None:
+            raise RuntimeError(
+                f"{self.participant} media playback worker failed: {self._worker_error}"
+            ) from self._worker_error
+
+    def _fail_queued_frames(self, error: Exception) -> None:
+        while True:
+            try:
+                _, _, completed = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            if completed is not None and not completed.done():
+                completed.set_exception(error)
+            self._queue.task_done()
+
     async def _playback_worker(self) -> None:
         while True:
             frame, direction, completed = await self._queue.get()
@@ -422,9 +440,18 @@ class StreamingMediaBridge(FrameProcessor):
                     await self._play_audio_frame(frame, direction)
                 else:
                     await self._finish_turn(frame, direction)
-            finally:
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._worker_error = exc
+                if completed is not None and not completed.done():
+                    completed.set_exception(exc)
+                self._fail_queued_frames(exc)
+                return
+            else:
                 if completed is not None and not completed.done():
                     completed.set_result(None)
+            finally:
                 self._queue.task_done()
 
     async def _play_audio_frame(
@@ -500,6 +527,7 @@ class StreamingRtcAsrProcessor(FrameProcessor):
         stream_path: str = "/v1/stt/stream",
         participant: str,
         final_frame_type: type[TranscriptionFrame],
+        end_type: type[Frame] | None = None,
         event_callback: EventCallback | None = None,
         vad_params: VADParams | None = None,
     ) -> None:
@@ -507,6 +535,7 @@ class StreamingRtcAsrProcessor(FrameProcessor):
         self.url = rtc_asr_stream_url(base_url, stream_path)
         self.participant = participant
         self.final_frame_type = final_frame_type
+        self.end_type = end_type
         self.event_callback = event_callback
         self.vad = SileroVADAnalyzer(
             sample_rate=16000,
@@ -525,6 +554,7 @@ class StreamingRtcAsrProcessor(FrameProcessor):
         self.finalizing = False
         self.closing = False
         self.protocol_error: RuntimeError | None = None
+        self.protocol_error_reported = False
         self.previous_state = VADState.QUIET
         self.pre_roll: deque[bytes] = deque(maxlen=15)
         self.transcript = ""
@@ -577,6 +607,8 @@ class StreamingRtcAsrProcessor(FrameProcessor):
                 await self._finalize(direction, wait_for_final=False)
             self.previous_state = state
             return
+        if self.end_type is not None and isinstance(frame, self.end_type):
+            self._raise_protocol_error(once=True)
         if isinstance(frame, EndFrame):
             if self.active:
                 await self._finalize(direction, wait_for_final=True)
@@ -674,8 +706,12 @@ class StreamingRtcAsrProcessor(FrameProcessor):
             ) from exc
         self._raise_protocol_error()
 
-    def _raise_protocol_error(self) -> None:
+    def _raise_protocol_error(self, *, once: bool = False) -> None:
         if self.protocol_error is not None:
+            if once and self.protocol_error_reported:
+                return
+            if once:
+                self.protocol_error_reported = True
             raise self.protocol_error
 
     async def _receive(self) -> None:
