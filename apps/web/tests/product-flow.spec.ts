@@ -87,7 +87,7 @@ test('dedicated paths expose only their primary workflow', async ({ page }) => {
   await expect(page.getByText('Required evidence:')).toHaveCount(0);
 });
 
-test('legacy benchmark route keeps the full console for history workflows', async ({ page }) => {
+test('legacy benchmark route keeps Console Settings for history workflows', async ({ page }) => {
   await page.goto('/benchmarks');
   await expect(page.getByRole('heading', { name: 'Benchmark history and reports.' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Simulate scenario' })).toBeVisible();

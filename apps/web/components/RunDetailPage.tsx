@@ -836,7 +836,7 @@ function JudgeResult({
         </div>
       ) : null}
       {judge.block_reason === 'provider' ? (
-        <p><ApiAwareLink href="/benchmarks">Connect OpenAI in the Full console</ApiAwareLink>, then try again.</p>
+        <p><ApiAwareLink href="/benchmarks">Connect OpenAI in Console Settings</ApiAwareLink>, then try again.</p>
       ) : null}
       {judge.prompt_preview ? (
         <div>

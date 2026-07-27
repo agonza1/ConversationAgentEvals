@@ -16,7 +16,7 @@ export function SiteNav({
         <ApiAwareLink href="/runs" aria-current={current === 'runs' ? 'page' : undefined}>Run agent</ApiAwareLink>
         <ApiAwareLink href="/eval" aria-current={current === 'eval' ? 'page' : undefined}>Eval</ApiAwareLink>
         <ApiAwareLink href="/voice" aria-current={current === 'voice' ? 'page' : undefined}>Voice</ApiAwareLink>
-        <ApiAwareLink href="/benchmarks" aria-current={current === 'benchmarks' ? 'page' : undefined}>Full console</ApiAwareLink>
+        <ApiAwareLink href="/benchmarks" aria-current={current === 'benchmarks' ? 'page' : undefined}>Console Settings</ApiAwareLink>
       </div>
     </nav>
   );
