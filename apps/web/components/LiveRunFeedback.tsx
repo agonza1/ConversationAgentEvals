@@ -334,6 +334,7 @@ export function LiveRunFeedback({
 
   async function startLiveListening() {
     stopPlayback();
+    const generation = playbackGenerationRef.current;
     playbackModeRef.current = 'live';
     setPlaybackMode('live');
     setExpanded(true);
@@ -344,9 +345,21 @@ export function LiveRunFeedback({
       // Give the owner's embedded listener a distinct server-side listener ID.
       token = await requestListenerToken();
     } catch (error) {
+      if (
+        playbackGenerationRef.current !== generation
+        || playbackModeRef.current !== 'live'
+      ) {
+        return;
+      }
       playbackModeRef.current = 'idle';
       setPlaybackMode('idle');
       setPlaybackMessage(error instanceof Error ? error.message : 'Could not create the owner listener.');
+      return;
+    }
+    if (
+      playbackGenerationRef.current !== generation
+      || playbackModeRef.current !== 'live'
+    ) {
       return;
     }
     if (!token) {
@@ -356,7 +369,19 @@ export function LiveRunFeedback({
     }
     try {
       await connectWebRTC(token);
+      if (
+        playbackGenerationRef.current !== generation
+        || playbackModeRef.current !== 'live'
+      ) {
+        disconnectWebRTC();
+      }
     } catch (error) {
+      if (
+        playbackGenerationRef.current !== generation
+        || playbackModeRef.current !== 'live'
+      ) {
+        return;
+      }
       playbackModeRef.current = 'idle';
       setPlaybackMode('idle');
       setPlaybackMessage(error instanceof Error ? error.message : 'Could not attach the live WebRTC listener.');

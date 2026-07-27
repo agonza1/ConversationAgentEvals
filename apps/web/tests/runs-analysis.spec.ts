@@ -1133,6 +1133,12 @@ test('owner live WebRTC uses a different token from the shared listener link', a
   let listenerTokenRequests = 0;
   let ownerWebrtcRequests = 0;
   let sharedWebrtcRequests = 0;
+  let abandonedWebrtcRequests = 0;
+  let abandonedTokenDelivered = false;
+  let releaseAbandonedToken!: () => void;
+  const abandonedTokenGate = new Promise<void>((resolve) => {
+    releaseAbandonedToken = resolve;
+  });
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
     class TestPeerConnection {
@@ -1159,9 +1165,14 @@ test('owner live WebRTC uses a different token from the shared listener link', a
   await page.route('**/api/execution/runs/exec-expired-listener**', async (route) => {
     if (route.request().url().includes('/listener-token')) {
       listenerTokenRequests += 1;
-      const token = listenerTokenRequests > 1
-        ? 'owner-listener-token'
-        : 'shared-listener-token';
+      const token = listenerTokenRequests === 1
+        ? 'shared-listener-token'
+        : listenerTokenRequests === 2
+          ? 'owner-listener-token'
+          : 'abandoned-listener-token';
+      if (token === 'abandoned-listener-token') {
+        await abandonedTokenGate;
+      }
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -1180,6 +1191,9 @@ test('owner live WebRTC uses a different token from the shared listener link', a
           },
         }),
       });
+      if (token === 'abandoned-listener-token') {
+        abandonedTokenDelivered = true;
+      }
       return;
     }
     await route.fulfill({
@@ -1213,6 +1227,7 @@ test('owner live WebRTC uses a different token from the shared listener link', a
     if (url.endsWith('/webrtc')) {
       if (url.includes('owner-listener-token')) ownerWebrtcRequests += 1;
       if (url.includes('shared-listener-token')) sharedWebrtcRequests += 1;
+      if (url.includes('abandoned-listener-token')) abandonedWebrtcRequests += 1;
       await route.fulfill({
         status: url.includes('shared-listener-token') ? 409 : 200,
         contentType: 'application/json',
@@ -1254,6 +1269,18 @@ test('owner live WebRTC uses a different token from the shared listener link', a
   expect(sharedWebrtcRequests).toBe(0);
   await expect(feedback.getByRole('button', { name: 'Stop live WebRTC' })).toBeVisible();
   await expect(feedback.getByLabel('Run listener link')).toContainText('shared-listener-token');
+
+  await feedback.getByRole('button', { name: 'Stop live WebRTC' }).click();
+  await feedback.getByRole('button', { name: 'Listen to live WebRTC' }).click();
+  await expect.poll(() => listenerTokenRequests).toBe(3);
+  await feedback.getByRole('button', { name: 'Stop live WebRTC' }).click();
+  releaseAbandonedToken();
+  await expect.poll(() => abandonedTokenDelivered).toBe(true);
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
+  expect(abandonedWebrtcRequests).toBe(0);
+  await expect(feedback.getByRole('button', { name: 'Listen to live WebRTC' })).toBeVisible();
 });
 
 test('completed replay switches from listener-token audio to owner-scoped audio', async ({ page }) => {
