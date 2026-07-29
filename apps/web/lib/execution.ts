@@ -64,6 +64,18 @@ export interface ConversationMetricsSummary {
   latency: LatencyStats;
   interruption_count: number;
   call_resolution_success: number;
+  word_error_rate?: WordErrorRateSummary | null;
+}
+
+export interface WordErrorRateSummary {
+  rate: number;
+  percent: number;
+  errors: number;
+  reference_words: number;
+  substitutions: number;
+  deletions: number;
+  insertions: number;
+  turn_count?: number;
 }
 
 export interface TimelineEvent {

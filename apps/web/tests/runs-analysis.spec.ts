@@ -43,8 +43,24 @@ const runFixture = {
       mode: 'voice_fixture',
       status: 'completed',
       turns: [
-        { turn_index: 1, speaker: 'caller', text: 'I want to cancel today.' },
-        { turn_index: 2, speaker: 'agent', text: 'I can help with that.' },
+        {
+          turn_index: 1,
+          speaker: 'caller',
+          text: 'I want to cancel today.',
+          frame_metadata: {
+            source_text: 'I want to cancel today.',
+            asr_receipt: 'I want to cancel today.',
+          },
+        },
+        {
+          turn_index: 2,
+          speaker: 'agent',
+          text: 'I can help with that.',
+          frame_metadata: {
+            source_text: 'I can help you with that.',
+            asr_receipt: 'I can help with that.',
+          },
+        },
       ],
       transcript: 'Caller: I want to cancel today.\nAgent: I can help with that.',
       action_trace: [{ action: 'confirm cancellation outcome', status: 'completed' }],
@@ -114,6 +130,13 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
   await expect(participants).toContainText('saved evidence replay');
   await expect(page.getByRole('button', { name: /Interruption Detection/ }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: /^Latency/ }).first()).toBeVisible();
+  const werTile = page.getByRole('button', { name: /Word Error Rate 9.1%/ }).first();
+  await expect(werTile).toBeVisible();
+  await werTile.click();
+  await expect(page.getByRole('heading', { name: 'Word Error Rate' })).toBeVisible();
+  await expect(page.getByLabel('Word error rate summary')).toContainText('1');
+  await expect(page.getByLabel('Per-turn word error rates')).toContainText('Target → tester ASR · 17%');
+  await expect(page.getByLabel('Per-turn word error rates')).toContainText('S 0 · D 1 · I 0');
   await page.getByRole('button', { name: /Verified Resolution Rate/ }).click();
   await expect(page.getByLabel('Resolution verification status')).toContainText('Verified');
   await expect(page.getByLabel('Resolution evidence details')).toContainText('91/100');

@@ -394,6 +394,8 @@ def test_reference_tester_to_agent_contract_uses_only_current_run(tmp_path: Path
         assert turns[1].text == 'Tester heard a cancellable request.'
         assert turns[1].frame_metadata['source_text'] == 'I can help with that request.'
         assert turns[1].frame_metadata['asr_receipt'] == 'Tester heard a cancellable request.'
+        assert turns[0].frame_metadata['word_error_rate']['percent'] >= 0
+        assert turns[1].frame_metadata['word_error_rate']['reference_words'] == 6
         assert result['turns'][0]['observation']['agent_text'] == 'Tester heard a cancellable request.'
         assert media.transcriptions == 2
         proof = transport.session_proof(session_id)

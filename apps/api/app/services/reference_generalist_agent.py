@@ -25,6 +25,7 @@ import httpx
 from app.services.acc_realtime_target import AccAudioFixture, AccAudioStep
 from app.services.execution_audio import AudioRecordingHandle, TranscriptionTurn
 from app.services.llm_providers import get_provider
+from app.services.word_error_rate import calculate_word_error_rate
 from app.services.two_agent_pipecat_duplex import (
     InMemoryDuplexFrameTransport,
     TwoPipecatDuplexHarness,
@@ -742,6 +743,8 @@ class ReferencePipecatAgentTransport:
         target_frame = target.get('frame') if isinstance(target.get('frame'), dict) else {}
         if tester_frame.get('direction') != 'tester_to_target' or target_frame.get('direction') != 'target_to_tester':
             raise ReferenceRuntimeError('Pipecat duplex exchange returned invalid frame directions.')
+        tester_wer = calculate_word_error_rate(tester_text, target_receipt)
+        target_wer = calculate_word_error_rate(target_text, tester_receipt)
 
         caller_index = len(state.transcription) + 1
         state.transcription.extend([
@@ -758,6 +761,7 @@ class ReferencePipecatAgentTransport:
                     'source': 'tester_kokoro_audio',
                     'source_text': tester_text,
                     'asr_receipt': target_receipt,
+                    'word_error_rate': tester_wer.as_dict() if tester_wer else None,
                 },
             ),
             TranscriptionTurn(
@@ -773,6 +777,7 @@ class ReferencePipecatAgentTransport:
                     'source': 'target_kokoro_audio',
                     'source_text': target_text,
                     'asr_receipt': tester_receipt,
+                    'word_error_rate': target_wer.as_dict() if target_wer else None,
                 },
             ),
         ])
@@ -890,6 +895,8 @@ class ReferencePipecatAgentTransport:
             target_audio=agent_wav,
             tester_receipt=tester_receipt,
         )
+        tester_wer = calculate_word_error_rate(rendered_text, caller_text)
+        target_wer = calculate_word_error_rate(agent_text, tester_receipt)
 
         caller_index = len(state.transcription) + 1
         state.transcription.extend([
@@ -908,6 +915,7 @@ class ReferencePipecatAgentTransport:
                     'source': 'tester_kokoro_audio',
                     'source_text': rendered_text,
                     'asr_receipt': caller_text,
+                    'word_error_rate': tester_wer.as_dict() if tester_wer else None,
                 },
             ),
             TranscriptionTurn(
@@ -924,6 +932,7 @@ class ReferencePipecatAgentTransport:
                     'source': 'target_kokoro_audio',
                     'source_text': agent_text,
                     'asr_receipt': tester_receipt,
+                    'word_error_rate': target_wer.as_dict() if target_wer else None,
                     'response_metric': 'target_time_to_first_audio_byte',
                     'response_latency_ms': float(first_audio_byte_latency_ms),
                     'response_complete_latency_ms': pipeline_payload.get('response_complete_latency_ms'),

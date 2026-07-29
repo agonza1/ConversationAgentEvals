@@ -130,6 +130,7 @@ class ConversationMetricsSummary(BaseModel):
     latency: LatencyStats = Field(default_factory=LatencyStats)
     interruption_count: int = 0
     call_resolution_success: float = 0.0
+    word_error_rate: dict[str, int | float] | None = None
 
 
 class TimelineEvent(BaseModel):
