@@ -3,13 +3,13 @@ import Link from 'next/link';
 import { BenchmarkRunner } from '@/components/BenchmarkRunner';
 import { SiteNav } from '@/components/SiteNav';
 
-/** Full console retained for advanced history/report workflows. */
+/** Console Settings retains advanced history/report workflows. */
 export default function BenchmarksPage() {
   return (
     <main className="page-shell compact-shell">
       <SiteNav current="benchmarks" />
       <section className="minimal-hero" aria-labelledby="benchmarks-title">
-        <p className="eyebrow">Full console</p>
+        <p className="eyebrow">Console Settings</p>
         <h1 id="benchmarks-title">Benchmark history and reports.</h1>
         <p>
           Saved runs, suite history, and report tooling. For day-to-day work use{' '}

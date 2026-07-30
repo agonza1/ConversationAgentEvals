@@ -18,11 +18,12 @@ import {
   requestLlmJudge,
 } from '@/lib/execution';
 
-type MetricKey = 'audio_interruption' | 'latency' | 'call_resolution';
+type MetricKey = 'audio_interruption' | 'word_error_rate' | 'latency' | 'call_resolution';
 type ResolutionState = 'verified' | 'unverified' | 'failed' | 'not_evaluated';
 
-const METRICS: Array<{ id: MetricKey; group: string; label: string }> = [
+const METRICS: Array<{ id: MetricKey; group: string; label: string; voiceOnly?: boolean }> = [
   { id: 'audio_interruption', group: 'Audio', label: 'Interruption Detection' },
+  { id: 'word_error_rate', group: 'Audio', label: 'Word Error Rate', voiceOnly: true },
   { id: 'latency', group: 'Audio', label: 'Latency' },
   { id: 'call_resolution', group: 'Other', label: 'Resolution Evidence' },
 ];
@@ -155,6 +156,19 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
               selected={metric === 'latency'}
               onClick={() => setMetric('latency')}
             />
+            {run.mode !== 'text_callable' ? (
+              <MetricTile
+                title="Word Error Rate"
+                value={summary.wordErrorRate
+                  ? formatWerPercent(summary.wordErrorRate.percent)
+                  : 'n/a'}
+                detail={summary.wordErrorRate
+                  ? `${summary.wordErrorRate.errors} errors / ${summary.wordErrorRate.referenceWords} reference words`
+                  : 'LLM source and ASR receipt not captured'}
+                selected={metric === 'word_error_rate'}
+                onClick={() => setMetric('word_error_rate')}
+              />
+            ) : null}
             <MetricTile
               title="Verified Resolution Rate"
               value={summary.resolutionRate == null ? 'n/a' : `${Math.round(summary.resolutionRate)}%`}
@@ -169,7 +183,9 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
               {['Audio', 'Other'].map((group) => (
                 <div key={group} className="runs-metric-group">
                   <p className="eyebrow">{group}</p>
-                  {METRICS.filter((item) => item.group === group).map((item) => (
+                  {METRICS.filter((item) => (
+                    item.group === group && (!item.voiceOnly || run.mode !== 'text_callable')
+                  )).map((item) => (
                     <button
                       key={item.id}
                       type="button"
@@ -550,6 +566,62 @@ function MetricDetail({
     );
   }
 
+  if (metric === 'word_error_rate') {
+    const turns = conversationWordErrorRates(conversation);
+    const wordErrorRate = aggregateWordErrorRates(turns.map((item) => item.result));
+    return (
+      <div className="runs-detail-copy">
+        <h2>Word Error Rate</h2>
+        <p className="latency-definition">
+          <strong>LLM source text → peer ASR receipt.</strong>{' '}
+          Lower is better. This measures the speech path&apos;s transcription fidelity, not whether the agent gave
+          a semantically correct answer.
+        </p>
+        {wordErrorRate ? (
+          <>
+            <dl className="resolution-facts" aria-label="Word error rate summary">
+              <div><dt>WER</dt><dd>{formatWerPercent(wordErrorRate.percent)}</dd></div>
+              <div><dt>Compared turns</dt><dd>{wordErrorRate.turnCount}</dd></div>
+              <div><dt>Reference words</dt><dd>{wordErrorRate.referenceWords}</dd></div>
+              <div><dt>Total errors</dt><dd>{wordErrorRate.errors}</dd></div>
+              <div><dt>Substitutions</dt><dd>{wordErrorRate.substitutions}</dd></div>
+              <div><dt>Deletions</dt><dd>{wordErrorRate.deletions}</dd></div>
+              <div><dt>Insertions</dt><dd>{wordErrorRate.insertions}</dd></div>
+            </dl>
+            <ol className="conversation-flow-turns" aria-label="Per-turn word error rates">
+              {turns.map(({ turn, reference, hypothesis, result }) => (
+                <li key={`wer-${turn.turn_index}`} data-speaker={turnLane(turn)}>
+                  <span>{turn.turn_index}</span>
+                  <strong>
+                    {turnLane(turn) === 'caller' ? 'Tester → target ASR' : 'Target → tester ASR'}
+                    {' · '}
+                    {formatWerPercent(result.percent)}
+                  </strong>
+                  <p><b>LLM:</b> {reference}</p>
+                  <p><b>ASR:</b> {hypothesis}</p>
+                  <small>
+                    {result.errors} errors / {result.referenceWords} words
+                    {' · '}
+                    S {result.substitutions} · D {result.deletions} · I {result.insertions}
+                  </small>
+                </li>
+              ))}
+            </ol>
+          </>
+        ) : (
+          <p>
+            WER is unavailable because this conversation does not contain both the LLM source text and peer ASR
+            receipt for any voice turn.
+          </p>
+        )}
+        <p className="resolution-note">
+          Comparison ignores casing and punctuation. The run-level value is micro-averaged from total word edits,
+          so longer utterances receive proportionate weight. WER can exceed 100% when ASR inserts extra words.
+        </p>
+      </div>
+    );
+  }
+
   if (!summary) {
     return <p className="scenarios-muted">This metric was not reported for the selected conversation.</p>;
   }
@@ -836,7 +908,7 @@ function JudgeResult({
         </div>
       ) : null}
       {judge.block_reason === 'provider' ? (
-        <p><ApiAwareLink href="/benchmarks">Connect OpenAI in the Full console</ApiAwareLink>, then try again.</p>
+        <p><ApiAwareLink href="/benchmarks">Connect OpenAI in Console Settings</ApiAwareLink>, then try again.</p>
       ) : null}
       {judge.prompt_preview ? (
         <div>
@@ -908,6 +980,11 @@ function AppliedAdjudication({
 
 function aggregateRunMetrics(run: ExecutionRunRecord | null) {
   const conversations = run?.conversations || [];
+  const wordErrorRate = aggregateWordErrorRates(
+    conversations.flatMap((conversation) => (
+      conversationWordErrorRates(conversation).map((item) => item.result)
+    )),
+  );
   const interruptionCount = conversations.reduce(
     (sum, item) => sum + Number(item.metrics_summary?.interruption_count || 0),
     0,
@@ -963,6 +1040,7 @@ function aggregateRunMetrics(run: ExecutionRunRecord | null) {
       : null,
     resolutionDetail,
     latencyBars,
+    wordErrorRate,
   };
 }
 
@@ -1301,6 +1379,109 @@ function latencyStats(values: number[]) {
     max_ms: ordered[ordered.length - 1],
     outlier_count: ordered.filter((value) => medianMs > 0 && value > medianMs * 1.5).length,
   };
+}
+
+type WordErrorRateResult = {
+  errors: number;
+  referenceWords: number;
+  substitutions: number;
+  deletions: number;
+  insertions: number;
+  percent: number;
+  turnCount: number;
+};
+
+function conversationWordErrorRates(conversation: ConversationRecord) {
+  return (conversation.turns || []).flatMap((turn) => {
+    const metadata = turn.frame_metadata || {};
+    const reference = stringValue(metadata.source_text) || stringValue(metadata.llm_output);
+    const hypothesis = typeof metadata.asr_receipt === 'string'
+      ? metadata.asr_receipt.trim()
+      : null;
+    if (!reference || hypothesis == null) return [];
+    const result = calculateWordErrorRate(reference, hypothesis);
+    return result ? [{ turn, reference, hypothesis, result }] : [];
+  });
+}
+
+function calculateWordErrorRate(reference: string, hypothesis: string): WordErrorRateResult | null {
+  const referenceWords = normalizeWerWords(reference);
+  if (!referenceWords.length) return null;
+  const hypothesisWords = normalizeWerWords(hypothesis);
+  type Cell = [number, number, number, number];
+  let previous: Cell[] = hypothesisWords.map((_, index) => [index + 1, 0, 0, index + 1]);
+  previous.unshift([0, 0, 0, 0]);
+
+  referenceWords.forEach((referenceWord, referenceIndex) => {
+    const current: Cell[] = [[referenceIndex + 1, 0, referenceIndex + 1, 0]];
+    hypothesisWords.forEach((hypothesisWord, hypothesisIndex) => {
+      if (referenceWord === hypothesisWord) {
+        current.push(previous[hypothesisIndex]);
+        return;
+      }
+      const candidates: Cell[] = [
+        addWerOperation(previous[hypothesisIndex], 1),
+        addWerOperation(previous[hypothesisIndex + 1], 2),
+        addWerOperation(current[hypothesisIndex], 3),
+      ];
+      current.push(candidates.reduce((best, candidate) => candidate[0] < best[0] ? candidate : best));
+    });
+    previous = current;
+  });
+
+  const [, substitutions, deletions, insertions] = previous[previous.length - 1];
+  const errors = substitutions + deletions + insertions;
+  return {
+    errors,
+    referenceWords: referenceWords.length,
+    substitutions,
+    deletions,
+    insertions,
+    percent: (errors / referenceWords.length) * 100,
+    turnCount: 1,
+  };
+}
+
+function aggregateWordErrorRates(values: WordErrorRateResult[]): WordErrorRateResult | null {
+  if (!values.length) return null;
+  const summary = values.reduce((total, value) => ({
+    errors: total.errors + value.errors,
+    referenceWords: total.referenceWords + value.referenceWords,
+    substitutions: total.substitutions + value.substitutions,
+    deletions: total.deletions + value.deletions,
+    insertions: total.insertions + value.insertions,
+    percent: 0,
+    turnCount: total.turnCount + 1,
+  }), {
+    errors: 0,
+    referenceWords: 0,
+    substitutions: 0,
+    deletions: 0,
+    insertions: 0,
+    percent: 0,
+    turnCount: 0,
+  });
+  summary.percent = summary.referenceWords ? (summary.errors / summary.referenceWords) * 100 : 0;
+  return summary;
+}
+
+function normalizeWerWords(value: string) {
+  return value
+    .normalize('NFKC')
+    .toLocaleLowerCase('en-US')
+    .replace(/[\u2018\u2019]/g, "'")
+    .match(/[\p{L}\p{N}]+(?:'[\p{L}\p{N}]+)?/gu) || [];
+}
+
+function addWerOperation(value: [number, number, number, number], operationIndex: 1 | 2 | 3) {
+  const next: [number, number, number, number] = [...value];
+  next[0] += 1;
+  next[operationIndex] += 1;
+  return next;
+}
+
+function formatWerPercent(value: number) {
+  return `${value.toFixed(value < 10 ? 1 : 0)}%`;
 }
 
 function turnLane(turn: ConversationTurn): 'caller' | 'agent' {

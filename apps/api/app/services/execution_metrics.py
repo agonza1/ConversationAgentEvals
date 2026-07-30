@@ -4,6 +4,7 @@ from statistics import median
 from typing import Any
 
 from app.schemas.execution import ConversationMetricsSummary, LatencyStats, TimelineEvent
+from app.services.word_error_rate import summarize_word_error_rates, word_error_rate_for_turn
 
 
 def build_metrics_and_timeline(
@@ -17,6 +18,11 @@ def build_metrics_and_timeline(
     latencies = [value for value in latencies if value is not None]
     latency_stats = _latency_stats(latencies)
     interruption_count = _interruption_count(turns=turns, latency_marks=latency_marks)
+    word_error_rates = [
+        value
+        for turn in turns or []
+        if (value := word_error_rate_for_turn(turn)) is not None
+    ]
     timeline = _build_timeline(turns=turns, latency_marks=latency_marks)
     return (
         ConversationMetricsSummary(
@@ -26,6 +32,7 @@ def build_metrics_and_timeline(
             latency=latency_stats,
             interruption_count=interruption_count,
             call_resolution_success=100.0 if verdict == 'pass' else 0.0,
+            word_error_rate=summarize_word_error_rates(word_error_rates),
         ),
         timeline,
     )

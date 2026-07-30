@@ -49,13 +49,20 @@ def test_templates_include_cae_native_and_acc_extension_without_acc_dependency()
     assert 'agentic_contact_center' not in acc_spec['required_behaviors'][0]
 
 
-def test_generate_calls_configured_llm_and_returns_draft_suggestions_that_require_user_approval():
+def test_generate_calls_configured_llm_and_returns_draft_suggestions_that_require_user_approval(monkeypatch):
+    monkeypatch.delenv('SPEC_GENERATION_MODEL', raising=False)
+    monkeypatch.setenv('OPENAI_RESPONSES_MODEL', 'gpt-4.1-mini')
+
     class FakeProvider:
         def status(self):
             return {'status': 'connected', 'provider': 'fake-openai-oauth'}
 
         def complete(self, prompt, *, model_name=None):
             assert 'Cancellation rescue agent' in prompt
+            assert 'Every severity must be exactly one of "info", "warning", or "error".' in prompt
+            assert 'scenario_seeds is an array of plain strings, never objects.' in prompt
+            assert 'judges must contain exactly one object' in prompt
+            assert model_name == 'gpt-5.4-mini'
             return json.dumps({
                 'required_behaviors': [{'id': 'diagnose', 'label': 'Diagnose reason', 'description': 'Ask why the caller wants to cancel.', 'severity': 'error'}],
                 'forbidden_behaviors': [{'id': 'no-promises', 'label': 'No unsupported promises', 'description': 'Do not invent a discount.', 'severity': 'error'}],
@@ -84,6 +91,41 @@ def test_generate_calls_configured_llm_and_returns_draft_suggestions_that_requir
     assert payload['requires_user_approval'] is True
     assert all(item['draft'] is True for item in payload['required_behaviors'])
     assert len(payload['scenarios']) == 2
+
+
+def test_generate_uses_feature_specific_model_override(monkeypatch):
+    monkeypatch.setenv('SPEC_GENERATION_MODEL', 'gpt-5.4')
+
+    class FakeProvider:
+        def status(self):
+            return {'status': 'connected', 'provider': 'fake-openai-oauth'}
+
+        def complete(self, prompt, *, model_name=None):
+            assert model_name == 'gpt-5.4'
+            return json.dumps({
+                'required_behaviors': [],
+                'forbidden_behaviors': [],
+                'scenario_seeds': [],
+                'scenarios': [],
+                'deterministic_checks': [],
+                'judges': [],
+            })
+
+    set_provider_for_tests('openai', FakeProvider())
+    try:
+        response = client.post(
+            '/api/specs/generate',
+            json={
+                'title': 'Support agent',
+                'role': 'customer support agent',
+                'objective': 'Resolve account requests without unsupported claims.',
+            },
+        )
+    finally:
+        set_provider_for_tests('openai', None)
+
+    assert response.status_code == 200
+    assert response.json()['model'] == 'gpt-5.4'
 
 
 def test_generate_fails_closed_when_no_llm_is_configured(monkeypatch):
