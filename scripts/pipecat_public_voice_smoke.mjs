@@ -107,6 +107,10 @@ function redactedUrl(value) {
   }
 }
 
+function redactedText(value) {
+  return String(value).replace(/https?:\/\/[^\s"'<>`]+/g, (url) => redactedUrl(url));
+}
+
 function agentLabel(agent) {
   return PUBLIC_REMOTE_AGENTS.find((item) => item.id === agent || item.label === agent)?.label || agent;
 }
@@ -269,7 +273,7 @@ async function runSmoke(args) {
       if (/error|warn|Daily|Pipecat|RTVI|connected|disconnect|transcription/i.test(text)) {
         result.console_events.push({
           type: message.type(),
-          text: text.slice(0, 500),
+          text: redactedText(text).slice(0, 500),
           t_ms: Date.now() - startedMs,
         });
       }
@@ -391,7 +395,7 @@ async function runSmoke(args) {
   } catch (error) {
     result.status = 'blocked';
     result.reason_code = classifyError(error);
-    result.reason = error instanceof Error ? error.message : String(error);
+    result.reason = redactedText(error instanceof Error ? error.message : String(error));
     return result;
   } finally {
     result.timestamps.completed_at = nowIso();
@@ -435,6 +439,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
+  console.error(redactedText(error instanceof Error ? error.message : String(error)));
   process.exit(1);
 });
