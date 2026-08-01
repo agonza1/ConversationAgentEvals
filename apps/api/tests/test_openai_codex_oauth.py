@@ -613,10 +613,11 @@ def test_openai_codex_list_models_falls_back_on_403(tmp_path: Path):
     assert 'gpt-4o' in ids
 
 
-def test_oauth_authorize_requests_model_read_scope():
+def test_oauth_authorize_uses_codex_account_scopes():
     from app.services.llm_providers import openai_codex as mod
 
-    assert 'api.model.read' in mod.SCOPE
+    assert mod.SCOPE == 'openid profile email offline_access'
+    assert 'api.model.read' not in mod.SCOPE
 
 
 def _fake_jwt(payload: dict) -> str:
