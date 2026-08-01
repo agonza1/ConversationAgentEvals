@@ -317,8 +317,8 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
   await expect(results.getByLabel('Run listener link')).toContainText('no microphone');
   await expect(results.getByLabel('Observed live exchange')).toContainText('I want to cancel.', { timeout: 10000 });
   await expect(results.getByLabel('Observed live exchange')).toContainText('tester → target');
-  await expect(results.getByLabel('Observed live exchange')).toContainText('LLM output: I want to cancel.');
-  await expect(results.getByLabel('Observed live exchange')).toContainText('ASR receipt: I want to cancel.');
+  await expect(results.getByLabel('Observed live exchange')).toContainText('Spoken (LLM output): I want to cancel.');
+  await expect(results.getByLabel('Observed live exchange')).toContainText('Peer ASR receipt: I want to cancel.');
   await expect(results.getByRole('progressbar', { name: 'Voice evaluation progress' })).toHaveAttribute('aria-valuenow', '100');
   await results.getByRole('button', { name: 'Play recorded conversation' }).click();
   await expect.poll(() => page.evaluate(() => (
@@ -441,8 +441,8 @@ test('browser listener page polls token-scoped live events', async ({ page }) =>
   await expect(page.getByLabel('Observed live exchange')).toContainText('I can help with that.', { timeout: 5000 });
   await expect(page.getByLabel('Observed live exchange')).toContainText('tester → target');
   await expect(page.getByLabel('Observed live exchange')).toContainText('target → tester');
-  await expect(page.getByLabel('Observed live exchange')).toContainText('LLM output: I can help with that.');
-  await expect(page.getByLabel('Observed live exchange')).toContainText('ASR receipt: I can help with that.');
+  await expect(page.getByLabel('Observed live exchange')).toContainText('Spoken (LLM output): I can help with that.');
+  await expect(page.getByLabel('Observed live exchange')).toContainText('Peer ASR receipt: I can help with that.');
   await page.getByRole('button', { name: 'Start WebRTC listener' }).click();
   await expect(page.getByLabel('WebRTC listener status')).toHaveText('WebRTC · listening');
   expect(webrtcOffers).toBe(1);

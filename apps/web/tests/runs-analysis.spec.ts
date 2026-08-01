@@ -146,8 +146,10 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
   await expect(page.getByLabel('Resolution evidence details')).toContainText('91/100');
   await expect(page.getByLabel('Resolution evidence details')).toContainText('Complete');
   await expect(page.getByLabel('Two-agent conversation timeline')).toBeVisible();
-  await expect(page.getByLabel('Conversation turn sequence')).toContainText('I can help with that.');
+  await expect(page.getByLabel('Conversation turn sequence')).toContainText('I can help you with that.');
   await expect(page.getByLabel('Transcript')).toContainText('I want to cancel today.');
+  await expect(page.getByLabel('Transcript')).toContainText('I can help you with that.');
+  await expect(page.getByLabel('Transcript')).not.toContainText('I can help with that.');
 });
 
 test('needs-review resolution explains score and missing proof without calling it a failed call', async ({ page }) => {

@@ -655,10 +655,12 @@ export function LiveRunFeedback({
               <strong style={{ fontSize: 13 }}>
                 {event.speaker}{directionLabel(event.direction) ? ` · ${directionLabel(event.direction)}` : ''}
               </strong>
-              <span style={{ whiteSpace: 'pre-wrap' }}>{event.text}</span>
-              {event.llm_output && event.asr_receipt ? (
+              <span style={{ whiteSpace: 'pre-wrap' }}>
+                {event.llm_output ? 'Spoken (LLM output): ' : ''}{event.llm_output || event.text}
+              </span>
+              {event.asr_receipt ? (
                 <span style={{ color: 'var(--muted)', fontSize: 12 }}>
-                  LLM output: {event.llm_output} · ASR receipt: {event.asr_receipt}
+                  Peer ASR receipt: {event.asr_receipt}
                 </span>
               ) : null}
             </div>
