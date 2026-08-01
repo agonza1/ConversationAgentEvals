@@ -588,22 +588,33 @@ function MetricDetail({
               <div><dt>Deletions</dt><dd>{wordErrorRate.deletions}</dd></div>
               <div><dt>Insertions</dt><dd>{wordErrorRate.insertions}</dd></div>
             </dl>
-            <ol className="conversation-flow-turns" aria-label="Per-turn word error rates">
+            <ol className="wer-turn-list" aria-label="Per-turn word error rates">
               {turns.map(({ turn, reference, hypothesis, result }) => (
-                <li key={`wer-${turn.turn_index}`} data-speaker={turnLane(turn)}>
-                  <span>{turn.turn_index}</span>
-                  <strong>
-                    {turnLane(turn) === 'caller' ? 'Tester → target ASR' : 'Target → tester ASR'}
-                    {' · '}
-                    {formatWerPercent(result.percent)}
-                  </strong>
-                  <p><b>LLM:</b> {reference}</p>
-                  <p><b>ASR:</b> {hypothesis}</p>
-                  <small>
-                    {result.errors} errors / {result.referenceWords} words
-                    {' · '}
-                    S {result.substitutions} · D {result.deletions} · I {result.insertions}
-                  </small>
+                <li className="wer-turn-card" key={`wer-${turn.turn_index}`} data-speaker={turnLane(turn)}>
+                  <div className="wer-turn-heading">
+                    <span className="wer-turn-index" aria-label={`Turn ${turn.turn_index}`}>{turn.turn_index}</span>
+                    <strong>
+                      {turnLane(turn) === 'caller' ? 'Tester → target ASR' : 'Target → tester ASR'}
+                      {' · '}
+                      {formatWerPercent(result.percent)}
+                    </strong>
+                  </div>
+                  <div className="wer-transcript-comparison">
+                    <div className="wer-transcript-block" data-source="llm">
+                      <span>LLM source</span>
+                      <p>{reference}</p>
+                    </div>
+                    <div className="wer-transcript-block" data-source="asr">
+                      <span>ASR transcript</span>
+                      <p>{hypothesis}</p>
+                    </div>
+                  </div>
+                  <div className="wer-turn-stats" aria-label={`Turn ${turn.turn_index} error counts`}>
+                    <span>{result.errors} errors / {result.referenceWords} words</span>
+                    <span>S {result.substitutions}</span>
+                    <span>D {result.deletions}</span>
+                    <span>I {result.insertions}</span>
+                  </div>
                 </li>
               ))}
             </ol>
