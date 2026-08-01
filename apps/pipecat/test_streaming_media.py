@@ -5,7 +5,7 @@ import struct
 
 import pytest
 from pipecat.audio.vad.vad_analyzer import VADState
-from pipecat.frames.frames import Frame, InputAudioRawFrame, OutputAudioRawFrame
+from pipecat.frames.frames import EndFrame, Frame, InputAudioRawFrame, OutputAudioRawFrame, TranscriptionFrame
 from pipecat.processors.frame_processor import FrameDirection
 
 from streaming_media import (
@@ -20,6 +20,10 @@ from streaming_media import (
 
 
 class TurnEndFrame(Frame):
+    pass
+
+
+class FinalFrame(TranscriptionFrame):
     pass
 
 
@@ -136,7 +140,7 @@ def test_rtc_asr_waits_for_final_transcript_before_custom_turn_boundary(
         processor = StreamingRtcAsrProcessor(
             base_url="http://rtc-asr.test",
             participant="tester",
-            final_frame_type=type("FinalFrame", (), {}),
+            final_frame_type=FinalFrame,
             end_type=TurnEndFrame,
         )
         processor.active = active
@@ -168,10 +172,92 @@ def test_rtc_asr_waits_for_final_transcript_before_custom_turn_boundary(
 
         await processor.process_frame(TurnEndFrame(), FrameDirection.DOWNSTREAM)
 
-        assert events == (["finalized"] if active else ["waited"]) + ["TurnEndFrame"]
+        assert events == (["finalized"] if active else ["waited"]) + [
+            "FinalFrame",
+            "TurnEndFrame",
+        ]
         assert processor.transcript == "final receipt"
         assert not processor.pre_roll
         assert processor.previous_state == VADState.QUIET
+
+    asyncio.run(run())
+
+
+def test_rtc_asr_emits_one_aggregated_transcript_per_media_turn() -> None:
+    async def run() -> None:
+        observed_frames: list[Frame] = []
+        observed_events: list[dict[str, object]] = []
+
+        async def event_callback(event: dict[str, object]) -> None:
+            observed_events.append(event)
+
+        processor = StreamingRtcAsrProcessor(
+            base_url="http://rtc-asr.test",
+            participant="target",
+            final_frame_type=FinalFrame,
+            end_type=TurnEndFrame,
+            event_callback=event_callback,
+        )
+        processor.turn_open = True
+        processor.final_segments = ["first clause", "second clause"]
+        processor.transcript = "first clause second clause"
+        processor.final_result = {"revision": 2, "audio_received_ms": 1200}
+
+        async def push_frame(frame: Frame, direction: FrameDirection) -> None:
+            assert direction == FrameDirection.DOWNSTREAM
+            observed_frames.append(frame)
+
+        processor.push_frame = push_frame
+
+        await processor.process_frame(TurnEndFrame(), FrameDirection.DOWNSTREAM)
+
+        finals = [frame for frame in observed_frames if isinstance(frame, FinalFrame)]
+        assert len(finals) == 1
+        assert finals[0].text == "first clause second clause"
+        assert isinstance(observed_frames[-1], TurnEndFrame)
+        assert observed_events == [
+            {
+                "type": "transcript",
+                "participant": "target",
+                "text": "first clause second clause",
+                "is_final": True,
+                "speech_final": True,
+                "revision": 2,
+                "audio_received_ms": 1200,
+                "audio_transcribed_ms": None,
+            }
+        ]
+
+    asyncio.run(run())
+
+
+def test_rtc_asr_without_media_turn_boundaries_does_not_reemit_final_on_end() -> None:
+    async def run() -> None:
+        observed_frames: list[Frame] = []
+        processor = StreamingRtcAsrProcessor(
+            base_url="http://rtc-asr.test",
+            participant="target",
+            final_frame_type=FinalFrame,
+        )
+        processor.turn_open = True
+        processor.transcript = "already emitted"
+        processor.final_result = {"revision": 1}
+
+        async def push_frame(frame: Frame, direction: FrameDirection) -> None:
+            assert direction == FrameDirection.DOWNSTREAM
+            observed_frames.append(frame)
+
+        processor.push_frame = push_frame
+        async def close() -> None:
+            return None
+
+        processor._close = close
+
+        await processor.process_frame(EndFrame(), FrameDirection.DOWNSTREAM)
+
+        assert not any(isinstance(frame, FinalFrame) for frame in observed_frames)
+        assert len(observed_frames) == 1
+        assert isinstance(observed_frames[0], EndFrame)
 
     asyncio.run(run())
 

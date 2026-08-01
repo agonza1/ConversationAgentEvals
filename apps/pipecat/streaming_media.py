@@ -564,6 +564,10 @@ class StreamingRtcAsrProcessor(FrameProcessor):
         self.previous_state = VADState.QUIET
         self.pre_roll: deque[bytes] = deque(maxlen=15)
         self.transcript = ""
+        self.final_segments: list[str] = []
+        self.final_result: dict[str, Any] = {}
+        self.turn_open = False
+        self.turn_final_emitted = False
         self.interims: list[str] = []
         self.speech_started_at: float | None = None
         self.speech_ended_at: float | None = None
@@ -624,14 +628,17 @@ class StreamingRtcAsrProcessor(FrameProcessor):
             elif self.finalizing:
                 await self._wait_for_final()
             self._raise_protocol_error(once=True)
+            await self._emit_turn_final(direction)
             self.pre_roll.clear()
             self.previous_state = VADState.QUIET
+            self.turn_open = False
         if isinstance(frame, EndFrame):
             if self.active:
                 await self._finalize(direction, wait_for_final=True)
             elif self.finalizing:
                 await self._wait_for_final()
             self._raise_protocol_error()
+            await self._emit_turn_final(direction)
             await self._close()
         await self.push_frame(frame, direction)
 
@@ -651,12 +658,17 @@ class StreamingRtcAsrProcessor(FrameProcessor):
         if self.active or self.finalizing:
             return
         await self._connect()
-        self.transcript = ""
-        self.interims = []
-        self.speech_started_at = None
-        self.speech_ended_at = None
-        self.final_at = None
-        self.server_timing = {}
+        if self.end_type is None or not self.turn_open:
+            self.transcript = ""
+            self.final_segments = []
+            self.final_result = {}
+            self.turn_final_emitted = False
+            self.interims = []
+            self.speech_started_at = None
+            self.speech_ended_at = None
+            self.final_at = None
+            self.server_timing = {}
+            self.turn_open = True
         self.ready.clear()
         self.final_received.clear()
         assert self.websocket is not None
@@ -757,23 +769,18 @@ class StreamingRtcAsrProcessor(FrameProcessor):
                 if not text:
                     continue
                 if payload.get("is_final"):
-                    self.transcript = text
+                    if not self.final_segments or self.final_segments[-1] != text:
+                        self.final_segments.append(text)
+                    self.transcript = " ".join(self.final_segments).strip()
+                    self.final_result = payload
                     self.final_at = time.time()
                     self.server_timing = {
                         key: payload.get(key)
                         for key in ("audio_received_ms", "audio_transcribed_ms", "revision")
                         if payload.get(key) is not None
                     }
-                    await self.push_frame(
-                        self.final_frame_type(
-                            text=text,
-                            user_id=self.participant,
-                            timestamp=datetime.now(UTC).isoformat(),
-                            language="en",
-                            result=payload,
-                            finalized=True,
-                        )
-                    )
+                    if self.end_type is None:
+                        await self.push_frame(self._final_frame(text, payload))
                     self.finalizing = False
                     self.final_received.set()
                 else:
@@ -787,7 +794,9 @@ class StreamingRtcAsrProcessor(FrameProcessor):
                             result=payload,
                         )
                     )
-                if self.event_callback:
+                if self.event_callback and not (
+                    payload.get("is_final") and self.end_type is not None
+                ):
                     await self.event_callback(
                         {
                             "type": "transcript",
@@ -814,6 +823,38 @@ class StreamingRtcAsrProcessor(FrameProcessor):
             self.ready.set()
             self.final_received.set()
 
+    def _final_frame(self, text: str, result: dict[str, Any]) -> TranscriptionFrame:
+        return self.final_frame_type(
+            text=text,
+            user_id=self.participant,
+            timestamp=datetime.now(UTC).isoformat(),
+            language="en",
+            result=result,
+            finalized=True,
+        )
+
+    async def _emit_turn_final(self, direction: FrameDirection) -> None:
+        if self.end_type is None or self.turn_final_emitted or not self.transcript:
+            return
+        await self.push_frame(
+            self._final_frame(self.transcript, self.final_result),
+            direction,
+        )
+        self.turn_final_emitted = True
+        if self.event_callback:
+            await self.event_callback(
+                {
+                    "type": "transcript",
+                    "participant": self.participant,
+                    "text": self.transcript,
+                    "is_final": True,
+                    "speech_final": True,
+                    "revision": self.final_result.get("revision"),
+                    "audio_received_ms": self.final_result.get("audio_received_ms"),
+                    "audio_transcribed_ms": self.final_result.get("audio_transcribed_ms"),
+                }
+            )
+
     async def _close(self) -> None:
         self.closing = True
         websocket = self.websocket
@@ -830,6 +871,7 @@ class StreamingRtcAsrProcessor(FrameProcessor):
             self.receiver_task = None
         self.active = False
         self.finalizing = False
+        self.turn_open = False
 
 
 class MetricsCollector(FrameProcessor):
