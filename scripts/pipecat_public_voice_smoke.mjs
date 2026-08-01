@@ -99,13 +99,16 @@ function redactedUrl(value) {
         index === 0 && part === 'rooms' ? part : '<redacted>'
       )).join('/')}`;
     }
-    if (url.search) {
-      url.search = '?<redacted>';
-    }
-    return url.toString();
+    const redactedSearch = url.search ? '?<redacted>' : '';
+    const redactedHash = url.hash ? '#<redacted>' : '';
+    return `${url.origin}${url.pathname}${redactedSearch}${redactedHash}`;
   } catch {
     return '<unparseable-url>';
   }
+}
+
+function agentLabel(agent) {
+  return PUBLIC_REMOTE_AGENTS.find((item) => item.id === agent || item.label === agent)?.label || agent;
 }
 
 function redactStartPayload(payload) {
@@ -129,7 +132,7 @@ function baseResult(args, startedAt) {
     reason: null,
     target: {
       id: 'pipecat-public-demo',
-      url: args.targetUrl,
+      url: redactedUrl(args.targetUrl),
       selected_agent: args.agent,
       kind: 'public_browser_voice_demo',
       execution: 'real_external_public_target',
@@ -224,14 +227,10 @@ function extractTranscript(bodyText) {
 }
 
 async function selectAgent(page, agent) {
-  if (!agent || agent === DEFAULT_AGENT) {
-    return;
-  }
-  const requested = PUBLIC_REMOTE_AGENTS.find((item) => item.id === agent || item.label === agent);
-  const optionName = requested?.label || agent;
+  const optionName = agentLabel(agent || DEFAULT_AGENT);
   const trigger = page.locator('button[role="combobox"]').first();
   if (!(await trigger.count())) {
-    return;
+    throw new Error('Pipecat public agent selector was not available.');
   }
   await trigger.click();
   const escaped = optionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -241,6 +240,11 @@ async function selectAgent(page, agent) {
     throw new Error(`Requested Pipecat public agent was not available: ${agent}`);
   }
   await option.first().click();
+  await page.waitForTimeout(250);
+  const selectedText = ((await trigger.textContent().catch(() => '')) || '').replace(/\s+/g, ' ').trim();
+  if (!selectedText.includes(optionName)) {
+    throw new Error(`Requested Pipecat public agent was not selected. Expected "${optionName}", observed "${selectedText || '<empty>'}".`);
+  }
 }
 
 async function runSmoke(args) {
@@ -400,6 +404,9 @@ async function runSmoke(args) {
 
 function classifyError(error) {
   const message = error instanceof Error ? error.message : String(error);
+  if (/agent selector|agent was not available|agent was not selected/i.test(message)) {
+    return 'target_changed';
+  }
   if (/permission|microphone|media/i.test(message)) {
     return 'browser_permission_denied';
   }
