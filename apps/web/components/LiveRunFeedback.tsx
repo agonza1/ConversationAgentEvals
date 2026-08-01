@@ -109,6 +109,7 @@ export function LiveRunFeedback({
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const currentResolveRef = useRef<(() => void) | null>(null);
   const playbackRef = useRef(Promise.resolve());
+  const liveSegmentFallbackRef = useRef(false);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const liveAudioRef = useRef<HTMLAudioElement | null>(null);
   const stopUrlRef = useRef<string | null>(null);
@@ -249,6 +250,7 @@ export function LiveRunFeedback({
     peer.onconnectionstatechange = () => {
       if (!ownsSharedConnection() || !isCurrentAttempt()) return;
       if (peer.connectionState === 'connected') {
+        liveSegmentFallbackRef.current = false;
         setWebrtcStatus('listening');
         setPlaybackMessage('Listening to the ongoing WebRTC audio stream. Earlier audio is not replayed.');
       } else if (peer.connectionState === 'failed') {
@@ -305,7 +307,9 @@ export function LiveRunFeedback({
         await cleanupAttempt(true);
         return;
       }
-      setWebrtcStatus(answer.status === 'listening' ? 'listening' : 'connecting');
+      // The signaling response only confirms that the server accepted the
+      // offer. ICE may still be unable to establish the media connection.
+      setWebrtcStatus(peer.connectionState === 'connected' ? 'listening' : 'connecting');
     } catch (error) {
       const ownedSharedConnection = await cleanupAttempt(serverListenerAttached);
       if (ownedSharedConnection && isCurrentAttempt()) setWebrtcStatus('error');
@@ -321,6 +325,7 @@ export function LiveRunFeedback({
     currentResolveRef.current?.();
     currentResolveRef.current = null;
     queuedRef.current.clear();
+    liveSegmentFallbackRef.current = false;
     playbackRef.current = Promise.resolve();
     disconnectWebRTC();
     setPlaybackMode('idle');
@@ -330,6 +335,7 @@ export function LiveRunFeedback({
   const queueAudioEvents = useCallback((
     candidates: typeof audioEvents,
     generation: number,
+    expectedMode: Exclude<PlaybackMode, 'idle'> = 'replay',
   ) => {
     for (const event of candidates) {
       const eventKey = `${event.conversationId}:${event.sequence}`;
@@ -339,9 +345,8 @@ export function LiveRunFeedback({
       playbackRef.current = playbackRef.current.then(async () => {
         if (
           playbackGenerationRef.current !== generation
-          || playbackModeRef.current !== 'replay'
+          || playbackModeRef.current !== expectedMode
         ) {
-          queuedRef.current.delete(queueKey);
           return;
         }
         const audio = new Audio(mediaUrl(apiBase, event.media_url as string));
@@ -361,7 +366,6 @@ export function LiveRunFeedback({
         } finally {
           if (currentAudioRef.current === audio) currentAudioRef.current = null;
           currentResolveRef.current = null;
-          queuedRef.current.delete(queueKey);
         }
       }).catch(() => undefined);
     }
@@ -374,6 +378,11 @@ export function LiveRunFeedback({
     playbackModeRef.current = 'live';
     setPlaybackMode('live');
     setExpanded(true);
+    // Mark audio that existed before the click as heard. If WebRTC cannot
+    // connect, the fallback starts with the next captured turn.
+    for (const event of audioEvents) {
+      queuedRef.current.add(`${generation}:${event.conversationId}:${event.sequence}`);
+    }
     setPlaybackMessage('Connecting to the ongoing WebRTC audio stream…');
     let token: ListenerToken | null = null;
     try {
@@ -403,12 +412,23 @@ export function LiveRunFeedback({
       setPlaybackMode('idle');
       return;
     }
+    listenerTokenRef.current = token;
+    setListenerToken(token);
+    await refreshListener(token.token).catch(() => undefined);
     try {
       const isCurrentAttempt = () => (
         playbackGenerationRef.current === generation
         && playbackModeRef.current === 'live'
       );
       await connectWebRTC(token, isCurrentAttempt);
+      window.setTimeout(() => {
+        if (!isCurrentAttempt() || peerRef.current?.connectionState === 'connected') return;
+        disconnectWebRTC();
+        liveSegmentFallbackRef.current = true;
+        setWebrtcStatus('error');
+        setPlaybackMessage('WebRTC could not reach the local voice runtime. Playing each new audio turn over the live HTTP fallback.');
+        void queueAudioEvents(audioEvents, generation, 'live');
+      }, 2500);
     } catch (error) {
       if (
         playbackGenerationRef.current !== generation
@@ -421,6 +441,11 @@ export function LiveRunFeedback({
       setPlaybackMessage(error instanceof Error ? error.message : 'Could not attach the live WebRTC listener.');
     }
   }
+
+  useEffect(() => {
+    if (playbackMode !== 'live' || !liveSegmentFallbackRef.current) return;
+    void queueAudioEvents(audioEvents, playbackGenerationRef.current, 'live');
+  }, [audioEvents, playbackMode, queueAudioEvents]);
 
   function startReplay() {
     stopPlayback();
@@ -449,6 +474,20 @@ export function LiveRunFeedback({
     if (playbackMode !== 'live') return;
     if (!listenerActive) {
       disconnectWebRTC();
+      if (liveSegmentFallbackRef.current) {
+        const generation = playbackGenerationRef.current;
+        void playbackRef.current.then(() => {
+          if (
+            playbackGenerationRef.current !== generation
+            || playbackModeRef.current !== 'live'
+          ) return;
+          liveSegmentFallbackRef.current = false;
+          playbackModeRef.current = 'idle';
+          setPlaybackMode('idle');
+          setPlaybackMessage('Live listening ended with the run. Recorded playback is now available.');
+        });
+        return;
+      }
       playbackModeRef.current = 'idle';
       setPlaybackMode('idle');
       setPlaybackMessage('Live listening ended with the run. Recorded playback is now available.');
