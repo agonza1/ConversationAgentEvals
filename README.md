@@ -57,6 +57,8 @@ For an **optional external-target example**, see [docs/agentic-contact-center-ex
 
 Execute-stage **local Pipecat SmallWebRTC audio in/out hooks** with vCon recording/transcription capture (no FreeSWITCH required for CI) are documented in [docs/execution-audio-webrtc.md](docs/execution-audio-webrtc.md).
 
+The opt-in public Pipecat demo smoke records a real browser connection artifact, latency metrics, and the observed transcript from `https://www.pipecat.ai/`; see [docs/pipecat-public-voice-smoke.md](docs/pipecat-public-voice-smoke.md).
+
 Standalone offline example after `npm run setup`:
 
 ```bash
@@ -155,10 +157,11 @@ npm run build:web
 npm run test:api
 npm run test:benchmark-smoke
 npm run test:voice-lab-proof
+npm run test:pipecat-public-voice-smoke
 apps/api/.venv/bin/python -m pytest apps/api/tests/test_assert_boundary.py apps/api/tests/test_benchmarks.py -q
 ```
 
-`npm run test:api` uses Docker when available and otherwise falls back to an existing local API virtual environment. Run `npm run setup` first for local-only testing.
+`npm run test:api` uses Docker when available and otherwise falls back to an existing local API virtual environment. Run `npm run setup` first for local-only testing. The public Pipecat smoke is opt-in and external-service-backed; it is not part of the offline CI set.
 
 ## Benchmark families
 
