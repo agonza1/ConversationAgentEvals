@@ -127,6 +127,55 @@ def test_rtc_asr_surfaces_protocol_error_at_custom_turn_boundary() -> None:
     asyncio.run(run())
 
 
+@pytest.mark.parametrize(('active', 'finalizing'), [(True, False), (False, True)])
+def test_rtc_asr_waits_for_final_transcript_before_custom_turn_boundary(
+    active: bool,
+    finalizing: bool,
+) -> None:
+    async def run() -> None:
+        processor = StreamingRtcAsrProcessor(
+            base_url="http://rtc-asr.test",
+            participant="tester",
+            final_frame_type=type("FinalFrame", (), {}),
+            end_type=TurnEndFrame,
+        )
+        processor.active = active
+        processor.finalizing = finalizing
+        processor.previous_state = VADState.SPEAKING
+        processor.pre_roll.append(b"old turn")
+        events: list[str] = []
+
+        async def finalize(direction: FrameDirection, *, wait_for_final: bool) -> None:
+            assert direction == FrameDirection.DOWNSTREAM
+            assert wait_for_final
+            events.append("finalized")
+            processor.active = False
+            processor.finalizing = False
+            processor.transcript = "final receipt"
+
+        async def wait_for_final() -> None:
+            events.append("waited")
+            processor.finalizing = False
+            processor.transcript = "final receipt"
+
+        async def push_frame(frame: Frame, direction: FrameDirection) -> None:
+            assert direction == FrameDirection.DOWNSTREAM
+            events.append(type(frame).__name__)
+
+        processor._finalize = finalize
+        processor._wait_for_final = wait_for_final
+        processor.push_frame = push_frame
+
+        await processor.process_frame(TurnEndFrame(), FrameDirection.DOWNSTREAM)
+
+        assert events == (["finalized"] if active else ["waited"]) + ["TurnEndFrame"]
+        assert processor.transcript == "final receipt"
+        assert not processor.pre_roll
+        assert processor.previous_state == VADState.QUIET
+
+    asyncio.run(run())
+
+
 def test_vad_restarts_asr_when_speech_resumes_during_finalization() -> None:
     async def run() -> None:
         processor = StreamingRtcAsrProcessor(
@@ -202,3 +251,7 @@ def test_adaptive_tts_caps_unpunctuated_first_chunk() -> None:
         "one two three four five six seven eight nine ten eleven twelve".split()
     )
     assert remainder.strip() == "thirteen fourteen"
+
+
+def test_adaptive_tts_discards_punctuation_only_final_remainder() -> None:
+    assert _next_tts_chunk("?", first_chunk=False, final=True) == ("", "")

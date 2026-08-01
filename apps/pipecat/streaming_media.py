@@ -333,6 +333,12 @@ def _next_tts_chunk(
     value = text.lstrip()
     if not value:
         return "", ""
+    # Streaming deltas can leave only terminal punctuation after an earlier
+    # low-latency word-cap chunk. Kokoro returns a valid empty WAV for inputs
+    # such as "?"; discard that remainder instead of treating it as a failed
+    # synthesis request.
+    if final and not any(character.isalnum() for character in value):
+        return "", ""
     sentence_match = re.search(r"[.!?](?:[\"')\]]+)?(?:\s+|$)", value)
     if not first_chunk:
         if sentence_match:
@@ -608,7 +614,18 @@ class StreamingRtcAsrProcessor(FrameProcessor):
             self.previous_state = state
             return
         if self.end_type is not None and isinstance(frame, self.end_type):
+            # A custom speech boundary is the end of this processor's media
+            # turn, just like EndFrame is the end of the full pipeline. Do not
+            # let it overtake rtc-asr's final transcript: downstream turn
+            # completion may otherwise pair a stale clause receipt with the
+            # new speech-end frame and observe empty current-turn state.
+            if self.active:
+                await self._finalize(direction, wait_for_final=True)
+            elif self.finalizing:
+                await self._wait_for_final()
             self._raise_protocol_error(once=True)
+            self.pre_roll.clear()
+            self.previous_state = VADState.QUIET
         if isinstance(frame, EndFrame):
             if self.active:
                 await self._finalize(direction, wait_for_final=True)

@@ -1080,16 +1080,20 @@ class _StreamingDuplexSession:
                 f'Persistent Pipecat pipeline ended before the turn completed: {exception}'
             )
         turn_complete.result()
-        required = (
-            self.tester_llm.text,
-            self.caller_tts.audio,
-            self.target_asr.transcript,
-            self.target_llm.text,
-            self.target_tts.audio,
-            self.tester_asr.transcript,
-        )
-        if not all(required):
-            raise RuntimeError('Streaming Pipecat exchange produced incomplete media or transcripts.')
+        required = {
+            'tester LLM text': self.tester_llm.text,
+            'tester TTS audio': self.caller_tts.audio,
+            'target ASR transcript': self.target_asr.transcript,
+            'target LLM text': self.target_llm.text,
+            'target TTS audio': self.target_tts.audio,
+            'tester ASR transcript': self.tester_asr.transcript,
+        }
+        missing = [label for label, value in required.items() if not value]
+        if missing:
+            raise RuntimeError(
+                'Streaming Pipecat exchange produced incomplete media or transcripts; '
+                f'missing {", ".join(missing)}.'
+            )
         if (
             self.caller_bridge.audio_ended_at is None
             or self.target_asr.speech_ended_at is None
