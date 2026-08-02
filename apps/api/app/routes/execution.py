@@ -29,6 +29,9 @@ from app.services.acc_connection import acc_connection_status, test_acc_connecti
 
 router = APIRouter(prefix='/api/execution', tags=['execution'])
 _LISTENER_TOKENS: dict[str, dict[str, Any]] = {}
+_LISTENER_BROWSER_TURN_URL = os.getenv('LISTENER_BROWSER_TURN_URL', '').strip()
+_LISTENER_TURN_USERNAME = os.getenv('LISTENER_TURN_USERNAME', '').strip()
+_LISTENER_TURN_CREDENTIAL = os.getenv('LISTENER_TURN_CREDENTIAL', '').strip()
 _REFERENCE_DEPENDENCY_SETUP_URLS = {
     'openai': 'https://platform.openai.com/docs/quickstart',
     'shared_token': 'https://github.com/agonza1/ConversationAgentEvals/blob/main/docs/environment.md#live-asr-and-voice-experiments',
@@ -237,6 +240,17 @@ def apply_execution_judge_review(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+def _listener_browser_ice_servers() -> list[dict[str, str]]:
+    if not _LISTENER_BROWSER_TURN_URL:
+        return []
+    server = {'urls': _LISTENER_BROWSER_TURN_URL}
+    if _LISTENER_TURN_USERNAME:
+        server['username'] = _LISTENER_TURN_USERNAME
+    if _LISTENER_TURN_CREDENTIAL:
+        server['credential'] = _LISTENER_TURN_CREDENTIAL
+    return [server]
+
+
 @router.post('/runs/{execution_run_id}/listener-token')
 def create_execution_listener_token(
     execution_run_id: str,
@@ -267,6 +281,7 @@ def create_execution_listener_token(
             'webrtc_url': f'/api/execution/listeners/{token}/webrtc',
             'webrtc_ice_url': f'/api/execution/listeners/{token}/webrtc/ice',
             'webrtc_stop_url': f'/api/execution/listeners/{token}/webrtc/stop',
+            'ice_servers': _listener_browser_ice_servers(),
             'media_transport': 'webrtc',
             'read_only': True,
             'can_inject_audio': False,
@@ -352,6 +367,7 @@ def get_execution_listener_state(token: str):
             'webrtc_url': f'/api/execution/listeners/{token}/webrtc',
             'webrtc_ice_url': f'/api/execution/listeners/{token}/webrtc/ice',
             'webrtc_stop_url': f'/api/execution/listeners/{token}/webrtc/stop',
+            'ice_servers': _listener_browser_ice_servers(),
             'read_only': True,
             'can_inject_audio': False,
             'requires_microphone': False,

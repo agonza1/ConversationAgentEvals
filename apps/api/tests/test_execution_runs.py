@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.routes import execution as execution_routes
 from app.schemas.execution import ConversationRecord, ExecutionRunCreateRequest, LiveExecutionEvent
 from app.services import execution_run_store
 from app.services.execution_run_store import reset_execution_runs_for_tests
@@ -19,6 +20,18 @@ client = TestClient(app)
 
 def setup_function() -> None:
     reset_execution_runs_for_tests()
+
+
+def test_listener_browser_ice_servers_expose_configured_turn_relay(monkeypatch):
+    monkeypatch.setattr(execution_routes, '_LISTENER_BROWSER_TURN_URL', 'turn:127.0.0.1:3478?transport=udp')
+    monkeypatch.setattr(execution_routes, '_LISTENER_TURN_USERNAME', 'cae')
+    monkeypatch.setattr(execution_routes, '_LISTENER_TURN_CREDENTIAL', 'local-secret')
+
+    assert execution_routes._listener_browser_ice_servers() == [{
+        'urls': 'turn:127.0.0.1:3478?transport=udp',
+        'username': 'cae',
+        'credential': 'local-secret',
+    }]
 
 
 def test_text_callable_execution_appends_conversations_and_writes_inference_set():

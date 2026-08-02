@@ -37,6 +37,7 @@ interface ListenerState {
     webrtc_url?: string;
     webrtc_ice_url?: string;
     webrtc_stop_url?: string;
+    ice_servers?: RTCIceServer[];
   };
   conversations?: ListenerConversation[];
 }
@@ -127,7 +128,7 @@ export function BrowserListenerPage({ token }: { token: string }) {
       existingPeer.close();
       peerRef.current = null;
     }
-    const peer = new RTCPeerConnection();
+    const peer = new RTCPeerConnection({ iceServers: listenerConfig.ice_servers ?? [] });
     peerRef.current = peer;
     const iceUrl = listenerConfig.webrtc_ice_url;
     const pendingIceCandidates: RTCIceCandidateInit[] = [];

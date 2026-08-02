@@ -30,7 +30,7 @@ for _parent in _env_candidates:
 
 try:
     import aiohttp
-    from aiortc import RTCSessionDescription
+    from aiortc import RTCIceServer, RTCSessionDescription
     from aiortc.sdp import candidate_from_sdp
     from pipecat.adapters.schemas.function_schema import FunctionSchema
     from pipecat.adapters.schemas.tools_schema import ToolsSchema
@@ -85,6 +85,7 @@ try:
 except Exception:  # pragma: no cover - fallback for non-pipecat test envs
     aiohttp = None  # type: ignore[assignment]
     RTCSessionDescription = None  # type: ignore[assignment]
+    RTCIceServer = None  # type: ignore[assignment]
     candidate_from_sdp = None  # type: ignore[assignment]
     FunctionSchema = None  # type: ignore[assignment]
     FunctionCallParams = Any  # type: ignore[misc, assignment]
@@ -231,6 +232,10 @@ RTC_ASR_SAMPLE_RATE = 16000
 RTC_ASR_CHANNELS = 1
 RTC_ASR_ENCODING = 'pcm16le'
 KOKORO_BASE_URL = os.getenv('KOKORO_BASE_URL', '').rstrip('/')
+BROWSER_ICE_HOST_OVERRIDE = os.getenv('BROWSER_ICE_HOST_OVERRIDE', '').strip()
+LISTENER_TURN_URL = os.getenv('LISTENER_TURN_URL', '').strip()
+LISTENER_TURN_USERNAME = os.getenv('LISTENER_TURN_USERNAME', '').strip()
+LISTENER_TURN_CREDENTIAL = os.getenv('LISTENER_TURN_CREDENTIAL', '').strip()
 KOKORO_MODEL = os.getenv('KOKORO_MODEL', 'kokoro')
 KOKORO_TESTER_VOICE = os.getenv('KOKORO_TESTER_VOICE', 'af_heart')
 _KOKORO_LEGACY_VOICE = os.getenv('KOKORO_VOICE', '').strip()
@@ -1570,7 +1575,17 @@ async def reference_duplex_listen(
         raise HTTPException(status_code=409, detail='The duplex run is not active; retry while it is running.')
     if payload.listener_id in broadcast.listeners:
         raise HTTPException(status_code=409, detail='This listener is already attached.')
-    connection = ReferenceListenerWebRTCConnection(audio_out_sample_rate=24000)
+    ice_servers = []
+    if LISTENER_TURN_URL and RTCIceServer is not None:
+        ice_servers.append(RTCIceServer(
+            urls=LISTENER_TURN_URL,
+            username=LISTENER_TURN_USERNAME or None,
+            credential=LISTENER_TURN_CREDENTIAL or None,
+        ))
+    connection = ReferenceListenerWebRTCConnection(
+        audio_out_sample_rate=24000,
+        ice_servers=ice_servers,
+    )
     try:
         await connection.initialize(payload.sdp, payload.type)
         answer = connection.get_answer()
@@ -3158,7 +3173,19 @@ def _coerce_ice_candidate(candidate: dict[str, Any]) -> Any:
         return None
     if candidate_from_sdp is None:
         return candidate
-    parsed = candidate_from_sdp(str(raw_candidate).removeprefix('candidate:'))
+    candidate_sdp = str(raw_candidate).removeprefix('candidate:')
+    parts = candidate_sdp.split()
+    if (
+        BROWSER_ICE_HOST_OVERRIDE
+        and len(parts) > 4
+        and parts[4].lower().endswith('.local')
+    ):
+        # Chromium masks host candidates with an mDNS name. A Linux
+        # container cannot resolve that browser-local name, but it can reach
+        # the browser's UDP socket through Docker's host gateway.
+        parts[4] = BROWSER_ICE_HOST_OVERRIDE
+        candidate_sdp = ' '.join(parts)
+    parsed = candidate_from_sdp(candidate_sdp)
     parsed.sdpMid = candidate.get('sdpMid') if 'sdpMid' in candidate else candidate.get('sdp_mid')
     parsed.sdpMLineIndex = candidate.get('sdpMLineIndex') if 'sdpMLineIndex' in candidate else candidate.get('sdp_mline_index')
     return parsed

@@ -13,6 +13,24 @@ from fastapi.testclient import TestClient
 import server
 
 
+def test_browser_mdns_ice_candidate_uses_configured_host_gateway(monkeypatch):
+    monkeypatch.setattr(server, 'BROWSER_ICE_HOST_OVERRIDE', 'host.docker.internal')
+
+    candidate = server._coerce_ice_candidate({
+        'candidate': (
+            'candidate:1 1 udp 2113937151 '
+            'browser-session.local 63556 typ host generation 0'
+        ),
+        'sdpMid': '0',
+        'sdpMLineIndex': 0,
+    })
+
+    assert candidate.ip == 'host.docker.internal'
+    assert candidate.port == 63556
+    assert candidate.sdpMid == '0'
+    assert candidate.sdpMLineIndex == 0
+
+
 def test_transient_reference_completion_errors_are_retryable():
     assert server._is_transient_reference_completion_error(
         RuntimeError(
@@ -697,11 +715,13 @@ def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(m
 
     class _Connection:
         last = None
+        last_kwargs = None
 
         def __init__(self, *args, **kwargs):
             self._presenter_answer_audio_track = _Track()
             self.disconnected = False
             _Connection.last = self
+            _Connection.last_kwargs = kwargs
 
         async def initialize(self, sdp, type):
             assert sdp == 'receive-only-offer'
@@ -720,6 +740,9 @@ def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(m
             return None
 
     monkeypatch.setattr(server, 'REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
+    monkeypatch.setattr(server, 'LISTENER_TURN_URL', 'turn:coturn:3478?transport=udp')
+    monkeypatch.setattr(server, 'LISTENER_TURN_USERNAME', 'cae')
+    monkeypatch.setattr(server, 'LISTENER_TURN_CREDENTIAL', 'local-secret')
     monkeypatch.setattr(server, 'ReferenceListenerWebRTCConnection', _Connection)
     broadcast = server._ReferenceDuplexBroadcast(
         execution_run_id='active-run',
@@ -743,6 +766,10 @@ def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(m
     assert joined.json()['read_only'] is True
     assert joined.json()['requires_microphone'] is False
     assert joined.json()['answer']['sdp'] == 'send-only-answer'
+    turn_server = _Connection.last_kwargs['ice_servers'][0]
+    assert turn_server.urls == 'turn:coturn:3478?transport=udp'
+    assert turn_server.username == 'cae'
+    assert turn_server.credential == 'local-secret'
 
     broadcast.publish(b'\x01\x00' * 240, sample_rate=24000)
     assert _Connection.last._presenter_answer_audio_track.audio

@@ -73,6 +73,7 @@ interface ListenerToken {
   webrtc_url?: string;
   webrtc_ice_url?: string;
   webrtc_stop_url?: string;
+  ice_servers?: RTCIceServer[];
 }
 
 interface ListenerState {
@@ -209,7 +210,7 @@ export function LiveRunFeedback({
       throw new Error('This listener token does not expose WebRTC signaling.');
     }
     disconnectWebRTC();
-    const peer = new RTCPeerConnection();
+    const peer = new RTCPeerConnection({ iceServers: token.ice_servers ?? [] });
     const stopUrl = token.webrtc_stop_url
       ? mediaUrl(apiBase, token.webrtc_stop_url)
       : null;
