@@ -1029,7 +1029,7 @@ test('active voice listening falls back after peer failure and completed playbac
           if (this.connectionState !== 'connected') return;
           this.connectionState = 'failed';
           this.onconnectionstatechange?.();
-        }, 50);
+        }, 1800);
       }
       close() {
         this.connectionState = 'closed';
@@ -1061,7 +1061,8 @@ test('active voice listening falls back after peer failure and completed playbac
       return;
     }
     polls += 1;
-    const hasNewAgentAudio = polls >= 3;
+    const hasWebrtcAgentAudio = polls >= 2;
+    const hasFallbackCallerAudio = polls >= 3;
     const completed = polls >= 4;
     const liveEvents = [
       {
@@ -1072,13 +1073,21 @@ test('active voice listening falls back after peer failure and completed playbac
         direction: 'tester_to_target',
         media_url: '/api/execution/runs/exec-live-cursor/conversations/exec-live-cursor-1/audio/1?user_id=demo-user',
       },
-      ...(hasNewAgentAudio ? [{
+      ...(hasWebrtcAgentAudio ? [{
         sequence: 2,
         kind: 'audio',
         speaker: 'Agent',
         text: 'I can help with that.',
         direction: 'target_to_tester',
         media_url: '/api/execution/runs/exec-live-cursor/conversations/exec-live-cursor-1/audio/2?user_id=demo-user',
+      }] : []),
+      ...(hasFallbackCallerAudio ? [{
+        sequence: 3,
+        kind: 'audio',
+        speaker: 'Caller',
+        text: 'This turn arrived after WebRTC failed.',
+        direction: 'tester_to_target',
+        media_url: '/api/execution/runs/exec-live-cursor/conversations/exec-live-cursor-1/audio/3?user_id=demo-user',
       }] : []),
     ];
     await route.fulfill({
@@ -1152,10 +1161,10 @@ test('active voice listening falls back after peer failure and completed playbac
   await expect(feedback.getByLabel('WebRTC listener status')).toContainText('HTTP fallback');
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
-  ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(1);
+  ).__playedVoiceUrls.filter((url) => url.includes('/audio/3?')).length)).toBe(1);
   expect(await page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
-  ).__playedVoiceUrls.some((url) => url.includes('/audio/1?')))).toBe(false);
+  ).__playedVoiceUrls.some((url) => url.includes('/audio/1?') || url.includes('/audio/2?')))).toBe(false);
 
   await expect(feedback.getByRole('button', { name: 'Play recorded conversation' })).toBeVisible({ timeout: 10_000 });
   await feedback.getByRole('button', { name: 'Play recorded conversation' }).click();
@@ -1164,12 +1173,15 @@ test('active voice listening falls back after peer failure and completed playbac
   ).__playedVoiceUrls.filter((url) => url.includes('/audio/1?')).length)).toBe(1);
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
-  ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(2);
+  ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(1);
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.filter((url) => url.includes('/audio/3?')).length)).toBe(2);
 });
 
-test('HTTP fallback queues setup audio while WebRTC signaling is still pending', async ({ page }) => {
-  let listenerPolls = 0;
-  let signalingResponded = false;
+test('HTTP fallback queues setup audio while listener-token creation is still pending', async ({ page }) => {
+  let runPolls = 0;
+  let tokenResponded = false;
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
     const runtime = window as Window & { __playedVoiceUrls: string[] };
@@ -1223,6 +1235,8 @@ test('HTTP fallback queues setup audio while WebRTC signaling is still pending',
 
   await page.route('**/api/execution/runs/exec-live-fallback**', async (route) => {
     if (route.request().url().includes('/listener-token')) {
+      await new Promise((resolve) => setTimeout(resolve, 4000));
+      tokenResponded = true;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -1242,6 +1256,7 @@ test('HTTP fallback queues setup audio while WebRTC signaling is still pending',
       });
       return;
     }
+    runPolls += 1;
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -1256,51 +1271,16 @@ test('HTTP fallback queues setup audio while WebRTC signaling is still pending',
           execution_run_id: 'exec-live-fallback',
           status: 'running',
           mode: 'pipecat_webrtc',
-          live_events: audioEvents(false),
+          live_events: audioEvents(runPolls >= 2),
         }],
       }),
     });
   });
-  await page.route('**/api/execution/listeners/live-fallback-token**', async (route) => {
-    const url = route.request().url();
-    if (url.endsWith('/webrtc')) {
-      await new Promise((resolve) => setTimeout(resolve, 4000));
-      signalingResponded = true;
-      await route.fulfill({
-        status: 502,
-        contentType: 'application/json',
-        body: JSON.stringify({ detail: 'WebRTC signaling failed.' }),
-      });
-      return;
-    }
-    if (url.endsWith('/webrtc/stop')) {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
-      return;
-    }
-    listenerPolls += 1;
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        listener: {
-          read_only: true,
-          can_inject_audio: false,
-          requires_microphone: false,
-          run_status: 'running',
-        },
-        conversations: [{
-          conversation_id: 'exec-live-fallback-1',
-          live_events: audioEvents(listenerPolls >= 2),
-        }],
-      }),
-    });
-  });
-
   await page.goto('/runs/exec-live-fallback');
   const feedback = page.getByLabel('Live run feedback');
   await feedback.getByRole('button', { name: 'Listen to live WebRTC' }).click();
   await expect(feedback.getByLabel('WebRTC listener status')).toContainText('HTTP fallback', { timeout: 6000 });
-  expect(signalingResponded).toBe(false);
+  expect(tokenResponded).toBe(false);
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
   ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(1);

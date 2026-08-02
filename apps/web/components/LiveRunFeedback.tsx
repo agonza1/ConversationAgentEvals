@@ -375,6 +375,15 @@ export function LiveRunFeedback({
     return playbackRef.current;
   }, [apiBase]);
 
+  const markAudioEventsHeard = useCallback((
+    candidates: typeof audioEvents,
+    generation: number,
+  ) => {
+    for (const event of candidates) {
+      queuedRef.current.add(`${generation}:${event.conversationId}:${event.sequence}`);
+    }
+  }, []);
+
   async function startLiveListening() {
     stopPlayback();
     const generation = playbackGenerationRef.current;
@@ -395,30 +404,32 @@ export function LiveRunFeedback({
     setExpanded(true);
     // Mark audio that existed before the click as heard. If WebRTC cannot
     // connect, the fallback starts with the next captured turn.
-    for (const event of audioEvents) {
-      queuedRef.current.add(`${generation}:${event.conversationId}:${event.sequence}`);
-    }
+    markAudioEventsHeard(audioEvents, generation);
+    window.setTimeout(() => {
+      if (!isCurrentAttempt() || peerRef.current?.connectionState === 'connected') return;
+      activateHttpFallback();
+    }, 2500);
     setPlaybackMessage('Connecting to the ongoing WebRTC audio stream…');
     let token: ListenerToken | null = null;
     try {
       // The displayed token may already be attached in a shared browser.
       // Give the owner's embedded listener a distinct server-side listener ID.
       token = await requestListenerToken();
-    } catch (error) {
+    } catch {
       if (
         playbackGenerationRef.current !== generation
         || playbackModeRef.current !== 'live'
+        || liveSegmentFallbackRef.current
       ) {
         return;
       }
-      playbackModeRef.current = 'idle';
-      setPlaybackMode('idle');
-      setPlaybackMessage(error instanceof Error ? error.message : 'Could not create the owner listener.');
+      activateHttpFallback();
       return;
     }
     if (
       playbackGenerationRef.current !== generation
       || playbackModeRef.current !== 'live'
+      || liveSegmentFallbackRef.current
     ) {
       return;
     }
@@ -429,23 +440,28 @@ export function LiveRunFeedback({
     }
     listenerTokenRef.current = token;
     setListenerToken(token);
-    window.setTimeout(() => {
-      if (!isCurrentAttempt() || peerRef.current?.connectionState === 'connected') return;
-      activateHttpFallback();
-    }, 2500);
     await refreshListener(token.token).catch(() => undefined);
     if (!isCurrentAttempt() || liveSegmentFallbackRef.current) return;
     try {
-      await connectWebRTC(token, isCurrentAttempt, activateHttpFallback);
+      await connectWebRTC(token, isCurrentAttempt, () => {
+        markAudioEventsHeard(audioEventsRef.current, generation);
+        activateHttpFallback();
+      });
     } catch {
       activateHttpFallback();
     }
   }
 
   useEffect(() => {
-    if (playbackMode !== 'live' || !liveSegmentFallbackRef.current) return;
+    if (playbackMode !== 'live') return;
+    if (!liveSegmentFallbackRef.current) {
+      if (webrtcStatus === 'listening') {
+        markAudioEventsHeard(audioEvents, playbackGenerationRef.current);
+      }
+      return;
+    }
     void queueAudioEvents(audioEvents, playbackGenerationRef.current, 'live');
-  }, [audioEvents, playbackMode, queueAudioEvents]);
+  }, [audioEvents, markAudioEventsHeard, playbackMode, queueAudioEvents, webrtcStatus]);
 
   function startReplay() {
     stopPlayback();
