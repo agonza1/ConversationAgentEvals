@@ -102,7 +102,7 @@ export function LiveRunFeedback({
   const [listenerConversations, setListenerConversations] = useState<LiveRunConversation[] | null>(null);
   const [listenerMessage, setListenerMessage] = useState<string | null>(null);
   const [isCreatingListener, setIsCreatingListener] = useState(false);
-  const [webrtcStatus, setWebrtcStatus] = useState<'idle' | 'connecting' | 'listening' | 'error'>('idle');
+  const [webrtcStatus, setWebrtcStatus] = useState<'idle' | 'connecting' | 'listening' | 'fallback' | 'error'>('idle');
   const queuedRef = useRef(new Set<string>());
   const playbackModeRef = useRef<PlaybackMode>('idle');
   const playbackGenerationRef = useRef(0);
@@ -425,7 +425,7 @@ export function LiveRunFeedback({
         if (!isCurrentAttempt() || peerRef.current?.connectionState === 'connected') return;
         disconnectWebRTC();
         liveSegmentFallbackRef.current = true;
-        setWebrtcStatus('error');
+        setWebrtcStatus('fallback');
         setPlaybackMessage('WebRTC could not reach the local voice runtime. Playing each new audio turn over the live HTTP fallback.');
         void queueAudioEvents(audioEvents, generation, 'live');
       }, 2500);
@@ -608,12 +608,33 @@ export function LiveRunFeedback({
       </div>
       {voice ? (
         <>
-          <span role="status" aria-live="polite" style={{ color: 'var(--muted)', fontSize: 13 }}>
+          <span
+            role="status"
+            aria-live="polite"
+            style={{
+              color: webrtcStatus === 'fallback' ? 'var(--error-text)' : 'var(--muted)',
+              fontSize: 13,
+              fontWeight: webrtcStatus === 'fallback' ? 700 : undefined,
+            }}
+          >
             {playbackMessage || defaultPlaybackMessage}
           </span>
           {listenerActive ? (
-            <span aria-label="WebRTC listener status" style={{ color: 'var(--muted)', fontSize: 12 }}>
-              WebRTC · {webrtcStatus}
+            <span
+              aria-label="WebRTC listener status"
+              data-transport-status={webrtcStatus}
+              style={{
+                color: webrtcStatus === 'fallback' ? 'var(--error-text)' : 'var(--muted)',
+                background: webrtcStatus === 'fallback' ? 'var(--error-bg)' : undefined,
+                border: webrtcStatus === 'fallback' ? '1px solid var(--error-border)' : undefined,
+                borderRadius: webrtcStatus === 'fallback' ? 8 : undefined,
+                padding: webrtcStatus === 'fallback' ? '5px 8px' : undefined,
+                fontSize: 12,
+                fontWeight: webrtcStatus === 'fallback' ? 800 : undefined,
+                width: 'fit-content',
+              }}
+            >
+              {webrtcStatus === 'fallback' ? 'Live audio · HTTP fallback' : `WebRTC · ${webrtcStatus}`}
             </span>
           ) : null}
           <audio ref={liveAudioRef} autoPlay aria-label="Receive-only live run audio" />
