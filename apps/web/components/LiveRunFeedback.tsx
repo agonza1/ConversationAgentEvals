@@ -133,6 +133,8 @@ export function LiveRunFeedback({
     () => events.filter((event) => event.kind === 'audio' && event.media_url),
     [events],
   );
+  const audioEventsRef = useRef(audioEvents);
+  audioEventsRef.current = audioEvents;
 
   const refreshListener = useCallback(async (token = listenerToken?.token) => {
     if (!token) return;
@@ -428,7 +430,7 @@ export function LiveRunFeedback({
         liveSegmentFallbackRef.current = true;
         setWebrtcStatus('fallback');
         setPlaybackMessage('WebRTC could not reach the local voice runtime. Playing each new audio turn over the live HTTP fallback.');
-        void queueAudioEvents(audioEvents, generation, 'live');
+        void queueAudioEvents(audioEventsRef.current, generation, 'live');
       }, 2500);
     } catch (error) {
       if (

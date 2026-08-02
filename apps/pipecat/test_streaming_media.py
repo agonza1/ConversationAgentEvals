@@ -231,6 +231,34 @@ def test_rtc_asr_emits_one_aggregated_transcript_per_media_turn() -> None:
     asyncio.run(run())
 
 
+def test_rtc_asr_preserves_repeated_text_from_distinct_streams() -> None:
+    processor = StreamingRtcAsrProcessor(
+        base_url="http://rtc-asr.test",
+        participant="target",
+        final_frame_type=FinalFrame,
+        end_type=TurnEndFrame,
+    )
+
+    first = {
+        "text": "yes",
+        "is_final": True,
+        "revision": 2,
+        "metadata": {"client_stream_id": "utterance-1"},
+    }
+    second = {
+        "text": "yes",
+        "is_final": True,
+        "revision": 2,
+        "metadata": {"client_stream_id": "utterance-2"},
+    }
+
+    assert processor._record_final_segment("yes", first)
+    assert not processor._record_final_segment("yes", first)
+    assert processor._record_final_segment("yes", second)
+    assert processor.final_segments == ["yes", "yes"]
+    assert processor.transcript == "yes yes"
+
+
 def test_rtc_asr_without_media_turn_boundaries_does_not_reemit_final_on_end() -> None:
     async def run() -> None:
         observed_frames: list[Frame] = []
