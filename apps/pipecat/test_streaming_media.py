@@ -259,6 +259,55 @@ def test_rtc_asr_preserves_repeated_text_from_distinct_streams() -> None:
     assert processor.transcript == "yes yes"
 
 
+def test_rtc_asr_stale_duplicate_does_not_complete_current_stream() -> None:
+    async def run() -> None:
+        stale_yielded = asyncio.Event()
+        release_current = asyncio.Event()
+
+        class TranscriptWebSocket:
+            async def __aiter__(self):
+                yield '{"type":"transcript","text":"first","is_final":true,"revision":2,"metadata":{"client_stream_id":"utterance-1"}}'
+                stale_yielded.set()
+                await release_current.wait()
+                yield '{"type":"transcript","text":"second","is_final":true,"revision":2,"metadata":{"client_stream_id":"utterance-2"}}'
+                await asyncio.Future()
+
+        processor = StreamingRtcAsrProcessor(
+            base_url="http://rtc-asr.test",
+            participant="target",
+            final_frame_type=FinalFrame,
+            end_type=TurnEndFrame,
+        )
+        processor.websocket = TranscriptWebSocket()
+        processor.current_stream_id = "utterance-2"
+        processor.finalizing = True
+        processor.final_segments = ["first"]
+        processor.transcript = "first"
+        processor.final_segment_event_ids = {("utterance-1", 2)}
+
+        receive_task = asyncio.create_task(processor._receive())
+        await stale_yielded.wait()
+        await asyncio.sleep(0)
+
+        assert processor.finalizing
+        assert not processor.final_received.is_set()
+        assert processor.final_result == {}
+
+        release_current.set()
+        await asyncio.wait_for(processor.final_received.wait(), timeout=1)
+
+        assert not processor.finalizing
+        assert processor.final_result["metadata"]["client_stream_id"] == "utterance-2"
+        assert processor.transcript == "first second"
+
+        processor.closing = True
+        receive_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await receive_task
+
+    asyncio.run(run())
+
+
 def test_rtc_asr_without_media_turn_boundaries_does_not_reemit_final_on_end() -> None:
     async def run() -> None:
         observed_frames: list[Frame] = []

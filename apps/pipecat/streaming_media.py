@@ -774,17 +774,28 @@ class StreamingRtcAsrProcessor(FrameProcessor):
                     continue
                 if payload.get("is_final"):
                     is_new_final = self._record_final_segment(text, payload)
-                    self.final_result = payload
-                    self.final_at = time.time()
-                    self.server_timing = {
-                        key: payload.get(key)
-                        for key in ("audio_received_ms", "audio_transcribed_ms", "revision")
-                        if payload.get(key) is not None
-                    }
-                    if self.end_type is None and is_new_final:
-                        await self.push_frame(self._final_frame(text, payload))
-                    self.finalizing = False
-                    self.final_received.set()
+                    metadata = payload.get("metadata")
+                    payload_stream_id = (
+                        metadata.get("client_stream_id")
+                        if isinstance(metadata, dict)
+                        else None
+                    )
+                    completes_current_stream = is_new_final and (
+                        not payload_stream_id
+                        or str(payload_stream_id) == self.current_stream_id
+                    )
+                    if completes_current_stream:
+                        self.final_result = payload
+                        self.final_at = time.time()
+                        self.server_timing = {
+                            key: payload.get(key)
+                            for key in ("audio_received_ms", "audio_transcribed_ms", "revision")
+                            if payload.get(key) is not None
+                        }
+                        if self.end_type is None:
+                            await self.push_frame(self._final_frame(text, payload))
+                        self.finalizing = False
+                        self.final_received.set()
                 else:
                     self.interims.append(text)
                     await self.push_frame(

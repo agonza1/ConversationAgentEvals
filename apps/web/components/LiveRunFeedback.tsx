@@ -207,6 +207,7 @@ export function LiveRunFeedback({
   const connectWebRTC = useCallback(async (
     token: ListenerToken,
     isCurrentAttempt: () => boolean,
+    activateHttpFallback: () => void,
   ) => {
     if (!token.webrtc_url) {
       throw new Error('This listener token does not expose WebRTC signaling.');
@@ -257,8 +258,7 @@ export function LiveRunFeedback({
         setWebrtcStatus('listening');
         setPlaybackMessage('Listening to the ongoing WebRTC audio stream. Earlier audio is not replayed.');
       } else if (peer.connectionState === 'failed') {
-        setWebrtcStatus('error');
-        setPlaybackMessage('The live WebRTC listener failed. Stop listening and try again while the run is active.');
+        activateHttpFallback();
       }
     };
     const sendIceCandidate = async (candidate: RTCIceCandidateInit) => {
@@ -431,7 +431,7 @@ export function LiveRunFeedback({
     setListenerToken(token);
     await refreshListener(token.token).catch(() => undefined);
     try {
-      await connectWebRTC(token, isCurrentAttempt);
+      await connectWebRTC(token, isCurrentAttempt, activateHttpFallback);
       window.setTimeout(() => {
         if (!isCurrentAttempt() || peerRef.current?.connectionState === 'connected') return;
         activateHttpFallback();

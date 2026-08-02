@@ -977,7 +977,7 @@ test('voice analysis reports end-to-end target latency and scopes target diagnos
   await expect(page.getByText('17534ms')).toHaveCount(0);
 });
 
-test('active voice listening uses WebRTC and completed playback restarts from the beginning', async ({ page }) => {
+test('active voice listening falls back after peer failure and completed playback restarts from the beginning', async ({ page }) => {
   let polls = 0;
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
@@ -1025,6 +1025,11 @@ test('active voice listening uses WebRTC and completed playback restarts from th
           streams: [new MediaStream()],
         });
         this.onconnectionstatechange?.();
+        setTimeout(() => {
+          if (this.connectionState !== 'connected') return;
+          this.connectionState = 'failed';
+          this.onconnectionstatechange?.();
+        }, 50);
       }
       close() {
         this.connectionState = 'closed';
@@ -1144,9 +1149,13 @@ test('active voice listening uses WebRTC and completed playback restarts from th
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __liveWebrtcPlayCount: number }
   ).__liveWebrtcPlayCount)).toBe(1);
+  await expect(feedback.getByLabel('WebRTC listener status')).toContainText('HTTP fallback');
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(1);
   expect(await page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
-  ).__playedVoiceUrls.length)).toBe(0);
+  ).__playedVoiceUrls.some((url) => url.includes('/audio/1?')))).toBe(false);
 
   await expect(feedback.getByRole('button', { name: 'Play recorded conversation' })).toBeVisible({ timeout: 10_000 });
   await feedback.getByRole('button', { name: 'Play recorded conversation' }).click();
@@ -1155,7 +1164,7 @@ test('active voice listening uses WebRTC and completed playback restarts from th
   ).__playedVoiceUrls.filter((url) => url.includes('/audio/1?')).length)).toBe(1);
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
-  ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(1);
+  ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(2);
 });
 
 test('HTTP fallback queues setup audio when WebRTC signaling rejects', async ({ page }) => {
