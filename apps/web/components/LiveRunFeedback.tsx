@@ -378,6 +378,18 @@ export function LiveRunFeedback({
   async function startLiveListening() {
     stopPlayback();
     const generation = playbackGenerationRef.current;
+    const isCurrentAttempt = () => (
+      playbackGenerationRef.current === generation
+      && playbackModeRef.current === 'live'
+    );
+    const activateHttpFallback = () => {
+      if (!isCurrentAttempt()) return;
+      disconnectWebRTC();
+      liveSegmentFallbackRef.current = true;
+      setWebrtcStatus('fallback');
+      setPlaybackMessage('WebRTC could not reach the local voice runtime. Playing each new audio turn over the live HTTP fallback.');
+      void queueAudioEvents(audioEventsRef.current, generation, 'live');
+    };
     playbackModeRef.current = 'live';
     setPlaybackMode('live');
     setExpanded(true);
@@ -419,29 +431,13 @@ export function LiveRunFeedback({
     setListenerToken(token);
     await refreshListener(token.token).catch(() => undefined);
     try {
-      const isCurrentAttempt = () => (
-        playbackGenerationRef.current === generation
-        && playbackModeRef.current === 'live'
-      );
       await connectWebRTC(token, isCurrentAttempt);
       window.setTimeout(() => {
         if (!isCurrentAttempt() || peerRef.current?.connectionState === 'connected') return;
-        disconnectWebRTC();
-        liveSegmentFallbackRef.current = true;
-        setWebrtcStatus('fallback');
-        setPlaybackMessage('WebRTC could not reach the local voice runtime. Playing each new audio turn over the live HTTP fallback.');
-        void queueAudioEvents(audioEventsRef.current, generation, 'live');
+        activateHttpFallback();
       }, 2500);
-    } catch (error) {
-      if (
-        playbackGenerationRef.current !== generation
-        || playbackModeRef.current !== 'live'
-      ) {
-        return;
-      }
-      playbackModeRef.current = 'idle';
-      setPlaybackMode('idle');
-      setPlaybackMessage(error instanceof Error ? error.message : 'Could not attach the live WebRTC listener.');
+    } catch {
+      activateHttpFallback();
     }
   }
 

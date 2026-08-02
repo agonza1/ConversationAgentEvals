@@ -1158,7 +1158,7 @@ test('active voice listening uses WebRTC and completed playback restarts from th
   ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(1);
 });
 
-test('HTTP fallback queues audio captured while WebRTC is connecting', async ({ page }) => {
+test('HTTP fallback queues setup audio when WebRTC signaling rejects', async ({ page }) => {
   let listenerPolls = 0;
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
@@ -1254,10 +1254,11 @@ test('HTTP fallback queues audio captured while WebRTC is connecting', async ({ 
   await page.route('**/api/execution/listeners/live-fallback-token**', async (route) => {
     const url = route.request().url();
     if (url.endsWith('/webrtc')) {
+      await new Promise((resolve) => setTimeout(resolve, 1800));
       await route.fulfill({
-        status: 200,
+        status: 502,
         contentType: 'application/json',
-        body: JSON.stringify({ answer: { type: 'answer', sdp: 'test-answer' }, status: 'listening' }),
+        body: JSON.stringify({ detail: 'WebRTC signaling failed.' }),
       });
       return;
     }
