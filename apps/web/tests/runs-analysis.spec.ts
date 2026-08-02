@@ -1167,8 +1167,9 @@ test('active voice listening falls back after peer failure and completed playbac
   ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(2);
 });
 
-test('HTTP fallback queues setup audio when WebRTC signaling rejects', async ({ page }) => {
+test('HTTP fallback queues setup audio while WebRTC signaling is still pending', async ({ page }) => {
   let listenerPolls = 0;
+  let signalingResponded = false;
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
     const runtime = window as Window & { __playedVoiceUrls: string[] };
@@ -1263,7 +1264,8 @@ test('HTTP fallback queues setup audio when WebRTC signaling rejects', async ({ 
   await page.route('**/api/execution/listeners/live-fallback-token**', async (route) => {
     const url = route.request().url();
     if (url.endsWith('/webrtc')) {
-      await new Promise((resolve) => setTimeout(resolve, 1800));
+      await new Promise((resolve) => setTimeout(resolve, 4000));
+      signalingResponded = true;
       await route.fulfill({
         status: 502,
         contentType: 'application/json',
@@ -1298,6 +1300,7 @@ test('HTTP fallback queues setup audio when WebRTC signaling rejects', async ({ 
   const feedback = page.getByLabel('Live run feedback');
   await feedback.getByRole('button', { name: 'Listen to live WebRTC' }).click();
   await expect(feedback.getByLabel('WebRTC listener status')).toContainText('HTTP fallback', { timeout: 6000 });
+  expect(signalingResponded).toBe(false);
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
   ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(1);

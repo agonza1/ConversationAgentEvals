@@ -383,7 +383,7 @@ export function LiveRunFeedback({
       && playbackModeRef.current === 'live'
     );
     const activateHttpFallback = () => {
-      if (!isCurrentAttempt()) return;
+      if (!isCurrentAttempt() || liveSegmentFallbackRef.current) return;
       disconnectWebRTC();
       liveSegmentFallbackRef.current = true;
       setWebrtcStatus('fallback');
@@ -429,13 +429,14 @@ export function LiveRunFeedback({
     }
     listenerTokenRef.current = token;
     setListenerToken(token);
+    window.setTimeout(() => {
+      if (!isCurrentAttempt() || peerRef.current?.connectionState === 'connected') return;
+      activateHttpFallback();
+    }, 2500);
     await refreshListener(token.token).catch(() => undefined);
+    if (!isCurrentAttempt() || liveSegmentFallbackRef.current) return;
     try {
       await connectWebRTC(token, isCurrentAttempt, activateHttpFallback);
-      window.setTimeout(() => {
-        if (!isCurrentAttempt() || peerRef.current?.connectionState === 'connected') return;
-        activateHttpFallback();
-      }, 2500);
     } catch {
       activateHttpFallback();
     }
