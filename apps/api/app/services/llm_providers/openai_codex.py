@@ -75,8 +75,10 @@ def _callback_bind_host() -> str:
     return os.getenv('OPENAI_CODEX_CALLBACK_BIND_HOST', '0.0.0.0')
 
 
-# api.model.read unlocks platform GET /v1/models for newly authorized sessions.
-SCOPE = 'openid profile email offline_access api.model.read'
+# Keep this aligned with the scopes accepted by the Codex OAuth client. Model
+# discovery already prefers the ChatGPT Codex endpoint and has a local fallback;
+# requesting the platform-only api.model.read scope makes authorization fail.
+SCOPE = 'openid profile email offline_access'
 ORIGINATOR = 'conversation-agent-evals'
 DEFAULT_MODEL = 'gpt-5.4-mini'
 TOKEN_REFRESH_THRESHOLD_SECONDS = 60
