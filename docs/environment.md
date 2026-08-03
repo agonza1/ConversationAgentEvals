@@ -103,9 +103,12 @@ processes must set the same non-empty value explicitly; it is never included in 
 artifacts or provenance.
 
 The Compose voice profile uses a loopback-only coturn relay with local long-term
-credentials. A remotely reachable `LISTENER_BROWSER_TURN_URL` must instead configure
-coturn REST shared-secret authentication and set `LISTENER_TURN_SHARED_SECRET` on the
-API **and Pipecat**, using the same secret in both processes. CAE then issues
+credentials. A remote deployment must configure coturn REST shared-secret
+authentication, set `LISTENER_BROWSER_TURN_URL` to the browser-reachable relay URL,
+and set `LISTENER_TURN_URL` to a URL for that same relay that is reachable from the
+Pipecat process. Do not leave `LISTENER_TURN_URL` at the Compose-local
+`turn:coturn:3478` default when selecting a remote relay. Set the same
+`LISTENER_TURN_SHARED_SECRET` on the API and Pipecat. CAE then issues
 listener-specific HMAC credentials whose expiry matches the listener token for both
 the browser and the Pipecat peer. It will not expose `LISTENER_TURN_CREDENTIAL` to a
 non-loopback relay.
