@@ -1183,14 +1183,19 @@ test('brief WebRTC recovery replays audio captured during the disconnect', async
   let listenerPolls = 0;
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
-    const runtime = window as Window & { __playedVoiceUrls: string[] };
+    const runtime = window as Window & { __playedVoiceUrls: string[]; __blockedRecoveryOnce: boolean };
     runtime.__playedVoiceUrls = [];
+    runtime.__blockedRecoveryOnce = false;
     class TestAudio extends EventTarget {
       constructor(private readonly url: string) {
         super();
       }
       play() {
         runtime.__playedVoiceUrls.push(this.url);
+        if (this.url.includes('/audio/2?') && !runtime.__blockedRecoveryOnce) {
+          runtime.__blockedRecoveryOnce = true;
+          return Promise.reject(new Error('Browser blocked recovery playback'));
+        }
         setTimeout(() => this.dispatchEvent(new Event('ended')), 10);
         return Promise.resolve();
       }
@@ -1332,6 +1337,11 @@ test('brief WebRTC recovery replays audio captured during the disconnect', async
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
   ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(1);
+  await expect(feedback.getByRole('button', { name: 'Retry missed live audio' })).toBeVisible();
+  await feedback.getByRole('button', { name: 'Retry missed live audio' }).click();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(2);
   expect(await page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
   ).__playedVoiceUrls.some((url) => url.includes('/audio/1?')))).toBe(false);
