@@ -352,7 +352,13 @@ def join_execution_listener_webrtc(token: str, payload: ListenerWebRTCOffer):
         f'{conversation.get("conversation_id")}:{event.get("sequence")}'
         for conversation in latest_run.get('conversations') or []
         for event in conversation.get('live_events') or []
-        if event.get('kind') == 'audio' and event.get('sequence') is not None
+        if event.get('sequence') is not None and (
+            event.get('kind') == 'audio'
+            or (
+                isinstance(event.get('frame_metadata'), dict)
+                and event['frame_metadata'].get('media_event') == 'first_audible_byte'
+            )
+        )
     ]
     return response
 

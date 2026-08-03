@@ -530,14 +530,13 @@ def test_execution_listener_token_is_receive_only_owner_scoped_and_ephemeral(mon
         if path == '/reference-duplex/listen':
             execution_run_store.append_live_event(run_id, conversation_id, LiveExecutionEvent(
                 sequence=2,
-                kind='audio',
+                kind='message',
                 speaker='Caller',
-                text='Audio captured while the listener attached.',
-                media_url=(
-                    f'/api/execution/runs/{run_id}/conversations/{conversation_id}/audio/2'
-                    '?user_id=listener-owner'
-                ),
-                mime_type='audio/wav',
+                text='Speech started while the listener attached.',
+                frame_metadata={
+                    'media_event': 'first_audible_byte',
+                    'first_audible_byte_at': 42.0,
+                },
                 created_at='2026-07-18T20:00:01+00:00',
             ))
         return {'status': 'listening', 'answer': {'sdp': 'send-only-answer', 'type': 'answer'}}

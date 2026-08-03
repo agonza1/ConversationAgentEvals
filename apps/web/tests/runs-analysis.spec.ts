@@ -1477,6 +1477,7 @@ test('HTTP fallback queues setup audio while listener-token creation is still pe
 });
 
 test('HTTP fallback preserves setup audio identified by the attachment watermark', async ({ page }) => {
+  let listenerPolls = 0;
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
     const runtime = window as Window & { __playedVoiceUrls: string[] };
@@ -1525,7 +1526,7 @@ test('HTTP fallback preserves setup audio identified by the attachment watermark
       sequence: 2,
       kind: 'audio',
       speaker: 'Agent',
-      text: 'Audio captured before ICE failed.',
+      text: 'The in-progress setup turn completed.',
       direction: 'target_to_tester',
       media_url: '/api/execution/runs/exec-preconnect-failure/conversations/exec-preconnect-failure-1/audio/2?user_id=demo-user',
     }] : []),
@@ -1605,7 +1606,21 @@ test('HTTP fallback preserves setup audio identified by the attachment watermark
         },
         conversations: [{
           conversation_id: 'exec-preconnect-failure-1',
-          live_events: audioEvents(true),
+          live_events: (() => {
+            listenerPolls += 1;
+            if (listenerPolls >= 2) return audioEvents(true);
+            return [
+              ...audioEvents(false),
+              {
+                sequence: 2,
+                kind: 'message',
+                speaker: 'Agent',
+                text: 'Speech started before the listener attached.',
+                direction: 'target_to_tester',
+                frame_metadata: { media_event: 'first_audible_byte' },
+              },
+            ];
+          })(),
         }],
       }),
     });
