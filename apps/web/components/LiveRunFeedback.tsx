@@ -225,6 +225,7 @@ export function LiveRunFeedback({
     token: ListenerToken,
     isCurrentAttempt: () => boolean,
     activateHttpFallback: () => void,
+    hasUnheardSetupAudio: (eventKeys: string[]) => boolean,
   ) => {
     if (!token.webrtc_url) {
       throw new Error('This listener token does not expose WebRTC signaling.');
@@ -332,7 +333,11 @@ export function LiveRunFeedback({
     try {
       const offer = await peer.createOffer();
       await peer.setLocalDescription(offer);
-      const answer = await fetchJson<{ answer: RTCSessionDescriptionInit; status?: string }>(
+      const answer = await fetchJson<{
+        answer: RTCSessionDescriptionInit;
+        status?: string;
+        pre_attach_audio_event_keys?: string[];
+      }>(
         mediaUrl(apiBase, token.webrtc_url),
         {
           method: 'POST',
@@ -343,6 +348,10 @@ export function LiveRunFeedback({
       serverListenerAttached = true;
       if (!ownsSharedConnection() || !isCurrentAttempt()) {
         await cleanupAttempt(true);
+        return;
+      }
+      if (hasUnheardSetupAudio(answer.pre_attach_audio_event_keys ?? [])) {
+        activateHttpFallback();
         return;
       }
       await peer.setRemoteDescription(answer.answer);
@@ -506,6 +515,9 @@ export function LiveRunFeedback({
         token,
         isCurrentAttempt,
         activateHttpFallback,
+        (eventKeys) => eventKeys.some((eventKey) => (
+          !queuedRef.current.has(`${generation}:${eventKey}`)
+        )),
       );
     } catch {
       activateHttpFallback();

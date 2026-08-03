@@ -1476,7 +1476,7 @@ test('HTTP fallback queues setup audio while listener-token creation is still pe
   ).__playedVoiceUrls.some((url) => url.includes('/audio/1?')))).toBe(false);
 });
 
-test('HTTP fallback preserves setup audio when WebRTC fails before connecting', async ({ page }) => {
+test('HTTP fallback preserves setup audio identified by the attachment watermark', async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
     const runtime = window as Window & { __playedVoiceUrls: string[] };
@@ -1494,7 +1494,7 @@ test('HTTP fallback preserves setup audio when WebRTC fails before connecting', 
         this.dispatchEvent(new Event('ended'));
       }
     }
-    class FailingPeerConnection {
+    class SuccessfulPeerConnection {
       connectionState = 'new';
       ontrack = null;
       onconnectionstatechange: (() => void) | null = null;
@@ -1503,13 +1503,13 @@ test('HTTP fallback preserves setup audio when WebRTC fails before connecting', 
       async createOffer() { return { type: 'offer', sdp: 'test-offer' }; }
       async setLocalDescription() {}
       async setRemoteDescription() {
-        this.connectionState = 'failed';
+        this.connectionState = 'connected';
         this.onconnectionstatechange?.();
       }
       close() { this.connectionState = 'closed'; }
     }
     Object.defineProperty(window, 'Audio', { value: TestAudio });
-    Object.defineProperty(window, 'RTCPeerConnection', { value: FailingPeerConnection });
+    Object.defineProperty(window, 'RTCPeerConnection', { value: SuccessfulPeerConnection });
   });
 
   const audioEvents = (includeSetupTurn: boolean) => [
@@ -1574,10 +1574,18 @@ test('HTTP fallback preserves setup audio when WebRTC fails before connecting', 
   await page.route('**/api/execution/listeners/preconnect-failure-token**', async (route) => {
     const url = route.request().url();
     if (url.endsWith('/webrtc')) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ answer: { type: 'answer', sdp: 'test-answer' }, status: 'listening' }),
+        body: JSON.stringify({
+          answer: { type: 'answer', sdp: 'test-answer' },
+          status: 'listening',
+          pre_attach_audio_event_keys: [
+            'exec-preconnect-failure-1:1',
+            'exec-preconnect-failure-1:2',
+          ],
+        }),
       });
       return;
     }

@@ -337,7 +337,7 @@ def join_execution_listener_webrtc(token: str, payload: ListenerWebRTCOffer):
     run, grant = _listener_run_or_403(token)
     if run.get('status') not in {'queued', 'running'}:
         raise HTTPException(status_code=409, detail='The execution run is no longer active.')
-    return _proxy_reference_listener(
+    response = _proxy_reference_listener(
         '/reference-duplex/listen',
         {
             'execution_run_id': str(run.get('execution_run_id') or ''),
@@ -347,6 +347,14 @@ def join_execution_listener_webrtc(token: str, payload: ListenerWebRTCOffer):
             'expires_at_unix': grant['expires_at'].timestamp(),
         },
     )
+    latest_run = execution_run_store.get_execution_run(str(run.get('execution_run_id') or '')) or run
+    response['pre_attach_audio_event_keys'] = [
+        f'{conversation.get("conversation_id")}:{event.get("sequence")}'
+        for conversation in latest_run.get('conversations') or []
+        for event in conversation.get('live_events') or []
+        if event.get('kind') == 'audio' and event.get('sequence') is not None
+    ]
+    return response
 
 
 @router.post('/listeners/{token}/webrtc/ice')
