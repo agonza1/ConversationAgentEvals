@@ -207,7 +207,7 @@ export function LiveRunFeedback({
   const connectWebRTC = useCallback(async (
     token: ListenerToken,
     isCurrentAttempt: () => boolean,
-    activateHttpFallback: () => void,
+    activateHttpFallback: (wasConnected: boolean) => void,
   ) => {
     if (!token.webrtc_url) {
       throw new Error('This listener token does not expose WebRTC signaling.');
@@ -222,6 +222,7 @@ export function LiveRunFeedback({
     const pendingIceCandidates: RTCIceCandidateInit[] = [];
     let signalingReady = false;
     let serverListenerAttached = false;
+    let wasConnected = false;
     const ownsSharedConnection = () => peerRef.current === peer;
     const cleanupAttempt = async (notifyServer: boolean) => {
       const ownedSharedConnection = ownsSharedConnection();
@@ -254,11 +255,12 @@ export function LiveRunFeedback({
     peer.onconnectionstatechange = () => {
       if (!ownsSharedConnection() || !isCurrentAttempt()) return;
       if (peer.connectionState === 'connected') {
+        wasConnected = true;
         liveSegmentFallbackRef.current = false;
         setWebrtcStatus('listening');
         setPlaybackMessage('Listening to the ongoing WebRTC audio stream. Earlier audio is not replayed.');
       } else if (peer.connectionState === 'failed') {
-        activateHttpFallback();
+        activateHttpFallback(wasConnected);
       }
     };
     const sendIceCandidate = async (candidate: RTCIceCandidateInit) => {
@@ -443,8 +445,8 @@ export function LiveRunFeedback({
     await refreshListener(token.token).catch(() => undefined);
     if (!isCurrentAttempt() || liveSegmentFallbackRef.current) return;
     try {
-      await connectWebRTC(token, isCurrentAttempt, () => {
-        markAudioEventsHeard(audioEventsRef.current, generation);
+      await connectWebRTC(token, isCurrentAttempt, (wasConnected) => {
+        if (wasConnected) markAudioEventsHeard(audioEventsRef.current, generation);
         activateHttpFallback();
       });
     } catch {

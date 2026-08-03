@@ -1289,6 +1289,145 @@ test('HTTP fallback queues setup audio while listener-token creation is still pe
   ).__playedVoiceUrls.some((url) => url.includes('/audio/1?')))).toBe(false);
 });
 
+test('HTTP fallback preserves setup audio when WebRTC fails before connecting', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    const runtime = window as Window & { __playedVoiceUrls: string[] };
+    runtime.__playedVoiceUrls = [];
+    class TestAudio extends EventTarget {
+      constructor(private readonly url: string) {
+        super();
+      }
+      play() {
+        runtime.__playedVoiceUrls.push(this.url);
+        setTimeout(() => this.dispatchEvent(new Event('ended')), 10);
+        return Promise.resolve();
+      }
+      pause() {
+        this.dispatchEvent(new Event('ended'));
+      }
+    }
+    class FailingPeerConnection {
+      connectionState = 'new';
+      ontrack = null;
+      onconnectionstatechange: (() => void) | null = null;
+      onicecandidate = null;
+      addTransceiver() {}
+      async createOffer() { return { type: 'offer', sdp: 'test-offer' }; }
+      async setLocalDescription() {}
+      async setRemoteDescription() {
+        this.connectionState = 'failed';
+        this.onconnectionstatechange?.();
+      }
+      close() { this.connectionState = 'closed'; }
+    }
+    Object.defineProperty(window, 'Audio', { value: TestAudio });
+    Object.defineProperty(window, 'RTCPeerConnection', { value: FailingPeerConnection });
+  });
+
+  const audioEvents = (includeSetupTurn: boolean) => [
+    {
+      sequence: 1,
+      kind: 'audio',
+      speaker: 'Caller',
+      text: 'Existing audio.',
+      direction: 'tester_to_target',
+      media_url: '/api/execution/runs/exec-preconnect-failure/conversations/exec-preconnect-failure-1/audio/1?user_id=demo-user',
+    },
+    ...(includeSetupTurn ? [{
+      sequence: 2,
+      kind: 'audio',
+      speaker: 'Agent',
+      text: 'Audio captured before ICE failed.',
+      direction: 'target_to_tester',
+      media_url: '/api/execution/runs/exec-preconnect-failure/conversations/exec-preconnect-failure-1/audio/2?user_id=demo-user',
+    }] : []),
+  ];
+
+  await page.route('**/api/execution/runs/exec-preconnect-failure**', async (route) => {
+    if (route.request().url().includes('/listener-token')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          listener: {
+            token: 'preconnect-failure-token',
+            expires_at: '2099-07-26T12:00:00Z',
+            listen_url: '/api/execution/listeners/preconnect-failure-token',
+            webrtc_url: '/api/execution/listeners/preconnect-failure-token/webrtc',
+            webrtc_stop_url: '/api/execution/listeners/preconnect-failure-token/webrtc/stop',
+            read_only: true,
+            can_inject_audio: false,
+            requires_microphone: false,
+            media_transport: 'webrtc',
+          },
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...runFixture,
+        execution_run_id: 'exec-preconnect-failure',
+        status: 'running',
+        mode: 'pipecat_webrtc',
+        conversations: [{
+          ...runFixture.conversations[0],
+          conversation_id: 'exec-preconnect-failure-1',
+          execution_run_id: 'exec-preconnect-failure',
+          status: 'running',
+          mode: 'pipecat_webrtc',
+          live_events: audioEvents(false),
+        }],
+      }),
+    });
+  });
+  await page.route('**/api/execution/listeners/preconnect-failure-token**', async (route) => {
+    const url = route.request().url();
+    if (url.endsWith('/webrtc')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ answer: { type: 'answer', sdp: 'test-answer' }, status: 'listening' }),
+      });
+      return;
+    }
+    if (url.endsWith('/webrtc/stop')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        listener: {
+          read_only: true,
+          can_inject_audio: false,
+          requires_microphone: false,
+          run_status: 'running',
+        },
+        conversations: [{
+          conversation_id: 'exec-preconnect-failure-1',
+          live_events: audioEvents(true),
+        }],
+      }),
+    });
+  });
+
+  await page.goto('/runs/exec-preconnect-failure');
+  const feedback = page.getByLabel('Live run feedback');
+  await feedback.getByRole('button', { name: 'Listen to live WebRTC' }).click();
+  await expect(feedback.getByLabel('WebRTC listener status')).toContainText('HTTP fallback');
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(1);
+  expect(await page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.some((url) => url.includes('/audio/1?')))).toBe(false);
+});
+
 test('owner live WebRTC uses a different token from the shared listener link', async ({ page }) => {
   let listenerTokenRequests = 0;
   let ownerWebrtcRequests = 0;
