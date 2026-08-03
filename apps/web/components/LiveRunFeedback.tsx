@@ -222,7 +222,7 @@ export function LiveRunFeedback({
   const connectWebRTC = useCallback(async (
     token: ListenerToken,
     isCurrentAttempt: () => boolean,
-    activateHttpFallback: (wasConnected: boolean) => void,
+    activateHttpFallback: () => void,
   ) => {
     if (!token.webrtc_url) {
       throw new Error('This listener token does not expose WebRTC signaling.');
@@ -237,7 +237,6 @@ export function LiveRunFeedback({
     const pendingIceCandidates: RTCIceCandidateInit[] = [];
     let signalingReady = false;
     let serverListenerAttached = false;
-    let wasConnected = false;
     const ownsSharedConnection = () => peerRef.current === peer;
     const cleanupAttempt = async (notifyServer: boolean) => {
       const ownedSharedConnection = ownsSharedConnection();
@@ -272,7 +271,6 @@ export function LiveRunFeedback({
       if (peer.connectionState === 'connected') {
         clearSetupFallbackTimer();
         clearDisconnectedFallbackTimer();
-        wasConnected = true;
         liveSegmentFallbackRef.current = false;
         setWebrtcStatus('listening');
         setPlaybackMessage('Listening to the ongoing WebRTC audio stream. Earlier audio is not replayed.');
@@ -287,11 +285,11 @@ export function LiveRunFeedback({
               || !isCurrentAttempt()
               || peer.connectionState !== 'disconnected'
             ) return;
-            activateHttpFallback(wasConnected);
+            activateHttpFallback();
           }, 2000);
         }
       } else if (peer.connectionState === 'failed') {
-        activateHttpFallback(wasConnected);
+        activateHttpFallback();
       }
     };
     const sendIceCandidate = async (candidate: RTCIceCandidateInit) => {
@@ -480,10 +478,7 @@ export function LiveRunFeedback({
     await refreshListener(token.token).catch(() => undefined);
     if (!isCurrentAttempt() || liveSegmentFallbackRef.current) return;
     try {
-      await connectWebRTC(token, isCurrentAttempt, (wasConnected) => {
-        if (wasConnected) markAudioEventsHeard(audioEventsRef.current, generation);
-        activateHttpFallback();
-      });
+      await connectWebRTC(token, isCurrentAttempt, activateHttpFallback);
     } catch {
       activateHttpFallback();
     }
