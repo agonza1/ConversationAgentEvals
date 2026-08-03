@@ -977,7 +977,7 @@ test('voice analysis reports end-to-end target latency and scopes target diagnos
   await expect(page.getByText('17534ms')).toHaveCount(0);
 });
 
-test('active voice listening falls back after peer failure and completed playback restarts from the beginning', async ({ page }) => {
+test('active voice listening falls back after disconnect grace and completed playback restarts from the beginning', async ({ page }) => {
   let polls = 0;
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
@@ -1027,7 +1027,7 @@ test('active voice listening falls back after peer failure and completed playbac
         this.onconnectionstatechange?.();
         setTimeout(() => {
           if (this.connectionState !== 'connected') return;
-          this.connectionState = 'failed';
+          this.connectionState = 'disconnected';
           this.onconnectionstatechange?.();
         }, 1800);
       }

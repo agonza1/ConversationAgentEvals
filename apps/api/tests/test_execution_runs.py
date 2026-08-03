@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import time
 from datetime import UTC, datetime, timedelta
@@ -26,12 +29,52 @@ def test_listener_browser_ice_servers_expose_configured_turn_relay(monkeypatch):
     monkeypatch.setattr(execution_routes, '_LISTENER_BROWSER_TURN_URL', 'turn:127.0.0.1:3478?transport=udp')
     monkeypatch.setattr(execution_routes, '_LISTENER_TURN_USERNAME', 'cae')
     monkeypatch.setattr(execution_routes, '_LISTENER_TURN_CREDENTIAL', 'local-secret')
+    monkeypatch.setattr(execution_routes, '_LISTENER_TURN_SHARED_SECRET', '')
 
-    assert execution_routes._listener_browser_ice_servers() == [{
+    assert execution_routes._listener_browser_ice_servers(
+        expires_at=datetime(2030, 1, 1, tzinfo=UTC),
+        listener_id='local-listener',
+    ) == [{
         'urls': 'turn:127.0.0.1:3478?transport=udp',
         'username': 'cae',
         'credential': 'local-secret',
     }]
+
+
+def test_listener_browser_ice_servers_issue_expiring_remote_turn_credentials(monkeypatch):
+    expires_at = datetime(2030, 1, 1, tzinfo=UTC)
+    listener_id = 'shared-listener'
+    monkeypatch.setattr(execution_routes, '_LISTENER_BROWSER_TURN_URL', 'turn:relay.example.com:3478')
+    monkeypatch.setattr(execution_routes, '_LISTENER_TURN_USERNAME', 'cae')
+    monkeypatch.setattr(execution_routes, '_LISTENER_TURN_CREDENTIAL', 'static-password')
+    monkeypatch.setattr(execution_routes, '_LISTENER_TURN_SHARED_SECRET', 'rest-auth-secret')
+    username = f'{int(expires_at.timestamp())}:cae:{listener_id}'
+    expected_credential = base64.b64encode(hmac.new(
+        b'rest-auth-secret',
+        username.encode(),
+        hashlib.sha1,
+    ).digest()).decode()
+
+    assert execution_routes._listener_browser_ice_servers(
+        expires_at=expires_at,
+        listener_id=listener_id,
+    ) == [{
+        'urls': 'turn:relay.example.com:3478',
+        'username': username,
+        'credential': expected_credential,
+    }]
+
+
+def test_listener_browser_ice_servers_do_not_expose_remote_static_credentials(monkeypatch):
+    monkeypatch.setattr(execution_routes, '_LISTENER_BROWSER_TURN_URL', 'turn:relay.example.com:3478')
+    monkeypatch.setattr(execution_routes, '_LISTENER_TURN_USERNAME', 'cae')
+    monkeypatch.setattr(execution_routes, '_LISTENER_TURN_CREDENTIAL', 'static-password')
+    monkeypatch.setattr(execution_routes, '_LISTENER_TURN_SHARED_SECRET', '')
+
+    assert execution_routes._listener_browser_ice_servers(
+        expires_at=datetime(2030, 1, 1, tzinfo=UTC),
+        listener_id='shared-listener',
+    ) == []
 
 
 def test_text_callable_execution_appends_conversations_and_writes_inference_set():

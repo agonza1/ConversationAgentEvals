@@ -114,6 +114,8 @@ export function LiveRunFeedback({
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const liveAudioRef = useRef<HTMLAudioElement | null>(null);
   const stopUrlRef = useRef<string | null>(null);
+  const setupFallbackTimerRef = useRef<number | null>(null);
+  const disconnectedFallbackTimerRef = useRef<number | null>(null);
   const executionRunIdRef = useRef(executionRunId);
   const listenerTokenRef = useRef(listenerToken);
   executionRunIdRef.current = executionRunId;
@@ -191,7 +193,20 @@ export function LiveRunFeedback({
     }
   }
 
+  const clearSetupFallbackTimer = useCallback(() => {
+    if (setupFallbackTimerRef.current === null) return;
+    window.clearTimeout(setupFallbackTimerRef.current);
+    setupFallbackTimerRef.current = null;
+  }, []);
+
+  const clearDisconnectedFallbackTimer = useCallback(() => {
+    if (disconnectedFallbackTimerRef.current === null) return;
+    window.clearTimeout(disconnectedFallbackTimerRef.current);
+    disconnectedFallbackTimerRef.current = null;
+  }, []);
+
   const disconnectWebRTC = useCallback((notifyServer = true) => {
+    clearDisconnectedFallbackTimer();
     const peer = peerRef.current;
     peerRef.current = null;
     peer?.close();
@@ -202,7 +217,7 @@ export function LiveRunFeedback({
       void fetch(mediaUrl(apiBase, stopUrl), { method: 'POST', keepalive: true }).catch(() => undefined);
     }
     setWebrtcStatus('idle');
-  }, [apiBase]);
+  }, [apiBase, clearDisconnectedFallbackTimer]);
 
   const connectWebRTC = useCallback(async (
     token: ListenerToken,
@@ -255,10 +270,26 @@ export function LiveRunFeedback({
     peer.onconnectionstatechange = () => {
       if (!ownsSharedConnection() || !isCurrentAttempt()) return;
       if (peer.connectionState === 'connected') {
+        clearSetupFallbackTimer();
+        clearDisconnectedFallbackTimer();
         wasConnected = true;
         liveSegmentFallbackRef.current = false;
         setWebrtcStatus('listening');
         setPlaybackMessage('Listening to the ongoing WebRTC audio stream. Earlier audio is not replayed.');
+      } else if (peer.connectionState === 'disconnected') {
+        setWebrtcStatus('connecting');
+        setPlaybackMessage('The live WebRTC connection was interrupted. Waiting briefly for it to recover.');
+        if (disconnectedFallbackTimerRef.current === null) {
+          disconnectedFallbackTimerRef.current = window.setTimeout(() => {
+            disconnectedFallbackTimerRef.current = null;
+            if (
+              !ownsSharedConnection()
+              || !isCurrentAttempt()
+              || peer.connectionState !== 'disconnected'
+            ) return;
+            activateHttpFallback(wasConnected);
+          }, 2000);
+        }
       } else if (peer.connectionState === 'failed') {
         activateHttpFallback(wasConnected);
       }
@@ -320,9 +351,10 @@ export function LiveRunFeedback({
       if (ownedSharedConnection && isCurrentAttempt()) setWebrtcStatus('error');
       throw error;
     }
-  }, [apiBase, disconnectWebRTC]);
+  }, [apiBase, clearDisconnectedFallbackTimer, clearSetupFallbackTimer, disconnectWebRTC]);
 
   const stopPlayback = useCallback((message: string | null = null) => {
+    clearSetupFallbackTimer();
     playbackGenerationRef.current += 1;
     playbackModeRef.current = 'idle';
     currentAudioRef.current?.pause();
@@ -335,7 +367,7 @@ export function LiveRunFeedback({
     disconnectWebRTC();
     setPlaybackMode('idle');
     setPlaybackMessage(message);
-  }, [disconnectWebRTC]);
+  }, [clearSetupFallbackTimer, disconnectWebRTC]);
 
   const queueAudioEvents = useCallback((
     candidates: typeof audioEvents,
@@ -395,6 +427,7 @@ export function LiveRunFeedback({
     );
     const activateHttpFallback = () => {
       if (!isCurrentAttempt() || liveSegmentFallbackRef.current) return;
+      clearSetupFallbackTimer();
       disconnectWebRTC();
       liveSegmentFallbackRef.current = true;
       setWebrtcStatus('fallback');
@@ -407,7 +440,9 @@ export function LiveRunFeedback({
     // Mark audio that existed before the click as heard. If WebRTC cannot
     // connect, the fallback starts with the next captured turn.
     markAudioEventsHeard(audioEvents, generation);
-    window.setTimeout(() => {
+    clearSetupFallbackTimer();
+    setupFallbackTimerRef.current = window.setTimeout(() => {
+      setupFallbackTimerRef.current = null;
       if (!isCurrentAttempt() || peerRef.current?.connectionState === 'connected') return;
       activateHttpFallback();
     }, 2500);

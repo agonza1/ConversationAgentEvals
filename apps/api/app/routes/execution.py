@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import ipaddress
 import json
 import os
 import secrets
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
@@ -32,6 +37,7 @@ _LISTENER_TOKENS: dict[str, dict[str, Any]] = {}
 _LISTENER_BROWSER_TURN_URL = os.getenv('LISTENER_BROWSER_TURN_URL', '').strip()
 _LISTENER_TURN_USERNAME = os.getenv('LISTENER_TURN_USERNAME', '').strip()
 _LISTENER_TURN_CREDENTIAL = os.getenv('LISTENER_TURN_CREDENTIAL', '').strip()
+_LISTENER_TURN_SHARED_SECRET = os.getenv('LISTENER_TURN_SHARED_SECRET', '').strip()
 _REFERENCE_DEPENDENCY_SETUP_URLS = {
     'openai': 'https://platform.openai.com/docs/quickstart',
     'shared_token': 'https://github.com/agonza1/ConversationAgentEvals/blob/main/docs/environment.md#live-asr-and-voice-experiments',
@@ -240,14 +246,46 @@ def apply_execution_judge_review(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-def _listener_browser_ice_servers() -> list[dict[str, str]]:
+def _turn_url_is_loopback(url: str) -> bool:
+    address = url.partition(':')[2].lstrip('/')
+    hostname = urlsplit(f'//{address}').hostname
+    if not hostname:
+        return False
+    if hostname.lower() == 'localhost':
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _listener_browser_ice_servers(
+    *,
+    expires_at: datetime,
+    listener_id: str,
+) -> list[dict[str, str]]:
     if not _LISTENER_BROWSER_TURN_URL:
         return []
     server = {'urls': _LISTENER_BROWSER_TURN_URL}
-    if _LISTENER_TURN_USERNAME:
-        server['username'] = _LISTENER_TURN_USERNAME
-    if _LISTENER_TURN_CREDENTIAL:
-        server['credential'] = _LISTENER_TURN_CREDENTIAL
+    if _LISTENER_TURN_SHARED_SECRET:
+        identity = _LISTENER_TURN_USERNAME or 'cae-listener'
+        username = f'{int(expires_at.timestamp())}:{identity}:{listener_id}'
+        credential = hmac.new(
+            _LISTENER_TURN_SHARED_SECRET.encode(),
+            username.encode(),
+            hashlib.sha1,
+        ).digest()
+        server['username'] = username
+        server['credential'] = base64.b64encode(credential).decode()
+    elif _turn_url_is_loopback(_LISTENER_BROWSER_TURN_URL):
+        if _LISTENER_TURN_USERNAME:
+            server['username'] = _LISTENER_TURN_USERNAME
+        if _LISTENER_TURN_CREDENTIAL:
+            server['credential'] = _LISTENER_TURN_CREDENTIAL
+    elif _LISTENER_TURN_USERNAME or _LISTENER_TURN_CREDENTIAL:
+        # Never expose a reusable long-term credential for a remote relay.
+        # Remote authenticated TURN must use coturn REST shared-secret auth.
+        return []
     return [server]
 
 
@@ -266,11 +304,12 @@ def create_execution_listener_token(
     ttl_seconds = (payload or ListenerTokenRequest()).ttl_seconds
     token = secrets.token_urlsafe(32)
     expires_at = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
+    listener_id = secrets.token_urlsafe(18)
     _LISTENER_TOKENS[token] = {
         'execution_run_id': execution_run_id,
         'user_id': user_id,
         'expires_at': expires_at,
-        'listener_id': secrets.token_urlsafe(18),
+        'listener_id': listener_id,
     }
     return {
         'listener': {
@@ -281,7 +320,10 @@ def create_execution_listener_token(
             'webrtc_url': f'/api/execution/listeners/{token}/webrtc',
             'webrtc_ice_url': f'/api/execution/listeners/{token}/webrtc/ice',
             'webrtc_stop_url': f'/api/execution/listeners/{token}/webrtc/stop',
-            'ice_servers': _listener_browser_ice_servers(),
+            'ice_servers': _listener_browser_ice_servers(
+                expires_at=expires_at,
+                listener_id=listener_id,
+            ),
             'media_transport': 'webrtc',
             'read_only': True,
             'can_inject_audio': False,
@@ -334,7 +376,7 @@ def stop_execution_listener_webrtc(token: str):
 
 @router.get('/listeners/{token}')
 def get_execution_listener_state(token: str):
-    run, _grant = _listener_run_or_403(token)
+    run, grant = _listener_run_or_403(token)
     def listener_event(conversation_id: str, event: dict[str, Any]) -> dict[str, Any]:
         next_event = dict(event)
         if next_event.get('kind') == 'audio' and next_event.get('sequence') is not None:
@@ -367,7 +409,10 @@ def get_execution_listener_state(token: str):
             'webrtc_url': f'/api/execution/listeners/{token}/webrtc',
             'webrtc_ice_url': f'/api/execution/listeners/{token}/webrtc/ice',
             'webrtc_stop_url': f'/api/execution/listeners/{token}/webrtc/stop',
-            'ice_servers': _listener_browser_ice_servers(),
+            'ice_servers': _listener_browser_ice_servers(
+                expires_at=grant['expires_at'],
+                listener_id=str(grant['listener_id']),
+            ),
             'read_only': True,
             'can_inject_audio': False,
             'requires_microphone': False,
