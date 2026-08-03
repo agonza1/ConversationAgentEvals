@@ -135,15 +135,21 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
   await werTile.click();
   await expect(page.getByRole('heading', { name: 'Word Error Rate' })).toBeVisible();
   await expect(page.getByLabel('Word error rate summary')).toContainText('1');
-  await expect(page.getByLabel('Per-turn word error rates')).toContainText('Target → tester ASR · 17%');
-  await expect(page.getByLabel('Per-turn word error rates')).toContainText('S 0 · D 1 · I 0');
+  const perTurnWer = page.getByLabel('Per-turn word error rates');
+  await expect(perTurnWer).toContainText('Target → tester ASR · 17%');
+  await expect(perTurnWer).toContainText('S 0 D 1 I 0');
+  await expect(perTurnWer.locator('.wer-turn-card')).toHaveCount(2);
+  await expect(perTurnWer.getByText('LLM source')).toHaveCount(2);
+  await expect(perTurnWer.getByText('ASR transcript')).toHaveCount(2);
   await page.getByRole('button', { name: /Verified Resolution Rate/ }).click();
   await expect(page.getByLabel('Resolution verification status')).toContainText('Verified');
   await expect(page.getByLabel('Resolution evidence details')).toContainText('91/100');
   await expect(page.getByLabel('Resolution evidence details')).toContainText('Complete');
   await expect(page.getByLabel('Two-agent conversation timeline')).toBeVisible();
-  await expect(page.getByLabel('Conversation turn sequence')).toContainText('I can help with that.');
+  await expect(page.getByLabel('Conversation turn sequence')).toContainText('I can help you with that.');
   await expect(page.getByLabel('Transcript')).toContainText('I want to cancel today.');
+  await expect(page.getByLabel('Transcript')).toContainText('I can help you with that.');
+  await expect(page.getByLabel('Transcript')).not.toContainText('I can help with that.');
 });
 
 test('needs-review resolution explains score and missing proof without calling it a failed call', async ({ page }) => {
@@ -971,7 +977,7 @@ test('voice analysis reports end-to-end target latency and scopes target diagnos
   await expect(page.getByText('17534ms')).toHaveCount(0);
 });
 
-test('active voice listening uses WebRTC and completed playback restarts from the beginning', async ({ page }) => {
+test('active voice listening falls back after disconnect grace and completed playback restarts from the beginning', async ({ page }) => {
   let polls = 0;
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
@@ -1019,6 +1025,11 @@ test('active voice listening uses WebRTC and completed playback restarts from th
           streams: [new MediaStream()],
         });
         this.onconnectionstatechange?.();
+        setTimeout(() => {
+          if (this.connectionState !== 'connected') return;
+          this.connectionState = 'disconnected';
+          this.onconnectionstatechange?.();
+        }, 1800);
       }
       close() {
         this.connectionState = 'closed';
@@ -1050,7 +1061,8 @@ test('active voice listening uses WebRTC and completed playback restarts from th
       return;
     }
     polls += 1;
-    const hasNewAgentAudio = polls >= 3;
+    const hasWebrtcAgentAudio = polls >= 2;
+    const hasFallbackCallerAudio = polls >= 3;
     const completed = polls >= 4;
     const liveEvents = [
       {
@@ -1061,13 +1073,21 @@ test('active voice listening uses WebRTC and completed playback restarts from th
         direction: 'tester_to_target',
         media_url: '/api/execution/runs/exec-live-cursor/conversations/exec-live-cursor-1/audio/1?user_id=demo-user',
       },
-      ...(hasNewAgentAudio ? [{
+      ...(hasWebrtcAgentAudio ? [{
         sequence: 2,
         kind: 'audio',
         speaker: 'Agent',
         text: 'I can help with that.',
         direction: 'target_to_tester',
         media_url: '/api/execution/runs/exec-live-cursor/conversations/exec-live-cursor-1/audio/2?user_id=demo-user',
+      }] : []),
+      ...(hasFallbackCallerAudio ? [{
+        sequence: 3,
+        kind: 'audio',
+        speaker: 'Caller',
+        text: 'This turn arrived after WebRTC failed.',
+        direction: 'tester_to_target',
+        media_url: '/api/execution/runs/exec-live-cursor/conversations/exec-live-cursor-1/audio/3?user_id=demo-user',
       }] : []),
     ];
     await route.fulfill({
@@ -1138,9 +1158,13 @@ test('active voice listening uses WebRTC and completed playback restarts from th
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __liveWebrtcPlayCount: number }
   ).__liveWebrtcPlayCount)).toBe(1);
+  await expect(feedback.getByLabel('WebRTC listener status')).toContainText('HTTP fallback');
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.filter((url) => url.includes('/audio/3?')).length)).toBe(1);
   expect(await page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
-  ).__playedVoiceUrls.length)).toBe(0);
+  ).__playedVoiceUrls.some((url) => url.includes('/audio/1?') || url.includes('/audio/2?')))).toBe(false);
 
   await expect(feedback.getByRole('button', { name: 'Play recorded conversation' })).toBeVisible({ timeout: 10_000 });
   await feedback.getByRole('button', { name: 'Play recorded conversation' }).click();
@@ -1150,6 +1174,622 @@ test('active voice listening uses WebRTC and completed playback restarts from th
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
   ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(1);
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.filter((url) => url.includes('/audio/3?')).length)).toBe(2);
+});
+
+test('brief WebRTC recovery switches to lossless HTTP fallback', async ({ page }) => {
+  let listenerPolls = 0;
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    const runtime = window as Window & {
+      __playedVoiceUrls: string[];
+      __blockedRecoveryOnce: boolean;
+      __liveWebrtcMutedAtReconnect: boolean;
+    };
+    runtime.__playedVoiceUrls = [];
+    runtime.__blockedRecoveryOnce = false;
+    runtime.__liveWebrtcMutedAtReconnect = false;
+    class TestAudio extends EventTarget {
+      constructor(private readonly url: string) {
+        super();
+      }
+      play() {
+        runtime.__playedVoiceUrls.push(this.url);
+        if (this.url.includes('/audio/2?') && !runtime.__blockedRecoveryOnce) {
+          runtime.__blockedRecoveryOnce = true;
+          return Promise.reject(new Error('Browser blocked recovery playback'));
+        }
+        setTimeout(() => this.dispatchEvent(new Event('ended')), 10);
+        return Promise.resolve();
+      }
+      pause() {
+        this.dispatchEvent(new Event('ended'));
+      }
+    }
+    class RecoveringPeerConnection {
+      connectionState = 'new';
+      ontrack: ((event: { track: { kind: string }; streams: MediaStream[] }) => void) | null = null;
+      onconnectionstatechange: (() => void) | null = null;
+      onicecandidate = null;
+      addTransceiver() {}
+      async createOffer() { return { type: 'offer', sdp: 'test-offer' }; }
+      async setLocalDescription() {}
+      async setRemoteDescription() {
+        this.connectionState = 'connected';
+        this.ontrack?.({ track: { kind: 'audio' }, streams: [new MediaStream()] });
+        this.onconnectionstatechange?.();
+        setTimeout(() => {
+          if (this.connectionState !== 'connected') return;
+          this.connectionState = 'disconnected';
+          this.onconnectionstatechange?.();
+        }, 500);
+        setTimeout(() => {
+          if (this.connectionState !== 'disconnected') return;
+          this.connectionState = 'connected';
+          runtime.__liveWebrtcMutedAtReconnect = Boolean(
+            document.querySelector<HTMLAudioElement>('audio[aria-label="Receive-only live run audio"]')?.muted,
+          );
+          this.onconnectionstatechange?.();
+        }, 800);
+      }
+      close() { this.connectionState = 'closed'; }
+    }
+    Object.defineProperty(window, 'Audio', { value: TestAudio });
+    Object.defineProperty(HTMLMediaElement.prototype, 'play', {
+      configurable: true,
+      value() { return Promise.resolve(); },
+    });
+    Object.defineProperty(window, 'RTCPeerConnection', { value: RecoveringPeerConnection });
+  });
+
+  const liveEvents = (includeDisconnectedTurn: boolean) => [
+    {
+      sequence: 1,
+      kind: 'audio',
+      speaker: 'Caller',
+      text: 'Existing audio.',
+      direction: 'tester_to_target',
+      media_url: '/api/execution/runs/exec-brief-recovery/conversations/exec-brief-recovery-1/audio/1?user_id=demo-user',
+    },
+    ...(includeDisconnectedTurn ? [{
+      sequence: 2,
+      kind: 'audio',
+      speaker: 'Agent',
+      text: 'Audio captured during a brief disconnect.',
+      direction: 'target_to_tester',
+      media_url: '/api/execution/runs/exec-brief-recovery/conversations/exec-brief-recovery-1/audio/2?user_id=demo-user',
+    }] : []),
+  ];
+
+  await page.route('**/api/execution/runs/exec-brief-recovery**', async (route) => {
+    if (route.request().url().includes('/listener-token')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          listener: {
+            token: 'brief-recovery-token',
+            expires_at: '2099-07-26T12:00:00Z',
+            listen_url: '/api/execution/listeners/brief-recovery-token',
+            webrtc_url: '/api/execution/listeners/brief-recovery-token/webrtc',
+            webrtc_stop_url: '/api/execution/listeners/brief-recovery-token/webrtc/stop',
+            read_only: true,
+            can_inject_audio: false,
+            requires_microphone: false,
+            media_transport: 'webrtc',
+          },
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...runFixture,
+        execution_run_id: 'exec-brief-recovery',
+        status: 'running',
+        mode: 'pipecat_webrtc',
+        conversations: [{
+          ...runFixture.conversations[0],
+          conversation_id: 'exec-brief-recovery-1',
+          execution_run_id: 'exec-brief-recovery',
+          status: 'running',
+          mode: 'pipecat_webrtc',
+          live_events: liveEvents(false),
+        }],
+      }),
+    });
+  });
+  await page.route('**/api/execution/listeners/brief-recovery-token**', async (route) => {
+    const url = route.request().url();
+    if (url.endsWith('/webrtc')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ answer: { type: 'answer', sdp: 'test-answer' }, status: 'listening' }),
+      });
+      return;
+    }
+    if (url.endsWith('/webrtc/stop')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+      return;
+    }
+    listenerPolls += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        listener: {
+          read_only: true,
+          can_inject_audio: false,
+          requires_microphone: false,
+          run_status: 'running',
+        },
+        conversations: [{
+          conversation_id: 'exec-brief-recovery-1',
+          // The outage turn first appears in the listener snapshot requested
+          // after reconnection, before the normal 1.5-second polling tick.
+          live_events: liveEvents(listenerPolls >= 2),
+        }],
+      }),
+    });
+  });
+
+  await page.goto('/runs/exec-brief-recovery');
+  const feedback = page.getByLabel('Live run feedback');
+  await feedback.getByRole('button', { name: 'Listen to live WebRTC' }).click();
+  await expect(feedback.getByText('The live WebRTC connection was interrupted. Waiting briefly for it to recover.')).toBeVisible();
+  await expect(feedback.getByLabel('WebRTC listener status')).toContainText('HTTP fallback');
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(1);
+  await expect(feedback.getByRole('button', { name: 'Retry missed live audio' })).toBeVisible();
+  expect(await page.evaluate(() => (
+    window as Window & { __liveWebrtcMutedAtReconnect: boolean }
+  ).__liveWebrtcMutedAtReconnect)).toBe(true);
+  await feedback.getByRole('button', { name: 'Retry missed live audio' }).click();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(2);
+  expect(await page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.some((url) => url.includes('/audio/1?')))).toBe(false);
+});
+
+test('HTTP fallback queues setup audio while listener-token creation is still pending', async ({ page }) => {
+  let runPolls = 0;
+  let tokenResponded = false;
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    const runtime = window as Window & { __playedVoiceUrls: string[]; __blockedFallbackOnce: boolean };
+    runtime.__playedVoiceUrls = [];
+    runtime.__blockedFallbackOnce = false;
+    class TestAudio extends EventTarget {
+      constructor(private readonly url: string) {
+        super();
+      }
+      play() {
+        runtime.__playedVoiceUrls.push(this.url);
+        if (this.url.includes('/audio/2?') && !runtime.__blockedFallbackOnce) {
+          runtime.__blockedFallbackOnce = true;
+          return Promise.reject(new Error('Browser blocked autoplay'));
+        }
+        setTimeout(() => this.dispatchEvent(new Event('ended')), 10);
+        return Promise.resolve();
+      }
+      pause() {
+        this.dispatchEvent(new Event('ended'));
+      }
+    }
+    class PendingPeerConnection {
+      connectionState = 'new';
+      ontrack = null;
+      onconnectionstatechange = null;
+      onicecandidate = null;
+      addTransceiver() {}
+      async createOffer() { return { type: 'offer', sdp: 'test-offer' }; }
+      async setLocalDescription() {}
+      async setRemoteDescription() {}
+      close() { this.connectionState = 'closed'; }
+    }
+    Object.defineProperty(window, 'Audio', { value: TestAudio });
+    Object.defineProperty(window, 'RTCPeerConnection', { value: PendingPeerConnection });
+  });
+
+  const audioEvents = (includeNewTurn: boolean) => [
+    {
+      sequence: 1,
+      kind: 'audio',
+      speaker: 'Caller',
+      text: 'Existing audio.',
+      direction: 'tester_to_target',
+      media_url: '/api/execution/runs/exec-live-fallback/conversations/exec-live-fallback-1/audio/1?user_id=demo-user',
+    },
+    ...(includeNewTurn ? [{
+      sequence: 2,
+      kind: 'audio',
+      speaker: 'Agent',
+      text: 'Audio captured during setup.',
+      direction: 'target_to_tester',
+      media_url: '/api/execution/runs/exec-live-fallback/conversations/exec-live-fallback-1/audio/2?user_id=demo-user',
+    }] : []),
+  ];
+
+  await page.route('**/api/execution/runs/exec-live-fallback**', async (route) => {
+    if (route.request().url().includes('/listener-token')) {
+      await new Promise((resolve) => setTimeout(resolve, 4000));
+      tokenResponded = true;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          listener: {
+            token: 'live-fallback-token',
+            expires_at: '2099-07-26T12:00:00Z',
+            listen_url: '/api/execution/listeners/live-fallback-token',
+            webrtc_url: '/api/execution/listeners/live-fallback-token/webrtc',
+            webrtc_stop_url: '/api/execution/listeners/live-fallback-token/webrtc/stop',
+            read_only: true,
+            can_inject_audio: false,
+            requires_microphone: false,
+            media_transport: 'webrtc',
+          },
+        }),
+      });
+      return;
+    }
+    runPolls += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...runFixture,
+        execution_run_id: 'exec-live-fallback',
+        status: 'running',
+        mode: 'pipecat_webrtc',
+        conversations: [{
+          ...runFixture.conversations[0],
+          conversation_id: 'exec-live-fallback-1',
+          execution_run_id: 'exec-live-fallback',
+          status: 'running',
+          mode: 'pipecat_webrtc',
+          live_events: audioEvents(runPolls >= 2),
+        }],
+      }),
+    });
+  });
+  await page.goto('/runs/exec-live-fallback');
+  const feedback = page.getByLabel('Live run feedback');
+  await feedback.getByRole('button', { name: 'Listen to live WebRTC' }).click();
+  await expect(feedback.getByLabel('WebRTC listener status')).toContainText('HTTP fallback', { timeout: 6000 });
+  expect(tokenResponded).toBe(false);
+  await expect(feedback.getByRole('button', { name: 'Retry missed live audio' })).toBeVisible();
+  await feedback.getByRole('button', { name: 'Retry missed live audio' }).click();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(2);
+  expect(await page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.some((url) => url.includes('/audio/1?')))).toBe(false);
+});
+
+test('HTTP fallback preserves setup audio identified by the atomic attachment watermark', async ({ page }) => {
+  let listenerPolls = 0;
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    const runtime = window as Window & { __playedVoiceUrls: string[] };
+    runtime.__playedVoiceUrls = [];
+    class TestAudio extends EventTarget {
+      constructor(private readonly url: string) {
+        super();
+      }
+      play() {
+        runtime.__playedVoiceUrls.push(this.url);
+        setTimeout(() => this.dispatchEvent(new Event('ended')), 10);
+        return Promise.resolve();
+      }
+      pause() {
+        this.dispatchEvent(new Event('ended'));
+      }
+    }
+    class SuccessfulPeerConnection {
+      connectionState = 'new';
+      ontrack = null;
+      onconnectionstatechange: (() => void) | null = null;
+      onicecandidate = null;
+      addTransceiver() {}
+      async createOffer() { return { type: 'offer', sdp: 'test-offer' }; }
+      async setLocalDescription() {}
+      async setRemoteDescription() {
+        this.connectionState = 'connected';
+        this.onconnectionstatechange?.();
+      }
+      close() { this.connectionState = 'closed'; }
+    }
+    Object.defineProperty(window, 'Audio', { value: TestAudio });
+    Object.defineProperty(window, 'RTCPeerConnection', { value: SuccessfulPeerConnection });
+  });
+
+  const audioEvents = (includeSetupTurn: boolean) => [
+    {
+      sequence: 1,
+      kind: 'audio',
+      speaker: 'Caller',
+      text: 'Existing audio.',
+      direction: 'tester_to_target',
+      frame_metadata: {
+        listener_media_key: 'active-session:1:tester_to_target',
+      },
+      media_url: '/api/execution/runs/exec-preconnect-failure/conversations/exec-preconnect-failure-1/audio/1?user_id=demo-user',
+    },
+    ...(includeSetupTurn ? [{
+      sequence: 2,
+      kind: 'audio',
+      speaker: 'Agent',
+      text: 'The in-progress setup turn completed.',
+      direction: 'target_to_tester',
+      frame_metadata: {
+        listener_media_key: 'active-session:1:target_to_tester',
+      },
+      media_url: '/api/execution/runs/exec-preconnect-failure/conversations/exec-preconnect-failure-1/audio/2?user_id=demo-user',
+    }] : []),
+  ];
+
+  await page.route('**/api/execution/runs/exec-preconnect-failure**', async (route) => {
+    if (route.request().url().includes('/listener-token')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          listener: {
+            token: 'preconnect-failure-token',
+            expires_at: '2099-07-26T12:00:00Z',
+            listen_url: '/api/execution/listeners/preconnect-failure-token',
+            webrtc_url: '/api/execution/listeners/preconnect-failure-token/webrtc',
+            webrtc_stop_url: '/api/execution/listeners/preconnect-failure-token/webrtc/stop',
+            read_only: true,
+            can_inject_audio: false,
+            requires_microphone: false,
+            media_transport: 'webrtc',
+          },
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...runFixture,
+        execution_run_id: 'exec-preconnect-failure',
+        status: 'running',
+        mode: 'pipecat_webrtc',
+        conversations: [{
+          ...runFixture.conversations[0],
+          conversation_id: 'exec-preconnect-failure-1',
+          execution_run_id: 'exec-preconnect-failure',
+          status: 'running',
+          mode: 'pipecat_webrtc',
+          live_events: audioEvents(false),
+        }],
+      }),
+    });
+  });
+  await page.route('**/api/execution/listeners/preconnect-failure-token**', async (route) => {
+    const url = route.request().url();
+    if (url.endsWith('/webrtc')) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          answer: { type: 'answer', sdp: 'test-answer' },
+          status: 'listening',
+          pre_attach_audio_event_keys: [
+            'exec-preconnect-failure-1:1',
+          ],
+          pre_attach_listener_media_keys: [
+            'active-session:1:tester_to_target',
+            'active-session:1:target_to_tester',
+          ],
+          audio_published_during_attach: false,
+        }),
+      });
+      return;
+    }
+    if (url.endsWith('/webrtc/stop')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        listener: {
+          read_only: true,
+          can_inject_audio: false,
+          requires_microphone: false,
+          run_status: 'running',
+        },
+        conversations: [{
+          conversation_id: 'exec-preconnect-failure-1',
+          live_events: (() => {
+            listenerPolls += 1;
+            if (listenerPolls >= 2) return audioEvents(true);
+            return [
+              ...audioEvents(false),
+              {
+                sequence: 2,
+                kind: 'message',
+                speaker: 'Agent',
+                text: 'Speech started before the listener attached.',
+                direction: 'target_to_tester',
+                frame_metadata: {
+                  media_event: 'first_audible_byte',
+                  listener_media_key: 'active-session:1:target_to_tester',
+                },
+              },
+            ];
+          })(),
+        }],
+      }),
+    });
+  });
+
+  await page.goto('/runs/exec-preconnect-failure');
+  const feedback = page.getByLabel('Live run feedback');
+  await feedback.getByRole('button', { name: 'Listen to live WebRTC' }).click();
+  await expect(feedback.getByLabel('WebRTC listener status')).toContainText('HTTP fallback');
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(1);
+  expect(await page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.some((url) => url.includes('/audio/1?')))).toBe(false);
+});
+
+test('blocked WebRTC playback falls back without consuming unheard audio', async ({ page }) => {
+  let listenerPolls = 0;
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    const runtime = window as Window & { __playedVoiceUrls: string[] };
+    runtime.__playedVoiceUrls = [];
+    class TestAudio extends EventTarget {
+      constructor(private readonly url: string) {
+        super();
+      }
+      play() {
+        runtime.__playedVoiceUrls.push(this.url);
+        setTimeout(() => this.dispatchEvent(new Event('ended')), 10);
+        return Promise.resolve();
+      }
+      pause() {
+        this.dispatchEvent(new Event('ended'));
+      }
+    }
+    Object.defineProperty(window, 'Audio', { value: TestAudio });
+    Object.defineProperty(HTMLMediaElement.prototype, 'play', {
+      configurable: true,
+      value() { return Promise.reject(new Error('autoplay blocked')); },
+    });
+    class BlockedPlaybackPeerConnection {
+      connectionState = 'new';
+      ontrack: ((event: { track: { kind: string }; streams: MediaStream[] }) => void) | null = null;
+      onconnectionstatechange: (() => void) | null = null;
+      onicecandidate = null;
+      addTransceiver() {}
+      async createOffer() { return { type: 'offer', sdp: 'test-offer' }; }
+      async setLocalDescription() {}
+      async setRemoteDescription() {
+        this.connectionState = 'connected';
+        this.ontrack?.({ track: { kind: 'audio' }, streams: [new MediaStream()] });
+        this.onconnectionstatechange?.();
+      }
+      close() { this.connectionState = 'closed'; }
+    }
+    Object.defineProperty(window, 'RTCPeerConnection', { value: BlockedPlaybackPeerConnection });
+  });
+
+  const audioEvents = (includeUnheardTurn: boolean) => [{
+    sequence: 1,
+    kind: 'audio',
+    speaker: 'Caller',
+    text: 'Audio from before listening started.',
+    direction: 'tester_to_target',
+    media_url: '/api/execution/runs/exec-blocked-playback/conversations/exec-blocked-playback-1/audio/1?user_id=demo-user',
+  }, ...(includeUnheardTurn ? [{
+    sequence: 2,
+    kind: 'audio',
+    speaker: 'Agent',
+    text: 'Audio that the blocked element never played.',
+    direction: 'target_to_tester',
+    media_url: '/api/execution/runs/exec-blocked-playback/conversations/exec-blocked-playback-1/audio/2?user_id=demo-user',
+  }] : [])];
+
+  await page.route('**/api/execution/runs/exec-blocked-playback**', async (route) => {
+    if (route.request().url().includes('/listener-token')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ listener: {
+          token: 'blocked-playback-token',
+          expires_at: '2099-07-26T12:00:00Z',
+          listen_url: '/api/execution/listeners/blocked-playback-token',
+          webrtc_url: '/api/execution/listeners/blocked-playback-token/webrtc',
+          webrtc_stop_url: '/api/execution/listeners/blocked-playback-token/webrtc/stop',
+          read_only: true,
+          can_inject_audio: false,
+          requires_microphone: false,
+          media_transport: 'webrtc',
+        } }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...runFixture,
+        execution_run_id: 'exec-blocked-playback',
+        status: 'running',
+        mode: 'pipecat_webrtc',
+        conversations: [{
+          ...runFixture.conversations[0],
+          conversation_id: 'exec-blocked-playback-1',
+          execution_run_id: 'exec-blocked-playback',
+          status: 'running',
+          mode: 'pipecat_webrtc',
+          live_events: audioEvents(false),
+        }],
+      }),
+    });
+  });
+  await page.route('**/api/execution/listeners/blocked-playback-token**', async (route) => {
+    const url = route.request().url();
+    if (url.endsWith('/webrtc')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          answer: { type: 'answer', sdp: 'test-answer' },
+          status: 'listening',
+          pre_attach_audio_event_keys: ['exec-blocked-playback-1:1'],
+          audio_published_during_attach: false,
+        }),
+      });
+      return;
+    }
+    if (url.endsWith('/webrtc/stop')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+      return;
+    }
+    listenerPolls += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        listener: { read_only: true, run_status: 'running' },
+        conversations: [{
+          conversation_id: 'exec-blocked-playback-1',
+          live_events: audioEvents(listenerPolls >= 2),
+        }],
+      }),
+    });
+  });
+
+  await page.goto('/runs/exec-blocked-playback');
+  const feedback = page.getByLabel('Live run feedback');
+  await feedback.getByRole('button', { name: 'Listen to live WebRTC' }).click();
+  await expect(feedback.getByLabel('WebRTC listener status')).toContainText('HTTP fallback');
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(1);
+  expect(await page.evaluate(() => (
+    window as Window & { __playedVoiceUrls: string[] }
+  ).__playedVoiceUrls.some((url) => url.includes('/audio/1?')))).toBe(false);
 });
 
 test('owner live WebRTC uses a different token from the shared listener link', async ({ page }) => {

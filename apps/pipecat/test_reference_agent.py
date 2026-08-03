@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import hmac
 import io
 import struct
 import time
@@ -11,6 +13,24 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 import server
+
+
+def test_browser_mdns_ice_candidate_uses_configured_host_gateway(monkeypatch):
+    monkeypatch.setattr(server, 'BROWSER_ICE_HOST_OVERRIDE', 'host.docker.internal')
+
+    candidate = server._coerce_ice_candidate({
+        'candidate': (
+            'candidate:1 1 udp 2113937151 '
+            'browser-session.local 63556 typ host generation 0'
+        ),
+        'sdpMid': '0',
+        'sdpMLineIndex': 0,
+    })
+
+    assert candidate.ip == 'host.docker.internal'
+    assert candidate.port == 63556
+    assert candidate.sdpMid == '0'
+    assert candidate.sdpMLineIndex == 0
 
 
 def test_transient_reference_completion_errors_are_retryable():
@@ -352,6 +372,7 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
         payload = kwargs['payload']
         history = kwargs['history']
         event_callback = kwargs['event_callback']
+        turn_index = kwargs['turn_index']
         _AsyncClient.completion_prompts.extend([
             (
                 'caller-side Pipecat tester\n'
@@ -373,6 +394,9 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
             'text': 'Of course.',
             'llm_output': 'Of course.',
             'first_audible_pcm_at': 10.0,
+            'listener_media_key': (
+                f'{payload.session_id}:{turn_index}:tester_to_target'
+            ),
         })
         await event_callback({
             'type': 'speech_started',
@@ -382,6 +406,9 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
             'text': 'Of course.',
             'llm_output': 'Of course.',
             'first_audible_pcm_at': 11.0,
+            'listener_media_key': (
+                f'{payload.session_id}:{turn_index}:target_to_tester'
+            ),
         })
         return _streaming_result(
             caller_text='Of course.',
@@ -438,6 +465,18 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
         'target_to_tester',
         'tester_to_target',
         'target_to_tester',
+    ]
+    assert [event['listener_media_key'] for event in speech_started] == [
+        f'{request["session_id"]}:1:tester_to_target',
+        f'{request["session_id"]}:1:target_to_tester',
+        f'{request["session_id"]}:2:tester_to_target',
+        f'{request["session_id"]}:2:target_to_tester',
+    ]
+    assert [event['listener_media_key'] for event in live_audio] == [
+        f'{request["session_id"]}:1:tester_to_target',
+        f'{request["session_id"]}:1:target_to_tester',
+        f'{request["session_id"]}:2:tester_to_target',
+        f'{request["session_id"]}:2:target_to_tester',
     ]
     assert live_audio[0]['speaker'] == 'Caller'
     assert live_audio[1]['speaker'] == 'Agent'
@@ -697,15 +736,19 @@ def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(m
 
     class _Connection:
         last = None
+        last_kwargs = None
 
         def __init__(self, *args, **kwargs):
             self._presenter_answer_audio_track = _Track()
             self.disconnected = False
             _Connection.last = self
+            _Connection.last_kwargs = kwargs
 
         async def initialize(self, sdp, type):
             assert sdp == 'receive-only-offer'
             assert type == 'offer'
+            broadcast.mark_audio_started('active-session:1:tester_to_target')
+            broadcast.publish(b'\x00\x00' * 240, sample_rate=24000)
 
         def get_answer(self):
             return {'sdp': 'send-only-answer', 'type': 'answer', 'pc_id': 'listener-pc'}
@@ -720,6 +763,10 @@ def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(m
             return None
 
     monkeypatch.setattr(server, 'REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
+    monkeypatch.setattr(server, 'LISTENER_TURN_URL', 'turn:coturn:3478?transport=udp')
+    monkeypatch.setattr(server, 'LISTENER_TURN_USERNAME', 'cae')
+    monkeypatch.setattr(server, 'LISTENER_TURN_CREDENTIAL', 'local-secret')
+    monkeypatch.setattr(server, 'LISTENER_TURN_SHARED_SECRET', 'rest-auth-secret')
     monkeypatch.setattr(server, 'ReferenceListenerWebRTCConnection', _Connection)
     broadcast = server._ReferenceDuplexBroadcast(
         execution_run_id='active-run',
@@ -728,6 +775,7 @@ def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(m
     server.REFERENCE_DUPLEX_RUNS['active-run'] = broadcast
     client = TestClient(server.app)
 
+    expires_at_unix = server.time.time() + 120
     joined = client.post(
         '/reference-duplex/listen',
         headers={'x-cae-reference-token': 'test-token'},
@@ -736,13 +784,27 @@ def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(m
             'listener_id': 'owner-listener',
             'sdp': 'receive-only-offer',
             'type': 'offer',
-            'expires_at_unix': server.time.time() + 120,
+            'expires_at_unix': expires_at_unix,
         },
     )
     assert joined.status_code == 200, joined.text
     assert joined.json()['read_only'] is True
     assert joined.json()['requires_microphone'] is False
+    assert joined.json()['audio_published_during_attach'] is True
+    assert joined.json()['pre_attach_listener_media_keys'] == [
+        'active-session:1:tester_to_target',
+    ]
     assert joined.json()['answer']['sdp'] == 'send-only-answer'
+    turn_server = _Connection.last_kwargs['ice_servers'][0]
+    assert turn_server.urls == 'turn:coturn:3478?transport=udp'
+    expected_username = f'{int(expires_at_unix)}:cae:owner-listener'
+    expected_credential = base64.b64encode(hmac.new(
+        b'rest-auth-secret',
+        expected_username.encode(),
+        hashlib.sha1,
+    ).digest()).decode()
+    assert turn_server.username == expected_username
+    assert turn_server.credential == expected_credential
 
     broadcast.publish(b'\x01\x00' * 240, sample_rate=24000)
     assert _Connection.last._presenter_answer_audio_track.audio

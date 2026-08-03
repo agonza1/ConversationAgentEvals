@@ -674,6 +674,7 @@ class ReferencePipecatAgentTransport:
         if not text:
             return
         turn_pair = event.get('turn_pair')
+        listener_media_key = str(event.get('listener_media_key') or '').strip()
         self.event_observer({
             'speaker': speaker,
             'text': text,
@@ -685,6 +686,7 @@ class ReferencePipecatAgentTransport:
                     event.get('first_audible_byte_at')
                     or event.get('first_audible_pcm_at')
                 ),
+                'listener_media_key': listener_media_key,
             },
             'live_audio_key': f'{turn_pair}:{direction}',
         })
@@ -709,6 +711,7 @@ class ReferencePipecatAgentTransport:
             raise ReferenceRuntimeError('Pipecat live audio event returned empty WAV evidence.')
         frame = event.get('frame') if isinstance(event.get('frame'), dict) else {}
         turn_pair = event.get('turn_pair')
+        listener_media_key = str(event.get('listener_media_key') or '').strip()
         self.event_observer({
             'speaker': speaker,
             'text': text,
@@ -720,7 +723,10 @@ class ReferencePipecatAgentTransport:
                 if event.get('asr_receipt')
                 else None
             ),
-            'frame_metadata': frame,
+            'frame_metadata': {
+                **frame,
+                'listener_media_key': listener_media_key,
+            },
             'update_live_audio_key': f'{turn_pair}:{direction}',
             'live_audio_key': f'{turn_pair}:{direction}',
         })

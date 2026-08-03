@@ -249,7 +249,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
                   {(conversation?.turns || []).map((turn) => (
                     <li key={`${turn.turn_index}-${turn.speaker}`}>
                       <strong>{turn.speaker || 'speaker'}</strong>
-                      <p>{turn.text || '—'}</p>
+                      <p>{spokenTurnText(turn) || '—'}</p>
                     </li>
                   ))}
                 </ol>
@@ -588,22 +588,33 @@ function MetricDetail({
               <div><dt>Deletions</dt><dd>{wordErrorRate.deletions}</dd></div>
               <div><dt>Insertions</dt><dd>{wordErrorRate.insertions}</dd></div>
             </dl>
-            <ol className="conversation-flow-turns" aria-label="Per-turn word error rates">
+            <ol className="wer-turn-list" aria-label="Per-turn word error rates">
               {turns.map(({ turn, reference, hypothesis, result }) => (
-                <li key={`wer-${turn.turn_index}`} data-speaker={turnLane(turn)}>
-                  <span>{turn.turn_index}</span>
-                  <strong>
-                    {turnLane(turn) === 'caller' ? 'Tester → target ASR' : 'Target → tester ASR'}
-                    {' · '}
-                    {formatWerPercent(result.percent)}
-                  </strong>
-                  <p><b>LLM:</b> {reference}</p>
-                  <p><b>ASR:</b> {hypothesis}</p>
-                  <small>
-                    {result.errors} errors / {result.referenceWords} words
-                    {' · '}
-                    S {result.substitutions} · D {result.deletions} · I {result.insertions}
-                  </small>
+                <li className="wer-turn-card" key={`wer-${turn.turn_index}`} data-speaker={turnLane(turn)}>
+                  <div className="wer-turn-heading">
+                    <span className="wer-turn-index" aria-label={`Turn ${turn.turn_index}`}>{turn.turn_index}</span>
+                    <strong>
+                      {turnLane(turn) === 'caller' ? 'Tester → target ASR' : 'Target → tester ASR'}
+                      {' · '}
+                      {formatWerPercent(result.percent)}
+                    </strong>
+                  </div>
+                  <div className="wer-transcript-comparison">
+                    <div className="wer-transcript-block" data-source="llm">
+                      <span>LLM source</span>
+                      <p>{reference}</p>
+                    </div>
+                    <div className="wer-transcript-block" data-source="asr">
+                      <span>ASR transcript</span>
+                      <p>{hypothesis}</p>
+                    </div>
+                  </div>
+                  <div className="wer-turn-stats" aria-label={`Turn ${turn.turn_index} error counts`}>
+                    <span>{result.errors} errors / {result.referenceWords} words</span>
+                    <span>S {result.substitutions}</span>
+                    <span>D {result.deletions}</span>
+                    <span>I {result.insertions}</span>
+                  </div>
                 </li>
               ))}
             </ol>
@@ -769,7 +780,7 @@ function ConversationFlow({
                     left: `${(segment.startMs / totalMs) * 100}%`,
                     width: `${Math.max(1.5, (segment.durationMs / totalMs) * 100)}%`,
                   }}
-                  title={`Turn ${segment.turn.turn_index} · ${fmtDuration(segment.durationMs)} · ${segment.turn.text || ''}`}
+                  title={`Turn ${segment.turn.turn_index} · ${fmtDuration(segment.durationMs)} · ${spokenTurnText(segment.turn)}`}
                 >
                   <i aria-hidden="true" />
                   <b>{segment.turn.turn_index}</b>
@@ -805,7 +816,7 @@ function ConversationFlow({
           <li key={`flow-${segment.turn.turn_index}`} data-speaker={segment.lane}>
             <span>{segment.turn.turn_index}</span>
             <strong>{segment.lane === 'caller' ? 'Caller' : 'Agent'}</strong>
-            <p>{segment.turn.text || 'No transcript text.'}</p>
+            <p>{spokenTurnText(segment.turn) || 'No transcript text.'}</p>
             <small>
               {fmtDuration(segment.durationMs)}
               {segment.responseLatencyMs != null
@@ -1490,6 +1501,14 @@ function turnLane(turn: ConversationTurn): 'caller' | 'agent' {
   return 'caller';
 }
 
+function spokenTurnText(turn: ConversationTurn) {
+  const metadata = turn.frame_metadata || {};
+  return stringValue(metadata.source_text)
+    || stringValue(metadata.llm_output)
+    || stringValue(turn.text)
+    || '';
+}
+
 function turnAudioDurationMs(turn: ConversationTurn) {
   const metadata = turn.frame_metadata || {};
   const explicitDuration = Number(metadata.duration_ms);
@@ -1500,7 +1519,7 @@ function turnAudioDurationMs(turn: ConversationTurn) {
   if (bytes > 0 && sampleRate > 0 && channels > 0) {
     return (bytes / (sampleRate * channels * 2)) * 1000;
   }
-  const words = String(turn.text || '').trim().split(/\s+/).filter(Boolean).length;
+  const words = spokenTurnText(turn).trim().split(/\s+/).filter(Boolean).length;
   return Math.min(12_000, Math.max(700, (words / 2.6) * 1000));
 }
 

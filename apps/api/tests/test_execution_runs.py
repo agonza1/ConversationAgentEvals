@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import time
 from datetime import UTC, datetime, timedelta
@@ -8,6 +11,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.routes import execution as execution_routes
 from app.schemas.execution import ConversationRecord, ExecutionRunCreateRequest, LiveExecutionEvent
 from app.services import execution_run_store
 from app.services.execution_run_store import reset_execution_runs_for_tests
@@ -19,6 +23,58 @@ client = TestClient(app)
 
 def setup_function() -> None:
     reset_execution_runs_for_tests()
+
+
+def test_listener_browser_ice_servers_expose_configured_turn_relay(monkeypatch):
+    monkeypatch.setattr(execution_routes, '_LISTENER_BROWSER_TURN_URL', 'turn:127.0.0.1:3478?transport=udp')
+    monkeypatch.setattr(execution_routes, '_LISTENER_TURN_USERNAME', 'cae')
+    monkeypatch.setattr(execution_routes, '_LISTENER_TURN_CREDENTIAL', 'local-secret')
+    monkeypatch.setattr(execution_routes, '_LISTENER_TURN_SHARED_SECRET', '')
+
+    assert execution_routes._listener_browser_ice_servers(
+        expires_at=datetime(2030, 1, 1, tzinfo=UTC),
+        listener_id='local-listener',
+    ) == [{
+        'urls': 'turn:127.0.0.1:3478?transport=udp',
+        'username': 'cae',
+        'credential': 'local-secret',
+    }]
+
+
+def test_listener_browser_ice_servers_issue_expiring_remote_turn_credentials(monkeypatch):
+    expires_at = datetime(2030, 1, 1, tzinfo=UTC)
+    listener_id = 'shared-listener'
+    monkeypatch.setattr(execution_routes, '_LISTENER_BROWSER_TURN_URL', 'turn:relay.example.com:3478')
+    monkeypatch.setattr(execution_routes, '_LISTENER_TURN_USERNAME', 'cae')
+    monkeypatch.setattr(execution_routes, '_LISTENER_TURN_CREDENTIAL', 'static-password')
+    monkeypatch.setattr(execution_routes, '_LISTENER_TURN_SHARED_SECRET', 'rest-auth-secret')
+    username = f'{int(expires_at.timestamp())}:cae:{listener_id}'
+    expected_credential = base64.b64encode(hmac.new(
+        b'rest-auth-secret',
+        username.encode(),
+        hashlib.sha1,
+    ).digest()).decode()
+
+    assert execution_routes._listener_browser_ice_servers(
+        expires_at=expires_at,
+        listener_id=listener_id,
+    ) == [{
+        'urls': 'turn:relay.example.com:3478',
+        'username': username,
+        'credential': expected_credential,
+    }]
+
+
+def test_listener_browser_ice_servers_do_not_expose_remote_static_credentials(monkeypatch):
+    monkeypatch.setattr(execution_routes, '_LISTENER_BROWSER_TURN_URL', 'turn:relay.example.com:3478')
+    monkeypatch.setattr(execution_routes, '_LISTENER_TURN_USERNAME', 'cae')
+    monkeypatch.setattr(execution_routes, '_LISTENER_TURN_CREDENTIAL', 'static-password')
+    monkeypatch.setattr(execution_routes, '_LISTENER_TURN_SHARED_SECRET', '')
+
+    assert execution_routes._listener_browser_ice_servers(
+        expires_at=datetime(2030, 1, 1, tzinfo=UTC),
+        listener_id='shared-listener',
+    ) == []
 
 
 def test_text_callable_execution_appends_conversations_and_writes_inference_set():
@@ -471,7 +527,30 @@ def test_execution_listener_token_is_receive_only_owner_scoped_and_ephemeral(mon
 
     def fake_proxy(path, payload):
         proxied.append((path, payload))
-        return {'status': 'listening', 'answer': {'sdp': 'send-only-answer', 'type': 'answer'}}
+        if path == '/reference-duplex/listen':
+            # The Pipecat response is returned after the listener has been
+            # registered. A turn persisted in that post-attachment window must
+            # not be mislabeled as pre-attachment by the API.
+            execution_run_store.append_live_event(run_id, conversation_id, LiveExecutionEvent(
+                sequence=3,
+                kind='audio',
+                speaker='Agent',
+                text='Audio streamed after listener registration.',
+                media_url=(
+                    f'/api/execution/runs/{run_id}/conversations/'
+                    f'{conversation_id}/audio/3?user_id=listener-owner'
+                ),
+                mime_type='audio/wav',
+                created_at='2026-07-18T20:00:02+00:00',
+            ))
+        return {
+            'status': 'listening',
+            'audio_published_during_attach': True,
+            'pre_attach_listener_media_keys': [
+                'active-session:1:tester_to_target',
+            ],
+            'answer': {'sdp': 'send-only-answer', 'type': 'answer'},
+        }
 
     monkeypatch.setattr(execution_routes, '_proxy_reference_listener', fake_proxy)
 
@@ -524,6 +603,17 @@ def test_execution_listener_token_is_receive_only_owner_scoped_and_ephemeral(mon
     assert listener['media_transport'] == 'webrtc'
     assert listener['webrtc_url'].endswith('/webrtc')
     token = listener['token']
+    execution_run_store.append_live_event(run_id, conversation_id, LiveExecutionEvent(
+        sequence=2,
+        kind='message',
+        speaker='Caller',
+        text='Speech started before the listener attached.',
+        frame_metadata={
+            'media_event': 'first_audible_byte',
+            'first_audible_byte_at': 42.0,
+        },
+        created_at='2026-07-18T20:00:01+00:00',
+    ))
 
     joined = client.post(
         f'/api/execution/listeners/{token}/webrtc',
@@ -531,6 +621,15 @@ def test_execution_listener_token_is_receive_only_owner_scoped_and_ephemeral(mon
     )
     assert joined.status_code == 200, joined.text
     assert joined.json()['answer']['sdp'] == 'send-only-answer'
+    assert joined.json()['audio_published_during_attach'] is True
+    assert joined.json()['pre_attach_listener_media_keys'] == [
+        'active-session:1:tester_to_target',
+    ]
+    assert joined.json()['pre_attach_audio_event_keys'] == [
+        f'{conversation_id}:1',
+        f'{conversation_id}:2',
+    ]
+    assert f'{conversation_id}:3' not in joined.json()['pre_attach_audio_event_keys']
     assert proxied[0][0] == '/reference-duplex/listen'
     assert proxied[0][1]['execution_run_id'] == run_id
     assert proxied[0][1]['listener_id']

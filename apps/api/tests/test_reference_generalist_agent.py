@@ -225,6 +225,7 @@ class FakeDuplexAsyncClient:
                 'text': 'I want to cancel because the renewal increased.',
                 'llm_output': 'I want to cancel because the renewal increased.',
                 'first_audible_pcm_at': 10.0,
+                'listener_media_key': 'duplex-session:1:tester_to_target',
             },
             {
                 'type': 'speech_started',
@@ -235,6 +236,7 @@ class FakeDuplexAsyncClient:
                 'text': 'I can help and will keep the cancellation active.',
                 'llm_output': 'I can help and will keep the cancellation active.',
                 'first_audible_pcm_at': 11.0,
+                'listener_media_key': 'duplex-session:1:target_to_tester',
             },
             {
                 'type': 'live_audio',
@@ -244,6 +246,7 @@ class FakeDuplexAsyncClient:
                 'text': 'I want to cancel because the renewal increased.',
                 'llm_output': 'I want to cancel because the renewal increased.',
                 'asr_receipt': None,
+                'listener_media_key': 'duplex-session:1:tester_to_target',
                 'audio_wav_base64': tester_audio,
                 'frame': {
                     'sequence': 1,
@@ -260,6 +263,7 @@ class FakeDuplexAsyncClient:
                 'text': 'I can help and will keep the cancellation active.',
                 'llm_output': 'I can help and will keep the cancellation active.',
                 'asr_receipt': None,
+                'listener_media_key': 'duplex-session:1:target_to_tester',
                 'audio_wav_base64': target_audio,
                 'frame': {
                     'sequence': 2,
@@ -528,6 +532,18 @@ def test_primary_reference_path_streams_session_control_not_wav_turns(monkeypatc
         ]
         assert [event['speaker'] for event in speech_events] == ['Caller', 'Agent']
         assert [event['speaker'] for event in audio_events] == ['Caller', 'Agent']
+        assert [
+            event['frame_metadata']['listener_media_key'] for event in speech_events
+        ] == [
+            'duplex-session:1:tester_to_target',
+            'duplex-session:1:target_to_tester',
+        ]
+        assert [
+            event['frame_metadata']['listener_media_key'] for event in audio_events
+        ] == [
+            'duplex-session:1:tester_to_target',
+            'duplex-session:1:target_to_tester',
+        ]
         assert [event['asr_receipt'] for event in evidence_updates] == [
             'I want to cancel because the renewal increased.',
             'I can help and will keep the cancellation active.',

@@ -50,6 +50,10 @@ services:
       RTC_ASR_BASE_URL: ${RTC_ASR_BASE_URL:-}
       KOKORO_BASE_URL: ${KOKORO_BASE_URL:-}
       REFERENCE_AGENT_INTERNAL_TOKEN: ${REFERENCE_AGENT_INTERNAL_TOKEN:-}
+      LISTENER_BROWSER_TURN_URL: ${LISTENER_BROWSER_TURN_URL:-turn:127.0.0.1:3478?transport=udp}
+      LISTENER_TURN_USERNAME: ${LISTENER_TURN_USERNAME:-cae}
+      LISTENER_TURN_CREDENTIAL: ${LISTENER_TURN_CREDENTIAL:-cae-local-turn}
+      LISTENER_TURN_SHARED_SECRET: ${LISTENER_TURN_SHARED_SECRET:-}
       APP_ENV: ${APP_ENV:-development}
     ports:
       - "${API_PORT:-8025}:8000"
@@ -102,6 +106,30 @@ services:
       timeout: 5s
       retries: 3
 
+  coturn:
+    # Local-only relay for browser-to-container WebRTC. Published sockets are
+    # loopback-bound; production deployments must provide their own TURN.
+    image: coturn/coturn@sha256:01fc8655e7c262fa4ccfb8dca74ff80fb372b0ee021e80370a4d3e3dd01a951e
+    profiles:
+      - voice
+    command:
+      - --no-tls
+      - --no-dtls
+      - --log-file=stdout
+      - --fingerprint
+      - --lt-cred-mech
+      - --realm=${LISTENER_TURN_REALM:-cae.local}
+      - --user=${LISTENER_TURN_USERNAME:-cae}:${LISTENER_TURN_CREDENTIAL:-cae-local-turn}
+      - --min-port=49160
+      - --max-port=49200
+      - --external-ip=127.0.0.1
+      - --allow-loopback-peers
+      - --no-multicast-peers
+    ports:
+      - "127.0.0.1:3478:3478/tcp"
+      - "127.0.0.1:3478:3478/udp"
+      - "127.0.0.1:49160-49200:49160-49200/udp"
+
   pipecat:
     image: conversation-agent-evals-pipecat:latest
     profiles:
@@ -119,6 +147,11 @@ services:
       RTC_ASR_STREAM_PATH: ${RTC_ASR_STREAM_PATH:-/v1/stt/stream}
       KOKORO_BASE_URL: ${KOKORO_BASE_URL:-}
       REFERENCE_AGENT_INTERNAL_TOKEN: ${REFERENCE_AGENT_INTERNAL_TOKEN:-}
+      BROWSER_ICE_HOST_OVERRIDE: ${BROWSER_ICE_HOST_OVERRIDE:-host.docker.internal}
+      LISTENER_TURN_URL: ${LISTENER_TURN_URL:-turn:coturn:3478?transport=udp}
+      LISTENER_TURN_USERNAME: ${LISTENER_TURN_USERNAME:-cae}
+      LISTENER_TURN_CREDENTIAL: ${LISTENER_TURN_CREDENTIAL:-cae-local-turn}
+      LISTENER_TURN_SHARED_SECRET: ${LISTENER_TURN_SHARED_SECRET:-}
     ports:
       - "${PIPECAT_PORT:-8110}:8110"
     extra_hosts:
@@ -126,6 +159,8 @@ services:
     depends_on:
       api:
         condition: service_healthy
+      coturn:
+        condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8110/health', timeout=5).read()"]
       interval: 15s

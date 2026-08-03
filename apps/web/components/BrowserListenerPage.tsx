@@ -37,6 +37,7 @@ interface ListenerState {
     webrtc_url?: string;
     webrtc_ice_url?: string;
     webrtc_stop_url?: string;
+    ice_servers?: RTCIceServer[];
   };
   conversations?: ListenerConversation[];
 }
@@ -127,7 +128,7 @@ export function BrowserListenerPage({ token }: { token: string }) {
       existingPeer.close();
       peerRef.current = null;
     }
-    const peer = new RTCPeerConnection();
+    const peer = new RTCPeerConnection({ iceServers: listenerConfig.ice_servers ?? [] });
     peerRef.current = peer;
     const iceUrl = listenerConfig.webrtc_ice_url;
     const pendingIceCandidates: RTCIceCandidateInit[] = [];
@@ -234,10 +235,12 @@ export function BrowserListenerPage({ token }: { token: string }) {
             <strong>
               {event.speaker}{directionLabel(event.direction) ? ` · ${directionLabel(event.direction)}` : ''}
             </strong>
-            <span style={{ whiteSpace: 'pre-wrap' }}>{event.text}</span>
-            {event.llm_output && event.asr_receipt ? (
+            <span style={{ whiteSpace: 'pre-wrap' }}>
+              {event.llm_output ? 'Spoken (LLM output): ' : ''}{event.llm_output || event.text}
+            </span>
+            {event.asr_receipt ? (
               <span style={{ color: 'var(--muted)', fontSize: 12 }}>
-                LLM output: {event.llm_output} · ASR receipt: {event.asr_receipt}
+                Peer ASR receipt: {event.asr_receipt}
               </span>
             ) : null}
             {event.kind === 'audio' ? (

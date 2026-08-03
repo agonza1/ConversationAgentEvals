@@ -5,7 +5,7 @@ import struct
 
 import pytest
 from pipecat.audio.vad.vad_analyzer import VADState
-from pipecat.frames.frames import Frame, InputAudioRawFrame, OutputAudioRawFrame
+from pipecat.frames.frames import EndFrame, Frame, InputAudioRawFrame, OutputAudioRawFrame, TranscriptionFrame
 from pipecat.processors.frame_processor import FrameDirection
 
 from streaming_media import (
@@ -20,6 +20,10 @@ from streaming_media import (
 
 
 class TurnEndFrame(Frame):
+    pass
+
+
+class FinalFrame(TranscriptionFrame):
     pass
 
 
@@ -127,6 +131,216 @@ def test_rtc_asr_surfaces_protocol_error_at_custom_turn_boundary() -> None:
     asyncio.run(run())
 
 
+@pytest.mark.parametrize(('active', 'finalizing'), [(True, False), (False, True)])
+def test_rtc_asr_waits_for_final_transcript_before_custom_turn_boundary(
+    active: bool,
+    finalizing: bool,
+) -> None:
+    async def run() -> None:
+        processor = StreamingRtcAsrProcessor(
+            base_url="http://rtc-asr.test",
+            participant="tester",
+            final_frame_type=FinalFrame,
+            end_type=TurnEndFrame,
+        )
+        processor.active = active
+        processor.finalizing = finalizing
+        processor.previous_state = VADState.SPEAKING
+        processor.pre_roll.append(b"old turn")
+        events: list[str] = []
+
+        async def finalize(direction: FrameDirection, *, wait_for_final: bool) -> None:
+            assert direction == FrameDirection.DOWNSTREAM
+            assert wait_for_final
+            events.append("finalized")
+            processor.active = False
+            processor.finalizing = False
+            processor.transcript = "final receipt"
+
+        async def wait_for_final() -> None:
+            events.append("waited")
+            processor.finalizing = False
+            processor.transcript = "final receipt"
+
+        async def push_frame(frame: Frame, direction: FrameDirection) -> None:
+            assert direction == FrameDirection.DOWNSTREAM
+            events.append(type(frame).__name__)
+
+        processor._finalize = finalize
+        processor._wait_for_final = wait_for_final
+        processor.push_frame = push_frame
+
+        await processor.process_frame(TurnEndFrame(), FrameDirection.DOWNSTREAM)
+
+        assert events == (["finalized"] if active else ["waited"]) + [
+            "FinalFrame",
+            "TurnEndFrame",
+        ]
+        assert processor.transcript == "final receipt"
+        assert not processor.pre_roll
+        assert processor.previous_state == VADState.QUIET
+
+    asyncio.run(run())
+
+
+def test_rtc_asr_emits_one_aggregated_transcript_per_media_turn() -> None:
+    async def run() -> None:
+        observed_frames: list[Frame] = []
+        observed_events: list[dict[str, object]] = []
+
+        async def event_callback(event: dict[str, object]) -> None:
+            observed_events.append(event)
+
+        processor = StreamingRtcAsrProcessor(
+            base_url="http://rtc-asr.test",
+            participant="target",
+            final_frame_type=FinalFrame,
+            end_type=TurnEndFrame,
+            event_callback=event_callback,
+        )
+        processor.turn_open = True
+        processor.final_segments = ["first clause", "second clause"]
+        processor.transcript = "first clause second clause"
+        processor.final_result = {"revision": 2, "audio_received_ms": 1200}
+
+        async def push_frame(frame: Frame, direction: FrameDirection) -> None:
+            assert direction == FrameDirection.DOWNSTREAM
+            observed_frames.append(frame)
+
+        processor.push_frame = push_frame
+
+        await processor.process_frame(TurnEndFrame(), FrameDirection.DOWNSTREAM)
+
+        finals = [frame for frame in observed_frames if isinstance(frame, FinalFrame)]
+        assert len(finals) == 1
+        assert finals[0].text == "first clause second clause"
+        assert isinstance(observed_frames[-1], TurnEndFrame)
+        assert observed_events == [
+            {
+                "type": "transcript",
+                "participant": "target",
+                "text": "first clause second clause",
+                "is_final": True,
+                "speech_final": True,
+                "revision": 2,
+                "audio_received_ms": 1200,
+                "audio_transcribed_ms": None,
+            }
+        ]
+
+    asyncio.run(run())
+
+
+def test_rtc_asr_preserves_repeated_text_from_distinct_streams() -> None:
+    processor = StreamingRtcAsrProcessor(
+        base_url="http://rtc-asr.test",
+        participant="target",
+        final_frame_type=FinalFrame,
+        end_type=TurnEndFrame,
+    )
+
+    first = {
+        "text": "yes",
+        "is_final": True,
+        "revision": 2,
+        "metadata": {"client_stream_id": "utterance-1"},
+    }
+    second = {
+        "text": "yes",
+        "is_final": True,
+        "revision": 2,
+        "metadata": {"client_stream_id": "utterance-2"},
+    }
+
+    assert processor._record_final_segment("yes", first)
+    assert not processor._record_final_segment("yes", first)
+    assert processor._record_final_segment("yes", second)
+    assert processor.final_segments == ["yes", "yes"]
+    assert processor.transcript == "yes yes"
+
+
+def test_rtc_asr_stale_duplicate_does_not_complete_current_stream() -> None:
+    async def run() -> None:
+        stale_yielded = asyncio.Event()
+        release_current = asyncio.Event()
+
+        class TranscriptWebSocket:
+            async def __aiter__(self):
+                yield '{"type":"transcript","text":"first","is_final":true,"revision":2,"metadata":{"client_stream_id":"utterance-1"}}'
+                stale_yielded.set()
+                await release_current.wait()
+                yield '{"type":"transcript","text":"second","is_final":true,"revision":2,"metadata":{"client_stream_id":"utterance-2"}}'
+                await asyncio.Future()
+
+        processor = StreamingRtcAsrProcessor(
+            base_url="http://rtc-asr.test",
+            participant="target",
+            final_frame_type=FinalFrame,
+            end_type=TurnEndFrame,
+        )
+        processor.websocket = TranscriptWebSocket()
+        processor.current_stream_id = "utterance-2"
+        processor.finalizing = True
+        processor.final_segments = ["first"]
+        processor.transcript = "first"
+        # A new media turn resets the per-turn duplicate set. The stream id
+        # still has to reject a late final from the previous turn.
+        processor.final_segment_event_ids = set()
+
+        receive_task = asyncio.create_task(processor._receive())
+        await stale_yielded.wait()
+        await asyncio.sleep(0)
+
+        assert processor.finalizing
+        assert not processor.final_received.is_set()
+        assert processor.final_result == {}
+
+        release_current.set()
+        await asyncio.wait_for(processor.final_received.wait(), timeout=1)
+
+        assert not processor.finalizing
+        assert processor.final_result["metadata"]["client_stream_id"] == "utterance-2"
+        assert processor.transcript == "first second"
+
+        processor.closing = True
+        receive_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await receive_task
+
+    asyncio.run(run())
+
+
+def test_rtc_asr_without_media_turn_boundaries_does_not_reemit_final_on_end() -> None:
+    async def run() -> None:
+        observed_frames: list[Frame] = []
+        processor = StreamingRtcAsrProcessor(
+            base_url="http://rtc-asr.test",
+            participant="target",
+            final_frame_type=FinalFrame,
+        )
+        processor.turn_open = True
+        processor.transcript = "already emitted"
+        processor.final_result = {"revision": 1}
+
+        async def push_frame(frame: Frame, direction: FrameDirection) -> None:
+            assert direction == FrameDirection.DOWNSTREAM
+            observed_frames.append(frame)
+
+        processor.push_frame = push_frame
+        async def close() -> None:
+            return None
+
+        processor._close = close
+
+        await processor.process_frame(EndFrame(), FrameDirection.DOWNSTREAM)
+
+        assert not any(isinstance(frame, FinalFrame) for frame in observed_frames)
+        assert len(observed_frames) == 1
+        assert isinstance(observed_frames[0], EndFrame)
+
+    asyncio.run(run())
+
+
 def test_vad_restarts_asr_when_speech_resumes_during_finalization() -> None:
     async def run() -> None:
         processor = StreamingRtcAsrProcessor(
@@ -202,3 +416,7 @@ def test_adaptive_tts_caps_unpunctuated_first_chunk() -> None:
         "one two three four five six seven eight nine ten eleven twelve".split()
     )
     assert remainder.strip() == "thirteen fourteen"
+
+
+def test_adaptive_tts_discards_punctuation_only_final_remainder() -> None:
+    assert _next_tts_chunk("?", first_chunk=False, final=True) == ("", "")

@@ -102,6 +102,17 @@ it to both processes when the variable is absent. Managed or separately started
 processes must set the same non-empty value explicitly; it is never included in run
 artifacts or provenance.
 
+The Compose voice profile uses a loopback-only coturn relay with local long-term
+credentials. A remote deployment must configure coturn REST shared-secret
+authentication, set `LISTENER_BROWSER_TURN_URL` to the browser-reachable relay URL,
+and set `LISTENER_TURN_URL` to a URL for that same relay that is reachable from the
+Pipecat process. Do not leave `LISTENER_TURN_URL` at the Compose-local
+`turn:coturn:3478` default when selecting a remote relay. Set the same
+`LISTENER_TURN_SHARED_SECRET` on the API and Pipecat. CAE then issues
+listener-specific HMAC credentials whose expiry matches the listener token for both
+the browser and the Pipecat peer. It will not expose `LISTENER_TURN_CREDENTIAL` to a
+non-loopback relay.
+
 When the API and Pipecat run in the Compose `voice` profile while rtc-asr and
 Kokoro run on the host, give both containers host-reachable service URLs and the
 same non-empty internal token:

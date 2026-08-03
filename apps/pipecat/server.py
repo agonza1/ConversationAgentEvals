@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import hmac
 import io
 import json
 import os
@@ -30,7 +32,7 @@ for _parent in _env_candidates:
 
 try:
     import aiohttp
-    from aiortc import RTCSessionDescription
+    from aiortc import RTCIceServer, RTCSessionDescription
     from aiortc.sdp import candidate_from_sdp
     from pipecat.adapters.schemas.function_schema import FunctionSchema
     from pipecat.adapters.schemas.tools_schema import ToolsSchema
@@ -85,6 +87,7 @@ try:
 except Exception:  # pragma: no cover - fallback for non-pipecat test envs
     aiohttp = None  # type: ignore[assignment]
     RTCSessionDescription = None  # type: ignore[assignment]
+    RTCIceServer = None  # type: ignore[assignment]
     candidate_from_sdp = None  # type: ignore[assignment]
     FunctionSchema = None  # type: ignore[assignment]
     FunctionCallParams = Any  # type: ignore[misc, assignment]
@@ -231,6 +234,11 @@ RTC_ASR_SAMPLE_RATE = 16000
 RTC_ASR_CHANNELS = 1
 RTC_ASR_ENCODING = 'pcm16le'
 KOKORO_BASE_URL = os.getenv('KOKORO_BASE_URL', '').rstrip('/')
+BROWSER_ICE_HOST_OVERRIDE = os.getenv('BROWSER_ICE_HOST_OVERRIDE', '').strip()
+LISTENER_TURN_URL = os.getenv('LISTENER_TURN_URL', '').strip()
+LISTENER_TURN_USERNAME = os.getenv('LISTENER_TURN_USERNAME', '').strip()
+LISTENER_TURN_CREDENTIAL = os.getenv('LISTENER_TURN_CREDENTIAL', '').strip()
+LISTENER_TURN_SHARED_SECRET = os.getenv('LISTENER_TURN_SHARED_SECRET', '').strip()
 KOKORO_MODEL = os.getenv('KOKORO_MODEL', 'kokoro')
 KOKORO_TESTER_VOICE = os.getenv('KOKORO_TESTER_VOICE', 'af_heart')
 _KOKORO_LEGACY_VOICE = os.getenv('KOKORO_VOICE', '').strip()
@@ -247,6 +255,19 @@ HEYGEN_SANDBOX = os.getenv('HEYGEN_SANDBOX', 'true').lower() == 'true'
 HEYGEN_SANDBOX_AVATAR_ID = os.getenv('HEYGEN_SANDBOX_AVATAR_ID', 'dd73ea75-1218-4ef3-92ce-606d5f7fbc0a')
 HEYGEN_VIDEO_WIDTH = int(os.getenv('HEYGEN_VIDEO_WIDTH', '640'))
 HEYGEN_VIDEO_HEIGHT = int(os.getenv('HEYGEN_VIDEO_HEIGHT', '360'))
+
+
+def _listener_turn_auth(*, listener_id: str, expires_at_unix: float) -> tuple[str | None, str | None]:
+    if not LISTENER_TURN_SHARED_SECRET:
+        return LISTENER_TURN_USERNAME or None, LISTENER_TURN_CREDENTIAL or None
+    identity = LISTENER_TURN_USERNAME or 'cae-listener'
+    username = f'{int(expires_at_unix)}:{identity}:{listener_id}'
+    credential = hmac.new(
+        LISTENER_TURN_SHARED_SECRET.encode(),
+        username.encode(),
+        hashlib.sha1,
+    ).digest()
+    return username, base64.b64encode(credential).decode()
 
 
 def _heygen_avatar_id() -> str:
@@ -354,8 +375,14 @@ class _ReferenceDuplexBroadcast:
     session_id: str
     active: bool = True
     listeners: dict[str, _ReferenceListener] = field(default_factory=dict)
+    audio_publish_sequence: int = 0
+    started_listener_media_keys: set[str] = field(default_factory=set)
+
+    def mark_audio_started(self, listener_media_key: str) -> None:
+        self.started_listener_media_keys.add(listener_media_key)
 
     def publish(self, audio: bytes, *, sample_rate: int, channels: int = 1) -> None:
+        self.audio_publish_sequence += 1
         mono_audio = pcm16_to_mono(audio, channels)
         for listener in tuple(self.listeners.values()):
             track = listener.track
@@ -845,6 +872,11 @@ if PIPECAT_RUNTIME_AVAILABLE:
         broadcast: Any
         sequence: int = 0
 
+        def mark_audio_started(self, *, turn_pair: int, direction: str) -> str:
+            listener_media_key = f'{self.session_id}:{turn_pair}:{direction}'
+            self.broadcast.mark_audio_started(listener_media_key)
+            return listener_media_key
+
         def publish_chunk(self, audio: bytes, *, sample_rate: int, channels: int) -> None:
             self.broadcast.publish(audio, sample_rate=sample_rate, channels=channels)
 
@@ -933,21 +965,31 @@ class _StreamingDuplexSession:
             self.bus.publish_chunk(audio, sample_rate=sample_rate, channels=channels)
 
         async def announce_caller(event: dict[str, Any]) -> None:
+            listener_media_key = self.bus.mark_audio_started(
+                turn_pair=self.tester_llm.turn_index,
+                direction='tester_to_target',
+            )
             await self.event_callback({
                 **event,
                 'speaker': 'Caller',
                 'direction': 'tester_to_target',
                 'text': self.tester_llm.text,
                 'llm_output': self.tester_llm.text,
+                'listener_media_key': listener_media_key,
             })
 
         async def announce_target(event: dict[str, Any]) -> None:
+            listener_media_key = self.bus.mark_audio_started(
+                turn_pair=self.tester_llm.turn_index,
+                direction='target_to_tester',
+            )
             await self.event_callback({
                 **event,
                 'speaker': 'Agent',
                 'direction': 'target_to_tester',
                 'text': self.target_llm.text,
                 'llm_output': self.target_llm.text,
+                'listener_media_key': listener_media_key,
             })
 
         self.tester_llm = _StreamingTesterLlmProcessor(
@@ -1080,16 +1122,20 @@ class _StreamingDuplexSession:
                 f'Persistent Pipecat pipeline ended before the turn completed: {exception}'
             )
         turn_complete.result()
-        required = (
-            self.tester_llm.text,
-            self.caller_tts.audio,
-            self.target_asr.transcript,
-            self.target_llm.text,
-            self.target_tts.audio,
-            self.tester_asr.transcript,
-        )
-        if not all(required):
-            raise RuntimeError('Streaming Pipecat exchange produced incomplete media or transcripts.')
+        required = {
+            'tester LLM text': self.tester_llm.text,
+            'tester TTS audio': self.caller_tts.audio,
+            'target ASR transcript': self.target_asr.transcript,
+            'target LLM text': self.target_llm.text,
+            'target TTS audio': self.target_tts.audio,
+            'tester ASR transcript': self.tester_asr.transcript,
+        }
+        missing = [label for label, value in required.items() if not value]
+        if missing:
+            raise RuntimeError(
+                'Streaming Pipecat exchange produced incomplete media or transcripts; '
+                f'missing {", ".join(missing)}.'
+            )
         if (
             self.caller_bridge.audio_ended_at is None
             or self.target_asr.speech_ended_at is None
@@ -1284,6 +1330,9 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                 yield _duplex_event({
                     'type': 'live_audio',
                     'turn_pair': turn_index,
+                    'listener_media_key': (
+                        f'{payload.session_id}:{turn_index}:tester_to_target'
+                    ),
                     'speaker': 'Caller',
                     'direction': 'tester_to_target',
                     'text': result.target_asr.transcript,
@@ -1355,6 +1404,9 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                 yield _duplex_event({
                     'type': 'live_audio',
                     'turn_pair': turn_index,
+                    'listener_media_key': (
+                        f'{payload.session_id}:{turn_index}:target_to_tester'
+                    ),
                     'speaker': 'Agent',
                     'direction': 'target_to_tester',
                     'text': result.tester_asr.transcript,
@@ -1566,13 +1618,30 @@ async def reference_duplex_listen(
         raise HTTPException(status_code=409, detail='The duplex run is not active; retry while it is running.')
     if payload.listener_id in broadcast.listeners:
         raise HTTPException(status_code=409, detail='This listener is already attached.')
-    connection = ReferenceListenerWebRTCConnection(audio_out_sample_rate=24000)
+    attach_started_audio_sequence = broadcast.audio_publish_sequence
+    ice_servers = []
+    if LISTENER_TURN_URL and RTCIceServer is not None:
+        turn_username, turn_credential = _listener_turn_auth(
+            listener_id=payload.listener_id,
+            expires_at_unix=payload.expires_at_unix,
+        )
+        ice_servers.append(RTCIceServer(
+            urls=LISTENER_TURN_URL,
+            username=turn_username,
+            credential=turn_credential,
+        ))
+    connection = ReferenceListenerWebRTCConnection(
+        audio_out_sample_rate=24000,
+        ice_servers=ice_servers,
+    )
     try:
         await connection.initialize(payload.sdp, payload.type)
         answer = connection.get_answer()
         track = getattr(connection, '_presenter_answer_audio_track', None)
         if not answer or track is None:
             raise RuntimeError('Pipecat did not produce a send-only audio answer.')
+        attached_after_audio_sequence = broadcast.audio_publish_sequence
+        pre_attach_listener_media_keys = sorted(broadcast.started_listener_media_keys)
         broadcast.listeners[payload.listener_id] = _ReferenceListener(
             listener_id=payload.listener_id,
             connection=connection,
@@ -1588,6 +1657,10 @@ async def reference_duplex_listen(
             'status': 'listening',
             'read_only': True,
             'requires_microphone': False,
+            'audio_published_during_attach': (
+                attached_after_audio_sequence > attach_started_audio_sequence
+            ),
+            'pre_attach_listener_media_keys': pre_attach_listener_media_keys,
             'answer': answer,
         }
     except HTTPException:
@@ -3154,7 +3227,19 @@ def _coerce_ice_candidate(candidate: dict[str, Any]) -> Any:
         return None
     if candidate_from_sdp is None:
         return candidate
-    parsed = candidate_from_sdp(str(raw_candidate).removeprefix('candidate:'))
+    candidate_sdp = str(raw_candidate).removeprefix('candidate:')
+    parts = candidate_sdp.split()
+    if (
+        BROWSER_ICE_HOST_OVERRIDE
+        and len(parts) > 4
+        and parts[4].lower().endswith('.local')
+    ):
+        # Chromium masks host candidates with an mDNS name. A Linux
+        # container cannot resolve that browser-local name, but it can reach
+        # the browser's UDP socket through Docker's host gateway.
+        parts[4] = BROWSER_ICE_HOST_OVERRIDE
+        candidate_sdp = ' '.join(parts)
+    parsed = candidate_from_sdp(candidate_sdp)
     parsed.sdpMid = candidate.get('sdpMid') if 'sdpMid' in candidate else candidate.get('sdp_mid')
     parsed.sdpMLineIndex = candidate.get('sdpMLineIndex') if 'sdpMLineIndex' in candidate else candidate.get('sdp_mline_index')
     return parsed
