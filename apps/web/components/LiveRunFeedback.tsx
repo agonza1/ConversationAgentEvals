@@ -157,7 +157,7 @@ export function LiveRunFeedback({
         next.listener.requires_microphone ? 'microphone required' : 'no microphone'
       } · ${next.listener.run_status}`,
     );
-    return next.listener.run_status;
+    return next;
   }, [apiBase, listenerToken?.token]);
 
   async function requestListenerToken(): Promise<ListenerToken | null> {
@@ -224,7 +224,7 @@ export function LiveRunFeedback({
     token: ListenerToken,
     isCurrentAttempt: () => boolean,
     activateHttpFallback: () => void,
-    recoverDisconnectedAudio: () => void,
+    recoverDisconnectedAudio: () => Promise<void>,
   ) => {
     if (!token.webrtc_url) {
       throw new Error('This listener token does not expose WebRTC signaling.');
@@ -240,6 +240,7 @@ export function LiveRunFeedback({
     let signalingReady = false;
     let serverListenerAttached = false;
     let recoveringFromDisconnect = false;
+    let recoveryCatchupInFlight = false;
     const ownsSharedConnection = () => peerRef.current === peer;
     const cleanupAttempt = async (notifyServer: boolean) => {
       const ownedSharedConnection = ownsSharedConnection();
@@ -274,9 +275,23 @@ export function LiveRunFeedback({
       if (peer.connectionState === 'connected') {
         clearSetupFallbackTimer();
         clearDisconnectedFallbackTimer();
+        if (recoveryCatchupInFlight) return;
         if (recoveringFromDisconnect) {
           recoveringFromDisconnect = false;
-          recoverDisconnectedAudio();
+          recoveryCatchupInFlight = true;
+          setPlaybackMessage('WebRTC reconnected. Checking for audio captured during the interruption.');
+          void recoverDisconnectedAudio().finally(() => {
+            recoveryCatchupInFlight = false;
+            if (
+              !ownsSharedConnection()
+              || !isCurrentAttempt()
+              || peer.connectionState !== 'connected'
+            ) return;
+            liveSegmentFallbackRef.current = false;
+            setWebrtcStatus('listening');
+            setPlaybackMessage('Listening to the ongoing WebRTC audio stream. Earlier audio is not replayed.');
+          });
+          return;
         }
         liveSegmentFallbackRef.current = false;
         setWebrtcStatus('listening');
@@ -498,7 +513,19 @@ export function LiveRunFeedback({
         token,
         isCurrentAttempt,
         activateHttpFallback,
-        () => void queueAudioEvents(audioEventsRef.current, generation, 'live'),
+        async () => {
+          try {
+            const next = await refreshListener(token.token);
+            const recoveredEvents = (next?.conversations ?? []).flatMap((conversation) =>
+              (conversation.live_events ?? [])
+                .filter((event) => event.kind === 'audio' && event.media_url)
+                .map((event) => ({ ...event, conversationId: conversation.conversation_id })),
+            );
+            void queueAudioEvents(recoveredEvents, generation, 'live');
+          } catch {
+            activateHttpFallback();
+          }
+        },
       );
     } catch {
       activateHttpFallback();
@@ -599,8 +626,9 @@ export function LiveRunFeedback({
         return;
       }
       try {
-        const status = await refreshListener(token);
+        const next = await refreshListener(token);
         if (!active) return;
+        const status = next?.listener.run_status;
         if (status === undefined || status === 'queued' || status === 'running') {
           timer = setTimeout(() => void poll(), 1500);
         }

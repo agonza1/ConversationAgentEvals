@@ -1219,7 +1219,7 @@ test('brief WebRTC recovery replays audio captured during the disconnect', async
           if (this.connectionState !== 'disconnected') return;
           this.connectionState = 'connected';
           this.onconnectionstatechange?.();
-        }, 1700);
+        }, 800);
       }
       close() { this.connectionState = 'closed'; }
     }
@@ -1317,6 +1317,8 @@ test('brief WebRTC recovery replays audio captured during the disconnect', async
         },
         conversations: [{
           conversation_id: 'exec-brief-recovery-1',
+          // The outage turn first appears in the listener snapshot requested
+          // after reconnection, before the normal 1.5-second polling tick.
           live_events: liveEvents(listenerPolls >= 2),
         }],
       }),
