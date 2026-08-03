@@ -267,7 +267,8 @@ export function LiveRunFeedback({
       ) return;
       liveAudioRef.current.srcObject = event.streams[0] ?? new MediaStream([event.track]);
       void liveAudioRef.current.play().catch(() => {
-        setPlaybackMessage('Live audio was blocked by the browser. Stop listening and try again.');
+        if (!ownsSharedConnection() || !isCurrentAttempt()) return;
+        activateHttpFallback();
       });
     };
     peer.onconnectionstatechange = () => {
@@ -337,6 +338,7 @@ export function LiveRunFeedback({
         answer: RTCSessionDescriptionInit;
         status?: string;
         pre_attach_audio_event_keys?: string[];
+        audio_published_during_attach?: boolean;
       }>(
         mediaUrl(apiBase, token.webrtc_url),
         {
@@ -350,7 +352,10 @@ export function LiveRunFeedback({
         await cleanupAttempt(true);
         return;
       }
-      if (hasUnheardSetupAudio(answer.pre_attach_audio_event_keys ?? [])) {
+      if (
+        answer.audio_published_during_attach
+        || hasUnheardSetupAudio(answer.pre_attach_audio_event_keys ?? [])
+      ) {
         activateHttpFallback();
         return;
       }

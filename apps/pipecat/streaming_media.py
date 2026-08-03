@@ -773,13 +773,15 @@ class StreamingRtcAsrProcessor(FrameProcessor):
                 if not text:
                     continue
                 if payload.get("is_final"):
-                    is_new_final = self._record_final_segment(text, payload)
                     metadata = payload.get("metadata")
                     payload_stream_id = (
                         metadata.get("client_stream_id")
                         if isinstance(metadata, dict)
                         else None
                     )
+                    if payload_stream_id and str(payload_stream_id) != self.current_stream_id:
+                        continue
+                    is_new_final = self._record_final_segment(text, payload)
                     completes_current_stream = is_new_final and (
                         not payload_stream_id
                         or str(payload_stream_id) == self.current_stream_id

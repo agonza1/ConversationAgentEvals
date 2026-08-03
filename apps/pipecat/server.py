@@ -375,8 +375,10 @@ class _ReferenceDuplexBroadcast:
     session_id: str
     active: bool = True
     listeners: dict[str, _ReferenceListener] = field(default_factory=dict)
+    audio_publish_sequence: int = 0
 
     def publish(self, audio: bytes, *, sample_rate: int, channels: int = 1) -> None:
+        self.audio_publish_sequence += 1
         mono_audio = pcm16_to_mono(audio, channels)
         for listener in tuple(self.listeners.values()):
             track = listener.track
@@ -1591,6 +1593,7 @@ async def reference_duplex_listen(
         raise HTTPException(status_code=409, detail='The duplex run is not active; retry while it is running.')
     if payload.listener_id in broadcast.listeners:
         raise HTTPException(status_code=409, detail='This listener is already attached.')
+    attach_started_audio_sequence = broadcast.audio_publish_sequence
     ice_servers = []
     if LISTENER_TURN_URL and RTCIceServer is not None:
         turn_username, turn_credential = _listener_turn_auth(
@@ -1612,6 +1615,7 @@ async def reference_duplex_listen(
         track = getattr(connection, '_presenter_answer_audio_track', None)
         if not answer or track is None:
             raise RuntimeError('Pipecat did not produce a send-only audio answer.')
+        attached_after_audio_sequence = broadcast.audio_publish_sequence
         broadcast.listeners[payload.listener_id] = _ReferenceListener(
             listener_id=payload.listener_id,
             connection=connection,
@@ -1627,6 +1631,9 @@ async def reference_duplex_listen(
             'status': 'listening',
             'read_only': True,
             'requires_microphone': False,
+            'audio_published_during_attach': (
+                attached_after_audio_sequence > attach_started_audio_sequence
+            ),
             'answer': answer,
         }
     except HTTPException:

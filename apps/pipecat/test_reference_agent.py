@@ -728,6 +728,7 @@ def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(m
         async def initialize(self, sdp, type):
             assert sdp == 'receive-only-offer'
             assert type == 'offer'
+            broadcast.publish(b'\x00\x00' * 240, sample_rate=24000)
 
         def get_answer(self):
             return {'sdp': 'send-only-answer', 'type': 'answer', 'pc_id': 'listener-pc'}
@@ -769,6 +770,7 @@ def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(m
     assert joined.status_code == 200, joined.text
     assert joined.json()['read_only'] is True
     assert joined.json()['requires_microphone'] is False
+    assert joined.json()['audio_published_during_attach'] is True
     assert joined.json()['answer']['sdp'] == 'send-only-answer'
     turn_server = _Connection.last_kwargs['ice_servers'][0]
     assert turn_server.urls == 'turn:coturn:3478?transport=udp'

@@ -528,18 +528,26 @@ def test_execution_listener_token_is_receive_only_owner_scoped_and_ephemeral(mon
     def fake_proxy(path, payload):
         proxied.append((path, payload))
         if path == '/reference-duplex/listen':
+            # The Pipecat response is returned after the listener has been
+            # registered. A turn persisted in that post-attachment window must
+            # not be mislabeled as pre-attachment by the API.
             execution_run_store.append_live_event(run_id, conversation_id, LiveExecutionEvent(
-                sequence=2,
-                kind='message',
-                speaker='Caller',
-                text='Speech started while the listener attached.',
-                frame_metadata={
-                    'media_event': 'first_audible_byte',
-                    'first_audible_byte_at': 42.0,
-                },
-                created_at='2026-07-18T20:00:01+00:00',
+                sequence=3,
+                kind='audio',
+                speaker='Agent',
+                text='Audio streamed after listener registration.',
+                media_url=(
+                    f'/api/execution/runs/{run_id}/conversations/'
+                    f'{conversation_id}/audio/3?user_id=listener-owner'
+                ),
+                mime_type='audio/wav',
+                created_at='2026-07-18T20:00:02+00:00',
             ))
-        return {'status': 'listening', 'answer': {'sdp': 'send-only-answer', 'type': 'answer'}}
+        return {
+            'status': 'listening',
+            'audio_published_during_attach': True,
+            'answer': {'sdp': 'send-only-answer', 'type': 'answer'},
+        }
 
     monkeypatch.setattr(execution_routes, '_proxy_reference_listener', fake_proxy)
 
@@ -592,6 +600,17 @@ def test_execution_listener_token_is_receive_only_owner_scoped_and_ephemeral(mon
     assert listener['media_transport'] == 'webrtc'
     assert listener['webrtc_url'].endswith('/webrtc')
     token = listener['token']
+    execution_run_store.append_live_event(run_id, conversation_id, LiveExecutionEvent(
+        sequence=2,
+        kind='message',
+        speaker='Caller',
+        text='Speech started before the listener attached.',
+        frame_metadata={
+            'media_event': 'first_audible_byte',
+            'first_audible_byte_at': 42.0,
+        },
+        created_at='2026-07-18T20:00:01+00:00',
+    ))
 
     joined = client.post(
         f'/api/execution/listeners/{token}/webrtc',
@@ -599,10 +618,12 @@ def test_execution_listener_token_is_receive_only_owner_scoped_and_ephemeral(mon
     )
     assert joined.status_code == 200, joined.text
     assert joined.json()['answer']['sdp'] == 'send-only-answer'
+    assert joined.json()['audio_published_during_attach'] is True
     assert joined.json()['pre_attach_audio_event_keys'] == [
         f'{conversation_id}:1',
         f'{conversation_id}:2',
     ]
+    assert f'{conversation_id}:3' not in joined.json()['pre_attach_audio_event_keys']
     assert proxied[0][0] == '/reference-duplex/listen'
     assert proxied[0][1]['execution_run_id'] == run_id
     assert proxied[0][1]['listener_id']

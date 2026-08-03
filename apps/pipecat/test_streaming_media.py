@@ -283,7 +283,9 @@ def test_rtc_asr_stale_duplicate_does_not_complete_current_stream() -> None:
         processor.finalizing = True
         processor.final_segments = ["first"]
         processor.transcript = "first"
-        processor.final_segment_event_ids = {("utterance-1", 2)}
+        # A new media turn resets the per-turn duplicate set. The stream id
+        # still has to reject a late final from the previous turn.
+        processor.final_segment_event_ids = set()
 
         receive_task = asyncio.create_task(processor._receive())
         await stale_yielded.wait()
