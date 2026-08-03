@@ -376,6 +376,10 @@ class _ReferenceDuplexBroadcast:
     active: bool = True
     listeners: dict[str, _ReferenceListener] = field(default_factory=dict)
     audio_publish_sequence: int = 0
+    started_listener_media_keys: set[str] = field(default_factory=set)
+
+    def mark_audio_started(self, listener_media_key: str) -> None:
+        self.started_listener_media_keys.add(listener_media_key)
 
     def publish(self, audio: bytes, *, sample_rate: int, channels: int = 1) -> None:
         self.audio_publish_sequence += 1
@@ -868,6 +872,11 @@ if PIPECAT_RUNTIME_AVAILABLE:
         broadcast: Any
         sequence: int = 0
 
+        def mark_audio_started(self, *, turn_pair: int, direction: str) -> str:
+            listener_media_key = f'{self.session_id}:{turn_pair}:{direction}'
+            self.broadcast.mark_audio_started(listener_media_key)
+            return listener_media_key
+
         def publish_chunk(self, audio: bytes, *, sample_rate: int, channels: int) -> None:
             self.broadcast.publish(audio, sample_rate=sample_rate, channels=channels)
 
@@ -956,21 +965,31 @@ class _StreamingDuplexSession:
             self.bus.publish_chunk(audio, sample_rate=sample_rate, channels=channels)
 
         async def announce_caller(event: dict[str, Any]) -> None:
+            listener_media_key = self.bus.mark_audio_started(
+                turn_pair=self.tester_llm.turn_index,
+                direction='tester_to_target',
+            )
             await self.event_callback({
                 **event,
                 'speaker': 'Caller',
                 'direction': 'tester_to_target',
                 'text': self.tester_llm.text,
                 'llm_output': self.tester_llm.text,
+                'listener_media_key': listener_media_key,
             })
 
         async def announce_target(event: dict[str, Any]) -> None:
+            listener_media_key = self.bus.mark_audio_started(
+                turn_pair=self.tester_llm.turn_index,
+                direction='target_to_tester',
+            )
             await self.event_callback({
                 **event,
                 'speaker': 'Agent',
                 'direction': 'target_to_tester',
                 'text': self.target_llm.text,
                 'llm_output': self.target_llm.text,
+                'listener_media_key': listener_media_key,
             })
 
         self.tester_llm = _StreamingTesterLlmProcessor(
@@ -1311,6 +1330,9 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                 yield _duplex_event({
                     'type': 'live_audio',
                     'turn_pair': turn_index,
+                    'listener_media_key': (
+                        f'{payload.session_id}:{turn_index}:tester_to_target'
+                    ),
                     'speaker': 'Caller',
                     'direction': 'tester_to_target',
                     'text': result.target_asr.transcript,
@@ -1382,6 +1404,9 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                 yield _duplex_event({
                     'type': 'live_audio',
                     'turn_pair': turn_index,
+                    'listener_media_key': (
+                        f'{payload.session_id}:{turn_index}:target_to_tester'
+                    ),
                     'speaker': 'Agent',
                     'direction': 'target_to_tester',
                     'text': result.tester_asr.transcript,
@@ -1616,6 +1641,7 @@ async def reference_duplex_listen(
         if not answer or track is None:
             raise RuntimeError('Pipecat did not produce a send-only audio answer.')
         attached_after_audio_sequence = broadcast.audio_publish_sequence
+        pre_attach_listener_media_keys = sorted(broadcast.started_listener_media_keys)
         broadcast.listeners[payload.listener_id] = _ReferenceListener(
             listener_id=payload.listener_id,
             connection=connection,
@@ -1634,6 +1660,7 @@ async def reference_duplex_listen(
             'audio_published_during_attach': (
                 attached_after_audio_sequence > attach_started_audio_sequence
             ),
+            'pre_attach_listener_media_keys': pre_attach_listener_media_keys,
             'answer': answer,
         }
     except HTTPException:

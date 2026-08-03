@@ -372,6 +372,7 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
         payload = kwargs['payload']
         history = kwargs['history']
         event_callback = kwargs['event_callback']
+        turn_index = kwargs['turn_index']
         _AsyncClient.completion_prompts.extend([
             (
                 'caller-side Pipecat tester\n'
@@ -393,6 +394,9 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
             'text': 'Of course.',
             'llm_output': 'Of course.',
             'first_audible_pcm_at': 10.0,
+            'listener_media_key': (
+                f'{payload.session_id}:{turn_index}:tester_to_target'
+            ),
         })
         await event_callback({
             'type': 'speech_started',
@@ -402,6 +406,9 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
             'text': 'Of course.',
             'llm_output': 'Of course.',
             'first_audible_pcm_at': 11.0,
+            'listener_media_key': (
+                f'{payload.session_id}:{turn_index}:target_to_tester'
+            ),
         })
         return _streaming_result(
             caller_text='Of course.',
@@ -458,6 +465,18 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
         'target_to_tester',
         'tester_to_target',
         'target_to_tester',
+    ]
+    assert [event['listener_media_key'] for event in speech_started] == [
+        f'{request["session_id"]}:1:tester_to_target',
+        f'{request["session_id"]}:1:target_to_tester',
+        f'{request["session_id"]}:2:tester_to_target',
+        f'{request["session_id"]}:2:target_to_tester',
+    ]
+    assert [event['listener_media_key'] for event in live_audio] == [
+        f'{request["session_id"]}:1:tester_to_target',
+        f'{request["session_id"]}:1:target_to_tester',
+        f'{request["session_id"]}:2:tester_to_target',
+        f'{request["session_id"]}:2:target_to_tester',
     ]
     assert live_audio[0]['speaker'] == 'Caller'
     assert live_audio[1]['speaker'] == 'Agent'
@@ -728,6 +747,7 @@ def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(m
         async def initialize(self, sdp, type):
             assert sdp == 'receive-only-offer'
             assert type == 'offer'
+            broadcast.mark_audio_started('active-session:1:tester_to_target')
             broadcast.publish(b'\x00\x00' * 240, sample_rate=24000)
 
         def get_answer(self):
@@ -771,6 +791,9 @@ def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(m
     assert joined.json()['read_only'] is True
     assert joined.json()['requires_microphone'] is False
     assert joined.json()['audio_published_during_attach'] is True
+    assert joined.json()['pre_attach_listener_media_keys'] == [
+        'active-session:1:tester_to_target',
+    ]
     assert joined.json()['answer']['sdp'] == 'send-only-answer'
     turn_server = _Connection.last_kwargs['ice_servers'][0]
     assert turn_server.urls == 'turn:coturn:3478?transport=udp'

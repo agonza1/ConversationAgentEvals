@@ -546,6 +546,9 @@ def test_execution_listener_token_is_receive_only_owner_scoped_and_ephemeral(mon
         return {
             'status': 'listening',
             'audio_published_during_attach': True,
+            'pre_attach_listener_media_keys': [
+                'active-session:1:tester_to_target',
+            ],
             'answer': {'sdp': 'send-only-answer', 'type': 'answer'},
         }
 
@@ -619,6 +622,9 @@ def test_execution_listener_token_is_receive_only_owner_scoped_and_ephemeral(mon
     assert joined.status_code == 200, joined.text
     assert joined.json()['answer']['sdp'] == 'send-only-answer'
     assert joined.json()['audio_published_during_attach'] is True
+    assert joined.json()['pre_attach_listener_media_keys'] == [
+        'active-session:1:tester_to_target',
+    ]
     assert joined.json()['pre_attach_audio_event_keys'] == [
         f'{conversation_id}:1',
         f'{conversation_id}:2',

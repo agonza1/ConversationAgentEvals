@@ -22,6 +22,11 @@ function directionLabel(direction?: LiveRunEvent['direction']) {
   return null;
 }
 
+function listenerMediaKey(event: LiveRunEvent) {
+  const value = event.frame_metadata?.listener_media_key;
+  return typeof value === 'string' && value ? value : null;
+}
+
 export interface LiveRunConversation {
   conversation_id: string;
   live_events?: LiveRunEvent[];
@@ -225,7 +230,7 @@ export function LiveRunFeedback({
     token: ListenerToken,
     isCurrentAttempt: () => boolean,
     activateHttpFallback: () => void,
-    hasUnheardSetupAudio: (eventKeys: string[]) => boolean,
+    hasUnheardSetupAudio: (eventKeys: string[], listenerMediaKeys: string[]) => boolean,
   ) => {
     if (!token.webrtc_url) {
       throw new Error('This listener token does not expose WebRTC signaling.');
@@ -338,6 +343,7 @@ export function LiveRunFeedback({
         answer: RTCSessionDescriptionInit;
         status?: string;
         pre_attach_audio_event_keys?: string[];
+        pre_attach_listener_media_keys?: string[];
         audio_published_during_attach?: boolean;
       }>(
         mediaUrl(apiBase, token.webrtc_url),
@@ -354,7 +360,10 @@ export function LiveRunFeedback({
       }
       if (
         answer.audio_published_during_attach
-        || hasUnheardSetupAudio(answer.pre_attach_audio_event_keys ?? [])
+        || hasUnheardSetupAudio(
+          answer.pre_attach_audio_event_keys ?? [],
+          answer.pre_attach_listener_media_keys ?? [],
+        )
       ) {
         activateHttpFallback();
         return;
@@ -476,6 +485,9 @@ export function LiveRunFeedback({
     // Mark audio that existed before the click as heard. If WebRTC cannot
     // connect, the fallback starts with the next captured turn.
     markAudioEventsHeard(audioEvents, generation);
+    const preListenMediaKeys = new Set(
+      events.map(listenerMediaKey).filter((value): value is string => Boolean(value)),
+    );
     clearSetupFallbackTimer();
     setupFallbackTimerRef.current = window.setTimeout(() => {
       setupFallbackTimerRef.current = null;
@@ -520,9 +532,12 @@ export function LiveRunFeedback({
         token,
         isCurrentAttempt,
         activateHttpFallback,
-        (eventKeys) => eventKeys.some((eventKey) => (
-          !queuedRef.current.has(`${generation}:${eventKey}`)
-        )),
+        (eventKeys, listenerMediaKeys) => (
+          eventKeys.some((eventKey) => (
+            !queuedRef.current.has(`${generation}:${eventKey}`)
+          ))
+          || listenerMediaKeys.some((mediaKey) => !preListenMediaKeys.has(mediaKey))
+        ),
       );
     } catch {
       activateHttpFallback();

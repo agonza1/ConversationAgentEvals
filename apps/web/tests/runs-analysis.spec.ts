@@ -1476,7 +1476,7 @@ test('HTTP fallback queues setup audio while listener-token creation is still pe
   ).__playedVoiceUrls.some((url) => url.includes('/audio/1?')))).toBe(false);
 });
 
-test('HTTP fallback preserves setup audio identified by the attachment watermark', async ({ page }) => {
+test('HTTP fallback preserves setup audio identified by the atomic attachment watermark', async ({ page }) => {
   let listenerPolls = 0;
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
@@ -1520,6 +1520,9 @@ test('HTTP fallback preserves setup audio identified by the attachment watermark
       speaker: 'Caller',
       text: 'Existing audio.',
       direction: 'tester_to_target',
+      frame_metadata: {
+        listener_media_key: 'active-session:1:tester_to_target',
+      },
       media_url: '/api/execution/runs/exec-preconnect-failure/conversations/exec-preconnect-failure-1/audio/1?user_id=demo-user',
     },
     ...(includeSetupTurn ? [{
@@ -1528,6 +1531,9 @@ test('HTTP fallback preserves setup audio identified by the attachment watermark
       speaker: 'Agent',
       text: 'The in-progress setup turn completed.',
       direction: 'target_to_tester',
+      frame_metadata: {
+        listener_media_key: 'active-session:1:target_to_tester',
+      },
       media_url: '/api/execution/runs/exec-preconnect-failure/conversations/exec-preconnect-failure-1/audio/2?user_id=demo-user',
     }] : []),
   ];
@@ -1584,8 +1590,12 @@ test('HTTP fallback preserves setup audio identified by the attachment watermark
           status: 'listening',
           pre_attach_audio_event_keys: [
             'exec-preconnect-failure-1:1',
-            'exec-preconnect-failure-1:2',
           ],
+          pre_attach_listener_media_keys: [
+            'active-session:1:tester_to_target',
+            'active-session:1:target_to_tester',
+          ],
+          audio_published_during_attach: false,
         }),
       });
       return;
@@ -1617,7 +1627,10 @@ test('HTTP fallback preserves setup audio identified by the attachment watermark
                 speaker: 'Agent',
                 text: 'Speech started before the listener attached.',
                 direction: 'target_to_tester',
-                frame_metadata: { media_event: 'first_audible_byte' },
+                frame_metadata: {
+                  media_event: 'first_audible_byte',
+                  listener_media_key: 'active-session:1:target_to_tester',
+                },
               },
             ];
           })(),
