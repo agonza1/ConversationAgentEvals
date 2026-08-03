@@ -1183,9 +1183,14 @@ test('brief WebRTC recovery replays audio captured during the disconnect', async
   let listenerPolls = 0;
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
-    const runtime = window as Window & { __playedVoiceUrls: string[]; __blockedRecoveryOnce: boolean };
+    const runtime = window as Window & {
+      __playedVoiceUrls: string[];
+      __blockedRecoveryOnce: boolean;
+      __liveWebrtcMutedAtReconnect: boolean;
+    };
     runtime.__playedVoiceUrls = [];
     runtime.__blockedRecoveryOnce = false;
+    runtime.__liveWebrtcMutedAtReconnect = false;
     class TestAudio extends EventTarget {
       constructor(private readonly url: string) {
         super();
@@ -1223,6 +1228,9 @@ test('brief WebRTC recovery replays audio captured during the disconnect', async
         setTimeout(() => {
           if (this.connectionState !== 'disconnected') return;
           this.connectionState = 'connected';
+          runtime.__liveWebrtcMutedAtReconnect = Boolean(
+            document.querySelector<HTMLAudioElement>('audio[aria-label="Receive-only live run audio"]')?.muted,
+          );
           this.onconnectionstatechange?.();
         }, 800);
       }
@@ -1338,10 +1346,14 @@ test('brief WebRTC recovery replays audio captured during the disconnect', async
     window as Window & { __playedVoiceUrls: string[] }
   ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(1);
   await expect(feedback.getByRole('button', { name: 'Retry missed live audio' })).toBeVisible();
+  expect(await page.evaluate(() => (
+    window as Window & { __liveWebrtcMutedAtReconnect: boolean }
+  ).__liveWebrtcMutedAtReconnect)).toBe(true);
   await feedback.getByRole('button', { name: 'Retry missed live audio' }).click();
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
   ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(2);
+  await expect(feedback.getByLabel('Receive-only live run audio')).toHaveJSProperty('muted', false);
   expect(await page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
   ).__playedVoiceUrls.some((url) => url.includes('/audio/1?')))).toBe(false);

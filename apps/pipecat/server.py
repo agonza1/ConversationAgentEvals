@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import hmac
 import io
 import json
 import os
@@ -236,6 +238,7 @@ BROWSER_ICE_HOST_OVERRIDE = os.getenv('BROWSER_ICE_HOST_OVERRIDE', '').strip()
 LISTENER_TURN_URL = os.getenv('LISTENER_TURN_URL', '').strip()
 LISTENER_TURN_USERNAME = os.getenv('LISTENER_TURN_USERNAME', '').strip()
 LISTENER_TURN_CREDENTIAL = os.getenv('LISTENER_TURN_CREDENTIAL', '').strip()
+LISTENER_TURN_SHARED_SECRET = os.getenv('LISTENER_TURN_SHARED_SECRET', '').strip()
 KOKORO_MODEL = os.getenv('KOKORO_MODEL', 'kokoro')
 KOKORO_TESTER_VOICE = os.getenv('KOKORO_TESTER_VOICE', 'af_heart')
 _KOKORO_LEGACY_VOICE = os.getenv('KOKORO_VOICE', '').strip()
@@ -252,6 +255,19 @@ HEYGEN_SANDBOX = os.getenv('HEYGEN_SANDBOX', 'true').lower() == 'true'
 HEYGEN_SANDBOX_AVATAR_ID = os.getenv('HEYGEN_SANDBOX_AVATAR_ID', 'dd73ea75-1218-4ef3-92ce-606d5f7fbc0a')
 HEYGEN_VIDEO_WIDTH = int(os.getenv('HEYGEN_VIDEO_WIDTH', '640'))
 HEYGEN_VIDEO_HEIGHT = int(os.getenv('HEYGEN_VIDEO_HEIGHT', '360'))
+
+
+def _listener_turn_auth(*, listener_id: str, expires_at_unix: float) -> tuple[str | None, str | None]:
+    if not LISTENER_TURN_SHARED_SECRET:
+        return LISTENER_TURN_USERNAME or None, LISTENER_TURN_CREDENTIAL or None
+    identity = LISTENER_TURN_USERNAME or 'cae-listener'
+    username = f'{int(expires_at_unix)}:{identity}:{listener_id}'
+    credential = hmac.new(
+        LISTENER_TURN_SHARED_SECRET.encode(),
+        username.encode(),
+        hashlib.sha1,
+    ).digest()
+    return username, base64.b64encode(credential).decode()
 
 
 def _heygen_avatar_id() -> str:
@@ -1577,10 +1593,14 @@ async def reference_duplex_listen(
         raise HTTPException(status_code=409, detail='This listener is already attached.')
     ice_servers = []
     if LISTENER_TURN_URL and RTCIceServer is not None:
+        turn_username, turn_credential = _listener_turn_auth(
+            listener_id=payload.listener_id,
+            expires_at_unix=payload.expires_at_unix,
+        )
         ice_servers.append(RTCIceServer(
             urls=LISTENER_TURN_URL,
-            username=LISTENER_TURN_USERNAME or None,
-            credential=LISTENER_TURN_CREDENTIAL or None,
+            username=turn_username,
+            credential=turn_credential,
         ))
     connection = ReferenceListenerWebRTCConnection(
         audio_out_sample_rate=24000,

@@ -290,16 +290,19 @@ export function LiveRunFeedback({
               || peer.connectionState !== 'connected'
             ) return;
             liveSegmentFallbackRef.current = false;
+            if (liveAudioRef.current) liveAudioRef.current.muted = false;
             setWebrtcStatus('listening');
             setPlaybackMessage('Listening to the ongoing WebRTC audio stream. Earlier audio is not replayed.');
           });
           return;
         }
         liveSegmentFallbackRef.current = false;
+        if (liveAudioRef.current) liveAudioRef.current.muted = false;
         setWebrtcStatus('listening');
         setPlaybackMessage('Listening to the ongoing WebRTC audio stream. Earlier audio is not replayed.');
       } else if (peer.connectionState === 'disconnected') {
         recoveringFromDisconnect = true;
+        if (liveAudioRef.current) liveAudioRef.current.muted = true;
         setWebrtcStatus('connecting');
         setPlaybackMessage('The live WebRTC connection was interrupted. Waiting briefly for it to recover.');
         if (disconnectedFallbackTimerRef.current === null) {
@@ -714,6 +717,7 @@ export function LiveRunFeedback({
                       || liveSegmentFallbackRef.current
                       || peerRef.current?.connectionState !== 'connected'
                     ) return;
+                    if (liveAudioRef.current) liveAudioRef.current.muted = false;
                     setWebrtcStatus('listening');
                     setPlaybackMessage('Listening to the ongoing WebRTC audio stream. Earlier audio is not replayed.');
                   });

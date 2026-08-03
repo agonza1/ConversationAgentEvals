@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import hmac
 import io
 import struct
 import time
@@ -743,6 +745,7 @@ def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(m
     monkeypatch.setattr(server, 'LISTENER_TURN_URL', 'turn:coturn:3478?transport=udp')
     monkeypatch.setattr(server, 'LISTENER_TURN_USERNAME', 'cae')
     monkeypatch.setattr(server, 'LISTENER_TURN_CREDENTIAL', 'local-secret')
+    monkeypatch.setattr(server, 'LISTENER_TURN_SHARED_SECRET', 'rest-auth-secret')
     monkeypatch.setattr(server, 'ReferenceListenerWebRTCConnection', _Connection)
     broadcast = server._ReferenceDuplexBroadcast(
         execution_run_id='active-run',
@@ -751,6 +754,7 @@ def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(m
     server.REFERENCE_DUPLEX_RUNS['active-run'] = broadcast
     client = TestClient(server.app)
 
+    expires_at_unix = server.time.time() + 120
     joined = client.post(
         '/reference-duplex/listen',
         headers={'x-cae-reference-token': 'test-token'},
@@ -759,7 +763,7 @@ def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(m
             'listener_id': 'owner-listener',
             'sdp': 'receive-only-offer',
             'type': 'offer',
-            'expires_at_unix': server.time.time() + 120,
+            'expires_at_unix': expires_at_unix,
         },
     )
     assert joined.status_code == 200, joined.text
@@ -768,8 +772,14 @@ def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(m
     assert joined.json()['answer']['sdp'] == 'send-only-answer'
     turn_server = _Connection.last_kwargs['ice_servers'][0]
     assert turn_server.urls == 'turn:coturn:3478?transport=udp'
-    assert turn_server.username == 'cae'
-    assert turn_server.credential == 'local-secret'
+    expected_username = f'{int(expires_at_unix)}:cae:owner-listener'
+    expected_credential = base64.b64encode(hmac.new(
+        b'rest-auth-secret',
+        expected_username.encode(),
+        hashlib.sha1,
+    ).digest()).decode()
+    assert turn_server.username == expected_username
+    assert turn_server.credential == expected_credential
 
     broadcast.publish(b'\x01\x00' * 240, sample_rate=24000)
     assert _Connection.last._presenter_answer_audio_track.audio
