@@ -99,6 +99,7 @@ export function LiveRunFeedback({
   const [expanded, setExpanded] = useState(false);
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>('idle');
   const [playbackMessage, setPlaybackMessage] = useState<string | null>(null);
+  const [livePlaybackBlocked, setLivePlaybackBlocked] = useState(false);
   const [listenerToken, setListenerToken] = useState<ListenerToken | null>(null);
   const [listenerConversations, setListenerConversations] = useState<LiveRunConversation[] | null>(null);
   const [listenerMessage, setListenerMessage] = useState<string | null>(null);
@@ -223,6 +224,7 @@ export function LiveRunFeedback({
     token: ListenerToken,
     isCurrentAttempt: () => boolean,
     activateHttpFallback: () => void,
+    recoverDisconnectedAudio: () => void,
   ) => {
     if (!token.webrtc_url) {
       throw new Error('This listener token does not expose WebRTC signaling.');
@@ -237,6 +239,7 @@ export function LiveRunFeedback({
     const pendingIceCandidates: RTCIceCandidateInit[] = [];
     let signalingReady = false;
     let serverListenerAttached = false;
+    let recoveringFromDisconnect = false;
     const ownsSharedConnection = () => peerRef.current === peer;
     const cleanupAttempt = async (notifyServer: boolean) => {
       const ownedSharedConnection = ownsSharedConnection();
@@ -271,10 +274,15 @@ export function LiveRunFeedback({
       if (peer.connectionState === 'connected') {
         clearSetupFallbackTimer();
         clearDisconnectedFallbackTimer();
+        if (recoveringFromDisconnect) {
+          recoveringFromDisconnect = false;
+          recoverDisconnectedAudio();
+        }
         liveSegmentFallbackRef.current = false;
         setWebrtcStatus('listening');
         setPlaybackMessage('Listening to the ongoing WebRTC audio stream. Earlier audio is not replayed.');
       } else if (peer.connectionState === 'disconnected') {
+        recoveringFromDisconnect = true;
         setWebrtcStatus('connecting');
         setPlaybackMessage('The live WebRTC connection was interrupted. Waiting briefly for it to recover.');
         if (disconnectedFallbackTimerRef.current === null) {
@@ -361,6 +369,7 @@ export function LiveRunFeedback({
     currentResolveRef.current = null;
     queuedRef.current.clear();
     liveSegmentFallbackRef.current = false;
+    setLivePlaybackBlocked(false);
     playbackRef.current = Promise.resolve();
     disconnectWebRTC();
     setPlaybackMode('idle');
@@ -394,10 +403,17 @@ export function LiveRunFeedback({
         });
         try {
           await audio.play();
+          if (expectedMode === 'live') setLivePlaybackBlocked(false);
           await finished;
         } catch {
           currentResolveRef.current?.();
-          setPlaybackMessage('Playback was blocked by the browser. Click play to try again.');
+          if (expectedMode === 'live') {
+            queuedRef.current.delete(queueKey);
+            setLivePlaybackBlocked(true);
+            setPlaybackMessage('Live fallback audio was blocked by the browser. Retry to hear the missed turn.');
+          } else {
+            setPlaybackMessage('Playback was blocked by the browser. Click play to try again.');
+          }
         } finally {
           if (currentAudioRef.current === audio) currentAudioRef.current = null;
           currentResolveRef.current = null;
@@ -478,7 +494,12 @@ export function LiveRunFeedback({
     await refreshListener(token.token).catch(() => undefined);
     if (!isCurrentAttempt() || liveSegmentFallbackRef.current) return;
     try {
-      await connectWebRTC(token, isCurrentAttempt, activateHttpFallback);
+      await connectWebRTC(
+        token,
+        isCurrentAttempt,
+        activateHttpFallback,
+        () => void queueAudioEvents(audioEventsRef.current, generation, 'live'),
+      );
     } catch {
       activateHttpFallback();
     }
@@ -642,6 +663,17 @@ export function LiveRunFeedback({
             >
               {audioButtonLabel}
             </button>
+            {playbackMode === 'live' && livePlaybackBlocked ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setLivePlaybackBlocked(false);
+                  void queueAudioEvents(audioEventsRef.current, playbackGenerationRef.current, 'live');
+                }}
+              >
+                Retry missed live audio
+              </button>
+            ) : null}
             {listenerActive ? (
               <button
                 type="button"
