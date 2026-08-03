@@ -158,7 +158,7 @@ export function LiveRunFeedback({
         next.listener.requires_microphone ? 'microphone required' : 'no microphone'
       } · ${next.listener.run_status}`,
     );
-    return next;
+    return next.listener.run_status;
   }, [apiBase, listenerToken?.token]);
 
   async function requestListenerToken(): Promise<ListenerToken | null> {
@@ -225,7 +225,6 @@ export function LiveRunFeedback({
     token: ListenerToken,
     isCurrentAttempt: () => boolean,
     activateHttpFallback: () => void,
-    recoverDisconnectedAudio: () => Promise<boolean>,
   ) => {
     if (!token.webrtc_url) {
       throw new Error('This listener token does not expose WebRTC signaling.');
@@ -241,7 +240,6 @@ export function LiveRunFeedback({
     let signalingReady = false;
     let serverListenerAttached = false;
     let recoveringFromDisconnect = false;
-    let recoveryCatchupInFlight = false;
     const ownsSharedConnection = () => peerRef.current === peer;
     const cleanupAttempt = async (notifyServer: boolean) => {
       const ownedSharedConnection = ownsSharedConnection();
@@ -276,24 +274,9 @@ export function LiveRunFeedback({
       if (peer.connectionState === 'connected') {
         clearSetupFallbackTimer();
         clearDisconnectedFallbackTimer();
-        if (recoveryCatchupInFlight) return;
         if (recoveringFromDisconnect) {
           recoveringFromDisconnect = false;
-          recoveryCatchupInFlight = true;
-          setPlaybackMessage('WebRTC reconnected. Checking for audio captured during the interruption.');
-          void recoverDisconnectedAudio().then((catchupSucceeded) => {
-            recoveryCatchupInFlight = false;
-            if (
-              !catchupSucceeded
-              || !ownsSharedConnection()
-              || !isCurrentAttempt()
-              || peer.connectionState !== 'connected'
-            ) return;
-            liveSegmentFallbackRef.current = false;
-            if (liveAudioRef.current) liveAudioRef.current.muted = false;
-            setWebrtcStatus('listening');
-            setPlaybackMessage('Listening to the ongoing WebRTC audio stream. Earlier audio is not replayed.');
-          });
+          activateHttpFallback();
           return;
         }
         liveSegmentFallbackRef.current = false;
@@ -523,21 +506,6 @@ export function LiveRunFeedback({
         token,
         isCurrentAttempt,
         activateHttpFallback,
-        async () => {
-          try {
-            const next = await refreshListener(token.token);
-            const recoveredEvents = (next?.conversations ?? []).flatMap((conversation) =>
-              (conversation.live_events ?? [])
-                .filter((event) => event.kind === 'audio' && event.media_url)
-                .map((event) => ({ ...event, conversationId: conversation.conversation_id })),
-            );
-            await queueAudioEvents(recoveredEvents, generation, 'live');
-            return blockedLiveQueueKeysRef.current.size === 0;
-          } catch {
-            activateHttpFallback();
-            return false;
-          }
-        },
       );
     } catch {
       activateHttpFallback();
@@ -638,9 +606,8 @@ export function LiveRunFeedback({
         return;
       }
       try {
-        const next = await refreshListener(token);
+        const status = await refreshListener(token);
         if (!active) return;
-        const status = next?.listener.run_status;
         if (status === undefined || status === 'queued' || status === 'running') {
           timer = setTimeout(() => void poll(), 1500);
         }
@@ -707,20 +674,7 @@ export function LiveRunFeedback({
               <button
                 type="button"
                 onClick={() => {
-                  void queueAudioEvents(
-                    audioEventsRef.current,
-                    playbackGenerationRef.current,
-                    'live',
-                  ).then(() => {
-                    if (
-                      blockedLiveQueueKeysRef.current.size > 0
-                      || liveSegmentFallbackRef.current
-                      || peerRef.current?.connectionState !== 'connected'
-                    ) return;
-                    if (liveAudioRef.current) liveAudioRef.current.muted = false;
-                    setWebrtcStatus('listening');
-                    setPlaybackMessage('Listening to the ongoing WebRTC audio stream. Earlier audio is not replayed.');
-                  });
+                  void queueAudioEvents(audioEventsRef.current, playbackGenerationRef.current, 'live');
                 }}
               >
                 Retry missed live audio

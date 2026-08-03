@@ -1179,7 +1179,7 @@ test('active voice listening falls back after disconnect grace and completed pla
   ).__playedVoiceUrls.filter((url) => url.includes('/audio/3?')).length)).toBe(2);
 });
 
-test('brief WebRTC recovery replays audio captured during the disconnect', async ({ page }) => {
+test('brief WebRTC recovery switches to lossless HTTP fallback', async ({ page }) => {
   let listenerPolls = 0;
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
@@ -1342,6 +1342,7 @@ test('brief WebRTC recovery replays audio captured during the disconnect', async
   const feedback = page.getByLabel('Live run feedback');
   await feedback.getByRole('button', { name: 'Listen to live WebRTC' }).click();
   await expect(feedback.getByText('The live WebRTC connection was interrupted. Waiting briefly for it to recover.')).toBeVisible();
+  await expect(feedback.getByLabel('WebRTC listener status')).toContainText('HTTP fallback');
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
   ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(1);
@@ -1353,11 +1354,9 @@ test('brief WebRTC recovery replays audio captured during the disconnect', async
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
   ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(2);
-  await expect(feedback.getByLabel('Receive-only live run audio')).toHaveJSProperty('muted', false);
   expect(await page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
   ).__playedVoiceUrls.some((url) => url.includes('/audio/1?')))).toBe(false);
-  await expect(feedback.getByLabel('WebRTC listener status')).toContainText('WebRTC · listening');
 });
 
 test('HTTP fallback queues setup audio while listener-token creation is still pending', async ({ page }) => {
