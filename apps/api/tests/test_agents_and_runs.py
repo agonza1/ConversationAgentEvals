@@ -96,6 +96,36 @@ def test_http_target_requires_real_connection_configuration():
     assert 'string_pattern_mismatch' in arbitrary_environment_variable.text
 
 
+def test_agent_options_expose_adapter_tester_executor_defaults():
+    response = client.get('/api/agents/options')
+    assert response.status_code == 200
+    targets = {item['id']: item for item in response.json()['targets']}
+
+    http_target = targets['http_endpoint']
+    assert http_target['channel'] == 'text'
+    assert http_target['group'] == 'live_connection'
+    assert http_target['available'] is True
+    assert http_target['requires_connection'] == ['endpoint_url']
+    assert http_target['defaults'] == {
+        'mode': 'text_callable',
+        'tester_id': 'scenario_simulator',
+        'executor_id': 'local_async_runner',
+        'audio_transport': 'none',
+    }
+
+    sip_target = targets['sip_agent']
+    assert sip_target['channel'] == 'voice'
+    assert sip_target['available'] is False
+    assert sip_target['requires_connection'] == ['acc_base_url', 'sip_uri']
+    assert sip_target['defaults']['executor_id'] == 'acc_sip'
+    assert 'cannot execute this adapter' in sip_target['unavailable_reason']
+
+    builtin_voice = targets['builtin_sample_voice']
+    assert builtin_voice['group'] == 'built_in_sample'
+    assert builtin_voice['defaults']['tester_id'] == 'pipecat_tester'
+    assert builtin_voice['defaults']['executor_id'] == 'cae_local_audio_loop'
+
+
 def test_http_target_credentials_only_resolve_from_dedicated_namespace(monkeypatch):
     monkeypatch.setenv('AWS_SECRET_ACCESS_KEY', 'must-not-be-read')
 
