@@ -1989,6 +1989,132 @@ test('owner live WebRTC uses a different token from the shared listener link', a
   await expect(feedback.getByRole('button', { name: 'Stop live WebRTC' })).toBeVisible();
 });
 
+test('recorded conversation playback pauses and resumes from the current position', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+    type ReplayAudio = EventTarget & { currentTime: number };
+    const runtime = window as Window & {
+      __replayPlayCalls: Array<{ url: string; currentTime: number }>;
+      __replayPauseCalls: number;
+      __currentReplayAudio: ReplayAudio | null;
+      __finishReplayAudio: () => void;
+    };
+    runtime.__replayPlayCalls = [];
+    runtime.__replayPauseCalls = 0;
+    runtime.__currentReplayAudio = null;
+    runtime.__finishReplayAudio = () => {
+      runtime.__currentReplayAudio?.dispatchEvent(new Event('ended'));
+    };
+    class TestAudio extends EventTarget {
+      currentTime = 0;
+
+      constructor(private readonly url: string) {
+        super();
+      }
+
+      play() {
+        runtime.__currentReplayAudio = this;
+        runtime.__replayPlayCalls.push({ url: this.url, currentTime: this.currentTime });
+        return Promise.resolve();
+      }
+
+      pause() {
+        runtime.__replayPauseCalls += 1;
+      }
+    }
+    Object.defineProperty(window, 'Audio', { value: TestAudio });
+  });
+
+  await page.route('**/api/execution/runs/exec-pause-replay**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...runFixture,
+        execution_run_id: 'exec-pause-replay',
+        status: 'completed',
+        mode: 'pipecat_webrtc',
+        conversations: [{
+          ...runFixture.conversations[0],
+          conversation_id: 'exec-pause-replay-1',
+          execution_run_id: 'exec-pause-replay',
+          status: 'completed',
+          mode: 'pipecat_webrtc',
+          live_events: [1, 2].map((sequence) => ({
+            sequence,
+            kind: 'audio',
+            speaker: sequence === 1 ? 'Caller' : 'Agent',
+            text: sequence === 1 ? 'First recorded turn.' : 'Second recorded turn.',
+            direction: sequence === 1 ? 'tester_to_target' : 'target_to_tester',
+            media_url: `/api/execution/runs/exec-pause-replay/conversations/exec-pause-replay-1/audio/${sequence}?user_id=demo-user`,
+          })),
+        }],
+      }),
+    });
+  });
+
+  await page.goto('/runs/exec-pause-replay');
+  const feedback = page.getByLabel('Live run feedback');
+  await feedback.getByRole('button', { name: 'Play recorded conversation' }).click();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __replayPlayCalls: unknown[] }
+  ).__replayPlayCalls.length)).toBe(1);
+  await expect(feedback.getByRole('button', { name: 'Pause playback' })).toBeVisible();
+  await page.evaluate(() => {
+    const runtime = window as Window & { __currentReplayAudio: { currentTime: number } | null };
+    if (runtime.__currentReplayAudio) runtime.__currentReplayAudio.currentTime = 3.5;
+  });
+
+  await feedback.getByRole('button', { name: 'Pause playback' }).click();
+  await expect(feedback.getByRole('button', { name: 'Resume playback' })).toBeVisible();
+  await expect(feedback.getByText('Playback paused. Resume to continue from this point.')).toBeVisible();
+  await page.waitForTimeout(100);
+  expect(await page.evaluate(() => (
+    window as Window & { __replayPlayCalls: unknown[] }
+  ).__replayPlayCalls.length)).toBe(1);
+
+  await feedback.getByRole('button', { name: 'Resume playback' }).click();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __replayPlayCalls: unknown[] }
+  ).__replayPlayCalls.length)).toBe(2);
+  const resumedCall = await page.evaluate(() => (
+    window as Window & {
+      __replayPlayCalls: Array<{ url: string; currentTime: number }>;
+    }
+  ).__replayPlayCalls[1]);
+  expect(resumedCall.url).toContain('/audio/1?');
+  expect(resumedCall.currentTime).toBe(3.5);
+
+  await page.evaluate(() => (
+    window as Window & { __finishReplayAudio: () => void }
+  ).__finishReplayAudio());
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __replayPlayCalls: unknown[] }
+  ).__replayPlayCalls.length)).toBe(3);
+  const secondTurnCall = await page.evaluate(() => (
+    window as Window & {
+      __replayPlayCalls: Array<{ url: string; currentTime: number }>;
+    }
+  ).__replayPlayCalls[2]);
+  expect(secondTurnCall.url).toContain('/audio/2?');
+  await page.evaluate(() => (
+    window as Window & { __finishReplayAudio: () => void }
+  ).__finishReplayAudio());
+  await expect(feedback.getByRole('button', { name: 'Play recorded conversation' })).toBeVisible();
+  await expect(feedback.getByText('Playback finished. Play again to restart from the beginning.')).toBeVisible();
+
+  await feedback.getByRole('button', { name: 'Play recorded conversation' }).click();
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __replayPlayCalls: unknown[] }
+  ).__replayPlayCalls.length)).toBe(4);
+  await feedback.getByRole('button', { name: 'Pause playback' }).click();
+  await feedback.getByRole('button', { name: 'Stop playback', exact: true }).click();
+  await expect(feedback.getByRole('button', { name: 'Play recorded conversation' })).toBeVisible();
+  await expect(feedback.getByText(
+    'Playback stopped. Play again to restart from the beginning.',
+  )).toBeVisible();
+});
+
 test('completed replay switches from listener-token audio to owner-scoped audio', async ({ page }) => {
   let runPolls = 0;
   await page.addInitScript(() => {
