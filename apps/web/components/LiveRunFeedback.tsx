@@ -454,7 +454,29 @@ export function LiveRunFeedback({
             setLivePlaybackBlocked(blockedLiveQueueKeysRef.current.size > 0);
           }
           await finished;
-        } catch {
+        } catch (error) {
+          const isPausedAbort = (
+            expectedMode === 'replay'
+            && replayPausedRef.current
+            && error instanceof DOMException
+            && error.name === 'AbortError'
+          );
+          if (isPausedAbort) {
+            await new Promise<void>((resolve) => {
+              replayResumeResolveRef.current = resolve;
+            });
+            if (
+              playbackGenerationRef.current !== generation
+              || playbackModeRef.current !== expectedMode
+              || currentAudioRef.current !== audio
+            ) {
+              return;
+            }
+            await audio.play();
+            await finished;
+            return;
+          }
+
           currentResolveRef.current?.();
           if (expectedMode === 'live') {
             queuedRef.current.delete(queueKey);
