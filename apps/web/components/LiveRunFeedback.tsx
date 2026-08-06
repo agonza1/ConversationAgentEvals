@@ -105,6 +105,7 @@ export function LiveRunFeedback({
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>('idle');
   const [playbackMessage, setPlaybackMessage] = useState<string | null>(null);
   const [livePlaybackBlocked, setLivePlaybackBlocked] = useState(false);
+  const [replayPaused, setReplayPaused] = useState(false);
   const [listenerToken, setListenerToken] = useState<ListenerToken | null>(null);
   const [listenerConversations, setListenerConversations] = useState<LiveRunConversation[] | null>(null);
   const [listenerMessage, setListenerMessage] = useState<string | null>(null);
@@ -116,6 +117,8 @@ export function LiveRunFeedback({
   const playbackGenerationRef = useRef(0);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const currentResolveRef = useRef<(() => void) | null>(null);
+  const replayPausedRef = useRef(false);
+  const replayResumeResolveRef = useRef<(() => void) | null>(null);
   const playbackRef = useRef(Promise.resolve());
   const liveSegmentFallbackRef = useRef(false);
   const peerRef = useRef<RTCPeerConnection | null>(null);
@@ -393,10 +396,14 @@ export function LiveRunFeedback({
     currentAudioRef.current = null;
     currentResolveRef.current?.();
     currentResolveRef.current = null;
+    replayPausedRef.current = false;
+    replayResumeResolveRef.current?.();
+    replayResumeResolveRef.current = null;
     queuedRef.current.clear();
     blockedLiveQueueKeysRef.current.clear();
     liveSegmentFallbackRef.current = false;
     setLivePlaybackBlocked(false);
+    setReplayPaused(false);
     playbackRef.current = Promise.resolve();
     disconnectWebRTC();
     setPlaybackMode('idle');
@@ -420,6 +427,18 @@ export function LiveRunFeedback({
         ) {
           return;
         }
+        if (expectedMode === 'replay' && replayPausedRef.current) {
+          await new Promise<void>((resolve) => {
+            replayResumeResolveRef.current = resolve;
+          });
+          replayResumeResolveRef.current = null;
+          if (
+            playbackGenerationRef.current !== generation
+            || playbackModeRef.current !== expectedMode
+          ) {
+            return;
+          }
+        }
         const audio = new Audio(mediaUrl(apiBase, event.media_url as string));
         currentAudioRef.current = audio;
         const finished = new Promise<void>((resolve) => {
@@ -435,7 +454,29 @@ export function LiveRunFeedback({
             setLivePlaybackBlocked(blockedLiveQueueKeysRef.current.size > 0);
           }
           await finished;
-        } catch {
+        } catch (error) {
+          const isPausedAbort = (
+            expectedMode === 'replay'
+            && replayPausedRef.current
+            && error instanceof DOMException
+            && error.name === 'AbortError'
+          );
+          if (isPausedAbort) {
+            await new Promise<void>((resolve) => {
+              replayResumeResolveRef.current = resolve;
+            });
+            if (
+              playbackGenerationRef.current !== generation
+              || playbackModeRef.current !== expectedMode
+              || currentAudioRef.current !== audio
+            ) {
+              return;
+            }
+            await audio.play();
+            await finished;
+            return;
+          }
+
           currentResolveRef.current?.();
           if (expectedMode === 'live') {
             queuedRef.current.delete(queueKey);
@@ -555,6 +596,32 @@ export function LiveRunFeedback({
     void queueAudioEvents(audioEvents, playbackGenerationRef.current, 'live');
   }, [audioEvents, markAudioEventsHeard, playbackMode, queueAudioEvents, webrtcStatus]);
 
+  function pauseReplay() {
+    if (playbackModeRef.current !== 'replay' || replayPausedRef.current) return;
+    replayPausedRef.current = true;
+    currentAudioRef.current?.pause();
+    setReplayPaused(true);
+    setPlaybackMessage('Playback paused. Resume to continue from this point.');
+  }
+
+  async function resumeReplay() {
+    if (playbackModeRef.current !== 'replay' || !replayPausedRef.current) return;
+    const audio = currentAudioRef.current;
+    if (audio) {
+      try {
+        await audio.play();
+      } catch {
+        setPlaybackMessage('Playback was blocked by the browser. Click resume to try again.');
+        return;
+      }
+    }
+    replayPausedRef.current = false;
+    replayResumeResolveRef.current?.();
+    replayResumeResolveRef.current = null;
+    setReplayPaused(false);
+    setPlaybackMessage('Playing the recorded conversation from the paused position.');
+  }
+
   function startReplay() {
     stopPlayback();
     if (!audioEvents.length) {
@@ -572,7 +639,9 @@ export function LiveRunFeedback({
         && playbackModeRef.current === 'replay'
       ) {
         playbackModeRef.current = 'idle';
+        replayPausedRef.current = false;
         setPlaybackMode('idle');
+        setReplayPaused(false);
         setPlaybackMessage('Playback finished. Play again to restart from the beginning.');
       }
     });
@@ -660,7 +729,7 @@ export function LiveRunFeedback({
   const audioButtonLabel = playbackMode === 'live'
     ? 'Stop live WebRTC'
     : playbackMode === 'replay'
-      ? 'Stop playback'
+      ? (replayPaused ? 'Resume playback' : 'Pause playback')
       : listenerActive
         ? 'Listen to live WebRTC'
         : audioEvents.length
@@ -687,12 +756,16 @@ export function LiveRunFeedback({
               aria-pressed={playbackMode !== 'idle'}
               disabled={!listenerActive && !audioEvents.length}
               onClick={() => {
-                if (playbackMode !== 'idle') {
+                if (playbackMode === 'live') {
                   stopPlayback(
-                    listenerActive
-                      ? 'Live listening stopped. Start again to hear only future audio.'
-                      : 'Playback stopped. Play again to restart from the beginning.',
+                    'Live listening stopped. Start again to hear only future audio.',
                   );
+                } else if (playbackMode === 'replay') {
+                  if (replayPaused) {
+                    void resumeReplay();
+                  } else {
+                    pauseReplay();
+                  }
                 } else if (listenerActive) {
                   void startLiveListening();
                 } else {
@@ -702,6 +775,16 @@ export function LiveRunFeedback({
             >
               {audioButtonLabel}
             </button>
+            {playbackMode === 'replay' ? (
+              <button
+                type="button"
+                onClick={() => stopPlayback(
+                  'Playback stopped. Play again to restart from the beginning.',
+                )}
+              >
+                Stop playback
+              </button>
+            ) : null}
             {playbackMode === 'live' && livePlaybackBlocked ? (
               <button
                 type="button"
