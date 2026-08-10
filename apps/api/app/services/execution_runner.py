@@ -66,6 +66,7 @@ EVALUATION_FINDING_KEYS = (
     'forbidden_action_score',
     'final_state_score',
     'workflow_order_score',
+    'scoring_mode',
     'score_components',
     'completed_actions',
     'missing_actions',

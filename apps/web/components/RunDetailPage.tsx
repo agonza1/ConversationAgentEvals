@@ -439,7 +439,9 @@ function MetricDetail({
           <div><dt>Evaluator verdict</dt><dd>{evidence.verdict}</dd></div>
           <div>
             <dt>Evaluation basis</dt>
-            <dd>{adjudication ? 'Confirmed LLM adjudication' : 'Automatic rule-based evaluation'}</dd>
+            <dd>
+              <EvaluationBasisHelp conversation={conversation} adjudicated={Boolean(adjudication)} />
+            </dd>
           </div>
           <div><dt>Final state</dt><dd>{evidence.finalState}</dd></div>
           <div><dt>Termination</dt><dd>{evidence.termination}</dd></div>
@@ -1123,6 +1125,128 @@ function resolutionEvidence(conversation: ConversationRecord) {
     error,
     gaps: [...new Set(gaps)],
   };
+}
+
+function EvaluationBasisHelp({
+  conversation,
+  adjudicated,
+}: {
+  conversation: ConversationRecord;
+  adjudicated: boolean;
+}) {
+  const tooltipId = `evaluation-basis-${conversation.conversation_id}`;
+  const details = evaluationBasisDetails(conversation, adjudicated);
+  return (
+    <span
+      className="evaluation-basis-help"
+      tabIndex={0}
+      aria-describedby={tooltipId}
+    >
+      <span>{adjudicated ? 'Confirmed LLM adjudication' : 'Automatic rule-based evaluation'}</span>
+      <span className="evaluation-basis-help-icon" aria-hidden="true">i</span>
+      <span className="evaluation-basis-tooltip" id={tooltipId} role="tooltip">
+        <strong>{details.heading}</strong>
+        {details.lines.map((line) => <span key={line}>{line}</span>)}
+      </span>
+    </span>
+  );
+}
+
+function evaluationBasisDetails(conversation: ConversationRecord, adjudicated: boolean) {
+  if (adjudicated) {
+    return {
+      heading: 'How this evaluation was determined',
+      lines: [
+        'A user confirmed an LLM judge proposal after reviewing the transcript and recorded evidence.',
+        'The confirmed verdict and score are shown here; the original automatic result remains preserved in the run history for audit.',
+      ],
+    };
+  }
+
+  const findings = asRecord(conversation.evaluation_findings);
+  const components = numericScoreComponents(findings.score_components);
+  const reportedMode = stringValue(findings.scoring_mode)?.toLowerCase();
+  const mode = reportedMode === 'agentic' || reportedMode === 'transcript'
+    ? reportedMode
+    : Object.hasOwn(components, 'rubric') || Object.hasOwn(components, 'forbidden_penalty')
+      ? 'transcript'
+      : Object.keys(components).length
+        ? 'agentic'
+        : 'unknown';
+  const score = conversation.metrics_summary?.score ?? conversation.score;
+  const scoreLabel = typeof score === 'number' ? `${Math.round(score)}/100` : 'the reported score';
+
+  if (mode === 'agentic') {
+    const preferredOrder = ['required_actions', 'forbidden_actions', 'workflow_order', 'final_state'];
+    const measured = [
+      ...preferredOrder
+        .filter((name) => typeof components[name] === 'number')
+        .map((name) => [name, components[name]] as [string, number]),
+      ...Object.entries(components)
+        .filter(([name]) => name !== 'forbidden_penalty' && !preferredOrder.includes(name)),
+    ];
+    const equation = measured.length
+      ? `${measured.map(([name, value]) => `${scoreComponentLabel(name)} ${formatScoreNumber(value)}`).join(' + ')}; average = ${scoreLabel}.`
+      : null;
+    return {
+      heading: 'How the automatic score is calculated',
+      lines: [
+        'Agentic-evidence mode averages only the dimensions the run can prove. Required actions earn a completion percentage. Forbidden actions, workflow order, and final state each earn 100 when satisfied or 0 when violated; unavailable dimensions are excluded.',
+        ...(equation ? [`This run: ${equation}`] : []),
+        'A score of 100 means every measured component earned full credit; 0 means none did; 50 means the measured points average to half credit (for example, one 100 and one 0).',
+        'Passing also requires at least 75/100 and no missing or failed required action, forbidden action, final-state mismatch, or workflow-order failure. A score alone does not guarantee a pass.',
+      ],
+    };
+  }
+
+  if (mode === 'transcript') {
+    const requiredActions = components.required_actions;
+    const rubric = components.rubric;
+    const penalty = components.forbidden_penalty;
+    const hasEquation = [requiredActions, rubric, penalty].every((value) => typeof value === 'number');
+    return {
+      heading: 'How the automatic score is calculated',
+      lines: [
+        'Transcript mode calculates 45% of required-action completion plus 55% of the weighted rubric, then subtracts 20 points per forbidden action (up to 40 points) and clamps the result to 0–100.',
+        ...(hasEquation ? [
+          `This run: 45% × ${formatScoreNumber(requiredActions)} + 55% × ${formatScoreNumber(rubric)} − ${formatScoreNumber(penalty)} penalty = ${scoreLabel}.`,
+        ] : []),
+        'A score of 100 means full required-action and rubric credit with no penalty; 0 means the formula earned no remaining credit; 50 means the weighted result is half of the available 100 points.',
+        'Passing also requires at least 75/100 and no missing or failed required action or other hard-check failure. A score alone does not guarantee a pass.',
+      ],
+    };
+  }
+
+  return {
+    heading: 'How the automatic score is calculated',
+    lines: [
+      'The evaluator deterministically compares recorded evidence with the scenario’s required actions, rubric, forbidden actions, workflow order, and expected final state. It does not ask an LLM to assign this score.',
+      `${scoreLabel} is the result recorded by the evaluator. A score of 100 is full credit, 0 is no credit, and 50 is half credit across the checks that could be measured.`,
+      'Passing also requires at least 75/100 and no hard-check failures. A score alone does not guarantee a pass.',
+    ],
+  };
+}
+
+function numericScoreComponents(value: unknown) {
+  const record = asRecord(value);
+  return Object.fromEntries(
+    Object.entries(record).filter((entry): entry is [string, number] => typeof entry[1] === 'number'),
+  );
+}
+
+function scoreComponentLabel(value: string) {
+  const labels: Record<string, string> = {
+    required_actions: 'required actions',
+    forbidden_actions: 'forbidden actions',
+    workflow_order: 'workflow order',
+    final_state: 'final state',
+    rubric: 'rubric',
+  };
+  return labels[value] || formatRuntimeId(value).toLowerCase();
+}
+
+function formatScoreNumber(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, '');
 }
 
 function automaticResolutionGaps(conversation: ConversationRecord) {
