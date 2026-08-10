@@ -325,8 +325,11 @@ def test_reference_turn_runs_real_pipecat_pipeline(monkeypatch):
     assert payload['first_audio_byte_latency_ms'] >= 0
     assert payload['response_complete_latency_ms'] >= payload['first_audio_byte_latency_ms']
     assert base64.b64decode(payload['agent_audio_wav_base64']).startswith(b'RIFF')
-    assert 'one or two short sentences' in _AsyncClient.completion_prompts[0]
-    assert 'Ask at most one question at a time' in _AsyncClient.completion_prompts[0]
+    assert 'default to one sentence and no more than 20 words' in _AsyncClient.completion_prompts[0]
+    assert 'Use a second short sentence only for essential safety guidance' in _AsyncClient.completion_prompts[0]
+    assert 'Advance one necessary step per turn' in _AsyncClient.completion_prompts[0]
+    assert 'ask at most one question' in _AsyncClient.completion_prompts[0]
+    assert 'Avoid filler, recaps, and repeating information' in _AsyncClient.completion_prompts[0]
     assert 'Do not use markdown, bullets, or numbered lists' in _AsyncClient.completion_prompts[0]
     assert _AsyncClient.speech_voices == ['af_bella']
 
@@ -381,7 +384,7 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
             ),
             (
                 'built-in generalist voice agent\n'
-                'one or two short sentences\n'
+                'default to one sentence and no more than 20 words\n'
                 + '\n'.join(f'{item["speaker"]}: {item["text"]}' for item in history)
             ),
         ])
@@ -515,7 +518,7 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
         if 'built-in generalist voice agent' in prompt
     ]
     assert target_prompts
-    assert all('one or two short sentences' in prompt for prompt in target_prompts)
+    assert all('default to one sentence and no more than 20 words' in prompt for prompt in target_prompts)
     tester_prompts = [
         prompt for prompt in _AsyncClient.completion_prompts
         if 'caller-side Pipecat tester' in prompt
