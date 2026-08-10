@@ -21,6 +21,7 @@ from app.schemas.execution import (
     LiveExecutionEvent,
 )
 from app.services import execution_run_store
+from app.services.pipecat_public_target import run_public_pipecat_call
 from app.services.agent_store import get_agent
 from app.services.execution_metrics import build_metrics_and_timeline
 from app.services.acc_realtime_target import (
@@ -125,7 +126,7 @@ def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool =
         _repo_path(resolved.voice_fixture_path)
     if resolved.audio_plan_path:
         _repo_path(resolved.audio_plan_path)
-    if preflight and resolved.mode == 'pipecat_webrtc':
+    if preflight and resolved.mode == 'pipecat_webrtc' and resolved.executor_id == 'cae_local_audio_loop':
         _preflight_reference_runtime(resolved, execution_run_id=f'preflight-{uuid.uuid4().hex[:12]}')
     total = len(scenario_ids) * resolved.iterations
     now = datetime.now(UTC).isoformat()
@@ -364,6 +365,15 @@ def _run_one_conversation(
                 agent_snapshot=agent_snapshot,
                 event_observer=publish,
             )
+        elif payload.mode == 'pipecat_webrtc' and payload.executor_id == 'pipecat_public_daily':
+            result = _execute_public_pipecat_daily(
+                execution_run_id=execution_run_id,
+                conversation_id=conversation_id,
+                suite_id=suite_id,
+                scenario_id=scenario_id,
+                payload=payload,
+                event_observer=publish,
+            )
         elif payload.mode == 'pipecat_webrtc':
             result = asyncio.run(
                 _execute_pipecat_webrtc(
@@ -509,6 +519,7 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
         'audio_transport': audio_transport,
         'agent_id': agent['id'],
         'model_name': model_name,
+        'max_exchanges': 1 if target == 'pipecat_public_demo' else payload.max_exchanges,
     })
 
 
@@ -519,6 +530,140 @@ def _execution_model_name(payload: ExecutionRunCreateRequest, *, target: str) ->
     if target == 'builtin_sample_voice':
         return ReferenceRuntimeConfig().llm_model
     return DEFAULT_EXECUTION_MODEL
+
+
+def _execute_public_pipecat_daily(
+    *,
+    execution_run_id: str,
+    conversation_id: str,
+    suite_id: str,
+    scenario_id: str,
+    payload: ExecutionRunCreateRequest,
+    event_observer: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    """Execute one scenario turn against the public Pipecat bot over direct Daily WebRTC."""
+    if payload.audio_transport != 'pipecat_daily_webrtc':
+        raise ValueError(
+            'Public Pipecat execution requires audio_transport=pipecat_daily_webrtc.'
+        )
+    scenario = _scenario_definition(suite_id, scenario_id)
+    caller_text = _scenario_user_opener(scenario)
+    artifact_dir = REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id / 'audio'
+    result = run_public_pipecat_call(
+        caller_text=caller_text,
+        artifact_dir=artifact_dir,
+        conversation_id=conversation_id,
+        timeout_seconds=payload.duplex_timeout_seconds,
+    )
+    transcription = result['transcription_turns']
+    recording = result['recording_handle']
+    turns = [
+        ConversationTurn(
+            turn_index=item.turn_index,
+            speaker=item.speaker.lower(),
+            text=item.text,
+            event_types=list(item.event_types),
+            direction=item.direction,
+            evidence_role=item.evidence_role,
+            frame_metadata=dict(item.frame_metadata),
+        )
+        for item in transcription
+    ]
+    if event_observer is not None:
+        for item in transcription:
+            event_observer({
+                'speaker': item.speaker,
+                'text': item.text,
+                'direction': item.direction,
+                'frame_metadata': {
+                    'transport': 'pipecat_daily_webrtc',
+                    'current_run': True,
+                },
+            })
+    transcript = '\n'.join(f'{item.speaker}: {item.text}' for item in transcription)
+    current_final_state = {
+        'complete': False,
+        'outcome': 'public_pipecat_response_captured',
+        'evidence_scope': 'current_run_only',
+    }
+    report: dict[str, Any] = {}
+    if payload.evaluate:
+        report = run_scenario(BenchmarkRunRequest(
+            suite_id=suite_id,
+            scenario_id=scenario_id,
+            transcript=transcript,
+            action_trace=[],
+            final_state=current_final_state,
+            user_id=payload.user_id,
+            project_id=payload.project_id,
+        ))
+    latency = result.get('latency_metrics') if isinstance(result.get('latency_metrics'), dict) else {}
+    media = result.get('media') if isinstance(result.get('media'), dict) else {}
+    latency_marks = []
+    first_audio_ms = latency.get('caller_audio_to_first_target_audio_ms')
+    if isinstance(first_audio_ms, (int, float)):
+        latency_marks.append({
+            'name': 'caller_audio_to_first_target_audio',
+            'latency_ms': first_audio_ms,
+            'source': 'pipecat_daily_webrtc',
+        })
+    runtime_provenance = {
+        'execution_engine': 'pipecat_service',
+        'target_agent_id': payload.agent_id,
+        'mode': payload.mode,
+        'audio_transport': 'pipecat_daily_webrtc',
+        'capture_surface': 'pipecat_daily_transport',
+        'browser_peer': False,
+        'headless_browser': False,
+        'live_external_connection': True,
+        'saved_evidence': False,
+        'fixture_backed_scoring': False,
+        'daily_room_credentials_persisted': False,
+        'tester_media': 'current_run_kokoro',
+        'target_media': 'current_run_daily_webrtc',
+    }
+    target = result.get('target') if isinstance(result.get('target'), dict) else {}
+    connection = result.get('connection') if isinstance(result.get('connection'), dict) else {}
+    vcon_export = build_execution_vcon(
+        conversation_id=conversation_id,
+        execution_run_id=execution_run_id,
+        suite_id=suite_id,
+        scenario_id=scenario_id,
+        transport='pipecat_daily_webrtc',
+        transcription_turns=transcription,
+        recording=recording,
+        termination_reason='target_response_complete',
+        tester_provenance=runtime_provenance,
+        extra_analysis_body={
+            'connection': connection,
+            'latency_metrics': latency,
+            'selected_public_agent': target.get('selected_agent'),
+        },
+    )
+    return {
+        'turns': turns,
+        'transcript': transcript,
+        'action_trace': [],
+        'final_state': {**current_final_state, 'runtime_provenance': runtime_provenance},
+        'latency_marks': latency_marks,
+        'recording': recording.as_call_media(),
+        'vcon_export': vcon_export,
+        'vcon_export_summary': vcon_summary(vcon_export),
+        'audio_session': {
+            'transport': 'pipecat_daily_webrtc',
+            'provider': 'daily',
+            'frames_sent': int(media.get('caller_audio_frames') or 0),
+            'frames_received': int(media.get('target_audio_frames') or 0),
+            'bytes_received': recording.bytes_captured,
+            'negotiated': bool(connection.get('connected')),
+            'closed': True,
+            'proof': True,
+            'runtime_provenance': runtime_provenance,
+        },
+        'verdict': report.get('verdict'),
+        'score': report.get('overall_score'),
+        'evaluation_report': report,
+    }
 
 
 def _reference_runtime_config(payload: ExecutionRunCreateRequest) -> ReferenceRuntimeConfig:

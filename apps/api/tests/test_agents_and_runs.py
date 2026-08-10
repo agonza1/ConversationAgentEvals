@@ -32,7 +32,12 @@ def test_agent_crud_round_trip():
     listed = client.get('/api/agents')
     assert listed.status_code == 200
     agents = listed.json()['agents']
-    assert {item['id'] for item in agents} >= {'mock-text-agent', 'acc-voice-fixture-agent', 'generalist-voice-agent'}
+    assert {item['id'] for item in agents} >= {
+        'mock-text-agent',
+        'acc-voice-fixture-agent',
+        'generalist-voice-agent',
+        'pipecat-public-demo',
+    }
 
     created = client.post(
         '/api/agents',
@@ -124,6 +129,55 @@ def test_agent_options_expose_adapter_tester_executor_defaults():
     assert builtin_voice['group'] == 'built_in_sample'
     assert builtin_voice['defaults']['tester_id'] == 'pipecat_tester'
     assert builtin_voice['defaults']['executor_id'] == 'cae_local_audio_loop'
+
+    public_pipecat = targets['pipecat_public_demo']
+    assert public_pipecat['label'] == 'Pipecat demo'
+    assert public_pipecat['channel'] == 'voice'
+    assert public_pipecat['available'] is True
+    assert public_pipecat['requires_connection'] == ['endpoint_url']
+    assert public_pipecat['default_connection'] == {'endpoint_url': 'https://www.pipecat.ai/'}
+    assert public_pipecat['defaults'] == {
+        'mode': 'pipecat_webrtc',
+        'tester_id': 'pipecat_tester',
+        'executor_id': 'pipecat_public_daily',
+        'audio_transport': 'pipecat_daily_webrtc',
+    }
+
+
+def test_pipecat_public_target_accepts_fixed_public_url():
+    created = client.post(
+        '/api/agents',
+        json={
+            'name': 'Public Pipecat target',
+            'channel': 'voice',
+            'target': 'pipecat_public_demo',
+            'environment': 'production',
+            'connection': {'endpoint_url': 'https://www.pipecat.ai/'},
+        },
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()['connection']['endpoint_url'] == 'https://www.pipecat.ai/'
+
+
+@pytest.mark.parametrize('endpoint_url', [
+    'https://internal.example.test/',
+    'https://www.pipecat.ai/other-path',
+    'https://www.pipecat.ai:444/',
+    'https://user:secret@www.pipecat.ai/',
+    'https://www.pipecat.ai/?token=secret',
+])
+def test_pipecat_public_target_rejects_non_public_url(endpoint_url):
+    response = client.post(
+        '/api/agents',
+        json={
+            'name': 'Unsafe public target',
+            'channel': 'voice',
+            'target': 'pipecat_public_demo',
+            'connection': {'endpoint_url': endpoint_url},
+        },
+    )
+    assert response.status_code == 422
+    assert 'https://www.pipecat.ai/' in response.text
 
 
 def test_http_target_credentials_only_resolve_from_dedicated_namespace(monkeypatch):
@@ -303,6 +357,74 @@ def test_builtin_sample_voice_agent_run_uses_local_audio_loop_provenance():
     if conversation['status'] == 'completed':
         assert conversation['metrics_summary']['latency']['count'] >= 0
         assert isinstance(conversation['timeline'], list)
+
+
+def test_public_pipecat_agent_uses_direct_daily_executor(monkeypatch, tmp_path):
+    from app.services import execution_runner
+    from app.services.execution_audio import AudioRecordingHandle, TranscriptionTurn
+
+    response_audio = tmp_path / 'public-target.wav'
+    response_audio.write_bytes(b'current-run-target-audio')
+
+    def fake_public_call(**kwargs):
+        assert kwargs['caller_text']
+        assert kwargs['timeout_seconds'] == 60
+        return {
+            'target': {'selected_agent': '09-cascade-d'},
+            'connection': {'connected': True, 'response_complete': True},
+            'latency_metrics': {'caller_audio_to_first_target_audio_ms': 240.5},
+            'transcription_turns': [
+                TranscriptionTurn(
+                    turn_index=1,
+                    speaker='Caller',
+                    text='I need help with a cancellation.',
+                    source='pipecat_public_daily',
+                    direction='tester_to_target',
+                    evidence_role='tester',
+                ),
+                TranscriptionTurn(
+                    turn_index=2,
+                    speaker='Agent',
+                    text='I can help with that.',
+                    source='pipecat_public_daily',
+                    direction='target_to_tester',
+                    evidence_role='target',
+                ),
+            ],
+            'recording_handle': AudioRecordingHandle(
+                uri=str(response_audio),
+                bytes_captured=response_audio.stat().st_size,
+                transport='pipecat_daily_webrtc',
+            ),
+        }
+
+    monkeypatch.setattr(execution_runner, 'run_public_pipecat_call', fake_public_call)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='pipecat-public-demo',
+        duplex_timeout_seconds=60,
+        evaluate=False,
+        user_id='agent-runs-user',
+        project_id='agent-runs-project',
+    )
+    queued = start_execution_run(payload)
+
+    assert queued['mode'] == 'pipecat_webrtc'
+    assert queued['executor_id'] == 'pipecat_public_daily'
+    assert queued['max_exchanges'] == 1
+    assert queued['execution_snapshot']['request']['audio_transport'] == 'pipecat_daily_webrtc'
+    assert queued['provenance']['live_external_connection'] is True
+    assert queued['provenance']['evidence_source'] == 'external_webrtc'
+
+    finished = execute_execution_run(queued['execution_run_id'], payload)
+    conversation = finished['conversations'][0]
+    assert conversation['status'] == 'completed'
+    assert conversation['audio_session']['transport'] == 'pipecat_daily_webrtc'
+    assert conversation['audio_session']['negotiated'] is True
+    assert conversation['recording']['transport'] == 'pipecat_daily_webrtc'
+    assert conversation['final_state']['runtime_provenance']['browser_peer'] is False
+    assert [turn['speaker'] for turn in conversation['turns']] == ['caller', 'agent']
 
 
 def test_saved_voice_agent_ignores_serialized_request_placeholders():

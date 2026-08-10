@@ -66,6 +66,16 @@ async function mockRunnerApis(page: import('@playwright/test').Page, options: Mo
             metadata: { model_name: 'builtin-sample-voice', prompt_version: 'seed' },
           },
           {
+            id: 'pipecat-public-demo',
+            name: 'Pipecat public demo',
+            channel: 'voice',
+            target: 'pipecat_public_demo',
+            environment: 'production',
+            connection: { endpoint_url: 'https://www.pipecat.ai/' },
+            description: 'Real external direct Daily WebRTC target.',
+            metadata: { model_name: 'public-demo-selected-agent', prompt_version: 'external' },
+          },
+          {
             id: 'live-openai-agent',
             name: 'Live OpenAI agent',
             channel: 'text',
@@ -203,6 +213,13 @@ test('targets page shows agent target cards and try-it-out deep links', async ({
   await expect(voiceCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
     'href',
     '/runs?launch=demo&agent_id=acc-voice-fixture-agent',
+  );
+  const publicPipecatCard = page.getByRole('article').filter({ hasText: 'Pipecat public demo' });
+  await expect(publicPipecatCard.getByText('Public external target')).toBeVisible();
+  await expect(publicPipecatCard).toContainText('https://www.pipecat.ai');
+  await expect(publicPipecatCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
+    'href',
+    '/runs?launch=demo&agent_id=pipecat-public-demo',
   );
   await expect(page.getByRole('article').filter({ hasText: 'Saved voice evidence' })).toHaveCount(0);
   await expect(mockCard.getByRole('button', { name: 'Actions for Mock text agent' })).toHaveCount(0);
@@ -382,8 +399,13 @@ test('agent target form only offers connections compatible with its selected cha
   await expect(page.getByLabel('Endpoint URL')).toBeVisible();
 
   await channel.selectOption('voice');
-  await expect(target).toHaveValue('browser_webrtc_agent');
-  await expect(target.getByRole('option')).toHaveCount(4);
+  await expect(target).toHaveValue('pipecat_public_demo');
+  await expect(target.getByRole('option')).toHaveCount(5);
+  await expect(target.locator('option[value="pipecat_public_demo"]')).toHaveText('Pipecat demo');
+  await expect(page.getByLabel('Pipecat demo URL')).toHaveValue('https://www.pipecat.ai/');
+  await expect(page.getByRole('button', { name: 'Create target' })).toBeEnabled();
+
+  await target.selectOption('browser_webrtc_agent');
   await expect(target.locator('option[value="sip_agent"]')).toHaveText(/ACC SIP URI \(coming soon\)/);
   await expect(target.locator('option[value="phone_agent"]')).toHaveText(/ACC phone number \(coming soon\)/);
   await expect(target.locator('option[value="browser_webrtc_agent"]')).toHaveText(/ACC browser WebRTC \(coming soon\)/);

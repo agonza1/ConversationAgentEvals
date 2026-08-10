@@ -30,7 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.services.acc_realtime_target import AccAudioFixture, AccAudioStep
 
 
-AudioTransportId = Literal['none', 'pipecat_small_webrtc', 'freeswitch_verto_sip']
+AudioTransportId = Literal['none', 'pipecat_small_webrtc', 'pipecat_daily_webrtc', 'freeswitch_verto_sip']
 
 
 class ExecutionAudioTransportInfo(BaseModel):
@@ -128,7 +128,11 @@ class AudioRecordingHandle:
     sha256: str | None = None
     duration_ms: int | None = None
     bytes_captured: int = 0
-    transport: Literal['pipecat_small_webrtc', 'freeswitch_verto_sip'] = 'pipecat_small_webrtc'
+    transport: Literal[
+        'pipecat_small_webrtc',
+        'pipecat_daily_webrtc',
+        'freeswitch_verto_sip',
+    ] = 'pipecat_small_webrtc'
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def as_call_media(self) -> dict[str, Any]:

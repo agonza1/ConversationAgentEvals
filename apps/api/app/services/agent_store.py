@@ -55,6 +55,19 @@ SEED_AGENTS: list[dict[str, Any]] = [
         'metadata': {'model_name': 'gpt-5.4-mini', 'prompt_version': 'generalist-v1'},
     },
     {
+        'id': 'pipecat-public-demo',
+        'name': 'Pipecat public demo',
+        'channel': 'voice',
+        'target': 'pipecat_public_demo',
+        'environment': 'production',
+        'connection': {'endpoint_url': 'https://www.pipecat.ai/'},
+        'description': (
+            'Real external voice target against the public Pipecat demo. CAE joins its ephemeral '
+            'Daily room directly, sends current-run tester audio, and captures response media and transcript evidence.'
+        ),
+        'metadata': {'model_name': 'public-demo-selected-agent', 'prompt_version': 'external'},
+    },
+    {
         'id': 'generalist-text-agent',
         'name': 'Built-in generalist text agent',
         'channel': 'text',

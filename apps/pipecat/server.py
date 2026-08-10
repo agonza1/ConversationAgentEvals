@@ -321,6 +321,12 @@ class ReferenceTesterTurnRequest(BaseModel):
     model_name: str | None = None
 
 
+class PublicPipecatRunRequest(BaseModel):
+    caller_text: str = Field(min_length=1, max_length=2_000)
+    agent: str = Field(default='09-cascade-d', min_length=1, max_length=120)
+    timeout_seconds: int = Field(default=90, ge=30, le=180)
+
+
 class ReferenceDuplexRunRequest(BaseModel):
     session_id: str
     execution_run_id: str
@@ -1579,6 +1585,36 @@ async def reference_agent_readiness(x_cae_reference_token: str | None = Header(d
         'route': '/reference-duplex/run',
         'listener_route': '/reference-duplex/listen',
     }
+
+
+@app.post('/public-pipecat/run')
+async def public_pipecat_run(
+    payload: PublicPipecatRunRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+):
+    """Join the public demo's Daily room directly as a Pipecat tester participant."""
+    _require_reference_token(x_cae_reference_token)
+    if not KOKORO_BASE_URL:
+        raise HTTPException(status_code=503, detail='Public Pipecat execution requires KOKORO_BASE_URL.')
+    try:
+        from public_daily_target import PublicDailyTargetRequest, run_public_daily_target
+
+        return await run_public_daily_target(
+            PublicDailyTargetRequest(**payload.model_dump()),
+            kokoro_base_url=KOKORO_BASE_URL,
+            kokoro_model=KOKORO_MODEL,
+            kokoro_voice=KOKORO_TESTER_VOICE,
+        )
+    except HTTPException:
+        raise
+    except (ImportError, ModuleNotFoundError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail='Install the Pipecat daily transport extra to run the public target directly.',
+        ) from exc
+    except Exception as exc:
+        # Daily failures can include ephemeral room details. Keep them out of the API response.
+        raise HTTPException(status_code=502, detail='Public Pipecat direct execution failed.') from exc
 
 
 @app.post('/reference-duplex/run')
