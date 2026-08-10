@@ -1157,8 +1157,8 @@ function evaluationBasisDetails(conversation: ConversationRecord, adjudicated: b
     return {
       heading: 'How this evaluation was determined',
       lines: [
-        'A user confirmed an LLM judge proposal after reviewing the transcript and recorded evidence.',
-        'The confirmed verdict and score are shown here; the original automatic result remains preserved in the run history for audit.',
+        'A user confirmed an LLM judge proposal based on the transcript and recorded evidence.',
+        'The original automatic result remains in the run history for audit.',
       ],
     };
   }
@@ -1191,10 +1191,9 @@ function evaluationBasisDetails(conversation: ConversationRecord, adjudicated: b
     return {
       heading: 'How the automatic score is calculated',
       lines: [
-        'Agentic-evidence mode averages only the dimensions the run can prove. Required actions earn a completion percentage. Forbidden actions, workflow order, and final state each earn 100 when satisfied or 0 when violated; unavailable dimensions are excluded.',
+        'Score = the average of available checks: required-action completion plus 100/0 checks for forbidden actions, workflow order, and final state.',
         ...(equation ? [`This run: ${equation}`] : []),
-        'A score of 100 means every measured component earned full credit; 0 means none did; 50 means the measured points average to half credit (for example, one 100 and one 0).',
-        'Passing also requires at least 75/100 and no missing or failed required action, forbidden action, final-state mismatch, or workflow-order failure. A score alone does not guarantee a pass.',
+        '100 = all measured checks passed; 50 = half credit; 0 = none. Pass also requires at least 75 and no hard-check failures.',
       ],
     };
   }
@@ -1207,12 +1206,11 @@ function evaluationBasisDetails(conversation: ConversationRecord, adjudicated: b
     return {
       heading: 'How the automatic score is calculated',
       lines: [
-        'Transcript mode calculates 45% of required-action completion plus 55% of the weighted rubric, then subtracts 20 points per forbidden action (up to 40 points) and clamps the result to 0–100.',
+        'Score = 45% required-action completion + 55% weighted rubric − 20 per forbidden action (maximum 40-point penalty).',
         ...(hasEquation ? [
           `This run: 45% × ${formatScoreNumber(requiredActions)} + 55% × ${formatScoreNumber(rubric)} − ${formatScoreNumber(penalty)} penalty = ${scoreLabel}.`,
         ] : []),
-        'A score of 100 means full required-action and rubric credit with no penalty; 0 means the formula earned no remaining credit; 50 means the weighted result is half of the available 100 points.',
-        'Passing also requires at least 75/100 and no missing or failed required action or other hard-check failure. A score alone does not guarantee a pass.',
+        '100 = full credit; 50 = half credit; 0 = none. Pass also requires at least 75 and no hard-check failures.',
       ],
     };
   }
@@ -1220,9 +1218,8 @@ function evaluationBasisDetails(conversation: ConversationRecord, adjudicated: b
   return {
     heading: 'How the automatic score is calculated',
     lines: [
-      'The evaluator deterministically compares recorded evidence with the scenario’s required actions, rubric, forbidden actions, workflow order, and expected final state. It does not ask an LLM to assign this score.',
-      `${scoreLabel} is the result recorded by the evaluator. A score of 100 is full credit, 0 is no credit, and 50 is half credit across the checks that could be measured.`,
-      'Passing also requires at least 75/100 and no hard-check failures. A score alone does not guarantee a pass.',
+      'Deterministic checks compare recorded evidence with the scenario requirements; no LLM assigns this score.',
+      `${scoreLabel}: 100 = full credit; 50 = half credit; 0 = none. Pass also requires at least 75 and no hard-check failures.`,
     ],
   };
 }

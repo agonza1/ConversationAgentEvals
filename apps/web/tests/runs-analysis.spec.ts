@@ -231,10 +231,10 @@ test('needs-review resolution explains score and missing proof without calling i
   await expect(evaluationTooltip).toContainText(
     'This run: required actions 40 + forbidden actions 100 + workflow order 100 + final state 0; average = 60/100.',
   );
-  await expect(evaluationTooltip).toContainText('A score of 100');
-  await expect(evaluationTooltip).toContainText('0 means none did');
-  await expect(evaluationTooltip).toContainText('50 means the measured points average to half credit');
-  await expect(evaluationTooltip).toContainText('Passing also requires at least 75/100');
+  await expect(evaluationTooltip).toContainText('100 = all measured checks passed');
+  await expect(evaluationTooltip).toContainText('50 = half credit');
+  await expect(evaluationTooltip).toContainText('0 = none');
+  await expect(evaluationTooltip).toContainText('Pass also requires at least 75');
   await expect(page.getByText('Why resolution is not verified')).toBeVisible();
   await expect(page.getByText('No action or tool evidence was recorded.')).toBeVisible();
   await expect(page.getByText('The conversation reached the configured exchange limit.')).toBeVisible();
