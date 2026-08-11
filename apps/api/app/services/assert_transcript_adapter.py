@@ -39,40 +39,33 @@ def build_assert_inference_row(
         )
     )
 
-    message_count = 0
-    for turn in conversation.get('turns') or []:
-        if not isinstance(turn, dict):
-            continue
-        role = _role(str(turn.get('speaker') or ''))
-        text = str(turn.get('text') or '').strip()
-        if role and text:
-            transcript.add_event(_message_event(role, text, raw={'cae_turn': _jsonable(turn)}))
-            message_count += 1
-    if message_count == 0:
-        for role, text in _parse_transcript(str(conversation.get('transcript') or '')):
-            transcript.add_event(_message_event(role, text))
-            message_count += int(role in {'user', 'assistant'})
+    messages = _conversation_messages(conversation)
+    actions = [
+        (index, action, _action_anchor(action))
+        for index, action in enumerate(conversation.get('action_trace') or [], start=1)
+        if isinstance(action, dict)
+    ]
+    emitted_actions: set[int] = set()
 
-    for index, action in enumerate(conversation.get('action_trace') or [], start=1):
-        if not isinstance(action, dict):
+    for turn_index, role, text, raw in messages:
+        for action_index, action, anchor in actions:
+            if action_index in emitted_actions or anchor != ('before', turn_index):
+                continue
+            transcript.add_event(_tool_event(action, action_index))
+            emitted_actions.add(action_index)
+
+        transcript.add_event(_message_event(role, text, raw=raw))
+
+        for action_index, action, anchor in actions:
+            if action_index in emitted_actions or anchor != ('after', turn_index):
+                continue
+            transcript.add_event(_tool_event(action, action_index))
+            emitted_actions.add(action_index)
+
+    for action_index, action, _anchor in actions:
+        if action_index in emitted_actions:
             continue
-        transcript.add_event(TranscriptEvent(
-            view=['target', 'combined'],
-            actor='tool',
-            edit=ToolCallEdit(
-                tool_name=_identifier(str(
-                    action.get('tool_name')
-                    or action.get('function')
-                    or action.get('action')
-                    or action.get('name')
-                    or action.get('type')
-                    or f'cae_action_{index}'
-                )),
-                tool_args=_action_args(action),
-                tool_result=_action_result(action),
-            ),
-            raw={'cae_action': _jsonable(action)},
-        ))
+        transcript.add_event(_tool_event(action, action_index))
 
     final_state = conversation.get('final_state')
     if isinstance(final_state, dict) and final_state:
@@ -97,8 +90,38 @@ def build_assert_inference_row(
 
     if not transcript.events:
         raise ValueError('The conversation has no evidence to judge.')
-    transcript.stop_reason = 'completed' if message_count else 'evidence_only'
+    transcript.stop_reason = 'completed' if messages else 'evidence_only'
     return transcript.to_dict()
+
+
+def _conversation_messages(
+    conversation: dict[str, Any],
+) -> list[tuple[int, str, str, dict[str, Any] | None]]:
+    messages: list[tuple[int, str, str, dict[str, Any] | None]] = []
+    for position, turn in enumerate(conversation.get('turns') or [], start=1):
+        if not isinstance(turn, dict):
+            continue
+        role = _role(str(turn.get('speaker') or ''))
+        text = str(turn.get('text') or '').strip()
+        if not role or not text:
+            continue
+        turn_index = _positive_int(turn.get('turn_index')) or position
+        messages.append((
+            turn_index,
+            role,
+            text,
+            {'cae_turn': _jsonable(turn)},
+        ))
+    if messages:
+        return messages
+
+    return [
+        (index, role, text, None)
+        for index, (role, text) in enumerate(
+            _parse_transcript(str(conversation.get('transcript') or '')),
+            start=1,
+        )
+    ]
 
 
 def _message_event(role: str, text: str, raw: dict[str, Any] | None = None) -> TranscriptEvent:
@@ -108,6 +131,38 @@ def _message_event(role: str, text: str, raw: dict[str, Any] | None = None) -> T
         edit=AddMessageEdit(message=Message(role=role, content=text)),
         raw=raw,
     )
+
+
+def _tool_event(action: dict[str, Any], index: int) -> TranscriptEvent:
+    return TranscriptEvent(
+        view=['target', 'combined'],
+        actor='tool',
+        edit=ToolCallEdit(
+            tool_name=_identifier(str(
+                action.get('tool_name')
+                or action.get('function')
+                or action.get('action')
+                or action.get('name')
+                or action.get('type')
+                or f'cae_action_{index}'
+            )),
+            tool_args=_action_args(action),
+            tool_result=_action_result(action),
+        ),
+        raw={'cae_action': _jsonable(action)},
+    )
+
+
+def _action_anchor(action: dict[str, Any]) -> tuple[str, int] | None:
+    for key in ('before_turn_index', 'before_turn', 'before_exchange'):
+        value = _positive_int(action.get(key))
+        if value is not None:
+            return 'before', value
+    for key in ('after_turn_index', 'after_turn', 'turn_index', 'exchange_index', 'exchange'):
+        value = _positive_int(action.get(key))
+        if value is not None:
+            return 'after', value
+    return None
 
 
 def _parse_transcript(value: str) -> list[tuple[str, str]]:
@@ -151,7 +206,22 @@ def _action_args(action: dict[str, Any]) -> dict[str, Any]:
             return _jsonable(action[key])
     return _jsonable({
         key: value for key, value in action.items()
-        if key not in {'tool_result', 'result', 'output', 'response', 'status', 'error'}
+        if key not in {
+            'tool_result',
+            'result',
+            'output',
+            'response',
+            'status',
+            'error',
+            'before_turn_index',
+            'before_turn',
+            'before_exchange',
+            'after_turn_index',
+            'after_turn',
+            'turn_index',
+            'exchange_index',
+            'exchange',
+        }
     })
 
 
@@ -165,6 +235,16 @@ def _action_result(action: dict[str, Any]) -> str:
 def _evidence_level(conversation: dict[str, Any]) -> str:
     actions, state = bool(conversation.get('action_trace')), bool(conversation.get('final_state'))
     return 'gray_box' if actions and state else 'partial_structured' if actions or state else 'black_box'
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _jsonable(value: Any) -> Any:

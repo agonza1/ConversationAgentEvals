@@ -253,6 +253,8 @@ def test_execution_with_agent_id_and_metrics_summary():
     assert 'turn_count' in conversation['metrics_summary']
     assert 'missing_actions' in conversation['evaluation_findings']
     assert 'rubric_checks' in conversation['evaluation_findings']
+    assert conversation['evaluation_findings']['scoring_mode'] == 'agentic'
+    assert conversation['evaluation_findings']['score_components']
     assert conversation['evaluation_findings']['scenario_contract']['required_actions']
     assert isinstance(conversation.get('timeline'), list)
     assert finished.get('run_snapshot_path')

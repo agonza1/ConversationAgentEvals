@@ -439,7 +439,9 @@ function MetricDetail({
           <div><dt>Evaluator verdict</dt><dd>{evidence.verdict}</dd></div>
           <div>
             <dt>Evaluation basis</dt>
-            <dd>{adjudication ? 'Confirmed LLM adjudication' : 'Automatic rule-based evaluation'}</dd>
+            <dd>
+              <EvaluationBasisHelp conversation={conversation} adjudicated={Boolean(adjudication)} />
+            </dd>
           </div>
           <div><dt>Final state</dt><dd>{evidence.finalState}</dd></div>
           <div><dt>Termination</dt><dd>{evidence.termination}</dd></div>
@@ -1123,6 +1125,125 @@ function resolutionEvidence(conversation: ConversationRecord) {
     error,
     gaps: [...new Set(gaps)],
   };
+}
+
+function EvaluationBasisHelp({
+  conversation,
+  adjudicated,
+}: {
+  conversation: ConversationRecord;
+  adjudicated: boolean;
+}) {
+  const tooltipId = `evaluation-basis-${conversation.conversation_id}`;
+  const details = evaluationBasisDetails(conversation, adjudicated);
+  return (
+    <span
+      className="evaluation-basis-help"
+      tabIndex={0}
+      aria-describedby={tooltipId}
+    >
+      <span>{adjudicated ? 'Confirmed LLM adjudication' : 'Automatic rule-based evaluation'}</span>
+      <span className="evaluation-basis-help-icon" aria-hidden="true">i</span>
+      <span className="evaluation-basis-tooltip" id={tooltipId} role="tooltip">
+        <strong>{details.heading}</strong>
+        {details.lines.map((line) => <span key={line}>{line}</span>)}
+      </span>
+    </span>
+  );
+}
+
+function evaluationBasisDetails(conversation: ConversationRecord, adjudicated: boolean) {
+  if (adjudicated) {
+    return {
+      heading: 'How this evaluation was determined',
+      lines: [
+        'A user confirmed an LLM judge proposal based on the transcript and recorded evidence.',
+        'The original automatic result remains in the run history for audit.',
+      ],
+    };
+  }
+
+  const findings = asRecord(conversation.evaluation_findings);
+  const components = numericScoreComponents(findings.score_components);
+  const reportedMode = stringValue(findings.scoring_mode)?.toLowerCase();
+  const mode = reportedMode === 'agentic' || reportedMode === 'transcript'
+    ? reportedMode
+    : Object.hasOwn(components, 'rubric') || Object.hasOwn(components, 'forbidden_penalty')
+      ? 'transcript'
+      : Object.keys(components).length
+        ? 'agentic'
+        : 'unknown';
+  const score = conversation.metrics_summary?.score ?? conversation.score;
+  const scoreLabel = typeof score === 'number' ? `${Math.round(score)}/100` : 'the reported score';
+
+  if (mode === 'agentic') {
+    const preferredOrder = ['required_actions', 'forbidden_actions', 'workflow_order', 'final_state'];
+    const measured = [
+      ...preferredOrder
+        .filter((name) => typeof components[name] === 'number')
+        .map((name) => [name, components[name]] as [string, number]),
+      ...Object.entries(components)
+        .filter(([name]) => name !== 'forbidden_penalty' && !preferredOrder.includes(name)),
+    ];
+    const equation = measured.length
+      ? `${measured.map(([name, value]) => `${scoreComponentLabel(name)} ${formatScoreNumber(value)}`).join(' + ')}; average = ${scoreLabel}.`
+      : null;
+    return {
+      heading: 'How the automatic score is calculated',
+      lines: [
+        'Score = the average of available checks: required-action completion plus 100/0 checks for forbidden actions, workflow order, and final state.',
+        ...(equation ? [`This run: ${equation}`] : []),
+        '100 = all measured checks passed; 50 = half credit; 0 = none. Pass also requires at least 75 and no hard-check failures.',
+      ],
+    };
+  }
+
+  if (mode === 'transcript') {
+    const requiredActions = components.required_actions;
+    const rubric = components.rubric;
+    const penalty = components.forbidden_penalty;
+    const hasEquation = [requiredActions, rubric, penalty].every((value) => typeof value === 'number');
+    return {
+      heading: 'How the automatic score is calculated',
+      lines: [
+        'Score = max(0, 45% required-action completion + 55% weighted rubric − forbidden-action penalty). The penalty is 20 per action, up to 40.',
+        ...(hasEquation ? [
+          `This run: max(0, 45% × ${formatScoreNumber(requiredActions)} + 55% × ${formatScoreNumber(rubric)} − ${formatScoreNumber(penalty)}) = ${scoreLabel}.`,
+        ] : []),
+        '100 = full credit; 50 = half credit; 0 = none. Pass also requires at least 75 and no hard-check failures.',
+      ],
+    };
+  }
+
+  return {
+    heading: 'How the automatic score is calculated',
+    lines: [
+      'Deterministic checks compare recorded evidence with the scenario requirements; no LLM assigns this score.',
+      `${scoreLabel}: 100 = full credit; 50 = half credit; 0 = none. Pass also requires at least 75 and no hard-check failures.`,
+    ],
+  };
+}
+
+function numericScoreComponents(value: unknown) {
+  const record = asRecord(value);
+  return Object.fromEntries(
+    Object.entries(record).filter((entry): entry is [string, number] => typeof entry[1] === 'number'),
+  );
+}
+
+function scoreComponentLabel(value: string) {
+  const labels: Record<string, string> = {
+    required_actions: 'required actions',
+    forbidden_actions: 'forbidden actions',
+    workflow_order: 'workflow order',
+    final_state: 'final state',
+    rubric: 'rubric',
+  };
+  return labels[value] || formatRuntimeId(value).toLowerCase();
+}
+
+function formatScoreNumber(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, '');
 }
 
 function automaticResolutionGaps(conversation: ConversationRecord) {
