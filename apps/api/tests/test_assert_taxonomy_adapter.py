@@ -28,9 +28,13 @@ def test_taxonomy_adapter_unwraps_catalog_contract_envelope():
 
     names = {item['name'] for item in taxonomy['behavior_categories']}
     assert taxonomy['behavior']['definition'] == (
-        'Open a policy review case without promising a refund.'
+        'Open a policy review case without promising a refund.\n\n'
+        'Expected final state: A refund review case exists and no refund was guaranteed.'
     )
     assert taxonomy['meta']['scenario_title'] == 'Refund Policy Boundary'
+    assert taxonomy['meta']['expected_final_state'] == (
+        'A refund review case exists and no refund was guaranteed.'
+    )
     assert 'missing_required_verify_customer_identity' in names
     assert 'missing_required_open_a_refund_review_case' in names
     assert 'forbidden_promise_a_guaranteed_refund' in names
