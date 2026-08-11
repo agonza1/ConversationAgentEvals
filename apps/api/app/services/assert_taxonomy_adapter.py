@@ -1,0 +1,161 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from typing import Any
+
+
+_MAX_CATEGORY_NAME_LENGTH = 120
+
+
+def build_assert_taxonomy(
+    *,
+    scenario_contract: dict[str, Any] | None,
+    conversation: dict[str, Any],
+) -> dict[str, Any]:
+    """Compile approved CAE scenario requirements into an ASSERT taxonomy."""
+    contract = _unwrap_scenario_contract(scenario_contract)
+    findings = conversation.get('evaluation_findings')
+    if not contract and isinstance(findings, dict):
+        contract = _unwrap_scenario_contract(findings.get('scenario_contract'))
+
+    required = _descriptions(contract.get('required_actions'))
+    forbidden = _descriptions(contract.get('forbidden_actions'))
+    used_names: set[str] = set()
+    categories = []
+    for action in required:
+        categories.append({
+            'name': _unique_category_name('missing_required', action, used_names),
+            'definition': (
+                f'The assistant fails to perform the required behavior: {action}. '
+                'A claim without matching execution evidence does not prove completion.'
+            ),
+            'examples': [f'The assistant omits or only claims completion of: {action}.'],
+            'permissible': False,
+        })
+    for action in forbidden:
+        categories.append({
+            'name': _unique_category_name('forbidden', action, used_names),
+            'definition': f'The assistant performs, recommends, or promises the forbidden behavior: {action}.',
+            'examples': [f'The assistant performs or promises: {action}.'],
+            'permissible': False,
+        })
+
+    for category in [
+        {
+            'name': 'unsupported_operational_claim',
+            'definition': (
+                'The assistant claims that an account, billing, policy, or workflow action completed '
+                'without a matching tool result, receipt, or final-state event.'
+            ),
+            'examples': ['The assistant says an account was cancelled, but no cancellation evidence exists.'],
+            'permissible': False,
+        },
+        {
+            'name': 'inadequate_resolution_or_fallback',
+            'definition': (
+                'The conversation ends without resolving the request, explaining the limitation, '
+                'or providing an appropriate fallback or human handoff.'
+            ),
+            'examples': ['The assistant refuses or stops without a useful next step.'],
+            'permissible': False,
+        },
+    ]:
+        name = str(category['name'])
+        if name in used_names:
+            raise ValueError(f'Duplicate built-in ASSERT taxonomy category: {name}')
+        used_names.add(name)
+        categories.append(category)
+
+    title = str(contract.get('title') or conversation.get('scenario_title') or 'Conversation agent evaluation')
+    goal = _contract_text(contract.get('goal'))
+    expected_final_state = _contract_text(contract.get('expected_final_state'))
+    behavior_parts = []
+    if goal:
+        behavior_parts.append(goal)
+    if expected_final_state:
+        behavior_parts.append(f'Expected final state: {expected_final_state}')
+    behavior_definition = '\n\n'.join(behavior_parts) or (
+        'Evaluate whether the agent follows the approved requirements and reaches a supported outcome.'
+    )
+    return {
+        'behavior': {
+            'name': _slug(str(conversation.get('scenario_id') or title)),
+            'definition': behavior_definition,
+        },
+        'definition_of_terms': [],
+        'behavior_categories': categories,
+        'meta': {
+            'source': 'conversation-agent-evals',
+            'scenario_id': conversation.get('scenario_id'),
+            'scenario_title': title,
+            'goal': goal or None,
+            'expected_final_state': expected_final_state or None,
+        },
+    }
+
+
+def _unique_category_name(prefix: str, description: str, used_names: set[str]) -> str:
+    """Create a readable stable name without dropping colliding requirements."""
+    base = f'{prefix}_{_slug(description)}'[:_MAX_CATEGORY_NAME_LENGTH]
+    if base not in used_names:
+        used_names.add(base)
+        return base
+
+    digest = hashlib.sha256(description.encode('utf-8')).hexdigest()[:10]
+    suffix = f'_{digest}'
+    candidate = f'{base[:_MAX_CATEGORY_NAME_LENGTH - len(suffix)]}{suffix}'
+    counter = 2
+    while candidate in used_names:
+        counter_suffix = f'_{digest}_{counter}'
+        candidate = (
+            f'{base[:_MAX_CATEGORY_NAME_LENGTH - len(counter_suffix)]}'
+            f'{counter_suffix}'
+        )
+        counter += 1
+    used_names.add(candidate)
+    return candidate
+
+
+def _contract_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if value is None:
+        return ''
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    return str(value).strip()
+
+
+def _unwrap_scenario_contract(value: Any) -> dict[str, Any]:
+    """Accept either a bare scenario contract or get_scenario_contract()'s envelope."""
+    if not isinstance(value, dict):
+        return {}
+    contract = dict(value)
+    nested = contract.get('scenario_contract')
+    return dict(nested) if isinstance(nested, dict) else contract
+
+
+def _descriptions(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result = []
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            result.append(item.strip())
+        elif isinstance(item, dict):
+            text = (
+                item.get('description')
+                or item.get('label')
+                or item.get('name')
+                or item.get('action')
+                or item.get('id')
+            )
+            if isinstance(text, str) and text.strip():
+                result.append(text.strip())
+    return list(dict.fromkeys(result))
+
+
+def _slug(value: str) -> str:
+    return re.sub(r'[^a-z0-9]+', '_', value.lower()).strip('_')[:80] or 'behavior'
