@@ -38,7 +38,29 @@ ASSERT_JUDGE_TIMEOUT_SECONDS=300
 
 The current CAE Codex OAuth session is not automatically forwarded into LiteLLM. Use a provider credential supported by ASSERT for this initial integration.
 
-## Run against a completed conversation
+## Run-analysis UI integration
+
+The existing run-analysis **Review with LLM judge** action now routes completed execution conversations through the upstream ASSERT endpoint:
+
+```text
+POST /api/assert/runs/<execution-run-id>/conversations/<conversation-id>/judge
+```
+
+The browser sends only the run owner identifier. The server reloads the persisted conversation and constructs the ASSERT transcript, taxonomy, and judge configuration from trusted run evidence.
+
+The legacy endpoint remains available for standalone report or transcript reviews that are not attached to an execution conversation:
+
+```text
+POST /api/product/judge
+```
+
+Therefore the product boundary is explicit:
+
+- execution-conversation button -> upstream ASSERT judge;
+- standalone report/transcript review -> legacy CAE product judge;
+- deterministic execution, final-state, media, and voice checks -> CAE.
+
+## Run against a completed conversation directly
 
 ```bash
 curl -X POST \
@@ -90,7 +112,7 @@ The upstream result is also stored as a pending CAE judge review. Applying that 
 
 ## Initial limitations
 
-- This is an explicit API action; the run UI does not expose a separate ASSERT button yet.
+- The run UI uses the ASSERT path for execution conversations, but still presents the shared LLM-review result component. A later UX slice can expose ASSERT dimensions, behavior-node judgments, and artifact links more directly.
 - The taxonomy is compiled from the active CAE scenario contract. A later slice should use the approved, versioned editable ASSERT spec directly.
 - OpenTelemetry/OpenInference trace import remains a separate future path. Structured CAE action and final-state evidence are mapped directly for now.
 - Automatic judgment for every run is intentionally not enabled because it incurs model cost and requires provider credentials.
