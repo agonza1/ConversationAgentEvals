@@ -11,7 +11,7 @@ from app.services.execution_audio import AudioRecordingHandle, TranscriptionTurn
 from app.services.reference_generalist_agent import ReferenceRuntimeConfig
 
 
-DEFAULT_PUBLIC_AGENT = '09-cascade-d'
+DEFAULT_PUBLIC_AGENT = '10-gradium'
 
 
 def run_public_pipecat_call(
@@ -43,7 +43,19 @@ def run_public_pipecat_call(
     finally:
         if client is None:
             request_client.close()
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        detail = ''
+        try:
+            error_payload = response.json()
+            if isinstance(error_payload, dict):
+                detail = str(error_payload.get('detail') or '').strip()
+        except (TypeError, ValueError):
+            pass
+        if detail.startswith('Public Pipecat'):
+            raise RuntimeError(detail) from exc
+        raise
     payload = response.json()
     if payload.get('status') != 'pass':
         raise RuntimeError(str(payload.get('reason') or 'Public Pipecat direct call did not pass.'))

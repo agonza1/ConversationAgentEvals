@@ -323,7 +323,7 @@ class ReferenceTesterTurnRequest(BaseModel):
 
 class PublicPipecatRunRequest(BaseModel):
     caller_text: str = Field(min_length=1, max_length=2_000)
-    agent: str = Field(default='09-cascade-d', min_length=1, max_length=120)
+    agent: str = Field(default='10-gradium', min_length=1, max_length=120)
     timeout_seconds: int = Field(default=90, ge=30, le=180)
 
 
@@ -1597,8 +1597,17 @@ async def public_pipecat_run(
     if not KOKORO_BASE_URL:
         raise HTTPException(status_code=503, detail='Public Pipecat execution requires KOKORO_BASE_URL.')
     try:
-        from public_daily_target import PublicDailyTargetRequest, run_public_daily_target
-
+        from public_daily_target import (
+            PublicDailyTargetError,
+            PublicDailyTargetRequest,
+            run_public_daily_target,
+        )
+    except (ImportError, ModuleNotFoundError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail='Install the Pipecat daily transport extra to run the public target directly.',
+        ) from exc
+    try:
         return await run_public_daily_target(
             PublicDailyTargetRequest(**payload.model_dump()),
             kokoro_base_url=KOKORO_BASE_URL,
@@ -1607,11 +1616,8 @@ async def public_pipecat_run(
         )
     except HTTPException:
         raise
-    except (ImportError, ModuleNotFoundError) as exc:
-        raise HTTPException(
-            status_code=503,
-            detail='Install the Pipecat daily transport extra to run the public target directly.',
-        ) from exc
+    except PublicDailyTargetError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:
         # Daily failures can include ephemeral room details. Keep them out of the API response.
         raise HTTPException(status_code=502, detail='Public Pipecat direct execution failed.') from exc

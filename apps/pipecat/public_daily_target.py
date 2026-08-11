@@ -27,7 +27,11 @@ from pipecat.transports.daily.transport import DailyParams, DailyTransport
 
 
 PUBLIC_PIPECAT_URL = 'https://www.pipecat.ai'
-DEFAULT_PUBLIC_AGENT = '09-cascade-d'
+DEFAULT_PUBLIC_AGENT = '10-gradium'
+
+
+class PublicDailyTargetError(RuntimeError):
+    """Safe-to-return failure from a known public-target execution stage."""
 
 
 class PublicDailyTargetRequest(BaseModel):
@@ -46,6 +50,7 @@ class _DirectDailyEvidence:
     target_participant_id: str | None = None
     caller_transcripts: list[str] = field(default_factory=list)
     target_transcripts: list[str] = field(default_factory=list)
+    target_output_segments: list[str] = field(default_factory=list)
     target_audio: bytearray = field(default_factory=bytearray)
     target_audio_sample_rate: int = 16_000
     target_audio_channels: int = 1
@@ -56,6 +61,7 @@ class _DirectDailyEvidence:
     first_target_audio_at: float | None = None
     initial_bot_turn_complete: bool = False
     initial_target_transcript_count: int = 0
+    initial_target_output_count: int = 0
     capture_response_audio: bool = False
 
 
@@ -105,6 +111,21 @@ def _message_text(message: Any) -> str:
 def _message_is_final(message: Any) -> bool:
     data = _message_data(message)
     return bool(data.get('final', data.get('is_final', data.get('isFinal', True))))
+
+
+def _completed_bot_output_text(message: Any) -> str:
+    """Return only the completed spoken representation from an RTVI bot-output event."""
+    data = _message_data(message)
+    if data.get('spoken') is True:
+        return _message_text(message)
+    if data.get('will_be_spoken') is True and data.get('spoken_status') == 'completed':
+        progress = data.get('spoken_progress')
+        if isinstance(progress, dict):
+            accumulated = str(progress.get('accumulated_text') or '').strip()
+            if accumulated:
+                return accumulated
+        return _message_text(message)
+    return ''
 
 
 def _wav_to_pcm(payload: bytes) -> tuple[bytes, int, int]:
@@ -168,14 +189,24 @@ async def run_public_daily_target(
     kokoro_voice: str,
 ) -> dict[str, Any]:
     started = time.perf_counter()
-    caller_wav = await _synthesize_caller(
-        request.caller_text,
-        kokoro_base_url=kokoro_base_url,
-        model=kokoro_model,
-        voice=kokoro_voice,
-    )
+    try:
+        caller_wav = await _synthesize_caller(
+            request.caller_text,
+            kokoro_base_url=kokoro_base_url,
+            model=kokoro_model,
+            voice=kokoro_voice,
+        )
+    except Exception as exc:
+        raise PublicDailyTargetError(
+            'Public Pipecat tester audio synthesis failed; verify Kokoro is reachable.'
+        ) from exc
     caller_pcm, caller_rate, caller_channels = _wav_to_pcm(caller_wav)
-    room_url, token = await _start_public_bot(request.agent)
+    try:
+        room_url, token = await _start_public_bot(request.agent)
+    except Exception as exc:
+        raise PublicDailyTargetError(
+            'Public Pipecat demo could not create a Daily call room.'
+        ) from exc
     evidence = _DirectDailyEvidence()
     transport = DailyTransport(
         room_url,
@@ -235,6 +266,7 @@ async def run_public_daily_target(
             'user-started-speaking',
             'user-stopped-speaking',
             'user-transcription',
+            'bot-output',
             'bot-transcription',
             'error',
         }:
@@ -244,7 +276,18 @@ async def run_public_daily_target(
                 'data': {
                     key: value
                     for key, value in data.items()
-                    if key in {'text', 'transcript', 'final', 'is_final', 'isFinal'}
+                    if key in {
+                        'text',
+                        'transcript',
+                        'final',
+                        'is_final',
+                        'isFinal',
+                        'aggregated_by',
+                        'segment_id',
+                        'spoken',
+                        'will_be_spoken',
+                        'spoken_status',
+                    }
                 },
             })
         if message_type == 'bot-ready':
@@ -253,8 +296,10 @@ async def run_public_daily_target(
             text = _message_text(message)
             if text and (not evidence.caller_transcripts or evidence.caller_transcripts[-1] != text):
                 evidence.caller_transcripts.append(text)
-        # bot-output overlaps the legacy sentence-level bot-transcription stream.
-        # Use one canonical stream so the saved transcript does not duplicate text.
+        elif message_type == 'bot-output':
+            text = _completed_bot_output_text(message)
+            if text and (not evidence.target_output_segments or evidence.target_output_segments[-1] != text):
+                evidence.target_output_segments.append(text)
         elif message_type == 'bot-transcription' and _message_is_final(message):
             text = _message_text(message)
             if text and (not evidence.target_transcripts or evidence.target_transcripts[-1] != text):
@@ -277,9 +322,20 @@ async def run_public_daily_target(
     runner_task = asyncio.create_task(runner.run(task))
     caller_audio_frames = 0
     try:
-        await asyncio.wait_for(evidence.connected.wait(), timeout=20)
-        await asyncio.wait_for(evidence.target_joined.wait(), timeout=20)
-        await transport.output().send_message(OutputTransportMessageUrgentFrame({
+        try:
+            await asyncio.wait_for(evidence.connected.wait(), timeout=20)
+        except TimeoutError as exc:
+            raise PublicDailyTargetError(
+                'Public Pipecat Daily room connection timed out.'
+            ) from exc
+        try:
+            await asyncio.wait_for(evidence.target_joined.wait(), timeout=20)
+        except TimeoutError as exc:
+            raise PublicDailyTargetError(
+                'Public Pipecat room connected, but the selected bot did not join.'
+            ) from exc
+
+        client_ready = OutputTransportMessageUrgentFrame({
             'label': 'rtvi-ai',
             'type': 'client-ready',
             'id': uuid.uuid4().hex[:8],
@@ -287,22 +343,39 @@ async def run_public_daily_target(
                 'version': '1.2.0',
                 'about': {'library': 'conversation-agent-evals', 'library_version': 'direct-daily-v1'},
             },
-        }))
-        try:
-            await asyncio.wait_for(evidence.bot_stopped.wait(), timeout=30)
-        except TimeoutError:
+        })
+        readiness_deadline = time.monotonic() + 30
+        while not evidence.bot_stopped.is_set() and time.monotonic() < readiness_deadline:
             if not evidence.bot_ready.is_set():
-                observed = [item.get('type') for item in evidence.app_messages]
-                raise RuntimeError(f'Public Pipecat bot did not become ready; observed app messages: {observed}')
+                # The public bot can join Daily before its RTVI processor is listening.
+                # Re-sending the same request id makes readiness delivery idempotent.
+                await transport.output().send_message(client_ready)
+            remaining = max(0.1, readiness_deadline - time.monotonic())
+            try:
+                await asyncio.wait_for(evidence.bot_stopped.wait(), timeout=min(3, remaining))
+            except TimeoutError:
+                continue
+        if not evidence.bot_stopped.is_set():
+            observed = sorted({str(item.get('type') or '') for item in evidence.app_messages})
+            suffix = f' Observed RTVI events: {", ".join(observed)}.' if observed else ''
+            raise PublicDailyTargetError(
+                f'Public Pipecat bot joined Daily but did not become ready.{suffix}'
+            )
 
         evidence.bot_stopped.clear()
         evidence.initial_target_transcript_count = len(evidence.target_transcripts)
+        evidence.initial_target_output_count = len(evidence.target_output_segments)
         evidence.target_audio.clear()
         evidence.target_audio_frames = 0
         evidence.first_target_audio_at = None
         evidence.caller_audio_sent_at = time.perf_counter()
         caller_audio_frames = await _queue_pcm(task, caller_pcm, caller_rate, caller_channels)
-        await asyncio.wait_for(evidence.response_complete.wait(), timeout=request.timeout_seconds)
+        try:
+            await asyncio.wait_for(evidence.response_complete.wait(), timeout=request.timeout_seconds)
+        except TimeoutError as exc:
+            raise PublicDailyTargetError(
+                'Public Pipecat bot did not complete a response before the run timeout.'
+            ) from exc
     finally:
         await task.queue_frame(EndFrame())
         try:
@@ -313,12 +386,22 @@ async def run_public_daily_target(
 
     caller_transcript = ' '.join(evidence.caller_transcripts).strip()
     if not caller_transcript:
-        raise RuntimeError('The public Pipecat target did not transcribe the injected tester audio.')
-    response_transcripts = evidence.target_transcripts[evidence.initial_target_transcript_count:]
+        raise PublicDailyTargetError(
+            'Public Pipecat bot did not transcribe the injected tester audio.'
+        )
+    response_outputs = evidence.target_output_segments[evidence.initial_target_output_count:]
+    response_transcripts = (
+        response_outputs
+        or evidence.target_transcripts[evidence.initial_target_transcript_count:]
+    )
     if not response_transcripts:
-        raise RuntimeError('The public Pipecat target did not emit a response transcript.')
+        raise PublicDailyTargetError(
+            'Public Pipecat bot returned audio but no completed RTVI response text.'
+        )
     if not evidence.target_audio:
-        raise RuntimeError('The direct Daily transport captured no response audio from the public target.')
+        raise PublicDailyTargetError(
+            'Public Pipecat bot completed its turn, but Daily returned no response audio.'
+        )
 
     target_wav = _pcm_to_wav(
         bytes(evidence.target_audio),

@@ -27,7 +27,7 @@ The target has these launch defaults:
 | tester | `pipecat_tester` |
 | executor | `pipecat_public_daily` |
 | audio transport | `pipecat_daily_webrtc` |
-| public bot | `09-cascade-d` |
+| public bot | `10-gradium` |
 
 The API rejects incompatible executor and transport combinations. The target endpoint is allowlisted and cannot contain credentials, query parameters, or fragments.
 

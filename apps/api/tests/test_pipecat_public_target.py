@@ -4,6 +4,9 @@ import base64
 import io
 import wave
 
+import httpx
+import pytest
+
 from app.services.pipecat_public_target import run_public_pipecat_call
 from app.services.reference_generalist_agent import ReferenceRuntimeConfig
 
@@ -30,7 +33,7 @@ def test_public_target_client_persists_current_run_media_without_room_credential
         def json(self):
             return {
                 'status': 'pass',
-                'target': {'selected_agent': '09-cascade-d', 'transport': 'pipecat_daily_webrtc'},
+                'target': {'selected_agent': '10-gradium', 'transport': 'pipecat_daily_webrtc'},
                 'turns': [
                     {'speaker': 'caller', 'text': 'What is Pipecat?'},
                     {'speaker': 'agent', 'text': 'Pipecat is a voice AI framework.'},
@@ -65,7 +68,7 @@ def test_public_target_client_persists_current_run_media_without_room_credential
     assert observed['headers'] == {'x-cae-reference-token': 'internal-only'}
     assert observed['json'] == {
         'caller_text': 'What is Pipecat?',
-        'agent': '09-cascade-d',
+        'agent': '10-gradium',
         'timeout_seconds': 60,
     }
     assert [turn.text for turn in result['transcription_turns']] == [
@@ -77,3 +80,32 @@ def test_public_target_client_persists_current_run_media_without_room_credential
     assert result['recording_handle'].transport == 'pipecat_daily_webrtc'
     assert 'dailyRoom' not in str(result)
     assert 'dailyToken' not in str(result)
+
+
+def test_public_target_client_surfaces_safe_pipecat_failure_detail(tmp_path):
+    request = httpx.Request('POST', 'http://pipecat.test/public-pipecat/run')
+    response = httpx.Response(
+        502,
+        request=request,
+        json={'detail': 'Public Pipecat bot joined Daily but did not become ready.'},
+    )
+
+    class FakeClient:
+        def post(self, *_args, **_kwargs):
+            return response
+
+    with pytest.raises(
+        RuntimeError,
+        match='Public Pipecat bot joined Daily but did not become ready',
+    ):
+        run_public_pipecat_call(
+            caller_text='What is Pipecat?',
+            artifact_dir=tmp_path,
+            conversation_id='conversation-error',
+            timeout_seconds=60,
+            config=ReferenceRuntimeConfig(
+                pipecat_service_url='http://pipecat.test',
+                internal_token='internal-only',
+            ),
+            client=FakeClient(),  # type: ignore[arg-type]
+        )

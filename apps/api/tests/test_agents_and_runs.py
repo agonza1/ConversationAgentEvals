@@ -370,7 +370,7 @@ def test_public_pipecat_agent_uses_direct_daily_executor(monkeypatch, tmp_path):
         assert kwargs['caller_text']
         assert kwargs['timeout_seconds'] == 60
         return {
-            'target': {'selected_agent': '09-cascade-d'},
+            'target': {'selected_agent': '10-gradium'},
             'connection': {'connected': True, 'response_complete': True},
             'latency_metrics': {'caller_audio_to_first_target_audio_ms': 240.5},
             'transcription_turns': [
