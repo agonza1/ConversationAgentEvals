@@ -8,6 +8,8 @@ from app.services import execution_run_store
 from app.services.assert_sidecar import create_local_assert_sidecar_run, load_local_assert_sidecar_run
 from app.services.benchmark_service import get_scenario_contract
 from app.services.upstream_assert_judge import (
+    UpstreamAssertJudgeBudgetExceeded,
+    UpstreamAssertJudgeBusy,
     UpstreamAssertJudgeFailed,
     UpstreamAssertJudgeUnavailable,
     run_upstream_assert_judge,
@@ -69,6 +71,8 @@ def judge_execution_conversation(
             model_name=payload.model_name,
             judge_n=payload.judge_n,
         )
+    except (UpstreamAssertJudgeBusy, UpstreamAssertJudgeBudgetExceeded) as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     except UpstreamAssertJudgeUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except UpstreamAssertJudgeFailed as exc:
