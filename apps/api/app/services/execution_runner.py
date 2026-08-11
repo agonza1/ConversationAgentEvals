@@ -519,7 +519,7 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
         'audio_transport': audio_transport,
         'agent_id': agent['id'],
         'model_name': model_name,
-        'max_exchanges': 1 if target == 'pipecat_public_demo' else payload.max_exchanges,
+        'max_exchanges': payload.max_exchanges,
     })
 
 
@@ -541,7 +541,7 @@ def _execute_public_pipecat_daily(
     payload: ExecutionRunCreateRequest,
     event_observer: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """Execute one scenario turn against the public Pipecat bot over direct Daily WebRTC."""
+    """Execute a bounded scenario against one public Pipecat Daily room."""
     if payload.audio_transport != 'pipecat_daily_webrtc':
         raise ValueError(
             'Public Pipecat execution requires audio_transport=pipecat_daily_webrtc.'
@@ -554,6 +554,10 @@ def _execute_public_pipecat_daily(
         artifact_dir=artifact_dir,
         conversation_id=conversation_id,
         timeout_seconds=payload.duplex_timeout_seconds,
+        scenario=scenario,
+        max_exchanges=payload.max_exchanges,
+        tester_model_name=payload.tester_model_name,
+        event_observer=event_observer,
     )
     transcription = result['transcription_turns']
     recording = result['recording_handle']
@@ -569,17 +573,6 @@ def _execute_public_pipecat_daily(
         )
         for item in transcription
     ]
-    if event_observer is not None:
-        for item in transcription:
-            event_observer({
-                'speaker': item.speaker,
-                'text': item.text,
-                'direction': item.direction,
-                'frame_metadata': {
-                    'transport': 'pipecat_daily_webrtc',
-                    'current_run': True,
-                },
-            })
     transcript = '\n'.join(f'{item.speaker}: {item.text}' for item in transcription)
     current_final_state = {
         'complete': False,
@@ -600,11 +593,29 @@ def _execute_public_pipecat_daily(
     latency = result.get('latency_metrics') if isinstance(result.get('latency_metrics'), dict) else {}
     media = result.get('media') if isinstance(result.get('media'), dict) else {}
     latency_marks = []
-    first_audio_ms = latency.get('caller_audio_to_first_target_audio_ms')
-    if isinstance(first_audio_ms, (int, float)):
+    exchanges = result.get('exchanges') if isinstance(result.get('exchanges'), list) else []
+    for index, exchange in enumerate(exchanges, start=1):
+        if not isinstance(exchange, dict):
+            continue
+        mark_latency = exchange.get('latency') if isinstance(exchange.get('latency'), dict) else {}
+        first_audio_ms = mark_latency.get('tester_speech_end_to_first_target_audio_received_ms')
+        if not isinstance(first_audio_ms, (int, float)):
+            continue
+        turn_pair = int(exchange.get('turn_pair') or index)
         latency_marks.append({
-            'name': 'caller_audio_to_first_target_audio',
+            'name': 'tester_speech_end_to_first_target_audio_received',
+            'label': f'End-to-end target response · exchange {turn_pair}',
+            'kind': 'tester_speech_end_to_first_target_audio_received',
+            'response_metric': 'tester_speech_end_to_first_target_audio_received',
+            'participant': 'target',
+            'direction': 'target_to_tester',
+            'turn_pair': turn_pair,
             'latency_ms': first_audio_ms,
+            'response_complete_latency_ms': mark_latency.get('response_complete_latency_ms'),
+            'response_started_before_tester_speech_end': bool(
+                mark_latency.get('response_started_before_tester_speech_end')
+            ),
+            'response_overlap_ms': mark_latency.get('response_overlap_ms'),
             'source': 'pipecat_daily_webrtc',
         })
     runtime_provenance = {
@@ -640,13 +651,18 @@ def _execute_public_pipecat_daily(
             'selected_public_agent': target.get('selected_agent'),
         },
     )
+    recording_media = recording.as_call_media()
+    recording_media['recording_url'] = (
+        f'/api/execution/runs/{quote(execution_run_id)}/conversations/'
+        f'{quote(conversation_id)}/recording?user_id={quote(payload.user_id)}'
+    )
     return {
         'turns': turns,
         'transcript': transcript,
         'action_trace': [],
         'final_state': {**current_final_state, 'runtime_provenance': runtime_provenance},
         'latency_marks': latency_marks,
-        'recording': recording.as_call_media(),
+        'recording': recording_media,
         'vcon_export': vcon_export,
         'vcon_export_summary': vcon_summary(vcon_export),
         'audio_session': {
@@ -655,6 +671,8 @@ def _execute_public_pipecat_daily(
             'frames_sent': int(media.get('caller_audio_frames') or 0),
             'frames_received': int(media.get('target_audio_frames') or 0),
             'bytes_received': recording.bytes_captured,
+            'exchange_count': len(exchanges),
+            'total_run_ms': latency.get('total_run_ms'),
             'negotiated': bool(connection.get('connected')),
             'closed': True,
             'proof': True,

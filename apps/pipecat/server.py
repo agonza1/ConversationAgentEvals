@@ -327,6 +327,12 @@ class PublicPipecatRunRequest(BaseModel):
     timeout_seconds: int = Field(default=90, ge=30, le=300)
 
 
+class PublicPipecatDuplexRequest(PublicPipecatRunRequest):
+    scenario: dict[str, Any]
+    max_turn_pairs: int = Field(default=3, ge=1, le=10)
+    tester_model_name: str | None = None
+
+
 class ReferenceDuplexRunRequest(BaseModel):
     session_id: str
     execution_run_id: str
@@ -1621,6 +1627,105 @@ async def public_pipecat_run(
     except Exception as exc:
         # Daily failures can include ephemeral room details. Keep them out of the API response.
         raise HTTPException(status_code=502, detail='Public Pipecat direct execution failed.') from exc
+
+
+async def _public_pipecat_duplex_events(
+    payload: PublicPipecatDuplexRequest,
+) -> AsyncIterator[str]:
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+    async def publish(event: dict[str, Any]) -> None:
+        await queue.put(event)
+
+    async def next_turn(turn_pair: int, target_wav: bytes) -> tuple[str, bytes]:
+        actions = payload.scenario.get('required_actions') or []
+        objective = str(actions[min(turn_pair - 1, len(actions) - 1)]) if actions else str(
+            payload.scenario.get('goal') or 'Continue the scenario naturally.'
+        )
+        request = ReferenceTesterTurnRequest(
+            scenario_instruction=(
+                f'{payload.scenario.get("id") or "public-pipecat"}: '
+                f'{payload.scenario.get("goal") or objective}'
+            ),
+            act_id=f'scenario-turn-{turn_pair}',
+            act_objective=objective,
+            example_utterance=payload.caller_text,
+            target_audio_wav_base64=base64.b64encode(target_wav).decode('ascii'),
+            model_name=payload.tester_model_name,
+        )
+        pcm, sample_rate, channels = _wav_to_pcm(target_wav)
+        _asr, collector = await _run_reference_graph(
+            InputAudioRawFrame(pcm, sample_rate, channels),
+            _ReferenceTesterLlmProcessor(request),
+            voice=KOKORO_TESTER_VOICE,
+        )
+        caller_wav = _pcm_to_wav(collector.audio, collector.sample_rate, collector.channels)
+        return collector.agent_text.strip(), caller_wav
+
+    async def execute() -> None:
+        try:
+            from public_daily_target import (
+                PublicDailyDuplexRequest,
+                PublicDailyTargetError,
+                run_public_daily_duplex,
+            )
+            result = await run_public_daily_duplex(
+                PublicDailyDuplexRequest(
+                    caller_text=payload.caller_text,
+                    agent=payload.agent,
+                    timeout_seconds=payload.timeout_seconds,
+                    max_turn_pairs=payload.max_turn_pairs,
+                ),
+                kokoro_base_url=KOKORO_BASE_URL,
+                kokoro_model=KOKORO_MODEL,
+                kokoro_voice=KOKORO_TESTER_VOICE,
+                next_turn=next_turn,
+                event_callback=publish,
+            )
+            await publish({'type': 'complete', 'result': result})
+        except (ImportError, ModuleNotFoundError):
+            await publish({
+                'type': 'error',
+                'detail': 'Install the Pipecat daily transport extra to run the public target directly.',
+            })
+        except Exception as exc:
+            detail = (
+                str(exc)
+                if exc.__class__.__name__ == 'PublicDailyTargetError'
+                else 'Public Pipecat direct execution failed.'
+            )
+            await publish({'type': 'error', 'detail': detail})
+
+    task = asyncio.create_task(execute())
+    try:
+        while True:
+            event = await queue.get()
+            yield json.dumps(event, separators=(',', ':')) + '\n'
+            if event.get('type') in {'complete', 'error'}:
+                break
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@app.post('/public-pipecat/duplex')
+async def public_pipecat_duplex(
+    payload: PublicPipecatDuplexRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+):
+    """Stream a multi-turn CAE tester session through one public Daily room."""
+    _require_reference_token(x_cae_reference_token)
+    if not PIPECAT_RUNTIME_AVAILABLE or not RTC_ASR_BASE_URL or not KOKORO_BASE_URL:
+        raise HTTPException(
+            status_code=503,
+            detail='Public Pipecat duplex requires Pipecat, rtc-asr, and Kokoro.',
+        )
+    return StreamingResponse(
+        _public_pipecat_duplex_events(payload),
+        media_type='application/x-ndjson',
+        headers={'Cache-Control': 'no-store'},
+    )
 
 
 @app.post('/reference-duplex/run')

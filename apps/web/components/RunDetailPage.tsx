@@ -242,6 +242,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
                   executionRunId={run.execution_run_id}
                   userId={run.user_id || userId}
                   runStatus={run.status}
+                  autoExpandLiveEvents
                 />
               ) : null}
               {(conversation?.turns || []).length ? (
@@ -439,7 +440,15 @@ function MetricDetail({
           <div><dt>Evaluator verdict</dt><dd>{evidence.verdict}</dd></div>
           <div>
             <dt>Evaluation basis</dt>
-            <dd>{adjudication ? 'Confirmed LLM adjudication' : 'Automatic rule-based evaluation'}</dd>
+            <dd>
+              <span
+                title={adjudication
+                  ? 'An LLM judge reviewed and confirmed the evaluation.'
+                  : 'Scores the captured transcript and final state against the scenario’s required and forbidden rules; no LLM judge is used.'}
+              >
+                {adjudication ? 'Confirmed LLM adjudication' : 'Automatic rule-based evaluation'}
+              </span>
+            </dd>
           </div>
           <div><dt>Final state</dt><dd>{evidence.finalState}</dd></div>
           <div><dt>Termination</dt><dd>{evidence.termination}</dd></div>

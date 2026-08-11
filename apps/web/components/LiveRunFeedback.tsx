@@ -39,6 +39,7 @@ interface LiveRunFeedbackProps {
   executionRunId?: string;
   userId?: string;
   runStatus?: string;
+  autoExpandLiveEvents?: boolean;
 }
 
 function mediaUrl(apiBase: string, value: string) {
@@ -100,6 +101,7 @@ export function LiveRunFeedback({
   executionRunId,
   userId,
   runStatus,
+  autoExpandLiveEvents = false,
 }: LiveRunFeedbackProps) {
   const [expanded, setExpanded] = useState(false);
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>('idle');
@@ -111,6 +113,7 @@ export function LiveRunFeedback({
   const [listenerMessage, setListenerMessage] = useState<string | null>(null);
   const [isCreatingListener, setIsCreatingListener] = useState(false);
   const [webrtcStatus, setWebrtcStatus] = useState<'idle' | 'connecting' | 'listening' | 'fallback' | 'error'>('idle');
+  const autoExpandedRef = useRef(false);
   const queuedRef = useRef(new Set<string>());
   const blockedLiveQueueKeysRef = useRef(new Set<string>());
   const playbackModeRef = useRef<PlaybackMode>('idle');
@@ -147,6 +150,12 @@ export function LiveRunFeedback({
   );
   const audioEventsRef = useRef(audioEvents);
   audioEventsRef.current = audioEvents;
+
+  useEffect(() => {
+    if (!autoExpandLiveEvents || !listenerActive || !events.length || autoExpandedRef.current) return;
+    autoExpandedRef.current = true;
+    setExpanded(true);
+  }, [autoExpandLiveEvents, events.length, listenerActive]);
 
   const refreshListener = useCallback(async (token = listenerToken?.token) => {
     if (!token) return;

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import wave
 
-import httpx
 import pytest
 
 import app.services.pipecat_public_target as public_target_service
@@ -22,42 +22,77 @@ def _wav(value: int) -> bytes:
     return output.getvalue()
 
 
+class _StreamResponse:
+    def __init__(self, events):
+        self.events = events
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def raise_for_status(self):
+        return None
+
+    def iter_lines(self):
+        for event in self.events:
+            yield json.dumps(event)
+
+
 def test_public_target_client_persists_current_run_media_without_room_credentials(tmp_path):
     caller_wav = _wav(1)
     target_wav = _wav(2)
     observed: dict[str, object] = {}
-
-    class FakeResponse:
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {
-                'status': 'pass',
-                'target': {'selected_agent': '10-gradium', 'transport': 'pipecat_daily_webrtc'},
-                'turns': [
-                    {'speaker': 'caller', 'text': 'What is Pipecat?'},
-                    {'speaker': 'agent', 'text': 'Pipecat is a voice AI framework.'},
-                ],
-                'connection': {'connected': True, 'response_complete': True},
-                'latency_metrics': {'caller_audio_to_first_target_audio_ms': 321.5},
-                'media': {
-                    'caller_audio_wav_base64': base64.b64encode(caller_wav).decode(),
-                    'target_audio_wav_base64': base64.b64encode(target_wav).decode(),
-                },
-                'provenance': {'daily_room_credentials_persisted': False},
-            }
+    result_payload = {
+        'status': 'pass',
+        'target': {'selected_agent': '10-gradium', 'transport': 'pipecat_daily_webrtc'},
+        'turns': [
+            {'speaker': 'caller', 'text': 'What is Pipecat?'},
+            {'speaker': 'agent', 'text': 'Pipecat is a voice AI framework.'},
+        ],
+        'connection': {'connected': True, 'response_complete': True},
+        'latency_metrics': {
+            'tester_speech_end_to_first_target_audio_received_ms': 321.5,
+        },
+        'exchanges': [{
+            'turn_pair': 1,
+            'latency': {
+                'tester_speech_end_to_first_target_audio_received_ms': 321.5,
+                'response_complete_latency_ms': 900.0,
+            },
+        }],
+        'media': {
+            'caller_audio_wav_base64': base64.b64encode(caller_wav).decode(),
+            'target_audio_wav_base64': base64.b64encode(target_wav).decode(),
+        },
+        'provenance': {'daily_room_credentials_persisted': False},
+    }
 
     class FakeClient:
-        def post(self, url, *, headers, json):
-            observed.update({'url': url, 'headers': headers, 'json': json})
-            return FakeResponse()
+        def stream(self, method, url, *, headers, json):
+            observed.update({'method': method, 'url': url, 'headers': headers, 'json': json})
+            return _StreamResponse([
+                {
+                    'type': 'live_audio',
+                    'turn_pair': 1,
+                    'speaker': 'Caller',
+                    'direction': 'tester_to_target',
+                    'text': 'What is Pipecat?',
+                    'audio_wav_base64': base64.b64encode(caller_wav).decode(),
+                },
+                {'type': 'complete', 'result': result_payload},
+            ])
 
+    live_events: list[dict[str, object]] = []
     result = run_public_pipecat_call(
         caller_text='What is Pipecat?',
         artifact_dir=tmp_path,
         conversation_id='conversation-1',
         timeout_seconds=60,
+        scenario={'id': 'demo', 'goal': 'Ask about Pipecat.'},
+        max_exchanges=1,
+        event_observer=live_events.append,
         config=ReferenceRuntimeConfig(
             pipecat_service_url='http://pipecat.test',
             internal_token='internal-only',
@@ -65,13 +100,18 @@ def test_public_target_client_persists_current_run_media_without_room_credential
         client=FakeClient(),  # type: ignore[arg-type]
     )
 
-    assert observed['url'] == 'http://pipecat.test/public-pipecat/run'
+    assert observed['method'] == 'POST'
+    assert observed['url'] == 'http://pipecat.test/public-pipecat/duplex'
     assert observed['headers'] == {'x-cae-reference-token': 'internal-only'}
     assert observed['json'] == {
         'caller_text': 'What is Pipecat?',
         'agent': '10-gradium',
         'timeout_seconds': 60,
+        'scenario': {'id': 'demo', 'goal': 'Ask about Pipecat.'},
+        'max_turn_pairs': 1,
+        'tester_model_name': None,
     }
+    assert live_events[0]['audio'] == caller_wav
     assert [turn.text for turn in result['transcription_turns']] == [
         'What is Pipecat?',
         'Pipecat is a voice AI framework.',
@@ -84,16 +124,12 @@ def test_public_target_client_persists_current_run_media_without_room_credential
 
 
 def test_public_target_client_surfaces_safe_pipecat_failure_detail(tmp_path):
-    request = httpx.Request('POST', 'http://pipecat.test/public-pipecat/run')
-    response = httpx.Response(
-        502,
-        request=request,
-        json={'detail': 'Public Pipecat bot joined Daily but did not become ready.'},
-    )
-
     class FakeClient:
-        def post(self, *_args, **_kwargs):
-            return response
+        def stream(self, *_args, **_kwargs):
+            return _StreamResponse([{
+                'type': 'error',
+                'detail': 'Public Pipecat bot joined Daily but did not become ready.',
+            }])
 
     with pytest.raises(
         RuntimeError,
@@ -113,20 +149,17 @@ def test_public_target_client_surfaces_safe_pipecat_failure_detail(tmp_path):
 
 
 def test_public_target_client_timeout_includes_service_setup_and_playback(monkeypatch, tmp_path):
-    request = httpx.Request('POST', 'http://pipecat.test/public-pipecat/run')
-    response = httpx.Response(
-        502,
-        request=request,
-        json={'detail': 'Public Pipecat bot did not complete a response before the run timeout.'},
-    )
     observed: dict[str, object] = {}
 
     class FakeClient:
         def __init__(self, *, timeout):
             observed['timeout'] = timeout
 
-        def post(self, *_args, **_kwargs):
-            return response
+        def stream(self, *_args, **_kwargs):
+            return _StreamResponse([{
+                'type': 'error',
+                'detail': 'Public Pipecat bot did not complete a response before the run timeout.',
+            }])
 
         def close(self):
             observed['closed'] = True

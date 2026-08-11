@@ -494,6 +494,25 @@ def get_live_conversation_audio(
     return FileResponse(path, media_type='audio/wav')
 
 
+@router.get('/runs/{execution_run_id}/conversations/{conversation_id}/recording')
+def get_conversation_recording(
+    execution_run_id: str,
+    conversation_id: str,
+    user_id: str = Query(...),
+):
+    run = execution_run_store.get_execution_run(execution_run_id)
+    if run is None or run.get('user_id') != user_id:
+        raise HTTPException(status_code=404, detail='Execution run not found.')
+    conversation = execution_run_store.get_conversation(execution_run_id, conversation_id)
+    if conversation is None or not isinstance(conversation.get('recording'), dict):
+        raise HTTPException(status_code=404, detail='Conversation recording not found.')
+    root = (execution_run_store.RUNS_DIR / execution_run_id).resolve()
+    path = (root / 'audio' / f'{conversation_id}-target.wav').resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        raise HTTPException(status_code=404, detail='Conversation recording not found.')
+    return FileResponse(path, media_type='audio/wav')
+
+
 def _listener_run_or_403(token: str) -> tuple[dict[str, Any], dict[str, Any]]:
     _prune_listener_tokens()
     grant = _LISTENER_TOKENS.get(token)

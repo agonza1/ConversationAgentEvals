@@ -3483,16 +3483,13 @@ export function BenchmarkRunner({
     }
     const supportsConfigurableExchanges =
       selectedScoreAgent.target === 'openai_codex'
-      || selectedScoreAgent.target === 'builtin_sample_voice';
+      || selectedScoreAgent.target === 'builtin_sample_voice'
+      || selectedScoreAgent.target === 'pipecat_public_demo';
     if (supportsConfigurableExchanges && executionMaxExchanges === '') {
       setExecutionMessage('Enter a maximum exchange count from 1 to 10 before launching.');
       return null;
     }
-    const maxExchanges = selectedScoreAgent.target === 'pipecat_public_demo'
-      ? 1
-      : executionMaxExchanges === ''
-        ? 3
-        : executionMaxExchanges;
+    const maxExchanges = executionMaxExchanges === '' ? 3 : executionMaxExchanges;
     if (selectedScoreAgent.target === 'openai_codex'
       && selectedScoreAgent.id !== 'generalist-text-agent'
       && openaiProvider?.status !== 'connected') {
@@ -4723,7 +4720,11 @@ export function BenchmarkRunner({
                   max={10}
                   value={executionMaxExchanges}
                   aria-invalid={executionMaxExchanges === ''}
-                  disabled={!selectedScoreAgent || (selectedScoreAgent.target !== 'openai_codex' && selectedScoreAgent.target !== 'builtin_sample_voice')}
+                  disabled={!selectedScoreAgent || (
+                    selectedScoreAgent.target !== 'openai_codex'
+                    && selectedScoreAgent.target !== 'builtin_sample_voice'
+                    && selectedScoreAgent.target !== 'pipecat_public_demo'
+                  )}
                   onChange={(event) => {
                     const nextValue = event.target.value;
                     setExecutionMaxExchanges(
@@ -4732,7 +4733,8 @@ export function BenchmarkRunner({
                   }}
                 />
               </label>
-              {selectedScoreAgent?.target === 'builtin_sample_voice' ? (
+              {selectedScoreAgent?.target === 'builtin_sample_voice'
+              || selectedScoreAgent?.target === 'pipecat_public_demo' ? (
                 <label>
                   <span>Session timeout (seconds)</span>
                   <input
@@ -4750,7 +4752,9 @@ export function BenchmarkRunner({
             </div>
             <p>
               Queues the run and writes the ASSERT inference set locally.
-              {selectedScoreAgent?.target === 'openai_codex' || selectedScoreAgent?.target === 'builtin_sample_voice'
+              {selectedScoreAgent?.target === 'openai_codex'
+              || selectedScoreAgent?.target === 'builtin_sample_voice'
+              || selectedScoreAgent?.target === 'pipecat_public_demo'
                 ? ' One exchange is one tester message plus one agent response.'
                 : ' Choose a generalist text or voice agent to configure exchanges; fixed sample targets replay one exchange.'}
             </p>
@@ -4860,7 +4864,8 @@ export function BenchmarkRunner({
               || !selectedSuite
               || !selectedScoreAgent
               || ((selectedScoreAgent?.target === 'openai_codex'
-                || selectedScoreAgent?.target === 'builtin_sample_voice')
+                || selectedScoreAgent?.target === 'builtin_sample_voice'
+                || selectedScoreAgent?.target === 'pipecat_public_demo')
                 && executionMaxExchanges === '')
               || (selectedScoreAgent.target === 'openai_codex'
                 && selectedScoreAgent.id !== 'generalist-text-agent'

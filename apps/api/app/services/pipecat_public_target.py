@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,10 @@ def run_public_pipecat_call(
     artifact_dir: Path,
     conversation_id: str,
     timeout_seconds: int,
+    scenario: dict[str, Any] | None = None,
+    max_exchanges: int = 1,
+    tester_model_name: str | None = None,
+    event_observer: Any | None = None,
     public_agent: str = DEFAULT_PUBLIC_AGENT,
     config: ReferenceRuntimeConfig | None = None,
     client: httpx.Client | None = None,
@@ -33,36 +38,74 @@ def run_public_pipecat_call(
         raise RuntimeError(
             'Public Pipecat execution requires REFERENCE_AGENT_INTERNAL_TOKEN shared by the API and Pipecat service.'
         )
-    request_client = client or httpx.Client(
-        timeout=timeout_seconds + PUBLIC_PIPECAT_SETUP_AND_PLAYBACK_ALLOWANCE_SECONDS
-    )
+    request_client = client or httpx.Client(timeout=(
+        timeout_seconds * max_exchanges + PUBLIC_PIPECAT_SETUP_AND_PLAYBACK_ALLOWANCE_SECONDS
+    ))
     try:
-        response = request_client.post(
-            f'{runtime.pipecat_service_url}/public-pipecat/run',
-            headers={'x-cae-reference-token': runtime.internal_token},
-            json={
+        request_payload = {
                 'caller_text': caller_text,
                 'agent': public_agent,
                 'timeout_seconds': timeout_seconds,
-            },
-        )
+                'scenario': scenario or {'id': 'public-pipecat', 'goal': caller_text},
+                'max_turn_pairs': max_exchanges,
+                'tester_model_name': tester_model_name,
+        }
+        with request_client.stream(
+            'POST',
+            f'{runtime.pipecat_service_url}/public-pipecat/duplex',
+            headers={'x-cae-reference-token': runtime.internal_token},
+            json=request_payload,
+        ) as response:
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                detail = ''
+                try:
+                    error_payload = json.loads(response.read())
+                    if isinstance(error_payload, dict):
+                        detail = str(error_payload.get('detail') or '').strip()
+                except (TypeError, ValueError):
+                    pass
+                if detail.startswith('Public Pipecat'):
+                    raise RuntimeError(detail) from exc
+                raise
+            payload: dict[str, Any] | None = None
+            for line in response.iter_lines():
+                if not line.strip():
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError('Public Pipecat duplex stream returned invalid NDJSON.') from exc
+                event_type = str(event.get('type') or '')
+                if event_type == 'error':
+                    raise RuntimeError(str(event.get('detail') or 'Public Pipecat direct call failed.'))
+                if event_type == 'complete':
+                    payload = event.get('result') if isinstance(event.get('result'), dict) else None
+                    continue
+                if event_type != 'live_audio' or event_observer is None:
+                    continue
+                audio = _decode_audio(event.get('audio_wav_base64'), label='live')
+                turn_pair = int(event.get('turn_pair') or 0)
+                direction = str(event.get('direction') or '')
+                event_observer({
+                    'speaker': str(event.get('speaker') or ''),
+                    'text': str(event.get('text') or ''),
+                    'audio': audio,
+                    'direction': direction,
+                    'frame_metadata': {
+                        'transport': 'pipecat_daily_webrtc',
+                        'current_run': True,
+                        'turn_pair': turn_pair,
+                        'media_event': str(event.get('media_event') or 'completed_turn_audio'),
+                    },
+                    'live_audio_key': f'{turn_pair}:{direction}',
+                })
+            if payload is None:
+                raise RuntimeError('Public Pipecat duplex stream ended without completion evidence.')
     finally:
         if client is None:
             request_client.close()
-    try:
-        response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        detail = ''
-        try:
-            error_payload = response.json()
-            if isinstance(error_payload, dict):
-                detail = str(error_payload.get('detail') or '').strip()
-        except (TypeError, ValueError):
-            pass
-        if detail.startswith('Public Pipecat'):
-            raise RuntimeError(detail) from exc
-        raise
-    payload = response.json()
     if payload.get('status') != 'pass':
         raise RuntimeError(str(payload.get('reason') or 'Public Pipecat direct call did not pass.'))
 

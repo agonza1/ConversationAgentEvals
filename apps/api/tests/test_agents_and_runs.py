@@ -369,10 +369,22 @@ def test_public_pipecat_agent_uses_direct_daily_executor(monkeypatch, tmp_path):
     def fake_public_call(**kwargs):
         assert kwargs['caller_text']
         assert kwargs['timeout_seconds'] == 60
+        assert kwargs['max_exchanges'] == 3
+        assert kwargs['scenario']['id'] == 'cancellation-rescue'
         return {
             'target': {'selected_agent': '10-gradium'},
             'connection': {'connected': True, 'response_complete': True},
-            'latency_metrics': {'caller_audio_to_first_target_audio_ms': 240.5},
+            'latency_metrics': {
+                'tester_speech_end_to_first_target_audio_received_ms': 240.5,
+                'total_run_ms': 1200.0,
+            },
+            'exchanges': [{
+                'turn_pair': 1,
+                'latency': {
+                    'tester_speech_end_to_first_target_audio_received_ms': 240.5,
+                    'response_complete_latency_ms': 800.0,
+                },
+            }],
             'transcription_turns': [
                 TranscriptionTurn(
                     turn_index=1,
@@ -412,7 +424,7 @@ def test_public_pipecat_agent_uses_direct_daily_executor(monkeypatch, tmp_path):
 
     assert queued['mode'] == 'pipecat_webrtc'
     assert queued['executor_id'] == 'pipecat_public_daily'
-    assert queued['max_exchanges'] == 1
+    assert queued['max_exchanges'] == 3
     assert queued['execution_snapshot']['request']['audio_transport'] == 'pipecat_daily_webrtc'
     assert queued['provenance']['live_external_connection'] is True
     assert queued['provenance']['evidence_source'] == 'external_webrtc'
@@ -423,6 +435,13 @@ def test_public_pipecat_agent_uses_direct_daily_executor(monkeypatch, tmp_path):
     assert conversation['audio_session']['transport'] == 'pipecat_daily_webrtc'
     assert conversation['audio_session']['negotiated'] is True
     assert conversation['recording']['transport'] == 'pipecat_daily_webrtc'
+    assert conversation['recording']['recording_url'].endswith(
+        f'/recording?user_id={payload.user_id}'
+    )
+    assert conversation['latency_marks'][0]['kind'] == (
+        'tester_speech_end_to_first_target_audio_received'
+    )
+    assert conversation['latency_marks'][0]['response_complete_latency_ms'] == 800.0
     assert conversation['final_state']['runtime_provenance']['browser_peer'] is False
     assert [turn['speaker'] for turn in conversation['turns']] == ['caller', 'agent']
 

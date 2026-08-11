@@ -1,6 +1,7 @@
 node_modules
 apps/web/node_modules
 apps/web/.next
+apps/web/.next-*
 apps/realtime/node_modules
 apps/api/.venv
 apps/api/__pycache__

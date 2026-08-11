@@ -40,6 +40,10 @@ class PublicDailyTargetRequest(BaseModel):
     timeout_seconds: int = Field(default=90, ge=30, le=300)
 
 
+class PublicDailyDuplexRequest(PublicDailyTargetRequest):
+    max_turn_pairs: int = Field(default=3, ge=1, le=10)
+
+
 @dataclass(slots=True)
 class _DirectDailyEvidence:
     connected: asyncio.Event = field(default_factory=asyncio.Event)
@@ -58,7 +62,9 @@ class _DirectDailyEvidence:
     app_messages: list[dict[str, Any]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     caller_audio_sent_at: float | None = None
+    caller_audio_ended_at: float | None = None
     first_target_audio_at: float | None = None
+    response_complete_at: float | None = None
     initial_bot_turn_complete: bool = False
     initial_target_transcript_count: int = 0
     initial_target_output_count: int = 0
@@ -181,6 +187,29 @@ async def _queue_pcm(task: PipelineTask, pcm: bytes, sample_rate: int, channels:
     return frames_sent
 
 
+def _concatenate_wavs(chunks: list[bytes]) -> bytes:
+    if not chunks:
+        raise RuntimeError('No public Pipecat audio was captured.')
+    output = io.BytesIO()
+    params: tuple[int, int, int] | None = None
+    frames: list[bytes] = []
+    for chunk in chunks:
+        with wave.open(io.BytesIO(chunk), 'rb') as source:
+            current = (source.getnchannels(), source.getsampwidth(), source.getframerate())
+            if params is None:
+                params = current
+            if current != params:
+                raise RuntimeError('Public Pipecat WAV segments did not use a consistent format.')
+            frames.append(source.readframes(source.getnframes()))
+    assert params is not None
+    with wave.open(output, 'wb') as target:
+        target.setnchannels(params[0])
+        target.setsampwidth(params[1])
+        target.setframerate(params[2])
+        target.writeframes(b''.join(frames))
+    return output.getvalue()
+
+
 async def run_public_daily_target(
     request: PublicDailyTargetRequest,
     *,
@@ -188,6 +217,29 @@ async def run_public_daily_target(
     kokoro_model: str,
     kokoro_voice: str,
 ) -> dict[str, Any]:
+    return await run_public_daily_duplex(
+        PublicDailyDuplexRequest(**request.model_dump(), max_turn_pairs=1),
+        kokoro_base_url=kokoro_base_url,
+        kokoro_model=kokoro_model,
+        kokoro_voice=kokoro_voice,
+    )
+
+
+async def run_public_daily_duplex(
+    request: PublicDailyDuplexRequest,
+    *,
+    kokoro_base_url: str,
+    kokoro_model: str,
+    kokoro_voice: str,
+    next_turn: Any | None = None,
+    event_callback: Any | None = None,
+) -> dict[str, Any]:
+    """Run a bounded multi-turn evaluation in one public Daily room.
+
+    ``next_turn`` receives ``(next_turn_pair, previous_target_wav)`` and returns
+    ``(caller_text, caller_wav)``. ``event_callback`` receives live audio and
+    exchange events as soon as each side's current-run evidence is available.
+    """
     started = time.perf_counter()
     try:
         caller_wav = await _synthesize_caller(
@@ -200,6 +252,18 @@ async def run_public_daily_target(
         raise PublicDailyTargetError(
             'Public Pipecat tester audio synthesis failed; verify Kokoro is reachable.'
         ) from exc
+    initial_caller_published = False
+    if event_callback is not None:
+        await event_callback({
+            'type': 'live_audio',
+            'turn_pair': 1,
+            'speaker': 'Caller',
+            'direction': 'tester_to_target',
+            'text': request.caller_text,
+            'audio_wav_base64': base64.b64encode(caller_wav).decode(),
+            'media_event': 'tester_audio_ready',
+        })
+        initial_caller_published = True
     caller_pcm, caller_rate, caller_channels = _wav_to_pcm(caller_wav)
     try:
         room_url, token = await _start_public_bot(request.agent)
@@ -306,12 +370,12 @@ async def run_public_daily_target(
                 evidence.target_transcripts.append(text)
         elif message_type == 'bot-started-speaking' and evidence.caller_audio_sent_at is not None:
             evidence.capture_response_audio = True
-            evidence.first_target_audio_at = None
         elif message_type == 'bot-stopped-speaking':
             evidence.bot_stopped.set()
             if evidence.caller_audio_sent_at is None:
                 evidence.initial_bot_turn_complete = True
             else:
+                evidence.response_complete_at = time.perf_counter()
                 evidence.response_complete.set()
 
     @transport.event_handler('on_error')
@@ -321,6 +385,10 @@ async def run_public_daily_target(
     runner = PipelineRunner(handle_sigint=False, handle_sigterm=False)
     runner_task = asyncio.create_task(runner.run(task))
     caller_audio_frames = 0
+    all_caller_wavs: list[bytes] = []
+    all_target_wavs: list[bytes] = []
+    turns: list[dict[str, Any]] = []
+    exchanges: list[dict[str, Any]] = []
     try:
         try:
             await asyncio.wait_for(evidence.connected.wait(), timeout=20)
@@ -362,20 +430,133 @@ async def run_public_daily_target(
                 f'Public Pipecat bot joined Daily but did not become ready.{suffix}'
             )
 
-        evidence.bot_stopped.clear()
-        evidence.initial_target_transcript_count = len(evidence.target_transcripts)
-        evidence.initial_target_output_count = len(evidence.target_output_segments)
-        evidence.target_audio.clear()
-        evidence.target_audio_frames = 0
-        evidence.first_target_audio_at = None
-        evidence.caller_audio_sent_at = time.perf_counter()
-        caller_audio_frames = await _queue_pcm(task, caller_pcm, caller_rate, caller_channels)
-        try:
-            await asyncio.wait_for(evidence.response_complete.wait(), timeout=request.timeout_seconds)
-        except TimeoutError as exc:
-            raise PublicDailyTargetError(
-                'Public Pipecat bot did not complete a response before the run timeout.'
-            ) from exc
+        current_text = request.caller_text
+        current_wav = caller_wav
+        for turn_pair in range(1, request.max_turn_pairs + 1):
+            caller_pcm, caller_rate, caller_channels = _wav_to_pcm(current_wav)
+            caller_transcript_count = len(evidence.caller_transcripts)
+            evidence.bot_stopped.clear()
+            evidence.response_complete.clear()
+            evidence.initial_target_transcript_count = len(evidence.target_transcripts)
+            evidence.initial_target_output_count = len(evidence.target_output_segments)
+            evidence.target_audio.clear()
+            evidence.target_audio_frames = 0
+            # Daily media and RTVI app messages are independent streams. Capture
+            # before caller playback so leading target frames cannot arrive ahead
+            # of the bot-started-speaking notification and be discarded.
+            evidence.capture_response_audio = True
+            evidence.first_target_audio_at = None
+            evidence.response_complete_at = None
+
+            if event_callback is not None and not (turn_pair == 1 and initial_caller_published):
+                await event_callback({
+                    'type': 'live_audio',
+                    'turn_pair': turn_pair,
+                    'speaker': 'Caller',
+                    'direction': 'tester_to_target',
+                    'text': current_text,
+                    'audio_wav_base64': base64.b64encode(current_wav).decode(),
+                    'media_event': 'tester_audio_ready',
+                })
+            evidence.caller_audio_sent_at = time.perf_counter()
+            sent = await _queue_pcm(task, caller_pcm, caller_rate, caller_channels)
+            caller_audio_frames += sent
+            evidence.caller_audio_ended_at = time.perf_counter()
+            try:
+                await asyncio.wait_for(evidence.response_complete.wait(), timeout=request.timeout_seconds)
+            except TimeoutError as exc:
+                raise PublicDailyTargetError(
+                    f'Public Pipecat bot did not complete response {turn_pair} before the run timeout.'
+                ) from exc
+
+            caller_receipts = evidence.caller_transcripts[caller_transcript_count:]
+            caller_transcript = ' '.join(caller_receipts).strip()
+            if not caller_transcript:
+                raise PublicDailyTargetError(
+                    f'Public Pipecat bot did not transcribe tester turn {turn_pair}.'
+                )
+            response_outputs = evidence.target_output_segments[evidence.initial_target_output_count:]
+            response_transcripts = (
+                response_outputs
+                or evidence.target_transcripts[evidence.initial_target_transcript_count:]
+            )
+            target_text = ' '.join(response_transcripts).strip()
+            if not target_text:
+                raise PublicDailyTargetError(
+                    f'Public Pipecat bot returned audio but no completed RTVI text for response {turn_pair}.'
+                )
+            if not evidence.target_audio:
+                raise PublicDailyTargetError(
+                    f'Public Pipecat bot completed response {turn_pair}, but Daily returned no audio.'
+                )
+            target_wav = _pcm_to_wav(
+                bytes(evidence.target_audio),
+                evidence.target_audio_sample_rate,
+                evidence.target_audio_channels,
+            )
+            first_audio_offset_ms = (
+                round((evidence.first_target_audio_at - evidence.caller_audio_ended_at) * 1000, 2)
+                if evidence.first_target_audio_at is not None and evidence.caller_audio_ended_at is not None
+                else None
+            )
+            first_audio_ms = max(0.0, first_audio_offset_ms) if first_audio_offset_ms is not None else None
+            response_complete_ms = (
+                round(max(0.0, evidence.response_complete_at - evidence.caller_audio_ended_at) * 1000, 2)
+                if evidence.response_complete_at is not None and evidence.caller_audio_ended_at is not None
+                else None
+            )
+            exchange = {
+                'turn_pair': turn_pair,
+                'caller': {'text': caller_transcript},
+                'target': {'text': target_text},
+                'latency': {
+                    'tester_speech_end_to_first_target_audio_received_ms': first_audio_ms,
+                    'response_complete_latency_ms': response_complete_ms,
+                    'response_started_before_tester_speech_end': (
+                        first_audio_offset_ms is not None and first_audio_offset_ms < 0
+                    ),
+                    'response_overlap_ms': (
+                        round(abs(first_audio_offset_ms), 2)
+                        if first_audio_offset_ms is not None and first_audio_offset_ms < 0
+                        else 0.0
+                    ),
+                },
+                'media': {
+                    'caller_audio_wav_base64': base64.b64encode(current_wav).decode(),
+                    'target_audio_wav_base64': base64.b64encode(target_wav).decode(),
+                    'caller_audio_frames': sent,
+                    'target_audio_frames': evidence.target_audio_frames,
+                },
+            }
+            turns.extend([
+                {'speaker': 'caller', 'text': caller_transcript, 'turn_pair': turn_pair},
+                {'speaker': 'agent', 'text': target_text, 'turn_pair': turn_pair},
+            ])
+            exchanges.append(exchange)
+            all_caller_wavs.append(current_wav)
+            all_target_wavs.append(target_wav)
+            if event_callback is not None:
+                await event_callback({
+                    'type': 'live_audio',
+                    'turn_pair': turn_pair,
+                    'speaker': 'Agent',
+                    'direction': 'target_to_tester',
+                    'text': target_text,
+                    'audio_wav_base64': base64.b64encode(target_wav).decode(),
+                    'media_event': 'target_response_complete',
+                    'latency': exchange['latency'],
+                })
+                await event_callback({'type': 'exchange', **exchange})
+
+            if turn_pair >= request.max_turn_pairs:
+                break
+            if next_turn is None:
+                break
+            current_text, current_wav = await next_turn(turn_pair + 1, target_wav)
+            if not str(current_text).strip() or not current_wav:
+                raise PublicDailyTargetError(
+                    f'Public Pipecat tester graph returned no caller media for turn {turn_pair + 1}.'
+                )
     finally:
         await task.queue_frame(EndFrame())
         try:
@@ -384,35 +565,15 @@ async def run_public_daily_target(
             await task.cancel()
             runner_task.cancel()
 
-    caller_transcript = ' '.join(evidence.caller_transcripts).strip()
-    if not caller_transcript:
-        raise PublicDailyTargetError(
-            'Public Pipecat bot did not transcribe the injected tester audio.'
-        )
-    response_outputs = evidence.target_output_segments[evidence.initial_target_output_count:]
-    response_transcripts = (
-        response_outputs
-        or evidence.target_transcripts[evidence.initial_target_transcript_count:]
-    )
-    if not response_transcripts:
-        raise PublicDailyTargetError(
-            'Public Pipecat bot returned audio but no completed RTVI response text.'
-        )
-    if not evidence.target_audio:
-        raise PublicDailyTargetError(
-            'Public Pipecat bot completed its turn, but Daily returned no response audio.'
-        )
-
-    target_wav = _pcm_to_wav(
-        bytes(evidence.target_audio),
-        evidence.target_audio_sample_rate,
-        evidence.target_audio_channels,
-    )
-    first_audio_ms = (
-        round((evidence.first_target_audio_at - evidence.caller_audio_sent_at) * 1000, 2)
-        if evidence.first_target_audio_at is not None and evidence.caller_audio_sent_at is not None
-        else None
-    )
+    if not exchanges:
+        raise PublicDailyTargetError('Public Pipecat call completed without an exchange.')
+    first_audio_values = [
+        item['latency']['tester_speech_end_to_first_target_audio_received_ms']
+        for item in exchanges
+        if isinstance(item['latency']['tester_speech_end_to_first_target_audio_received_ms'], (int, float))
+    ]
+    caller_recording = _concatenate_wavs(all_caller_wavs)
+    target_recording = _concatenate_wavs(all_target_wavs)
     return {
         'status': 'pass',
         'target': {
@@ -420,12 +581,14 @@ async def run_public_daily_target(
             'selected_agent': request.agent,
             'transport': 'pipecat_daily_webrtc',
         },
-        'turns': [
-            {'speaker': 'caller', 'text': caller_transcript},
-            {'speaker': 'agent', 'text': ' '.join(response_transcripts).strip()},
-        ],
+        'turns': turns,
+        'exchanges': exchanges,
         'latency_metrics': {
-            'caller_audio_to_first_target_audio_ms': first_audio_ms,
+            'tester_speech_end_to_first_target_audio_received_ms': first_audio_values[0]
+            if first_audio_values else None,
+            'average_target_response_latency_ms': round(sum(first_audio_values) / len(first_audio_values), 2)
+            if first_audio_values else None,
+            'max_target_response_latency_ms': max(first_audio_values) if first_audio_values else None,
             'total_run_ms': round((time.perf_counter() - started) * 1000, 2),
         },
         'connection': {
@@ -435,13 +598,15 @@ async def run_public_daily_target(
             'response_complete': evidence.response_complete.is_set(),
         },
         'media': {
-            'caller_audio_wav_base64': base64.b64encode(caller_wav).decode(),
-            'target_audio_wav_base64': base64.b64encode(target_wav).decode(),
+            'caller_audio_wav_base64': base64.b64encode(caller_recording).decode(),
+            'target_audio_wav_base64': base64.b64encode(target_recording).decode(),
             'target_audio_sample_rate': evidence.target_audio_sample_rate,
             'target_audio_channels': evidence.target_audio_channels,
-            'target_audio_bytes': len(evidence.target_audio),
+            'target_audio_bytes': sum(len(item) for item in all_target_wavs),
             'caller_audio_frames': caller_audio_frames,
-            'target_audio_frames': evidence.target_audio_frames,
+            'target_audio_frames': sum(
+                int(item['media']['target_audio_frames']) for item in exchanges
+            ),
         },
         'app_messages': evidence.app_messages,
         'provenance': {
