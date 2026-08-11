@@ -1643,7 +1643,7 @@ async def _public_pipecat_duplex_events(
     async def publish(event: dict[str, Any]) -> None:
         await queue.put(event)
 
-    async def next_turn(turn_pair: int, target_wav: bytes) -> tuple[str, bytes]:
+    async def next_turn(turn_pair: int, target_text: str, target_wav: bytes) -> tuple[str, bytes]:
         actions = payload.scenario.get('required_actions') or []
         objective = str(actions[min(turn_pair - 1, len(actions) - 1)]) if actions else str(
             payload.scenario.get('goal') or 'Continue the scenario naturally.'
@@ -1659,12 +1659,20 @@ async def _public_pipecat_duplex_events(
             target_audio_wav_base64=base64.b64encode(target_wav).decode('ascii'),
             model_name=payload.tester_model_name,
         )
-        pcm, sample_rate, channels = _wav_to_pcm(target_wav)
-        _asr, collector = await _run_reference_graph(
-            InputAudioRawFrame(pcm, sample_rate, channels),
-            _ReferenceTesterLlmProcessor(request),
-            voice=KOKORO_TESTER_VOICE,
-        )
+        try:
+            # The public target already supplies an authoritative RTVI
+            # transcript. Feed it through the existing tester LLM -> Kokoro
+            # graph instead of lossy re-transcription of the same Daily audio.
+            _asr, collector = await _run_reference_graph(
+                TextFrame(target_text),
+                _ReferenceTesterLlmProcessor(request),
+                voice=KOKORO_TESTER_VOICE,
+            )
+        except Exception as exc:
+            from public_daily_target import PublicDailyTargetError
+            raise PublicDailyTargetError(
+                f'Public Pipecat tester could not generate turn {turn_pair}.'
+            ) from exc
         caller_wav = _pcm_to_wav(collector.audio, collector.sample_rate, collector.channels)
         return collector.agent_text.strip(), caller_wav
 

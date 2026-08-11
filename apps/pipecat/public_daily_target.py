@@ -119,6 +119,11 @@ def _message_is_final(message: Any) -> bool:
     return bool(data.get('final', data.get('is_final', data.get('isFinal', True))))
 
 
+def _message_is_explicitly_final(message: Any) -> bool:
+    data = _message_data(message)
+    return any(data.get(key) is True for key in ('final', 'is_final', 'isFinal'))
+
+
 def _completed_bot_output_text(message: Any) -> str:
     """Return only the completed spoken representation from an RTVI bot-output event."""
     data = _message_data(message)
@@ -143,8 +148,9 @@ def _message_completes_bot_turn(message_type: str, message: Any) -> bool:
     event that may never arrive.
     """
     if message_type == 'bot-output':
-        return bool(_completed_bot_output_text(message))
-    return message_type == 'bot-transcription' and _message_is_final(message)
+        data = _message_data(message)
+        return data.get('will_be_spoken') is True and data.get('spoken_status') == 'completed'
+    return message_type == 'bot-transcription' and _message_is_explicitly_final(message)
 
 
 def _wav_to_pcm(payload: bytes) -> tuple[bytes, int, int]:
@@ -249,9 +255,10 @@ async def run_public_daily_duplex(
 ) -> dict[str, Any]:
     """Run a bounded multi-turn evaluation in one public Daily room.
 
-    ``next_turn`` receives ``(next_turn_pair, previous_target_wav)`` and returns
-    ``(caller_text, caller_wav)``. ``event_callback`` receives live audio and
-    exchange events as soon as each side's current-run evidence is available.
+    ``next_turn`` receives ``(next_turn_pair, previous_target_text,
+    previous_target_wav)`` and returns ``(caller_text, caller_wav)``.
+    ``event_callback`` receives live audio and exchange events as soon as each
+    side's current-run evidence is available.
     """
     started = time.perf_counter()
     try:
@@ -574,7 +581,7 @@ async def run_public_daily_duplex(
                 break
             if next_turn is None:
                 break
-            current_text, current_wav = await next_turn(turn_pair + 1, target_wav)
+            current_text, current_wav = await next_turn(turn_pair + 1, target_text, target_wav)
             if not str(current_text).strip() or not current_wav:
                 raise PublicDailyTargetError(
                     f'Public Pipecat tester graph returned no caller media for turn {turn_pair + 1}.'
