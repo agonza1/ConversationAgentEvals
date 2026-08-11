@@ -38,11 +38,20 @@ def setup_function() -> None:
 def test_capabilities_advertise_local_webrtc_vcon_and_deferred_sip():
     payload = describe_execution_audio_capabilities()
     ids = {item.id for item in payload.transports}
-    assert ids >= {'none', 'pipecat_small_webrtc', 'freeswitch_verto_sip'}
+    assert ids >= {
+        'none',
+        'pipecat_small_webrtc',
+        'pipecat_daily_webrtc',
+        'freeswitch_verto_sip',
+    }
     local = next(item for item in payload.transports if item.id == 'pipecat_small_webrtc')
+    daily = next(item for item in payload.transports if item.id == 'pipecat_daily_webrtc')
     sip = next(item for item in payload.transports if item.id == 'freeswitch_verto_sip')
     assert local.available is True
     assert local.requires_freeswitch is False
+    assert daily.available is True
+    assert daily.requires_live_pipecat is True
+    assert daily.requires_freeswitch is False
     assert sip.available is False
     assert sip.status == 'deferred'
     assert payload.freeswitch_required is False
@@ -56,6 +65,7 @@ def test_audio_capabilities_endpoint():
     assert body['default_transport'] == 'none'
     assert body['vcon_capture'] is True
     assert any(item['id'] == 'pipecat_small_webrtc' for item in body['transports'])
+    assert any(item['id'] == 'pipecat_daily_webrtc' for item in body['transports'])
 
 
 def test_execution_health_includes_audio_capabilities():

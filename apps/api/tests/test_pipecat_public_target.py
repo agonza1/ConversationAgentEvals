@@ -7,6 +7,7 @@ import wave
 import httpx
 import pytest
 
+import app.services.pipecat_public_target as public_target_service
 from app.services.pipecat_public_target import run_public_pipecat_call
 from app.services.reference_generalist_agent import ReferenceRuntimeConfig
 
@@ -109,3 +110,39 @@ def test_public_target_client_surfaces_safe_pipecat_failure_detail(tmp_path):
             ),
             client=FakeClient(),  # type: ignore[arg-type]
         )
+
+
+def test_public_target_client_timeout_includes_service_setup_and_playback(monkeypatch, tmp_path):
+    request = httpx.Request('POST', 'http://pipecat.test/public-pipecat/run')
+    response = httpx.Response(
+        502,
+        request=request,
+        json={'detail': 'Public Pipecat bot did not complete a response before the run timeout.'},
+    )
+    observed: dict[str, object] = {}
+
+    class FakeClient:
+        def __init__(self, *, timeout):
+            observed['timeout'] = timeout
+
+        def post(self, *_args, **_kwargs):
+            return response
+
+        def close(self):
+            observed['closed'] = True
+
+    monkeypatch.setattr(public_target_service.httpx, 'Client', FakeClient)
+
+    with pytest.raises(RuntimeError, match='did not complete a response'):
+        run_public_pipecat_call(
+            caller_text='What is Pipecat?',
+            artifact_dir=tmp_path,
+            conversation_id='conversation-timeout-budget',
+            timeout_seconds=300,
+            config=ReferenceRuntimeConfig(
+                pipecat_service_url='http://pipecat.test',
+                internal_token='internal-only',
+            ),
+        )
+
+    assert observed == {'timeout': 660, 'closed': True}
