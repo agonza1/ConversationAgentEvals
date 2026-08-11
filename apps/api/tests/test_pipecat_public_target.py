@@ -81,6 +81,14 @@ def test_public_target_client_persists_current_run_media_without_room_credential
                     'text': 'What is Pipecat?',
                     'audio_wav_base64': base64.b64encode(caller_wav).decode(),
                 },
+                {
+                    'type': 'live_transcript',
+                    'turn_pair': 1,
+                    'speaker': 'Agent',
+                    'direction': 'target_to_tester',
+                    'text': 'Pipecat is a voice AI framework.',
+                    'media_event': 'rtvi_transcript_progress',
+                },
                 {'type': 'complete', 'result': result_payload},
             ])
 
@@ -112,6 +120,9 @@ def test_public_target_client_persists_current_run_media_without_room_credential
         'tester_model_name': None,
     }
     assert live_events[0]['audio'] == caller_wav
+    assert live_events[1]['text'] == 'Pipecat is a voice AI framework.'
+    assert 'audio' not in live_events[1]
+    assert live_events[1]['update_live_audio_key'] == '1:target_to_tester'
     assert [turn.text for turn in result['transcription_turns']] == [
         'What is Pipecat?',
         'Pipecat is a voice AI framework.',

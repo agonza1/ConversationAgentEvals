@@ -83,24 +83,27 @@ def run_public_pipecat_call(
                 if event_type == 'complete':
                     payload = event.get('result') if isinstance(event.get('result'), dict) else None
                     continue
-                if event_type != 'live_audio' or event_observer is None:
+                if event_observer is None or event_type not in {'live_audio', 'live_transcript'}:
                     continue
-                audio = _decode_audio(event.get('audio_wav_base64'), label='live')
                 turn_pair = int(event.get('turn_pair') or 0)
                 direction = str(event.get('direction') or '')
-                event_observer({
+                live_key = f'{turn_pair}:{direction}'
+                observed_event = {
                     'speaker': str(event.get('speaker') or ''),
                     'text': str(event.get('text') or ''),
-                    'audio': audio,
                     'direction': direction,
                     'frame_metadata': {
                         'transport': 'pipecat_daily_webrtc',
                         'current_run': True,
                         'turn_pair': turn_pair,
-                        'media_event': str(event.get('media_event') or 'completed_turn_audio'),
+                        'media_event': str(event.get('media_event') or event_type),
                     },
-                    'live_audio_key': f'{turn_pair}:{direction}',
-                })
+                    'update_live_audio_key': live_key,
+                    'live_audio_key': live_key,
+                }
+                if event_type == 'live_audio':
+                    observed_event['audio'] = _decode_audio(event.get('audio_wav_base64'), label='live')
+                event_observer(observed_event)
             if payload is None:
                 raise RuntimeError('Public Pipecat duplex stream ended without completion evidence.')
     finally:

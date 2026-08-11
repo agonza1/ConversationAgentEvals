@@ -68,6 +68,7 @@ class _DirectDailyEvidence:
     initial_bot_turn_complete: bool = False
     initial_target_transcript_count: int = 0
     initial_target_output_count: int = 0
+    current_turn_pair: int = 0
     capture_response_audio: bool = False
 
 
@@ -389,6 +390,23 @@ async def run_public_daily_duplex(
             text = _message_text(message)
             if text and (not evidence.target_transcripts or evidence.target_transcripts[-1] != text):
                 evidence.target_transcripts.append(text)
+                if (
+                    event_callback is not None
+                    and evidence.current_turn_pair > 0
+                    and evidence.caller_audio_sent_at is not None
+                ):
+                    live_text = ' '.join(
+                        evidence.target_transcripts[evidence.initial_target_transcript_count:]
+                    ).strip()
+                    if live_text:
+                        await event_callback({
+                            'type': 'live_transcript',
+                            'turn_pair': evidence.current_turn_pair,
+                            'speaker': 'Agent',
+                            'direction': 'target_to_tester',
+                            'text': live_text,
+                            'media_event': 'rtvi_transcript_progress',
+                        })
         elif message_type == 'bot-started-speaking' and evidence.caller_audio_sent_at is not None:
             evidence.capture_response_audio = True
         elif message_type == 'bot-stopped-speaking':
@@ -462,6 +480,7 @@ async def run_public_daily_duplex(
         current_text = request.caller_text
         current_wav = caller_wav
         for turn_pair in range(1, request.max_turn_pairs + 1):
+            evidence.current_turn_pair = turn_pair
             caller_pcm, caller_rate, caller_channels = _wav_to_pcm(current_wav)
             caller_transcript_count = len(evidence.caller_transcripts)
             evidence.bot_stopped.clear()
@@ -504,10 +523,9 @@ async def run_public_daily_duplex(
                 raise PublicDailyTargetError(
                     f'Public Pipecat bot did not transcribe tester turn {turn_pair}.'
                 )
-            response_outputs = evidence.target_output_segments[evidence.initial_target_output_count:]
             response_transcripts = (
-                response_outputs
-                or evidence.target_transcripts[evidence.initial_target_transcript_count:]
+                evidence.target_transcripts[evidence.initial_target_transcript_count:]
+                or evidence.target_output_segments[evidence.initial_target_output_count:]
             )
             target_text = ' '.join(response_transcripts).strip()
             if not target_text:
