@@ -84,59 +84,11 @@ def run_upstream_assert_judge(
         default=str,
     ).encode()).hexdigest()[:16]
 
-    invocation_id = _identifier(f'{fingerprint}-{uuid.uuid4().hex[:8]}')
-    root = Path(artifact_root or (
-        REPO_ROOT
-        / 'artifacts'
-        / 'execution-runs'
-        / _identifier(str(run.get('execution_run_id') or 'execution-run'))
-        / 'assert'
-        / _identifier(str(conversation.get('conversation_id') or 'conversation'))
-        / invocation_id
-    )).resolve()
-    results_dir = root / 'results'
-    suite_id = _identifier(f"cae-{conversation.get('scenario_id') or 'conversation'}")
-    suite_dir = results_dir / suite_id
-    run_dir = suite_dir / invocation_id
-    run_dir.mkdir(parents=True, exist_ok=True)
-
-    taxonomy_path = suite_dir / 'taxonomy.json'
-    inference_path = run_dir / 'inference_set.jsonl'
-    config_path = root / 'judge-only.yaml'
-    taxonomy_path.write_text(json.dumps(taxonomy, indent=2, sort_keys=True) + '\n', encoding='utf-8')
-    inference_path.write_text(json.dumps(inference, ensure_ascii=False) + '\n', encoding='utf-8')
-    config_path.write_text(yaml.safe_dump({
-        'suite': suite_id,
-        'run': invocation_id,
-        'artifacts_root': str(root),
-        'results_dir': str(results_dir),
-        'pipeline': {
-            'judge': {
-                'model': {
-                    'name': model,
-                    'max_tokens': _positive_int_env('ASSERT_JUDGE_MAX_TOKENS', 8000),
-                },
-                'n': judge_n,
-                'inference_set_path': str(inference_path),
-                'taxonomy_path': str(taxonomy_path),
-                'save_dir': str(run_dir),
-                'dimensions': _judge_dimensions(),
-            }
-        },
-    }, sort_keys=False), encoding='utf-8')
-
     executable = shutil.which('assert-ai')
     if not executable:
         raise UpstreamAssertJudgeUnavailable(
             'The assert-ai command is unavailable. Install the pinned API requirements first.'
         )
-    command = [
-        executable,
-        'run',
-        '--config', str(config_path),
-        '--force-stage', 'judge',
-        '--output', 'json',
-    ]
     environment = os.environ.copy()
     if model.startswith('openai/') and not environment.get('OPENAI_API_KEY') and environment.get('LLM_JUDGE_API_KEY'):
         environment['OPENAI_API_KEY'] = environment['LLM_JUDGE_API_KEY']
@@ -146,6 +98,60 @@ def run_upstream_assert_judge(
     with _assert_judge_slot():
         spend_control = _reserve_assert_credits(credits=credits, model=model)
         try:
+            invocation_id = _identifier(f'{fingerprint}-{uuid.uuid4().hex[:8]}')
+            root = Path(artifact_root or (
+                REPO_ROOT
+                / 'artifacts'
+                / 'execution-runs'
+                / _identifier(str(run.get('execution_run_id') or 'execution-run'))
+                / 'assert'
+                / _identifier(str(conversation.get('conversation_id') or 'conversation'))
+                / invocation_id
+            )).resolve()
+            results_dir = root / 'results'
+            suite_id = _identifier(f"cae-{conversation.get('scenario_id') or 'conversation'}")
+            suite_dir = results_dir / suite_id
+            run_dir = suite_dir / invocation_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+
+            taxonomy_path = suite_dir / 'taxonomy.json'
+            inference_path = run_dir / 'inference_set.jsonl'
+            config_path = root / 'judge-only.yaml'
+            taxonomy_path.write_text(
+                json.dumps(taxonomy, indent=2, sort_keys=True) + '\n',
+                encoding='utf-8',
+            )
+            inference_path.write_text(
+                json.dumps(inference, ensure_ascii=False) + '\n',
+                encoding='utf-8',
+            )
+            config_path.write_text(yaml.safe_dump({
+                'suite': suite_id,
+                'run': invocation_id,
+                'artifacts_root': str(root),
+                'results_dir': str(results_dir),
+                'pipeline': {
+                    'judge': {
+                        'model': {
+                            'name': model,
+                            'max_tokens': _positive_int_env('ASSERT_JUDGE_MAX_TOKENS', 8000),
+                        },
+                        'n': judge_n,
+                        'inference_set_path': str(inference_path),
+                        'taxonomy_path': str(taxonomy_path),
+                        'save_dir': str(run_dir),
+                        'dimensions': _judge_dimensions(),
+                    }
+                },
+            }, sort_keys=False), encoding='utf-8')
+
+            command = [
+                executable,
+                'run',
+                '--config', str(config_path),
+                '--force-stage', 'judge',
+                '--output', 'json',
+            ]
             started = time.perf_counter()
             try:
                 completed = subprocess.run(
