@@ -15,7 +15,11 @@ from app.services.upstream_assert_judge import (
     run_upstream_assert_judge,
 )
 
+# Local sidecar lifecycle routes remain development-only.
 router = APIRouter(prefix='/api/assert', tags=['assert'])
+# Product judgment is mounted independently so production deployments can use it
+# while the local sidecar lifecycle remains disabled.
+judge_router = APIRouter(prefix='/api/assert', tags=['assert-judge'])
 
 
 class AssertExecutionJudgeRequest(BaseModel):
@@ -40,7 +44,7 @@ def get_assert_sidecar_run(platform_run_id: str):
     return saved['record']
 
 
-@router.post('/runs/{execution_run_id}/conversations/{conversation_id}/judge')
+@judge_router.post('/runs/{execution_run_id}/conversations/{conversation_id}/judge')
 def judge_execution_conversation(
     execution_run_id: str,
     conversation_id: str,
