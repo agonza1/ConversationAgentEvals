@@ -323,7 +323,6 @@ async def run_public_daily_duplex(
         })
         initial_caller_published = True
     caller_pcm, caller_rate, caller_channels = _wav_to_pcm(caller_wav)
-    await report_phase('creating_room', 'Creating the public Pipecat room.')
     try:
         room_url, token = await _start_public_bot(request.agent)
     except Exception as exc:

@@ -31,7 +31,6 @@ function connectionPhaseLabel(event: LiveRunEvent) {
   const phase = event.frame_metadata?.connection_phase;
   if (typeof phase !== 'string' || !phase) return null;
   const labels: Record<string, string> = {
-    creating_room: 'creating room',
     bot_joined: 'bot joined',
     greeting: 'greeting',
     caller_speaking: 'caller speaking',
