@@ -10,10 +10,10 @@ def build_assert_taxonomy(
     conversation: dict[str, Any],
 ) -> dict[str, Any]:
     """Compile approved CAE scenario requirements into an ASSERT taxonomy."""
-    contract = dict(scenario_contract or {})
+    contract = _unwrap_scenario_contract(scenario_contract)
     findings = conversation.get('evaluation_findings')
-    if not contract and isinstance(findings, dict) and isinstance(findings.get('scenario_contract'), dict):
-        contract = dict(findings['scenario_contract'])
+    if not contract and isinstance(findings, dict):
+        contract = _unwrap_scenario_contract(findings.get('scenario_contract'))
 
     required = _descriptions(contract.get('required_actions'))
     forbidden = _descriptions(contract.get('forbidden_actions'))
@@ -75,6 +75,15 @@ def build_assert_taxonomy(
             'scenario_title': title,
         },
     }
+
+
+def _unwrap_scenario_contract(value: Any) -> dict[str, Any]:
+    """Accept either a bare scenario contract or get_scenario_contract()'s envelope."""
+    if not isinstance(value, dict):
+        return {}
+    contract = dict(value)
+    nested = contract.get('scenario_contract')
+    return dict(nested) if isinstance(nested, dict) else contract
 
 
 def _descriptions(value: Any) -> list[str]:
