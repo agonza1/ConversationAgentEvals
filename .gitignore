@@ -42,5 +42,6 @@ artifacts/voice-lab/
 artifacts/voice-lab-private-site/
 artifacts/execution-runs/
 artifacts/pipecat-public-voice-smoke/
+artifacts/signalwire-holyguacamole-smoke/
 artifacts/agents/
 artifacts/llm_judge_spend.json

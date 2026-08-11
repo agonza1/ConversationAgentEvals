@@ -19,6 +19,7 @@ AgentTarget = Literal[
     'voice_fixture',  # legacy saved-replay target; new records are rejected
     'builtin_sample_voice',
     'pipecat_public_demo',
+    'signalwire_holy_guacamole',
     'sip_agent',
     'phone_agent',
     'browser_webrtc_agent',
@@ -31,6 +32,7 @@ _VOICE_AGENT_TARGETS = frozenset(
         'voice_fixture',
         'builtin_sample_voice',
         'pipecat_public_demo',
+        'signalwire_holy_guacamole',
         'sip_agent',
         'phone_agent',
         'browser_webrtc_agent',
@@ -141,30 +143,39 @@ class AgentUpdateRequest(BaseModel):
 
 
 def validate_agent_connection(target: AgentTarget, connection: AgentConnection) -> None:
-    if target == 'pipecat_public_demo':
+    if target in {'pipecat_public_demo', 'signalwire_holy_guacamole'}:
         endpoint = (connection.endpoint_url or '').strip()
+        label = 'Pipecat demo' if target == 'pipecat_public_demo' else 'Holy Guacamole SignalWire'
         if not endpoint:
-            raise ValueError('Pipecat demo targets require connection.endpoint_url.')
+            raise ValueError(f'{label} targets require connection.endpoint_url.')
         parsed = urlparse(endpoint)
+        expected_host = (
+            'www.pipecat.ai' if target == 'pipecat_public_demo' else 'holyguacamole.signalwire.me'
+        )
+        expected_url = (
+            'https://www.pipecat.ai/'
+            if target == 'pipecat_public_demo'
+            else 'https://holyguacamole.signalwire.me/'
+        )
         try:
             port = parsed.port
         except ValueError as exc:
-            raise ValueError('Pipecat demo targets must use https://www.pipecat.ai/.') from exc
+            raise ValueError(f'{label} targets must use {expected_url}.') from exc
         if (
             parsed.scheme != 'https'
-            or parsed.hostname != 'www.pipecat.ai'
+            or parsed.hostname != expected_host
             or parsed.username
             or parsed.password
             or port is not None
             or parsed.path not in {'', '/'}
         ):
-            raise ValueError('Pipecat demo targets must use https://www.pipecat.ai/.')
+            raise ValueError(f'{label} targets must use {expected_url}.')
         if parsed.query or parsed.fragment:
-            raise ValueError('Pipecat demo target URLs cannot contain query strings or fragments.')
+            raise ValueError(f'{label} target URLs cannot contain query strings or fragments.')
         if connection.auth_type != 'none' or connection.secret_ref:
-            raise ValueError('The public Pipecat demo target does not accept stored credentials.')
+            raise ValueError(f'The public {label} target does not accept stored credentials.')
         if connection.sip_uri or connection.phone_number or connection.acc_base_url:
-            raise ValueError('Pipecat demo targets cannot include ACC voice destination fields.')
+            raise ValueError(f'{label} targets cannot include ACC voice destination fields.')
         return
 
     if target == 'http_endpoint':

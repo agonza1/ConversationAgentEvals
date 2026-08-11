@@ -19,6 +19,7 @@ TargetKind = Literal[
     'saved_text_replay',
     'builtin_sample_voice',
     'pipecat_public_demo',
+    'signalwire_holy_guacamole',
     'saved_voice_replay',
     'sip_agent',
     'phone_agent',
@@ -31,6 +32,7 @@ ExecutorId = Literal[
     'evidence_replay',
     'cae_local_audio_loop',
     'pipecat_public_daily',
+    'signalwire_public_browser',
     'acc_browser_webrtc',
     'acc_sip',
     'acc_phone',
@@ -58,6 +60,7 @@ _COMPATIBLE_EXECUTORS: dict[str, frozenset[ExecutorId]] = {
     'offline_acc_fixture': frozenset({'evidence_replay'}),
     'builtin_sample_voice': frozenset({'cae_local_audio_loop'}),
     'pipecat_public_demo': frozenset({'pipecat_public_daily'}),
+    'signalwire_holy_guacamole': frozenset({'signalwire_public_browser'}),
     'voice_fixture': frozenset({'evidence_replay'}),
     'sip_agent': frozenset({'acc_sip'}),
     'phone_agent': frozenset({'acc_phone'}),
@@ -91,6 +94,7 @@ class ExecutionDefaults(BaseModel):
         'none',
         'pipecat_small_webrtc',
         'pipecat_daily_webrtc',
+        'signalwire_browser_webrtc',
         'freeswitch_verto_sip',
     ] = 'none'
 
@@ -114,6 +118,13 @@ def execution_defaults_for_target(target: str | None) -> ExecutionDefaults:
             tester_id='pipecat_tester',
             executor_id='pipecat_public_daily',
             audio_transport='pipecat_daily_webrtc',
+        )
+    if normalized == 'signalwire_holy_guacamole':
+        return ExecutionDefaults(
+            mode='pipecat_webrtc',
+            tester_id='pipecat_tester',
+            executor_id='signalwire_public_browser',
+            audio_transport='signalwire_browser_webrtc',
         )
     if normalized == 'voice_fixture':
         return ExecutionDefaults(
@@ -179,6 +190,7 @@ def target_kind_for_agent_target(target: str | None) -> TargetKind:
         'offline_acc_fixture': 'saved_text_replay',
         'builtin_sample_voice': 'builtin_sample_voice',
         'pipecat_public_demo': 'pipecat_public_demo',
+        'signalwire_holy_guacamole': 'signalwire_holy_guacamole',
         'voice_fixture': 'saved_voice_replay',
         'sip_agent': 'sip_agent',
         'phone_agent': 'phone_agent',
@@ -200,6 +212,7 @@ def build_run_provenance(
     voice_targets = {
         'builtin_sample_voice',
         'pipecat_public_demo',
+        'signalwire_holy_guacamole',
         'voice_fixture',
         'sip_agent',
         'phone_agent',
@@ -215,6 +228,13 @@ def build_run_provenance(
     elif executor_id == 'pipecat_public_daily':
         evidence_source = 'external_webrtc'
         honesty_label = 'Live public Pipecat target · direct Daily WebRTC · current-run synthetic caller audio'
+        saved_evidence = False
+        synthetic_media = True
+    elif executor_id == 'signalwire_public_browser':
+        evidence_source = 'external_webrtc'
+        honesty_label = (
+            'Live Holy Guacamole SignalWire target · browser WebRTC SDK · current-run synthetic caller audio'
+        )
         saved_evidence = False
         synthetic_media = True
     elif executor_id == 'evidence_replay' or mode == 'voice_fixture' or target == 'offline_acc_fixture':
@@ -250,7 +270,10 @@ def build_run_provenance(
         tester_id=tester_id,
         executor_id=executor_id,
         evidence_source=evidence_source,
-        live_external_connection=executor_id == 'pipecat_public_daily' or executor_id in _UNAVAILABLE_EXECUTORS,
+        live_external_connection=(
+            executor_id in {'pipecat_public_daily', 'signalwire_public_browser'}
+            or executor_id in _UNAVAILABLE_EXECUTORS
+        ),
         saved_evidence=saved_evidence,
         synthetic_media=synthetic_media,
         honesty_label=honesty_label,

@@ -37,6 +37,7 @@ def test_agent_crud_round_trip():
         'acc-voice-fixture-agent',
         'generalist-voice-agent',
         'pipecat-public-demo',
+        'holyguacamole-signalwire-agent',
     }
 
     created = client.post(
@@ -143,6 +144,19 @@ def test_agent_options_expose_adapter_tester_executor_defaults():
         'audio_transport': 'pipecat_daily_webrtc',
     }
 
+    signalwire = targets['signalwire_holy_guacamole']
+    assert signalwire['label'] == 'Holy Guacamole SignalWire'
+    assert signalwire['channel'] == 'voice'
+    assert signalwire['available'] is True
+    assert signalwire['requires_connection'] == ['endpoint_url']
+    assert signalwire['default_connection'] == {'endpoint_url': 'https://holyguacamole.signalwire.me/'}
+    assert signalwire['defaults'] == {
+        'mode': 'pipecat_webrtc',
+        'tester_id': 'pipecat_tester',
+        'executor_id': 'signalwire_public_browser',
+        'audio_transport': 'signalwire_browser_webrtc',
+    }
+
 
 def test_pipecat_public_target_accepts_fixed_public_url():
     created = client.post(
@@ -157,6 +171,21 @@ def test_pipecat_public_target_accepts_fixed_public_url():
     )
     assert created.status_code == 200, created.text
     assert created.json()['connection']['endpoint_url'] == 'https://www.pipecat.ai/'
+
+
+def test_signalwire_holyguacamole_target_accepts_fixed_public_url():
+    created = client.post(
+        '/api/agents',
+        json={
+            'name': 'Holy Guacamole public target',
+            'channel': 'voice',
+            'target': 'signalwire_holy_guacamole',
+            'environment': 'production',
+            'connection': {'endpoint_url': 'https://holyguacamole.signalwire.me/'},
+        },
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()['connection']['endpoint_url'] == 'https://holyguacamole.signalwire.me/'
 
 
 @pytest.mark.parametrize('endpoint_url', [
@@ -178,6 +207,27 @@ def test_pipecat_public_target_rejects_non_public_url(endpoint_url):
     )
     assert response.status_code == 422
     assert 'https://www.pipecat.ai/' in response.text
+
+
+@pytest.mark.parametrize('endpoint_url', [
+    'https://internal.example.test/',
+    'https://holyguacamole.signalwire.me/menu',
+    'https://holyguacamole.signalwire.me:444/',
+    'https://user:secret@holyguacamole.signalwire.me/',
+    'https://holyguacamole.signalwire.me/?token=secret',
+])
+def test_signalwire_holyguacamole_target_rejects_non_public_url(endpoint_url):
+    response = client.post(
+        '/api/agents',
+        json={
+            'name': 'Unsafe Holy Guacamole target',
+            'channel': 'voice',
+            'target': 'signalwire_holy_guacamole',
+            'connection': {'endpoint_url': endpoint_url},
+        },
+    )
+    assert response.status_code == 422
+    assert 'https://holyguacamole.signalwire.me/' in response.text
 
 
 def test_http_target_credentials_only_resolve_from_dedicated_namespace(monkeypatch):
@@ -455,6 +505,87 @@ def test_public_pipecat_agent_uses_direct_daily_executor(monkeypatch, tmp_path):
     assert conversation['latency_marks'][0]['measurement_scope'] == 'remote_target_observed_at_tester'
     assert conversation['latency_marks'][0]['remote_target'] is True
     assert conversation['final_state']['runtime_provenance']['browser_peer'] is False
+    assert [turn['speaker'] for turn in conversation['turns']] == ['caller', 'agent']
+
+
+def test_signalwire_holyguacamole_agent_uses_gated_browser_executor(monkeypatch, tmp_path):
+    from app.services import execution_runner
+    from app.services.execution_audio import AudioRecordingHandle, TranscriptionTurn
+
+    response_audio = tmp_path / 'signalwire-target.webm'
+    response_audio.write_bytes(b'current-run-signalwire-audio')
+
+    def fake_signalwire_call(**kwargs):
+        assert kwargs['caller_text']
+        assert kwargs['timeout_seconds'] == 60
+        assert kwargs['execution_run_id'] == queued['execution_run_id']
+        assert kwargs['scenario']['id'] == 'cancellation-rescue'
+        return {
+            'connection': {'ui_connected': True, 'remote_stream_seen': True},
+            'tester': {'headless_browser': True, 'media_source': 'macos_say_tts'},
+            'latency_metrics': {
+                'connect_click_to_remote_audio_ms': 640.0,
+                'total_run_ms': 6000.0,
+            },
+            'media': {'target_audio_duration_ms': 5000},
+            'page_events': [{'kind': 'status', 'text': 'Connected! Ready to take your order.'}],
+            'artifacts': {'result_json': 'artifacts/signalwire/result.json'},
+            'transcription_turns': [
+                TranscriptionTurn(
+                    turn_index=1,
+                    speaker='Caller',
+                    text='I need help with a cancellation.',
+                    source='signalwire_browser_webrtc',
+                    direction='tester_to_target',
+                    evidence_role='tester',
+                ),
+                TranscriptionTurn(
+                    turn_index=2,
+                    speaker='Agent',
+                    text='Connected! Ready to take your order.',
+                    source='signalwire_browser_webrtc',
+                    direction='target_to_tester',
+                    evidence_role='target',
+                ),
+            ],
+            'recording_handle': AudioRecordingHandle(
+                uri=str(response_audio),
+                mime_type='audio/webm',
+                bytes_captured=response_audio.stat().st_size,
+                transport='signalwire_browser_webrtc',
+            ),
+        }
+
+    monkeypatch.setattr(execution_runner, 'run_signalwire_holyguacamole_call', fake_signalwire_call)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        duplex_timeout_seconds=60,
+        evaluate=False,
+        user_id='agent-runs-user',
+        project_id='agent-runs-project',
+    )
+    queued = start_execution_run(payload)
+
+    assert queued['mode'] == 'pipecat_webrtc'
+    assert queued['executor_id'] == 'signalwire_public_browser'
+    assert queued['execution_snapshot']['request']['audio_transport'] == 'signalwire_browser_webrtc'
+    assert queued['provenance']['target_kind'] == 'signalwire_holy_guacamole'
+    assert queued['provenance']['live_external_connection'] is True
+    assert queued['provenance']['evidence_source'] == 'external_webrtc'
+
+    finished = execute_execution_run(queued['execution_run_id'], payload)
+    conversation = finished['conversations'][0]
+    assert conversation['status'] == 'completed'
+    assert conversation['audio_session']['transport'] == 'signalwire_browser_webrtc'
+    assert conversation['audio_session']['provider'] == 'signalwire'
+    assert conversation['recording']['transport'] == 'signalwire_browser_webrtc'
+    assert conversation['recording']['mime_type'] == 'audio/webm'
+    assert conversation['latency_marks'][0]['kind'] == 'connect_click_to_remote_audio'
+    assert conversation['latency_marks'][0]['latency_ms'] == 640.0
+    assert conversation['final_state']['runtime_provenance']['browser_peer'] is True
+    assert conversation['final_state']['runtime_provenance']['guest_token_persisted'] is False
     assert [turn['speaker'] for turn in conversation['turns']] == ['caller', 'agent']
 
 
