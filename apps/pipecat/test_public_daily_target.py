@@ -3,12 +3,29 @@ import asyncio
 import pytest
 
 import public_daily_target
+import server
 from public_daily_target import (
     PublicDailyTargetError,
     PublicDailyTargetRequest,
     _completed_bot_output_text,
     run_public_daily_target,
 )
+
+
+def test_public_target_timeout_matches_execution_api_limit():
+    caller_text = 'Please update my billing address.'
+
+    service_request = server.PublicPipecatRunRequest(
+        caller_text=caller_text,
+        timeout_seconds=300,
+    )
+    daily_request = PublicDailyTargetRequest(
+        caller_text=caller_text,
+        timeout_seconds=300,
+    )
+
+    assert service_request.timeout_seconds == 300
+    assert daily_request.timeout_seconds == 300
 
 
 def test_completed_bot_output_text_accepts_legacy_spoken_segment():

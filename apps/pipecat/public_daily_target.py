@@ -37,7 +37,7 @@ class PublicDailyTargetError(RuntimeError):
 class PublicDailyTargetRequest(BaseModel):
     caller_text: str = Field(min_length=1, max_length=2_000)
     agent: str = Field(default=DEFAULT_PUBLIC_AGENT, min_length=1, max_length=120)
-    timeout_seconds: int = Field(default=90, ge=30, le=180)
+    timeout_seconds: int = Field(default=90, ge=30, le=300)
 
 
 @dataclass(slots=True)
