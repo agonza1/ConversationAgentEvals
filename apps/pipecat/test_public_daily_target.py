@@ -8,6 +8,7 @@ from public_daily_target import (
     PublicDailyTargetError,
     PublicDailyTargetRequest,
     _completed_bot_output_text,
+    _message_completes_bot_turn,
     run_public_daily_target,
 )
 
@@ -67,6 +68,25 @@ def test_completed_bot_output_text_ignores_unspoken_or_in_progress_segments():
             'spoken_status': 'in-progress',
         },
     }) == ''
+
+
+def test_rtvi_v2_completed_events_finish_bot_turn_without_stopped_speaking():
+    assert _message_completes_bot_turn('bot-output', {
+        'type': 'bot-output',
+        'data': {
+            'text': 'Ready to help.',
+            'will_be_spoken': True,
+            'spoken_status': 'completed',
+        },
+    }) is True
+    assert _message_completes_bot_turn('bot-transcription', {
+        'type': 'bot-transcription',
+        'data': {'text': 'Ready to help.', 'final': True},
+    }) is True
+    assert _message_completes_bot_turn('bot-output', {
+        'type': 'bot-output',
+        'data': {'text': 'Still speaking.', 'will_be_spoken': True, 'spoken_status': 'in-progress'},
+    }) is False
 
 
 def test_public_target_reports_tester_audio_synthesis_stage(monkeypatch):

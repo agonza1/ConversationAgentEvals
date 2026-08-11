@@ -134,6 +134,19 @@ def _completed_bot_output_text(message: Any) -> str:
     return ''
 
 
+def _message_completes_bot_turn(message_type: str, message: Any) -> bool:
+    """Recognize both RTVI generations' end-of-bot-turn signals.
+
+    The public demo no longer consistently emits ``bot-stopped-speaking``.
+    A completed spoken ``bot-output`` or final ``bot-transcription`` carries
+    the same completion evidence and keeps the transport from waiting for an
+    event that may never arrive.
+    """
+    if message_type == 'bot-output':
+        return bool(_completed_bot_output_text(message))
+    return message_type == 'bot-transcription' and _message_is_final(message)
+
+
 def _wav_to_pcm(payload: bytes) -> tuple[bytes, int, int]:
     with wave.open(io.BytesIO(payload), 'rb') as source:
         if source.getsampwidth() != 2:
@@ -323,6 +336,7 @@ async def run_public_daily_duplex(
     async def on_app_message(_transport: DailyTransport, message: Any, sender: str):
         message_type = _message_type(message)
         data = _message_data(message)
+        completes_bot_turn = _message_completes_bot_turn(message_type, message)
         if message_type in {
             'bot-ready',
             'bot-started-speaking',
@@ -371,6 +385,14 @@ async def run_public_daily_duplex(
         elif message_type == 'bot-started-speaking' and evidence.caller_audio_sent_at is not None:
             evidence.capture_response_audio = True
         elif message_type == 'bot-stopped-speaking':
+            evidence.bot_stopped.set()
+            if evidence.caller_audio_sent_at is None:
+                evidence.initial_bot_turn_complete = True
+            else:
+                evidence.response_complete_at = time.perf_counter()
+                evidence.response_complete.set()
+        if completes_bot_turn and not evidence.bot_stopped.is_set():
+            # RTVI v2 completion events can replace bot-stopped-speaking.
             evidence.bot_stopped.set()
             if evidence.caller_audio_sent_at is None:
                 evidence.initial_bot_turn_complete = True
