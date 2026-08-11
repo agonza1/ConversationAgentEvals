@@ -61,6 +61,12 @@ def judge_execution_conversation(
         raise HTTPException(status_code=404, detail='Conversation not found.')
     if conversation.get('status') in {'queued', 'running'}:
         raise HTTPException(status_code=409, detail='The conversation must be terminal before ASSERT judging.')
+    deterministic_verdict = str(conversation.get('verdict') or '').strip().lower()
+    if deterministic_verdict not in {'pass', 'needs_review', 'fail', 'failed'}:
+        raise HTTPException(
+            status_code=409,
+            detail='The conversation must have a deterministic verdict before ASSERT judging.',
+        )
 
     deterministic_snapshot = execution_run_store.deterministic_evaluation_snapshot(conversation)
     scenario_contract = get_scenario_contract(
