@@ -415,15 +415,28 @@ async def pace_pcm(
     audio_frame_callback: AudioFrameCallback | None = None,
     turn_pair: int = 0,
 ) -> int:
+    """Queue PCM to the target in real time while prebuffering live observers.
+
+    The WebRTC listener track already owns playout pacing. Publishing the caller
+    audio to it one 20 ms frame at a time couples that track to Daily's send loop
+    and lets scheduler jitter produce audible silence insertions. Give observers
+    the complete utterance first, then independently pace only the target output.
+    """
+    if audio_frame_callback is not None and pcm:
+        await audio_frame_callback('tester_to_target', pcm, sample_rate, channels, turn_pair)
+
     bytes_per_chunk = max(2, int(sample_rate * channels * 2 * 0.02))
+    bytes_per_second = sample_rate * channels * 2
     frames_sent = 0
+    started_at = time.perf_counter()
     for offset in range(0, len(pcm), bytes_per_chunk):
         chunk = pcm[offset:offset + bytes_per_chunk]
         await task.queue_frame(OutputAudioRawFrame(chunk, sample_rate, channels))
-        if audio_frame_callback is not None:
-            await audio_frame_callback('tester_to_target', chunk, sample_rate, channels, turn_pair)
         frames_sent += 1
-        await asyncio.sleep(0.02)
+        playback_deadline = started_at + min(offset + len(chunk), len(pcm)) / bytes_per_second
+        delay = playback_deadline - time.perf_counter()
+        if delay > 0:
+            await asyncio.sleep(delay)
     return frames_sent
 
 

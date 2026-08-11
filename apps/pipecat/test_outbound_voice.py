@@ -1,8 +1,10 @@
 import asyncio
 
+import outbound_voice
 from outbound_voice import (
     OutboundVoiceRunContext,
     OutboundVoiceTargetDescriptor,
+    pace_pcm,
     pcm_to_wav,
 )
 
@@ -71,3 +73,53 @@ def test_outbound_run_context_preserves_events_media_and_latency_contract():
     assert latency['signal_boundary'] == 'silero_vad_speech_onset'
     assert result['media']['caller_audio_frames'] == 1
     assert result['media']['target_audio_frames'] == 2
+
+
+def test_pace_pcm_prebuffers_listener_and_uses_deadline_pacing(monkeypatch):
+    clock = [100.0]
+    activity: list[tuple[str, object]] = []
+
+    class FakeTask:
+        async def queue_frame(self, frame):
+            activity.append(('target', frame.audio))
+            # Model ordinary work performed by the Daily send pipeline. Fixed
+            # sleeps would accumulate this overhead and progressively run late.
+            clock[0] += 0.001
+
+    async def capture_audio(direction, payload, sample_rate, channels, turn_pair):
+        activity.append(('listener', payload))
+        assert direction == 'tester_to_target'
+        assert sample_rate == 1_000
+        assert channels == 1
+        assert turn_pair == 2
+
+    async def fake_sleep(delay):
+        activity.append(('sleep', delay))
+        clock[0] += delay
+
+    monkeypatch.setattr(outbound_voice.time, 'perf_counter', lambda: clock[0])
+    monkeypatch.setattr(outbound_voice.asyncio, 'sleep', fake_sleep)
+    pcm = bytes(range(120))  # Three 20 ms chunks at 1 kHz, mono, 16-bit.
+
+    sent = asyncio.run(pace_pcm(
+        FakeTask(),
+        pcm,
+        1_000,
+        1,
+        audio_frame_callback=capture_audio,
+        turn_pair=2,
+    ))
+
+    assert sent == 3
+    assert activity[0] == ('listener', pcm)
+    assert [item[1] for item in activity if item[0] == 'listener'] == [pcm]
+    assert [item[1] for item in activity if item[0] == 'target'] == [
+        pcm[0:40],
+        pcm[40:80],
+        pcm[80:120],
+    ]
+    assert [round(float(item[1]), 3) for item in activity if item[0] == 'sleep'] == [
+        0.019,
+        0.019,
+        0.019,
+    ]
