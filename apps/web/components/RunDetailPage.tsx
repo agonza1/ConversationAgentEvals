@@ -1206,9 +1206,9 @@ function evaluationBasisDetails(conversation: ConversationRecord, adjudicated: b
     return {
       heading: 'How the automatic score is calculated',
       lines: [
-        'Score = 45% required-action completion + 55% weighted rubric − 20 per forbidden action (maximum 40-point penalty).',
+        'Score = max(0, 45% required-action completion + 55% weighted rubric − forbidden-action penalty). The penalty is 20 per action, up to 40.',
         ...(hasEquation ? [
-          `This run: 45% × ${formatScoreNumber(requiredActions)} + 55% × ${formatScoreNumber(rubric)} − ${formatScoreNumber(penalty)} penalty = ${scoreLabel}.`,
+          `This run: max(0, 45% × ${formatScoreNumber(requiredActions)} + 55% × ${formatScoreNumber(rubric)} − ${formatScoreNumber(penalty)}) = ${scoreLabel}.`,
         ] : []),
         '100 = full credit; 50 = half credit; 0 = none. Pass also requires at least 75 and no hard-check failures.',
       ],
