@@ -36,3 +36,32 @@ def test_taxonomy_adapter_unwraps_catalog_contract_envelope():
     assert 'forbidden_promise_a_guaranteed_refund' in names
     assert 'unsupported_operational_claim' in names
     assert 'inadequate_resolution_or_fallback' in names
+
+
+def test_taxonomy_adapter_preserves_distinct_requirements_with_colliding_slugs():
+    shared_prefix = (
+        'Verify the account using the same deliberately long requirement wording '
+        'that exceeds the taxonomy slug cutoff and continues with '
+    )
+    first = shared_prefix + 'the caller email address.'
+    second = shared_prefix + 'the caller phone number.'
+
+    taxonomy = build_assert_taxonomy(
+        scenario_contract={
+            'required_actions': [first, second],
+            'forbidden_actions': [],
+        },
+        conversation={'scenario_id': 'collision-regression'},
+    )
+
+    requirement_categories = [
+        item
+        for item in taxonomy['behavior_categories']
+        if item['name'].startswith('missing_required_')
+    ]
+    assert len(requirement_categories) == 2
+    assert len({item['name'] for item in requirement_categories}) == 2
+    assert any(item['name'].endswith('_d70fc536ce') for item in requirement_categories)
+    definitions = {item['definition'] for item in requirement_categories}
+    assert any(first in definition for definition in definitions)
+    assert any(second in definition for definition in definitions)
