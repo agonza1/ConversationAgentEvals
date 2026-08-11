@@ -99,6 +99,59 @@ def test_rtvi_v2_completed_events_finish_bot_turn_without_stopped_speaking():
     }) is False
 
 
+def test_remote_audio_latency_waits_for_confirmed_speech(monkeypatch):
+    class FakeVad:
+        def __init__(self, *_args, **_kwargs):
+            self.states = iter([
+                public_daily_target.VADState.QUIET,
+                public_daily_target.VADState.STARTING,
+                public_daily_target.VADState.SPEAKING,
+            ])
+
+        def set_sample_rate(self, _sample_rate):
+            pass
+
+        async def analyze_audio(self, _audio):
+            return next(self.states)
+
+        async def cleanup(self):
+            pass
+
+    monkeypatch.setattr(public_daily_target, 'SileroVADAnalyzer', FakeVad)
+
+    async def collect():
+        evidence = public_daily_target._DirectDailyEvidence(
+            current_turn_pair=1,
+            caller_audio_sent_at=public_daily_target.time.perf_counter() - 1,
+            caller_audio_ended_at=public_daily_target.time.perf_counter(),
+            capture_response_audio=True,
+        )
+        collector = public_daily_target._RemoteAudioCollector(evidence)
+        frame = public_daily_target.UserAudioRawFrame(
+            bytes([1, 0]) * 320,
+            sample_rate=16_000,
+            num_channels=1,
+            user_id='remote-bot',
+        )
+        await collector.process_frame(frame, public_daily_target.FrameDirection.DOWNSTREAM)
+        first_media_at = evidence.first_target_audio_at
+        assert first_media_at is not None
+        assert evidence.first_target_speech_at is None
+
+        await asyncio.sleep(0.025)
+        await collector.process_frame(frame, public_daily_target.FrameDirection.DOWNSTREAM)
+        assert evidence.first_target_speech_at is None
+
+        await asyncio.sleep(0.025)
+        await collector.process_frame(frame, public_daily_target.FrameDirection.DOWNSTREAM)
+        assert evidence.first_target_speech_at is not None
+        assert evidence.first_target_speech_at > first_media_at
+        assert evidence.target_audio_frames == 3
+        await collector.cleanup()
+
+    asyncio.run(collect())
+
+
 def test_public_duplex_reuses_rtvi_text_for_next_tester_turn(monkeypatch):
     observed: dict[str, object] = {}
 

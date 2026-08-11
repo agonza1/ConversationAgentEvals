@@ -54,11 +54,15 @@ def test_public_target_client_persists_current_run_media_without_room_credential
         'connection': {'connected': True, 'response_complete': True},
         'latency_metrics': {
             'tester_speech_end_to_first_target_audio_received_ms': 321.5,
+            'tester_speech_end_to_first_target_speech_received_ms': 321.5,
         },
         'exchanges': [{
             'turn_pair': 1,
             'latency': {
                 'tester_speech_end_to_first_target_audio_received_ms': 321.5,
+                'tester_speech_end_to_first_target_speech_received_ms': 321.5,
+                'first_target_media_frame_latency_ms': 0.2,
+                'signal_boundary': 'silero_vad_speech_onset',
                 'response_complete_latency_ms': 900.0,
             },
         }],

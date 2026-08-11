@@ -379,12 +379,16 @@ def test_public_pipecat_agent_uses_direct_daily_executor(monkeypatch, tmp_path):
             'connection': {'connected': True, 'response_complete': True},
             'latency_metrics': {
                 'tester_speech_end_to_first_target_audio_received_ms': 240.5,
+                'tester_speech_end_to_first_target_speech_received_ms': 240.5,
                 'total_run_ms': 1200.0,
             },
             'exchanges': [{
                 'turn_pair': 1,
                 'latency': {
                     'tester_speech_end_to_first_target_audio_received_ms': 240.5,
+                    'tester_speech_end_to_first_target_speech_received_ms': 240.5,
+                    'first_target_media_frame_latency_ms': 0.2,
+                    'signal_boundary': 'silero_vad_speech_onset',
                     'response_complete_latency_ms': 800.0,
                 },
             }],
@@ -442,8 +446,11 @@ def test_public_pipecat_agent_uses_direct_daily_executor(monkeypatch, tmp_path):
         f'/recording?user_id={payload.user_id}'
     )
     assert conversation['latency_marks'][0]['kind'] == (
-        'tester_speech_end_to_first_target_audio_received'
+        'tester_speech_end_to_first_target_speech_received'
     )
+    assert conversation['latency_marks'][0]['latency_ms'] == 240.5
+    assert conversation['latency_marks'][0]['first_target_media_frame_latency_ms'] == 0.2
+    assert conversation['latency_marks'][0]['signal_boundary'] == 'silero_vad_speech_onset'
     assert conversation['latency_marks'][0]['response_complete_latency_ms'] == 800.0
     assert conversation['latency_marks'][0]['measurement_scope'] == 'remote_target_observed_at_tester'
     assert conversation['latency_marks'][0]['remote_target'] is True

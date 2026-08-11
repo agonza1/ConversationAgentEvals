@@ -12,6 +12,8 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, Field
 
+from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams, VADState
 from pipecat.frames.frames import (
     EndFrame,
     Frame,
@@ -65,6 +67,7 @@ class _DirectDailyEvidence:
     caller_audio_ended_at: float | None = None
     response_started_at: float | None = None
     first_target_audio_at: float | None = None
+    first_target_speech_at: float | None = None
     response_complete_at: float | None = None
     initial_bot_turn_complete: bool = False
     initial_target_transcript_count: int = 0
@@ -79,12 +82,21 @@ class _RemoteAudioCollector(FrameProcessor):
         super().__init__()
         self.evidence = evidence
         self.audio_frame_callback = audio_frame_callback
+        self.vad = SileroVADAnalyzer(
+            sample_rate=16_000,
+            params=VADParams(confidence=0.7, start_secs=0.12, stop_secs=0.5, min_volume=0.4),
+        )
+        self.vad.set_sample_rate(16_000)
+        self.previous_vad_state = VADState.QUIET
+        self.speech_candidate_at: float | None = None
+        self.vad_turn_pair = 0
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
         if isinstance(frame, UserAudioRawFrame):
             if self.evidence.target_participant_id and frame.user_id != self.evidence.target_participant_id:
                 return
+            received_at = time.perf_counter()
             if self.audio_frame_callback is not None:
                 await self.audio_frame_callback(
                     'target_to_tester',
@@ -93,16 +105,40 @@ class _RemoteAudioCollector(FrameProcessor):
                     frame.num_channels,
                     self.evidence.current_turn_pair,
                 )
+            if frame.sample_rate == 16_000 and frame.num_channels == 1:
+                if self.vad_turn_pair != self.evidence.current_turn_pair:
+                    self.vad_turn_pair = self.evidence.current_turn_pair
+                    self.speech_candidate_at = None
+                vad_state = await self.vad.analyze_audio(frame.audio)
+                frame_duration = len(frame.audio) / (frame.sample_rate * frame.num_channels * 2)
+                if vad_state == VADState.STARTING and self.previous_vad_state != VADState.STARTING:
+                    self.speech_candidate_at = received_at - frame_duration
+                elif vad_state == VADState.QUIET:
+                    self.speech_candidate_at = None
+                if (
+                    vad_state == VADState.SPEAKING
+                    and self.previous_vad_state != VADState.SPEAKING
+                    and self.speech_candidate_at is not None
+                    and self.evidence.current_turn_pair > 0
+                    and self.evidence.caller_audio_sent_at is not None
+                    and self.evidence.first_target_speech_at is None
+                ):
+                    self.evidence.first_target_speech_at = self.speech_candidate_at
+                self.previous_vad_state = vad_state
             if not self.evidence.capture_response_audio:
                 return
             if self.evidence.first_target_audio_at is None:
-                self.evidence.first_target_audio_at = time.perf_counter()
+                self.evidence.first_target_audio_at = received_at
             self.evidence.target_audio.extend(frame.audio)
             self.evidence.target_audio_frames += 1
             self.evidence.target_audio_sample_rate = frame.sample_rate
             self.evidence.target_audio_channels = frame.num_channels
             return
         await self.push_frame(frame, direction)
+
+    async def cleanup(self) -> None:
+        await self.vad.cleanup()
+        await super().cleanup()
 
 
 def _message_type(message: Any) -> str:
@@ -532,6 +568,7 @@ async def run_public_daily_duplex(
         current_wav = caller_wav
         for turn_pair in range(1, request.max_turn_pairs + 1):
             evidence.current_turn_pair = turn_pair
+            evidence.caller_audio_sent_at = None
             caller_pcm, caller_rate, caller_channels = _wav_to_pcm(current_wav)
             caller_transcript_count = len(evidence.caller_transcripts)
             evidence.bot_stopped.clear()
@@ -548,6 +585,7 @@ async def run_public_daily_duplex(
             evidence.caller_audio_ended_at = None
             evidence.response_started_at = None
             evidence.first_target_audio_at = None
+            evidence.first_target_speech_at = None
             evidence.response_complete_at = None
 
             if event_callback is not None and not (turn_pair == 1 and initial_caller_published):
@@ -608,16 +646,26 @@ async def run_public_daily_duplex(
                 evidence.target_audio_sample_rate,
                 evidence.target_audio_channels,
             )
-            first_audio_offset_ms = (
+            first_media_frame_offset_ms = (
                 round((evidence.first_target_audio_at - evidence.caller_audio_ended_at) * 1000, 2)
                 if evidence.first_target_audio_at is not None and evidence.caller_audio_ended_at is not None
                 else None
             )
-            first_audio_ms = max(0.0, first_audio_offset_ms) if first_audio_offset_ms is not None else None
+            first_speech_offset_ms = (
+                round((evidence.first_target_speech_at - evidence.caller_audio_ended_at) * 1000, 2)
+                if evidence.first_target_speech_at is not None and evidence.caller_audio_ended_at is not None
+                else None
+            )
+            first_speech_ms = max(0.0, first_speech_offset_ms) if first_speech_offset_ms is not None else None
             response_started_offset_ms = (
                 round((evidence.response_started_at - evidence.caller_audio_ended_at) * 1000, 2)
                 if evidence.response_started_at is not None and evidence.caller_audio_ended_at is not None
                 else None
+            )
+            overlap_offset_ms = (
+                first_speech_offset_ms
+                if first_speech_offset_ms is not None and first_speech_offset_ms < 0
+                else response_started_offset_ms
             )
             response_complete_ms = (
                 round(max(0.0, evidence.response_complete_at - evidence.caller_audio_ended_at) * 1000, 2)
@@ -629,14 +677,24 @@ async def run_public_daily_duplex(
                 'caller': {'text': caller_transcript},
                 'target': {'text': target_text},
                 'latency': {
-                    'tester_speech_end_to_first_target_audio_received_ms': first_audio_ms,
+                    # Keep the established field for compatibility, but define
+                    # target response onset as confirmed audible speech rather
+                    # than Daily's continuously delivered silent media frames.
+                    'tester_speech_end_to_first_target_audio_received_ms': first_speech_ms,
+                    'tester_speech_end_to_first_target_speech_received_ms': first_speech_ms,
+                    'first_target_media_frame_latency_ms': (
+                        max(0.0, first_media_frame_offset_ms)
+                        if first_media_frame_offset_ms is not None
+                        else None
+                    ),
+                    'signal_boundary': 'silero_vad_speech_onset',
                     'response_complete_latency_ms': response_complete_ms,
                     'response_started_before_tester_speech_end': (
-                        response_started_offset_ms is not None and response_started_offset_ms < 0
+                        overlap_offset_ms is not None and overlap_offset_ms < 0
                     ),
                     'response_overlap_ms': (
-                        round(abs(response_started_offset_ms), 2)
-                        if response_started_offset_ms is not None and response_started_offset_ms < 0
+                        round(abs(overlap_offset_ms), 2)
+                        if overlap_offset_ms is not None and overlap_offset_ms < 0
                         else 0.0
                     ),
                     'measurement_scope': 'remote_target_observed_at_tester',
@@ -688,7 +746,7 @@ async def run_public_daily_duplex(
 
     if not exchanges:
         raise PublicDailyTargetError('Public Pipecat call completed without an exchange.')
-    first_audio_values = [
+    first_speech_values = [
         item['latency']['tester_speech_end_to_first_target_audio_received_ms']
         for item in exchanges
         if isinstance(item['latency']['tester_speech_end_to_first_target_audio_received_ms'], (int, float))
@@ -705,11 +763,14 @@ async def run_public_daily_duplex(
         'turns': turns,
         'exchanges': exchanges,
         'latency_metrics': {
-            'tester_speech_end_to_first_target_audio_received_ms': first_audio_values[0]
-            if first_audio_values else None,
-            'average_target_response_latency_ms': round(sum(first_audio_values) / len(first_audio_values), 2)
-            if first_audio_values else None,
-            'max_target_response_latency_ms': max(first_audio_values) if first_audio_values else None,
+            'tester_speech_end_to_first_target_audio_received_ms': first_speech_values[0]
+            if first_speech_values else None,
+            'tester_speech_end_to_first_target_speech_received_ms': first_speech_values[0]
+            if first_speech_values else None,
+            'average_target_response_latency_ms': round(
+                sum(first_speech_values) / len(first_speech_values), 2
+            ) if first_speech_values else None,
+            'max_target_response_latency_ms': max(first_speech_values) if first_speech_values else None,
             'total_run_ms': round((time.perf_counter() - started) * 1000, 2),
         },
         'connection': {

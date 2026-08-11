@@ -600,19 +600,25 @@ def _execute_public_pipecat_daily(
         if not isinstance(exchange, dict):
             continue
         mark_latency = exchange.get('latency') if isinstance(exchange.get('latency'), dict) else {}
-        first_audio_ms = mark_latency.get('tester_speech_end_to_first_target_audio_received_ms')
-        if not isinstance(first_audio_ms, (int, float)):
+        first_speech_ms = mark_latency.get('tester_speech_end_to_first_target_speech_received_ms')
+        if not isinstance(first_speech_ms, (int, float)):
+            first_speech_ms = mark_latency.get('tester_speech_end_to_first_target_audio_received_ms')
+        if not isinstance(first_speech_ms, (int, float)):
             continue
         turn_pair = int(exchange.get('turn_pair') or index)
         latency_marks.append({
-            'name': 'tester_speech_end_to_first_target_audio_received',
+            'name': 'tester_speech_end_to_first_target_speech_received',
             'label': f'End-to-end target response · exchange {turn_pair}',
-            'kind': 'tester_speech_end_to_first_target_audio_received',
-            'response_metric': 'tester_speech_end_to_first_target_audio_received',
+            'kind': 'tester_speech_end_to_first_target_speech_received',
+            'response_metric': 'tester_speech_end_to_first_target_speech_received',
             'participant': 'target',
             'direction': 'target_to_tester',
             'turn_pair': turn_pair,
-            'latency_ms': first_audio_ms,
+            'latency_ms': first_speech_ms,
+            'first_target_media_frame_latency_ms': mark_latency.get(
+                'first_target_media_frame_latency_ms'
+            ),
+            'signal_boundary': mark_latency.get('signal_boundary') or 'audible_speech_onset',
             'response_complete_latency_ms': mark_latency.get('response_complete_latency_ms'),
             'response_started_before_tester_speech_end': bool(
                 mark_latency.get('response_started_before_tester_speech_end')
