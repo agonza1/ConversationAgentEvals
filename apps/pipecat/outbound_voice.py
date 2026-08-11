@@ -349,11 +349,14 @@ class OutboundTargetAudioCollector(FrameProcessor):
                     self.evidence.current_turn_pair,
                 )
             await self._observe_speech(frame, received_at)
+            # Track target media even while response capture is closed. The
+            # public Daily adapter uses this to drain delayed greeting packets
+            # before opening exchange 1 capture.
+            self.evidence.last_target_audio_at = received_at
             if not self.evidence.capture_response_audio:
                 return
             if self.evidence.first_target_audio_at is None:
                 self.evidence.first_target_audio_at = received_at
-            self.evidence.last_target_audio_at = received_at
             self.evidence.target_audio.extend(frame.audio)
             self.evidence.target_audio_frames += 1
             self.evidence.target_audio_sample_rate = frame.sample_rate

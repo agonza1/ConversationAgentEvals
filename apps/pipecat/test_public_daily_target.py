@@ -207,6 +207,55 @@ def test_response_finalization_waits_for_trailing_daily_audio(monkeypatch):
     asyncio.run(drain())
 
 
+def test_greeting_drain_waits_for_late_media_without_capturing_it(monkeypatch):
+    class FakeVad:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def set_sample_rate(self, _sample_rate):
+            pass
+
+        async def analyze_audio(self, _audio):
+            return outbound_voice.VADState.QUIET
+
+        async def cleanup(self):
+            pass
+
+    monkeypatch.setattr(outbound_voice, 'SileroVADAnalyzer', FakeVad)
+    monkeypatch.setattr(public_daily_target, 'TARGET_AUDIO_IDLE_SECONDS', 0.03)
+    monkeypatch.setattr(public_daily_target, 'TARGET_AUDIO_DRAIN_TIMEOUT_SECONDS', 0.2)
+
+    async def drain():
+        evidence = outbound_voice.OutboundVoiceEvidence(capture_response_audio=False)
+        collector = outbound_voice.OutboundTargetAudioCollector(evidence)
+        greeting_frame = outbound_voice.UserAudioRawFrame(
+            bytes([1, 0]) * 320,
+            sample_rate=16_000,
+            num_channels=1,
+            user_id='remote-bot',
+        )
+        completion_at = public_daily_target.time.perf_counter()
+
+        async def delayed_greeting_packet():
+            await asyncio.sleep(0.02)
+            await collector.process_frame(
+                greeting_frame,
+                outbound_voice.FrameDirection.DOWNSTREAM,
+            )
+
+        started = public_daily_target.time.monotonic()
+        packet = asyncio.create_task(delayed_greeting_packet())
+        await _wait_for_target_audio_drain(evidence, completed_at=completion_at)
+        await packet
+        assert public_daily_target.time.monotonic() - started >= 0.045
+        assert evidence.last_target_audio_at is not None
+        assert bytes(evidence.target_audio) == b''
+        assert evidence.target_audio_frames == 0
+        await collector.cleanup()
+
+    asyncio.run(drain())
+
+
 def test_remote_audio_latency_waits_for_confirmed_speech(monkeypatch):
     class FakeVad:
         def __init__(self, *_args, **_kwargs):

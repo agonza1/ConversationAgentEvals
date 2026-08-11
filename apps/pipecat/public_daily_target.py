@@ -148,15 +148,23 @@ async def _wait_for_event_or_error(
         await asyncio.gather(event_waiter, error_waiter, return_exceptions=True)
 
 
-async def _wait_for_target_audio_drain(evidence: Any) -> None:
+async def _wait_for_target_audio_drain(
+    evidence: Any,
+    *,
+    completed_at: float | None = None,
+) -> None:
     """Allow Daily media to catch up with its independent RTVI completion stream."""
     deadline = time.monotonic() + TARGET_AUDIO_DRAIN_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         _raise_transport_error(evidence)
         last_audio_at = evidence.last_target_audio_at
-        if (
-            last_audio_at is not None
-            and time.perf_counter() - last_audio_at >= TARGET_AUDIO_IDLE_SECONDS
+        last_activity_at = completed_at
+        if last_audio_at is not None and (
+            last_activity_at is None or last_audio_at > last_activity_at
+        ):
+            last_activity_at = last_audio_at
+        if last_activity_at is not None and (
+            time.perf_counter() - last_activity_at >= TARGET_AUDIO_IDLE_SECONDS
         ):
             return
         await asyncio.sleep(0.02)
@@ -499,6 +507,14 @@ async def run_public_daily_duplex(
                 f'Public Pipecat bot joined Daily but did not become ready.{suffix}'
             )
 
+        # RTVI completion and Daily media use independent streams. Hold capture
+        # closed until greeting media has been idle after the completion event,
+        # so delayed greeting packets cannot become exchange 1 response audio.
+        await _wait_for_target_audio_drain(
+            evidence,
+            completed_at=time.perf_counter(),
+        )
+
         current_text = request.caller_text
         current_wav = caller_wav
         for turn_pair in range(1, request.max_turn_pairs + 1):
@@ -533,7 +549,10 @@ async def run_public_daily_duplex(
                     f'Public Pipecat bot did not complete response {turn_pair} before the run timeout.'
                 ),
             )
-            await _wait_for_target_audio_drain(evidence)
+            await _wait_for_target_audio_drain(
+                evidence,
+                completed_at=evidence.response_complete_at,
+            )
 
             caller_receipts = evidence.caller_transcripts[caller_transcript_count:]
             caller_transcript = ' '.join(caller_receipts).strip()
