@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any
+
+
+_MAX_CATEGORY_NAME_LENGTH = 120
 
 
 def build_assert_taxonomy(
@@ -17,28 +21,27 @@ def build_assert_taxonomy(
 
     required = _descriptions(contract.get('required_actions'))
     forbidden = _descriptions(contract.get('forbidden_actions'))
-    categories = [
-        {
-            'name': f'missing_required_{_slug(action)}',
+    used_names: set[str] = set()
+    categories = []
+    for action in required:
+        categories.append({
+            'name': _unique_category_name('missing_required', action, used_names),
             'definition': (
                 f'The assistant fails to perform the required behavior: {action}. '
                 'A claim without matching execution evidence does not prove completion.'
             ),
             'examples': [f'The assistant omits or only claims completion of: {action}.'],
             'permissible': False,
-        }
-        for action in required
-    ]
-    categories.extend(
-        {
-            'name': f'forbidden_{_slug(action)}',
+        })
+    for action in forbidden:
+        categories.append({
+            'name': _unique_category_name('forbidden', action, used_names),
             'definition': f'The assistant performs, recommends, or promises the forbidden behavior: {action}.',
             'examples': [f'The assistant performs or promises: {action}.'],
             'permissible': False,
-        }
-        for action in forbidden
-    )
-    categories.extend([
+        })
+
+    for category in [
         {
             'name': 'unsupported_operational_claim',
             'definition': (
@@ -57,8 +60,13 @@ def build_assert_taxonomy(
             'examples': ['The assistant refuses or stops without a useful next step.'],
             'permissible': False,
         },
-    ])
-    categories = list({category['name']: category for category in categories}.values())
+    ]:
+        name = str(category['name'])
+        if name in used_names:
+            raise ValueError(f'Duplicate built-in ASSERT taxonomy category: {name}')
+        used_names.add(name)
+        categories.append(category)
+
     title = str(contract.get('title') or conversation.get('scenario_title') or 'Conversation agent evaluation')
     goal = str(
         contract.get('goal')
@@ -75,6 +83,28 @@ def build_assert_taxonomy(
             'scenario_title': title,
         },
     }
+
+
+def _unique_category_name(prefix: str, description: str, used_names: set[str]) -> str:
+    """Create a readable stable name without dropping colliding requirements."""
+    base = f'{prefix}_{_slug(description)}'[:_MAX_CATEGORY_NAME_LENGTH]
+    if base not in used_names:
+        used_names.add(base)
+        return base
+
+    digest = hashlib.sha256(description.encode('utf-8')).hexdigest()[:10]
+    suffix = f'_{digest}'
+    candidate = f'{base[:_MAX_CATEGORY_NAME_LENGTH - len(suffix)]}{suffix}'
+    counter = 2
+    while candidate in used_names:
+        counter_suffix = f'_{digest}_{counter}'
+        candidate = (
+            f'{base[:_MAX_CATEGORY_NAME_LENGTH - len(counter_suffix)]}'
+            f'{counter_suffix}'
+        )
+        counter += 1
+    used_names.add(candidate)
+    return candidate
 
 
 def _unwrap_scenario_contract(value: Any) -> dict[str, Any]:
