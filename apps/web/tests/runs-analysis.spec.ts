@@ -164,6 +164,13 @@ test('needs-review resolution explains score and missing proof without calling i
     score: 60,
     action_trace: [],
     evaluation_findings: {
+      scoring_mode: 'agentic',
+      score_components: {
+        required_actions: 40,
+        forbidden_actions: 100,
+        workflow_order: 100,
+        final_state: 0,
+      },
       hard_check_failures: [
         { category: 'forbidden_action', action: 'provide_medical_diagnosis' },
         {
@@ -217,6 +224,17 @@ test('needs-review resolution explains score and missing proof without calling i
   await expect(details).toContainText('Not complete');
   await expect(details).toContainText('Max Exchanges');
   await expect(details).toContainText('None recorded');
+  const evaluationBasis = details.getByText('Automatic rule-based evaluation');
+  await evaluationBasis.hover();
+  const evaluationTooltip = page.getByRole('tooltip', { name: /How the automatic score is calculated/ });
+  await expect(evaluationTooltip).toBeVisible();
+  await expect(evaluationTooltip).toContainText(
+    'This run: required actions 40 + forbidden actions 100 + workflow order 100 + final state 0; average = 60/100.',
+  );
+  await expect(evaluationTooltip).toContainText('100 = all measured checks passed');
+  await expect(evaluationTooltip).toContainText('50 = half credit');
+  await expect(evaluationTooltip).toContainText('0 = none');
+  await expect(evaluationTooltip).toContainText('Pass also requires at least 75');
   await expect(page.getByText('Why resolution is not verified')).toBeVisible();
   await expect(page.getByText('No action or tool evidence was recorded.')).toBeVisible();
   await expect(page.getByText('The conversation reached the configured exchange limit.')).toBeVisible();

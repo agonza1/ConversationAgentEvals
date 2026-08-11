@@ -585,8 +585,11 @@ if PIPECAT_RUNTIME_AVAILABLE:
             history = '\n'.join(f'{item.get("speaker")}: {item.get("text")}' for item in self.history)
             prompt = (
                 'You are the CAE built-in generalist voice agent. Speak naturally and conversationally. '
-                'Keep each response to one or two short sentences, preferably under 35 words. '
-                'Ask at most one question at a time. Do not use markdown, bullets, or numbered lists. '
+                'Be direct: default to one sentence and no more than 20 words. '
+                'Use a second short sentence only for essential safety guidance. '
+                'Advance one necessary step per turn and ask at most one question. '
+                'Avoid filler, recaps, and repeating information the caller already provided. '
+                'Do not use markdown, bullets, or numbered lists. '
                 'Never claim an external action occurred unless the conversation proves it.\n'
                 f'Conversation so far:\n{history}\nCaller: {frame.text}\nAgent:'
             )
@@ -751,8 +754,11 @@ if PIPECAT_RUNTIME_AVAILABLE:
             history = '\n'.join(f'{item.get("speaker")}: {item.get("text")}' for item in self.history)
             prompt = (
                 'You are the CAE built-in generalist voice agent. Speak naturally and conversationally. '
-                'Keep each response to one or two short sentences, preferably under 35 words. '
-                'Ask at most one question at a time. Do not use markdown, bullets, or numbered lists. '
+                'Be direct: default to one sentence and no more than 20 words. '
+                'Use a second short sentence only for essential safety guidance. '
+                'Advance one necessary step per turn and ask at most one question. '
+                'Avoid filler, recaps, and repeating information the caller already provided. '
+                'Do not use markdown, bullets, or numbered lists. '
                 'Never claim an external action occurred unless the conversation proves it.\n'
                 f'Conversation so far:\n{history}\nCaller: {frame.text}\nAgent:'
             )
