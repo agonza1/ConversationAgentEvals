@@ -32,7 +32,7 @@ def test_taxonomy_adapter_unwraps_catalog_contract_envelope():
     )
     assert taxonomy['meta']['scenario_title'] == 'Refund Policy Boundary'
     assert 'missing_required_verify_customer_identity' in names
-    assert 'missing_required_open_refund_review_case' in names
+    assert 'missing_required_open_a_refund_review_case' in names
     assert 'forbidden_promise_a_guaranteed_refund' in names
     assert 'unsupported_operational_claim' in names
     assert 'inadequate_resolution_or_fallback' in names
