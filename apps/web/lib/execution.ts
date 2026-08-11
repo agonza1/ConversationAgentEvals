@@ -252,6 +252,11 @@ export interface LlmJudgeResponse {
   latency_ms?: number | null;
   review_id?: string | null;
   block_reason?: 'provider' | 'budget' | 'provider_error' | 'evidence' | null;
+  engine?: string | null;
+  assert_version?: string | null;
+  assert_result?: Record<string, unknown> | null;
+  artifacts?: Record<string, string> | null;
+  input_fingerprint?: string | null;
   spend_control?: {
     estimated_credits?: number;
     daily_credit_limit?: number;
@@ -382,6 +387,26 @@ export async function requestLlmJudge(payload: {
   execution_run_id?: string;
   conversation_id?: string;
 }): Promise<LlmJudgeResponse> {
+  const executionRunId = payload.execution_run_id;
+  const conversationId = payload.conversation_id;
+  const userId = payload.user_id;
+
+  if (executionRunId && conversationId && userId) {
+    // Completed execution conversations are judged by upstream ASSERT. The legacy
+    // product judge remains available only for standalone report/transcript reviews.
+    return handleJson(
+      await fetch(
+        `${getApiBase()}/api/assert/runs/${encodeURIComponent(executionRunId)}`
+        + `/conversations/${encodeURIComponent(conversationId)}/judge`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: userId }),
+        },
+      ),
+    );
+  }
+
   return handleJson(
     await fetch(`${getApiBase()}/api/product/judge`, {
       method: 'POST',
