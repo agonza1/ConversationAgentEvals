@@ -1,11 +1,27 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.assert_contracts import AssertRunCreateRequest
+from app.services import execution_run_store
 from app.services.assert_sidecar import create_local_assert_sidecar_run, load_local_assert_sidecar_run
+from app.services.benchmark_service import get_scenario_contract
+from app.services.upstream_assert_judge import (
+    UpstreamAssertJudgeFailed,
+    UpstreamAssertJudgeUnavailable,
+    run_upstream_assert_judge,
+)
 
 router = APIRouter(prefix='/api/assert', tags=['assert'])
+
+
+class AssertExecutionJudgeRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    user_id: str = Field(min_length=1)
+    model_name: str | None = Field(default=None, min_length=1, max_length=160)
+    judge_n: int = Field(default=1, ge=1, le=3)
 
 
 @router.post('/runs')
@@ -20,3 +36,56 @@ def get_assert_sidecar_run(platform_run_id: str):
     if saved is None:
         raise HTTPException(status_code=404, detail='ASSERT sidecar run not found')
     return saved['record']
+
+
+@router.post('/runs/{execution_run_id}/conversations/{conversation_id}/judge')
+def judge_execution_conversation(
+    execution_run_id: str,
+    conversation_id: str,
+    payload: AssertExecutionJudgeRequest,
+):
+    """Run upstream ASSERT judging over completed CAE text or voice evidence."""
+    run = execution_run_store.get_execution_run(execution_run_id)
+    if run is None or run.get('user_id') != payload.user_id:
+        raise HTTPException(status_code=404, detail='Execution run not found.')
+    if run.get('status') in {'queued', 'running'}:
+        raise HTTPException(status_code=409, detail='The execution run must be terminal before ASSERT judging.')
+    conversation = execution_run_store.get_conversation(execution_run_id, conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail='Conversation not found.')
+    if conversation.get('status') in {'queued', 'running'}:
+        raise HTTPException(status_code=409, detail='The conversation must be terminal before ASSERT judging.')
+
+    deterministic_snapshot = execution_run_store.deterministic_evaluation_snapshot(conversation)
+    scenario_contract = get_scenario_contract(
+        str(conversation.get('suite_id') or run.get('suite_id') or ''),
+        str(conversation.get('scenario_id') or ''),
+    )
+    try:
+        response = run_upstream_assert_judge(
+            run=run,
+            conversation=conversation,
+            scenario_contract=scenario_contract,
+            model_name=payload.model_name,
+            judge_n=payload.judge_n,
+        )
+    except UpstreamAssertJudgeUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except UpstreamAssertJudgeFailed as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    try:
+        review = execution_run_store.record_judge_review(
+            execution_run_id,
+            conversation_id,
+            user_id=payload.user_id,
+            response=response,
+            expected_deterministic_snapshot=deterministic_snapshot,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {**response, 'review_id': review['review_id']}
