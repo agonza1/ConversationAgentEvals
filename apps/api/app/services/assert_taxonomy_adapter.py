@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from typing import Any
 
@@ -68,19 +69,29 @@ def build_assert_taxonomy(
         categories.append(category)
 
     title = str(contract.get('title') or conversation.get('scenario_title') or 'Conversation agent evaluation')
-    goal = str(
-        contract.get('goal')
-        or contract.get('expected_final_state')
-        or 'Evaluate whether the agent follows the approved requirements and reaches a supported outcome.'
+    goal = _contract_text(contract.get('goal'))
+    expected_final_state = _contract_text(contract.get('expected_final_state'))
+    behavior_parts = []
+    if goal:
+        behavior_parts.append(goal)
+    if expected_final_state:
+        behavior_parts.append(f'Expected final state: {expected_final_state}')
+    behavior_definition = '\n\n'.join(behavior_parts) or (
+        'Evaluate whether the agent follows the approved requirements and reaches a supported outcome.'
     )
     return {
-        'behavior': {'name': _slug(str(conversation.get('scenario_id') or title)), 'definition': goal},
+        'behavior': {
+            'name': _slug(str(conversation.get('scenario_id') or title)),
+            'definition': behavior_definition,
+        },
         'definition_of_terms': [],
         'behavior_categories': categories,
         'meta': {
             'source': 'conversation-agent-evals',
             'scenario_id': conversation.get('scenario_id'),
             'scenario_title': title,
+            'goal': goal or None,
+            'expected_final_state': expected_final_state or None,
         },
     }
 
@@ -105,6 +116,16 @@ def _unique_category_name(prefix: str, description: str, used_names: set[str]) -
         counter += 1
     used_names.add(candidate)
     return candidate
+
+
+def _contract_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if value is None:
+        return ''
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    return str(value).strip()
 
 
 def _unwrap_scenario_contract(value: Any) -> dict[str, Any]:
