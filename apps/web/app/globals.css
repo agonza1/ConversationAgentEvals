@@ -2496,6 +2496,11 @@ select {
   overflow: hidden;
 }
 
+.runs-metric-detail:has(.evaluation-basis-help:hover),
+.runs-metric-detail:has(.evaluation-basis-help:focus-within) {
+  overflow: visible;
+}
+
 .runs-metric-group {
   display: grid;
   gap: 6px;
