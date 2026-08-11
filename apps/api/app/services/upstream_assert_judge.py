@@ -341,6 +341,11 @@ def _select_valid_score(
             )
         observed_nodes.add(node_name)
 
+    missing_nodes = sorted(expected_nodes - observed_nodes)
+    if missing_nodes:
+        raise UpstreamAssertJudgeFailed(
+            'ASSERT verdict omitted taxonomy categories: ' + ', '.join(missing_nodes)
+        )
     if not isinstance(verdict.get('narrative'), str):
         raise UpstreamAssertJudgeFailed('ASSERT verdict is missing its narrative string.')
     return score
