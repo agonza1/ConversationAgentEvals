@@ -554,6 +554,7 @@ def _execute_public_pipecat_daily(
         caller_text=caller_text,
         artifact_dir=artifact_dir,
         conversation_id=conversation_id,
+        execution_run_id=execution_run_id,
         timeout_seconds=payload.duplex_timeout_seconds,
         scenario=scenario,
         max_exchanges=payload.max_exchanges,
@@ -618,6 +619,8 @@ def _execute_public_pipecat_daily(
             ),
             'response_overlap_ms': mark_latency.get('response_overlap_ms'),
             'source': 'pipecat_daily_webrtc',
+            'measurement_scope': 'remote_target_observed_at_tester',
+            'remote_target': True,
         })
     runtime_provenance = {
         'execution_engine': 'pipecat_service',

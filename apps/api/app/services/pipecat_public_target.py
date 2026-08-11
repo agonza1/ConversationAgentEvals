@@ -24,6 +24,7 @@ def run_public_pipecat_call(
     caller_text: str,
     artifact_dir: Path,
     conversation_id: str,
+    execution_run_id: str | None = None,
     timeout_seconds: int,
     scenario: dict[str, Any] | None = None,
     max_exchanges: int = 1,
@@ -43,12 +44,14 @@ def run_public_pipecat_call(
     ))
     try:
         request_payload = {
-                'caller_text': caller_text,
-                'agent': public_agent,
-                'timeout_seconds': timeout_seconds,
-                'scenario': scenario or {'id': 'public-pipecat', 'goal': caller_text},
-                'max_turn_pairs': max_exchanges,
-                'tester_model_name': tester_model_name,
+            'caller_text': caller_text,
+            'agent': public_agent,
+            'timeout_seconds': timeout_seconds,
+            'scenario': scenario or {'id': 'public-pipecat', 'goal': caller_text},
+            'max_turn_pairs': max_exchanges,
+            'tester_model_name': tester_model_name,
+            'execution_run_id': execution_run_id,
+            'session_id': conversation_id,
         }
         with request_client.stream(
             'POST',
@@ -83,6 +86,19 @@ def run_public_pipecat_call(
                 if event_type == 'complete':
                     payload = event.get('result') if isinstance(event.get('result'), dict) else None
                     continue
+                if event_type == 'phase' and event_observer is not None:
+                    event_observer({
+                        'speaker': 'Connection',
+                        'text': str(event.get('text') or ''),
+                        'frame_metadata': {
+                            'transport': 'pipecat_daily_webrtc',
+                            'current_run': True,
+                            'turn_pair': int(event.get('turn_pair') or 0),
+                            'media_event': 'connection_phase',
+                            'connection_phase': str(event.get('phase') or ''),
+                        },
+                    })
+                    continue
                 if event_observer is None or event_type not in {'live_audio', 'live_transcript'}:
                     continue
                 turn_pair = int(event.get('turn_pair') or 0)
@@ -97,6 +113,7 @@ def run_public_pipecat_call(
                         'current_run': True,
                         'turn_pair': turn_pair,
                         'media_event': str(event.get('media_event') or event_type),
+                        'listener_media_key': str(event.get('listener_media_key') or ''),
                     },
                     'update_live_audio_key': live_key,
                     'live_audio_key': live_key,

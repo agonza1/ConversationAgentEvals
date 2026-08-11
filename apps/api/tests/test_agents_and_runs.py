@@ -372,6 +372,7 @@ def test_public_pipecat_agent_uses_direct_daily_executor(monkeypatch, tmp_path):
         assert kwargs['caller_text']
         assert kwargs['timeout_seconds'] == 60
         assert kwargs['max_exchanges'] == 3
+        assert kwargs['execution_run_id'] == queued['execution_run_id']
         assert kwargs['scenario']['id'] == 'cancellation-rescue'
         return {
             'target': {'selected_agent': '10-gradium'},
@@ -444,6 +445,8 @@ def test_public_pipecat_agent_uses_direct_daily_executor(monkeypatch, tmp_path):
         'tester_speech_end_to_first_target_audio_received'
     )
     assert conversation['latency_marks'][0]['response_complete_latency_ms'] == 800.0
+    assert conversation['latency_marks'][0]['measurement_scope'] == 'remote_target_observed_at_tester'
+    assert conversation['latency_marks'][0]['remote_target'] is True
     assert conversation['final_state']['runtime_provenance']['browser_peer'] is False
     assert [turn['speaker'] for turn in conversation['turns']] == ['caller', 'agent']
 

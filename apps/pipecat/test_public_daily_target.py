@@ -114,6 +114,9 @@ def test_public_duplex_reuses_rtvi_text_for_next_tester_turn(monkeypatch):
         )
 
     async def fake_duplex(_request, **kwargs):
+        await kwargs['audio_frame_callback'](
+            'target_to_tester', bytes([3, 0]) * 160, 16_000, 1, 1,
+        )
         caller_text, caller_wav = await kwargs['next_turn'](
             2,
             'I can provide information, but I cannot book appointments.',
@@ -131,6 +134,8 @@ def test_public_duplex_reuses_rtvi_text_for_next_tester_turn(monkeypatch):
             caller_text='I need a same-day visit.',
             scenario={'id': 'triage', 'goal': 'Request a same-day visit.'},
             max_turn_pairs=2,
+            execution_run_id='exec-public-listener',
+            session_id='public-session',
         )
         return [json.loads(item) async for item in server._public_pipecat_duplex_events(payload)]
 
@@ -143,6 +148,12 @@ def test_public_duplex_reuses_rtvi_text_for_next_tester_turn(monkeypatch):
     assert observed['caller_text'] == 'Could you tell me when the cough started?'
     assert bytes(observed['caller_wav']).startswith(b'RIFF')
     assert events == [{'type': 'complete', 'result': {'status': 'pass'}}]
+    broadcast = server.REFERENCE_DUPLEX_RUNS.pop('exec-public-listener')
+    assert broadcast.audio_publish_sequence == 1
+    assert broadcast.started_listener_media_keys == {
+        'public-session:1:target_to_tester',
+    }
+    assert broadcast.active is False
 
 
 def test_public_target_reports_tester_audio_synthesis_stage(monkeypatch):

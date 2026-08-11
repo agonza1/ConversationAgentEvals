@@ -63,6 +63,7 @@ class _DirectDailyEvidence:
     errors: list[str] = field(default_factory=list)
     caller_audio_sent_at: float | None = None
     caller_audio_ended_at: float | None = None
+    response_started_at: float | None = None
     first_target_audio_at: float | None = None
     response_complete_at: float | None = None
     initial_bot_turn_complete: bool = False
@@ -70,18 +71,28 @@ class _DirectDailyEvidence:
     initial_target_output_count: int = 0
     current_turn_pair: int = 0
     capture_response_audio: bool = False
+    reported_phases: set[str] = field(default_factory=set)
 
 
 class _RemoteAudioCollector(FrameProcessor):
-    def __init__(self, evidence: _DirectDailyEvidence):
+    def __init__(self, evidence: _DirectDailyEvidence, audio_frame_callback: Any | None = None):
         super().__init__()
         self.evidence = evidence
+        self.audio_frame_callback = audio_frame_callback
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
         if isinstance(frame, UserAudioRawFrame):
             if self.evidence.target_participant_id and frame.user_id != self.evidence.target_participant_id:
                 return
+            if self.audio_frame_callback is not None:
+                await self.audio_frame_callback(
+                    'target_to_tester',
+                    frame.audio,
+                    frame.sample_rate,
+                    frame.num_channels,
+                    self.evidence.current_turn_pair,
+                )
             if not self.evidence.capture_response_audio:
                 return
             if self.evidence.first_target_audio_at is None:
@@ -197,11 +208,22 @@ async def _start_public_bot(agent: str) -> tuple[str, str]:
     return room_url, token
 
 
-async def _queue_pcm(task: PipelineTask, pcm: bytes, sample_rate: int, channels: int) -> int:
+async def _queue_pcm(
+    task: PipelineTask,
+    pcm: bytes,
+    sample_rate: int,
+    channels: int,
+    *,
+    audio_frame_callback: Any | None = None,
+    turn_pair: int = 0,
+) -> int:
     bytes_per_chunk = max(2, int(sample_rate * channels * 2 * 0.02))
     frames_sent = 0
     for offset in range(0, len(pcm), bytes_per_chunk):
-        await task.queue_frame(OutputAudioRawFrame(pcm[offset:offset + bytes_per_chunk], sample_rate, channels))
+        chunk = pcm[offset:offset + bytes_per_chunk]
+        await task.queue_frame(OutputAudioRawFrame(chunk, sample_rate, channels))
+        if audio_frame_callback is not None:
+            await audio_frame_callback('tester_to_target', chunk, sample_rate, channels, turn_pair)
         frames_sent += 1
         await asyncio.sleep(0.02)
     return frames_sent
@@ -253,6 +275,7 @@ async def run_public_daily_duplex(
     kokoro_voice: str,
     next_turn: Any | None = None,
     event_callback: Any | None = None,
+    audio_frame_callback: Any | None = None,
 ) -> dict[str, Any]:
     """Run a bounded multi-turn evaluation in one public Daily room.
 
@@ -262,6 +285,20 @@ async def run_public_daily_duplex(
     side's current-run evidence is available.
     """
     started = time.perf_counter()
+    evidence = _DirectDailyEvidence()
+
+    async def report_phase(phase: str, text: str, *, turn_pair: int = 0) -> None:
+        phase_key = f'{turn_pair}:{phase}'
+        if phase_key in evidence.reported_phases:
+            return
+        evidence.reported_phases.add(phase_key)
+        if event_callback is not None:
+            await event_callback({
+                'type': 'phase',
+                'phase': phase,
+                'text': text,
+                'turn_pair': turn_pair,
+            })
     try:
         caller_wav = await _synthesize_caller(
             request.caller_text,
@@ -286,13 +323,13 @@ async def run_public_daily_duplex(
         })
         initial_caller_published = True
     caller_pcm, caller_rate, caller_channels = _wav_to_pcm(caller_wav)
+    await report_phase('creating_room', 'Creating the public Pipecat room.')
     try:
         room_url, token = await _start_public_bot(request.agent)
     except Exception as exc:
         raise PublicDailyTargetError(
             'Public Pipecat demo could not create a Daily call room.'
         ) from exc
-    evidence = _DirectDailyEvidence()
     transport = DailyTransport(
         room_url,
         token,
@@ -308,7 +345,7 @@ async def run_public_daily_duplex(
             camera_out_enabled=False,
         ),
     )
-    collector = _RemoteAudioCollector(evidence)
+    collector = _RemoteAudioCollector(evidence, audio_frame_callback)
     pipeline = Pipeline([transport.input(), collector, transport.output()])
     task = PipelineTask(
         pipeline,
@@ -399,6 +436,11 @@ async def run_public_daily_duplex(
                         evidence.target_transcripts[evidence.initial_target_transcript_count:]
                     ).strip()
                     if live_text:
+                        await report_phase(
+                            'bot_responding',
+                            f'Public Pipecat bot is responding to exchange {evidence.current_turn_pair}.',
+                            turn_pair=evidence.current_turn_pair,
+                        )
                         await event_callback({
                             'type': 'live_transcript',
                             'turn_pair': evidence.current_turn_pair,
@@ -407,8 +449,17 @@ async def run_public_daily_duplex(
                             'text': live_text,
                             'media_event': 'rtvi_transcript_progress',
                         })
-        elif message_type == 'bot-started-speaking' and evidence.caller_audio_sent_at is not None:
-            evidence.capture_response_audio = True
+        elif message_type == 'bot-started-speaking':
+            if evidence.caller_audio_sent_at is None:
+                await report_phase('greeting', 'Public Pipecat bot is playing its greeting.')
+            else:
+                if evidence.response_started_at is None:
+                    evidence.response_started_at = time.perf_counter()
+                await report_phase(
+                    'bot_responding',
+                    f'Public Pipecat bot is responding to exchange {evidence.current_turn_pair}.',
+                    turn_pair=evidence.current_turn_pair,
+                )
         elif message_type == 'bot-stopped-speaking':
             evidence.bot_stopped.set()
             if evidence.caller_audio_sent_at is None:
@@ -449,6 +500,7 @@ async def run_public_daily_duplex(
             raise PublicDailyTargetError(
                 'Public Pipecat room connected, but the selected bot did not join.'
             ) from exc
+        await report_phase('bot_joined', 'Public Pipecat bot joined the Daily room.')
 
         client_ready = OutputTransportMessageUrgentFrame({
             'label': 'rtvi-ai',
@@ -489,10 +541,13 @@ async def run_public_daily_duplex(
             evidence.initial_target_output_count = len(evidence.target_output_segments)
             evidence.target_audio.clear()
             evidence.target_audio_frames = 0
-            # Daily media and RTVI app messages are independent streams. Capture
-            # before caller playback so leading target frames cannot arrive ahead
-            # of the bot-started-speaking notification and be discarded.
-            evidence.capture_response_audio = True
+            # The public demo greeting can still have buffered Daily audio after
+            # its RTVI completion event. Continue forwarding those frames to the
+            # live listener, but only start response evidence at tester speech
+            # end so greeting audio cannot produce a false 0 ms latency.
+            evidence.capture_response_audio = False
+            evidence.caller_audio_ended_at = None
+            evidence.response_started_at = None
             evidence.first_target_audio_at = None
             evidence.response_complete_at = None
 
@@ -506,10 +561,23 @@ async def run_public_daily_duplex(
                     'audio_wav_base64': base64.b64encode(current_wav).decode(),
                     'media_event': 'tester_audio_ready',
                 })
+            await report_phase(
+                'caller_speaking',
+                f'Caller is speaking in exchange {turn_pair}.',
+                turn_pair=turn_pair,
+            )
             evidence.caller_audio_sent_at = time.perf_counter()
-            sent = await _queue_pcm(task, caller_pcm, caller_rate, caller_channels)
+            sent = await _queue_pcm(
+                task,
+                caller_pcm,
+                caller_rate,
+                caller_channels,
+                audio_frame_callback=audio_frame_callback,
+                turn_pair=turn_pair,
+            )
             caller_audio_frames += sent
             evidence.caller_audio_ended_at = time.perf_counter()
+            evidence.capture_response_audio = True
             try:
                 await asyncio.wait_for(evidence.response_complete.wait(), timeout=request.timeout_seconds)
             except TimeoutError as exc:
@@ -547,6 +615,11 @@ async def run_public_daily_duplex(
                 else None
             )
             first_audio_ms = max(0.0, first_audio_offset_ms) if first_audio_offset_ms is not None else None
+            response_started_offset_ms = (
+                round((evidence.response_started_at - evidence.caller_audio_ended_at) * 1000, 2)
+                if evidence.response_started_at is not None and evidence.caller_audio_ended_at is not None
+                else None
+            )
             response_complete_ms = (
                 round(max(0.0, evidence.response_complete_at - evidence.caller_audio_ended_at) * 1000, 2)
                 if evidence.response_complete_at is not None and evidence.caller_audio_ended_at is not None
@@ -560,13 +633,15 @@ async def run_public_daily_duplex(
                     'tester_speech_end_to_first_target_audio_received_ms': first_audio_ms,
                     'response_complete_latency_ms': response_complete_ms,
                     'response_started_before_tester_speech_end': (
-                        first_audio_offset_ms is not None and first_audio_offset_ms < 0
+                        response_started_offset_ms is not None and response_started_offset_ms < 0
                     ),
                     'response_overlap_ms': (
-                        round(abs(first_audio_offset_ms), 2)
-                        if first_audio_offset_ms is not None and first_audio_offset_ms < 0
+                        round(abs(response_started_offset_ms), 2)
+                        if response_started_offset_ms is not None and response_started_offset_ms < 0
                         else 0.0
                     ),
+                    'measurement_scope': 'remote_target_observed_at_tester',
+                    'remote_target': True,
                 },
                 'media': {
                     'caller_audio_wav_base64': base64.b64encode(current_wav).decode(),

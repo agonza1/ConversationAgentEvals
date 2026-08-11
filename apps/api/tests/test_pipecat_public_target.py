@@ -74,6 +74,11 @@ def test_public_target_client_persists_current_run_media_without_room_credential
             observed.update({'method': method, 'url': url, 'headers': headers, 'json': json})
             return _StreamResponse([
                 {
+                    'type': 'phase',
+                    'phase': 'bot_joined',
+                    'text': 'Public Pipecat bot joined the Daily room.',
+                },
+                {
                     'type': 'live_audio',
                     'turn_pair': 1,
                     'speaker': 'Caller',
@@ -118,11 +123,15 @@ def test_public_target_client_persists_current_run_media_without_room_credential
         'scenario': {'id': 'demo', 'goal': 'Ask about Pipecat.'},
         'max_turn_pairs': 1,
         'tester_model_name': None,
+        'execution_run_id': None,
+        'session_id': 'conversation-1',
     }
-    assert live_events[0]['audio'] == caller_wav
-    assert live_events[1]['text'] == 'Pipecat is a voice AI framework.'
-    assert 'audio' not in live_events[1]
-    assert live_events[1]['update_live_audio_key'] == '1:target_to_tester'
+    assert live_events[0]['text'] == 'Public Pipecat bot joined the Daily room.'
+    assert live_events[0]['frame_metadata']['connection_phase'] == 'bot_joined'
+    assert live_events[1]['audio'] == caller_wav
+    assert live_events[2]['text'] == 'Pipecat is a voice AI framework.'
+    assert 'audio' not in live_events[2]
+    assert live_events[2]['update_live_audio_key'] == '1:target_to_tester'
     assert [turn.text for turn in result['transcription_turns']] == [
         'What is Pipecat?',
         'Pipecat is a voice AI framework.',

@@ -27,6 +27,19 @@ function listenerMediaKey(event: LiveRunEvent) {
   return typeof value === 'string' && value ? value : null;
 }
 
+function connectionPhaseLabel(event: LiveRunEvent) {
+  const phase = event.frame_metadata?.connection_phase;
+  if (typeof phase !== 'string' || !phase) return null;
+  const labels: Record<string, string> = {
+    creating_room: 'creating room',
+    bot_joined: 'bot joined',
+    greeting: 'greeting',
+    caller_speaking: 'caller speaking',
+    bot_responding: 'bot responding',
+  };
+  return labels[phase] || phase.replaceAll('_', ' ');
+}
+
 export interface LiveRunConversation {
   conversation_id: string;
   live_events?: LiveRunEvent[];
@@ -884,7 +897,9 @@ export function LiveRunFeedback({
           {events.length ? events.map((event) => (
             <div key={`${event.conversationId}-${event.sequence}`} style={{ display: 'grid', gap: 2 }}>
               <strong style={{ fontSize: 13 }}>
-                {event.speaker}{directionLabel(event.direction) ? ` · ${directionLabel(event.direction)}` : ''}
+                {connectionPhaseLabel(event)
+                  ? `Connection · ${connectionPhaseLabel(event)}`
+                  : `${event.speaker}${directionLabel(event.direction) ? ` · ${directionLabel(event.direction)}` : ''}`}
               </strong>
               <span style={{ whiteSpace: 'pre-wrap' }}>
                 {event.llm_output ? 'Spoken (LLM output): ' : ''}{event.llm_output || event.text}

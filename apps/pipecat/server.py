@@ -331,6 +331,8 @@ class PublicPipecatDuplexRequest(PublicPipecatRunRequest):
     scenario: dict[str, Any]
     max_turn_pairs: int = Field(default=3, ge=1, le=10)
     tester_model_name: str | None = None
+    execution_run_id: str | None = None
+    session_id: str | None = None
 
 
 class ReferenceDuplexRunRequest(BaseModel):
@@ -389,6 +391,7 @@ class _ReferenceDuplexBroadcast:
     listeners: dict[str, _ReferenceListener] = field(default_factory=dict)
     audio_publish_sequence: int = 0
     started_listener_media_keys: set[str] = field(default_factory=set)
+    active_publishers: int = 0
 
     def mark_audio_started(self, listener_media_key: str) -> None:
         self.started_listener_media_keys.add(listener_media_key)
@@ -1639,9 +1642,52 @@ async def _public_pipecat_duplex_events(
     payload: PublicPipecatDuplexRequest,
 ) -> AsyncIterator[str]:
     queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    broadcast: _ReferenceDuplexBroadcast | None = None
+    bus: _LocalDuplexFrameBus | None = None
+    marked_listener_audio: set[str] = set()
+
+    if payload.execution_run_id:
+        session_id = payload.session_id or f'{payload.execution_run_id}:public-pipecat'
+        existing = REFERENCE_DUPLEX_RUNS.get(payload.execution_run_id)
+        if existing is not None and existing.active:
+            broadcast = existing
+        else:
+            broadcast = _ReferenceDuplexBroadcast(
+                execution_run_id=payload.execution_run_id,
+                session_id=session_id,
+            )
+            if existing is not None:
+                broadcast.listeners.update(existing.listeners)
+                existing.listeners.clear()
+            REFERENCE_DUPLEX_RUNS[payload.execution_run_id] = broadcast
+        broadcast.active = True
+        broadcast.active_publishers += 1
+        bus = _LocalDuplexFrameBus(session_id, broadcast)
 
     async def publish(event: dict[str, Any]) -> None:
+        direction = str(event.get('direction') or '')
+        turn_pair = int(event.get('turn_pair') or 0)
+        if bus is not None and direction in {'tester_to_target', 'target_to_tester'}:
+            event = {
+                **event,
+                'listener_media_key': f'{bus.session_id}:{turn_pair}:{direction}',
+            }
         await queue.put(event)
+
+    async def publish_audio_frame(
+        direction: str,
+        audio: bytes,
+        sample_rate: int,
+        channels: int,
+        turn_pair: int,
+    ) -> None:
+        if bus is None or not audio:
+            return
+        listener_media_key = f'{bus.session_id}:{turn_pair}:{direction}'
+        if listener_media_key not in marked_listener_audio:
+            bus.mark_audio_started(turn_pair=turn_pair, direction=direction)
+            marked_listener_audio.add(listener_media_key)
+        bus.publish_chunk(audio, sample_rate=sample_rate, channels=channels)
 
     async def next_turn(turn_pair: int, target_text: str, target_wav: bytes) -> tuple[str, bytes]:
         actions = payload.scenario.get('required_actions') or []
@@ -1695,6 +1741,7 @@ async def _public_pipecat_duplex_events(
                 kokoro_voice=KOKORO_TESTER_VOICE,
                 next_turn=next_turn,
                 event_callback=publish,
+                audio_frame_callback=publish_audio_frame,
             )
             await publish({'type': 'complete', 'result': result})
         except (ImportError, ModuleNotFoundError):
@@ -1721,6 +1768,11 @@ async def _public_pipecat_duplex_events(
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+        if broadcast is not None:
+            broadcast.active_publishers = max(0, broadcast.active_publishers - 1)
+            if broadcast.active_publishers == 0:
+                broadcast.active = False
+                asyncio.create_task(_retire_reference_broadcast(broadcast))
 
 
 @app.post('/public-pipecat/duplex')

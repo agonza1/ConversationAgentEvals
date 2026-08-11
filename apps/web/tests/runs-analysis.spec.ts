@@ -722,6 +722,15 @@ test('active voice analysis reveals the first streamed transcript automatically'
           turns: [],
           live_events: [{
             sequence: 1,
+            kind: 'message',
+            speaker: 'Connection',
+            text: 'Public Pipecat bot joined the Daily room.',
+            frame_metadata: {
+              media_event: 'connection_phase',
+              connection_phase: 'bot_joined',
+            },
+          }, {
+            sequence: 2,
             kind: 'audio',
             speaker: 'Caller',
             text: 'I need a same-day telehealth visit.',
@@ -737,6 +746,7 @@ test('active voice analysis reveals the first streamed transcript automatically'
   await expect(page.getByLabel('Observed live exchange')).toContainText(
     'I need a same-day telehealth visit.',
   );
+  await expect(page.getByLabel('Observed live exchange')).toContainText('Connection · bot joined');
   await expect(page.getByRole('button', { name: 'Hide live exchange' })).toBeVisible();
 });
 
