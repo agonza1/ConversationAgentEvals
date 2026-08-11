@@ -62,10 +62,14 @@ class OutboundVoiceEvidence:
     target_ready: asyncio.Event = field(default_factory=asyncio.Event)
     target_stopped: asyncio.Event = field(default_factory=asyncio.Event)
     response_complete: asyncio.Event = field(default_factory=asyncio.Event)
+    transport_error: asyncio.Event = field(default_factory=asyncio.Event)
     target_participant_id: str | None = None
     caller_transcripts: list[str] = field(default_factory=list)
     target_transcripts: list[str] = field(default_factory=list)
     target_output_segments: list[str] = field(default_factory=list)
+    caller_transcript_keys: set[str] = field(default_factory=set)
+    target_transcript_keys: set[str] = field(default_factory=set)
+    target_output_keys: set[str] = field(default_factory=set)
     target_audio: bytearray = field(default_factory=bytearray)
     target_audio_sample_rate: int = 16_000
     target_audio_channels: int = 1
@@ -77,6 +81,7 @@ class OutboundVoiceEvidence:
     response_started_at: float | None = None
     first_target_audio_at: float | None = None
     first_target_speech_at: float | None = None
+    last_target_audio_at: float | None = None
     response_complete_at: float | None = None
     initial_target_turn_complete: bool = False
     initial_target_transcript_count: int = 0
@@ -135,6 +140,9 @@ class OutboundVoiceRunContext:
         evidence.response_complete.clear()
         evidence.initial_target_transcript_count = len(evidence.target_transcripts)
         evidence.initial_target_output_count = len(evidence.target_output_segments)
+        evidence.caller_transcript_keys.clear()
+        evidence.target_transcript_keys.clear()
+        evidence.target_output_keys.clear()
         evidence.target_audio.clear()
         evidence.target_audio_frames = 0
         evidence.capture_response_audio = False
@@ -142,6 +150,7 @@ class OutboundVoiceRunContext:
         evidence.response_started_at = None
         evidence.first_target_audio_at = None
         evidence.first_target_speech_at = None
+        evidence.last_target_audio_at = None
         evidence.response_complete_at = None
         return caller_transcript_count
 
@@ -344,6 +353,7 @@ class OutboundTargetAudioCollector(FrameProcessor):
                 return
             if self.evidence.first_target_audio_at is None:
                 self.evidence.first_target_audio_at = received_at
+            self.evidence.last_target_audio_at = received_at
             self.evidence.target_audio.extend(frame.audio)
             self.evidence.target_audio_frames += 1
             self.evidence.target_audio_sample_rate = frame.sample_rate

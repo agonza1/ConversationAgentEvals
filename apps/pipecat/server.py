@@ -317,6 +317,7 @@ class ReferenceTesterTurnRequest(BaseModel):
     act_id: str
     act_objective: str
     example_utterance: str
+    history: list[dict[str, str]] = Field(default_factory=list)
     target_audio_wav_base64: str | None = None
     model_name: str | None = None
 
@@ -801,15 +802,22 @@ if PIPECAT_RUNTIME_AVAILABLE:
             if type(frame) is not TextFrame:
                 await self.push_frame(frame, direction)
                 return
+            history = '\n'.join(
+                f'{str(item.get("speaker") or "Unknown")}: {str(item.get("text") or "").strip()}'
+                for item in self.payload.history
+                if str(item.get('text') or '').strip()
+            )
             prompt = (
                 'You are the Pipecat scenario tester in a two-agent voice evaluation. '
                 'Render exactly one concise caller utterance for the allowed act. '
-                'Do not narrate, score, or include labels.\n\n'
+                'Continue consistently from the conversation history. '
+                'Do not narrate, score, include labels, or perform actions assigned to the target agent.\n\n'
                 f'Scenario: {self.payload.scenario_instruction}\n'
                 f'Allowed caller act: {self.payload.act_id}\n'
                 f'Act objective: {self.payload.act_objective}\n'
-                f'Example utterance: {self.payload.example_utterance}\n'
-                f'Tester ASR observation: {frame.text}\n\n'
+                f'Opening caller utterance (context only): {self.payload.example_utterance}\n'
+                f'Conversation history:\n{history or "No prior turns."}\n'
+                f'Latest target response: {frame.text}\n\n'
                 'Caller utterance:'
             )
             async with httpx.AsyncClient(timeout=90) as client:
@@ -1645,6 +1653,9 @@ async def _public_pipecat_duplex_events(
     broadcast: _ReferenceDuplexBroadcast | None = None
     bus: _LocalDuplexFrameBus | None = None
     marked_listener_audio: set[str] = set()
+    conversation_history: list[dict[str, str]] = [
+        {'speaker': 'Caller', 'text': payload.caller_text},
+    ]
 
     if payload.execution_run_id:
         session_id = payload.session_id or f'{payload.execution_run_id}:public-pipecat'
@@ -1690,18 +1701,23 @@ async def _public_pipecat_duplex_events(
         bus.publish_chunk(audio, sample_rate=sample_rate, channels=channels)
 
     async def next_turn(turn_pair: int, target_text: str, target_wav: bytes) -> tuple[str, bytes]:
-        actions = payload.scenario.get('required_actions') or []
-        objective = str(actions[min(turn_pair - 1, len(actions) - 1)]) if actions else str(
-            payload.scenario.get('goal') or 'Continue the scenario naturally.'
+        goal = str(payload.scenario.get('goal') or 'Continue the scenario naturally.').strip()
+        persona = str(payload.scenario.get('persona') or 'the original caller').strip()
+        objective = (
+            f'Respond naturally as {persona} to move the conversation toward this caller goal: '
+            f'{goal} Supply requested caller-side information when appropriate, but do not claim '
+            'to perform verification, updates, bookings, or other target-agent actions.'
         )
+        conversation_history.append({'speaker': 'Agent', 'text': target_text})
         request = ReferenceTesterTurnRequest(
             scenario_instruction=(
                 f'{payload.scenario.get("id") or "public-pipecat"}: '
-                f'{payload.scenario.get("goal") or objective}'
+                f'Caller persona: {persona}. Caller goal: {goal}'
             ),
-            act_id=f'scenario-turn-{turn_pair}',
+            act_id=f'caller-follow-up-{turn_pair}',
             act_objective=objective,
             example_utterance=payload.caller_text,
+            history=list(conversation_history),
             target_audio_wav_base64=base64.b64encode(target_wav).decode('ascii'),
             model_name=payload.tester_model_name,
         )
@@ -1720,7 +1736,9 @@ async def _public_pipecat_duplex_events(
                 f'Public Pipecat tester could not generate turn {turn_pair}.'
             ) from exc
         caller_wav = _pcm_to_wav(collector.audio, collector.sample_rate, collector.channels)
-        return collector.agent_text.strip(), caller_wav
+        caller_text = collector.agent_text.strip()
+        conversation_history.append({'speaker': 'Caller', 'text': caller_text})
+        return caller_text, caller_wav
 
     async def execute() -> None:
         try:
@@ -1782,10 +1800,10 @@ async def public_pipecat_duplex(
 ):
     """Stream a multi-turn CAE tester session through one public Daily room."""
     _require_reference_token(x_cae_reference_token)
-    if not PIPECAT_RUNTIME_AVAILABLE or not RTC_ASR_BASE_URL or not KOKORO_BASE_URL:
+    if not PIPECAT_RUNTIME_AVAILABLE or not KOKORO_BASE_URL:
         raise HTTPException(
             status_code=503,
-            detail='Public Pipecat duplex requires Pipecat, rtc-asr, and Kokoro.',
+            detail='Public Pipecat duplex requires Pipecat and Kokoro.',
         )
     return StreamingResponse(
         _public_pipecat_duplex_events(payload),

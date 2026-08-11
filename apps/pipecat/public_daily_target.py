@@ -31,6 +31,8 @@ from outbound_voice import (
 
 PUBLIC_PIPECAT_URL = 'https://www.pipecat.ai'
 DEFAULT_PUBLIC_AGENT = '10-gradium'
+TARGET_AUDIO_IDLE_SECONDS = 0.20
+TARGET_AUDIO_DRAIN_TIMEOUT_SECONDS = 1.0
 
 
 class PublicDailyTargetError(RuntimeError):
@@ -76,6 +78,89 @@ def _message_is_final(message: Any) -> bool:
 def _message_is_explicitly_final(message: Any) -> bool:
     data = _message_data(message)
     return any(data.get(key) is True for key in ('final', 'is_final', 'isFinal'))
+
+
+def _message_dedupe_key(message: Any, text: str) -> str:
+    data = _message_data(message)
+    segment_id = str(data.get('segment_id') or data.get('segmentId') or '').strip()
+    return f'segment:{segment_id}' if segment_id else f'text:{text}'
+
+
+def _append_unique_message_text(
+    messages: list[str],
+    keys: set[str],
+    message: Any,
+    text: str,
+) -> bool:
+    if not text:
+        return False
+    key = _message_dedupe_key(message, text)
+    if key in keys:
+        return False
+    keys.add(key)
+    messages.append(text)
+    return True
+
+
+def _current_target_text(evidence: Any) -> str:
+    completed_output = evidence.target_output_segments[evidence.initial_target_output_count:]
+    fallback_transcript = evidence.target_transcripts[evidence.initial_target_transcript_count:]
+    return ' '.join(completed_output or fallback_transcript).strip()
+
+
+def _transport_error_message(_errors: list[str]) -> str:
+    # Daily errors may contain ephemeral room credentials or network details.
+    # Keep the returned execution error stable and safe for the API/UI.
+    return 'Public Pipecat Daily transport failed.'
+
+
+def _raise_transport_error(evidence: Any) -> None:
+    if evidence.transport_error.is_set():
+        raise PublicDailyTargetError(_transport_error_message(evidence.errors))
+
+
+async def _wait_for_event_or_error(
+    event: asyncio.Event,
+    evidence: Any,
+    *,
+    timeout: float,
+    timeout_message: str | None,
+) -> bool:
+    event_waiter = asyncio.create_task(event.wait())
+    error_waiter = asyncio.create_task(evidence.transport_error.wait())
+    try:
+        done, _pending = await asyncio.wait(
+            {event_waiter, error_waiter},
+            timeout=timeout,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if error_waiter in done and evidence.transport_error.is_set():
+            raise PublicDailyTargetError(_transport_error_message(evidence.errors))
+        if event_waiter not in done:
+            if timeout_message is not None:
+                raise PublicDailyTargetError(timeout_message)
+            return False
+        return True
+    finally:
+        for waiter in (event_waiter, error_waiter):
+            if not waiter.done():
+                waiter.cancel()
+        await asyncio.gather(event_waiter, error_waiter, return_exceptions=True)
+
+
+async def _wait_for_target_audio_drain(evidence: Any) -> None:
+    """Allow Daily media to catch up with its independent RTVI completion stream."""
+    deadline = time.monotonic() + TARGET_AUDIO_DRAIN_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        _raise_transport_error(evidence)
+        last_audio_at = evidence.last_target_audio_at
+        if (
+            last_audio_at is not None
+            and time.perf_counter() - last_audio_at >= TARGET_AUDIO_IDLE_SECONDS
+        ):
+            return
+        await asyncio.sleep(0.02)
+    _raise_transport_error(evidence)
 
 
 def _completed_bot_output_text(message: Any) -> str:
@@ -291,16 +376,28 @@ async def run_public_daily_duplex(
             evidence.target_ready.set()
         elif message_type == 'user-transcription' and _message_is_final(message):
             text = _message_text(message)
-            if text and (not evidence.caller_transcripts or evidence.caller_transcripts[-1] != text):
-                evidence.caller_transcripts.append(text)
+            _append_unique_message_text(
+                evidence.caller_transcripts,
+                evidence.caller_transcript_keys,
+                message,
+                text,
+            )
         elif message_type == 'bot-output':
             text = _completed_bot_output_text(message)
-            if text and (not evidence.target_output_segments or evidence.target_output_segments[-1] != text):
-                evidence.target_output_segments.append(text)
+            _append_unique_message_text(
+                evidence.target_output_segments,
+                evidence.target_output_keys,
+                message,
+                text,
+            )
         elif message_type == 'bot-transcription' and _message_is_final(message):
             text = _message_text(message)
-            if text and (not evidence.target_transcripts or evidence.target_transcripts[-1] != text):
-                evidence.target_transcripts.append(text)
+            if _append_unique_message_text(
+                evidence.target_transcripts,
+                evidence.target_transcript_keys,
+                message,
+                text,
+            ):
                 if (
                     event_callback is not None
                     and evidence.current_turn_pair > 0
@@ -353,22 +450,23 @@ async def run_public_daily_duplex(
     @transport.event_handler('on_error')
     async def on_error(_transport: DailyTransport, error: str):
         evidence.errors.append(str(error))
+        evidence.transport_error.set()
 
     runner = PipelineRunner(handle_sigint=False, handle_sigterm=False)
     runner_task = asyncio.create_task(runner.run(task))
     try:
-        try:
-            await asyncio.wait_for(evidence.connected.wait(), timeout=20)
-        except TimeoutError as exc:
-            raise PublicDailyTargetError(
-                'Public Pipecat Daily room connection timed out.'
-            ) from exc
-        try:
-            await asyncio.wait_for(evidence.target_joined.wait(), timeout=20)
-        except TimeoutError as exc:
-            raise PublicDailyTargetError(
-                'Public Pipecat room connected, but the selected bot did not join.'
-            ) from exc
+        await _wait_for_event_or_error(
+            evidence.connected,
+            evidence,
+            timeout=20,
+            timeout_message='Public Pipecat Daily room connection timed out.',
+        )
+        await _wait_for_event_or_error(
+            evidence.target_joined,
+            evidence,
+            timeout=20,
+            timeout_message='Public Pipecat room connected, but the selected bot did not join.',
+        )
         await run.report_phase('bot_joined', 'Public Pipecat bot joined the Daily room.')
 
         client_ready = OutputTransportMessageUrgentFrame({
@@ -382,15 +480,18 @@ async def run_public_daily_duplex(
         })
         readiness_deadline = time.monotonic() + 30
         while not evidence.target_stopped.is_set() and time.monotonic() < readiness_deadline:
+            _raise_transport_error(evidence)
             if not evidence.target_ready.is_set():
                 # The public bot can join Daily before its RTVI processor is listening.
                 # Re-sending the same request id makes readiness delivery idempotent.
                 await transport.output().send_message(client_ready)
             remaining = max(0.1, readiness_deadline - time.monotonic())
-            try:
-                await asyncio.wait_for(evidence.target_stopped.wait(), timeout=min(3, remaining))
-            except TimeoutError:
-                continue
+            await _wait_for_event_or_error(
+                evidence.target_stopped,
+                evidence,
+                timeout=min(3, remaining),
+                timeout_message=None,
+            )
         if not evidence.target_stopped.is_set():
             observed = sorted({str(item.get('type') or '') for item in evidence.app_messages})
             suffix = f' Observed RTVI events: {", ".join(observed)}.' if observed else ''
@@ -412,6 +513,9 @@ async def run_public_daily_duplex(
                 turn_pair=turn_pair,
             )
             evidence.caller_audio_sent_at = time.perf_counter()
+            # Capture before playback so a target that barges in is retained.
+            # Greeting media was excluded by begin_turn's buffer reset.
+            evidence.capture_response_audio = True
             sent = await pace_pcm(
                 task,
                 caller_pcm,
@@ -421,13 +525,15 @@ async def run_public_daily_duplex(
                 turn_pair=turn_pair,
             )
             evidence.caller_audio_ended_at = time.perf_counter()
-            evidence.capture_response_audio = True
-            try:
-                await asyncio.wait_for(evidence.response_complete.wait(), timeout=request.timeout_seconds)
-            except TimeoutError as exc:
-                raise PublicDailyTargetError(
+            await _wait_for_event_or_error(
+                evidence.response_complete,
+                evidence,
+                timeout=request.timeout_seconds,
+                timeout_message=(
                     f'Public Pipecat bot did not complete response {turn_pair} before the run timeout.'
-                ) from exc
+                ),
+            )
+            await _wait_for_target_audio_drain(evidence)
 
             caller_receipts = evidence.caller_transcripts[caller_transcript_count:]
             caller_transcript = ' '.join(caller_receipts).strip()
@@ -435,11 +541,7 @@ async def run_public_daily_duplex(
                 raise PublicDailyTargetError(
                     f'Public Pipecat bot did not transcribe tester turn {turn_pair}.'
                 )
-            response_transcripts = (
-                evidence.target_transcripts[evidence.initial_target_transcript_count:]
-                or evidence.target_output_segments[evidence.initial_target_output_count:]
-            )
-            target_text = ' '.join(response_transcripts).strip()
+            target_text = _current_target_text(evidence)
             if not target_text:
                 raise PublicDailyTargetError(
                     f'Public Pipecat bot returned audio but no completed RTVI text for response {turn_pair}.'

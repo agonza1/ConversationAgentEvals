@@ -3573,7 +3573,9 @@ export function BenchmarkRunner({
         project_id: identity.projectId,
         evaluate: true,
         agent_id: selectedAgentId || undefined,
-        model_name: executionModelName || DEFAULT_EXECUTION_MODEL,
+        model_name: publicPipecatAgent
+          ? undefined
+          : executionModelName || DEFAULT_EXECUTION_MODEL,
         tester_id: runTesterId,
         executor_id: runExecutorId,
         audio_transport: publicPipecatAgent

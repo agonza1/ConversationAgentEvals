@@ -3,6 +3,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 
 import outbound_voice
 import public_daily_target
@@ -11,8 +12,12 @@ from outbound_voice import OutboundVoiceTargetAdapter
 from public_daily_target import (
     PublicDailyTargetError,
     PublicDailyTargetRequest,
+    _append_unique_message_text,
     _completed_bot_output_text,
+    _current_target_text,
     _message_completes_bot_turn,
+    _wait_for_event_or_error,
+    _wait_for_target_audio_drain,
     run_public_daily_target,
 )
 
@@ -110,6 +115,98 @@ def test_rtvi_v2_completed_events_finish_bot_turn_without_stopped_speaking():
     }) is False
 
 
+def test_transcript_deduplication_resets_between_exchanges():
+    run = outbound_voice.OutboundVoiceRunContext(
+        outbound_voice.OutboundVoiceTargetDescriptor(
+            adapter_id='test',
+            target_kind='test',
+            transport='test',
+            selected_target='test',
+        )
+    )
+    evidence = run.evidence
+    repeated = {'type': 'user-transcription', 'data': {'text': 'Please repeat.', 'final': True}}
+
+    assert _append_unique_message_text(
+        evidence.caller_transcripts,
+        evidence.caller_transcript_keys,
+        repeated,
+        'Please repeat.',
+    ) is True
+    assert _append_unique_message_text(
+        evidence.caller_transcripts,
+        evidence.caller_transcript_keys,
+        repeated,
+        'Please repeat.',
+    ) is False
+
+    caller_count = run.begin_turn(2)
+    assert caller_count == 1
+    assert _append_unique_message_text(
+        evidence.caller_transcripts,
+        evidence.caller_transcript_keys,
+        repeated,
+        'Please repeat.',
+    ) is True
+    assert evidence.caller_transcripts == ['Please repeat.', 'Please repeat.']
+
+
+def test_completed_bot_output_is_preferred_over_fallback_transcript():
+    evidence = outbound_voice.OutboundVoiceEvidence(
+        target_transcripts=['ASR approximation.'],
+        target_output_segments=['Authoritative spoken output.'],
+    )
+
+    assert _current_target_text(evidence) == 'Authoritative spoken output.'
+
+
+def test_daily_transport_error_interrupts_active_wait():
+    async def fail_soon():
+        evidence = outbound_voice.OutboundVoiceEvidence()
+
+        async def signal_error():
+            await asyncio.sleep(0.01)
+            evidence.errors.append('room secret should not be returned')
+            evidence.transport_error.set()
+
+        signal = asyncio.create_task(signal_error())
+        with pytest.raises(PublicDailyTargetError, match='Daily transport failed'):
+            await _wait_for_event_or_error(
+                evidence.connected,
+                evidence,
+                timeout=2,
+                timeout_message='connection timed out',
+            )
+        await signal
+
+    asyncio.run(fail_soon())
+
+
+def test_response_finalization_waits_for_trailing_daily_audio(monkeypatch):
+    monkeypatch.setattr(public_daily_target, 'TARGET_AUDIO_IDLE_SECONDS', 0.03)
+    monkeypatch.setattr(public_daily_target, 'TARGET_AUDIO_DRAIN_TIMEOUT_SECONDS', 0.2)
+
+    async def drain():
+        evidence = outbound_voice.OutboundVoiceEvidence(
+            capture_response_audio=True,
+            last_target_audio_at=public_daily_target.time.perf_counter(),
+        )
+
+        async def trailing_packet():
+            await asyncio.sleep(0.02)
+            evidence.target_audio.extend(b'trailing')
+            evidence.last_target_audio_at = public_daily_target.time.perf_counter()
+
+        started = public_daily_target.time.monotonic()
+        packet = asyncio.create_task(trailing_packet())
+        await _wait_for_target_audio_drain(evidence)
+        await packet
+        assert public_daily_target.time.monotonic() - started >= 0.045
+        assert bytes(evidence.target_audio) == b'trailing'
+
+    asyncio.run(drain())
+
+
 def test_remote_audio_latency_waits_for_confirmed_speech(monkeypatch):
     class FakeVad:
         def __init__(self, *_args, **_kwargs):
@@ -170,6 +267,7 @@ def test_public_duplex_reuses_rtvi_text_for_next_tester_turn(monkeypatch):
         observed['tester_input_type'] = type(input_frame).__name__
         observed['tester_input_text'] = input_frame.text
         observed['voice'] = voice
+        observed['request'] = _llm_processor.payload
         return SimpleNamespace(transcript=''), SimpleNamespace(
             agent_text='Could you tell me when the cough started?',
             audio=bytes([1, 0]) * 320,
@@ -188,6 +286,11 @@ def test_public_duplex_reuses_rtvi_text_for_next_tester_turn(monkeypatch):
         )
         observed['caller_text'] = caller_text
         observed['caller_wav'] = caller_wav
+        await kwargs['next_turn'](
+            3,
+            'What symptoms are you experiencing?',
+            outbound_voice.pcm_to_wav(bytes([4, 0]) * 320, 16_000, 1),
+        )
         return {'status': 'pass'}
 
     monkeypatch.setattr(server, '_run_reference_graph', fake_graph)
@@ -196,8 +299,13 @@ def test_public_duplex_reuses_rtvi_text_for_next_tester_turn(monkeypatch):
     async def collect_events():
         payload = server.PublicPipecatDuplexRequest(
             caller_text='I need a same-day visit.',
-            scenario={'id': 'triage', 'goal': 'Request a same-day visit.'},
-            max_turn_pairs=2,
+            scenario={
+                'id': 'triage',
+                'persona': 'a patient with a persistent cough',
+                'goal': 'Request a same-day visit.',
+                'required_actions': ['verify account using two identifiers'],
+            },
+            max_turn_pairs=3,
             execution_run_id='exec-public-listener',
             session_id='public-session',
         )
@@ -206,11 +314,21 @@ def test_public_duplex_reuses_rtvi_text_for_next_tester_turn(monkeypatch):
     events = asyncio.run(collect_events())
 
     assert observed['tester_input_type'] == 'TextFrame'
-    assert observed['tester_input_text'] == (
-        'I can provide information, but I cannot book appointments.'
-    )
+    assert observed['tester_input_text'] == 'What symptoms are you experiencing?'
     assert observed['caller_text'] == 'Could you tell me when the cough started?'
     assert bytes(observed['caller_wav']).startswith(b'RIFF')
+    request = observed['request']
+    assert 'verify account using two identifiers' not in request.act_objective
+    assert 'patient with a persistent cough' in request.act_objective
+    assert request.history == [
+        {'speaker': 'Caller', 'text': 'I need a same-day visit.'},
+        {
+            'speaker': 'Agent',
+            'text': 'I can provide information, but I cannot book appointments.',
+        },
+        {'speaker': 'Caller', 'text': 'Could you tell me when the cough started?'},
+        {'speaker': 'Agent', 'text': 'What symptoms are you experiencing?'},
+    ]
     assert events == [{'type': 'complete', 'result': {'status': 'pass'}}]
     broadcast = server.REFERENCE_DUPLEX_RUNS.pop('exec-public-listener')
     assert broadcast.audio_publish_sequence == 1
@@ -218,6 +336,33 @@ def test_public_duplex_reuses_rtvi_text_for_next_tester_turn(monkeypatch):
         'public-session:1:target_to_tester',
     }
     assert broadcast.active is False
+
+
+def test_public_duplex_does_not_require_unused_rtc_asr(monkeypatch):
+    async def fake_duplex(_request, **_kwargs):
+        return {'status': 'pass'}
+
+    monkeypatch.setattr(server, 'PIPECAT_RUNTIME_AVAILABLE', True)
+    monkeypatch.setattr(server, 'RTC_ASR_BASE_URL', '')
+    monkeypatch.setattr(server, 'KOKORO_BASE_URL', 'http://kokoro.test')
+    monkeypatch.setattr(server, 'REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
+    monkeypatch.setattr(public_daily_target, 'run_public_daily_duplex', fake_duplex)
+
+    response = TestClient(server.app).post(
+        '/public-pipecat/duplex',
+        headers={'x-cae-reference-token': 'test-token'},
+        json={
+            'caller_text': 'I need a same-day visit.',
+            'scenario': {'id': 'triage', 'goal': 'Request a same-day visit.'},
+            'max_turn_pairs': 1,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert json.loads(response.text.strip()) == {
+        'type': 'complete',
+        'result': {'status': 'pass'},
+    }
 
 
 def test_public_target_reports_tester_audio_synthesis_stage(monkeypatch):
