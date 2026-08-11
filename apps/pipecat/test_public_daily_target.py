@@ -4,8 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
+import outbound_voice
 import public_daily_target
 import server
+from outbound_voice import OutboundVoiceTargetAdapter
 from public_daily_target import (
     PublicDailyTargetError,
     PublicDailyTargetRequest,
@@ -29,6 +31,15 @@ def test_public_target_timeout_matches_execution_api_limit():
 
     assert service_request.timeout_seconds == 300
     assert daily_request.timeout_seconds == 300
+
+
+def test_public_daily_target_implements_outbound_adapter_contract():
+    adapter = public_daily_target.PublicDailyTargetAdapter('10-gradium')
+
+    assert isinstance(adapter, OutboundVoiceTargetAdapter)
+    assert adapter.descriptor.adapter_id == 'public_pipecat_daily'
+    assert adapter.descriptor.target_kind == 'pipecat_public_demo'
+    assert adapter.descriptor.transport == 'pipecat_daily_webrtc'
 
 
 def test_completed_bot_output_text_accepts_legacy_spoken_segment():
@@ -102,10 +113,10 @@ def test_rtvi_v2_completed_events_finish_bot_turn_without_stopped_speaking():
 def test_remote_audio_latency_waits_for_confirmed_speech(monkeypatch):
     class FakeVad:
         def __init__(self, *_args, **_kwargs):
-            self.states = iter([
-                public_daily_target.VADState.QUIET,
-                public_daily_target.VADState.STARTING,
-                public_daily_target.VADState.SPEAKING,
+                self.states = iter([
+                    outbound_voice.VADState.QUIET,
+                    outbound_voice.VADState.STARTING,
+                    outbound_voice.VADState.SPEAKING,
             ])
 
         def set_sample_rate(self, _sample_rate):
@@ -117,33 +128,33 @@ def test_remote_audio_latency_waits_for_confirmed_speech(monkeypatch):
         async def cleanup(self):
             pass
 
-    monkeypatch.setattr(public_daily_target, 'SileroVADAnalyzer', FakeVad)
+    monkeypatch.setattr(outbound_voice, 'SileroVADAnalyzer', FakeVad)
 
     async def collect():
-        evidence = public_daily_target._DirectDailyEvidence(
+        evidence = outbound_voice.OutboundVoiceEvidence(
             current_turn_pair=1,
             caller_audio_sent_at=public_daily_target.time.perf_counter() - 1,
             caller_audio_ended_at=public_daily_target.time.perf_counter(),
             capture_response_audio=True,
         )
-        collector = public_daily_target._RemoteAudioCollector(evidence)
-        frame = public_daily_target.UserAudioRawFrame(
+        collector = outbound_voice.OutboundTargetAudioCollector(evidence)
+        frame = outbound_voice.UserAudioRawFrame(
             bytes([1, 0]) * 320,
             sample_rate=16_000,
             num_channels=1,
             user_id='remote-bot',
         )
-        await collector.process_frame(frame, public_daily_target.FrameDirection.DOWNSTREAM)
+        await collector.process_frame(frame, outbound_voice.FrameDirection.DOWNSTREAM)
         first_media_at = evidence.first_target_audio_at
         assert first_media_at is not None
         assert evidence.first_target_speech_at is None
 
         await asyncio.sleep(0.025)
-        await collector.process_frame(frame, public_daily_target.FrameDirection.DOWNSTREAM)
+        await collector.process_frame(frame, outbound_voice.FrameDirection.DOWNSTREAM)
         assert evidence.first_target_speech_at is None
 
         await asyncio.sleep(0.025)
-        await collector.process_frame(frame, public_daily_target.FrameDirection.DOWNSTREAM)
+        await collector.process_frame(frame, outbound_voice.FrameDirection.DOWNSTREAM)
         assert evidence.first_target_speech_at is not None
         assert evidence.first_target_speech_at > first_media_at
         assert evidence.target_audio_frames == 3
@@ -173,7 +184,7 @@ def test_public_duplex_reuses_rtvi_text_for_next_tester_turn(monkeypatch):
         caller_text, caller_wav = await kwargs['next_turn'](
             2,
             'I can provide information, but I cannot book appointments.',
-            public_daily_target._pcm_to_wav(bytes([2, 0]) * 320, 16_000, 1),
+            outbound_voice.pcm_to_wav(bytes([2, 0]) * 320, 16_000, 1),
         )
         observed['caller_text'] = caller_text
         observed['caller_wav'] = caller_wav
