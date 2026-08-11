@@ -61,7 +61,7 @@ def test_taxonomy_adapter_preserves_distinct_requirements_with_colliding_slugs()
     ]
     assert len(requirement_categories) == 2
     assert len({item['name'] for item in requirement_categories}) == 2
-    assert any(item['name'].endswith('_d70fc536ce') for item in requirement_categories)
+    assert any(item['name'].endswith('_f91c04c73a') for item in requirement_categories)
     definitions = {item['definition'] for item in requirement_categories}
     assert any(first in definition for definition in definitions)
     assert any(second in definition for definition in definitions)
