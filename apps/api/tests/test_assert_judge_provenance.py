@@ -21,7 +21,12 @@ def test_assert_review_provenance_survives_pending_apply_and_disk_round_trip(
     monkeypatch,
     tmp_path,
 ):
-    monkeypatch.setattr(execution_run_store, 'RUNS_DIR', tmp_path)
+    monkeypatch.setattr(execution_run_store, 'REPO_ROOT', tmp_path)
+    monkeypatch.setattr(
+        execution_run_store,
+        'RUNS_DIR',
+        tmp_path / 'artifacts' / 'execution-runs',
+    )
     run_id = 'exec-assert-provenance'
     conversation_id = f'{run_id}-refund-1'
     execution_run_store.create_execution_run(ExecutionRunRecord(
