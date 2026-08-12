@@ -623,19 +623,21 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await page.goto('/runs?api_base=http%3A%2F%2Fapi.example.test&suite_id=call-center-voice-ai&scenario_id=billing-address-change');
   await expect(launch.getByLabel('Selected run scope')).toContainText('Billing Address Change');
   await launch.getByLabel('Execution agent target').selectOption('holyguacamole-signalwire-agent');
-  await expect(launch.getByLabel('Maximum exchanges')).toBeDisabled();
-  await expect(launch).toContainText('SignalWire direct runs capture one caller turn');
+  await expect(launch.getByLabel('Maximum exchanges')).toBeEnabled();
+  await expect(launch.getByLabel('Maximum exchanges')).toHaveAttribute('max', '2');
+  await launch.getByLabel('Maximum exchanges').fill('2');
+  await expect(launch).toContainText('SignalWire supports up to two in the same browser call');
   await launch.getByRole('button', { name: 'Run evaluation' }).click();
   await expect.poll(() => signalwirePosted).not.toBeNull();
   expect(signalwirePosted).toMatchObject({
     mode: 'pipecat_webrtc',
     agent_id: 'holyguacamole-signalwire-agent',
     tester_id: 'pipecat_tester',
-    executor_id: 'signalwire_public_direct',
-    audio_transport: 'signalwire_direct_webrtc',
+    executor_id: 'signalwire_public_browser',
+    audio_transport: 'signalwire_browser_webrtc',
     suite_id: 'call-center-voice-ai',
     scenario_ids: ['billing-address-change'],
-    max_exchanges: 1,
+    max_exchanges: 2,
     model_name: 'signalwire-ai-agent',
   });
 

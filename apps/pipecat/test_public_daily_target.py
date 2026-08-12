@@ -1,9 +1,6 @@
 import asyncio
-import base64
-import io
 import json
 import time
-import wave
 from types import SimpleNamespace
 
 import pytest
@@ -12,7 +9,6 @@ from fastapi.testclient import TestClient
 import outbound_voice
 import public_daily_target
 import server
-import signalwire_holyguacamole_target
 from outbound_voice import OutboundVoiceTargetAdapter
 from public_daily_target import (
     PublicDailyTargetError,
@@ -51,52 +47,6 @@ def test_public_daily_duplex_uses_one_session_deadline():
     assert 'session_deadline = time.monotonic() + request.timeout_seconds' in source
     assert 'timeout=request.timeout_seconds' not in source
     assert '_await_before_run_timeout(' in source
-
-
-def _wav_payload() -> bytes:
-    output = io.BytesIO()
-    with wave.open(output, 'wb') as handle:
-        handle.setnchannels(1)
-        handle.setsampwidth(2)
-        handle.setframerate(16_000)
-        handle.writeframes(b'\x01\x00' * 160)
-    return output.getvalue()
-
-
-def test_signalwire_duplex_publishes_live_audio_to_listener_broadcast(monkeypatch):
-    async def fake_direct(_request, **kwargs):
-        await kwargs['event_callback']({
-            'type': 'live_audio',
-            'turn_pair': 1,
-            'speaker': 'Agent',
-            'direction': 'target_to_tester',
-            'text': '',
-            'audio_wav_base64': base64.b64encode(_wav_payload()).decode('ascii'),
-            'media_event': 'target_response_complete',
-        })
-        return {'status': 'pass'}
-
-    monkeypatch.setattr(signalwire_holyguacamole_target, 'run_signalwire_holyguacamole_direct', fake_direct)
-
-    async def collect_events():
-        payload = server.SignalWireHolyGuacamoleDuplexRequest(
-            caller_text='I want a taco.',
-            execution_run_id='exec-signalwire-listener',
-            session_id='signalwire-session',
-        )
-        return [json.loads(item) async for item in server._signalwire_holyguacamole_duplex_events(payload)]
-
-    events = asyncio.run(collect_events())
-
-    assert events[0]['type'] == 'live_audio'
-    assert events[0]['listener_media_key'] == 'signalwire-session:1:target_to_tester'
-    assert events[-1] == {'type': 'complete', 'result': {'status': 'pass'}}
-    broadcast = server.REFERENCE_DUPLEX_RUNS.pop('exec-signalwire-listener')
-    assert broadcast.audio_publish_sequence == 1
-    assert broadcast.started_listener_media_keys == {
-        'signalwire-session:1:target_to_tester',
-    }
-    assert broadcast.active is False
 
 
 def test_public_daily_deadline_wrapper_fails_closed_after_budget():

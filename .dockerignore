@@ -11,3 +11,5 @@ apps/**/__pycache__
 .trash
 playwright-report
 test-results
+.playwright-browsers
+apps/web/test-results

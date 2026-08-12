@@ -296,10 +296,10 @@ def _live_event_publisher(
                 return
         speaker = str(payload.get('speaker') or 'System').strip()
         text = str(payload.get('text') or '').strip()
-        audio = payload.get('audio')
-        if not text and not (isinstance(audio, bytes) and audio):
+        if not text:
             return
         sequence += 1
+        audio = payload.get('audio')
         media_url = None
         mime_type = None
         kind = 'message'
@@ -378,8 +378,8 @@ def _run_one_conversation(
                 payload=payload,
                 event_observer=publish,
             )
-        elif payload.mode == 'pipecat_webrtc' and payload.executor_id == 'signalwire_public_direct':
-            result = _execute_signalwire_holyguacamole_direct(
+        elif payload.mode == 'pipecat_webrtc' and payload.executor_id == 'signalwire_public_browser':
+            result = _execute_signalwire_holyguacamole_browser(
                 execution_run_id=execution_run_id,
                 conversation_id=conversation_id,
                 suite_id=suite_id,
@@ -472,7 +472,7 @@ def _execution_target(
         return str(agent.get('target') or 'mock_agent')
     if payload.mode == 'pipecat_webrtc' and payload.executor_id == 'pipecat_public_daily':
         return 'pipecat_public_demo'
-    if payload.mode == 'pipecat_webrtc' and payload.executor_id == 'signalwire_public_direct':
+    if payload.mode == 'pipecat_webrtc' and payload.executor_id == 'signalwire_public_browser':
         return 'signalwire_holy_guacamole'
     if payload.mode == 'pipecat_webrtc':
         return 'builtin_sample_voice'
@@ -555,12 +555,11 @@ def _resolve_max_exchanges_for_target(
 ) -> int:
     if target != 'signalwire_holy_guacamole':
         return payload.max_exchanges
-    if 'max_exchanges' in payload.model_fields_set and payload.max_exchanges != 1:
+    if 'max_exchanges' in payload.model_fields_set and payload.max_exchanges > 2:
         raise ValueError(
-            'Holy Guacamole SignalWire execution captures one caller turn per direct call; '
-            'set max_exchanges=1.'
+            'Holy Guacamole SignalWire execution currently supports max_exchanges up to 2.'
         )
-    return 1
+    return payload.max_exchanges if 'max_exchanges' in payload.model_fields_set else 1
 
 
 def _execution_model_name(payload: ExecutionRunCreateRequest, *, target: str) -> str:
@@ -739,7 +738,7 @@ def _execute_public_pipecat_daily(
     }
 
 
-def _execute_signalwire_holyguacamole_direct(
+def _execute_signalwire_holyguacamole_browser(
     *,
     execution_run_id: str,
     conversation_id: str,
@@ -748,15 +747,29 @@ def _execute_signalwire_holyguacamole_direct(
     payload: ExecutionRunCreateRequest,
     event_observer: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """Execute a bounded scenario against the public Holy Guacamole SignalWire target."""
-    if payload.audio_transport != 'signalwire_direct_webrtc':
+    """Execute a bounded scenario against the public Holy Guacamole SignalWire page."""
+    if payload.audio_transport != 'signalwire_browser_webrtc':
         raise ValueError(
             'Holy Guacamole SignalWire execution requires '
-            'audio_transport=signalwire_direct_webrtc.'
+            'audio_transport=signalwire_browser_webrtc.'
         )
     scenario = _scenario_definition(suite_id, scenario_id)
     caller_text = _scenario_user_opener(scenario)
     artifact_dir = REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id / 'audio'
+    caller_live_audio_key = 'signalwire:1:tester_to_target'
+    if event_observer is not None:
+        event_observer({
+            'speaker': 'Caller',
+            'text': caller_text,
+            'direction': 'tester_to_target',
+            'live_audio_key': caller_live_audio_key,
+            'frame_metadata': {
+                'transport': 'signalwire_browser_webrtc',
+                'phase': 'connecting_to_remote_target',
+                'delivery_state': 'queued_for_remote_playback',
+                'current_run': True,
+            },
+        })
     result = run_signalwire_holyguacamole_call(
         caller_text=caller_text,
         artifact_dir=artifact_dir,
@@ -764,22 +777,57 @@ def _execute_signalwire_holyguacamole_direct(
         execution_run_id=execution_run_id,
         timeout_seconds=payload.duplex_timeout_seconds,
         scenario=scenario,
-        event_observer=event_observer,
+        max_exchanges=payload.max_exchanges,
+        tester_model_name=payload.tester_model_name,
     )
     transcription = result['transcription_turns']
     recording = result['recording_handle']
+    recording_metadata = dict(recording.metadata)
+
+    def read_captured_wav(value: Any) -> bytes | None:
+        value = str(value or '').strip()
+        if not value:
+            return None
+        path = Path(value)
+        if not path.exists() or not path.is_file():
+            return None
+        audio = path.read_bytes()
+        return audio if audio.startswith(b'RIFF') else None
+
+    caller_audio_uris = recording_metadata.get('caller_audio_turn_uris')
+    if not isinstance(caller_audio_uris, list) or not caller_audio_uris:
+        caller_audio_uris = [recording_metadata.get('cae_caller_audio_uri')]
+    response_audio_uris = recording_metadata.get('response_audio_turn_uris')
+    if not isinstance(response_audio_uris, list) or not response_audio_uris:
+        response_audio_uris = [recording_metadata.get('response_audio_uri')]
     for item in transcription:
         if event_observer is not None:
-            event_observer({
+            exchange_index = int(item.frame_metadata.get('exchange') or ((item.turn_index + 1) // 2))
+            audio_uris = caller_audio_uris if item.speaker == 'Caller' else response_audio_uris
+            completed_audio = (
+                read_captured_wav(audio_uris[exchange_index - 1])
+                if exchange_index <= len(audio_uris)
+                else None
+            )
+            live_event: dict[str, Any] = {
                 'speaker': item.speaker,
                 'text': item.text,
                 'direction': item.direction,
                 'frame_metadata': {
-                    'transport': 'signalwire_direct_webrtc',
+                    'transport': 'signalwire_browser_webrtc',
                     'current_run': True,
+                    'media_event': 'completed_audio_turn',
                     **dict(item.frame_metadata),
                 },
-            })
+            }
+            if item.speaker == 'Caller':
+                if exchange_index == 1:
+                    live_event['update_live_audio_key'] = caller_live_audio_key
+                if completed_audio:
+                    live_event['audio'] = completed_audio
+            elif item.speaker == 'Agent' and completed_audio:
+                live_event['audio'] = completed_audio
+            event_observer(live_event)
 
     turns = [
         ConversationTurn(
@@ -797,7 +845,7 @@ def _execute_signalwire_holyguacamole_direct(
     current_final_state = {
         'complete': False,
         'outcome': 'signalwire_holyguacamole_response_captured',
-        'termination_reason': 'single_exchange_target',
+        'termination_reason': 'max_exchanges',
         'evidence_scope': 'current_run_only',
     }
     report: dict[str, Any] = {}
@@ -828,33 +876,28 @@ def _execute_signalwire_holyguacamole_direct(
         }
 
     latency = result.get('latency_metrics') if isinstance(result.get('latency_metrics'), dict) else {}
-    recording_url = (
-        f'/api/execution/runs/{quote(execution_run_id)}/conversations/'
-        f'{quote(conversation_id)}/recording?user_id={quote(payload.user_id)}'
-    )
-    vcon_recording = recording.as_call_media()
-    vcon_recording['recording_url'] = recording_url
+    media = result.get('media') if isinstance(result.get('media'), dict) else {}
     runtime_provenance = {
-        'execution_engine': 'signalwire_js_node_webrtc',
+        'execution_engine': 'playwright_chromium',
         'target_agent_id': payload.agent_id,
         'target_url': 'https://holyguacamole.signalwire.me/',
         'mode': payload.mode,
-        'audio_transport': 'signalwire_direct_webrtc',
-        'capture_surface': 'signalwire_public_direct',
-        'browser_peer': False,
-        'headless_browser': False,
+        'audio_transport': 'signalwire_browser_webrtc',
+        'capture_surface': 'signalwire_public_browser',
+        'browser_peer': True,
+        'headless_browser': bool((result.get('tester') or {}).get('headless_browser')),
         'live_external_connection': True,
         'saved_evidence': False,
         'fixture_backed_scoring': False,
         'guest_token_persisted': False,
-        'tester_media': 'current_run_kokoro',
+        'tester_media': str((result.get('tester') or {}).get('media_source') or 'current_run_tts'),
         'target_media': 'current_run_signalwire_webrtc',
         'target_speech_transcript': (
             'current_run_asr'
             if agent_transcribed
             else 'untranscribed_remote_audio'
         ),
-        'max_exchanges': 1,
+        'max_exchanges': payload.max_exchanges,
         'public_execution_gate': 'CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE',
     }
     vcon_export = build_execution_vcon(
@@ -862,42 +905,69 @@ def _execute_signalwire_holyguacamole_direct(
         execution_run_id=execution_run_id,
         suite_id=suite_id,
         scenario_id=scenario_id,
-        transport='signalwire_direct_webrtc',
+        transport='signalwire_browser_webrtc',
         transcription_turns=transcription,
-        recording=vcon_recording,
-        termination_reason='signalwire_direct_complete',
+        recording=recording,
+        termination_reason='browser_smoke_complete',
         tester_provenance=runtime_provenance,
         extra_analysis_body={
             'connection': result.get('connection') if isinstance(result.get('connection'), dict) else {},
             'latency_metrics': latency,
             'target_url': 'https://holyguacamole.signalwire.me/',
+            'result_artifact': (result.get('artifacts') or {}).get('result_json'),
         },
     )
     recording_media = recording.as_call_media()
     recording_media['uri'] = recording.uri
-    recording_media['recording_url'] = recording_url
+    recording_media['recording_url'] = (
+        f'/api/execution/runs/{quote(execution_run_id)}/conversations/'
+        f'{quote(conversation_id)}/recording?user_id={quote(payload.user_id)}'
+    )
     latency_marks = []
-    first_audio_ms = latency.get('tester_speech_end_to_first_target_audio_received_ms')
-    if isinstance(first_audio_ms, (int, float)):
+    exchanges = result.get('exchanges') if isinstance(result.get('exchanges'), list) else []
+    for index, exchange in enumerate(exchanges, start=1):
+        if not isinstance(exchange, dict):
+            continue
+        response_latency_ms = exchange.get('target_response_latency_ms')
+        if not isinstance(response_latency_ms, (int, float)) or response_latency_ms < 0:
+            continue
+        turn_pair = int(exchange.get('turn_pair') or index)
         latency_marks.append({
-            'name': 'tester_speech_end_to_first_target_audio_received',
-            'label': 'Tester speech end to first SignalWire target audio',
-            'kind': 'tester_speech_end_to_first_target_audio',
-            'response_metric': 'tester_speech_end_to_first_target_audio_received_ms',
+            'name': 'tester_speech_end_to_first_target_speech_received',
+            'label': f'End-to-end target response · exchange {turn_pair}',
+            'kind': 'tester_speech_end_to_first_target_speech_received',
+            'response_metric': 'tester_speech_end_to_first_target_speech_received',
             'participant': 'target',
             'direction': 'target_to_tester',
-            'latency_ms': first_audio_ms,
-            'source': 'signalwire_direct_webrtc',
+            'turn_pair': turn_pair,
+            'latency_ms': response_latency_ms,
+            'signal_boundary': 'audible_speech_onset',
+            'source': 'signalwire_browser_webrtc',
             'measurement_scope': 'remote_target_observed_at_tester',
             'remote_target': True,
         })
+    if not latency_marks:
+        first_audio_ms = latency.get('connect_click_to_remote_audio_ms')
+        if isinstance(first_audio_ms, (int, float)):
+            latency_marks.append({
+                'name': 'connect_click_to_remote_audio',
+                'label': 'SignalWire connect to first remote audio',
+                'kind': 'connect_click_to_remote_audio',
+                'response_metric': 'connect_click_to_remote_audio',
+                'participant': 'target',
+                'direction': 'target_to_tester',
+                'latency_ms': first_audio_ms,
+                'source': 'signalwire_browser_webrtc',
+                'measurement_scope': 'remote_target_observed_in_browser',
+                'remote_target': True,
+            })
     return {
         'turns': turns,
         'transcript': transcript,
         'action_trace': [
             {
-                'type': 'signalwire_direct_event',
-                'events': result.get('app_messages') if isinstance(result.get('app_messages'), list) else [],
+                'type': 'signalwire_browser_event',
+                'events': result.get('page_events') if isinstance(result.get('page_events'), list) else [],
             }
         ],
         'final_state': {**current_final_state, 'runtime_provenance': runtime_provenance},
@@ -906,14 +976,15 @@ def _execute_signalwire_holyguacamole_direct(
         'vcon_export': vcon_export,
         'vcon_export_summary': vcon_summary(vcon_export),
         'audio_session': {
-            'transport': 'signalwire_direct_webrtc',
+            'transport': 'signalwire_browser_webrtc',
             'provider': 'signalwire',
             'bytes_received': recording.bytes_captured,
             'duration_ms': recording.duration_ms,
-            'negotiated': bool((result.get('connection') or {}).get('call_connected')),
+            'negotiated': bool((result.get('connection') or {}).get('ui_connected')),
             'closed': True,
             'proof': True,
             'runtime_provenance': runtime_provenance,
+            'artifact_result_json': (result.get('artifacts') or {}).get('result_json'),
             'target_audio_mime': recording.mime_type,
         },
         'verdict': report.get('verdict'),
@@ -1307,36 +1378,15 @@ def _scenario_definition(suite_id: str, scenario_id: str) -> dict[str, Any]:
 def _scenario_user_opener(scenario: dict[str, Any]) -> str:
     """Return caller-facing speech, never the internal persona/checklist description."""
     sample = str(scenario.get('sample_transcript') or '')
-    opener = _first_caller_line(sample)
-    if opener:
-        return opener
-    if str(scenario.get('source') or '').strip() == 'user_created':
-        prompt = str(
-            scenario.get('simulated_user_prompt')
-            or scenario.get('prompt')
-            or scenario.get('persona')
-            or ''
-        ).strip()
-        opener = _first_caller_line(prompt) or _compact_caller_prompt(prompt)
-        if opener:
-            return opener
-    title = str(scenario.get('title') or scenario.get('id') or 'this request').strip()
-    return f'Hi, I need help with {title.lower()}.'
-
-
-def _first_caller_line(value: str) -> str:
-    for line in value.splitlines():
+    for line in sample.splitlines():
         stripped = line.strip()
         speaker, separator, text = stripped.partition(':')
         if separator and speaker.strip().lower() in {'user', 'caller', 'customer', 'patient', 'learner'}:
             opener = text.strip()
             if opener:
                 return opener
-    return ''
-
-
-def _compact_caller_prompt(value: str) -> str:
-    return ' '.join(value.split())
+    title = str(scenario.get('title') or scenario.get('id') or 'this request').strip()
+    return f'Hi, I need help with {title.lower()}.'
 
 
 def _conversation_history_text(history: list[dict[str, str]]) -> str:

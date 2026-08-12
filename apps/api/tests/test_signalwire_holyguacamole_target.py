@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 from pathlib import Path
 
@@ -8,89 +7,27 @@ import httpx
 import pytest
 
 import app.services.signalwire_holyguacamole_target as signalwire_target
-from app.services.reference_generalist_agent import ReferenceRuntimeConfig
 from app.services.signalwire_holyguacamole_target import run_signalwire_holyguacamole_call
 
 
-def _wav(value: bytes) -> str:
-    return base64.b64encode(value).decode('ascii')
-
-
-class FakeStream:
-    def __init__(self, events: list[dict[str, object]], status_code: int = 200):
-        self.events = events
-        self.status_code = status_code
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        return False
-
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            raise httpx.HTTPStatusError(
-                'error',
-                request=httpx.Request('POST', 'http://pipecat.test/signalwire-holyguacamole/duplex'),
-                response=httpx.Response(self.status_code, json={'detail': 'Holy Guacamole blocked'}),
-            )
-
-    def iter_lines(self):
-        for event in self.events:
-            yield json.dumps(event)
-
-    def read(self):
-        return json.dumps({'detail': 'Holy Guacamole blocked'}).encode('utf-8')
-
-
-class FakeClient:
-    def __init__(self, events: list[dict[str, object]]):
-        self.events = events
-        self.observed: dict[str, object] = {}
-        self.closed = False
-
-    def stream(self, method, url, *, headers, json):
-        self.observed = {
-            'method': method,
-            'url': url,
-            'headers': headers,
-            'json': json,
-        }
-        return FakeStream(self.events)
-
-    def close(self):
-        self.closed = True
-
-
-def _complete_event(*, source: str = 'signalwire_direct_remote_audio_untranscribed'):
-    return {
-        'type': 'complete',
-        'result': {
-            'status': 'pass',
-            'connection': {'call_connected': True, 'remote_audio_track_seen': True},
-            'latency_metrics': {
-                'tester_speech_end_to_first_target_audio_received_ms': 640.0,
-                'total_run_ms': 6000.0,
-            },
-            'media': {
-                'caller_audio_wav_base64': _wav(b'current-run-caller-wav'),
-                'target_audio_wav_base64': _wav(b'current-run-signalwire-wav'),
-                'target_audio_frames': 20,
-            },
-            'transcript': {
-                'caller_text': 'I want a taco.',
-                'caller_text_verified': True,
-                'caller_text_source': 'current_run_kokoro',
-                'agent_text': 'Welcome to Holy Guacamole.',
-                'source': source,
-            },
-            'provenance': {
-                'browser_peer': False,
-                'headless_browser': False,
-                'guest_token_persisted': False,
-            },
-        },
-    }
+@pytest.fixture(autouse=True)
+def _stub_existing_cae_tester_media(monkeypatch):
+    monkeypatch.setenv('KOKORO_BASE_URL', 'http://kokoro.test')
+    monkeypatch.setattr(
+        signalwire_target.ReferenceMediaServices,
+        'synthesize',
+        lambda _self, _text, *, voice=None: b'cae-kokoro-caller-wav',
+    )
+    monkeypatch.setattr(
+        signalwire_target,
+        '_open_live_audio_broadcast',
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        signalwire_target,
+        '_close_live_audio_broadcast',
+        lambda *_args, **_kwargs: None,
+    )
 
 
 def test_signalwire_target_requires_explicit_public_gate(tmp_path, monkeypatch):
@@ -104,12 +41,129 @@ def test_signalwire_target_requires_explicit_public_gate(tmp_path, monkeypatch):
         )
 
 
-def test_signalwire_target_client_streams_pipecat_direct_and_persists_current_run_evidence(
+def test_signalwire_target_retries_transient_caller_synthesis(tmp_path, monkeypatch):
+    repo_root = Path(signalwire_target.__file__).resolve().parents[4]
+    result_dir = tmp_path / 'browser-result'
+    result_dir.mkdir()
+    target_audio = result_dir / 'target-audio.webm'
+    target_audio.write_bytes(b'current-run-signalwire-audio')
+    result_path = result_dir / 'result.json'
+    result_path.write_text(json.dumps({
+        'status': 'pass',
+        'connection': {'ui_connected': True, 'remote_stream_seen': True},
+        'tester': {'headless_browser': True},
+        'media': {'target_audio_duration_ms': 1000},
+        'transcript': {'agent_text': '', 'source': 'remote_audio_capture_untranscribed'},
+        'artifacts': {
+            'target_audio': str(target_audio.relative_to(repo_root))
+            if target_audio.is_relative_to(repo_root)
+            else str(target_audio),
+            'target_audio_mime': 'audio/webm',
+            'caller_audio': str(target_audio),
+            'result_json': str(result_path),
+        },
+    }), encoding='utf-8')
+
+    class Completed:
+        stdout = json.dumps({'result_path': str(result_path)})
+        stderr = ''
+        returncode = 0
+
+    attempts = 0
+
+    def flaky_synthesize(_self, _text, *, voice=None):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.ReadTimeout('transient Kokoro timeout')
+        return b'RIFF-retried-caller-wav'
+
+    monkeypatch.setenv(signalwire_target.SIGNALWIRE_PUBLIC_GATE_ENV, '1')
+    monkeypatch.setattr(signalwire_target.ReferenceMediaServices, 'synthesize', flaky_synthesize)
+    monkeypatch.setattr(signalwire_target.subprocess, 'run', lambda *args, **kwargs: Completed())
+
+    result = run_signalwire_holyguacamole_call(
+        caller_text='I want a taco.',
+        artifact_dir=tmp_path / 'api-artifacts',
+        conversation_id='conversation-retry',
+        timeout_seconds=60,
+    )
+
+    assert attempts == 2
+    assert result['recording_handle'].bytes_captured == len(b'current-run-signalwire-audio')
+
+
+def test_signalwire_target_client_invokes_smoke_and_returns_current_run_evidence(
     tmp_path,
     monkeypatch,
 ):
-    client = FakeClient([_complete_event()])
+    repo_root = Path(signalwire_target.__file__).resolve().parents[4]
+    result_dir = tmp_path / 'browser-result'
+    result_dir.mkdir()
+    target_audio = result_dir / 'target-audio.webm'
+    target_audio.write_bytes(b'current-run-signalwire-audio')
+    result_path = result_dir / 'result.json'
+    result_payload = {
+        'status': 'pass',
+        'connection': {'ui_connected': True, 'remote_stream_seen': True},
+        'tester': {'headless_browser': True, 'media_source': 'macos_say_tts'},
+        'latency_metrics': {'connect_click_to_remote_audio_ms': 1234.0},
+        'media': {'target_audio_duration_ms': 5000},
+        'transcript': {
+            'caller_text': 'I want a taco.',
+            'caller_text_verified': True,
+            'caller_text_source': 'macos_say_tts',
+            'agent_text': 'status: Connected! Ready to take your order.',
+            'source': 'holy_guacamole_browser_status_order_events',
+        },
+        'artifacts': {
+            'target_audio': str(target_audio),
+            'target_audio_mime': 'audio/webm',
+            'target_audio_sha256': 'sha-not-a-secret',
+            'caller_audio': str(target_audio),
+            'result_json': str(result_path),
+        },
+    }
+    result_path.write_text(json.dumps(result_payload), encoding='utf-8')
+    observed: dict[str, object] = {}
+    closed_publishers: list[tuple[str | None, str | None]] = []
+    setup_sequence: list[str] = []
+
+    class Completed:
+        stdout = json.dumps({'result_path': str(result_path)})
+        stderr = ''
+        returncode = 0
+
+    def fake_run(command, *, cwd, env, **kwargs):
+        observed['command'] = command
+        observed['cwd'] = cwd
+        observed['env'] = env
+        observed['kwargs'] = kwargs
+        return Completed()
+
     monkeypatch.setenv(signalwire_target.SIGNALWIRE_PUBLIC_GATE_ENV, '1')
+    monkeypatch.setattr(signalwire_target.subprocess, 'run', fake_run)
+    monkeypatch.setattr(
+        signalwire_target.ReferenceMediaServices,
+        'synthesize',
+        lambda _self, _text, *, voice=None: (
+            setup_sequence.append('synthesize') or b'cae-kokoro-caller-wav'
+        ),
+    )
+    monkeypatch.setattr(
+        signalwire_target,
+        '_open_live_audio_broadcast',
+        lambda _runtime, *, execution_run_id, conversation_id: (
+            setup_sequence.append('open_broadcast') or 'preopened-publisher'
+        ),
+    )
+    monkeypatch.setattr(
+        signalwire_target,
+        '_close_live_audio_broadcast',
+        lambda _runtime, *, execution_run_id, publisher_id: closed_publishers.append(
+            (execution_run_id, publisher_id)
+        ),
+    )
 
     result = run_signalwire_holyguacamole_call(
         caller_text='I want a taco.',
@@ -118,81 +172,249 @@ def test_signalwire_target_client_streams_pipecat_direct_and_persists_current_ru
         execution_run_id='exec-signalwire',
         timeout_seconds=60,
         scenario={'id': 'demo'},
-        config=ReferenceRuntimeConfig(
-            pipecat_service_url='http://pipecat.test',
-            internal_token='shared-token',
-        ),
-        client=client,
     )
 
-    assert client.observed['method'] == 'POST'
-    assert client.observed['url'] == 'http://pipecat.test/signalwire-holyguacamole/duplex'
-    assert client.observed['headers']['x-cae-reference-token'] == 'shared-token'
-    assert client.observed['json']['caller_text'] == 'I want a taco.'
-    assert client.observed['json']['session_id'] == 'conversation-1'
-    assert [turn.text for turn in result['transcription_turns']] == ['I want a taco.']
-    assert result['recording_handle'].transport == 'signalwire_direct_webrtc'
-    assert result['recording_handle'].mime_type == 'audio/wav'
-    assert result['recording_handle'].bytes_captured == len(b'current-run-signalwire-wav')
-    assert Path(result['caller_audio_path']).read_bytes() == b'current-run-caller-wav'
-    assert Path(result['target_audio_path']).read_bytes() == b'current-run-signalwire-wav'
-    assert 'eyJ' not in str(result)
+    command = observed['command']
+    assert command[:2] == ['node', str(repo_root / 'scripts' / 'signalwire_holyguacamole_smoke.mjs')]
+    assert '--caller-text' in command
+    assert 'I want a taco.' in command
+    assert '--caller-audio' in command
+    assert command[command.index('--max-exchanges') + 1] == '1'
+    caller_audio_path = Path(command[command.index('--caller-audio') + 1])
+    assert caller_audio_path.read_bytes() == b'cae-kokoro-caller-wav'
+    assert observed['cwd'] == repo_root
+    assert observed['env']['SIGNALWIRE_HOLYGUACAMOLE_ALLOW_PUBLIC'] == '1'
+    assert observed['env']['SIGNALWIRE_HOLYGUACAMOLE_CONVERSATION_ID'] == 'conversation-1'
+    assert observed['env']['SIGNALWIRE_HOLYGUACAMOLE_MAX_EXCHANGES'] == '1'
+    assert observed['env']['SIGNALWIRE_HOLYGUACAMOLE_LIVE_PUBLISHER_ID'] == 'preopened-publisher'
+    assert closed_publishers == [('exec-signalwire', 'preopened-publisher')]
+    assert setup_sequence[:2] == ['open_broadcast', 'synthesize']
+    assert [turn.text for turn in result['transcription_turns']] == [
+        'I want a taco.',
+    ]
+    assert result['recording_handle'].transport == 'signalwire_browser_webrtc'
+    assert result['recording_handle'].mime_type == 'audio/webm'
+    assert result['recording_handle'].bytes_captured == len(b'current-run-signalwire-audio')
+    assert result['transcription_turns'][0].frame_metadata['caller_text_source'] == 'cae_kokoro_tts'
+    assert 'token' not in str(result).lower()
 
 
 def test_signalwire_target_accepts_only_remote_speech_transcript_sources(tmp_path, monkeypatch):
-    client = FakeClient([_complete_event(source='signalwire_remote_audio_asr')])
+    result_dir = tmp_path / 'browser-result'
+    result_dir.mkdir()
+    target_audio = result_dir / 'target-audio.webm'
+    target_audio.write_bytes(b'current-run-signalwire-audio')
+    result_path = result_dir / 'result.json'
+    result_path.write_text(json.dumps({
+        'status': 'pass',
+        'connection': {'ui_connected': True, 'remote_stream_seen': True},
+        'tester': {'headless_browser': True, 'media_source': 'kokoro_tts'},
+        'media': {'target_audio_duration_ms': 5000},
+        'transcript': {
+            'caller_text': 'I want a taco.',
+            'caller_text_verified': True,
+            'caller_text_source': 'kokoro_tts',
+            'agent_text': 'Welcome to Holy Guacamole.',
+            'source': 'signalwire_remote_audio_asr',
+        },
+        'artifacts': {
+            'target_audio': str(target_audio),
+            'target_audio_mime': 'audio/webm',
+            'target_audio_sha256': 'sha-not-a-secret',
+            'caller_audio': str(target_audio),
+            'result_json': str(result_path),
+        },
+    }), encoding='utf-8')
+
+    class Completed:
+        stdout = json.dumps({'result_path': str(result_path)})
+        stderr = ''
+        returncode = 0
+
     monkeypatch.setenv(signalwire_target.SIGNALWIRE_PUBLIC_GATE_ENV, '1')
+    monkeypatch.setattr(signalwire_target.subprocess, 'run', lambda *args, **kwargs: Completed())
 
     result = run_signalwire_holyguacamole_call(
         caller_text='I want a taco.',
         artifact_dir=tmp_path / 'api-artifacts',
         conversation_id='conversation-1',
         timeout_seconds=60,
-        config=ReferenceRuntimeConfig(
-            pipecat_service_url='http://pipecat.test',
-            internal_token='shared-token',
-        ),
-        client=client,
     )
 
     assert [turn.text for turn in result['transcription_turns']] == [
         'I want a taco.',
         'Welcome to Holy Guacamole.',
     ]
-    assert result['transcription_turns'][0].frame_metadata['caller_text_source'] == 'current_run_kokoro'
+    assert result['transcription_turns'][0].frame_metadata['caller_text_source'] == 'cae_kokoro_tts'
 
 
-def test_signalwire_direct_runner_documents_no_browser_token_persistence():
+def test_signalwire_target_transcribes_captured_response_with_existing_rtc_asr(
+    tmp_path,
+    monkeypatch,
+):
+    result_dir = tmp_path / 'browser-result'
+    result_dir.mkdir()
+    target_audio = result_dir / 'target-audio.webm'
+    target_audio.write_bytes(b'current-run-signalwire-audio')
+    response_audio = result_dir / 'target-response.wav'
+    response_audio.write_bytes(b'current-run-response-wav')
+    result_path = result_dir / 'result.json'
+    result_path.write_text(json.dumps({
+        'status': 'pass',
+        'connection': {'ui_connected': True, 'remote_stream_seen': True},
+        'tester': {'headless_browser': True, 'media_source': 'kokoro_tts'},
+        'media': {'target_audio_duration_ms': 5000},
+        'transcript': {
+            'caller_text': 'I want a taco.',
+            'caller_text_verified': True,
+            'caller_text_source': 'kokoro_tts',
+            'agent_text': '',
+            'source': 'remote_audio_capture_untranscribed',
+        },
+        'artifacts': {
+            'target_audio': str(target_audio),
+            'target_audio_mime': 'audio/webm',
+            'target_audio_sha256': 'sha-not-a-secret',
+            'target_response_audio': str(response_audio),
+            'caller_audio': str(target_audio),
+            'result_json': str(result_path),
+        },
+    }), encoding='utf-8')
+
+    class Completed:
+        stdout = json.dumps({'result_path': str(result_path)})
+        stderr = ''
+        returncode = 0
+
+    captured_audio: list[bytes] = []
+
+    def fake_transcribe(_self, wav_bytes):
+        captured_audio.append(wav_bytes)
+        return 'Welcome to Holy Guacamole. What can I get started for you?'
+
+    monkeypatch.setenv(signalwire_target.SIGNALWIRE_PUBLIC_GATE_ENV, '1')
+    monkeypatch.setenv('RTC_ASR_BASE_URL', 'http://rtc-asr.test')
+    monkeypatch.setattr(signalwire_target.subprocess, 'run', lambda *args, **kwargs: Completed())
+    monkeypatch.setattr(signalwire_target.ReferenceMediaServices, 'transcribe', fake_transcribe)
+
+    result = run_signalwire_holyguacamole_call(
+        caller_text='I want a taco.',
+        artifact_dir=tmp_path / 'api-artifacts',
+        conversation_id='conversation-1',
+        timeout_seconds=60,
+    )
+
+    assert captured_audio == [b'current-run-response-wav']
+    assert [(turn.speaker, turn.text) for turn in result['transcription_turns']] == [
+        ('Caller', 'I want a taco.'),
+        ('Agent', 'Welcome to Holy Guacamole. What can I get started for you?'),
+    ]
+    assert result['transcript']['source'] == 'rtc-asr.current_run'
+    assert json.loads(result_path.read_text(encoding='utf-8'))['transcript']['agent_text_available'] is True
+
+
+def test_signalwire_target_grounds_caller_text_in_cae_synthesized_audio(
+    tmp_path,
+    monkeypatch,
+):
+    result_dir = tmp_path / 'browser-result'
+    result_dir.mkdir()
+    target_audio = result_dir / 'target-audio.webm'
+    target_audio.write_bytes(b'current-run-signalwire-audio')
+    result_path = result_dir / 'result.json'
+    result_path.write_text(json.dumps({
+        'status': 'pass',
+        'connection': {'ui_connected': True, 'remote_stream_seen': True},
+        'tester': {'headless_browser': True, 'media_source': 'supplied_audio_file'},
+        'media': {'target_audio_duration_ms': 5000},
+        'transcript': {
+            'caller_text': '',
+            'caller_text_verified': False,
+            'caller_text_source': 'unverified_supplied_audio',
+            'agent_text': 'Welcome to Holy Guacamole.',
+            'source': 'signalwire_remote_audio_asr',
+        },
+        'artifacts': {
+            'target_audio': str(target_audio),
+            'target_audio_mime': 'audio/webm',
+            'target_audio_sha256': 'sha-not-a-secret',
+            'caller_audio': str(target_audio),
+            'result_json': str(result_path),
+        },
+    }), encoding='utf-8')
+
+    class Completed:
+        stdout = json.dumps({'result_path': str(result_path)})
+        stderr = ''
+        returncode = 0
+
+    monkeypatch.setenv(signalwire_target.SIGNALWIRE_PUBLIC_GATE_ENV, '1')
+    monkeypatch.setattr(signalwire_target.subprocess, 'run', lambda *args, **kwargs: Completed())
+
+    result = run_signalwire_holyguacamole_call(
+        caller_text='I want a taco.',
+        artifact_dir=tmp_path / 'api-artifacts',
+        conversation_id='conversation-1',
+        timeout_seconds=60,
+    )
+
+    assert [(turn.speaker, turn.text) for turn in result['transcription_turns']] == [
+        ('Caller', 'I want a taco.'),
+        ('Agent', 'Welcome to Holy Guacamole.'),
+    ]
+
+
+def test_signalwire_browser_smoke_plays_caller_once_and_uses_audible_latency():
     repo_root = Path(signalwire_target.__file__).resolve().parents[4]
-    script = (repo_root / 'apps' / 'pipecat' / 'signalwire_holyguacamole_direct.mjs').read_text(
+    script = (repo_root / 'scripts' / 'signalwire_holyguacamole_smoke.mjs').read_text(
         encoding='utf-8'
     )
 
-    assert "from '@signalwire/js'" in script
-    assert "from '@roamhq/wrtc'" in script
-    assert 'RTCAudioSource' in script
-    assert 'RTCAudioSink' in script
+    assert 'source.loop = false' in script
+    assert 'source.stop(scheduledStartContextTime + buffer.duration)' in script
+    assert 'context.currentTime + 5' not in script
+    assert 'Date.now() + 5000' not in script
+    assert 'window.__caeStartInjectedAudio' in script
+    assert 'webrtc_connected_remote_audio_track' in script
+    assert "state.connected\n        && state.remoteAudio" in script
+    assert 'normalizeAllowlistedTargetUrl(args.targetUrl)' in script
+    assert 'url.href !== expected.href' in script
+    assert 'firstAudibleAudioEpochMs' in script
+    assert 'first_outbound_sample_epoch_ms' in script
+    assert 'caller_audio_played' in script
+    assert 'caller_audio_completed' in script
+    assert 'caller_text_verified = false' not in script
+    assert 'caller_text_verified' in script
+    assert 'unverified_supplied_audio' in script
+    assert 'supplied audio file (speech text unverified)' in script
     assert 'remote_audio_after_caller_seen' in script
-    assert 'captured no audible post-caller remote response' in script
-    assert 'CANONICAL_SIGNALWIRE_ADDRESS' in script
-    assert 'canonicalDialAddress(targetUrl, bootstrap.address)' in script
-    assert 'client.dial(dialAddress' in script
-    assert 'target_address_observed: dialAddress' in script
-    assert 'firstRemoteAfterCallerAt === null' in script
-    assert 'now - callerEndedAt >= POST_CALLER_REMOTE_AUDIO_GRACE_MS' in script
-    assert 'chromium' not in script.lower()
-    assert 'playwright' not in script.lower()
-    assert 'guest_token_persisted: false' in script
-    assert 'token_bootstrap_endpoint' in script
-
-
-def test_local_setup_installs_pipecat_node_dependencies():
-    repo_root = Path(signalwire_target.__file__).resolve().parents[4]
-    root_package_path = repo_root / 'package.json'
-    if not root_package_path.exists():
-        pytest.skip('Root setup manifest is not copied into the API Docker test image.')
-    root_package = json.loads(root_package_path.read_text(encoding='utf-8'))
-
-    assert root_package['scripts']['setup:pipecat-node'] == 'npm install --prefix apps/pipecat'
-    assert 'npm run setup:pipecat-node' in root_package['scripts']['setup']
-    assert 'npm run setup:pipecat-node' in root_package['scripts']['dev:pipecat']
+    assert '/reference-tester/turn' in script
+    assert 'window.__caePlayInjectedAudioBase64' in script
+    assert 'window.__caeCaptureRemoteResponse' in script
+    assert '--max-exchanges must be 1 or 2.' in script
+    assert 'firstAudibleAudioAfterCallerEpochMs' in script
+    assert 'POST_CALLER_REMOTE_AUDIO_GRACE_MS = 500' in script
+    assert 'REMOTE_AUDIO_SILENCE_BOUNDARY_MS = 700' in script
+    assert 'POST_CALLER_RESPONSE_END_SILENCE_MS = 1200' in script
+    assert 'POST_CALLER_RESPONSE_MIN_CAPTURE_MS = 3000' in script
+    assert 'POST_CALLER_RESPONSE_TAIL_MS = 8000' in script
+    assert 'postCallerSilenceBoundaryEpochMs' in script
+    assert 'postCallerResponseEndEpochMs' in script
+    assert 'post_caller_silence_boundary_seen' in script
+    assert 'post_caller_response_end_seen' in script
+    assert 'post_caller_remote_audible_onset_not_captured' in script
+    assert 'Date.now() - firstAudibleAudioAfterCallerEpochMs >= 1000' not in script
+    assert 'caller_audio_not_played' in script
+    assert 'connect_click_to_first_audible_audio_ms' in script
+    assert 'caller_audio_completed_to_remote_audio_ms' in script
+    assert 'connect_click_to_remote_audio_ms = clickMs ? remoteAudioMs - clickMs : null' not in script
+    assert 'responseWavBase64' in script
+    assert "target-response.wav" in script
+    assert 'target_response_audio' in script
+    assert 'CaeLiveAudioPublisher' in script
+    assert '/outbound-voice/broadcast/open' in script
+    assert '/outbound-voice/broadcast/audio' in script
+    assert '/outbound-voice/broadcast/close' in script
+    assert '__caePublishLivePcm' in script
+    assert "direction: 'tester_to_target'" in script
+    assert "direction: 'target_to_tester'" in script

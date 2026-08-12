@@ -27,6 +27,14 @@ function parseArgs(argv) {
     timeoutMs: Number(process.env.SIGNALWIRE_HOLYGUACAMOLE_TIMEOUT_MS || 60000),
     headed: process.env.SIGNALWIRE_HOLYGUACAMOLE_HEADED === '1',
     jsonOnly: false,
+    livePublishBaseUrl: (process.env.PIPECAT_SERVICE_URL || '').replace(/\/$/, ''),
+    livePublishToken: process.env.REFERENCE_AGENT_INTERNAL_TOKEN || '',
+    livePublishExecutionRunId: process.env.SIGNALWIRE_HOLYGUACAMOLE_EXECUTION_RUN_ID || '',
+    livePublishSessionId: process.env.SIGNALWIRE_HOLYGUACAMOLE_CONVERSATION_ID || '',
+    livePublishPublisherId: process.env.SIGNALWIRE_HOLYGUACAMOLE_LIVE_PUBLISHER_ID || '',
+    maxExchanges: Number(process.env.SIGNALWIRE_HOLYGUACAMOLE_MAX_EXCHANGES || 1),
+    scenario: JSON.parse(process.env.SIGNALWIRE_HOLYGUACAMOLE_SCENARIO_JSON || '{}'),
+    testerModelName: process.env.SIGNALWIRE_HOLYGUACAMOLE_TESTER_MODEL_NAME || null,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
@@ -35,6 +43,7 @@ function parseArgs(argv) {
     else if (value === '--caller-audio') args.callerAudio = requireValue(argv, ++index, value);
     else if (value === '--artifact-root') args.artifactRoot = requireValue(argv, ++index, value);
     else if (value === '--timeout-ms') args.timeoutMs = Number(requireValue(argv, ++index, value));
+    else if (value === '--max-exchanges') args.maxExchanges = Number(requireValue(argv, ++index, value));
     else if (value === '--headed') args.headed = true;
     else if (value === '--json-only') args.jsonOnly = true;
     else if (value === '--help' || value === '-h') {
@@ -47,6 +56,9 @@ function parseArgs(argv) {
   args.targetUrl = normalizeAllowlistedTargetUrl(args.targetUrl);
   if (!Number.isFinite(args.timeoutMs) || args.timeoutMs < 10000) {
     throw new Error('--timeout-ms must be a number >= 10000.');
+  }
+  if (!Number.isInteger(args.maxExchanges) || args.maxExchanges < 1 || args.maxExchanges > 2) {
+    throw new Error('--max-exchanges must be 1 or 2.');
   }
   if (process.env.SIGNALWIRE_HOLYGUACAMOLE_ALLOW_PUBLIC !== '1') {
     throw new Error('Set SIGNALWIRE_HOLYGUACAMOLE_ALLOW_PUBLIC=1 to run the public SignalWire smoke.');
@@ -81,6 +93,7 @@ Options:
   --caller-audio <path>    WAV/MP3/OGG audio file to inject as browser microphone.
   --artifact-root <path>   Artifact directory. Default: artifacts/signalwire-holyguacamole-smoke
   --timeout-ms <ms>        Overall wait budget. Default: 60000
+  --max-exchanges <1|2>   Exchanges to run in the same browser call. Default: 1
   --headed                 Show Chromium during the run.
   --json-only              Print only the machine-readable summary.
 `);
@@ -98,6 +111,127 @@ function redact(value) {
   return String(value)
     .replace(/token["'=:\s]+[^"',\s}]+/gi, 'token=<redacted>')
     .replace(/bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer <redacted>');
+}
+
+class CaeLiveAudioPublisher {
+  constructor(args) {
+    this.baseUrl = args.livePublishBaseUrl;
+    this.token = args.livePublishToken;
+    this.executionRunId = args.livePublishExecutionRunId;
+    this.sessionId = args.livePublishSessionId || `${this.executionRunId}:signalwire-browser`;
+    this.publisherId = args.livePublishPublisherId || null;
+    this.queue = [];
+    this.flushTimer = null;
+    this.pending = Promise.resolve();
+    this.error = null;
+  }
+  get configured() {
+    return Boolean(this.baseUrl && this.token && this.executionRunId);
+  }
+
+  async request(pathname, body) {
+    const response = await fetch(`${this.baseUrl}${pathname}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-cae-reference-token': this.token,
+      },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      throw new Error(`CAE live audio publisher returned HTTP ${response.status}.`);
+    }
+    return response.json();
+  }
+
+  async open() {
+    if (!this.configured) return false;
+    if (this.publisherId) return true;
+    try {
+      const opened = await this.request('/outbound-voice/broadcast/open', {
+        execution_run_id: this.executionRunId,
+        session_id: this.sessionId,
+      });
+      this.publisherId = opened.publisher_id;
+      return Boolean(this.publisherId);
+    } catch (error) {
+      this.error = redact(error instanceof Error ? error.message : String(error));
+      return false;
+    }
+  }
+
+  enqueue(frame) {
+    if (!this.publisherId || !frame?.pcm16Base64) return;
+    this.queue.push(frame);
+    if (this.flushTimer === null) {
+      this.flushTimer = setTimeout(() => {
+        this.flushTimer = null;
+        this.scheduleFlush();
+      }, 90);
+    }
+  }
+
+  scheduleFlush() {
+    if (!this.queue.length || !this.publisherId) return this.pending;
+    const queued = this.queue.splice(0);
+    this.pending = this.pending.then(async () => {
+      const batches = [];
+      for (const frame of queued) {
+        const previous = batches.at(-1);
+        if (
+          previous
+          && previous.direction === frame.direction
+          && previous.sampleRate === frame.sampleRate
+          && previous.turnPair === frame.turnPair
+        ) {
+          previous.buffers.push(Buffer.from(frame.pcm16Base64, 'base64'));
+        } else {
+          batches.push({
+            direction: frame.direction,
+            sampleRate: frame.sampleRate,
+            turnPair: Number(frame.turnPair || 1),
+            buffers: [Buffer.from(frame.pcm16Base64, 'base64')],
+          });
+        }
+      }
+      for (const batch of batches) {
+        const audio = Buffer.concat(batch.buffers);
+        if (!audio.length) continue;
+        await this.request('/outbound-voice/broadcast/audio', {
+          execution_run_id: this.executionRunId,
+          publisher_id: this.publisherId,
+          direction: batch.direction,
+          turn_pair: batch.turnPair,
+          sample_rate: batch.sampleRate,
+          channels: 1,
+          pcm16_base64: audio.toString('base64'),
+        });
+      }
+    }).catch((error) => {
+      this.error = redact(error instanceof Error ? error.message : String(error));
+    });
+    return this.pending;
+  }
+
+  async close() {
+    if (this.flushTimer !== null) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    await this.scheduleFlush();
+    await this.pending;
+    if (!this.publisherId) return;
+    const publisherId = this.publisherId;
+    this.publisherId = null;
+    try {
+      await this.request('/outbound-voice/broadcast/close', {
+        execution_run_id: this.executionRunId,
+        publisher_id: publisherId,
+      });
+    } catch (error) {
+      this.error = redact(error instanceof Error ? error.message : String(error));
+    }
+  }
 }
 
 function baseResult(args, startedAt) {
@@ -174,8 +308,45 @@ function baseResult(args, startedAt) {
     network_events: [],
     console_events: [],
     page_events: [],
+    exchanges: [],
     artifacts: {},
   };
+}
+
+async function generateTesterFollowup(args, targetAudioWavBase64, history, turnPair) {
+  if (!args.livePublishBaseUrl || !args.livePublishToken) {
+    throw new Error('Multi-exchange SignalWire execution requires the existing Pipecat tester runtime.');
+  }
+  const goal = String(args.scenario?.goal || args.callerText).trim();
+  const persona = String(args.scenario?.persona || 'the original caller').trim();
+  const response = await fetch(`${args.livePublishBaseUrl}/reference-tester/turn`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-cae-reference-token': args.livePublishToken,
+    },
+    body: JSON.stringify({
+      scenario_instruction: `${args.scenario?.id || 'signalwire-holyguacamole'}: ${goal}`,
+      act_id: `caller-follow-up-${turnPair}`,
+      act_objective: `Respond naturally as ${persona} and move the conversation toward this caller goal: ${goal}`,
+      example_utterance: args.callerText,
+      history,
+      target_audio_wav_base64: targetAudioWavBase64,
+      model_name: args.testerModelName,
+    }),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Existing Pipecat tester turn failed with HTTP ${response.status}: ${detail.slice(0, 240)}`);
+  }
+  const payload = await response.json();
+  const testerText = String(payload.tester_text || '').trim();
+  const testerAudioWavBase64 = String(payload.tester_audio_wav_base64 || '').trim();
+  const targetText = String(payload.tester_asr_receipt || '').trim();
+  if (!testerText || !testerAudioWavBase64 || !targetText) {
+    throw new Error('Existing Pipecat tester turn returned incomplete text or audio evidence.');
+  }
+  return { testerText, testerAudioWavBase64, targetText };
 }
 
 async function synthesizeCallerAudio(args, runDir) {
@@ -220,7 +391,7 @@ async function synthesizeCallerAudio(args, runDir) {
   );
 }
 
-async function writeArtifacts(result, runDir, targetAudio) {
+async function writeArtifacts(result, runDir, targetAudio, responseAudios) {
   const transcriptPath = path.join(runDir, 'transcript.txt');
   await fs.writeFile(transcriptPath, `${result.transcript.text || ''}\n`, 'utf8');
   result.transcript.artifact_path = relativeToRepo(transcriptPath);
@@ -232,6 +403,33 @@ async function writeArtifacts(result, runDir, targetAudio) {
     result.artifacts.target_audio = relativeToRepo(audioPath);
     result.artifacts.target_audio_mime = targetAudio.mimeType || 'audio/webm';
     result.artifacts.target_audio_sha256 = crypto.createHash('sha256').update(targetAudio.buffer).digest('hex');
+  }
+  const responseAudio = responseAudios[0];
+  if (responseAudio?.buffer?.length) {
+    const responsePath = path.join(runDir, 'target-response.wav');
+    await fs.writeFile(responsePath, responseAudio.buffer);
+    result.media.target_response_audio_bytes = responseAudio.buffer.length;
+    result.media.target_response_audio_duration_ms = responseAudio.durationMs;
+    result.artifacts.target_response_audio = relativeToRepo(responsePath);
+    result.artifacts.target_response_audio_mime = 'audio/wav';
+    result.artifacts.target_response_audio_sha256 = crypto
+      .createHash('sha256')
+      .update(responseAudio.buffer)
+      .digest('hex');
+  }
+  result.artifacts.target_response_audio_turns = [];
+  for (let index = 0; index < responseAudios.length; index += 1) {
+    const turnAudio = responseAudios[index];
+    if (!turnAudio?.buffer?.length) continue;
+    const turnPath = path.join(runDir, `target-response-turn-${index + 1}.wav`);
+    await fs.writeFile(turnPath, turnAudio.buffer);
+    result.artifacts.target_response_audio_turns.push({
+      turn_pair: index + 1,
+      path: relativeToRepo(turnPath),
+      mime_type: 'audio/wav',
+      sha256: crypto.createHash('sha256').update(turnAudio.buffer).digest('hex'),
+      duration_ms: turnAudio.durationMs,
+    });
   }
   const resultPath = path.join(runDir, 'result.json');
   const latestPath = path.join(path.dirname(runDir), 'latest.json');
@@ -268,7 +466,11 @@ async function runSmoke(args) {
   const result = baseResult(args, startedAt);
   let browser;
   let targetAudio = null;
+  const responseAudios = [];
+  const livePublisher = new CaeLiveAudioPublisher(args);
   try {
+    result.connection.cae_live_broadcast_connected = await livePublisher.open();
+    if (livePublisher.error) result.connection.cae_live_broadcast_error = livePublisher.error;
     const callerAudio = await synthesizeCallerAudio(args, runDir);
     const callerBytes = await fs.readFile(callerAudio.path);
     result.tester.media_source = callerAudio.source;
@@ -296,74 +498,91 @@ async function runSmoke(args) {
         window.__caeInjectedAudioStreamPromise = (async () => {
           const context = new AudioContext();
           const destination = context.createMediaStreamDestination();
-          const bytes = Uint8Array.from(atob(audioBase64), (char) => char.charCodeAt(0));
-          const buffer = await context.decodeAudioData(bytes.buffer.slice(0));
-          const source = context.createBufferSource();
-          source.buffer = buffer;
-          source.loop = false;
-          const gain = context.createGain();
-          gain.gain.value = 0.95;
-          const processor = context.createScriptProcessor(2048, 1, 1);
-          const sink = context.createGain();
-          sink.gain.value = 0;
-          const playback = {
-            loop: false,
-            duration_ms: Math.round(buffer.duration * 1000),
-            start_delay_ms: 0,
-            readiness_trigger: null,
-            readiness_triggered_epoch_ms: null,
-            scheduled_start_epoch_ms: null,
-            first_outbound_sample_epoch_ms: null,
-            first_outbound_sample_offset_ms: null,
-            ended_epoch_ms: null,
-            ended: false,
-            observed_peak: 0,
-            get_user_media_request_count: 1,
-          };
-          let scheduledStartContextTime = null;
-          let started = false;
-          processor.onaudioprocess = (event) => {
-            const input = event.inputBuffer.getChannelData(0);
-            let peak = 0;
-            for (let index = 0; index < input.length; index += 1) {
-              const sample = Math.abs(input[index]);
-              if (sample > peak) peak = sample;
-            }
-            if (peak > playback.observed_peak) playback.observed_peak = peak;
-            if (playback.first_outbound_sample_epoch_ms === null && peak >= 0.001) {
-              playback.first_outbound_sample_epoch_ms = Date.now();
-              playback.first_outbound_sample_offset_ms = scheduledStartContextTime === null
-                ? null
-                : Math.max(0, Math.round((context.currentTime - scheduledStartContextTime) * 1000));
-            }
-          };
-          source.onended = () => {
-            playback.ended = true;
-            playback.ended_epoch_ms = Date.now();
-            processor.disconnect();
-            sink.disconnect();
-          };
-          source.connect(gain);
-          gain.connect(destination);
-          gain.connect(processor);
-          processor.connect(sink);
-          sink.connect(context.destination);
           await context.resume().catch(() => {});
-          window.__caeStartInjectedAudio = async (reason = 'webrtc_media_ready') => {
-            if (started) return playback;
-            started = true;
-            await context.resume().catch(() => {});
-            scheduledStartContextTime = context.currentTime;
-            playback.readiness_trigger = reason;
-            playback.readiness_triggered_epoch_ms = Date.now();
-            playback.scheduled_start_epoch_ms = playback.readiness_triggered_epoch_ms;
+          const playAudio = async (nextAudioBase64, reason, turnPair) => {
+            const bytes = Uint8Array.from(atob(nextAudioBase64), (char) => char.charCodeAt(0));
+            const buffer = await context.decodeAudioData(bytes.buffer.slice(0));
+            const source = context.createBufferSource();
+            source.buffer = buffer;
+            source.loop = false;
+            const gain = context.createGain();
+            gain.gain.value = 0.95;
+            const processor = context.createScriptProcessor(2048, 1, 1);
+            const sink = context.createGain();
+            sink.gain.value = 0;
+            const playback = {
+              turn_pair: turnPair,
+              loop: false,
+              duration_ms: Math.round(buffer.duration * 1000),
+              start_delay_ms: 0,
+              readiness_trigger: reason,
+              readiness_triggered_epoch_ms: Date.now(),
+              scheduled_start_epoch_ms: null,
+              first_outbound_sample_epoch_ms: null,
+              first_outbound_sample_offset_ms: null,
+              ended_epoch_ms: null,
+              ended: false,
+              observed_peak: 0,
+              get_user_media_request_count: window.__caeInjectedAudioPlayback?.get_user_media_request_count || 1,
+            };
+            const scheduledStartContextTime = context.currentTime;
+            playback.scheduled_start_epoch_ms = Date.now();
+            processor.onaudioprocess = (event) => {
+              const input = event.inputBuffer.getChannelData(0);
+              if (typeof window.__caePublishLivePcm === 'function') {
+                const pcm = new Uint8Array(input.length * 2);
+                const view = new DataView(pcm.buffer);
+                for (let index = 0; index < input.length; index += 1) {
+                  const sample = Math.max(-1, Math.min(1, input[index]));
+                  view.setInt16(index * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+                }
+                let binary = '';
+                for (let index = 0; index < pcm.length; index += 1) binary += String.fromCharCode(pcm[index]);
+                window.__caePublishLivePcm({
+                  direction: 'tester_to_target',
+                  turnPair,
+                  sampleRate: context.sampleRate,
+                  pcm16Base64: btoa(binary),
+                }).catch(() => {});
+              }
+              let peak = 0;
+              for (let index = 0; index < input.length; index += 1) peak = Math.max(peak, Math.abs(input[index]));
+              playback.observed_peak = Math.max(playback.observed_peak, peak);
+              if (playback.first_outbound_sample_epoch_ms === null && peak >= 0.001) {
+                playback.first_outbound_sample_epoch_ms = Date.now();
+                playback.first_outbound_sample_offset_ms = Math.max(
+                  0,
+                  Math.round((context.currentTime - scheduledStartContextTime) * 1000),
+                );
+              }
+            };
+            source.onended = () => {
+              playback.ended = true;
+              playback.ended_epoch_ms = Date.now();
+              processor.disconnect();
+              sink.disconnect();
+            };
+            source.connect(gain);
+            gain.connect(destination);
+            gain.connect(processor);
+            processor.connect(sink);
+            sink.connect(context.destination);
+            window.__caeInjectedAudioSource = source;
+            window.__caeInjectedAudioPlayback = playback;
             source.start(scheduledStartContextTime);
             source.stop(scheduledStartContextTime + buffer.duration);
             return playback;
           };
+          let initialStarted = false;
+          window.__caeStartInjectedAudio = async (reason = 'webrtc_media_ready') => {
+            if (initialStarted) return window.__caeInjectedAudioPlayback;
+            initialStarted = true;
+            return playAudio(audioBase64, reason, 1);
+          };
+          window.__caePlayInjectedAudioBase64 = async (nextAudioBase64, reason, turnPair) => (
+            playAudio(nextAudioBase64, reason, turnPair)
+          );
           window.__caeInjectedAudioContext = context;
-          window.__caeInjectedAudioSource = source;
-          window.__caeInjectedAudioPlayback = playback;
           window.__caeInjectedAudioStream = destination.stream;
           return window.__caeInjectedAudioStream;
         })();
@@ -372,6 +591,9 @@ async function runSmoke(args) {
     }, { audioBase64: callerBytes.toString('base64') });
 
     const page = await context.newPage();
+    await page.exposeFunction('__caePublishLivePcm', (frame) => {
+      livePublisher.enqueue(frame);
+    });
     let clickMs = null;
     let connectedMs = null;
     let remoteAudioMs = null;
@@ -411,7 +633,18 @@ async function runSmoke(args) {
     clickMs = Date.now();
     await connectButton.first().click({ timeout: Math.min(args.timeoutMs, 15000) });
 
-    const recorderPromise = page.evaluate(async ({
+    const recorderConfig = {
+      turnPair: 1,
+      timeoutMs: args.timeoutMs,
+      postCallerRemoteAudioGraceMs: POST_CALLER_REMOTE_AUDIO_GRACE_MS,
+      remoteAudioSilenceBoundaryMs: REMOTE_AUDIO_SILENCE_BOUNDARY_MS,
+      postCallerResponseEndSilenceMs: POST_CALLER_RESPONSE_END_SILENCE_MS,
+      postCallerResponseMinCaptureMs: POST_CALLER_RESPONSE_MIN_CAPTURE_MS,
+      postCallerResponseTailMs: POST_CALLER_RESPONSE_TAIL_MS,
+    };
+    const recorderPromise = page.evaluate(async (config) => {
+      window.__caeCaptureRemoteResponse = async ({
+      turnPair,
       timeoutMs,
       postCallerRemoteAudioGraceMs,
       remoteAudioSilenceBoundaryMs,
@@ -450,6 +683,10 @@ async function runSmoke(args) {
       let responseLastAudibleEpochMs = null;
       let wasAudible = false;
       let silentSinceEpochMs = Date.now();
+      const capturedPcmChunks = [];
+      let capturedPcmSamples = 0;
+      let responseStartSampleIndex = null;
+      let responseLastAudibleSampleIndex = null;
       if (audioContext) {
         await audioContext.resume().catch(() => {});
         sourceNode = audioContext.createMediaStreamSource(audioOnly);
@@ -458,6 +695,25 @@ async function runSmoke(args) {
         sink.gain.value = 0;
         processor.onaudioprocess = (event) => {
           const input = event.inputBuffer.getChannelData(0);
+          if (typeof window.__caePublishLivePcm === 'function') {
+            const pcm = new Uint8Array(input.length * 2);
+            const view = new DataView(pcm.buffer);
+            for (let index = 0; index < input.length; index += 1) {
+              const sample = Math.max(-1, Math.min(1, input[index]));
+              view.setInt16(index * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+            }
+            let binary = '';
+            for (let index = 0; index < pcm.length; index += 1) binary += String.fromCharCode(pcm[index]);
+            window.__caePublishLivePcm({
+              direction: 'target_to_tester',
+              turnPair,
+              sampleRate: audioContext.sampleRate,
+              pcm16Base64: btoa(binary),
+            }).catch(() => {});
+          }
+          const chunkStartSample = capturedPcmSamples;
+          capturedPcmChunks.push(Float32Array.from(input));
+          capturedPcmSamples += input.length;
           let peak = 0;
           for (let index = 0; index < input.length; index += 1) {
             const sample = Math.abs(input[index]);
@@ -485,9 +741,11 @@ async function runSmoke(args) {
               && firstAudibleAudioAfterCallerEpochMs === null
             ) {
               firstAudibleAudioAfterCallerEpochMs = sampleEpochMs;
+              responseStartSampleIndex = chunkStartSample;
             }
             if (firstAudibleAudioAfterCallerEpochMs !== null) {
               responseLastAudibleEpochMs = sampleEpochMs;
+              responseLastAudibleSampleIndex = capturedPcmSamples;
             }
             wasAudible = true;
             silentSinceEpochMs = null;
@@ -551,6 +809,68 @@ async function runSmoke(args) {
       const array = new Uint8Array(await blob.arrayBuffer());
       let binary = '';
       for (const byte of array) binary += String.fromCharCode(byte);
+      let responseWavBase64 = null;
+      let responseWavBytes = 0;
+      let responseWavDurationMs = null;
+      if (
+        audioContext
+        && responseStartSampleIndex !== null
+        && responseLastAudibleSampleIndex !== null
+        && responseLastAudibleSampleIndex > responseStartSampleIndex
+      ) {
+        const sampleRate = audioContext.sampleRate;
+        const responseEndSampleIndex = Math.min(
+          capturedPcmSamples,
+          responseLastAudibleSampleIndex + Math.round(sampleRate * 0.25),
+        );
+        const responseSamples = new Float32Array(responseEndSampleIndex - responseStartSampleIndex);
+        let sourceOffset = 0;
+        let targetOffset = 0;
+        for (const chunk of capturedPcmChunks) {
+          const chunkEnd = sourceOffset + chunk.length;
+          const overlapStart = Math.max(sourceOffset, responseStartSampleIndex);
+          const overlapEnd = Math.min(chunkEnd, responseEndSampleIndex);
+          if (overlapEnd > overlapStart) {
+            const from = overlapStart - sourceOffset;
+            const to = overlapEnd - sourceOffset;
+            responseSamples.set(chunk.subarray(from, to), targetOffset);
+            targetOffset += to - from;
+          }
+          sourceOffset = chunkEnd;
+          if (sourceOffset >= responseEndSampleIndex) break;
+        }
+        const wav = new Uint8Array(44 + responseSamples.length * 2);
+        const view = new DataView(wav.buffer);
+        const writeText = (offset, text) => {
+          for (let index = 0; index < text.length; index += 1) {
+            view.setUint8(offset + index, text.charCodeAt(index));
+          }
+        };
+        writeText(0, 'RIFF');
+        view.setUint32(4, 36 + responseSamples.length * 2, true);
+        writeText(8, 'WAVE');
+        writeText(12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);
+        view.setUint16(22, 1, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * 2, true);
+        view.setUint16(32, 2, true);
+        view.setUint16(34, 16, true);
+        writeText(36, 'data');
+        view.setUint32(40, responseSamples.length * 2, true);
+        for (let index = 0; index < responseSamples.length; index += 1) {
+          const sample = Math.max(-1, Math.min(1, responseSamples[index]));
+          view.setInt16(44 + index * 2, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+        }
+        const binaryParts = [];
+        for (let offset = 0; offset < wav.length; offset += 0x8000) {
+          binaryParts.push(String.fromCharCode(...wav.subarray(offset, offset + 0x8000)));
+        }
+        responseWavBase64 = btoa(binaryParts.join(''));
+        responseWavBytes = wav.length;
+        responseWavDurationMs = Math.round(responseSamples.length * 1000 / sampleRate);
+      }
       return {
         ok: true,
         mimeType,
@@ -567,15 +887,13 @@ async function runSmoke(args) {
         postCallerResponseEndSilenceMs,
         postCallerResponseMinCaptureMs,
         postCallerResponseTailMs,
+        responseWavBase64,
+        responseWavBytes,
+        responseWavDurationMs,
       };
-    }, {
-      timeoutMs: args.timeoutMs,
-      postCallerRemoteAudioGraceMs: POST_CALLER_REMOTE_AUDIO_GRACE_MS,
-      remoteAudioSilenceBoundaryMs: REMOTE_AUDIO_SILENCE_BOUNDARY_MS,
-      postCallerResponseEndSilenceMs: POST_CALLER_RESPONSE_END_SILENCE_MS,
-      postCallerResponseMinCaptureMs: POST_CALLER_RESPONSE_MIN_CAPTURE_MS,
-      postCallerResponseTailMs: POST_CALLER_RESPONSE_TAIL_MS,
-    });
+      };
+      return window.__caeCaptureRemoteResponse(config);
+    }, recorderConfig);
 
     const deadline = startedMs + args.timeoutMs;
     while (Date.now() < deadline) {
@@ -643,6 +961,12 @@ async function runSmoke(args) {
         durationMs: recorded.durationMs,
         extension: 'target-audio.webm',
       };
+      if (recorded.responseWavBase64 && recorded.responseWavBytes > 44) {
+        responseAudios.push({
+          buffer: Buffer.from(recorded.responseWavBase64, 'base64'),
+          durationMs: recorded.responseWavDurationMs,
+        });
+      }
       result.connection.post_caller_silence_boundary_seen = Number.isFinite(
         recorded.postCallerSilenceBoundaryEpochMs
       );
@@ -665,6 +989,71 @@ async function runSmoke(args) {
         }
       }
     }
+    if (recorded.responseWavBase64 && recorded.responseWavBytes > 44) {
+      result.exchanges.push({
+        turn_pair: 1,
+        caller_text: args.callerText,
+        caller_audio_source: result.artifacts.caller_audio,
+        agent_text: '',
+        target_response_audio_turn: 1,
+        target_response_latency_ms: result.latency_metrics.caller_audio_completed_to_remote_audio_ms,
+      });
+    }
+    if (args.maxExchanges === 2 && recorded.responseWavBase64 && recorded.responseWavBytes > 44) {
+      const followup = await generateTesterFollowup(
+        args,
+        recorded.responseWavBase64,
+        [{ speaker: 'Caller', text: args.callerText }],
+        2,
+      );
+      result.exchanges[0].agent_text = followup.targetText;
+      const secondRecorderPromise = page.evaluate(
+        (config) => window.__caeCaptureRemoteResponse({ ...config, turnPair: 2 }),
+        recorderConfig,
+      );
+      await page.waitForTimeout(300);
+      const secondPlayback = await page.evaluate(async ({ audioBase64 }) => (
+        window.__caePlayInjectedAudioBase64
+          ? window.__caePlayInjectedAudioBase64(audioBase64, 'tester_follow_up_2', 2)
+          : null
+      ), { audioBase64: followup.testerAudioWavBase64 });
+      if (!secondPlayback) throw new Error('SignalWire browser could not play tester follow-up audio.');
+      const secondRecorded = await secondRecorderPromise.catch((error) => ({
+        ok: false,
+        reason: String(error),
+      }));
+      if (
+        !secondRecorded.ok
+        || !secondRecorded.responseWavBase64
+        || secondRecorded.responseWavBytes <= 44
+        || !Number.isFinite(secondRecorded.firstAudibleAudioAfterCallerEpochMs)
+      ) {
+        throw new Error(
+          `SignalWire exchange 2 did not capture a grounded target response: ${secondRecorded.reason || 'no audible response'}`,
+        );
+      }
+      responseAudios.push({
+        buffer: Buffer.from(secondRecorded.responseWavBase64, 'base64'),
+        durationMs: secondRecorded.responseWavDurationMs,
+      });
+      const completedSecondPlayback = await page.evaluate(
+        () => window.__caeInjectedAudioPlayback || null,
+      );
+      const secondLatencyMs = Number.isFinite(completedSecondPlayback?.ended_epoch_ms)
+        ? secondRecorded.firstAudibleAudioAfterCallerEpochMs - completedSecondPlayback.ended_epoch_ms
+        : null;
+      result.exchanges.push({
+        turn_pair: 2,
+        caller_text: followup.testerText,
+        caller_audio_wav_base64: followup.testerAudioWavBase64,
+        caller_audio_source: 'reference-tester/turn',
+        agent_text: '',
+        target_response_audio_turn: 2,
+        target_response_latency_ms: secondLatencyMs,
+      });
+      result.latency_metrics.exchange_2_caller_audio_completed_to_remote_audio_ms = secondLatencyMs;
+      result.tester.caller_audio_playback_turn_2 = completedSecondPlayback;
+    }
     deriveTranscript(result, args);
     if (
       result.connection.ui_connected
@@ -673,6 +1062,8 @@ async function runSmoke(args) {
       && targetAudio?.buffer?.length
       && result.connection.remote_audio_sample_seen
       && result.connection.remote_audio_after_caller_seen
+      && result.exchanges.length === args.maxExchanges
+      && responseAudios.length === args.maxExchanges
     ) {
       result.status = 'pass';
       result.reason = 'Holy Guacamole SignalWire connected, caller audio playback was observed, and a new post-caller audible remote response onset was captured.';
@@ -700,7 +1091,9 @@ async function runSmoke(args) {
     result.timestamps.completed_at = nowIso();
     result.latency_metrics.total_run_ms = Date.now() - startedMs;
     if (browser) await browser.close().catch(() => {});
-    await writeArtifacts(result, runDir, targetAudio);
+    await livePublisher.close();
+    if (livePublisher.error) result.connection.cae_live_broadcast_error = livePublisher.error;
+    await writeArtifacts(result, runDir, targetAudio, responseAudios);
   }
 }
 

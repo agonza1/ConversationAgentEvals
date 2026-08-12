@@ -12,7 +12,7 @@ AudioTransportId = Literal[
     'none',
     'pipecat_small_webrtc',
     'pipecat_daily_webrtc',
-    'signalwire_direct_webrtc',
+    'signalwire_browser_webrtc',
     'freeswitch_verto_sip',
 ]
 TextCallableId = Literal['mock_agent', 'offline_acc_fixture', 'openai_codex', 'http_endpoint']
@@ -57,11 +57,11 @@ class ExecutionRunCreateRequest(BaseModel):
             elif self.executor_id not in {
                 'cae_local_audio_loop',
                 'pipecat_public_daily',
-                'signalwire_public_direct',
+                'signalwire_public_browser',
             }:
                 raise ValueError(
                     'pipecat_webrtc mode requires executor_id=cae_local_audio_loop, '
-                    'pipecat_public_daily, or signalwire_public_direct'
+                    'pipecat_public_daily, or signalwire_public_browser'
                 )
             if self.executor_id == 'pipecat_public_daily':
                 if self.audio_transport in {'none', 'pipecat_daily_webrtc'}:
@@ -70,13 +70,13 @@ class ExecutionRunCreateRequest(BaseModel):
                     raise ValueError(
                         'executor_id=pipecat_public_daily requires audio_transport=pipecat_daily_webrtc'
                     )
-            elif self.executor_id == 'signalwire_public_direct':
-                if self.audio_transport in {'none', 'signalwire_direct_webrtc'}:
-                    self.audio_transport = 'signalwire_direct_webrtc'
+            elif self.executor_id == 'signalwire_public_browser':
+                if self.audio_transport in {'none', 'signalwire_browser_webrtc'}:
+                    self.audio_transport = 'signalwire_browser_webrtc'
                 else:
                     raise ValueError(
-                        'executor_id=signalwire_public_direct requires '
-                        'audio_transport=signalwire_direct_webrtc'
+                        'executor_id=signalwire_public_browser requires '
+                        'audio_transport=signalwire_browser_webrtc'
                     )
             elif self.audio_transport in {'none', 'pipecat_small_webrtc'}:
                 self.audio_transport = 'pipecat_small_webrtc'

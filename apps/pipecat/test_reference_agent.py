@@ -890,3 +890,59 @@ def test_reference_listener_waits_for_duplex_broadcast_registration(monkeypatch)
     assert joined['status'] == 'listening'
     assert joined['answer']['sdp'] == 'send-only-answer'
     server.REFERENCE_DUPLEX_RUNS.pop('soon-active-run', None)
+
+
+def test_outbound_voice_broadcast_reuses_reference_listener_bus(monkeypatch):
+    class _Track:
+        _sample_rate = 24000
+
+        def __init__(self):
+            self.audio = []
+
+        def add_audio_bytes(self, payload):
+            self.audio.append(payload)
+
+    monkeypatch.setattr(server, 'REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
+    client = TestClient(server.app)
+    opened = client.post(
+        '/outbound-voice/broadcast/open',
+        headers={'x-cae-reference-token': 'test-token'},
+        json={'execution_run_id': 'external-run', 'session_id': 'external-session'},
+    )
+    assert opened.status_code == 200, opened.text
+    publisher_id = opened.json()['publisher_id']
+    broadcast = server.REFERENCE_DUPLEX_RUNS['external-run']
+    track = _Track()
+    broadcast.listeners['listener'] = server._ReferenceListener(
+        listener_id='listener',
+        connection=None,
+        track=track,
+    )
+
+    audio = b'\x01\x00' * 160
+    published = client.post(
+        '/outbound-voice/broadcast/audio',
+        headers={'x-cae-reference-token': 'test-token'},
+        json={
+            'execution_run_id': 'external-run',
+            'publisher_id': publisher_id,
+            'direction': 'target_to_tester',
+            'turn_pair': 1,
+            'sample_rate': 16000,
+            'channels': 1,
+            'pcm16_base64': base64.b64encode(audio).decode(),
+        },
+    )
+    assert published.status_code == 200, published.text
+    assert published.json()['bytes'] == len(audio)
+    assert track.audio
+    assert 'external-session:1:target_to_tester' in broadcast.started_listener_media_keys
+
+    closed = client.post(
+        '/outbound-voice/broadcast/close',
+        headers={'x-cae-reference-token': 'test-token'},
+        json={'execution_run_id': 'external-run', 'publisher_id': publisher_id},
+    )
+    assert closed.status_code == 200
+    assert broadcast.active is False
+    server.REFERENCE_DUPLEX_RUNS.pop('external-run', None)

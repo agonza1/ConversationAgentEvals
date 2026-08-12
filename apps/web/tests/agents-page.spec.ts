@@ -82,7 +82,7 @@ async function mockRunnerApis(page: import('@playwright/test').Page, options: Mo
             target: 'signalwire_holy_guacamole',
             environment: 'production',
             connection: { endpoint_url: 'https://holyguacamole.signalwire.me/' },
-            description: 'Real external SignalWire direct WebRTC target.',
+            description: 'Real external SignalWire browser WebRTC target.',
             metadata: { model_name: 'signalwire-ai-agent', prompt_version: 'external' },
           },
           {

@@ -5,7 +5,6 @@ const root = process.cwd();
 const compose = readFileSync(join(root, 'docker-compose.yml'), 'utf8');
 const envExample = readFileSync(join(root, '.env.example'), 'utf8');
 const webDockerfile = readFileSync(join(root, 'apps/web/Dockerfile'), 'utf8');
-const pipecatDockerfile = readFileSync(join(root, 'apps/pipecat/Dockerfile'), 'utf8');
 const environmentDocs = readFileSync(join(root, 'docs/environment.md'), 'utf8');
 
 const failures = [];
@@ -166,12 +165,7 @@ for (const advancedEnvName of [
   requireNotIncludes('.env.example first-run env', envExample, advancedEnvName);
 }
 
-const apiDockerfile = readFileSync(join(root, 'apps/api/Dockerfile'), 'utf8');
-requireIncludes('api Dockerfile', apiDockerfile, 'ENV PYTHONPATH=/workspace/apps/api');
-requireNotIncludes('api Dockerfile', apiDockerfile, 'npx playwright install');
-requireIncludes('pipecat Dockerfile', pipecatDockerfile, 'nodejs npm');
-requireIncludes('pipecat Dockerfile', pipecatDockerfile, 'COPY apps/pipecat/package.json apps/pipecat/package-lock.json /app/');
-requireIncludes('pipecat Dockerfile', pipecatDockerfile, 'npm ci --omit=dev');
+requireIncludes('api Dockerfile', readFileSync(join(root, 'apps/api/Dockerfile'), 'utf8'), 'ENV PYTHONPATH=/workspace/apps/api');
 
 requireIncludes('web Dockerfile', webDockerfile, 'RUN cd /app/apps/web && npm run build');
 requireIncludes('web Dockerfile', webDockerfile, 'ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:8025');

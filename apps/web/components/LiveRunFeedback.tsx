@@ -551,11 +551,6 @@ export function LiveRunFeedback({
       events.map(listenerMediaKey).filter((value): value is string => Boolean(value)),
     );
     clearSetupFallbackTimer();
-    setupFallbackTimerRef.current = window.setTimeout(() => {
-      setupFallbackTimerRef.current = null;
-      if (!isCurrentAttempt() || peerRef.current?.connectionState === 'connected') return;
-      activateHttpFallback();
-    }, 2500);
     setPlaybackMessage('Connecting to the ongoing WebRTC audio stream…');
     let token: ListenerToken | null = null;
     try {
@@ -589,6 +584,15 @@ export function LiveRunFeedback({
     setListenerToken(token);
     await refreshListener(token.token).catch(() => undefined);
     if (!isCurrentAttempt() || liveSegmentFallbackRef.current) return;
+    // Token creation and the initial listener-state fetch can be slower than
+    // WebRTC negotiation (for example while an execution run is writing its
+    // first snapshot). Only time the actual peer connection so API setup
+    // latency cannot force a healthy local listener onto HTTP fallback.
+    setupFallbackTimerRef.current = window.setTimeout(() => {
+      setupFallbackTimerRef.current = null;
+      if (!isCurrentAttempt() || peerRef.current?.connectionState === 'connected') return;
+      activateHttpFallback();
+    }, 2500);
     try {
       await connectWebRTC(
         token,

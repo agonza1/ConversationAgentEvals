@@ -336,18 +336,6 @@ class PublicPipecatDuplexRequest(PublicPipecatRunRequest):
     session_id: str | None = None
 
 
-class SignalWireHolyGuacamoleDuplexRequest(BaseModel):
-    caller_text: str = Field(min_length=1, max_length=2_000)
-    timeout_seconds: int = Field(default=90, ge=30, le=300)
-    scenario: dict[str, Any] = Field(default_factory=dict)
-    max_turn_pairs: int = Field(default=1, ge=1, le=1)
-    tester_model_name: str | None = None
-    execution_run_id: str | None = None
-    session_id: str | None = None
-    target_url: str = 'https://holyguacamole.signalwire.me/'
-    voice: str = 'elevenlabs.adam'
-
-
 class ReferenceDuplexRunRequest(BaseModel):
     session_id: str
     execution_run_id: str
@@ -389,6 +377,26 @@ class ReferenceListenerStopRequest(BaseModel):
     listener_id: str
 
 
+class OutboundVoiceBroadcastOpenRequest(BaseModel):
+    execution_run_id: str = Field(min_length=1, max_length=200)
+    session_id: str = Field(min_length=1, max_length=300)
+
+
+class OutboundVoiceBroadcastAudioRequest(BaseModel):
+    execution_run_id: str = Field(min_length=1, max_length=200)
+    publisher_id: str = Field(min_length=1, max_length=200)
+    direction: Literal['tester_to_target', 'target_to_tester']
+    turn_pair: int = Field(default=1, ge=1, le=100)
+    sample_rate: int = Field(ge=8000, le=96000)
+    channels: int = Field(default=1, ge=1, le=2)
+    pcm16_base64: str = Field(min_length=1, max_length=1_500_000)
+
+
+class OutboundVoiceBroadcastCloseRequest(BaseModel):
+    execution_run_id: str = Field(min_length=1, max_length=200)
+    publisher_id: str = Field(min_length=1, max_length=200)
+
+
 @dataclass(slots=True)
 class _ReferenceListener:
     listener_id: str
@@ -405,6 +413,7 @@ class _ReferenceDuplexBroadcast:
     audio_publish_sequence: int = 0
     started_listener_media_keys: set[str] = field(default_factory=set)
     active_publishers: int = 0
+    publisher_ids: set[str] = field(default_factory=set)
 
     def mark_audio_started(self, listener_media_key: str) -> None:
         self.started_listener_media_keys.add(listener_media_key)
@@ -1832,131 +1841,6 @@ async def public_pipecat_duplex(
     )
 
 
-async def _signalwire_holyguacamole_duplex_events(
-    payload: SignalWireHolyGuacamoleDuplexRequest,
-) -> AsyncIterator[str]:
-    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-    broadcast: _ReferenceDuplexBroadcast | None = None
-    bus: _LocalDuplexFrameBus | None = None
-    marked_listener_audio: set[str] = set()
-
-    if payload.execution_run_id:
-        session_id = payload.session_id or f'{payload.execution_run_id}:signalwire-holyguacamole'
-        existing = REFERENCE_DUPLEX_RUNS.get(payload.execution_run_id)
-        if existing is not None and existing.active:
-            broadcast = existing
-        else:
-            broadcast = _ReferenceDuplexBroadcast(
-                execution_run_id=payload.execution_run_id,
-                session_id=session_id,
-            )
-            if existing is not None:
-                broadcast.listeners.update(existing.listeners)
-                existing.listeners.clear()
-            REFERENCE_DUPLEX_RUNS[payload.execution_run_id] = broadcast
-        broadcast.active = True
-        broadcast.active_publishers += 1
-        bus = _LocalDuplexFrameBus(session_id, broadcast)
-
-    async def publish(event: dict[str, Any]) -> None:
-        direction = str(event.get('direction') or '')
-        turn_pair = int(event.get('turn_pair') or 0)
-        if bus is not None and direction in {'tester_to_target', 'target_to_tester'}:
-            event = {
-                **event,
-                'listener_media_key': f'{bus.session_id}:{turn_pair}:{direction}',
-            }
-            audio_payload = event.get('audio_wav_base64')
-            if isinstance(audio_payload, str) and audio_payload:
-                try:
-                    audio_bytes = base64.b64decode(audio_payload)
-                except ValueError:
-                    audio_bytes = b''
-                listener_media_key = str(event.get('listener_media_key') or '')
-                if audio_bytes and listener_media_key not in marked_listener_audio:
-                    bus.mark_audio_started(turn_pair=turn_pair, direction=direction)
-                    marked_listener_audio.add(listener_media_key)
-                if audio_bytes:
-                    try:
-                        pcm, sample_rate, channels = _wav_to_pcm(audio_bytes)
-                    except (EOFError, wave.Error):
-                        pcm = b''
-                        sample_rate = 0
-                        channels = 0
-                    if pcm:
-                        bus.publish_chunk(pcm, sample_rate=sample_rate, channels=channels)
-        await queue.put(event)
-
-    async def execute() -> None:
-        try:
-            from signalwire_holyguacamole_target import (
-                SignalWireHolyGuacamoleError,
-                SignalWireHolyGuacamoleRequest,
-                run_signalwire_holyguacamole_direct,
-            )
-            result = await run_signalwire_holyguacamole_direct(
-                SignalWireHolyGuacamoleRequest(**payload.model_dump()),
-                kokoro_base_url=KOKORO_BASE_URL,
-                kokoro_model=KOKORO_MODEL,
-                kokoro_voice=KOKORO_TESTER_VOICE,
-                event_callback=publish,
-            )
-            await publish({'type': 'complete', 'result': result})
-        except (ImportError, ModuleNotFoundError):
-            await publish({
-                'type': 'error',
-                'detail': 'Install the SignalWire direct runner dependencies in the Pipecat service.',
-            })
-        except Exception as exc:
-            detail = (
-                str(exc)
-                if exc.__class__.__name__ == 'SignalWireHolyGuacamoleError'
-                else 'Holy Guacamole SignalWire direct execution failed.'
-            )
-            await publish({'type': 'error', 'detail': detail})
-
-    task = asyncio.create_task(execute())
-    try:
-        while True:
-            event = await queue.get()
-            yield json.dumps(event, separators=(',', ':')) + '\n'
-            if event.get('type') in {'complete', 'error'}:
-                break
-    finally:
-        if not task.done():
-            task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-        if broadcast is not None:
-            broadcast.active_publishers = max(0, broadcast.active_publishers - 1)
-            if broadcast.active_publishers == 0:
-                broadcast.active = False
-                asyncio.create_task(_retire_reference_broadcast(broadcast))
-
-
-@app.post('/signalwire-holyguacamole/duplex')
-async def signalwire_holyguacamole_duplex(
-    payload: SignalWireHolyGuacamoleDuplexRequest,
-    x_cae_reference_token: str | None = Header(default=None),
-):
-    """Stream a CAE tester session through direct SignalWire SDK WebRTC."""
-    _require_reference_token(x_cae_reference_token)
-    if not KOKORO_BASE_URL:
-        raise HTTPException(
-            status_code=503,
-            detail='Holy Guacamole SignalWire direct execution requires Kokoro.',
-        )
-    if os.getenv('CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE', '').strip().lower() not in {'1', 'true', 'yes'}:
-        raise HTTPException(
-            status_code=403,
-            detail='Holy Guacamole SignalWire execution requires CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE=1.',
-        )
-    return StreamingResponse(
-        _signalwire_holyguacamole_duplex_events(payload),
-        media_type='application/x-ndjson',
-        headers={'Cache-Control': 'no-store'},
-    )
-
-
 @app.post('/reference-duplex/run')
 async def reference_duplex_run(
     payload: ReferenceDuplexRunRequest,
@@ -1978,6 +1862,80 @@ async def reference_duplex_run(
         media_type='application/x-ndjson',
         headers={'Cache-Control': 'no-store'},
     )
+
+
+@app.post('/outbound-voice/broadcast/open')
+async def outbound_voice_broadcast_open(
+    payload: OutboundVoiceBroadcastOpenRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Register an external target adapter on CAE's existing live-listener bus."""
+    _require_reference_token(x_cae_reference_token)
+    broadcast = REFERENCE_DUPLEX_RUNS.get(payload.execution_run_id)
+    if broadcast is None or not broadcast.active:
+        replacement = _ReferenceDuplexBroadcast(
+            execution_run_id=payload.execution_run_id,
+            session_id=payload.session_id,
+        )
+        if broadcast is not None:
+            replacement.listeners.update(broadcast.listeners)
+            broadcast.listeners.clear()
+        broadcast = replacement
+        REFERENCE_DUPLEX_RUNS[payload.execution_run_id] = broadcast
+    publisher_id = secrets.token_urlsafe(24)
+    broadcast.active = True
+    broadcast.publisher_ids.add(publisher_id)
+    broadcast.active_publishers += 1
+    return {
+        'status': 'open',
+        'publisher_id': publisher_id,
+        'listener_route': '/reference-duplex/listen',
+    }
+
+
+@app.post('/outbound-voice/broadcast/audio')
+async def outbound_voice_broadcast_audio(
+    payload: OutboundVoiceBroadcastAudioRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Publish external PCM through the same bus used by native CAE targets."""
+    _require_reference_token(x_cae_reference_token)
+    broadcast = REFERENCE_DUPLEX_RUNS.get(payload.execution_run_id)
+    if (
+        broadcast is None
+        or not broadcast.active
+        or payload.publisher_id not in broadcast.publisher_ids
+    ):
+        raise HTTPException(status_code=409, detail='The outbound voice publisher is not active.')
+    try:
+        audio = base64.b64decode(payload.pcm16_base64, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail='pcm16_base64 is invalid.') from exc
+    if not audio or len(audio) % (payload.channels * 2) != 0:
+        raise HTTPException(status_code=422, detail='PCM16 audio is empty or frame-alignment is invalid.')
+    listener_media_key = (
+        f'{broadcast.session_id}:{payload.turn_pair}:{payload.direction}'
+    )
+    broadcast.mark_audio_started(listener_media_key)
+    broadcast.publish(audio, sample_rate=payload.sample_rate, channels=payload.channels)
+    return {'status': 'published', 'bytes': len(audio)}
+
+
+@app.post('/outbound-voice/broadcast/close')
+async def outbound_voice_broadcast_close(
+    payload: OutboundVoiceBroadcastCloseRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+) -> dict[str, str]:
+    _require_reference_token(x_cae_reference_token)
+    broadcast = REFERENCE_DUPLEX_RUNS.get(payload.execution_run_id)
+    if broadcast is None or payload.publisher_id not in broadcast.publisher_ids:
+        return {'status': 'already_closed'}
+    broadcast.publisher_ids.discard(payload.publisher_id)
+    broadcast.active_publishers = max(0, broadcast.active_publishers - 1)
+    if broadcast.active_publishers == 0:
+        broadcast.active = False
+        asyncio.create_task(_retire_reference_broadcast(broadcast))
+    return {'status': 'closed'}
 
 
 @app.post('/reference-duplex/listen')

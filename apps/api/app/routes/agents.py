@@ -153,10 +153,11 @@ def _target_option(target: AgentTarget) -> dict[str, object]:
             'defaults': {
                 'mode': 'pipecat_webrtc',
                 'tester_id': 'pipecat_tester',
-                'executor_id': 'signalwire_public_direct',
-                'audio_transport': 'signalwire_direct_webrtc',
+                'executor_id': 'signalwire_public_browser',
+                'audio_transport': 'signalwire_browser_webrtc',
                 'max_exchanges': 1,
-                'max_exchanges_configurable': False,
+                'max_exchanges_configurable': True,
+                'max_exchanges_limit': 2,
             },
         }
     defaults = execution_defaults_for_target(target)

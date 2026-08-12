@@ -5,7 +5,7 @@ export type AudioTransportId =
   | 'none'
   | 'pipecat_small_webrtc'
   | 'pipecat_daily_webrtc'
-  | 'signalwire_direct_webrtc'
+  | 'signalwire_browser_webrtc'
   | 'freeswitch_verto_sip';
 export type TesterId = 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
 export type ExecutorId =
@@ -13,7 +13,7 @@ export type ExecutorId =
   | 'evidence_replay'
   | 'cae_local_audio_loop'
   | 'pipecat_public_daily'
-  | 'signalwire_public_direct'
+  | 'signalwire_public_browser'
   | 'acc_browser_webrtc'
   | 'acc_sip'
   | 'acc_phone';
@@ -366,8 +366,8 @@ export function applyAgentLaunchDefaults(
     return {
       mode: 'pipecat_webrtc',
       testerId: 'pipecat_tester',
-      executorId: 'signalwire_public_direct',
-      audioTransport: 'signalwire_direct_webrtc',
+      executorId: 'signalwire_public_browser',
+      audioTransport: 'signalwire_browser_webrtc',
     };
   }
   if (agent.target === 'voice_fixture') {

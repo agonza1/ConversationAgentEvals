@@ -3,48 +3,52 @@
 ConversationAgentEvals can evaluate the public Holy Guacamole drive-thru demo at
 `https://holyguacamole.signalwire.me/` as an opt-in external voice target.
 
-This is a direct/no-headless-browser executor. CAE follows the public Pipecat
-target pattern: the API asks the Pipecat service to run a target-specific
-outbound adapter, the adapter discovers a fresh SignalWire guest token/address,
-sends current-run Kokoro tester audio through the SignalWire SDK using Node
-WebRTC primitives, and returns current-run media/provenance to the normal CAE
-run, timeline, recording, and vCon pipeline.
+The SignalWire demo exposes a browser WebRTC SDK flow rather than a server-side
+Daily room. CAE therefore uses the same target/tester/evidence contract added
+for public voice targets, but the executor is a gated Chromium browser runner:
 
 ```text
 CAE API
-  -> Pipecat service /signalwire-holyguacamole/duplex
-      -> synthesize caller audio with Kokoro
-      -> GET https://holyguacamole.signalwire.me/get_token?voice=...
-      -> SignalWire SDK dial /public/holyguacamole?channel=audio
-      -> send in-memory tester audio track
-      <- capture remote SignalWire WebRTC audio with RTCAudioSink
-  <- caller audio, target audio, timing, redacted provenance
-  -> standard CAE run, timeline, recording metadata, and vCon pipeline
+  -> scripts/signalwire_holyguacamole_smoke.mjs
+      -> load https://holyguacamole.signalwire.me/
+      -> request public guest token from /get_token
+      -> inject current-run tester audio as the browser microphone
+      -> dial the public SignalWire AI agent
+      <- remote WebRTC audio stream and page/order events
+      -> publish caller and target PCM through CAE's existing live-listener bus
+  <- caller transcript, timing, result JSON, caller audio, target audio
+  -> rtc-asr transcription and the standard CAE run, latency, recording, and vCon pipeline
 ```
-
-## Discovery
-
-The public page loads `https://cdn.signalwire.com/@signalwire/js@4.0.0-rc.0`
-and `/app.js?v=20`. Its first call fetches `/get_token?voice=<voice-id>`.
-The response contains only:
-
-- `token`: an ephemeral SignalWire guest token used in memory by the SDK
-- `address`: currently `/public/holyguacamole?channel=audio`
-
-CAE does not persist the token and does not include it in result JSON, logs, or
-vCon artifacts.
 
 ## Safety gate
 
-Live public execution is disabled unless these are configured:
+Live public execution is disabled unless both gates are explicit:
 
-- API and Pipecat service: `CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE=1`
-- API and Pipecat service: matching `REFERENCE_AGENT_INTERNAL_TOKEN`
-- Pipecat service: `KOKORO_BASE_URL`
+- API runs require `CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE=1`.
+- Standalone smoke runs require `SIGNALWIRE_HOLYGUACAMOLE_ALLOW_PUBLIC=1`.
 
 The target URL is allowlisted to `https://holyguacamole.signalwire.me/`. Endpoint
 URLs with credentials, ports, query strings, fragments, or alternate paths are
-rejected by the direct runner.
+rejected. Guest tokens returned by the public page are never persisted in CAE
+artifacts.
+
+## Smoke command
+
+```bash
+PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers \
+SIGNALWIRE_HOLYGUACAMOLE_ALLOW_PUBLIC=1 \
+npm run test:signalwire-holyguacamole-smoke -- \
+  --caller-text "I would like one chicken taco and a small drink."
+```
+
+The script writes `result.json`, `transcript.txt`, caller audio, and captured
+target audio under `artifacts/signalwire-holyguacamole-smoke/`. Page status and
+order text are retained as page events only; they are not labeled as agent
+speech or used for scoring.
+
+On macOS the script can synthesize caller audio with `say`. In other runtimes,
+provide `--caller-audio <path>` or configure `KOKORO_BASE_URL`. The runner fails
+preflight instead of injecting silence when real caller speech cannot be supplied.
 
 ## CAE run
 
@@ -58,37 +62,18 @@ Defaults:
 | --- | --- |
 | mode | `pipecat_webrtc` |
 | tester | `pipecat_tester` |
-| executor | `signalwire_public_direct` |
-| audio transport | `signalwire_direct_webrtc` |
+| executor | `signalwire_public_browser` |
+| audio transport | `signalwire_browser_webrtc` |
 
-Example local run shape:
+The run fails closed if the page, token endpoint, WebRTC connection, injected
+caller media, or remote audio capture cannot complete. Caller synthesis uses
+the configured CAE Kokoro service and retries once with a fresh client after a
+transient failure. It does not fall back to fixtures or saved transcripts.
 
-```bash
-CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE=1 \
-REFERENCE_AGENT_INTERNAL_TOKEN=dev-shared-token \
-KOKORO_BASE_URL=http://localhost:8880 \
-npm run dev
-```
-
-Then start an execution run for `holyguacamole-signalwire-agent` with
-`max_exchanges=1`.
-
-## Optional browser smoke
-
-`scripts/signalwire_holyguacamole_smoke.mjs` remains an optional compatibility
-smoke for the public website UI. It is not the canonical CAE executor and its
-artifacts are not used as target-evaluation evidence.
-
-```bash
-PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers \
-SIGNALWIRE_HOLYGUACAMOLE_ALLOW_PUBLIC=1 \
-npm run test:signalwire-holyguacamole-smoke -- \
-  --caller-text "I would like one chicken taco and a small drink."
-```
-
-## Limitations
-
-This target currently runs one caller turn per direct call (`max_exchanges=1`).
-Remote target audio is preserved as current-run WAV evidence. Until remote speech
-ASR is wired for the captured SignalWire audio, CAE marks semantic scoring as
-`needs_review` instead of labeling UI/status text as agent speech.
+The same browser call supports one or two exchanges (`max_exchanges=1..2`). The
+second tester turn is generated by CAE's existing Pipecat reference tester from
+the first observed target response. Each exchange records end-to-end response
+latency from tester speech completion to the first audible target speech frame.
+Captured remote audio is transcribed through the configured rtc-asr service;
+page status and order text remain non-speech evidence and are never scored or
+vCon-labeled as agent speech.

@@ -5,13 +5,12 @@
     "apps/web"
   ],
   "scripts": {
-    "setup": "npm install && npm run setup:pipecat-node && ./scripts/ensure-venv.sh apps/api/.venv apps/api/requirements.txt",
-    "setup:pipecat-node": "npm install --prefix apps/pipecat",
+    "setup": "npm install && ./scripts/ensure-venv.sh apps/api/.venv apps/api/requirements.txt",
     "dev": "npm run check:env && node scripts/dev.js",
     "dev:slot": "node scripts/dev-slot.mjs",
     "dev:web": "npm --workspace apps/web run dev",
     "dev:api": "apps/api/.venv/bin/python -m uvicorn app.main:app --app-dir apps/api --host 0.0.0.0 --port ${API_PORT:-8000} --reload --reload-dir apps/api",
-    "dev:pipecat": "(test -d apps/pipecat/node_modules/@signalwire/js && test -d apps/pipecat/node_modules/@roamhq/wrtc || npm run setup:pipecat-node) && (test -x apps/pipecat/.venv/bin/python || ./scripts/ensure-venv.sh apps/pipecat/.venv apps/pipecat/requirements.txt) && apps/pipecat/.venv/bin/python -m uvicorn server:app --app-dir apps/pipecat --host 0.0.0.0 --port ${PIPECAT_PORT:-8110}",
+    "dev:pipecat": "(test -x apps/pipecat/.venv/bin/python || ./scripts/ensure-venv.sh apps/pipecat/.venv apps/pipecat/requirements.txt) && apps/pipecat/.venv/bin/python -m uvicorn server:app --app-dir apps/pipecat --host 0.0.0.0 --port ${PIPECAT_PORT:-8110}",
     "build:web": "rm -rf apps/web/.next-build && NEXT_DIST_DIR=.next-build npm --workspace apps/web run build && node scripts/restore-web-next-env.mjs",
     "start:web": "rm -rf apps/web/.next-build && NEXT_DIST_DIR=.next-build npm --workspace apps/web run build && node scripts/restore-web-next-env.mjs && NEXT_DIST_DIR=.next-build npm --workspace apps/web run start",
     "lint:web": "npm --workspace apps/web run lint",
