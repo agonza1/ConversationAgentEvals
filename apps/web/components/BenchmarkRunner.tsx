@@ -277,8 +277,10 @@ interface OpenAIProviderStatus {
 }
 
 const DEFAULT_EXECUTION_MODEL = 'gpt-5.4-mini';
+const LOCAL_EXECUTION_MODELS = ['ollama/gemma2:2b'];
 const FALLBACK_EXECUTION_MODELS = [
   'gpt-5.4-mini',
+  ...LOCAL_EXECUTION_MODELS,
   'gpt-5.4',
   'gpt-5.2',
   'gpt-4.1',
@@ -292,7 +294,7 @@ const FALLBACK_EXECUTION_MODELS = [
 async function fetchOpenAIModels(): Promise<{ models: string[]; message: string | null }> {
   const response = await fetch(`${getApiBase()}/api/product/providers/openai/models`, { cache: 'no-store' });
   if (response.status === 401) {
-    return { models: [DEFAULT_EXECUTION_MODEL], message: 'Connect OpenAI to load models' };
+    return { models: [DEFAULT_EXECUTION_MODEL, ...LOCAL_EXECUTION_MODELS], message: 'Connect OpenAI to load GPT models; local Ollama models stay available.' };
   }
   if (!response.ok) {
     // Never leave the dropdown empty on transient API failures.
@@ -310,7 +312,7 @@ async function fetchOpenAIModels(): Promise<{ models: string[]; message: string 
   const ids = (payload.models ?? [])
     .map((item) => (typeof item === 'string' ? item : item.id))
     .filter((id): id is string => Boolean(id && id.trim()));
-  const merged = Array.from(new Set([DEFAULT_EXECUTION_MODEL, ...ids]));
+  const merged = Array.from(new Set([DEFAULT_EXECUTION_MODEL, ...LOCAL_EXECUTION_MODELS, ...ids]));
   merged.sort((a, b) => {
     if (a === DEFAULT_EXECUTION_MODEL) return -1;
     if (b === DEFAULT_EXECUTION_MODEL) return 1;
@@ -980,13 +982,13 @@ interface ExecutionRunRecord {
   duplex_timeout_seconds?: number;
   tester_id?: 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
   tester_model_name?: string | null;
-  executor_id?: 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
+  executor_id?: 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
   provenance?: {
     target_id?: string | null;
     target_kind: string;
     target_channel: 'text' | 'voice';
     tester_id: 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
-    executor_id: 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
+    executor_id: 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
     evidence_source: string;
     live_external_connection: boolean;
     saved_evidence: boolean;
@@ -1014,8 +1016,8 @@ async function createExecutionRun(payload: {
   model_name?: string;
   tester_id?: 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
   tester_model_name?: string;
-  executor_id?: 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
-  audio_transport?: 'none' | 'pipecat_small_webrtc' | 'freeswitch_verto_sip';
+  executor_id?: 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
+  audio_transport?: 'none' | 'pipecat_small_webrtc' | 'pipecat_daily_webrtc' | 'freeswitch_verto_sip';
 }) {
   return handleJson<ExecutionRunRecord>(
     await fetch(`${getApiBase()}/api/execution/runs`, {
@@ -2511,7 +2513,7 @@ export function BenchmarkRunner({
     async function loadExecutionModels() {
       if (openaiProvider?.status !== 'connected') {
         setExecutionModelOptions([DEFAULT_EXECUTION_MODEL, ...FALLBACK_EXECUTION_MODELS.filter((id) => id !== DEFAULT_EXECUTION_MODEL)]);
-        setExecutionModelsMessage('Connect OpenAI to load models');
+        setExecutionModelsMessage('Connect OpenAI to load GPT models; local Ollama models stay available.');
         setExecutionModelName((current) => current || DEFAULT_EXECUTION_MODEL);
         return;
       }
@@ -2564,6 +2566,10 @@ export function BenchmarkRunner({
             setExecutionMode('pipecat_webrtc');
             setExecutionTesterId('pipecat_tester');
             setExecutionExecutorId('cae_local_audio_loop');
+          } else if (matched.target === 'pipecat_public_demo') {
+            setExecutionMode('pipecat_webrtc');
+            setExecutionTesterId('pipecat_tester');
+            setExecutionExecutorId('pipecat_public_daily');
           } else if (matched.target === 'voice_fixture') {
             setExecutionMode('voice_fixture');
             setExecutionTesterId('fixture_replay');
@@ -3479,7 +3485,8 @@ export function BenchmarkRunner({
     }
     const supportsConfigurableExchanges =
       selectedScoreAgent.target === 'openai_codex'
-      || selectedScoreAgent.target === 'builtin_sample_voice';
+      || selectedScoreAgent.target === 'builtin_sample_voice'
+      || selectedScoreAgent.target === 'pipecat_public_demo';
     if (supportsConfigurableExchanges && executionMaxExchanges === '') {
       setExecutionMessage('Enter a maximum exchange count from 1 to 10 before launching.');
       return null;
@@ -3497,7 +3504,6 @@ export function BenchmarkRunner({
       );
       return null;
     }
-
     const sampleVoiceAgent = selectedScoreAgent.target === 'builtin_sample_voice';
     if (sampleVoiceAgent && !referenceVoicePreflight?.ready) {
       const blockers = referenceVoicePreflight?.dependencies
@@ -3510,7 +3516,8 @@ export function BenchmarkRunner({
       return null;
     }
     const legacyVoiceReplay = selectedScoreAgent.target === 'voice_fixture';
-    const runMode = sampleVoiceAgent
+    const publicPipecatAgent = selectedScoreAgent.target === 'pipecat_public_demo';
+    const runMode = sampleVoiceAgent || publicPipecatAgent
       ? 'pipecat_webrtc'
       : legacyVoiceReplay
         ? 'voice_fixture'
@@ -3563,15 +3570,21 @@ export function BenchmarkRunner({
         text_callable: runMode === 'text_callable' ? runTextCallable : undefined,
         iterations: executionIterations,
         max_exchanges: maxExchanges,
-        duplex_timeout_seconds: sampleVoiceAgent ? executionDuplexTimeoutSeconds : undefined,
+        duplex_timeout_seconds: sampleVoiceAgent || publicPipecatAgent ? executionDuplexTimeoutSeconds : undefined,
         user_id: identity.userId,
         project_id: identity.projectId,
         evaluate: true,
         agent_id: selectedAgentId || undefined,
-        model_name: executionModelName || DEFAULT_EXECUTION_MODEL,
+        model_name: publicPipecatAgent
+          ? undefined
+          : executionModelName || DEFAULT_EXECUTION_MODEL,
         tester_id: runTesterId,
         executor_id: runExecutorId,
-        audio_transport: runMode === 'pipecat_webrtc' ? 'pipecat_small_webrtc' : 'none',
+        audio_transport: publicPipecatAgent
+          ? 'pipecat_daily_webrtc'
+          : runMode === 'pipecat_webrtc'
+            ? 'pipecat_small_webrtc'
+            : 'none',
       });
       const queuedWithLaunchContext = {
         ...queued,
@@ -4647,6 +4660,10 @@ export function BenchmarkRunner({
                   setExecutionMode('pipecat_webrtc');
                   setExecutionTesterId('pipecat_tester');
                   setExecutionExecutorId('cae_local_audio_loop');
+                } else if (agent.target === 'pipecat_public_demo') {
+                  setExecutionMode('pipecat_webrtc');
+                  setExecutionTesterId('pipecat_tester');
+                  setExecutionExecutorId('pipecat_public_daily');
                 } else if (agent.target === 'voice_fixture') {
                   setExecutionMode('voice_fixture');
                   setExecutionTesterId('fixture_replay');
@@ -4683,7 +4700,7 @@ export function BenchmarkRunner({
           <div className="run-config-step">
             <div className="run-config-step-heading">
               <span>3</span>
-              <div><strong>Execution</strong><small>Local runner</small></div>
+              <div><strong>Execution</strong><small>{executionExecutorId === 'pipecat_public_daily' ? 'Direct Daily WebRTC' : 'Local runner'}</small></div>
             </div>
             <div className="run-execution-fields" aria-label="Execution runner">
               <div><span>Executor</span><strong>{executionExecutorId.replaceAll('_', ' ')}</strong></div>
@@ -4707,7 +4724,11 @@ export function BenchmarkRunner({
                   max={10}
                   value={executionMaxExchanges}
                   aria-invalid={executionMaxExchanges === ''}
-                  disabled={!selectedScoreAgent || (selectedScoreAgent.target !== 'openai_codex' && selectedScoreAgent.target !== 'builtin_sample_voice')}
+                  disabled={!selectedScoreAgent || (
+                    selectedScoreAgent.target !== 'openai_codex'
+                    && selectedScoreAgent.target !== 'builtin_sample_voice'
+                    && selectedScoreAgent.target !== 'pipecat_public_demo'
+                  )}
                   onChange={(event) => {
                     const nextValue = event.target.value;
                     setExecutionMaxExchanges(
@@ -4716,7 +4737,8 @@ export function BenchmarkRunner({
                   }}
                 />
               </label>
-              {selectedScoreAgent?.target === 'builtin_sample_voice' ? (
+              {selectedScoreAgent?.target === 'builtin_sample_voice'
+              || selectedScoreAgent?.target === 'pipecat_public_demo' ? (
                 <label>
                   <span>Session timeout (seconds)</span>
                   <input
@@ -4734,7 +4756,9 @@ export function BenchmarkRunner({
             </div>
             <p>
               Queues the run and writes the ASSERT inference set locally.
-              {selectedScoreAgent?.target === 'openai_codex' || selectedScoreAgent?.target === 'builtin_sample_voice'
+              {selectedScoreAgent?.target === 'openai_codex'
+              || selectedScoreAgent?.target === 'builtin_sample_voice'
+              || selectedScoreAgent?.target === 'pipecat_public_demo'
                 ? ' One exchange is one tester message plus one agent response.'
                 : ' Choose a generalist text or voice agent to configure exchanges; fixed sample targets replay one exchange.'}
             </p>
@@ -4760,7 +4784,7 @@ export function BenchmarkRunner({
             {openaiProvider?.status !== 'connected' ? (
               <span style={{ color: 'var(--muted)', fontSize: 13 }}>
                 {selectedScoreAgent.id === 'generalist-text-agent' || selectedScoreAgent.target === 'builtin_sample_voice'
-                  ? 'This reference target can use OPENAI_API_KEY from the API environment, or you can connect OpenAI here. '
+                  ? 'This reference target can use OPENAI_API_KEY, a connected OpenAI account, or local Ollama for ollama/... model ids. '
                   : 'Connect OpenAI to run this target. '}
                 <button type="button" className="secondary-link" disabled={isConnectingOpenAI} onClick={() => void onConnectOpenAI()} style={{ padding: 0, border: 0, background: 'transparent', color: 'var(--accent)', fontWeight: 700, cursor: 'pointer' }}>
                   {isConnectingOpenAI ? 'Connecting…' : 'Connect OpenAI'}
@@ -4777,6 +4801,8 @@ export function BenchmarkRunner({
                 ? 'Saved evidence replay'
                 : selectedScoreAgent.target === 'builtin_sample_voice'
                   ? 'Built-in generalist reference agent'
+                : selectedScoreAgent.target === 'pipecat_public_demo'
+                  ? 'Public Pipecat target'
                 : isFixtureTargetId(selectedScoreAgent.target)
                   ? 'Built-in sample agent'
                   : 'Live target'}
@@ -4786,6 +4812,8 @@ export function BenchmarkRunner({
                 ? `POSTs to ${selectedScoreAgent.connection?.endpoint_url || 'the configured endpoint'}; black-box response evidence only.`
                 : selectedScoreAgent.target === 'builtin_sample_voice'
                   ? 'Runs a separate Pipecat target through rtc-asr, the configured LLM, and Kokoro. Evaluation uses current-run local evidence; it is not a browser, SIP, or phone call.'
+                  : selectedScoreAgent.target === 'pipecat_public_demo'
+                    ? 'Runs the selected scenario through direct Daily WebRTC and captures current-run audio, transcript, latency, evaluation, and vCon evidence without a browser.'
                   : isSavedReplayTargetId(selectedScoreAgent.target)
                     ? 'Uses saved evidence. Replay is not a live agent destination.'
                     : isExternalVoiceTargetId(selectedScoreAgent.target)
@@ -4840,7 +4868,8 @@ export function BenchmarkRunner({
               || !selectedSuite
               || !selectedScoreAgent
               || ((selectedScoreAgent?.target === 'openai_codex'
-                || selectedScoreAgent?.target === 'builtin_sample_voice')
+                || selectedScoreAgent?.target === 'builtin_sample_voice'
+                || selectedScoreAgent?.target === 'pipecat_public_demo')
                 && executionMaxExchanges === '')
               || (selectedScoreAgent.target === 'openai_codex'
                 && selectedScoreAgent.id !== 'generalist-text-agent'

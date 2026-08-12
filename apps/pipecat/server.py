@@ -317,8 +317,23 @@ class ReferenceTesterTurnRequest(BaseModel):
     act_id: str
     act_objective: str
     example_utterance: str
+    history: list[dict[str, str]] = Field(default_factory=list)
     target_audio_wav_base64: str | None = None
     model_name: str | None = None
+
+
+class PublicPipecatRunRequest(BaseModel):
+    caller_text: str = Field(min_length=1, max_length=2_000)
+    agent: str = Field(default='10-gradium', min_length=1, max_length=120)
+    timeout_seconds: int = Field(default=90, ge=30, le=300)
+
+
+class PublicPipecatDuplexRequest(PublicPipecatRunRequest):
+    scenario: dict[str, Any]
+    max_turn_pairs: int = Field(default=3, ge=1, le=10)
+    tester_model_name: str | None = None
+    execution_run_id: str | None = None
+    session_id: str | None = None
 
 
 class ReferenceDuplexRunRequest(BaseModel):
@@ -377,6 +392,7 @@ class _ReferenceDuplexBroadcast:
     listeners: dict[str, _ReferenceListener] = field(default_factory=dict)
     audio_publish_sequence: int = 0
     started_listener_media_keys: set[str] = field(default_factory=set)
+    active_publishers: int = 0
 
     def mark_audio_started(self, listener_media_key: str) -> None:
         self.started_listener_media_keys.add(listener_media_key)
@@ -786,15 +802,22 @@ if PIPECAT_RUNTIME_AVAILABLE:
             if type(frame) is not TextFrame:
                 await self.push_frame(frame, direction)
                 return
+            history = '\n'.join(
+                f'{str(item.get("speaker") or "Unknown")}: {str(item.get("text") or "").strip()}'
+                for item in self.payload.history
+                if str(item.get('text') or '').strip()
+            )
             prompt = (
                 'You are the Pipecat scenario tester in a two-agent voice evaluation. '
                 'Render exactly one concise caller utterance for the allowed act. '
-                'Do not narrate, score, or include labels.\n\n'
+                'Continue consistently from the conversation history. '
+                'Do not narrate, score, include labels, or perform actions assigned to the target agent.\n\n'
                 f'Scenario: {self.payload.scenario_instruction}\n'
                 f'Allowed caller act: {self.payload.act_id}\n'
                 f'Act objective: {self.payload.act_objective}\n'
-                f'Example utterance: {self.payload.example_utterance}\n'
-                f'Tester ASR observation: {frame.text}\n\n'
+                f'Opening caller utterance (context only): {self.payload.example_utterance}\n'
+                f'Conversation history:\n{history or "No prior turns."}\n'
+                f'Latest target response: {frame.text}\n\n'
                 'Caller utterance:'
             )
             async with httpx.AsyncClient(timeout=90) as client:
@@ -1585,6 +1608,216 @@ async def reference_agent_readiness(x_cae_reference_token: str | None = Header(d
         'route': '/reference-duplex/run',
         'listener_route': '/reference-duplex/listen',
     }
+
+
+@app.post('/public-pipecat/run')
+async def public_pipecat_run(
+    payload: PublicPipecatRunRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+):
+    """Join the public demo's Daily room directly as a Pipecat tester participant."""
+    _require_reference_token(x_cae_reference_token)
+    if not KOKORO_BASE_URL:
+        raise HTTPException(status_code=503, detail='Public Pipecat execution requires KOKORO_BASE_URL.')
+    try:
+        from public_daily_target import (
+            PublicDailyTargetError,
+            PublicDailyTargetRequest,
+            run_public_daily_target,
+        )
+    except (ImportError, ModuleNotFoundError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail='Install the Pipecat daily transport extra to run the public target directly.',
+        ) from exc
+    try:
+        return await run_public_daily_target(
+            PublicDailyTargetRequest(**payload.model_dump()),
+            kokoro_base_url=KOKORO_BASE_URL,
+            kokoro_model=KOKORO_MODEL,
+            kokoro_voice=KOKORO_TESTER_VOICE,
+        )
+    except HTTPException:
+        raise
+    except PublicDailyTargetError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        # Daily failures can include ephemeral room details. Keep them out of the API response.
+        raise HTTPException(status_code=502, detail='Public Pipecat direct execution failed.') from exc
+
+
+async def _public_pipecat_duplex_events(
+    payload: PublicPipecatDuplexRequest,
+) -> AsyncIterator[str]:
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    broadcast: _ReferenceDuplexBroadcast | None = None
+    bus: _LocalDuplexFrameBus | None = None
+    marked_listener_audio: set[str] = set()
+    conversation_history: list[dict[str, str]] = []
+
+    if payload.execution_run_id:
+        session_id = payload.session_id or f'{payload.execution_run_id}:public-pipecat'
+        existing = REFERENCE_DUPLEX_RUNS.get(payload.execution_run_id)
+        if existing is not None and existing.active:
+            broadcast = existing
+        else:
+            broadcast = _ReferenceDuplexBroadcast(
+                execution_run_id=payload.execution_run_id,
+                session_id=session_id,
+            )
+            if existing is not None:
+                broadcast.listeners.update(existing.listeners)
+                existing.listeners.clear()
+            REFERENCE_DUPLEX_RUNS[payload.execution_run_id] = broadcast
+        broadcast.active = True
+        broadcast.active_publishers += 1
+        bus = _LocalDuplexFrameBus(session_id, broadcast)
+
+    async def publish(event: dict[str, Any]) -> None:
+        direction = str(event.get('direction') or '')
+        turn_pair = int(event.get('turn_pair') or 0)
+        if bus is not None and direction in {'tester_to_target', 'target_to_tester'}:
+            event = {
+                **event,
+                'listener_media_key': f'{bus.session_id}:{turn_pair}:{direction}',
+            }
+        await queue.put(event)
+
+    async def publish_audio_frame(
+        direction: str,
+        audio: bytes,
+        sample_rate: int,
+        channels: int,
+        turn_pair: int,
+    ) -> None:
+        if bus is None or not audio:
+            return
+        listener_media_key = f'{bus.session_id}:{turn_pair}:{direction}'
+        if listener_media_key not in marked_listener_audio:
+            bus.mark_audio_started(turn_pair=turn_pair, direction=direction)
+            marked_listener_audio.add(listener_media_key)
+        bus.publish_chunk(audio, sample_rate=sample_rate, channels=channels)
+
+    async def next_turn(
+        turn_pair: int,
+        recognized_caller_text: str,
+        target_text: str,
+        target_wav: bytes,
+    ) -> tuple[str, bytes]:
+        goal = str(payload.scenario.get('goal') or 'Continue the scenario naturally.').strip()
+        persona = str(payload.scenario.get('persona') or 'the original caller').strip()
+        objective = (
+            f'Respond naturally as {persona} to move the conversation toward this caller goal: '
+            f'{goal} Supply requested caller-side information when appropriate, but do not claim '
+            'to perform verification, updates, bookings, or other target-agent actions.'
+        )
+        # History must match the transcript being evaluated. The public target's
+        # RTVI ASR receipt is authoritative when it differs from tester source
+        # text, including for the opening utterance.
+        conversation_history.extend([
+            {'speaker': 'Caller', 'text': recognized_caller_text},
+            {'speaker': 'Agent', 'text': target_text},
+        ])
+        request = ReferenceTesterTurnRequest(
+            scenario_instruction=(
+                f'{payload.scenario.get("id") or "public-pipecat"}: '
+                f'Caller persona: {persona}. Caller goal: {goal}'
+            ),
+            act_id=f'caller-follow-up-{turn_pair}',
+            act_objective=objective,
+            example_utterance=payload.caller_text,
+            history=list(conversation_history),
+            target_audio_wav_base64=base64.b64encode(target_wav).decode('ascii'),
+            model_name=payload.tester_model_name,
+        )
+        try:
+            # The public target already supplies an authoritative RTVI
+            # transcript. Feed it through the existing tester LLM -> Kokoro
+            # graph instead of lossy re-transcription of the same Daily audio.
+            _asr, collector = await _run_reference_graph(
+                TextFrame(target_text),
+                _ReferenceTesterLlmProcessor(request),
+                voice=KOKORO_TESTER_VOICE,
+            )
+        except Exception as exc:
+            from public_daily_target import PublicDailyTargetError
+            raise PublicDailyTargetError(
+                f'Public Pipecat tester could not generate turn {turn_pair}.'
+            ) from exc
+        caller_wav = _pcm_to_wav(collector.audio, collector.sample_rate, collector.channels)
+        caller_text = collector.agent_text.strip()
+        return caller_text, caller_wav
+
+    async def execute() -> None:
+        try:
+            from public_daily_target import (
+                PublicDailyDuplexRequest,
+                PublicDailyTargetError,
+                run_public_daily_duplex,
+            )
+            result = await run_public_daily_duplex(
+                PublicDailyDuplexRequest(
+                    caller_text=payload.caller_text,
+                    agent=payload.agent,
+                    timeout_seconds=payload.timeout_seconds,
+                    max_turn_pairs=payload.max_turn_pairs,
+                ),
+                kokoro_base_url=KOKORO_BASE_URL,
+                kokoro_model=KOKORO_MODEL,
+                kokoro_voice=KOKORO_TESTER_VOICE,
+                next_turn=next_turn,
+                event_callback=publish,
+                audio_frame_callback=publish_audio_frame,
+            )
+            await publish({'type': 'complete', 'result': result})
+        except (ImportError, ModuleNotFoundError):
+            await publish({
+                'type': 'error',
+                'detail': 'Install the Pipecat daily transport extra to run the public target directly.',
+            })
+        except Exception as exc:
+            detail = (
+                str(exc)
+                if exc.__class__.__name__ == 'PublicDailyTargetError'
+                else 'Public Pipecat direct execution failed.'
+            )
+            await publish({'type': 'error', 'detail': detail})
+
+    task = asyncio.create_task(execute())
+    try:
+        while True:
+            event = await queue.get()
+            yield json.dumps(event, separators=(',', ':')) + '\n'
+            if event.get('type') in {'complete', 'error'}:
+                break
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if broadcast is not None:
+            broadcast.active_publishers = max(0, broadcast.active_publishers - 1)
+            if broadcast.active_publishers == 0:
+                broadcast.active = False
+                asyncio.create_task(_retire_reference_broadcast(broadcast))
+
+
+@app.post('/public-pipecat/duplex')
+async def public_pipecat_duplex(
+    payload: PublicPipecatDuplexRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+):
+    """Stream a multi-turn CAE tester session through one public Daily room."""
+    _require_reference_token(x_cae_reference_token)
+    if not PIPECAT_RUNTIME_AVAILABLE or not KOKORO_BASE_URL:
+        raise HTTPException(
+            status_code=503,
+            detail='Public Pipecat duplex requires Pipecat and Kokoro.',
+        )
+    return StreamingResponse(
+        _public_pipecat_duplex_events(payload),
+        media_type='application/x-ndjson',
+        headers={'Cache-Control': 'no-store'},
+    )
 
 
 @app.post('/reference-duplex/run')

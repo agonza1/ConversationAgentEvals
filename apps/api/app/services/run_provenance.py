@@ -18,6 +18,7 @@ TargetKind = Literal[
     'http_text_endpoint',
     'saved_text_replay',
     'builtin_sample_voice',
+    'pipecat_public_demo',
     'saved_voice_replay',
     'sip_agent',
     'phone_agent',
@@ -29,11 +30,19 @@ ExecutorId = Literal[
     'local_async_runner',
     'evidence_replay',
     'cae_local_audio_loop',
+    'pipecat_public_daily',
     'acc_browser_webrtc',
     'acc_sip',
     'acc_phone',
 ]
-EvidenceSource = Literal['generated_text', 'provider_response', 'saved_replay', 'local_audio_loop', 'acc_live']
+EvidenceSource = Literal[
+    'generated_text',
+    'provider_response',
+    'saved_replay',
+    'local_audio_loop',
+    'external_webrtc',
+    'acc_live',
+]
 
 BUILTIN_SAMPLE_VOICE_HONESTY = (
     'Built-in generalist agent · current-run local audio and scoring · no browser, phone, or SIP call'
@@ -48,6 +57,7 @@ _COMPATIBLE_EXECUTORS: dict[str, frozenset[ExecutorId]] = {
     'http_endpoint': frozenset({'local_async_runner'}),
     'offline_acc_fixture': frozenset({'evidence_replay'}),
     'builtin_sample_voice': frozenset({'cae_local_audio_loop'}),
+    'pipecat_public_demo': frozenset({'pipecat_public_daily'}),
     'voice_fixture': frozenset({'evidence_replay'}),
     'sip_agent': frozenset({'acc_sip'}),
     'phone_agent': frozenset({'acc_phone'}),
@@ -77,7 +87,12 @@ class ExecutionDefaults(BaseModel):
     mode: Literal['text_callable', 'voice_fixture', 'pipecat_webrtc']
     tester_id: TesterId
     executor_id: ExecutorId
-    audio_transport: Literal['none', 'pipecat_small_webrtc', 'freeswitch_verto_sip'] = 'none'
+    audio_transport: Literal[
+        'none',
+        'pipecat_small_webrtc',
+        'pipecat_daily_webrtc',
+        'freeswitch_verto_sip',
+    ] = 'none'
 
 
 def normalize_agent_target(target: str | None) -> str:
@@ -92,6 +107,13 @@ def execution_defaults_for_target(target: str | None) -> ExecutionDefaults:
             tester_id='pipecat_tester',
             executor_id='cae_local_audio_loop',
             audio_transport='pipecat_small_webrtc',
+        )
+    if normalized == 'pipecat_public_demo':
+        return ExecutionDefaults(
+            mode='pipecat_webrtc',
+            tester_id='pipecat_tester',
+            executor_id='pipecat_public_daily',
+            audio_transport='pipecat_daily_webrtc',
         )
     if normalized == 'voice_fixture':
         return ExecutionDefaults(
@@ -156,6 +178,7 @@ def target_kind_for_agent_target(target: str | None) -> TargetKind:
         'http_endpoint': 'http_text_endpoint',
         'offline_acc_fixture': 'saved_text_replay',
         'builtin_sample_voice': 'builtin_sample_voice',
+        'pipecat_public_demo': 'pipecat_public_demo',
         'voice_fixture': 'saved_voice_replay',
         'sip_agent': 'sip_agent',
         'phone_agent': 'phone_agent',
@@ -174,13 +197,24 @@ def build_run_provenance(
     text_callable: str | None = None,
 ) -> ExecutionRunProvenance:
     target = normalize_agent_target(agent_target or (agent or {}).get('target') or text_callable)
-    channel = str((agent or {}).get('channel') or ('voice' if target in {
-        'builtin_sample_voice', 'voice_fixture', 'sip_agent', 'phone_agent', 'browser_webrtc_agent'
-    } else 'text'))
+    voice_targets = {
+        'builtin_sample_voice',
+        'pipecat_public_demo',
+        'voice_fixture',
+        'sip_agent',
+        'phone_agent',
+        'browser_webrtc_agent',
+    }
+    channel = str((agent or {}).get('channel') or ('voice' if target in voice_targets else 'text'))
 
     if executor_id == 'cae_local_audio_loop':
         evidence_source: EvidenceSource = 'local_audio_loop'
         honesty_label = BUILTIN_SAMPLE_VOICE_HONESTY
+        saved_evidence = False
+        synthetic_media = True
+    elif executor_id == 'pipecat_public_daily':
+        evidence_source = 'external_webrtc'
+        honesty_label = 'Live public Pipecat target · direct Daily WebRTC · current-run synthetic caller audio'
         saved_evidence = False
         synthetic_media = True
     elif executor_id == 'evidence_replay' or mode == 'voice_fixture' or target == 'offline_acc_fixture':
@@ -216,7 +250,7 @@ def build_run_provenance(
         tester_id=tester_id,
         executor_id=executor_id,
         evidence_source=evidence_source,
-        live_external_connection=executor_id in _UNAVAILABLE_EXECUTORS,
+        live_external_connection=executor_id == 'pipecat_public_daily' or executor_id in _UNAVAILABLE_EXECUTORS,
         saved_evidence=saved_evidence,
         synthetic_media=synthetic_media,
         honesty_label=honesty_label,

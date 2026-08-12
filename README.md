@@ -57,7 +57,7 @@ For an **optional external-target example**, see [docs/agentic-contact-center-ex
 
 Execute-stage **local Pipecat SmallWebRTC audio in/out hooks** with vCon recording/transcription capture (no FreeSWITCH required for CI) are documented in [docs/execution-audio-webrtc.md](docs/execution-audio-webrtc.md).
 
-The opt-in public Pipecat demo smoke records a real browser connection artifact, latency metrics, and the observed transcript from `https://www.pipecat.ai/`; see [docs/pipecat-public-voice-smoke.md](docs/pipecat-public-voice-smoke.md).
+The opt-in public Pipecat demo target is available from **Targets** and runs a real evaluation over direct server-side Daily WebRTC, without Chromium. It records current-run caller/target audio, transcript, latency, evaluation, and vCon evidence; see [docs/pipecat-public-target-execution.md](docs/pipecat-public-target-execution.md). The separate browser compatibility probe remains documented in [docs/pipecat-public-voice-smoke.md](docs/pipecat-public-voice-smoke.md).
 
 Standalone offline example after `npm run setup`:
 

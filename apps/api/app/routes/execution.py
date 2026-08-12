@@ -29,6 +29,10 @@ from app.services.reference_generalist_agent import (
     discover_rtc_asr_runtime,
     resolve_reference_completion_provider,
 )
+from app.services.reference_model_preflight import (
+    augment_reference_voice_preflight,
+    prepare_execution_reference_models,
+)
 from app.services.acc_connection import acc_connection_status, test_acc_connection
 
 
@@ -39,7 +43,7 @@ _LISTENER_TURN_USERNAME = os.getenv('LISTENER_TURN_USERNAME', '').strip()
 _LISTENER_TURN_CREDENTIAL = os.getenv('LISTENER_TURN_CREDENTIAL', '').strip()
 _LISTENER_TURN_SHARED_SECRET = os.getenv('LISTENER_TURN_SHARED_SECRET', '').strip()
 _REFERENCE_DEPENDENCY_SETUP_URLS = {
-    'openai': 'https://platform.openai.com/docs/quickstart',
+    'llm': 'https://github.com/agonza1/ConversationAgentEvals/blob/main/docs/environment.md#live-asr-and-voice-experiments',
     'shared_token': 'https://github.com/agonza1/ConversationAgentEvals/blob/main/docs/environment.md#live-asr-and-voice-experiments',
     'pipecat': 'https://github.com/pipecat-ai/pipecat',
     'rtc_asr': 'https://github.com/agonza1/rtc-asr',
@@ -102,7 +106,7 @@ def execution_reference_complete(
     if not x_cae_reference_token or not secrets.compare_digest(x_cae_reference_token, expected_token):
         raise HTTPException(status_code=403, detail='Invalid local reference-agent token.')
     try:
-        provider = resolve_reference_completion_provider()
+        provider = resolve_reference_completion_provider(payload.model_name)
         started_at = time.perf_counter()
         complete_with_metrics = getattr(provider, 'complete_with_metrics', None)
         if callable(complete_with_metrics):
@@ -146,7 +150,7 @@ def execution_reference_stream(
     ):
         raise HTTPException(status_code=403, detail='Invalid local reference-agent token.')
     try:
-        provider = resolve_reference_completion_provider()
+        provider = resolve_reference_completion_provider(payload.model_name)
         provider_status = provider.status()
     except (ReferenceRuntimeError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -187,6 +191,7 @@ def execution_reference_stream(
 @router.post('/runs')
 def create_execution_run(payload: ExecutionRunCreateRequest, background_tasks: BackgroundTasks):
     try:
+        payload = prepare_execution_reference_models(payload)
         queued = start_execution_run(payload, preflight=True)
     except (ValueError, ReferenceRuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -494,6 +499,25 @@ def get_live_conversation_audio(
     return FileResponse(path, media_type='audio/wav')
 
 
+@router.get('/runs/{execution_run_id}/conversations/{conversation_id}/recording')
+def get_conversation_recording(
+    execution_run_id: str,
+    conversation_id: str,
+    user_id: str = Query(...),
+):
+    run = execution_run_store.get_execution_run(execution_run_id)
+    if run is None or run.get('user_id') != user_id:
+        raise HTTPException(status_code=404, detail='Execution run not found.')
+    conversation = execution_run_store.get_conversation(execution_run_id, conversation_id)
+    if conversation is None or not isinstance(conversation.get('recording'), dict):
+        raise HTTPException(status_code=404, detail='Conversation recording not found.')
+    root = (execution_run_store.RUNS_DIR / execution_run_id).resolve()
+    path = (root / 'audio' / f'{conversation_id}-target.wav').resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        raise HTTPException(status_code=404, detail='Conversation recording not found.')
+    return FileResponse(path, media_type='audio/wav')
+
+
 def _listener_run_or_403(token: str) -> tuple[dict[str, Any], dict[str, Any]]:
     _prune_listener_tokens()
     grant = _LISTENER_TOKENS.get(token)
@@ -547,20 +571,21 @@ def _reference_voice_preflight() -> dict[str, Any]:
     dependencies: list[dict[str, Any]] = []
 
     try:
-        provider = resolve_reference_completion_provider()
+        provider = resolve_reference_completion_provider(config.llm_model)
         status = provider.status()
         llm_ready = status.get('status') == 'connected'
+        provider_label = status.get('provider') or provider.provider_id
         dependencies.append({
-            'id': 'openai',
-            'label': 'OpenAI API key or Codex OAuth',
+            'id': 'llm',
+            'label': 'Generalist LLM provider',
             'ready': llm_ready,
             'detail': (
-                f'{status.get("provider") or provider.provider_id} ready for both agents.'
-                if llm_ready else status.get('message') or 'Connect OpenAI for both agents.'
+                f'{provider_label} ready for both agents.'
+                if llm_ready else status.get('message') or 'Configure OpenAI or local Ollama for both agents.'
             ),
         })
     except Exception as exc:  # noqa: BLE001
-        dependencies.append({'id': 'openai', 'label': 'OpenAI API key or Codex OAuth', 'ready': False, 'detail': str(exc)})
+        dependencies.append({'id': 'llm', 'label': 'Generalist LLM provider', 'ready': False, 'detail': str(exc)})
 
     token_ready = bool(config.internal_token)
     dependencies.append({
@@ -668,6 +693,6 @@ def execution_health(db: Session = Depends(get_db)):
         'ok': True,
         'surface': 'execution',
         'audio': describe_execution_audio_capabilities().model_dump(mode='json'),
-        'reference_voice': _reference_voice_preflight(),
+        'reference_voice': augment_reference_voice_preflight(_reference_voice_preflight()),
         'acc_connection': acc_connection_status(),
     }

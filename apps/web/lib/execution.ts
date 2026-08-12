@@ -1,12 +1,13 @@
 import { apiErrorMessage } from './apiError';
 
 export type ExecutionMode = 'text_callable' | 'voice_fixture' | 'pipecat_webrtc';
-export type AudioTransportId = 'none' | 'pipecat_small_webrtc' | 'freeswitch_verto_sip';
+export type AudioTransportId = 'none' | 'pipecat_small_webrtc' | 'pipecat_daily_webrtc' | 'freeswitch_verto_sip';
 export type TesterId = 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
 export type ExecutorId =
   | 'local_async_runner'
   | 'evidence_replay'
   | 'cae_local_audio_loop'
+  | 'pipecat_public_daily'
   | 'acc_browser_webrtc'
   | 'acc_sip'
   | 'acc_phone';
@@ -16,6 +17,7 @@ export type AgentTarget =
   | 'offline_acc_fixture'
   | 'voice_fixture'
   | 'builtin_sample_voice'
+  | 'pipecat_public_demo'
   | 'sip_agent'
   | 'phone_agent'
   | 'browser_webrtc_agent'
@@ -311,7 +313,12 @@ async function handleJson<T>(response: Response): Promise<T> {
   return (text ? JSON.parse(text) : {}) as T;
 }
 
-const BUILT_IN_AGENT_IDS = new Set(['mock-text-agent', 'generalist-text-agent', 'generalist-voice-agent']);
+const BUILT_IN_AGENT_IDS = new Set([
+  'mock-text-agent',
+  'generalist-text-agent',
+  'generalist-voice-agent',
+  'pipecat-public-demo',
+]);
 const BUILT_IN_AGENT_TARGETS = new Set<AgentTarget>(['mock_agent', 'builtin_sample_voice']);
 
 export function isSeedAgent(agent: Pick<AgentRecord, 'id'>) {
@@ -343,6 +350,14 @@ export function applyAgentLaunchDefaults(
       testerId: 'pipecat_tester',
       executorId: 'cae_local_audio_loop',
       audioTransport: 'pipecat_small_webrtc',
+    };
+  }
+  if (agent.target === 'pipecat_public_demo') {
+    return {
+      mode: 'pipecat_webrtc',
+      testerId: 'pipecat_tester',
+      executorId: 'pipecat_public_daily',
+      audioTransport: 'pipecat_daily_webrtc',
     };
   }
   if (agent.target === 'voice_fixture') {

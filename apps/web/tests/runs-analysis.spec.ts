@@ -145,6 +145,10 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
   await expect(page.getByLabel('Resolution verification status')).toContainText('Verified');
   await expect(page.getByLabel('Resolution evidence details')).toContainText('91/100');
   await expect(page.getByLabel('Resolution evidence details')).toContainText('Complete');
+  await expect(page.getByText('Automatic rule-based evaluation', { exact: true })).toHaveAttribute(
+    'title',
+    'Scores the captured transcript and final state against the scenario’s required and forbidden rules; no LLM judge is used.',
+  );
   await expect(page.getByLabel('Two-agent conversation timeline')).toBeVisible();
   await expect(page.getByLabel('Conversation turn sequence')).toContainText('I can help you with that.');
   await expect(page.getByLabel('Transcript')).toContainText('I want to cancel today.');
@@ -676,6 +680,56 @@ test('active run analysis recovers after a transient polling error', async ({ pa
   await expect(page.getByLabel('Transcript')).toContainText('I want to cancel today.', { timeout: 10_000 });
   expect(requests).toBeGreaterThanOrEqual(3);
   await expect(page.locator('.scenarios-error')).toHaveCount(0);
+});
+
+test('active voice analysis reveals the first streamed transcript automatically', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+  });
+  await page.route('**/api/execution/runs/exec-live-transcript**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ...runFixture,
+        execution_run_id: 'exec-live-transcript',
+        status: 'running',
+        mode: 'pipecat_webrtc',
+        conversations: [{
+          ...runFixture.conversations[0],
+          conversation_id: 'exec-live-transcript-1',
+          execution_run_id: 'exec-live-transcript',
+          mode: 'pipecat_webrtc',
+          status: 'running',
+          turns: [],
+          live_events: [{
+            sequence: 1,
+            kind: 'message',
+            speaker: 'Connection',
+            text: 'Public Pipecat bot joined the Daily room.',
+            frame_metadata: {
+              media_event: 'connection_phase',
+              connection_phase: 'bot_joined',
+            },
+          }, {
+            sequence: 2,
+            kind: 'audio',
+            speaker: 'Caller',
+            text: 'I need a same-day telehealth visit.',
+            direction: 'tester_to_target',
+            media_url: '/api/execution/runs/exec-live-transcript/conversations/exec-live-transcript-1/audio/1?user_id=demo-user',
+          }],
+        }],
+      }),
+    });
+  });
+
+  await page.goto('/runs/exec-live-transcript');
+  await expect(page.getByLabel('Observed live exchange')).toContainText(
+    'I need a same-day telehealth visit.',
+  );
+  await expect(page.getByLabel('Observed live exchange')).toContainText('Connection · bot joined');
+  await expect(page.getByRole('button', { name: 'Hide live exchange' })).toBeVisible();
 });
 
 test('runs list preserves an API base override in analysis links', async ({ page }) => {
