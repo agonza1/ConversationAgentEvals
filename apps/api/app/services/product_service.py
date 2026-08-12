@@ -332,6 +332,20 @@ def list_projects(db: Session, user_id: str) -> list[ProductProjectResponse]:
     return [_serialize_project(project, run_count=run_count) for project, run_count in rows]
 
 
+def find_visible_project(db: Session, user_id: str, project_id: str) -> ProductProject | None:
+    """Return a project owned by the user or shared through workspace membership."""
+    workspace_ids = _member_workspace_ids(db=db, user_id=user_id)
+    return (
+        db.query(ProductProject)
+        .filter(
+            ProductProject.project_key == project_id,
+            _visible_project_clause(user_id=user_id, workspace_ids=workspace_ids),
+        )
+        .order_by((ProductProject.user_id == user_id).desc())
+        .first()
+    )
+
+
 def update_project_settings(db: Session, project_id: str, payload: ProductProjectSettingsRequest) -> ProductProjectResponse | None:
     project = _project_for_settings_editor(db=db, project_id=project_id, user_id=payload.user_id)
     if project is None:
@@ -874,7 +888,9 @@ def record_judge_request(
 ) -> None:
     project = None
     if project_id:
-        project = _get_or_create_project(db=db, user_id=user_id, project_id=project_id, plan=plan)
+        project = find_visible_project(db=db, user_id=user_id, project_id=project_id)
+        if project is None:
+            project = _get_or_create_project(db=db, user_id=user_id, project_id=project_id, plan=plan)
     output_preview = (judge_output or '').strip()
     payload: dict[str, Any] = {
         'project_id': project_id,

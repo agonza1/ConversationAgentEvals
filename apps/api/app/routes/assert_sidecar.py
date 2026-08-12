@@ -5,12 +5,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
-from app.models.entities import ProductProject
 from app.schemas.assert_contracts import AssertRunCreateRequest
 from app.services import execution_run_store
 from app.services.assert_sidecar import create_local_assert_sidecar_run, load_local_assert_sidecar_run
 from app.services.benchmark_service import get_scenario_contract
-from app.services.product_service import record_judge_request
+from app.services.product_service import find_visible_project, record_judge_request
 from app.services.upstream_assert_judge import (
     UpstreamAssertJudgeBudgetExceeded,
     UpstreamAssertJudgeBusy,
@@ -38,16 +37,9 @@ def _product_plan(db: Session, *, user_id: str, project_id: str | None) -> str:
     """Return the persisted project plan without treating a feature requirement as entitlement."""
     if not project_id:
         return 'free'
-    project = (
-        db.query(ProductProject)
-        .filter(
-            ProductProject.user_id == user_id,
-            ProductProject.project_key == project_id,
-        )
-        .first()
-    )
+    project = find_visible_project(db=db, user_id=user_id, project_id=project_id)
     plan = str(project.plan or '').strip().lower() if project is not None else ''
-    return plan if plan in {'free', 'starter', 'team'} else 'free'
+    return plan if plan in {'free', 'starter', 'team', 'business'} else 'free'
 
 
 @router.post('/runs')
