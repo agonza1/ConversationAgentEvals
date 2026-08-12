@@ -258,3 +258,87 @@ def test_execution_run_requires_exact_project_identity_for_a_colliding_visible_k
     )
     assert selected.status_code == 200, selected.text
     assert selected.json()['product_project_id'] == shared_project_id
+
+
+def test_assert_judge_rejects_a_legacy_run_with_an_ambiguous_project_key(monkeypatch):
+    from app.routes import assert_sidecar
+
+    with SessionLocal() as db:
+        workspace = ProductWorkspace(
+            owner_user_id='legacy-owner',
+            workspace_key='legacy-workspace',
+            name='Legacy workspace',
+            plan='team',
+        )
+        db.add(workspace)
+        db.flush()
+        db.add_all(
+            [
+                ProductWorkspaceMember(
+                    workspace_id=workspace.id,
+                    user_id='legacy-owner',
+                    role='owner',
+                ),
+                ProductWorkspaceMember(
+                    workspace_id=workspace.id,
+                    user_id='legacy-reviewer',
+                    role='viewer',
+                ),
+                ProductProject(
+                    user_id='legacy-reviewer',
+                    project_key='legacy-project',
+                    name='Legacy personal project',
+                    plan='free',
+                ),
+                ProductProject(
+                    user_id='legacy-owner',
+                    workspace_id=workspace.id,
+                    project_key='legacy-project',
+                    name='Legacy shared project',
+                    plan='team',
+                ),
+            ]
+        )
+        db.commit()
+
+    run = {
+        'execution_run_id': 'exec-legacy-ambiguous',
+        'status': 'completed',
+        'suite_id': 'call-center-voice-ai',
+        'user_id': 'legacy-reviewer',
+        'project_id': 'legacy-project',
+    }
+    conversation = {
+        'conversation_id': 'exec-legacy-ambiguous-refund-1',
+        'execution_run_id': run['execution_run_id'],
+        'suite_id': run['suite_id'],
+        'scenario_id': 'refund-policy-boundary',
+        'status': 'completed',
+        'verdict': 'needs_review',
+    }
+    monkeypatch.setattr(assert_sidecar.execution_run_store, 'get_execution_run', lambda run_id: run)
+    monkeypatch.setattr(
+        assert_sidecar.execution_run_store,
+        'get_conversation',
+        lambda run_id, conversation_id: conversation,
+    )
+    judge_called = False
+
+    def fake_judge(**kwargs):
+        nonlocal judge_called
+        judge_called = True
+        return {}
+
+    monkeypatch.setattr(assert_sidecar, 'run_upstream_assert_judge', fake_judge)
+
+    response = client.post(
+        f"/api/assert/runs/{run['execution_run_id']}"
+        f"/conversations/{conversation['conversation_id']}/judge",
+        json={'user_id': run['user_id']},
+    )
+
+    assert response.status_code == 409
+    assert 'project key is ambiguous' in response.json()['detail']
+    assert judge_called is False
+    with SessionLocal() as db:
+        assert db.query(ProductAuditEvent).filter(ProductAuditEvent.event_type == 'judge.requested').count() == 0

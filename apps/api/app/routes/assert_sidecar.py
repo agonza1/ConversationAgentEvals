@@ -9,7 +9,11 @@ from app.schemas.assert_contracts import AssertRunCreateRequest
 from app.services import execution_run_store
 from app.services.assert_sidecar import create_local_assert_sidecar_run, load_local_assert_sidecar_run
 from app.services.benchmark_service import get_scenario_contract
-from app.services.product_service import find_visible_project, record_judge_request
+from app.services.product_service import (
+    find_visible_project,
+    record_judge_request,
+    resolve_execution_product_project_id,
+)
 from app.services.upstream_assert_judge import (
     UpstreamAssertJudgeBudgetExceeded,
     UpstreamAssertJudgeBusy,
@@ -92,6 +96,22 @@ def judge_execution_conversation(
             detail='The conversation must have a deterministic verdict before ASSERT judging.',
         )
 
+    project_id = str(run.get('project_id') or '').strip() or None
+    product_project_id = str(run.get('product_project_id') or '').strip() or None
+    if project_id:
+        try:
+            product_project_id = resolve_execution_product_project_id(
+                db=db,
+                user_id=payload.user_id,
+                project_id=project_id,
+                product_project_id=product_project_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f'{exc} Rerun after selecting the exact personal or workspace project.',
+            ) from exc
+
     deterministic_snapshot = execution_run_store.deterministic_evaluation_snapshot(conversation)
     scenario_contract = get_scenario_contract(
         str(conversation.get('suite_id') or run.get('suite_id') or ''),
@@ -116,8 +136,6 @@ def judge_execution_conversation(
 
     judge_result = response.get('judge_result')
     agrees = judge_result.get('agrees') if isinstance(judge_result, dict) else None
-    project_id = str(run.get('project_id') or '').strip() or None
-    product_project_id = str(run.get('product_project_id') or '').strip() or None
     record_judge_request(
         db=db,
         user_id=payload.user_id,

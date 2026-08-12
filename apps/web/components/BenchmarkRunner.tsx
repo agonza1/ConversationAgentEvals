@@ -5,6 +5,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiAwareLink } from './ApiAwareLink';
 import { LiveRunFeedback, type LiveRunEvent } from './LiveRunFeedback';
 import { apiErrorMessage } from '@/lib/apiError';
+import { listProductProjects, type ProductProjectOption } from '@/lib/execution';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -333,15 +334,6 @@ interface SavedRun {
   artifacts?: SavedRunArtifacts;
   transcript?: string | null;
   created_at: string;
-}
-
-interface ProductProjectOption {
-  id: string;
-  user_id: string;
-  workspace_id?: string | null;
-  project_id: string;
-  name: string;
-  plan: PricingPlan['id'];
 }
 
 interface ProjectRegressionSummary {
@@ -1036,13 +1028,6 @@ async function createExecutionRun(payload: {
       body: JSON.stringify(payload),
     }),
   );
-}
-
-async function listProductProjects(userId: string): Promise<ProductProjectOption[]> {
-  const payload = await handleJson<unknown>(
-    await fetch(`${getApiBase()}/api/product/projects?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
-  );
-  return Array.isArray(payload) ? payload as ProductProjectOption[] : [];
 }
 
 type ScoreAgentOption = {

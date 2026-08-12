@@ -49,6 +49,15 @@ export interface AgentRecord {
   updated_at?: string;
 }
 
+export interface ProductProjectOption {
+  id: string;
+  user_id: string;
+  workspace_id?: string | null;
+  project_id: string;
+  name: string;
+  plan: 'free' | 'starter' | 'team' | 'business';
+}
+
 export interface LatencyStats {
   count: number;
   avg_ms?: number | null;
@@ -392,6 +401,13 @@ export async function listAgents(): Promise<AgentRecord[]> {
     await fetch(`${getApiBase()}/api/agents`, { cache: 'no-store' }),
   );
   return payload.agents ?? [];
+}
+
+export async function listProductProjects(userId: string): Promise<ProductProjectOption[]> {
+  const payload = await handleJson<unknown>(
+    await fetch(`${getApiBase()}/api/product/projects?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
+  );
+  return Array.isArray(payload) ? payload as ProductProjectOption[] : [];
 }
 
 export async function requestLlmJudge(payload: {

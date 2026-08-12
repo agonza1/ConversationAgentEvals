@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { ApiAwareLink } from './ApiAwareLink';
 import { LiveRunFeedback, type LiveRunEvent } from './LiveRunFeedback';
+import { listProductProjects, type ProductProjectOption } from '@/lib/execution';
 
 type VoiceMode = 'pipecat_webrtc';
 type JsonRecord = Record<string, unknown>;
@@ -175,6 +176,9 @@ export function VoiceEvalPage() {
   const [selectedAgentId, setSelectedAgentId] = useState<string>('');
   const [agentsError, setAgentsError] = useState<string | null>(null);
   const [health, setHealth] = useState<ExecutionHealth | null>(null);
+  const [identity, setIdentity] = useState<{ userId: string; projectId: string } | null>(null);
+  const [productProjects, setProductProjects] = useState<ProductProjectOption[]>([]);
+  const [productProjectId, setProductProjectId] = useState('');
 
   const active = useMemo(
     () => run?.status === 'queued' || run?.status === 'running',
@@ -189,8 +193,13 @@ export function VoiceEvalPage() {
   const pipecat = transportStatus(health, 'pipecat_small_webrtc');
   const voicePreflight = health?.reference_voice;
   const preflightBlocked = !voicePreflight?.ready;
+  const matchingProductProjects = useMemo(
+    () => productProjects.filter((project) => project.project_id === identity?.projectId),
+    [identity?.projectId, productProjects],
+  );
 
   useEffect(() => {
+    setIdentity(ensureDemoIdentity());
     let cancelled = false;
     fetch(`${getApiBase()}/api/agents`, { cache: 'no-store' })
       .then((response) => handleJson<{ agents?: AgentRecord[] }>(response))
@@ -217,6 +226,34 @@ export function VoiceEvalPage() {
   }, []);
 
   useEffect(() => {
+    if (!identity) return;
+    let cancelled = false;
+    listProductProjects(identity.userId)
+      .then((projects) => {
+        if (cancelled) return;
+        setProductProjects(projects);
+        const matching = projects.filter((project) => project.project_id === identity.projectId);
+        const stored = window.localStorage.getItem('conversation-evals-demo-product-project-id') || '';
+        setProductProjectId(
+          matching.some((project) => project.id === stored)
+            ? stored
+            : matching.length === 1
+              ? matching[0].id
+              : '',
+        );
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProductProjects([]);
+          setProductProjectId('');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [identity]);
+
+  useEffect(() => {
     if (!run || !active) return;
     const identity = ensureDemoIdentity();
     const timer = window.setInterval(() => {
@@ -236,7 +273,11 @@ export function VoiceEvalPage() {
       setError('Voice dependency preflight is blocked. Resolve the red dependency checks before queueing.');
       return;
     }
-    const identity = ensureDemoIdentity();
+    const launchIdentity = ensureDemoIdentity();
+    if (matchingProductProjects.length > 1 && !productProjectId) {
+      setError('Select the personal or workspace project for this voice run.');
+      return;
+    }
     setIsLaunching(true);
     setError(null);
     try {
@@ -249,8 +290,9 @@ export function VoiceEvalPage() {
             scenario_ids: ['cancellation-rescue'],
             mode: 'pipecat_webrtc',
             iterations: 1,
-            user_id: identity.userId,
-            project_id: identity.projectId,
+            user_id: launchIdentity.userId,
+            project_id: launchIdentity.projectId,
+            product_project_id: productProjectId || undefined,
             agent_id: selectedTarget?.id,
             tester_id: 'pipecat_tester',
             executor_id: 'cae_local_audio_loop',
@@ -394,6 +436,29 @@ export function VoiceEvalPage() {
             </dl>
           </div>
 
+          {matchingProductProjects.length > 1 ? (
+            <label className="voice-target-select">
+              <span>Project for this run</span>
+              <select
+                aria-label="Voice execution project"
+                value={productProjectId}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  setProductProjectId(next);
+                  if (next) window.localStorage.setItem('conversation-evals-demo-product-project-id', next);
+                  else window.localStorage.removeItem('conversation-evals-demo-product-project-id');
+                }}
+              >
+                <option value="">Select personal or workspace project</option>
+                {matchingProductProjects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name} · {project.workspace_id ? 'workspace' : 'personal'}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+
           {error ? (
             <div className="voice-error" role="alert">
               <strong>Could not start the evaluation</strong>
@@ -432,7 +497,13 @@ export function VoiceEvalPage() {
               className="voice-run-button"
               aria-label={selectedMode.button}
               onClick={onLaunch}
-              disabled={isLaunching || active || !selectedTarget || preflightBlocked}
+              disabled={
+                isLaunching
+                || active
+                || !selectedTarget
+                || preflightBlocked
+                || (matchingProductProjects.length > 1 && !productProjectId)
+              }
             >
               {isLaunching ? 'Starting...' : active ? 'Running...' : selectedMode.button}
               {!isLaunching && !active ? <span aria-hidden="true">→</span> : null}
