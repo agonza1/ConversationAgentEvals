@@ -214,6 +214,41 @@ async def _synthesize_caller(text: str, *, kokoro_base_url: str, model: str, voi
     return response.content
 
 
+async def _play_caller_turn(
+    run: OutboundVoiceRunContext,
+    task: PipelineTask,
+    *,
+    turn_pair: int,
+    caller_text: str,
+    caller_wav: bytes,
+    caller_pcm: bytes,
+    sample_rate: int,
+    channels: int,
+    audio_frame_callback: AudioFrameCallback | None,
+) -> int:
+    """Publish caller evidence at the same boundary as target playback."""
+    await run.report_phase(
+        'caller_speaking',
+        f'Caller is speaking in exchange {turn_pair}.',
+        turn_pair=turn_pair,
+    )
+    await run.publish_caller_audio(turn_pair, caller_text, caller_wav)
+    evidence = run.evidence
+    evidence.caller_audio_sent_at = time.perf_counter()
+    # Capture before playback so a target that barges in is retained.
+    evidence.capture_response_audio = True
+    sent = await pace_pcm(
+        task,
+        caller_pcm,
+        sample_rate,
+        channels,
+        audio_frame_callback=audio_frame_callback,
+        turn_pair=turn_pair,
+    )
+    evidence.caller_audio_ended_at = time.perf_counter()
+    return sent
+
+
 async def _start_public_bot(agent: str) -> tuple[str, str]:
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(f'{PUBLIC_PIPECAT_URL}/api/start', json={'agent': agent})
@@ -284,8 +319,9 @@ async def run_public_daily_duplex(
 ) -> dict[str, Any]:
     """Run a bounded multi-turn evaluation in one public Daily room.
 
-    ``next_turn`` receives ``(next_turn_pair, previous_target_text,
-    previous_target_wav)`` and returns ``(caller_text, caller_wav)``.
+    ``next_turn`` receives ``(next_turn_pair, recognized_caller_text,
+    previous_target_text, previous_target_wav)`` and returns
+    ``(caller_text, caller_wav)``.
     ``event_callback`` receives live audio and exchange events as soon as each
     side's current-run evidence is available.
     """
@@ -304,8 +340,6 @@ async def run_public_daily_duplex(
     adapter = PublicDailyTargetAdapter(request.agent)
     run = OutboundVoiceRunContext(adapter.descriptor, event_callback=event_callback)
     evidence = run.evidence
-    initial_caller_published = event_callback is not None
-    await run.publish_caller_audio(1, request.caller_text, caller_wav)
     try:
         transport = await adapter.open(output_sample_rate=caller_rate)
     except Exception as exc:
@@ -521,26 +555,17 @@ async def run_public_daily_duplex(
             caller_pcm, caller_rate, caller_channels = wav_to_pcm(current_wav)
             caller_transcript_count = run.begin_turn(turn_pair)
 
-            if event_callback is not None and not (turn_pair == 1 and initial_caller_published):
-                await run.publish_caller_audio(turn_pair, current_text, current_wav)
-            await run.report_phase(
-                'caller_speaking',
-                f'Caller is speaking in exchange {turn_pair}.',
-                turn_pair=turn_pair,
-            )
-            evidence.caller_audio_sent_at = time.perf_counter()
-            # Capture before playback so a target that barges in is retained.
-            # Greeting media was excluded by begin_turn's buffer reset.
-            evidence.capture_response_audio = True
-            sent = await pace_pcm(
+            sent = await _play_caller_turn(
+                run,
                 task,
-                caller_pcm,
-                caller_rate,
-                caller_channels,
-                audio_frame_callback=audio_frame_callback,
                 turn_pair=turn_pair,
+                caller_text=current_text,
+                caller_wav=current_wav,
+                caller_pcm=caller_pcm,
+                sample_rate=caller_rate,
+                channels=caller_channels,
+                audio_frame_callback=audio_frame_callback,
             )
-            evidence.caller_audio_ended_at = time.perf_counter()
             await _wait_for_event_or_error(
                 evidence.response_complete,
                 evidence,

@@ -16,6 +16,7 @@ from public_daily_target import (
     _completed_bot_output_text,
     _current_target_text,
     _message_completes_bot_turn,
+    _play_caller_turn,
     _wait_for_event_or_error,
     _wait_for_target_audio_drain,
     run_public_daily_target,
@@ -45,6 +46,53 @@ def test_public_daily_target_implements_outbound_adapter_contract():
     assert adapter.descriptor.adapter_id == 'public_pipecat_daily'
     assert adapter.descriptor.target_kind == 'pipecat_public_demo'
     assert adapter.descriptor.transport == 'pipecat_daily_webrtc'
+
+
+def test_caller_live_event_is_published_at_playback_boundary(monkeypatch):
+    activity: list[str] = []
+
+    class FakeTask:
+        async def queue_frame(self, _frame):
+            activity.append('target_playback')
+
+    async def capture_event(event):
+        if event['type'] == 'phase':
+            activity.append(str(event['phase']))
+        elif event['type'] == 'live_audio':
+            activity.append(str(event['media_event']))
+
+    async def no_sleep(_delay):
+        pass
+
+    monkeypatch.setattr(outbound_voice.asyncio, 'sleep', no_sleep)
+    run = outbound_voice.OutboundVoiceRunContext(
+        outbound_voice.OutboundVoiceTargetDescriptor(
+            adapter_id='test',
+            target_kind='test',
+            transport='test',
+            selected_target='test',
+        ),
+        event_callback=capture_event,
+    )
+    caller_pcm = bytes([1, 0]) * 320
+    caller_wav = outbound_voice.pcm_to_wav(caller_pcm, 16_000, 1)
+
+    asyncio.run(_play_caller_turn(
+        run,
+        FakeTask(),
+        turn_pair=1,
+        caller_text='Please help me.',
+        caller_wav=caller_wav,
+        caller_pcm=caller_pcm,
+        sample_rate=16_000,
+        channels=1,
+        audio_frame_callback=None,
+    ))
+
+    assert activity == ['caller_speaking', 'tester_audio_ready', 'target_playback']
+    assert run.evidence.capture_response_audio is True
+    assert run.evidence.caller_audio_sent_at is not None
+    assert run.evidence.caller_audio_ended_at is not None
 
 
 def test_completed_bot_output_text_accepts_legacy_spoken_segment():
