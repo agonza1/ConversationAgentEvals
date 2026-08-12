@@ -477,19 +477,21 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
     if not payload.agent_id:
         target = _execution_target(payload)
         model_name = _execution_model_name(payload, target=target)
+        max_exchanges = _resolve_max_exchanges_for_target(payload, target=target)
         assert_execution_compatible(
             agent_target=target,
             mode=payload.mode,
             tester_id=payload.tester_id,
             executor_id=payload.executor_id,
         )
-        return payload.model_copy(update={'model_name': model_name})
+        return payload.model_copy(update={'model_name': model_name, 'max_exchanges': max_exchanges})
 
     agent = get_agent(payload.agent_id)
     if agent is None:
         raise ValueError(f'Unknown agent: {payload.agent_id}')
     target = _execution_target(payload, agent)
     model_name = _execution_model_name(payload, target=target)
+    max_exchanges = _resolve_max_exchanges_for_target(payload, target=target)
     defaults = execution_defaults_for_target(target)
     request_placeholders = {
         'mode': 'text_callable',
@@ -534,8 +536,23 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
         'audio_transport': audio_transport,
         'agent_id': agent['id'],
         'model_name': model_name,
-        'max_exchanges': payload.max_exchanges,
+        'max_exchanges': max_exchanges,
     })
+
+
+def _resolve_max_exchanges_for_target(
+    payload: ExecutionRunCreateRequest,
+    *,
+    target: str,
+) -> int:
+    if target != 'signalwire_holy_guacamole':
+        return payload.max_exchanges
+    if 'max_exchanges' in payload.model_fields_set and payload.max_exchanges != 1:
+        raise ValueError(
+            'Holy Guacamole SignalWire execution captures one caller turn per browser call; '
+            'set max_exchanges=1.'
+        )
+    return 1
 
 
 def _execution_model_name(payload: ExecutionRunCreateRequest, *, target: str) -> str:
@@ -678,6 +695,7 @@ def _execute_public_pipecat_daily(
         },
     )
     recording_media = recording.as_call_media()
+    recording_media['uri'] = recording.uri
     recording_media['recording_url'] = (
         f'/api/execution/runs/{quote(execution_run_id)}/conversations/'
         f'{quote(conversation_id)}/recording?user_id={quote(payload.user_id)}'
@@ -767,6 +785,7 @@ def _execute_signalwire_holyguacamole_browser(
     current_final_state = {
         'complete': False,
         'outcome': 'signalwire_holyguacamole_response_captured',
+        'termination_reason': 'single_exchange_target',
         'evidence_scope': 'current_run_only',
     }
     report: dict[str, Any] = {}
@@ -798,6 +817,12 @@ def _execute_signalwire_holyguacamole_browser(
         'guest_token_persisted': False,
         'tester_media': str((result.get('tester') or {}).get('media_source') or 'current_run_tts'),
         'target_media': 'current_run_signalwire_webrtc',
+        'target_speech_transcript': (
+            'current_run_asr'
+            if any(item.speaker == 'Agent' for item in transcription)
+            else 'untranscribed_remote_audio'
+        ),
+        'max_exchanges': 1,
         'public_execution_gate': 'CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE',
     }
     vcon_export = build_execution_vcon(
@@ -818,6 +843,7 @@ def _execute_signalwire_holyguacamole_browser(
         },
     )
     recording_media = recording.as_call_media()
+    recording_media['uri'] = recording.uri
     recording_media['recording_url'] = (
         f'/api/execution/runs/{quote(execution_run_id)}/conversations/'
         f'{quote(conversation_id)}/recording?user_id={quote(payload.user_id)}'

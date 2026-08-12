@@ -9,6 +9,7 @@ import os
 import secrets
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -507,10 +508,17 @@ def get_conversation_recording(
     if conversation is None or not isinstance(conversation.get('recording'), dict):
         raise HTTPException(status_code=404, detail='Conversation recording not found.')
     root = (execution_run_store.RUNS_DIR / execution_run_id).resolve()
-    path = (root / 'audio' / f'{conversation_id}-target.wav').resolve()
-    if not path.is_relative_to(root) or not path.is_file():
-        raise HTTPException(status_code=404, detail='Conversation recording not found.')
-    return FileResponse(path, media_type='audio/wav')
+    recording = conversation['recording']
+    mime_type = str(recording.get('mime_type') or 'audio/wav')
+    uri = str(recording.get('uri') or recording.get('recording_url') or '').strip()
+    if uri and not uri.startswith('/api/') and '://' not in uri:
+        path = Path(uri).resolve()
+        if path.is_relative_to(root) and path.is_file():
+            return FileResponse(path, media_type=mime_type)
+    legacy_path = (root / 'audio' / f'{conversation_id}-target.wav').resolve()
+    if legacy_path.is_relative_to(root) and legacy_path.is_file():
+        return FileResponse(legacy_path, media_type='audio/wav')
+    raise HTTPException(status_code=404, detail='Conversation recording not found.')
 
 
 def _listener_run_or_403(token: str) -> tuple[dict[str, Any], dict[str, Any]]:

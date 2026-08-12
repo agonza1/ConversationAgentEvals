@@ -155,6 +155,8 @@ def test_agent_options_expose_adapter_tester_executor_defaults():
         'tester_id': 'pipecat_tester',
         'executor_id': 'signalwire_public_browser',
         'audio_transport': 'signalwire_browser_webrtc',
+        'max_exchanges': 1,
+        'max_exchanges_configurable': False,
     }
 
 
@@ -508,18 +510,18 @@ def test_public_pipecat_agent_uses_direct_daily_executor(monkeypatch, tmp_path):
     assert [turn['speaker'] for turn in conversation['turns']] == ['caller', 'agent']
 
 
-def test_signalwire_holyguacamole_agent_uses_gated_browser_executor(monkeypatch, tmp_path):
+def test_signalwire_holyguacamole_agent_uses_gated_browser_executor(monkeypatch):
     from app.services import execution_runner
     from app.services.execution_audio import AudioRecordingHandle, TranscriptionTurn
-
-    response_audio = tmp_path / 'signalwire-target.webm'
-    response_audio.write_bytes(b'current-run-signalwire-audio')
 
     def fake_signalwire_call(**kwargs):
         assert kwargs['caller_text']
         assert kwargs['timeout_seconds'] == 60
         assert kwargs['execution_run_id'] == queued['execution_run_id']
         assert kwargs['scenario']['id'] == 'cancellation-rescue'
+        response_audio = kwargs['artifact_dir'] / 'signalwire-browser' / 'fake' / 'target-audio.webm'
+        response_audio.parent.mkdir(parents=True, exist_ok=True)
+        response_audio.write_bytes(b'current-run-signalwire-audio')
         return {
             'connection': {'ui_connected': True, 'remote_stream_seen': True},
             'tester': {'headless_browser': True, 'media_source': 'macos_say_tts'},
@@ -538,14 +540,6 @@ def test_signalwire_holyguacamole_agent_uses_gated_browser_executor(monkeypatch,
                     source='signalwire_browser_webrtc',
                     direction='tester_to_target',
                     evidence_role='tester',
-                ),
-                TranscriptionTurn(
-                    turn_index=2,
-                    speaker='Agent',
-                    text='Connected! Ready to take your order.',
-                    source='signalwire_browser_webrtc',
-                    direction='target_to_tester',
-                    evidence_role='target',
                 ),
             ],
             'recording_handle': AudioRecordingHandle(
@@ -570,7 +564,9 @@ def test_signalwire_holyguacamole_agent_uses_gated_browser_executor(monkeypatch,
 
     assert queued['mode'] == 'pipecat_webrtc'
     assert queued['executor_id'] == 'signalwire_public_browser'
+    assert queued['max_exchanges'] == 1
     assert queued['execution_snapshot']['request']['audio_transport'] == 'signalwire_browser_webrtc'
+    assert queued['execution_snapshot']['request']['max_exchanges'] == 1
     assert queued['provenance']['target_kind'] == 'signalwire_holy_guacamole'
     assert queued['provenance']['live_external_connection'] is True
     assert queued['provenance']['evidence_source'] == 'external_webrtc'
@@ -582,11 +578,32 @@ def test_signalwire_holyguacamole_agent_uses_gated_browser_executor(monkeypatch,
     assert conversation['audio_session']['provider'] == 'signalwire'
     assert conversation['recording']['transport'] == 'signalwire_browser_webrtc'
     assert conversation['recording']['mime_type'] == 'audio/webm'
+    recording_response = client.get(conversation['recording']['recording_url'])
+    assert recording_response.status_code == 200
+    assert recording_response.headers['content-type'] == 'audio/webm'
+    assert recording_response.content == b'current-run-signalwire-audio'
     assert conversation['latency_marks'][0]['kind'] == 'connect_click_to_remote_audio'
     assert conversation['latency_marks'][0]['latency_ms'] == 640.0
     assert conversation['final_state']['runtime_provenance']['browser_peer'] is True
     assert conversation['final_state']['runtime_provenance']['guest_token_persisted'] is False
-    assert [turn['speaker'] for turn in conversation['turns']] == ['caller', 'agent']
+    assert conversation['final_state']['runtime_provenance']['target_speech_transcript'] == (
+        'untranscribed_remote_audio'
+    )
+    assert [turn['speaker'] for turn in conversation['turns']] == ['caller']
+
+
+def test_signalwire_holyguacamole_rejects_multi_exchange_request():
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        max_exchanges=2,
+        user_id='agent-runs-user',
+        project_id='agent-runs-project',
+    )
+
+    with pytest.raises(ValueError, match='max_exchanges=1'):
+        start_execution_run(payload)
 
 
 def test_saved_voice_agent_ignores_serialized_request_placeholders():

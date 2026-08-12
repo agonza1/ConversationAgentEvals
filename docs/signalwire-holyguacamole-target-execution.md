@@ -15,7 +15,7 @@ CAE API
       -> inject current-run tester audio as the browser microphone
       -> dial the public SignalWire AI agent
       <- remote WebRTC audio stream and page/order events
-  <- transcript, timing, result JSON, caller audio, target audio
+  <- caller transcript, timing, result JSON, caller audio, target audio
   -> standard CAE run, timeline, recording metadata, and vCon pipeline
 ```
 
@@ -41,10 +41,13 @@ npm run test:signalwire-holyguacamole-smoke -- \
 ```
 
 The script writes `result.json`, `transcript.txt`, caller audio, and captured
-target audio under `artifacts/signalwire-holyguacamole-smoke/`.
+target audio under `artifacts/signalwire-holyguacamole-smoke/`. Page status and
+order text are retained as page events only; they are not labeled as agent
+speech or used for scoring.
 
 On macOS the script can synthesize caller audio with `say`. In other runtimes,
-provide `--caller-audio <path>` or configure `KOKORO_BASE_URL`.
+provide `--caller-audio <path>` or configure `KOKORO_BASE_URL`. The runner fails
+preflight instead of injecting silence when real caller speech cannot be supplied.
 
 ## CAE run
 
@@ -64,3 +67,7 @@ Defaults:
 The run fails closed if the page, token endpoint, WebRTC connection, injected
 caller media, or remote audio capture cannot complete. It does not fall back to
 fixtures or saved transcripts.
+
+This target currently runs one caller turn per browser call (`max_exchanges=1`).
+Until remote speech ASR is wired for the captured WebM, CAE does not score or
+vCon-label page status/order text as agent speech.

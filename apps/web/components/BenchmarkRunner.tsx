@@ -2572,6 +2572,7 @@ export function BenchmarkRunner({
             setExecutionMode('pipecat_webrtc');
             setExecutionTesterId('pipecat_tester');
             setExecutionExecutorId('signalwire_public_browser');
+            setExecutionMaxExchanges(1);
           } else if (matched.target === 'voice_fixture') {
             setExecutionMode('voice_fixture');
             setExecutionTesterId('fixture_replay');
@@ -3488,8 +3489,7 @@ export function BenchmarkRunner({
     const supportsConfigurableExchanges =
       selectedScoreAgent.target === 'openai_codex'
       || selectedScoreAgent.target === 'builtin_sample_voice'
-      || selectedScoreAgent.target === 'pipecat_public_demo'
-      || selectedScoreAgent.target === 'signalwire_holy_guacamole';
+      || selectedScoreAgent.target === 'pipecat_public_demo';
     if (supportsConfigurableExchanges && executionMaxExchanges === '') {
       setExecutionMessage('Enter a maximum exchange count from 1 to 10 before launching.');
       return null;
@@ -3521,6 +3521,7 @@ export function BenchmarkRunner({
     const legacyVoiceReplay = selectedScoreAgent.target === 'voice_fixture';
     const publicPipecatAgent = selectedScoreAgent.target === 'pipecat_public_demo';
     const signalwireAgent = selectedScoreAgent.target === 'signalwire_holy_guacamole';
+    const maxExchangesForRun = signalwireAgent ? 1 : maxExchanges;
     const runMode = sampleVoiceAgent || publicPipecatAgent || signalwireAgent
       ? 'pipecat_webrtc'
       : legacyVoiceReplay
@@ -3573,7 +3574,7 @@ export function BenchmarkRunner({
         mode: runMode,
         text_callable: runMode === 'text_callable' ? runTextCallable : undefined,
         iterations: executionIterations,
-        max_exchanges: maxExchanges,
+        max_exchanges: maxExchangesForRun,
         duplex_timeout_seconds: sampleVoiceAgent || publicPipecatAgent || signalwireAgent ? executionDuplexTimeoutSeconds : undefined,
         user_id: identity.userId,
         project_id: identity.projectId,
@@ -4672,6 +4673,7 @@ export function BenchmarkRunner({
                   setExecutionMode('pipecat_webrtc');
                   setExecutionTesterId('pipecat_tester');
                   setExecutionExecutorId('signalwire_public_browser');
+                  setExecutionMaxExchanges(1);
                 } else if (agent.target === 'voice_fixture') {
                   setExecutionMode('voice_fixture');
                   setExecutionTesterId('fixture_replay');
@@ -4736,7 +4738,6 @@ export function BenchmarkRunner({
                     selectedScoreAgent.target !== 'openai_codex'
                     && selectedScoreAgent.target !== 'builtin_sample_voice'
                     && selectedScoreAgent.target !== 'pipecat_public_demo'
-                    && selectedScoreAgent.target !== 'signalwire_holy_guacamole'
                   )}
                   onChange={(event) => {
                     const nextValue = event.target.value;
@@ -4769,8 +4770,9 @@ export function BenchmarkRunner({
               {selectedScoreAgent?.target === 'openai_codex'
               || selectedScoreAgent?.target === 'builtin_sample_voice'
               || selectedScoreAgent?.target === 'pipecat_public_demo'
-              || selectedScoreAgent?.target === 'signalwire_holy_guacamole'
                 ? ' One exchange is one tester message plus one agent response.'
+                : selectedScoreAgent?.target === 'signalwire_holy_guacamole'
+                  ? ' SignalWire browser runs capture one caller turn and remote target audio.'
                 : ' Choose a generalist text or voice agent to configure exchanges; fixed sample targets replay one exchange.'}
             </p>
           </div>
@@ -4828,7 +4830,7 @@ export function BenchmarkRunner({
                   : selectedScoreAgent.target === 'pipecat_public_demo'
                     ? 'Runs the selected scenario through direct Daily WebRTC and captures current-run audio, transcript, latency, evaluation, and vCon evidence without a browser.'
                   : selectedScoreAgent.target === 'signalwire_holy_guacamole'
-                    ? 'Runs the selected scenario through the public SignalWire browser client and captures current-run audio, page events, transcript, latency, evaluation, and vCon evidence.'
+                    ? 'Runs one scenario opener through the public SignalWire browser client and captures current-run audio, page events, latency, recording evidence, and vCon media without inferring agent words from page status.'
                   : isSavedReplayTargetId(selectedScoreAgent.target)
                     ? 'Uses saved evidence. Replay is not a live agent destination.'
                     : isExternalVoiceTargetId(selectedScoreAgent.target)
@@ -4869,10 +4871,11 @@ export function BenchmarkRunner({
               {selectedScoreAgent?.target === 'openai_codex'
               || selectedScoreAgent?.target === 'builtin_sample_voice'
               || selectedScoreAgent?.target === 'pipecat_public_demo'
-              || selectedScoreAgent?.target === 'signalwire_holy_guacamole'
                 ? executionMaxExchanges === ''
                   ? ' · enter an exchange cap'
                   : ` · up to ${executionMaxExchanges} ${executionMaxExchanges === 1 ? 'exchange' : 'exchanges'} each`
+                : selectedScoreAgent?.target === 'signalwire_holy_guacamole'
+                  ? ' · one exchange each'
                 : ''}
               {' · results appear below'}
             </span>
@@ -4887,8 +4890,7 @@ export function BenchmarkRunner({
               || !selectedScoreAgent
               || ((selectedScoreAgent?.target === 'openai_codex'
                 || selectedScoreAgent?.target === 'builtin_sample_voice'
-                || selectedScoreAgent?.target === 'pipecat_public_demo'
-                || selectedScoreAgent?.target === 'signalwire_holy_guacamole')
+                || selectedScoreAgent?.target === 'pipecat_public_demo')
                 && executionMaxExchanges === '')
               || (selectedScoreAgent.target === 'openai_codex'
                 && selectedScoreAgent.id !== 'generalist-text-agent'

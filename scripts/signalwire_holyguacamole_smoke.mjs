@@ -138,9 +138,11 @@ function baseResult(args, startedAt) {
     transcript: {
       text: '',
       agent_text: '',
-      source: 'holy_guacamole_browser_status_order_events',
+      source: 'remote_audio_capture_untranscribed',
       artifact_path: null,
-      complete_as_observed: true,
+      complete_as_observed: false,
+      agent_text_available: false,
+      untranscribed_target_audio: true,
     },
     media: {
       target_audio_duration_ms: null,
@@ -156,6 +158,10 @@ function baseResult(args, startedAt) {
 async function synthesizeCallerAudio(args, runDir) {
   if (args.callerAudio) {
     const source = path.resolve(REPO_ROOT, args.callerAudio);
+    const sourceStat = await fs.stat(source);
+    if (!sourceStat.isFile() || sourceStat.size <= 0) {
+      throw new Error(`Caller audio file is empty or not a file: ${args.callerAudio}`);
+    }
     const target = path.join(runDir, 'caller-audio' + path.extname(source));
     await fs.copyFile(source, target);
     return { path: target, source: 'supplied_audio_file' };
@@ -185,26 +191,10 @@ async function synthesizeCallerAudio(args, runDir) {
     ], { timeout: 30000 });
     return { path: target, source: 'macos_say_tts' };
   }
-  await fs.writeFile(target, buildSilentWav(16000, 3));
-  return { path: target, source: 'generated_silence_unusable' };
-}
-
-function buildSilentWav(sampleRate, seconds) {
-  const dataBytes = sampleRate * seconds * 2;
-  const buffer = Buffer.alloc(44 + dataBytes);
-  buffer.write('RIFF', 0);
-  buffer.writeUInt32LE(36 + dataBytes, 4);
-  buffer.write('WAVEfmt ', 8);
-  buffer.writeUInt32LE(16, 16);
-  buffer.writeUInt16LE(1, 20);
-  buffer.writeUInt16LE(1, 22);
-  buffer.writeUInt32LE(sampleRate, 24);
-  buffer.writeUInt32LE(sampleRate * 2, 28);
-  buffer.writeUInt16LE(2, 32);
-  buffer.writeUInt16LE(16, 34);
-  buffer.write('data', 36);
-  buffer.writeUInt32LE(dataBytes, 40);
-  return buffer;
+  throw new Error(
+    'Caller audio synthesis unavailable. Provide --caller-audio with real speech audio, '
+    + 'or set KOKORO_BASE_URL so the requested caller text can be synthesized.'
+  );
 }
 
 async function writeArtifacts(result, runDir, targetAudio) {
@@ -232,15 +222,10 @@ async function writeArtifacts(result, runDir, targetAudio) {
 }
 
 function deriveTranscript(result, args) {
-  const statusLines = result.page_events
-    .filter((item) => item.kind === 'status' || item.kind === 'result' || item.kind === 'order')
-    .map((item) => `${item.kind}: ${item.text}`)
-    .filter(Boolean);
-  const agentText = statusLines.at(-1) || (result.connection.ui_connected ? 'SignalWire remote audio was captured.' : '');
-  result.transcript.agent_text = agentText;
-  result.transcript.text = [`Caller: ${args.callerText}`, agentText ? `Agent: ${agentText}` : '']
-    .filter(Boolean)
-    .join('\n');
+  result.transcript.agent_text = '';
+  result.transcript.agent_text_available = false;
+  result.transcript.untranscribed_target_audio = Boolean(result.connection.remote_stream_seen);
+  result.transcript.text = `Caller: ${args.callerText}`;
 }
 
 async function runSmoke(args) {
@@ -438,7 +423,7 @@ function classifyError(error) {
   if (/permission|microphone|media/i.test(message)) return 'browser_permission_denied';
   if (/timeout/i.test(message)) return 'connection_timeout';
   if (/net::|ECONN|ENOTFOUND|fetch|navigation/i.test(message)) return 'target_unreachable';
-  if (/Kokoro|say/i.test(message)) return 'tester_audio_synthesis_failed';
+  if (/Kokoro|say|Caller audio synthesis|caller audio/i.test(message)) return 'tester_audio_synthesis_failed';
   return 'unsupported_signalwire_media_path';
 }
 

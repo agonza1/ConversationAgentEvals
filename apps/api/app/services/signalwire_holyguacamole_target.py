@@ -11,6 +11,12 @@ from app.services.execution_audio import AudioRecordingHandle, TranscriptionTurn
 
 DEFAULT_SIGNALWIRE_TARGET_URL = 'https://holyguacamole.signalwire.me/'
 SIGNALWIRE_PUBLIC_GATE_ENV = 'CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE'
+REMOTE_SPEECH_TRANSCRIPT_SOURCES = {
+    'remote_audio_asr',
+    'remote_audio_transcription',
+    'signalwire_remote_audio_asr',
+    'rtc-asr.current_run',
+}
 
 
 def run_signalwire_holyguacamole_call(
@@ -94,17 +100,19 @@ def run_signalwire_holyguacamole_call(
             frame_metadata={'target_url': DEFAULT_SIGNALWIRE_TARGET_URL},
         )
     ]
-    agent_text = str((result.get('transcript') or {}).get('agent_text') or '').strip()
-    if agent_text:
+    transcript_payload = result.get('transcript') if isinstance(result.get('transcript'), dict) else {}
+    agent_text = str(transcript_payload.get('agent_text') or '').strip()
+    transcript_source = str(transcript_payload.get('source') or '').strip()
+    if agent_text and transcript_source in REMOTE_SPEECH_TRANSCRIPT_SOURCES:
         transcript_turns.append(TranscriptionTurn(
             turn_index=2,
             speaker='Agent',
             text=agent_text,
             source='signalwire_browser_webrtc',
-            event_types=['remote_audio_captured', 'page_event_observed'],
+            event_types=['remote_audio_captured', 'remote_speech_transcribed'],
             direction='target_to_tester',
             evidence_role='target',
-            frame_metadata={'transcript_source': (result.get('transcript') or {}).get('source')},
+            frame_metadata={'transcript_source': transcript_source},
         ))
 
     audio_bytes = target_audio_path.read_bytes()

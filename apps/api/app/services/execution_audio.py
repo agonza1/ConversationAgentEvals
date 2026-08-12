@@ -111,7 +111,8 @@ def describe_execution_audio_capabilities() -> ExecutionAudioCapabilities:
                 notes=(
                     'Opt-in public SignalWire browser executor that drives the Holy Guacamole '
                     'web client with current-run tester audio and captures remote media, page '
-                    'events, transcript, timing, evaluation, and vCon evidence.'
+                    'events, timing, recording evidence, and vCon media. Page status text is '
+                    'not treated as target speech.'
                 ),
             ),
             ExecutionAudioTransportInfo(
