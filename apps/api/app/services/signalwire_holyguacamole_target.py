@@ -88,24 +88,30 @@ def run_signalwire_holyguacamole_call(
     if not target_audio_path.exists():
         raise RuntimeError('Holy Guacamole SignalWire run did not capture remote audio.')
 
-    transcript_turns = [
-        TranscriptionTurn(
+    transcript_payload = result.get('transcript') if isinstance(result.get('transcript'), dict) else {}
+    transcript_turns: list[TranscriptionTurn] = []
+    caller_text_verified = transcript_payload.get('caller_text_verified') is True
+    if caller_text_verified:
+        transcript_turns.append(TranscriptionTurn(
             turn_index=1,
             speaker='Caller',
-            text=caller_text,
+            text=str(transcript_payload.get('caller_text') or caller_text),
             source='signalwire_browser_webrtc',
             event_types=['browser_synthetic_audio_sent'],
             direction='tester_to_target',
             evidence_role='tester',
-            frame_metadata={'target_url': DEFAULT_SIGNALWIRE_TARGET_URL},
-        )
-    ]
-    transcript_payload = result.get('transcript') if isinstance(result.get('transcript'), dict) else {}
+            frame_metadata={
+                'target_url': DEFAULT_SIGNALWIRE_TARGET_URL,
+                'caller_text_source': str(
+                    transcript_payload.get('caller_text_source') or 'current_run_tts'
+                ),
+            },
+        ))
     agent_text = str(transcript_payload.get('agent_text') or '').strip()
     transcript_source = str(transcript_payload.get('source') or '').strip()
     if agent_text and transcript_source in REMOTE_SPEECH_TRANSCRIPT_SOURCES:
         transcript_turns.append(TranscriptionTurn(
-            turn_index=2,
+            turn_index=len(transcript_turns) + 1,
             speaker='Agent',
             text=agent_text,
             source='signalwire_browser_webrtc',

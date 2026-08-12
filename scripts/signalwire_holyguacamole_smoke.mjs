@@ -151,6 +151,9 @@ function baseResult(args, startedAt) {
     },
     transcript: {
       text: '',
+      caller_text: '',
+      caller_text_verified: false,
+      caller_text_source: 'unverified',
       agent_text: '',
       source: 'remote_audio_capture_untranscribed',
       artifact_path: null,
@@ -178,7 +181,7 @@ async function synthesizeCallerAudio(args, runDir) {
     }
     const target = path.join(runDir, 'caller-audio' + path.extname(source));
     await fs.copyFile(source, target);
-    return { path: target, source: 'supplied_audio_file' };
+    return { path: target, source: 'supplied_audio_file', callerTextVerified: false };
   }
   const target = path.join(runDir, 'caller-audio.wav');
   if (process.env.KOKORO_BASE_URL) {
@@ -194,7 +197,7 @@ async function synthesizeCallerAudio(args, runDir) {
     });
     if (!response.ok) throw new Error(`Kokoro returned HTTP ${response.status}`);
     await fs.writeFile(target, Buffer.from(await response.arrayBuffer()));
-    return { path: target, source: 'kokoro_tts' };
+    return { path: target, source: 'kokoro_tts', callerTextVerified: true };
   }
   if (process.platform === 'darwin') {
     await execFileAsync('/usr/bin/say', [
@@ -203,7 +206,7 @@ async function synthesizeCallerAudio(args, runDir) {
       '--data-format=LEI16@16000',
       args.callerText,
     ], { timeout: 30000 });
-    return { path: target, source: 'macos_say_tts' };
+    return { path: target, source: 'macos_say_tts', callerTextVerified: true };
   }
   throw new Error(
     'Caller audio synthesis unavailable. Provide --caller-audio with real speech audio, '
@@ -239,7 +242,15 @@ function deriveTranscript(result, args) {
   result.transcript.agent_text = '';
   result.transcript.agent_text_available = false;
   result.transcript.untranscribed_target_audio = Boolean(result.connection.remote_stream_seen);
-  result.transcript.text = `Caller: ${args.callerText}`;
+  const callerTextVerified = result.tester.caller_text_verified === true;
+  result.transcript.caller_text = callerTextVerified ? args.callerText : '';
+  result.transcript.caller_text_verified = callerTextVerified;
+  result.transcript.caller_text_source = callerTextVerified
+    ? String(result.tester.media_source || 'current_run_tts')
+    : 'unverified_supplied_audio';
+  result.transcript.text = callerTextVerified
+    ? `Caller: ${args.callerText}`
+    : 'Caller audio: supplied audio file (speech text unverified)';
 }
 
 async function runSmoke(args) {
@@ -255,6 +266,7 @@ async function runSmoke(args) {
     const callerAudio = await synthesizeCallerAudio(args, runDir);
     const callerBytes = await fs.readFile(callerAudio.path);
     result.tester.media_source = callerAudio.source;
+    result.tester.caller_text_verified = callerAudio.callerTextVerified === true;
     result.artifacts.caller_audio = relativeToRepo(callerAudio.path);
 
     browser = await chromium.launch({
