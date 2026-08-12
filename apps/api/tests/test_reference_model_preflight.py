@@ -60,6 +60,16 @@ def test_selected_voice_model_is_reused_for_tester(monkeypatch):
     assert prepared.tester_model_name == 'ollama/gemma2:2b'
 
 
+def test_non_ollama_voice_model_preserves_configured_tester(monkeypatch):
+    monkeypatch.setenv('REFERENCE_TESTER_LLM_MODEL', 'gpt-4.1-mini')
+    payload = _voice_request(model_name='gpt-5.4-mini')
+
+    prepared = prepare_execution_reference_models(payload)
+
+    assert prepared is payload
+    assert prepared.tester_model_name is None
+
+
 def test_explicit_voice_tester_model_is_preserved(monkeypatch):
     monkeypatch.setenv('OLLAMA_BASE_URL', 'http://ollama.test')
     requested_urls: list[str] = []
