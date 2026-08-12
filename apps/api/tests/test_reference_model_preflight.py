@@ -34,6 +34,13 @@ class _Response:
         return self._payload
 
 
+class _ConnectedProvider:
+    provider_id = 'fake'
+
+    def status(self):
+        return {'status': 'connected', 'provider': 'fake'}
+
+
 def _voice_request(**updates) -> ExecutionRunCreateRequest:
     values = {
         'suite_id': 'call-center-voice-ai',
@@ -47,17 +54,30 @@ def _voice_request(**updates) -> ExecutionRunCreateRequest:
     return ExecutionRunCreateRequest(**values)
 
 
-def test_selected_voice_model_is_reused_for_tester(monkeypatch):
+def test_selected_voice_target_preserves_and_validates_configured_tester(monkeypatch):
     monkeypatch.setenv('OLLAMA_BASE_URL', 'http://ollama.test')
+    monkeypatch.setenv('REFERENCE_TESTER_LLM_MODEL', 'gpt-4.1-mini')
     monkeypatch.setattr(
         'app.services.reference_model_preflight.httpx.get',
         lambda *_args, **_kwargs: _Response({'models': [{'name': 'gemma2:2b'}]}),
     )
+    resolved_models: list[str] = []
 
-    prepared = prepare_execution_reference_models(_voice_request())
+    def resolve(model_name):
+        resolved_models.append(model_name)
+        return _ConnectedProvider()
 
+    monkeypatch.setattr(
+        'app.services.reference_model_preflight.resolve_reference_completion_provider',
+        resolve,
+    )
+    payload = _voice_request()
+    prepared = prepare_execution_reference_models(payload)
+
+    assert prepared is payload
     assert prepared.model_name == 'ollama/gemma2:2b'
-    assert prepared.tester_model_name == 'ollama/gemma2:2b'
+    assert prepared.tester_model_name is None
+    assert resolved_models == ['gpt-4.1-mini']
 
 
 def test_non_ollama_voice_model_preserves_configured_tester(monkeypatch):
@@ -79,10 +99,10 @@ def test_explicit_voice_tester_model_is_preserved(monkeypatch):
         return _Response({'models': [{'name': 'gemma2:2b'}, {'name': 'gemma2:9b'}]})
 
     monkeypatch.setattr('app.services.reference_model_preflight.httpx.get', fake_get)
-    prepared = prepare_execution_reference_models(
-        _voice_request(tester_model_name='ollama/gemma2:9b')
-    )
+    payload = _voice_request(tester_model_name='ollama/gemma2:9b')
+    prepared = prepare_execution_reference_models(payload)
 
+    assert prepared is payload
     assert prepared.tester_model_name == 'ollama/gemma2:9b'
     assert requested_urls == [
         'http://ollama.test/api/tags',
@@ -125,10 +145,11 @@ def test_text_generalist_preflights_selected_ollama_model(monkeypatch):
     assert requested == ['http://ollama.test/api/tags']
 
 
-def test_execution_route_queues_normalized_ollama_voice_payload(monkeypatch):
+def test_execution_route_queues_ollama_target_without_overwriting_tester(monkeypatch):
     import app.routes.execution as execution_routes
 
     monkeypatch.setenv('OLLAMA_BASE_URL', 'http://ollama.test')
+    monkeypatch.setenv('REFERENCE_TESTER_LLM_MODEL', 'ollama/gemma2:2b')
     monkeypatch.setattr(
         'app.services.reference_model_preflight.httpx.get',
         lambda *_args, **_kwargs: _Response({'models': [{'name': 'gemma2:2b'}]}),
@@ -149,7 +170,7 @@ def test_execution_route_queues_normalized_ollama_voice_payload(monkeypatch):
     queued_payload = captured['payload']
     assert isinstance(queued_payload, ExecutionRunCreateRequest)
     assert queued_payload.model_name == 'ollama/gemma2:2b'
-    assert queued_payload.tester_model_name == 'ollama/gemma2:2b'
+    assert queued_payload.tester_model_name is None
     assert captured['preflight'] is True
 
 
@@ -157,6 +178,7 @@ def test_execution_route_rejects_unpulled_ollama_model_before_queue(monkeypatch)
     import app.routes.execution as execution_routes
 
     monkeypatch.setenv('OLLAMA_BASE_URL', 'http://ollama.test')
+    monkeypatch.setenv('REFERENCE_TESTER_LLM_MODEL', 'ollama/gemma2:2b')
     monkeypatch.setattr(
         'app.services.reference_model_preflight.httpx.get',
         lambda *_args, **_kwargs: _Response({'models': [{'name': 'llama3.2:3b'}]}),
@@ -172,10 +194,41 @@ def test_execution_route_rejects_unpulled_ollama_model_before_queue(monkeypatch)
     assert 'ollama pull gemma2:2b' in response.json()['detail']
 
 
-def test_voice_health_uses_configured_ollama_when_primary_llm_is_unavailable(monkeypatch):
+def test_execution_route_rejects_unavailable_independent_tester(monkeypatch):
+    import app.routes.execution as execution_routes
+
     monkeypatch.setenv('OLLAMA_BASE_URL', 'http://ollama.test')
-    monkeypatch.setenv('REFERENCE_OLLAMA_MODEL', 'gemma2:2b')
-    monkeypatch.delenv('REFERENCE_LLM_MODEL', raising=False)
+    monkeypatch.setenv('REFERENCE_TESTER_LLM_MODEL', 'gpt-4.1-mini')
+    monkeypatch.setattr(
+        'app.services.reference_model_preflight.httpx.get',
+        lambda *_args, **_kwargs: _Response({'models': [{'name': 'gemma2:2b'}]}),
+    )
+
+    def unavailable(_model_name):
+        raise ReferenceRuntimeError('OpenAI is not connected.')
+
+    monkeypatch.setattr(
+        'app.services.reference_model_preflight.resolve_reference_completion_provider',
+        unavailable,
+    )
+    monkeypatch.setattr(
+        execution_routes,
+        'start_execution_run',
+        lambda *_args, **_kwargs: pytest.fail('execution should not be queued'),
+    )
+
+    response = client.post('/api/execution/runs', json=_voice_request().model_dump(mode='json'))
+
+    assert response.status_code == 400, response.text
+    detail = response.json()['detail']
+    assert 'tester model gpt-4.1-mini is not ready' in detail
+    assert 'OpenAI is not connected' in detail
+
+
+def test_voice_health_uses_configured_ollama_for_target_and_tester(monkeypatch):
+    monkeypatch.setenv('OLLAMA_BASE_URL', 'http://ollama.test')
+    monkeypatch.setenv('REFERENCE_LLM_MODEL', 'ollama/gemma2:2b')
+    monkeypatch.delenv('REFERENCE_TESTER_LLM_MODEL', raising=False)
     monkeypatch.setattr(
         'app.services.reference_model_preflight.httpx.get',
         lambda *_args, **_kwargs: _Response({'models': [{'name': 'gemma2:2b'}]}),
@@ -201,10 +254,45 @@ def test_voice_health_uses_configured_ollama_when_primary_llm_is_unavailable(mon
     assert report['ready'] is True
     assert llm['ready'] is True
     assert llm['provider'] == 'ollama'
+    assert llm['target_provider'] == 'ollama'
+    assert llm['tester_provider'] == 'ollama'
     assert llm['target_model'] == 'ollama/gemma2:2b'
     assert llm['tester_model'] == 'ollama/gemma2:2b'
-    assert 'built-in tester and target' in llm['detail']
+    assert 'built-in target and tester' in llm['detail']
     assert llm['setup_url'] == 'https://example.test/setup'
+
+
+def test_voice_health_validates_independent_tester_provider(monkeypatch):
+    monkeypatch.setenv('OLLAMA_BASE_URL', 'http://ollama.test')
+    monkeypatch.setenv('REFERENCE_OLLAMA_MODEL', 'gemma2:2b')
+    monkeypatch.delenv('REFERENCE_LLM_MODEL', raising=False)
+    monkeypatch.setenv('REFERENCE_TESTER_LLM_MODEL', 'gpt-4.1-mini')
+    monkeypatch.setattr(
+        'app.services.reference_model_preflight.httpx.get',
+        lambda *_args, **_kwargs: _Response({'models': [{'name': 'gemma2:2b'}]}),
+    )
+    monkeypatch.setattr(
+        'app.services.reference_model_preflight.resolve_reference_completion_provider',
+        lambda _model_name: _ConnectedProvider(),
+    )
+    base = {
+        'ready': False,
+        'llm_mode': 'real',
+        'dependencies': [
+            {'id': 'llm', 'ready': False, 'detail': 'Primary provider unavailable.'},
+            {'id': 'pipecat', 'ready': True, 'detail': 'ready'},
+        ],
+    }
+
+    report = augment_reference_voice_preflight(base)
+    llm = next(item for item in report['dependencies'] if item['id'] == 'llm')
+
+    assert report['ready'] is True
+    assert llm['target_model'] == 'ollama/gemma2:2b'
+    assert llm['tester_model'] == 'gpt-4.1-mini'
+    assert llm['target_provider'] == 'ollama'
+    assert llm['tester_provider'] == 'fake'
+    assert 'tester gpt-4.1-mini via fake ready' in llm['detail']
 
 
 def test_voice_health_preserves_ready_openai_when_ollama_is_only_optional(monkeypatch):
