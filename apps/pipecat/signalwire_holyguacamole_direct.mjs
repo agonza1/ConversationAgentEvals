@@ -271,7 +271,8 @@ async function main() {
     const bytesPerFrame = samplesPerFrame * caller.channels * 2;
     let sentFrames = 0;
     for (let offset = 0; offset < caller.pcm.length; offset += bytesPerFrame) {
-      const chunk = caller.pcm.subarray(offset, offset + bytesPerFrame);
+      const chunk = Buffer.alloc(bytesPerFrame);
+      caller.pcm.copy(chunk, 0, offset, Math.min(caller.pcm.length, offset + bytesPerFrame));
       const samples = new Int16Array(Math.floor(chunk.byteLength / 2));
       for (let index = 0; index < samples.length; index += 1) {
         samples[index] = chunk.readInt16LE(index * 2);
@@ -301,8 +302,14 @@ async function main() {
       await wait(50);
     }
 
-    const targetWav = pcmToWav(remoteChunks, targetSampleRate, targetChannels);
     if (!remoteChunks.length) throw new Error('Holy Guacamole SignalWire direct call captured no remote audio.');
+    if (!connection.remote_audio_after_caller_seen) {
+      throw new Error(
+        'Holy Guacamole SignalWire direct call captured no audible post-caller remote response.',
+      );
+    }
+
+    const targetWav = pcmToWav(remoteChunks, targetSampleRate, targetChannels);
 
     const result = {
       status: 'pass',

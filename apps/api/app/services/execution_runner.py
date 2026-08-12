@@ -296,10 +296,10 @@ def _live_event_publisher(
                 return
         speaker = str(payload.get('speaker') or 'System').strip()
         text = str(payload.get('text') or '').strip()
-        if not text:
+        audio = payload.get('audio')
+        if not text and not (isinstance(audio, bytes) and audio):
             return
         sequence += 1
-        audio = payload.get('audio')
         media_url = None
         mime_type = None
         kind = 'message'
@@ -764,6 +764,7 @@ def _execute_signalwire_holyguacamole_direct(
         execution_run_id=execution_run_id,
         timeout_seconds=payload.duplex_timeout_seconds,
         scenario=scenario,
+        event_observer=event_observer,
     )
     transcription = result['transcription_turns']
     recording = result['recording_handle']

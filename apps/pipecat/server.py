@@ -1876,8 +1876,15 @@ async def _signalwire_holyguacamole_duplex_events(
                 if audio_bytes and listener_media_key not in marked_listener_audio:
                     bus.mark_audio_started(turn_pair=turn_pair, direction=direction)
                     marked_listener_audio.add(listener_media_key)
-                # The listener path is opportunistic here; the authoritative
-                # persisted artifacts are returned in the completion payload.
+                if audio_bytes:
+                    try:
+                        pcm, sample_rate, channels = _wav_to_pcm(audio_bytes)
+                    except (EOFError, wave.Error):
+                        pcm = b''
+                        sample_rate = 0
+                        channels = 0
+                    if pcm:
+                        bus.publish_chunk(pcm, sample_rate=sample_rate, channels=channels)
         await queue.put(event)
 
     async def execute() -> None:

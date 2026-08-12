@@ -533,6 +533,20 @@ def test_signalwire_holyguacamole_agent_uses_gated_direct_executor(monkeypatch):
         assert kwargs['timeout_seconds'] == 60
         assert kwargs['execution_run_id'] == queued['execution_run_id']
         assert kwargs['scenario']['id'] == 'cancellation-rescue'
+        assert kwargs['event_observer'] is not None
+        kwargs['event_observer']({
+            'speaker': 'Agent',
+            'text': '',
+            'direction': 'target_to_tester',
+            'update_live_audio_key': '1:target_to_tester',
+            'live_audio_key': '1:target_to_tester',
+            'audio': b'current-run-live-target-wav',
+            'frame_metadata': {
+                'transport': 'signalwire_direct_webrtc',
+                'current_run': True,
+                'listener_media_key': 'conversation-1:1:target_to_tester',
+            },
+        })
         response_audio = kwargs['artifact_dir'] / 'signalwire-direct' / 'fake' / 'target-audio.wav'
         response_audio.parent.mkdir(parents=True, exist_ok=True)
         response_audio.write_bytes(b'current-run-signalwire-audio')
@@ -590,6 +604,14 @@ def test_signalwire_holyguacamole_agent_uses_gated_direct_executor(monkeypatch):
     assert conversation['audio_session']['provider'] == 'signalwire'
     assert conversation['recording']['transport'] == 'signalwire_direct_webrtc'
     assert conversation['recording']['mime_type'] == 'audio/wav'
+    assert conversation['live_events'][0]['kind'] == 'audio'
+    assert conversation['live_events'][0]['speaker'] == 'Agent'
+    assert conversation['live_events'][0]['media_url'].endswith(
+        f'/audio/1?user_id={payload.user_id}'
+    )
+    assert conversation['live_events'][0]['frame_metadata']['listener_media_key'] == (
+        'conversation-1:1:target_to_tester'
+    )
     recording_response = client.get(conversation['recording']['recording_url'])
     assert recording_response.status_code == 200
     assert recording_response.headers['content-type'] == 'audio/wav'

@@ -172,7 +172,21 @@ def test_signalwire_direct_runner_documents_no_browser_token_persistence():
     assert "from '@roamhq/wrtc'" in script
     assert 'RTCAudioSource' in script
     assert 'RTCAudioSink' in script
+    assert 'remote_audio_after_caller_seen' in script
+    assert 'captured no audible post-caller remote response' in script
     assert 'chromium' not in script.lower()
     assert 'playwright' not in script.lower()
     assert 'guest_token_persisted: false' in script
     assert 'token_bootstrap_endpoint' in script
+
+
+def test_local_setup_installs_pipecat_node_dependencies():
+    repo_root = Path(signalwire_target.__file__).resolve().parents[4]
+    root_package_path = repo_root / 'package.json'
+    if not root_package_path.exists():
+        pytest.skip('Root setup manifest is not copied into the API Docker test image.')
+    root_package = json.loads(root_package_path.read_text(encoding='utf-8'))
+
+    assert root_package['scripts']['setup:pipecat-node'] == 'npm install --prefix apps/pipecat'
+    assert 'npm run setup:pipecat-node' in root_package['scripts']['setup']
+    assert 'npm run setup:pipecat-node' in root_package['scripts']['dev:pipecat']
