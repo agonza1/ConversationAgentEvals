@@ -462,11 +462,15 @@ def test_signalwire_smoke_uses_direct_webrtc_and_audible_latency():
     assert "caller_audio_wav_base64: callerWav.toString('base64')" in script
     assert '--max-exchanges must be 1 or 2.' in script
     assert 'POST_CALLER_GRACE_MS = 300' in script
+    assert 'capture.candidateOnsetAt ??= receivedAt' in script
+    assert 'Math.min(timeoutMs, 12000)' not in script
+    assert 'signal: AbortSignal.timeout(LIVE_PUBLISH_TIMEOUT_MS)' in script
     assert 'PRE_RESPONSE_SILENCE_MS = 700' in script
     assert 'RESPONSE_END_SILENCE_MS = 1800' in script
     assert 'RESPONSE_MIN_CAPTURE_MS = 3500' in script
     assert 'RESPONSE_MAX_CAPTURE_MS = 9000' in script
     assert 'caller_audio_completed_to_remote_audio_ms' in script
+    assert 'Date.now() - callConnectedAt' in script
     assert 'target_response_audio' in script
     assert 'createPcmWav(capture.chunks' in script
     assert "extension: 'target-audio.wav'" in script

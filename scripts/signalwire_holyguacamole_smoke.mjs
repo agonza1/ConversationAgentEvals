@@ -23,6 +23,7 @@ const FRAME_SAMPLE_COUNT = OUTBOUND_SAMPLE_RATE * FRAME_DURATION_MS / 1000;
 const AUDIBLE_PEAK = 32;
 const PRE_RESPONSE_SILENCE_MS = 700;
 const POST_CALLER_GRACE_MS = 300;
+const LIVE_PUBLISH_TIMEOUT_MS = 2000;
 // Remote agents can insert a natural pause between clauses. Keep a conservative
 // end boundary so ASR receives the complete utterance instead of the first clause.
 const RESPONSE_END_SILENCE_MS = 1800;
@@ -151,6 +152,7 @@ class CaeLiveAudioPublisher {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-cae-reference-token': this.token },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(LIVE_PUBLISH_TIMEOUT_MS),
     });
     if (!response.ok) throw new Error(`CAE live audio publisher returned HTTP ${response.status}.`);
     return response.json();
@@ -184,6 +186,7 @@ class CaeLiveAudioPublisher {
     if (!this.queue.length || !this.publisherId) return this.pending;
     const queued = this.queue.splice(0);
     this.pending = this.pending.then(async () => {
+      if (!this.publisherId) return;
       const batches = [];
       for (const frame of queued) {
         const previous = batches.at(-1);
@@ -200,6 +203,7 @@ class CaeLiveAudioPublisher {
         }
       }
       for (const batch of batches) {
+        if (!this.publisherId) return;
         const audio = Buffer.concat(batch.buffers);
         if (!audio.length) continue;
         await this.request('/outbound-voice/broadcast/audio', {
@@ -214,6 +218,8 @@ class CaeLiveAudioPublisher {
       }
     }).catch((error) => {
       this.error = redact(error instanceof Error ? error.message : String(error));
+      this.publisherId = null;
+      this.queue = [];
     });
     return this.pending;
   }
@@ -470,13 +476,27 @@ class RemoteAudioMonitor {
     const capture = this.capture;
     if (!capture) return;
     if (!capture.onsetAt) {
+      if (capture.callerEndedAt === null || receivedAt < capture.callerEndedAt) return;
       const enoughSilence = capture.silenceSeenAt !== null
         || (this.silentSince !== null && receivedAt - this.silentSince >= PRE_RESPONSE_SILENCE_MS);
       if (enoughSilence) capture.silenceSeenAt ??= this.silentSince;
-      if (audible && receivedAt >= capture.minOnsetAt && enoughSilence) {
-        capture.onsetAt = receivedAt;
-        capture.lastAudibleAt = receivedAt;
-        capture.chunks.push(pcm);
+      if (audible) {
+        capture.candidateOnsetAt ??= receivedAt;
+        capture.candidateLastAudibleAt = receivedAt;
+        capture.candidateChunks.push(pcm);
+        if (enoughSilence || receivedAt >= capture.graceEndsAt) {
+          capture.onsetAt = capture.candidateOnsetAt;
+          capture.lastAudibleAt = capture.candidateLastAudibleAt;
+          capture.chunks.push(...capture.candidateChunks);
+          capture.candidateChunks = [];
+        }
+      } else if (capture.candidateOnsetAt !== null) {
+        capture.candidateChunks.push(pcm);
+        if (enoughSilence) {
+          capture.candidateOnsetAt = null;
+          capture.candidateLastAudibleAt = null;
+          capture.candidateChunks = [];
+        }
       }
       return;
     }
@@ -495,9 +515,13 @@ class RemoteAudioMonitor {
     this.turnPair = turnPair;
     this.capture = {
       turnPair,
-      minOnsetAt: Infinity,
+      callerEndedAt: null,
+      graceEndsAt: Infinity,
       silenceSeenAt: this.silentSince && Date.now() - this.silentSince >= PRE_RESPONSE_SILENCE_MS
         ? this.silentSince : null,
+      candidateOnsetAt: null,
+      candidateLastAudibleAt: null,
+      candidateChunks: [],
       onsetAt: null,
       lastAudibleAt: null,
       chunks: [],
@@ -505,8 +529,13 @@ class RemoteAudioMonitor {
     return this.capture;
   }
   async finish(capture, callerEndedAt, timeoutMs) {
-    capture.minOnsetAt = callerEndedAt + POST_CALLER_GRACE_MS;
-    await waitUntil(() => capture.onsetAt, Math.min(timeoutMs, 12000), `target response onset for exchange ${capture.turnPair}`);
+    capture.callerEndedAt = callerEndedAt;
+    capture.graceEndsAt = callerEndedAt + POST_CALLER_GRACE_MS;
+    await waitUntil(
+      () => capture.onsetAt,
+      Math.max(1, timeoutMs),
+      `target response onset for exchange ${capture.turnPair}`,
+    );
     const captureDeadline = Math.min(Date.now() + RESPONSE_MAX_CAPTURE_MS, callerEndedAt + timeoutMs);
     while (Date.now() < captureDeadline) {
       const elapsed = Date.now() - capture.onsetAt;
@@ -798,8 +827,9 @@ async function runSmoke(args) {
       result.call_events.push({ kind: 'user_event', event: event?.params ?? event, t_ms: Date.now() - startedMs });
     }));
     await waitForObservable(call.status$, (status) => status === 'connected', Math.min(20000, remaining()), 'SignalWire call connection');
+    const callConnectedAt = Date.now();
     result.connection.call_connected = true;
-    result.latency_metrics.sdk_connected_to_call_connected_ms = Date.now() - dialStartedAt;
+    result.latency_metrics.sdk_connected_to_call_connected_ms = callConnectedAt - dialStartedAt;
     const remoteStream = await waitForObservable(
       call.remoteStream$,
       (stream) => Boolean(stream?.getAudioTracks?.().length),
@@ -808,7 +838,7 @@ async function runSmoke(args) {
     );
     remoteMonitor.attach(remoteStream.getAudioTracks()[0]);
     result.connection.remote_stream_seen = true;
-    result.latency_metrics.call_connected_to_remote_track_ms = Date.now() - dialStartedAt;
+    result.latency_metrics.call_connected_to_remote_track_ms = Date.now() - callConnectedAt;
     await waitUntil(() => remoteMonitor.firstFrameAt, Math.min(5000, remaining()), 'first remote PCM frame');
     result.connection.remote_audio_sample_seen = true;
     await remoteMonitor.waitForGreetingBoundary(Math.min(7000, remaining()));

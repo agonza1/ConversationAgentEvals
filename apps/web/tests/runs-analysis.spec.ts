@@ -1413,7 +1413,7 @@ test('brief WebRTC recovery switches to lossless HTTP fallback', async ({ page }
   ).__playedVoiceUrls.some((url) => url.includes('/audio/1?')))).toBe(false);
 });
 
-test('WebRTC setup waits for a pending listener token before timing out to HTTP fallback', async ({ page }) => {
+test('WebRTC setup falls back when the listener token request stalls', async ({ page }) => {
   let runPolls = 0;
   let tokenResponded = false;
   await page.addInitScript(() => {
@@ -1548,16 +1548,12 @@ test('WebRTC setup waits for a pending listener token before timing out to HTTP 
   await page.goto('/runs/exec-live-fallback');
   const feedback = page.getByLabel('Live run feedback');
   await feedback.getByRole('button', { name: 'Listen to live WebRTC' }).click();
-  await page.waitForTimeout(3000);
+  await expect(feedback.getByLabel('WebRTC listener status')).toContainText('HTTP fallback', { timeout: 4000 });
   expect(tokenResponded).toBe(false);
-  await expect(feedback.getByText(
-    'WebRTC could not reach the local voice runtime. Playing each new audio turn over the live HTTP fallback.',
-  )).toHaveCount(0);
-  await expect(feedback.getByLabel('WebRTC listener status')).toContainText('HTTP fallback', { timeout: 6000 });
-  expect(tokenResponded).toBe(true);
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
   ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBeGreaterThan(0);
+  await expect.poll(() => tokenResponded).toBe(true);
   expect(await page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
   ).__playedVoiceUrls.some((url) => url.includes('/audio/1?')))).toBe(false);
