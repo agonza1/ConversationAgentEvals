@@ -660,15 +660,15 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect(launch).toContainText('enter an exchange cap');
   await expect(launch.getByRole('button', { name: 'Run evaluation' })).toBeDisabled();
   await launch.getByLabel('Maximum exchanges').fill('2');
-  await expect(launch).toContainText('SignalWire supports up to two in the same browser call');
+  await expect(launch).toContainText('SignalWire supports up to two in the same WebRTC call');
   await launch.getByRole('button', { name: 'Run evaluation' }).click();
   await expect.poll(() => signalwirePosted).not.toBeNull();
   expect(signalwirePosted).toMatchObject({
     mode: 'pipecat_webrtc',
     agent_id: 'holyguacamole-signalwire-agent',
     tester_id: 'pipecat_tester',
-    executor_id: 'signalwire_public_browser',
-    audio_transport: 'signalwire_browser_webrtc',
+    executor_id: 'signalwire_public_webrtc',
+    audio_transport: 'signalwire_webrtc',
     suite_id: 'call-center-voice-ai',
     scenario_ids: ['billing-address-change'],
     max_exchanges: 2,

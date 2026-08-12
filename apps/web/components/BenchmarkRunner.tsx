@@ -983,13 +983,13 @@ interface ExecutionRunRecord {
   duplex_timeout_seconds?: number;
   tester_id?: 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
   tester_model_name?: string | null;
-  executor_id?: 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'signalwire_public_browser' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
+  executor_id?: 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'signalwire_public_webrtc' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
   provenance?: {
     target_id?: string | null;
     target_kind: string;
     target_channel: 'text' | 'voice';
     tester_id: 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
-    executor_id: 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'signalwire_public_browser' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
+    executor_id: 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'signalwire_public_webrtc' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
     evidence_source: string;
     live_external_connection: boolean;
     saved_evidence: boolean;
@@ -1018,8 +1018,8 @@ async function createExecutionRun(payload: {
   model_name?: string;
   tester_id?: 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
   tester_model_name?: string;
-  executor_id?: 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'signalwire_public_browser' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
-  audio_transport?: 'none' | 'pipecat_small_webrtc' | 'pipecat_daily_webrtc' | 'signalwire_browser_webrtc' | 'freeswitch_verto_sip';
+  executor_id?: 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'signalwire_public_webrtc' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
+  audio_transport?: 'none' | 'pipecat_small_webrtc' | 'pipecat_daily_webrtc' | 'signalwire_webrtc' | 'freeswitch_verto_sip';
 }) {
   return handleJson<ExecutionRunRecord>(
     await fetch(`${getApiBase()}/api/execution/runs`, {
@@ -2581,7 +2581,7 @@ export function BenchmarkRunner({
           } else if (matched.target === 'signalwire_holy_guacamole') {
             setExecutionMode('pipecat_webrtc');
             setExecutionTesterId('pipecat_tester');
-            setExecutionExecutorId('signalwire_public_browser');
+            setExecutionExecutorId('signalwire_public_webrtc');
             setExecutionMaxExchanges(1);
           } else if (matched.target === 'voice_fixture') {
             setExecutionMode('voice_fixture');
@@ -3639,7 +3639,7 @@ export function BenchmarkRunner({
         audio_transport: publicPipecatAgent
           ? 'pipecat_daily_webrtc'
           : signalwireAgent
-            ? 'signalwire_browser_webrtc'
+            ? 'signalwire_webrtc'
           : runMode === 'pipecat_webrtc'
             ? 'pipecat_small_webrtc'
             : 'none',
@@ -4751,7 +4751,7 @@ export function BenchmarkRunner({
                 } else if (agent.target === 'signalwire_holy_guacamole') {
                   setExecutionMode('pipecat_webrtc');
                   setExecutionTesterId('pipecat_tester');
-                  setExecutionExecutorId('signalwire_public_browser');
+                  setExecutionExecutorId('signalwire_public_webrtc');
                   setExecutionMaxExchanges(1);
                 } else if (agent.target === 'voice_fixture') {
                   setExecutionMode('voice_fixture');
@@ -4789,7 +4789,7 @@ export function BenchmarkRunner({
           <div className="run-config-step">
             <div className="run-config-step-heading">
               <span>3</span>
-              <div><strong>Execution</strong><small>{executionExecutorId === 'pipecat_public_daily' ? 'Direct Daily WebRTC' : executionExecutorId === 'signalwire_public_browser' ? 'SignalWire browser WebRTC' : 'Local runner'}</small></div>
+              <div><strong>Execution</strong><small>{executionExecutorId === 'pipecat_public_daily' ? 'Direct Daily WebRTC' : executionExecutorId === 'signalwire_public_webrtc' ? 'Direct SignalWire WebRTC' : 'Local runner'}</small></div>
             </div>
             <div className="run-execution-fields" aria-label="Execution runner">
               <div><span>Executor</span><strong>{executionExecutorId.replaceAll('_', ' ')}</strong></div>
@@ -4860,7 +4860,7 @@ export function BenchmarkRunner({
               || selectedScoreAgent?.target === 'pipecat_public_demo'
                 ? ' One exchange is one tester message plus one agent response.'
                 : selectedScoreAgent?.target === 'signalwire_holy_guacamole'
-                  ? ' One exchange is one tester message plus one remote target response; SignalWire supports up to two in the same browser call.'
+                  ? ' One exchange is one tester message plus one remote target response; SignalWire supports up to two in the same WebRTC call.'
                 : ' Choose a generalist text or voice agent to configure exchanges; fixed sample targets replay one exchange.'}
             </p>
           </div>
@@ -4918,7 +4918,7 @@ export function BenchmarkRunner({
                   : selectedScoreAgent.target === 'pipecat_public_demo'
                     ? 'Runs the selected scenario through direct Daily WebRTC and captures current-run audio, transcript, latency, evaluation, and vCon evidence without a browser.'
                    : selectedScoreAgent.target === 'signalwire_holy_guacamole'
-                     ? 'Runs up to two exchanges through one public SignalWire browser call and captures current-run audio, page events, latency, recording evidence, and vCon media without inferring agent words from page status.'
+                     ? 'Runs up to two exchanges through one direct public SignalWire WebRTC call and captures current-run audio, latency, recording evidence, and vCon media without launching a browser.'
                   : isSavedReplayTargetId(selectedScoreAgent.target)
                     ? 'Uses saved evidence. Replay is not a live agent destination.'
                     : isExternalVoiceTargetId(selectedScoreAgent.target)

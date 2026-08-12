@@ -1,17 +1,20 @@
+FROM node:22-bookworm-slim AS signalwire-runtime
+
+WORKDIR /runtime
+
+COPY apps/api/signalwire-runtime/package.json apps/api/signalwire-runtime/package-lock.json ./
+RUN npm ci --omit=dev
+
 FROM python:3.13-slim
 
 WORKDIR /workspace
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends curl build-essential nodejs npm \
+  && apt-get install -y --no-install-recommends curl build-essential \
   && rm -rf /var/lib/apt/lists/*
 
-COPY package.json package-lock.json /workspace/
-COPY apps/web/package.json /workspace/apps/web/package.json
-RUN npm ci
-
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN npx playwright install --with-deps chromium
+COPY --from=signalwire-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=signalwire-runtime /runtime/node_modules /workspace/node_modules
 
 COPY apps/api/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt

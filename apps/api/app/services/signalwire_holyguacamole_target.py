@@ -33,7 +33,7 @@ def _open_live_audio_broadcast(
     execution_run_id: str | None,
     conversation_id: str,
 ) -> str | None:
-    """Pre-register the existing CAE listener bus before slow TTS/browser setup."""
+    """Pre-register the existing CAE listener bus before TTS and WebRTC setup."""
     if not execution_run_id or not runtime.internal_token:
         return None
     try:
@@ -49,7 +49,7 @@ def _open_live_audio_broadcast(
         response.raise_for_status()
         publisher_id = str(response.json().get('publisher_id') or '').strip()
         return publisher_id or None
-    except Exception:  # noqa: BLE001 - browser retains late-registration fallback
+    except Exception:  # noqa: BLE001 - the transport retains late-registration fallback
         return None
 
 
@@ -211,7 +211,7 @@ def run_signalwire_holyguacamole_call(
     caller_audio_path.write_bytes(caller_audio)
     caller_audio_sha256 = hashlib.sha256(caller_audio).hexdigest()
     script_path = repo_root / 'scripts' / 'signalwire_holyguacamole_smoke.mjs'
-    artifact_root = artifact_dir / 'signalwire-browser'
+    artifact_root = artifact_dir / 'signalwire-webrtc'
     command = [
         'node',
         str(script_path),
@@ -330,8 +330,8 @@ def run_signalwire_holyguacamole_call(
                 turn_index=len(transcript_turns) + 1,
                 speaker='Caller',
                 text=exchange_caller_text,
-                source='signalwire_browser_webrtc',
-                event_types=['browser_synthetic_audio_sent'],
+                source='signalwire_webrtc',
+                event_types=['webrtc_synthetic_audio_sent'],
                 direction='tester_to_target',
                 evidence_role='tester',
                 frame_metadata={
@@ -371,7 +371,7 @@ def run_signalwire_holyguacamole_call(
                     turn_index=len(transcript_turns) + 1,
                     speaker='Agent',
                     text=agent_text,
-                    source='signalwire_browser_webrtc',
+                    source='signalwire_webrtc',
                     event_types=['remote_audio_captured', 'remote_speech_transcribed'],
                     direction='target_to_tester',
                     evidence_role='target',
@@ -392,8 +392,8 @@ def run_signalwire_holyguacamole_call(
                 turn_index=1,
                 speaker='Caller',
                 text=str(transcript_payload.get('caller_text') or caller_text),
-                source='signalwire_browser_webrtc',
-                event_types=['browser_synthetic_audio_sent'],
+                source='signalwire_webrtc',
+                event_types=['webrtc_synthetic_audio_sent'],
                 direction='tester_to_target',
                 evidence_role='tester',
                 frame_metadata={
@@ -410,7 +410,7 @@ def run_signalwire_holyguacamole_call(
                 turn_index=2,
                 speaker='Agent',
                 text=agent_text,
-                source='signalwire_browser_webrtc',
+                source='signalwire_webrtc',
                 event_types=['remote_audio_captured', 'remote_speech_transcribed'],
                 direction='target_to_tester',
                 evidence_role='target',
@@ -441,10 +441,10 @@ def run_signalwire_holyguacamole_call(
         sha256=str((result.get('artifacts') or {}).get('target_audio_sha256') or ''),
         duration_ms=(result.get('media') or {}).get('target_audio_duration_ms'),
         bytes_captured=len(audio_bytes),
-        transport='signalwire_browser_webrtc',
+        transport='signalwire_webrtc',
         metadata={
-            'transport': 'signalwire_browser_webrtc',
-            'scope': 'remote_target_browser_capture',
+            'transport': 'signalwire_webrtc',
+            'scope': 'remote_target_webrtc_capture',
             'caller_audio_uri': str(repo_root / str((result.get('artifacts') or {}).get('caller_audio') or '')),
             'cae_caller_audio_uri': str(caller_audio_path),
             'cae_caller_audio_sha256': caller_audio_sha256,

@@ -1,4 +1,8 @@
 node_modules
+.venv
+.local
+artifacts
+storage
 apps/web/node_modules
 apps/web/.next
 apps/web/.next-*

@@ -153,8 +153,8 @@ def test_agent_options_expose_adapter_tester_executor_defaults():
     assert signalwire['defaults'] == {
         'mode': 'pipecat_webrtc',
         'tester_id': 'pipecat_tester',
-        'executor_id': 'signalwire_public_browser',
-        'audio_transport': 'signalwire_browser_webrtc',
+        'executor_id': 'signalwire_public_webrtc',
+        'audio_transport': 'signalwire_webrtc',
         'max_exchanges': 1,
         'max_exchanges_configurable': True,
         'max_exchanges_limit': 2,
@@ -525,7 +525,7 @@ def test_public_pipecat_agent_uses_direct_daily_executor(monkeypatch, tmp_path):
     assert observed_benchmark_request.final_state == {}
 
 
-def test_signalwire_holyguacamole_agent_uses_gated_browser_executor(monkeypatch):
+def test_signalwire_holyguacamole_agent_uses_gated_direct_webrtc_executor(monkeypatch):
     from app.services import execution_runner
     from app.services.execution_audio import AudioRecordingHandle, TranscriptionTurn
 
@@ -535,7 +535,7 @@ def test_signalwire_holyguacamole_agent_uses_gated_browser_executor(monkeypatch)
         assert kwargs['execution_run_id'] == queued['execution_run_id']
         assert kwargs['scenario']['id'] == 'cancellation-rescue'
         assert kwargs['max_exchanges'] == 1
-        response_audio = kwargs['artifact_dir'] / 'signalwire-browser' / 'fake' / 'target-audio.webm'
+        response_audio = kwargs['artifact_dir'] / 'signalwire-webrtc' / 'fake' / 'target-audio.webm'
         response_audio.parent.mkdir(parents=True, exist_ok=True)
         response_audio.write_bytes(b'current-run-signalwire-audio')
         caller_wav = response_audio.parent / 'caller.wav'
@@ -543,21 +543,21 @@ def test_signalwire_holyguacamole_agent_uses_gated_browser_executor(monkeypatch)
         target_response_wav = response_audio.parent / 'target-response.wav'
         target_response_wav.write_bytes(b'RIFF-current-run-target-response-wav')
         return {
-            'connection': {'ui_connected': True, 'remote_stream_seen': True},
-            'tester': {'headless_browser': True, 'media_source': 'macos_say_tts'},
+            'connection': {'call_connected': True, 'remote_stream_seen': True},
+            'tester': {'media_source': 'macos_say_tts'},
             'latency_metrics': {
-                'connect_click_to_remote_audio_ms': 640.0,
+                'call_connected_to_remote_track_ms': 640.0,
                 'total_run_ms': 6000.0,
             },
             'media': {'target_audio_duration_ms': 5000},
-            'page_events': [{'kind': 'status', 'text': 'Connected! Ready to take your order.'}],
+            'call_events': [{'kind': 'status', 'status': 'connected'}],
             'artifacts': {'result_json': 'artifacts/signalwire/result.json'},
             'transcription_turns': [
                 TranscriptionTurn(
                     turn_index=1,
                     speaker='Caller',
                     text='I need help with a cancellation.',
-                    source='signalwire_browser_webrtc',
+                    source='signalwire_webrtc',
                     direction='tester_to_target',
                     evidence_role='tester',
                 ),
@@ -565,7 +565,7 @@ def test_signalwire_holyguacamole_agent_uses_gated_browser_executor(monkeypatch)
                     turn_index=2,
                     speaker='Agent',
                     text='Welcome to Holy Guacamole. What would you like to order?',
-                    source='signalwire_browser_webrtc',
+                    source='signalwire_webrtc',
                     direction='target_to_tester',
                     evidence_role='target',
                     frame_metadata={'transcript_source': 'rtc-asr.current_run'},
@@ -575,7 +575,7 @@ def test_signalwire_holyguacamole_agent_uses_gated_browser_executor(monkeypatch)
                 uri=str(response_audio),
                 mime_type='audio/webm',
                 bytes_captured=response_audio.stat().st_size,
-                transport='signalwire_browser_webrtc',
+                transport='signalwire_webrtc',
                 metadata={
                     'cae_caller_audio_uri': str(caller_wav),
                     'response_audio_uri': str(target_response_wav),
@@ -596,9 +596,9 @@ def test_signalwire_holyguacamole_agent_uses_gated_browser_executor(monkeypatch)
     queued = start_execution_run(payload)
 
     assert queued['mode'] == 'pipecat_webrtc'
-    assert queued['executor_id'] == 'signalwire_public_browser'
+    assert queued['executor_id'] == 'signalwire_public_webrtc'
     assert queued['max_exchanges'] == 1
-    assert queued['execution_snapshot']['request']['audio_transport'] == 'signalwire_browser_webrtc'
+    assert queued['execution_snapshot']['request']['audio_transport'] == 'signalwire_webrtc'
     assert queued['execution_snapshot']['request']['max_exchanges'] == 1
     assert queued['provenance']['target_kind'] == 'signalwire_holy_guacamole'
     assert queued['provenance']['live_external_connection'] is True
@@ -607,17 +607,17 @@ def test_signalwire_holyguacamole_agent_uses_gated_browser_executor(monkeypatch)
     finished = execute_execution_run(queued['execution_run_id'], payload)
     conversation = finished['conversations'][0]
     assert conversation['status'] == 'completed'
-    assert conversation['audio_session']['transport'] == 'signalwire_browser_webrtc'
+    assert conversation['audio_session']['transport'] == 'signalwire_webrtc'
     assert conversation['audio_session']['provider'] == 'signalwire'
-    assert conversation['recording']['transport'] == 'signalwire_browser_webrtc'
+    assert conversation['recording']['transport'] == 'signalwire_webrtc'
     assert conversation['recording']['mime_type'] == 'audio/webm'
     recording_response = client.get(conversation['recording']['recording_url'])
     assert recording_response.status_code == 200
     assert recording_response.headers['content-type'] == 'audio/webm'
     assert recording_response.content == b'current-run-signalwire-audio'
-    assert conversation['latency_marks'][0]['kind'] == 'connect_click_to_remote_audio'
+    assert conversation['latency_marks'][0]['kind'] == 'call_connected_to_remote_track'
     assert conversation['latency_marks'][0]['latency_ms'] == 640.0
-    assert conversation['final_state']['runtime_provenance']['browser_peer'] is True
+    assert conversation['final_state']['runtime_provenance']['browser_peer'] is False
     assert conversation['final_state']['runtime_provenance']['guest_token_persisted'] is False
     assert conversation['final_state']['runtime_provenance']['target_speech_transcript'] == (
         'current_run_asr'
@@ -636,26 +636,26 @@ def test_signalwire_holyguacamole_evaluation_with_incomplete_agent_transcript_ne
     from app.services.execution_audio import AudioRecordingHandle, TranscriptionTurn
 
     def fake_signalwire_call(**kwargs):
-        response_audio = kwargs['artifact_dir'] / 'signalwire-browser' / 'fake' / 'target-audio.webm'
+        response_audio = kwargs['artifact_dir'] / 'signalwire-webrtc' / 'fake' / 'target-audio.webm'
         response_audio.parent.mkdir(parents=True, exist_ok=True)
         response_audio.write_bytes(b'current-run-signalwire-audio')
         return {
             'connection': {
-                'ui_connected': True,
+                'call_connected': True,
                 'remote_stream_seen': True,
                 'remote_audio_sample_seen': True,
             },
-            'tester': {'headless_browser': True, 'media_source': 'macos_say_tts'},
-            'latency_metrics': {'connect_click_to_remote_audio_ms': 640.0},
+            'tester': {'media_source': 'macos_say_tts'},
+            'latency_metrics': {'call_connected_to_remote_track_ms': 640.0},
             'media': {'target_audio_duration_ms': 5000},
-            'page_events': [{'kind': 'status', 'text': 'Connected! Ready to take your order.'}],
+            'call_events': [{'kind': 'status', 'status': 'connected'}],
             'artifacts': {'result_json': 'artifacts/signalwire/result.json'},
             'transcription_turns': [
                 TranscriptionTurn(
                     turn_index=1,
                     speaker='Caller',
                     text='I need help with a cancellation.',
-                    source='signalwire_browser_webrtc',
+                    source='signalwire_webrtc',
                     direction='tester_to_target',
                     evidence_role='tester',
                 ),
@@ -663,7 +663,7 @@ def test_signalwire_holyguacamole_evaluation_with_incomplete_agent_transcript_ne
                     turn_index=2,
                     speaker='Agent',
                     text='What would you like to order?',
-                    source='signalwire_browser_webrtc',
+                    source='signalwire_webrtc',
                     direction='target_to_tester',
                     evidence_role='target',
                     frame_metadata={'exchange': 1},
@@ -672,7 +672,7 @@ def test_signalwire_holyguacamole_evaluation_with_incomplete_agent_transcript_ne
                     turn_index=3,
                     speaker='Caller',
                     text='One chicken taco, please.',
-                    source='signalwire_browser_webrtc',
+                    source='signalwire_webrtc',
                     direction='tester_to_target',
                     evidence_role='tester',
                     frame_metadata={'exchange': 2},
@@ -682,7 +682,7 @@ def test_signalwire_holyguacamole_evaluation_with_incomplete_agent_transcript_ne
                 uri=str(response_audio),
                 mime_type='audio/webm',
                 bytes_captured=response_audio.stat().st_size,
-                transport='signalwire_browser_webrtc',
+                transport='signalwire_webrtc',
             ),
         }
 
@@ -729,14 +729,14 @@ def test_signalwire_holyguacamole_rejects_more_than_two_exchanges():
         start_execution_run(payload)
 
 
-def test_signalwire_holyguacamole_runs_two_exchanges_in_one_browser_call(monkeypatch):
+def test_signalwire_holyguacamole_runs_two_exchanges_in_one_webrtc_call(monkeypatch):
     from app.services import execution_runner
     from app.services.execution_audio import AudioRecordingHandle, TranscriptionTurn
 
     def fake_signalwire_call(**kwargs):
         assert kwargs['max_exchanges'] == 2
         assert kwargs['tester_model_name'] == 'tester-model'
-        audio_dir = kwargs['artifact_dir'] / 'signalwire-browser' / 'two-turns'
+        audio_dir = kwargs['artifact_dir'] / 'signalwire-webrtc' / 'two-turns'
         audio_dir.mkdir(parents=True, exist_ok=True)
         recording_path = audio_dir / 'target-audio.webm'
         recording_path.write_bytes(b'current-run-two-exchange-audio')
@@ -756,7 +756,7 @@ def test_signalwire_holyguacamole_runs_two_exchanges_in_one_browser_call(monkeyp
                     turn_index=index * 2 - 1,
                     speaker='Caller',
                     text=f'Caller turn {index}',
-                    source='signalwire_browser_webrtc',
+                    source='signalwire_webrtc',
                     direction='tester_to_target',
                     evidence_role='tester',
                     frame_metadata={'exchange': index},
@@ -765,29 +765,29 @@ def test_signalwire_holyguacamole_runs_two_exchanges_in_one_browser_call(monkeyp
                     turn_index=index * 2,
                     speaker='Agent',
                     text=f'Agent turn {index}',
-                    source='signalwire_browser_webrtc',
+                    source='signalwire_webrtc',
                     direction='target_to_tester',
                     evidence_role='target',
                     frame_metadata={'exchange': index},
                 ),
             ])
         return {
-            'connection': {'ui_connected': True, 'remote_stream_seen': True},
-            'tester': {'headless_browser': True, 'media_source': 'cae_kokoro_tts'},
+            'connection': {'call_connected': True, 'remote_stream_seen': True},
+            'tester': {'media_source': 'cae_kokoro_tts'},
             'latency_metrics': {},
             'exchanges': [
                 {'turn_pair': 1, 'target_response_latency_ms': 410.0},
                 {'turn_pair': 2, 'target_response_latency_ms': 525.0},
             ],
             'media': {'target_audio_duration_ms': 12000},
-            'page_events': [],
+            'call_events': [],
             'artifacts': {'result_json': 'artifacts/signalwire/result.json'},
             'transcription_turns': turns,
             'recording_handle': AudioRecordingHandle(
                 uri=str(recording_path),
                 mime_type='audio/webm',
                 bytes_captured=recording_path.stat().st_size,
-                transport='signalwire_browser_webrtc',
+                transport='signalwire_webrtc',
                 metadata={
                     'caller_audio_turn_uris': caller_paths,
                     'response_audio_turn_uris': response_paths,

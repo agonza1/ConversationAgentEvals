@@ -7,7 +7,7 @@ CAE tester / audio plan
   -> ExecutionAudioTransport
        - pipecat_small_webrtc (this slice: local/mocked)
        - pipecat_daily_webrtc (public Pipecat target)
-       - signalwire_browser_webrtc (public SignalWire browser target)
+       - signalwire_webrtc (public SignalWire target)
        - freeswitch_verto_sip (deferred extension point)
   -> target session send/receive
   -> recording + transcription handles
@@ -36,7 +36,7 @@ AudioTransportId = Literal[
     'none',
     'pipecat_small_webrtc',
     'pipecat_daily_webrtc',
-    'signalwire_browser_webrtc',
+    'signalwire_webrtc',
     'freeswitch_verto_sip',
 ]
 
@@ -102,17 +102,16 @@ def describe_execution_audio_capabilities() -> ExecutionAudioCapabilities:
                 ),
             ),
             ExecutionAudioTransportInfo(
-                id='signalwire_browser_webrtc',
-                label='Holy Guacamole SignalWire browser WebRTC',
+                id='signalwire_webrtc',
+                label='Holy Guacamole direct SignalWire WebRTC',
                 available=True,
                 status='available',
                 requires_freeswitch=False,
                 requires_live_pipecat=False,
                 notes=(
-                    'Opt-in public SignalWire browser executor that drives the Holy Guacamole '
-                    'web client with current-run tester audio and captures remote media, page '
-                    'events, timing, recording evidence, and vCon media. Page status text is '
-                    'not treated as target speech.'
+                    'Opt-in direct SignalWire WebRTC executor that sends current-run tester '
+                    'audio and captures remote PCM, timing, recording evidence, and vCon media '
+                    'without launching a browser.'
                 ),
             ),
             ExecutionAudioTransportInfo(
@@ -150,7 +149,7 @@ def describe_execution_audio_capabilities() -> ExecutionAudioCapabilities:
             'ACC mirrors: Pipecat + SmallWebRTC for media, FreeSWITCH Verto for outbound SIP.',
             'Use execution mode pipecat_webrtc with audio_transport=pipecat_small_webrtc for vCon capture.',
             'The public Pipecat target uses pipecat_daily_webrtc for direct external Daily media.',
-            'The Holy Guacamole target uses signalwire_browser_webrtc behind an explicit env gate.',
+            'The Holy Guacamole target uses signalwire_webrtc behind an explicit env gate.',
             'freeswitch_verto_sip remains a deferred extension point (see FreeSwitchVertoSipTransport).',
         ],
     )
@@ -168,7 +167,7 @@ class AudioRecordingHandle:
     transport: Literal[
         'pipecat_small_webrtc',
         'pipecat_daily_webrtc',
-        'signalwire_browser_webrtc',
+        'signalwire_webrtc',
         'freeswitch_verto_sip',
     ] = 'pipecat_small_webrtc'
     metadata: dict[str, Any] = field(default_factory=dict)

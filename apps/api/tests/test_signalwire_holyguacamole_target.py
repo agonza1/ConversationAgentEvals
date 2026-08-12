@@ -43,15 +43,15 @@ def test_signalwire_target_requires_explicit_public_gate(tmp_path, monkeypatch):
 
 def test_signalwire_target_retries_transient_caller_synthesis(tmp_path, monkeypatch):
     repo_root = Path(signalwire_target.__file__).resolve().parents[4]
-    result_dir = tmp_path / 'browser-result'
+    result_dir = tmp_path / 'webrtc-result'
     result_dir.mkdir()
     target_audio = result_dir / 'target-audio.webm'
     target_audio.write_bytes(b'current-run-signalwire-audio')
     result_path = result_dir / 'result.json'
     result_path.write_text(json.dumps({
         'status': 'pass',
-        'connection': {'ui_connected': True, 'remote_stream_seen': True},
-        'tester': {'headless_browser': True},
+        'connection': {'call_connected': True, 'remote_stream_seen': True},
+        'tester': {'transport_runtime': 'direct-webrtc'},
         'media': {'target_audio_duration_ms': 1000},
         'transcript': {'agent_text': '', 'source': 'remote_audio_capture_untranscribed'},
         'artifacts': {
@@ -98,23 +98,23 @@ def test_signalwire_target_client_invokes_smoke_and_returns_current_run_evidence
     monkeypatch,
 ):
     repo_root = Path(signalwire_target.__file__).resolve().parents[4]
-    result_dir = tmp_path / 'browser-result'
+    result_dir = tmp_path / 'webrtc-result'
     result_dir.mkdir()
     target_audio = result_dir / 'target-audio.webm'
     target_audio.write_bytes(b'current-run-signalwire-audio')
     result_path = result_dir / 'result.json'
     result_payload = {
         'status': 'pass',
-        'connection': {'ui_connected': True, 'remote_stream_seen': True},
-        'tester': {'headless_browser': True, 'media_source': 'macos_say_tts'},
-        'latency_metrics': {'connect_click_to_remote_audio_ms': 1234.0},
+        'connection': {'call_connected': True, 'remote_stream_seen': True},
+        'tester': {'media_source': 'macos_say_tts'},
+        'latency_metrics': {'call_connected_to_remote_track_ms': 1234.0},
         'media': {'target_audio_duration_ms': 5000},
         'transcript': {
             'caller_text': 'I want a taco.',
             'caller_text_verified': True,
             'caller_text_source': 'macos_say_tts',
             'agent_text': 'status: Connected! Ready to take your order.',
-            'source': 'holy_guacamole_browser_status_order_events',
+            'source': 'signalwire_call_events',
         },
         'artifacts': {
             'target_audio': str(target_audio),
@@ -192,7 +192,7 @@ def test_signalwire_target_client_invokes_smoke_and_returns_current_run_evidence
     assert [turn.text for turn in result['transcription_turns']] == [
         'I want a taco.',
     ]
-    assert result['recording_handle'].transport == 'signalwire_browser_webrtc'
+    assert result['recording_handle'].transport == 'signalwire_webrtc'
     assert result['recording_handle'].mime_type == 'audio/webm'
     assert result['recording_handle'].bytes_captured == len(b'current-run-signalwire-audio')
     assert result['transcription_turns'][0].frame_metadata['caller_text_source'] == 'cae_kokoro_tts'
@@ -200,15 +200,15 @@ def test_signalwire_target_client_invokes_smoke_and_returns_current_run_evidence
 
 
 def test_signalwire_target_accepts_only_remote_speech_transcript_sources(tmp_path, monkeypatch):
-    result_dir = tmp_path / 'browser-result'
+    result_dir = tmp_path / 'webrtc-result'
     result_dir.mkdir()
     target_audio = result_dir / 'target-audio.webm'
     target_audio.write_bytes(b'current-run-signalwire-audio')
     result_path = result_dir / 'result.json'
     result_path.write_text(json.dumps({
         'status': 'pass',
-        'connection': {'ui_connected': True, 'remote_stream_seen': True},
-        'tester': {'headless_browser': True, 'media_source': 'kokoro_tts'},
+        'connection': {'call_connected': True, 'remote_stream_seen': True},
+        'tester': {'media_source': 'kokoro_tts'},
         'media': {'target_audio_duration_ms': 5000},
         'transcript': {
             'caller_text': 'I want a taco.',
@@ -252,7 +252,7 @@ def test_signalwire_target_transcribes_captured_response_with_existing_rtc_asr(
     tmp_path,
     monkeypatch,
 ):
-    result_dir = tmp_path / 'browser-result'
+    result_dir = tmp_path / 'webrtc-result'
     result_dir.mkdir()
     target_audio = result_dir / 'target-audio.webm'
     target_audio.write_bytes(b'current-run-signalwire-audio')
@@ -261,8 +261,8 @@ def test_signalwire_target_transcribes_captured_response_with_existing_rtc_asr(
     result_path = result_dir / 'result.json'
     result_path.write_text(json.dumps({
         'status': 'pass',
-        'connection': {'ui_connected': True, 'remote_stream_seen': True},
-        'tester': {'headless_browser': True, 'media_source': 'kokoro_tts'},
+        'connection': {'call_connected': True, 'remote_stream_seen': True},
+        'tester': {'media_source': 'kokoro_tts'},
         'media': {'target_audio_duration_ms': 5000},
         'transcript': {
             'caller_text': 'I want a taco.',
@@ -317,15 +317,15 @@ def test_signalwire_target_grounds_caller_text_in_cae_synthesized_audio(
     tmp_path,
     monkeypatch,
 ):
-    result_dir = tmp_path / 'browser-result'
+    result_dir = tmp_path / 'webrtc-result'
     result_dir.mkdir()
     target_audio = result_dir / 'target-audio.webm'
     target_audio.write_bytes(b'current-run-signalwire-audio')
     result_path = result_dir / 'result.json'
     result_path.write_text(json.dumps({
         'status': 'pass',
-        'connection': {'ui_connected': True, 'remote_stream_seen': True},
-        'tester': {'headless_browser': True, 'media_source': 'supplied_audio_file'},
+        'connection': {'call_connected': True, 'remote_stream_seen': True},
+        'tester': {'media_source': 'supplied_audio_file'},
         'media': {'target_audio_duration_ms': 5000},
         'transcript': {
             'caller_text': '',
@@ -364,22 +364,23 @@ def test_signalwire_target_grounds_caller_text_in_cae_synthesized_audio(
     ]
 
 
-def test_signalwire_browser_smoke_plays_caller_once_and_uses_audible_latency():
+def test_signalwire_smoke_uses_direct_webrtc_and_audible_latency():
     repo_root = Path(signalwire_target.__file__).resolve().parents[4]
     script = (repo_root / 'scripts' / 'signalwire_holyguacamole_smoke.mjs').read_text(
         encoding='utf-8'
     )
 
-    assert 'source.loop = false' in script
-    assert 'source.stop(scheduledStartContextTime + buffer.duration)' in script
-    assert 'context.currentTime + 5' not in script
-    assert 'Date.now() + 5000' not in script
-    assert 'window.__caeStartInjectedAudio' in script
-    assert 'webrtc_connected_remote_audio_track' in script
-    assert "state.connected\n        && state.remoteAudio" in script
+    assert "require('@signalwire/js')" in script
+    assert "require('@roamhq/wrtc')" in script
+    assert 'new wrtc.nonstandard.RTCAudioSource()' in script
+    assert 'new wrtc.nonstandard.RTCAudioSink(track)' in script
+    assert 'new SignalWire(credentialProvider' in script
+    assert 'client.dial(firstCredential.address' in script
+    assert "import { chromium } from 'playwright'" not in script
+    assert 'chromium.launch' not in script
+    assert 'headless: true' not in script
     assert 'normalizeAllowlistedTargetUrl(args.targetUrl)' in script
     assert 'url.href !== expected.href' in script
-    assert 'firstAudibleAudioEpochMs' in script
     assert 'first_outbound_sample_epoch_ms' in script
     assert 'caller_audio_played' in script
     assert 'caller_audio_completed' in script
@@ -389,38 +390,20 @@ def test_signalwire_browser_smoke_plays_caller_once_and_uses_audible_latency():
     assert 'supplied audio file (speech text unverified)' in script
     assert 'remote_audio_after_caller_seen' in script
     assert '/reference-tester/turn' in script
-    assert 'window.__caePlayInjectedAudioBase64' in script
-    assert 'window.__caeCaptureRemoteResponse' in script
     assert '--max-exchanges must be 1 or 2.' in script
-    assert 'firstAudibleAudioAfterCallerEpochMs' in script
-    assert 'POST_CALLER_REMOTE_AUDIO_GRACE_MS = 500' in script
-    assert 'REMOTE_AUDIO_SILENCE_BOUNDARY_MS = 700' in script
-    assert 'POST_CALLER_RESPONSE_END_SILENCE_MS = 1200' in script
-    assert 'POST_CALLER_RESPONSE_MIN_CAPTURE_MS = 3000' in script
-    assert 'POST_CALLER_RESPONSE_TAIL_MS = 8000' in script
-    assert 'postCallerSilenceBoundaryEpochMs' in script
-    assert 'postCallerResponseEndEpochMs' in script
-    assert 'post_caller_silence_boundary_seen' in script
-    assert 'post_caller_response_end_seen' in script
-    assert 'post_caller_remote_audible_onset_not_captured' in script
-    assert 'Date.now() - firstAudibleAudioAfterCallerEpochMs >= 1000' not in script
-    assert 'caller_audio_not_played' in script
-    assert 'connect_click_to_first_audible_audio_ms' in script
+    assert 'POST_CALLER_GRACE_MS = 300' in script
+    assert 'PRE_RESPONSE_SILENCE_MS = 700' in script
+    assert 'RESPONSE_END_SILENCE_MS = 1800' in script
+    assert 'RESPONSE_MIN_CAPTURE_MS = 3500' in script
+    assert 'RESPONSE_MAX_CAPTURE_MS = 9000' in script
     assert 'caller_audio_completed_to_remote_audio_ms' in script
-    assert 'connect_click_to_remote_audio_ms = clickMs ? remoteAudioMs - clickMs : null' not in script
-    assert 'responseWavBase64' in script
-    assert "target-response.wav" in script
     assert 'target_response_audio' in script
-    assert 'combineResponseWavs(responseAudios) || targetAudio' in script
+    assert 'createPcmWav(capture.chunks' in script
     assert "extension: 'target-audio.wav'" in script
-    assert 'const sessionDeadlineMs = startedMs + args.timeoutMs' in script
-    assert 'timeoutMs: secondRecorderTimeoutMs' in script
-    assert 'const recordDeadline = Math.min(deadline, Date.now() + 24000)' in script
-    assert 'Date.now() + Math.min(24000, Math.max(12000, timeoutMs - 1000))' not in script
+    assert 'const deadline = startedMs + args.timeoutMs' in script
     assert 'CaeLiveAudioPublisher' in script
     assert '/outbound-voice/broadcast/open' in script
     assert '/outbound-voice/broadcast/audio' in script
     assert '/outbound-voice/broadcast/close' in script
-    assert '__caePublishLivePcm' in script
     assert "direction: 'tester_to_target'" in script
     assert "direction: 'target_to_tester'" in script

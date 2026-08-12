@@ -93,7 +93,7 @@ function targetLabel(target: FormTarget) {
   if (target === 'offline_acc_fixture') return 'Saved ACC text replay';
   if (target === 'http_endpoint') return 'HTTP JSON endpoint (live)';
   if (target === 'pipecat_public_demo') return 'Pipecat public demo (direct Daily WebRTC)';
-  if (target === 'signalwire_holy_guacamole') return 'Holy Guacamole SignalWire (browser WebRTC)';
+  if (target === 'signalwire_holy_guacamole') return 'Holy Guacamole SignalWire (direct WebRTC)';
   if (target === 'browser_webrtc_agent') return 'ACC browser WebRTC (coming soon)';
   if (target === 'sip_agent') return 'ACC SIP URI (coming soon)';
   if (target === 'phone_agent') return 'ACC phone number (coming soon)';
@@ -474,12 +474,12 @@ function AgentFormModal({
             <fieldset className="agents-connection-fields">
               <legend>
                 {target === 'signalwire_holy_guacamole'
-                  ? 'Holy Guacamole SignalWire browser WebRTC target'
+                  ? 'Holy Guacamole direct SignalWire WebRTC target'
                   : 'Public Pipecat direct WebRTC target'}
               </legend>
               <p>
                 {target === 'signalwire_holy_guacamole'
-                  ? 'CAE drives the public SignalWire browser flow with synthesized scenario speech, then captures current-run remote audio, latency, and redacted provenance.'
+                  ? 'CAE connects directly with the SignalWire SDK, sends synthesized scenario speech, and captures current-run remote audio, latency, and redacted provenance without a browser.'
                   : 'CAE joins the demo&apos;s ephemeral Daily room directly through Pipecat, sends synthesized scenario speech, and captures current-run response audio, transcript, latency, and redacted provenance.'}
               </p>
               <label>
