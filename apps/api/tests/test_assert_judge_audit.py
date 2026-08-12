@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -89,10 +91,34 @@ def test_assert_judge_endpoint_records_product_audit_metadata(monkeypatch):
     assert response.json()['review_id'] == 'judge-review-audit'
     assert recorded['user_id'] == run['user_id']
     assert recorded['project_id'] == run['project_id']
-    assert recorded['plan'] == 'starter'
+    # The absent project defaults to the actual baseline entitlement rather than
+    # ASSERT's separate feature requirement (`required_plan='starter'`).
+    assert recorded['plan'] == 'free'
     assert recorded['status'] == 'ready'
     assert recorded['credits'] == 10
     assert recorded['provider'] == 'assert-ai'
     assert recorded['model'] == 'openai/gpt-4.1-mini'
     assert recorded['judge_output'] == '{"judge_status":"ok"}'
     assert recorded['agrees'] is False
+
+
+def test_assert_audit_uses_the_persisted_project_plan():
+    from app.routes import assert_sidecar
+
+    class FakeQuery:
+        def filter(self, *criteria):
+            return self
+
+        def first(self):
+            return SimpleNamespace(plan='team')
+
+    class FakeSession:
+        def query(self, model):
+            assert model is assert_sidecar.ProductProject
+            return FakeQuery()
+
+    assert assert_sidecar._product_plan(
+        FakeSession(),
+        user_id='audit-user',
+        project_id='audit-project',
+    ) == 'team'
