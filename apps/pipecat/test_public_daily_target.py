@@ -17,6 +17,7 @@ from public_daily_target import (
     _current_target_text,
     _message_completes_bot_turn,
     _play_caller_turn,
+    _remaining_session_timeout,
     _wait_for_event_or_error,
     _wait_for_target_audio_drain,
     run_public_daily_target,
@@ -37,6 +38,19 @@ def test_public_target_timeout_matches_execution_api_limit():
 
     assert service_request.timeout_seconds == 300
     assert daily_request.timeout_seconds == 300
+
+
+def test_public_session_timeout_uses_one_remaining_budget(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(public_daily_target.time, 'monotonic', lambda: clock[0])
+    deadline = clock[0] + 30
+
+    assert _remaining_session_timeout(deadline, 30) == 30
+    clock[0] += 12.5
+    assert _remaining_session_timeout(deadline, 30) == 17.5
+    clock[0] = deadline
+    with pytest.raises(PublicDailyTargetError, match='session exceeded 30 seconds'):
+        _remaining_session_timeout(deadline, 30)
 
 
 def test_public_daily_target_implements_outbound_adapter_contract():

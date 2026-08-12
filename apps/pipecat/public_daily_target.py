@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -152,9 +153,13 @@ async def _wait_for_target_audio_drain(
     evidence: Any,
     *,
     completed_at: float | None = None,
+    timeout_seconds: float = TARGET_AUDIO_DRAIN_TIMEOUT_SECONDS,
 ) -> None:
     """Allow Daily media to catch up with its independent RTVI completion stream."""
-    deadline = time.monotonic() + TARGET_AUDIO_DRAIN_TIMEOUT_SECONDS
+    deadline = time.monotonic() + min(
+        TARGET_AUDIO_DRAIN_TIMEOUT_SECONDS,
+        max(0.0, timeout_seconds),
+    )
     while time.monotonic() < deadline:
         _raise_transport_error(evidence)
         last_audio_at = evidence.last_target_audio_at
@@ -169,6 +174,32 @@ async def _wait_for_target_audio_drain(
             return
         await asyncio.sleep(0.02)
     _raise_transport_error(evidence)
+
+
+def _remaining_session_timeout(deadline: float, configured_seconds: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise PublicDailyTargetError(
+            f'Public Pipecat duplex session exceeded {configured_seconds:g} seconds.'
+        )
+    return remaining
+
+
+async def _await_with_session_timeout(
+    operation: Callable[[], Awaitable[Any]],
+    *,
+    deadline: float,
+    configured_seconds: float,
+) -> Any:
+    try:
+        return await asyncio.wait_for(
+            operation(),
+            timeout=_remaining_session_timeout(deadline, configured_seconds),
+        )
+    except TimeoutError as exc:
+        raise PublicDailyTargetError(
+            f'Public Pipecat duplex session exceeded {configured_seconds:g} seconds.'
+        ) from exc
 
 
 def _completed_bot_output_text(message: Any) -> str:
@@ -551,33 +582,46 @@ async def run_public_daily_duplex(
 
         current_text = request.caller_text
         current_wav = caller_wav
+        session_deadline = time.monotonic() + request.timeout_seconds
         for turn_pair in range(1, request.max_turn_pairs + 1):
             caller_pcm, caller_rate, caller_channels = wav_to_pcm(current_wav)
             caller_transcript_count = run.begin_turn(turn_pair)
 
-            sent = await _play_caller_turn(
-                run,
-                task,
-                turn_pair=turn_pair,
-                caller_text=current_text,
-                caller_wav=current_wav,
-                caller_pcm=caller_pcm,
-                sample_rate=caller_rate,
-                channels=caller_channels,
-                audio_frame_callback=audio_frame_callback,
+            sent = await _await_with_session_timeout(
+                lambda: _play_caller_turn(
+                    run,
+                    task,
+                    turn_pair=turn_pair,
+                    caller_text=current_text,
+                    caller_wav=current_wav,
+                    caller_pcm=caller_pcm,
+                    sample_rate=caller_rate,
+                    channels=caller_channels,
+                    audio_frame_callback=audio_frame_callback,
+                ),
+                deadline=session_deadline,
+                configured_seconds=request.timeout_seconds,
             )
             await _wait_for_event_or_error(
                 evidence.response_complete,
                 evidence,
-                timeout=request.timeout_seconds,
+                timeout=_remaining_session_timeout(
+                    session_deadline,
+                    request.timeout_seconds,
+                ),
                 timeout_message=(
-                    f'Public Pipecat bot did not complete response {turn_pair} before the run timeout.'
+                    f'Public Pipecat duplex session exceeded {request.timeout_seconds:g} seconds.'
                 ),
             )
             await _wait_for_target_audio_drain(
                 evidence,
                 completed_at=evidence.response_complete_at,
+                timeout_seconds=_remaining_session_timeout(
+                    session_deadline,
+                    request.timeout_seconds,
+                ),
             )
+            _remaining_session_timeout(session_deadline, request.timeout_seconds)
 
             caller_receipts = evidence.caller_transcripts[caller_transcript_count:]
             caller_transcript = ' '.join(caller_receipts).strip()
@@ -607,11 +651,15 @@ async def run_public_daily_duplex(
                 break
             if next_turn is None:
                 break
-            current_text, current_wav = await next_turn(
-                turn_pair + 1,
-                caller_transcript,
-                target_text,
-                target_wav,
+            current_text, current_wav = await _await_with_session_timeout(
+                lambda: next_turn(
+                    turn_pair + 1,
+                    caller_transcript,
+                    target_text,
+                    target_wav,
+                ),
+                deadline=session_deadline,
+                configured_seconds=request.timeout_seconds,
             )
             if not str(current_text).strip() or not current_wav:
                 raise PublicDailyTargetError(

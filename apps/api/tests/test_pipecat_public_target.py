@@ -196,6 +196,7 @@ def test_public_target_client_timeout_includes_service_setup_and_playback(monkey
             artifact_dir=tmp_path,
             conversation_id='conversation-timeout-budget',
             timeout_seconds=300,
+            max_exchanges=10,
             config=ReferenceRuntimeConfig(
                 pipecat_service_url='http://pipecat.test',
                 internal_token='internal-only',
