@@ -277,8 +277,10 @@ interface OpenAIProviderStatus {
 }
 
 const DEFAULT_EXECUTION_MODEL = 'gpt-5.4-mini';
+const LOCAL_EXECUTION_MODELS = ['ollama/gemma2:2b'];
 const FALLBACK_EXECUTION_MODELS = [
   'gpt-5.4-mini',
+  ...LOCAL_EXECUTION_MODELS,
   'gpt-5.4',
   'gpt-5.2',
   'gpt-4.1',
@@ -292,7 +294,7 @@ const FALLBACK_EXECUTION_MODELS = [
 async function fetchOpenAIModels(): Promise<{ models: string[]; message: string | null }> {
   const response = await fetch(`${getApiBase()}/api/product/providers/openai/models`, { cache: 'no-store' });
   if (response.status === 401) {
-    return { models: [DEFAULT_EXECUTION_MODEL], message: 'Connect OpenAI to load models' };
+    return { models: [DEFAULT_EXECUTION_MODEL, ...LOCAL_EXECUTION_MODELS], message: 'Connect OpenAI to load GPT models; local Ollama models stay available.' };
   }
   if (!response.ok) {
     // Never leave the dropdown empty on transient API failures.
@@ -310,7 +312,7 @@ async function fetchOpenAIModels(): Promise<{ models: string[]; message: string 
   const ids = (payload.models ?? [])
     .map((item) => (typeof item === 'string' ? item : item.id))
     .filter((id): id is string => Boolean(id && id.trim()));
-  const merged = Array.from(new Set([DEFAULT_EXECUTION_MODEL, ...ids]));
+  const merged = Array.from(new Set([DEFAULT_EXECUTION_MODEL, ...LOCAL_EXECUTION_MODELS, ...ids]));
   merged.sort((a, b) => {
     if (a === DEFAULT_EXECUTION_MODEL) return -1;
     if (b === DEFAULT_EXECUTION_MODEL) return 1;
@@ -2511,7 +2513,7 @@ export function BenchmarkRunner({
     async function loadExecutionModels() {
       if (openaiProvider?.status !== 'connected') {
         setExecutionModelOptions([DEFAULT_EXECUTION_MODEL, ...FALLBACK_EXECUTION_MODELS.filter((id) => id !== DEFAULT_EXECUTION_MODEL)]);
-        setExecutionModelsMessage('Connect OpenAI to load models');
+        setExecutionModelsMessage('Connect OpenAI to load GPT models; local Ollama models stay available.');
         setExecutionModelName((current) => current || DEFAULT_EXECUTION_MODEL);
         return;
       }
@@ -4782,7 +4784,7 @@ export function BenchmarkRunner({
             {openaiProvider?.status !== 'connected' ? (
               <span style={{ color: 'var(--muted)', fontSize: 13 }}>
                 {selectedScoreAgent.id === 'generalist-text-agent' || selectedScoreAgent.target === 'builtin_sample_voice'
-                  ? 'This reference target can use OPENAI_API_KEY from the API environment, or you can connect OpenAI here. '
+                  ? 'This reference target can use OPENAI_API_KEY, a connected OpenAI account, or local Ollama for ollama/... model ids. '
                   : 'Connect OpenAI to run this target. '}
                 <button type="button" className="secondary-link" disabled={isConnectingOpenAI} onClick={() => void onConnectOpenAI()} style={{ padding: 0, border: 0, background: 'transparent', color: 'var(--accent)', fontWeight: 700, cursor: 'pointer' }}>
                   {isConnectingOpenAI ? 'Connecting…' : 'Connect OpenAI'}
