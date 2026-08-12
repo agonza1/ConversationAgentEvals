@@ -39,9 +39,7 @@ function parseArgs(argv) {
       throw new Error(`Unknown option: ${value}`);
     }
   }
-  if (new URL(args.targetUrl).origin !== new URL(DEFAULT_TARGET_URL).origin) {
-    throw new Error(`Holy Guacamole smoke is allowlisted to ${DEFAULT_TARGET_URL}.`);
-  }
+  args.targetUrl = normalizeAllowlistedTargetUrl(args.targetUrl);
   if (!Number.isFinite(args.timeoutMs) || args.timeoutMs < 10000) {
     throw new Error('--timeout-ms must be a number >= 10000.');
   }
@@ -49,6 +47,15 @@ function parseArgs(argv) {
     throw new Error('Set SIGNALWIRE_HOLYGUACAMOLE_ALLOW_PUBLIC=1 to run the public SignalWire smoke.');
   }
   return args;
+}
+
+function normalizeAllowlistedTargetUrl(value) {
+  const url = new URL(value);
+  const expected = new URL(DEFAULT_TARGET_URL);
+  if (url.href !== expected.href) {
+    throw new Error(`Holy Guacamole smoke is allowlisted to ${DEFAULT_TARGET_URL}.`);
+  }
+  return expected.href;
 }
 
 function requireValue(argv, index, flag) {
@@ -126,6 +133,8 @@ function baseResult(args, startedAt) {
       sdk_connected: false,
       ui_connected: false,
       remote_stream_seen: false,
+      caller_audio_played: false,
+      caller_audio_completed: false,
       terminal_status: null,
     },
     latency_metrics: {
@@ -257,27 +266,72 @@ async function runSmoke(args) {
         if (!constraints || !constraints.audio) {
           return originalGetUserMedia ? originalGetUserMedia(constraints) : new MediaStream();
         }
-        const context = new AudioContext();
-        const destination = context.createMediaStreamDestination();
-        const bytes = Uint8Array.from(atob(audioBase64), (char) => char.charCodeAt(0));
-        const buffer = await context.decodeAudioData(bytes.buffer.slice(0));
-        const source = context.createBufferSource();
-        source.buffer = buffer;
-        source.loop = false;
-        const gain = context.createGain();
-        gain.gain.value = 0.95;
-        source.connect(gain).connect(destination);
-        const startAt = context.currentTime + 5;
-        source.start(startAt);
-        source.stop(startAt + buffer.duration);
-        window.__caeInjectedAudioContext = context;
-        window.__caeInjectedAudioSource = source;
-        window.__caeInjectedAudioPlayback = {
-          loop: false,
-          duration_ms: Math.round(buffer.duration * 1000),
-          start_delay_ms: 5000,
-        };
-        return destination.stream;
+        if (window.__caeInjectedAudioPlayback) {
+          window.__caeInjectedAudioPlayback.get_user_media_request_count += 1;
+        }
+        if (window.__caeInjectedAudioStreamPromise) {
+          return window.__caeInjectedAudioStreamPromise;
+        }
+        window.__caeInjectedAudioStreamPromise = (async () => {
+          const context = new AudioContext();
+          const destination = context.createMediaStreamDestination();
+          const bytes = Uint8Array.from(atob(audioBase64), (char) => char.charCodeAt(0));
+          const buffer = await context.decodeAudioData(bytes.buffer.slice(0));
+          const source = context.createBufferSource();
+          source.buffer = buffer;
+          source.loop = false;
+          const gain = context.createGain();
+          gain.gain.value = 0.95;
+          const processor = context.createScriptProcessor(2048, 1, 1);
+          const sink = context.createGain();
+          sink.gain.value = 0;
+          const startAt = context.currentTime + 5;
+          const playback = {
+            loop: false,
+            duration_ms: Math.round(buffer.duration * 1000),
+            start_delay_ms: 5000,
+            scheduled_start_epoch_ms: Date.now() + 5000,
+            first_outbound_sample_epoch_ms: null,
+            first_outbound_sample_offset_ms: null,
+            ended_epoch_ms: null,
+            ended: false,
+            observed_peak: 0,
+            get_user_media_request_count: 1,
+          };
+          processor.onaudioprocess = (event) => {
+            const input = event.inputBuffer.getChannelData(0);
+            let peak = 0;
+            for (let index = 0; index < input.length; index += 1) {
+              const sample = Math.abs(input[index]);
+              if (sample > peak) peak = sample;
+            }
+            if (peak > playback.observed_peak) playback.observed_peak = peak;
+            if (playback.first_outbound_sample_epoch_ms === null && peak >= 0.001) {
+              playback.first_outbound_sample_epoch_ms = Date.now();
+              playback.first_outbound_sample_offset_ms = Math.max(0, Math.round((context.currentTime - startAt) * 1000));
+            }
+          };
+          source.onended = () => {
+            playback.ended = true;
+            playback.ended_epoch_ms = Date.now();
+            processor.disconnect();
+            sink.disconnect();
+          };
+          source.connect(gain);
+          gain.connect(destination);
+          gain.connect(processor);
+          processor.connect(sink);
+          sink.connect(context.destination);
+          await context.resume().catch(() => {});
+          source.start(startAt);
+          source.stop(startAt + buffer.duration);
+          window.__caeInjectedAudioContext = context;
+          window.__caeInjectedAudioSource = source;
+          window.__caeInjectedAudioPlayback = playback;
+          window.__caeInjectedAudioStream = destination.stream;
+          return window.__caeInjectedAudioStream;
+        })();
+        return window.__caeInjectedAudioStreamPromise;
       };
     }, { audioBase64: callerBytes.toString('base64') });
 
@@ -406,8 +460,14 @@ async function runSmoke(args) {
           order: text('#order-display'),
           connected: Boolean(document.querySelector('#remote-video')) || document.body.innerText.includes('Connected!'),
           remoteAudio: Boolean(document.querySelector('#remote-video')?.srcObject?.getAudioTracks?.().length),
+          callerPlayback: window.__caeInjectedAudioPlayback || null,
         };
       });
+      if (state.callerPlayback) {
+        result.tester.caller_audio_playback = state.callerPlayback;
+        result.connection.caller_audio_played = Boolean(state.callerPlayback.first_outbound_sample_epoch_ms);
+        result.connection.caller_audio_completed = Boolean(state.callerPlayback.ended);
+      }
       if (state.status) result.page_events.push({ kind: 'status', text: state.status, t_ms: Date.now() - startedMs });
       if (state.result) result.page_events.push({ kind: 'result', text: state.result, t_ms: Date.now() - startedMs });
       if (state.order && !state.order.includes('Your order will appear here')) {
@@ -429,6 +489,12 @@ async function runSmoke(args) {
     }
 
     const recorded = await recorderPromise.catch((error) => ({ ok: false, reason: String(error) }));
+    const callerPlayback = await page.evaluate(() => window.__caeInjectedAudioPlayback || null).catch(() => null);
+    if (callerPlayback) {
+      result.tester.caller_audio_playback = callerPlayback;
+      result.connection.caller_audio_played = Boolean(callerPlayback.first_outbound_sample_epoch_ms);
+      result.connection.caller_audio_completed = Boolean(callerPlayback.ended);
+    }
     if (recorded.ok && recorded.bytes > 0) {
       targetAudio = {
         buffer: Buffer.from(recorded.base64, 'base64'),
@@ -446,13 +512,23 @@ async function runSmoke(args) {
       }
     }
     deriveTranscript(result, args);
-    if (result.connection.ui_connected && targetAudio?.buffer?.length && result.connection.remote_audio_sample_seen) {
+    if (
+      result.connection.ui_connected
+      && result.connection.caller_audio_played
+      && result.connection.caller_audio_completed
+      && targetAudio?.buffer?.length
+      && result.connection.remote_audio_sample_seen
+    ) {
       result.status = 'pass';
-      result.reason = 'Holy Guacamole SignalWire connected and audible remote audio was captured.';
+      result.reason = 'Holy Guacamole SignalWire connected, caller audio playback was observed, and audible remote audio was captured.';
     } else {
       result.status = 'blocked';
-      result.reason_code = recorded.reason || 'remote_audible_audio_not_captured';
-      result.reason = 'The public SignalWire page was reached, but audible remote audio evidence was not captured before timeout.';
+      result.reason_code = !result.connection.caller_audio_played
+        ? 'caller_audio_not_played'
+        : !result.connection.caller_audio_completed
+          ? 'caller_audio_not_completed'
+          : recorded.reason || 'remote_audible_audio_not_captured';
+      result.reason = 'The public SignalWire page was reached, but grounded caller playback and audible remote audio evidence were not both captured before timeout.';
     }
 
     await page.locator('#hangupBtn').click({ timeout: 3000 }).catch(() => {});
@@ -491,6 +567,7 @@ async function main() {
     result_path: relativeToRepo(resultPath),
     transcript_path: result.transcript.artifact_path,
     target_audio_path: result.artifacts.target_audio || null,
+    caller_audio_playback: result.tester.caller_audio_playback || null,
     latency_metrics: result.latency_metrics,
     connection: result.connection,
   };

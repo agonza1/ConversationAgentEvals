@@ -131,6 +131,15 @@ test('launch evaluation streams conversations into the live list', async ({ page
             description: 'Reference voice target',
             metadata: { model_name: 'registry-seed-must-not-override-env' },
           },
+          {
+            id: 'holyguacamole-signalwire-agent',
+            name: 'Holy Guacamole SignalWire',
+            channel: 'voice',
+            target: 'signalwire_holy_guacamole',
+            description: 'Public SignalWire voice target',
+            connection: { endpoint_url: 'https://holyguacamole.signalwire.me/' },
+            metadata: { model_name: 'signalwire-ai-agent' },
+          },
         ],
       }),
     });
@@ -160,6 +169,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   let posted: Record<string, unknown> | null = null;
   const textPostAttempts: Record<string, unknown>[] = [];
   let voicePosted: Record<string, unknown> | null = null;
+  let signalwirePosted: Record<string, unknown> | null = null;
   let voiceRunCount = 0;
   const listenerRunIds: string[] = [];
   let firstListenerPollStarted = false;
@@ -175,6 +185,30 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await page.route('**/api/execution/runs**', async (route) => {
     if (route.request().method() === 'POST') {
       const body = route.request().postDataJSON() as Record<string, unknown>;
+      if (body.agent_id === 'holyguacamole-signalwire-agent') {
+        signalwirePosted = body;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            execution_run_id: 'exec-ui-signalwire',
+            status: 'queued',
+            mode: 'pipecat_webrtc',
+            suite_id: 'call-center-voice-ai',
+            scenario_ids: ['billing-address-change'],
+            user_id: 'demo-user',
+            project_id: 'call-center-demo',
+            agent_id: 'holyguacamole-signalwire-agent',
+            agent_name: 'Holy Guacamole SignalWire',
+            model_name: body.model_name,
+            progress: { phase: 'queued', completed_conversations: 0, total_conversations: 1, percent: 0 },
+            conversations: [],
+            created_at: '2026-07-18T00:00:00Z',
+            updated_at: '2026-07-18T00:00:00Z',
+          }),
+        });
+        return;
+      }
       if (body.agent_id === 'generalist-voice-agent') {
         voicePosted = body;
         voiceRunCount += 1;
@@ -559,6 +593,23 @@ test('launch evaluation streams conversations into the live list', async ({ page
   expect(listenerRunIds).toEqual(['exec-ui-voice-1', 'exec-ui-voice-2']);
   await expect(page.getByRole('heading', { name: 'Recent runs' })).toBeVisible();
   await expect(page.getByRole('link', { name: /Mock text agent/ })).toContainText('queued');
+
+  await launch.getByLabel('Execution agent target').selectOption('holyguacamole-signalwire-agent');
+  await expect(launch.getByLabel('Maximum exchanges')).toBeDisabled();
+  await expect(launch).toContainText('SignalWire browser runs capture one caller turn');
+  await launch.getByRole('button', { name: 'Run evaluation' }).click();
+  await expect.poll(() => signalwirePosted).not.toBeNull();
+  expect(signalwirePosted).toMatchObject({
+    mode: 'pipecat_webrtc',
+    agent_id: 'holyguacamole-signalwire-agent',
+    tester_id: 'pipecat_tester',
+    executor_id: 'signalwire_public_browser',
+    audio_transport: 'signalwire_browser_webrtc',
+    suite_id: 'call-center-voice-ai',
+    scenario_ids: ['billing-address-change'],
+    max_exchanges: 1,
+    model_name: 'signalwire-ai-agent',
+  });
 
   voicePreflightReady = false;
   await page.goto('/runs?api_base=http%3A%2F%2Fapi.example.test&suite_id=call-center-voice-ai&scenario_id=cancellation-rescue');

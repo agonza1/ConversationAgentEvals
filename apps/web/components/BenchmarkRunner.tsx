@@ -3568,6 +3568,9 @@ export function BenchmarkRunner({
     setRunError(null);
 
     try {
+      const modelNameForExecutionRun = signalwireAgent
+        ? 'signalwire-ai-agent'
+        : executionModelName || DEFAULT_EXECUTION_MODEL;
       const queued = await createExecutionRun({
         suite_id: suiteForRun,
         scenario_ids: scenarioIds,
@@ -3580,7 +3583,7 @@ export function BenchmarkRunner({
         project_id: identity.projectId,
         evaluate: true,
         agent_id: selectedAgentId || undefined,
-        model_name: executionModelName || DEFAULT_EXECUTION_MODEL,
+        model_name: modelNameForExecutionRun,
         tester_id: runTesterId,
         executor_id: runExecutorId,
         audio_transport: publicPipecatAgent
