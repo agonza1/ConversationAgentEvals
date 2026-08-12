@@ -411,6 +411,12 @@ def test_signalwire_browser_smoke_plays_caller_once_and_uses_audible_latency():
     assert 'responseWavBase64' in script
     assert "target-response.wav" in script
     assert 'target_response_audio' in script
+    assert 'combineResponseWavs(responseAudios) || targetAudio' in script
+    assert "extension: 'target-audio.wav'" in script
+    assert 'const sessionDeadlineMs = startedMs + args.timeoutMs' in script
+    assert 'timeoutMs: secondRecorderTimeoutMs' in script
+    assert 'const recordDeadline = Math.min(deadline, Date.now() + 24000)' in script
+    assert 'Date.now() + Math.min(24000, Math.max(12000, timeoutMs - 1000))' not in script
     assert 'CaeLiveAudioPublisher' in script
     assert '/outbound-voice/broadcast/open' in script
     assert '/outbound-voice/broadcast/audio' in script

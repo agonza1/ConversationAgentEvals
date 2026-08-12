@@ -625,6 +625,9 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await launch.getByLabel('Execution agent target').selectOption('holyguacamole-signalwire-agent');
   await expect(launch.getByLabel('Maximum exchanges')).toBeEnabled();
   await expect(launch.getByLabel('Maximum exchanges')).toHaveAttribute('max', '2');
+  await launch.getByLabel('Maximum exchanges').fill('');
+  await expect(launch).toContainText('enter an exchange cap');
+  await expect(launch.getByRole('button', { name: 'Run evaluation' })).toBeDisabled();
   await launch.getByLabel('Maximum exchanges').fill('2');
   await expect(launch).toContainText('SignalWire supports up to two in the same browser call');
   await launch.getByRole('button', { name: 'Run evaluation' }).click();

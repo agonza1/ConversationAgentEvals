@@ -3489,9 +3489,11 @@ export function BenchmarkRunner({
     const supportsConfigurableExchanges =
       selectedScoreAgent.target === 'openai_codex'
       || selectedScoreAgent.target === 'builtin_sample_voice'
-      || selectedScoreAgent.target === 'pipecat_public_demo';
+      || selectedScoreAgent.target === 'pipecat_public_demo'
+      || selectedScoreAgent.target === 'signalwire_holy_guacamole';
     if (supportsConfigurableExchanges && executionMaxExchanges === '') {
-      setExecutionMessage('Enter a maximum exchange count from 1 to 10 before launching.');
+      const exchangeLimit = selectedScoreAgent.target === 'signalwire_holy_guacamole' ? 2 : 10;
+      setExecutionMessage(`Enter a maximum exchange count from 1 to ${exchangeLimit} before launching.`);
       return null;
     }
     const maxExchanges = executionMaxExchanges === '' ? 3 : executionMaxExchanges;
@@ -4885,11 +4887,10 @@ export function BenchmarkRunner({
               {selectedScoreAgent?.target === 'openai_codex'
               || selectedScoreAgent?.target === 'builtin_sample_voice'
               || selectedScoreAgent?.target === 'pipecat_public_demo'
+              || selectedScoreAgent?.target === 'signalwire_holy_guacamole'
                 ? executionMaxExchanges === ''
                   ? ' · enter an exchange cap'
                   : ` · up to ${executionMaxExchanges} ${executionMaxExchanges === 1 ? 'exchange' : 'exchanges'} each`
-                : selectedScoreAgent?.target === 'signalwire_holy_guacamole'
-                  ? ` · up to ${Math.min(2, executionMaxExchanges === '' ? 1 : executionMaxExchanges)} ${executionMaxExchanges === 1 ? 'exchange' : 'exchanges'} each`
                 : ''}
               {' · results appear below'}
             </span>
@@ -4904,7 +4905,8 @@ export function BenchmarkRunner({
               || !selectedScoreAgent
               || ((selectedScoreAgent?.target === 'openai_codex'
                 || selectedScoreAgent?.target === 'builtin_sample_voice'
-                || selectedScoreAgent?.target === 'pipecat_public_demo')
+                || selectedScoreAgent?.target === 'pipecat_public_demo'
+                || selectedScoreAgent?.target === 'signalwire_holy_guacamole')
                 && executionMaxExchanges === '')
               || (selectedScoreAgent.target === 'openai_codex'
                 && selectedScoreAgent.id !== 'generalist-text-agent'

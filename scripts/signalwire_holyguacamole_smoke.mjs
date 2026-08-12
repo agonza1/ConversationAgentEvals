@@ -313,7 +313,7 @@ function baseResult(args, startedAt) {
   };
 }
 
-async function generateTesterFollowup(args, targetAudioWavBase64, history, turnPair) {
+async function generateTesterFollowup(args, targetAudioWavBase64, history, turnPair, timeoutMs) {
   if (!args.livePublishBaseUrl || !args.livePublishToken) {
     throw new Error('Multi-exchange SignalWire execution requires the existing Pipecat tester runtime.');
   }
@@ -334,6 +334,7 @@ async function generateTesterFollowup(args, targetAudioWavBase64, history, turnP
       target_audio_wav_base64: targetAudioWavBase64,
       model_name: args.testerModelName,
     }),
+    signal: AbortSignal.timeout(Math.max(1, timeoutMs)),
   });
   if (!response.ok) {
     const detail = await response.text();
@@ -391,18 +392,53 @@ async function synthesizeCallerAudio(args, runDir) {
   );
 }
 
+function combineResponseWavs(responseAudios) {
+  if (responseAudios.length < 2) return null;
+  const wavs = responseAudios.map((item) => item.buffer);
+  const first = wavs[0];
+  if (
+    !wavs.every((wav) => wav.length > 44 && wav.subarray(0, 4).toString('ascii') === 'RIFF')
+  ) return null;
+  const format = {
+    channels: first.readUInt16LE(22),
+    sampleRate: first.readUInt32LE(24),
+    bitsPerSample: first.readUInt16LE(34),
+  };
+  if (!wavs.every((wav) => (
+    wav.readUInt16LE(22) === format.channels
+    && wav.readUInt32LE(24) === format.sampleRate
+    && wav.readUInt16LE(34) === format.bitsPerSample
+  ))) return null;
+  const pcm = Buffer.concat(wavs.map((wav) => wav.subarray(44)));
+  const combined = Buffer.alloc(44 + pcm.length);
+  first.copy(combined, 0, 0, 44);
+  combined.writeUInt32LE(36 + pcm.length, 4);
+  combined.writeUInt32LE(pcm.length, 40);
+  pcm.copy(combined, 44);
+  return {
+    buffer: combined,
+    mimeType: 'audio/wav',
+    durationMs: responseAudios.reduce((total, item) => total + (item.durationMs || 0), 0),
+    extension: 'target-audio.wav',
+  };
+}
+
 async function writeArtifacts(result, runDir, targetAudio, responseAudios) {
+  const primaryTargetAudio = combineResponseWavs(responseAudios) || targetAudio;
   const transcriptPath = path.join(runDir, 'transcript.txt');
   await fs.writeFile(transcriptPath, `${result.transcript.text || ''}\n`, 'utf8');
   result.transcript.artifact_path = relativeToRepo(transcriptPath);
-  if (targetAudio?.buffer?.length) {
-    const audioPath = path.join(runDir, targetAudio.extension || 'target-audio.webm');
-    await fs.writeFile(audioPath, targetAudio.buffer);
-    result.media.target_audio_bytes = targetAudio.buffer.length;
-    result.media.target_audio_duration_ms = targetAudio.durationMs;
+  if (primaryTargetAudio?.buffer?.length) {
+    const audioPath = path.join(runDir, primaryTargetAudio.extension || 'target-audio.webm');
+    await fs.writeFile(audioPath, primaryTargetAudio.buffer);
+    result.media.target_audio_bytes = primaryTargetAudio.buffer.length;
+    result.media.target_audio_duration_ms = primaryTargetAudio.durationMs;
     result.artifacts.target_audio = relativeToRepo(audioPath);
-    result.artifacts.target_audio_mime = targetAudio.mimeType || 'audio/webm';
-    result.artifacts.target_audio_sha256 = crypto.createHash('sha256').update(targetAudio.buffer).digest('hex');
+    result.artifacts.target_audio_mime = primaryTargetAudio.mimeType || 'audio/webm';
+    result.artifacts.target_audio_sha256 = crypto
+      .createHash('sha256')
+      .update(primaryTargetAudio.buffer)
+      .digest('hex');
   }
   const responseAudio = responseAudios[0];
   if (responseAudio?.buffer?.length) {
@@ -460,6 +496,8 @@ function deriveTranscript(result, args) {
 async function runSmoke(args) {
   const startedAt = nowIso();
   const startedMs = Date.now();
+  const sessionDeadlineMs = startedMs + args.timeoutMs;
+  const remainingSessionMs = () => Math.max(0, sessionDeadlineMs - Date.now());
   const runId = `signalwire-holyguacamole-${startedAt.replace(/[:.]/g, '').replace(/-/g, '')}`;
   const runDir = path.resolve(REPO_ROOT, args.artifactRoot, runId);
   await fs.mkdir(runDir, { recursive: true });
@@ -619,7 +657,10 @@ async function runSmoke(args) {
     });
 
     const pageStartMs = Date.now();
-    await page.goto(args.targetUrl, { waitUntil: 'networkidle', timeout: args.timeoutMs });
+    await page.goto(args.targetUrl, {
+      waitUntil: 'networkidle',
+      timeout: Math.max(1, remainingSessionMs()),
+    });
     result.connection.page_loaded = true;
     result.latency_metrics.page_load_ms = Date.now() - pageStartMs;
 
@@ -631,11 +672,11 @@ async function runSmoke(args) {
       return result;
     }
     clickMs = Date.now();
-    await connectButton.first().click({ timeout: Math.min(args.timeoutMs, 15000) });
+    await connectButton.first().click({ timeout: Math.max(1, Math.min(remainingSessionMs(), 15000)) });
 
     const recorderConfig = {
       turnPair: 1,
-      timeoutMs: args.timeoutMs,
+      timeoutMs: remainingSessionMs(),
       postCallerRemoteAudioGraceMs: POST_CALLER_REMOTE_AUDIO_GRACE_MS,
       remoteAudioSilenceBoundaryMs: REMOTE_AUDIO_SILENCE_BOUNDARY_MS,
       postCallerResponseEndSilenceMs: POST_CALLER_RESPONSE_END_SILENCE_MS,
@@ -778,7 +819,7 @@ async function runSmoke(args) {
       }
       const started = Date.now();
       recorder.start(250);
-      const recordDeadline = Date.now() + Math.min(24000, Math.max(12000, timeoutMs - 1000));
+      const recordDeadline = Math.min(deadline, Date.now() + 24000);
       while (Date.now() < recordDeadline) {
         const responseCaptureMs = firstAudibleAudioAfterCallerEpochMs === null
           ? 0
@@ -895,8 +936,7 @@ async function runSmoke(args) {
       return window.__caeCaptureRemoteResponse(config);
     }, recorderConfig);
 
-    const deadline = startedMs + args.timeoutMs;
-    while (Date.now() < deadline) {
+    while (Date.now() < sessionDeadlineMs) {
       const state = await page.evaluate(() => {
         const text = (selector) => document.querySelector(selector)?.textContent?.replace(/\s+/g, ' ').trim() || '';
         return {
@@ -1005,11 +1045,16 @@ async function runSmoke(args) {
         recorded.responseWavBase64,
         [{ speaker: 'Caller', text: args.callerText }],
         2,
+        remainingSessionMs(),
       );
       result.exchanges[0].agent_text = followup.targetText;
+      const secondRecorderTimeoutMs = remainingSessionMs();
+      if (secondRecorderTimeoutMs < 1000) {
+        throw new Error('SignalWire session timeout elapsed before exchange 2 could start.');
+      }
       const secondRecorderPromise = page.evaluate(
         (config) => window.__caeCaptureRemoteResponse({ ...config, turnPair: 2 }),
-        recorderConfig,
+        { ...recorderConfig, timeoutMs: secondRecorderTimeoutMs },
       );
       await page.waitForTimeout(300);
       const secondPlayback = await page.evaluate(async ({ audioBase64 }) => (

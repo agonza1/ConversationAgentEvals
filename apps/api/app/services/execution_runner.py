@@ -849,8 +849,16 @@ def _execute_signalwire_holyguacamole_browser(
         'evidence_scope': 'current_run_only',
     }
     report: dict[str, Any] = {}
-    agent_transcribed = any(item.speaker == 'Agent' for item in transcription)
-    if payload.evaluate and agent_transcribed:
+    transcribed_agent_exchanges = {
+        int(item.frame_metadata.get('exchange') or ((item.turn_index + 1) // 2))
+        for item in transcription
+        if item.speaker == 'Agent'
+    }
+    all_agent_turns_transcribed = all(
+        exchange in transcribed_agent_exchanges
+        for exchange in range(1, payload.max_exchanges + 1)
+    )
+    if payload.evaluate and all_agent_turns_transcribed:
         report = run_scenario(BenchmarkRunRequest(
             suite_id=suite_id,
             scenario_id=scenario_id,
@@ -864,8 +872,8 @@ def _execute_signalwire_holyguacamole_browser(
         report = {
             'verdict': 'needs_review',
             'summary': (
-                'SignalWire evaluation skipped because current-run remote agent speech '
-                'was captured as audio but was not transcribed into grounded agent text.'
+                'SignalWire evaluation skipped because one or more requested remote agent '
+                'responses were captured as audio but were not transcribed into grounded text.'
             ),
             'failure_categories': ['missing_grounded_agent_transcript'],
             'failure_modes': ['signalwire_remote_speech_untranscribed'],
@@ -894,7 +902,7 @@ def _execute_signalwire_holyguacamole_browser(
         'target_media': 'current_run_signalwire_webrtc',
         'target_speech_transcript': (
             'current_run_asr'
-            if agent_transcribed
+            if all_agent_turns_transcribed
             else 'untranscribed_remote_audio'
         ),
         'max_exchanges': payload.max_exchanges,

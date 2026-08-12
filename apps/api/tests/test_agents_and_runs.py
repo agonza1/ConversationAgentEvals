@@ -631,7 +631,7 @@ def test_signalwire_holyguacamole_agent_uses_gated_browser_executor(monkeypatch)
     assert target_live_audio.content == b'RIFF-current-run-target-response-wav'
 
 
-def test_signalwire_holyguacamole_evaluation_without_agent_transcript_needs_review(monkeypatch):
+def test_signalwire_holyguacamole_evaluation_with_incomplete_agent_transcript_needs_review(monkeypatch):
     from app.services import execution_runner
     from app.services.execution_audio import AudioRecordingHandle, TranscriptionTurn
 
@@ -659,6 +659,24 @@ def test_signalwire_holyguacamole_evaluation_without_agent_transcript_needs_revi
                     direction='tester_to_target',
                     evidence_role='tester',
                 ),
+                TranscriptionTurn(
+                    turn_index=2,
+                    speaker='Agent',
+                    text='What would you like to order?',
+                    source='signalwire_browser_webrtc',
+                    direction='target_to_tester',
+                    evidence_role='target',
+                    frame_metadata={'exchange': 1},
+                ),
+                TranscriptionTurn(
+                    turn_index=3,
+                    speaker='Caller',
+                    text='One chicken taco, please.',
+                    source='signalwire_browser_webrtc',
+                    direction='tester_to_target',
+                    evidence_role='tester',
+                    frame_metadata={'exchange': 2},
+                ),
             ],
             'recording_handle': AudioRecordingHandle(
                 uri=str(response_audio),
@@ -673,6 +691,7 @@ def test_signalwire_holyguacamole_evaluation_without_agent_transcript_needs_revi
         suite_id='call-center-voice-ai',
         scenario_ids=['cancellation-rescue'],
         agent_id='holyguacamole-signalwire-agent',
+        max_exchanges=2,
         duplex_timeout_seconds=60,
         evaluate=True,
         user_id='agent-runs-user',
