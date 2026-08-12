@@ -1,8 +1,8 @@
 """Model-aware preflight for built-in generalist execution targets.
 
 The execution UI exposes one target-model selector. For the local two-agent
-voice path, an explicit selection must therefore be applied to both the tester
-and evaluated target unless the caller deliberately supplied a separate tester
+voice path, an explicit Ollama selection is applied to both the tester and
+evaluated target unless the caller deliberately supplied a separate tester
 model. Ollama selections are also checked against the local model inventory so
 a run fails before it is queued instead of later inside the media pipeline.
 """
@@ -124,8 +124,9 @@ def prepare_execution_reference_models(
     """Normalize voice model selection and preflight selected Ollama models."""
     normalized = payload
     local_voice = _is_local_generalist_voice(payload)
+    selected_ollama_model = _native_ollama_model(payload.model_name)
 
-    if local_voice and payload.model_name and not payload.tester_model_name:
+    if local_voice and selected_ollama_model is not None and not payload.tester_model_name:
         normalized = payload.model_copy(
             update={'tester_model_name': payload.model_name},
         )
