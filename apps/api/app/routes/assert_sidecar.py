@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.orm import Session
 
+from app.db.database import get_db
 from app.schemas.assert_contracts import AssertRunCreateRequest
 from app.services import execution_run_store
 from app.services.assert_sidecar import create_local_assert_sidecar_run, load_local_assert_sidecar_run
 from app.services.benchmark_service import get_scenario_contract
+from app.services.product_service import record_judge_request
 from app.services.upstream_assert_judge import (
     UpstreamAssertJudgeBudgetExceeded,
     UpstreamAssertJudgeBusy,
@@ -49,6 +52,7 @@ def judge_execution_conversation(
     execution_run_id: str,
     conversation_id: str,
     payload: AssertExecutionJudgeRequest,
+    db: Session = Depends(get_db),
 ):
     """Run upstream ASSERT judging over completed CAE text or voice evidence."""
     run = execution_run_store.get_execution_run(execution_run_id)
@@ -89,6 +93,22 @@ def judge_execution_conversation(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    judge_result = response.get('judge_result')
+    agrees = judge_result.get('agrees') if isinstance(judge_result, dict) else None
+    project_id = str(run.get('project_id') or '').strip() or None
+    record_judge_request(
+        db=db,
+        user_id=payload.user_id,
+        project_id=project_id,
+        plan=str(response.get('required_plan') or 'starter'),
+        status=str(response.get('status') or 'ready'),
+        credits=int(response.get('credits') or 0),
+        provider=str(response.get('provider') or '').strip() or None,
+        model=str(response.get('model') or '').strip() or None,
+        judge_output=str(response.get('judge_output') or '').strip() or None,
+        agrees=agrees if isinstance(agrees, bool) else None,
+    )
 
     try:
         review = execution_run_store.record_judge_review(
