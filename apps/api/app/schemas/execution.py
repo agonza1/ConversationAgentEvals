@@ -16,7 +16,7 @@ AudioTransportId = Literal[
     'freeswitch_verto_sip',
 ]
 TextCallableId = Literal['mock_agent', 'offline_acc_fixture', 'openai_codex', 'http_endpoint']
-ConversationStatus = Literal['queued', 'running', 'completed', 'failed']
+ConversationStatus = Literal['queued', 'running', 'completed', 'needs_review', 'failed']
 ExecutionRunStatus = Literal['queued', 'running', 'completed', 'needs_review', 'failed']
 
 

@@ -938,7 +938,7 @@ interface ExecutionConversationRecord {
   scenario_id: string;
   scenario_title?: string | null;
   mode: 'text_callable' | 'voice_fixture' | 'pipecat_webrtc';
-  status: 'queued' | 'running' | 'completed' | 'failed';
+  status: 'queued' | 'running' | 'completed' | 'needs_review' | 'failed';
   iteration?: number;
   turns?: ExecutionConversationTurn[];
   live_events?: LiveRunEvent[];

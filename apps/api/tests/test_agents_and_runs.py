@@ -592,6 +592,70 @@ def test_signalwire_holyguacamole_agent_uses_gated_browser_executor(monkeypatch)
     assert [turn['speaker'] for turn in conversation['turns']] == ['caller']
 
 
+def test_signalwire_holyguacamole_evaluation_without_agent_transcript_needs_review(monkeypatch):
+    from app.services import execution_runner
+    from app.services.execution_audio import AudioRecordingHandle, TranscriptionTurn
+
+    def fake_signalwire_call(**kwargs):
+        response_audio = kwargs['artifact_dir'] / 'signalwire-browser' / 'fake' / 'target-audio.webm'
+        response_audio.parent.mkdir(parents=True, exist_ok=True)
+        response_audio.write_bytes(b'current-run-signalwire-audio')
+        return {
+            'connection': {
+                'ui_connected': True,
+                'remote_stream_seen': True,
+                'remote_audio_sample_seen': True,
+            },
+            'tester': {'headless_browser': True, 'media_source': 'macos_say_tts'},
+            'latency_metrics': {'connect_click_to_remote_audio_ms': 640.0},
+            'media': {'target_audio_duration_ms': 5000},
+            'page_events': [{'kind': 'status', 'text': 'Connected! Ready to take your order.'}],
+            'artifacts': {'result_json': 'artifacts/signalwire/result.json'},
+            'transcription_turns': [
+                TranscriptionTurn(
+                    turn_index=1,
+                    speaker='Caller',
+                    text='I need help with a cancellation.',
+                    source='signalwire_browser_webrtc',
+                    direction='tester_to_target',
+                    evidence_role='tester',
+                ),
+            ],
+            'recording_handle': AudioRecordingHandle(
+                uri=str(response_audio),
+                mime_type='audio/webm',
+                bytes_captured=response_audio.stat().st_size,
+                transport='signalwire_browser_webrtc',
+            ),
+        }
+
+    monkeypatch.setattr(execution_runner, 'run_signalwire_holyguacamole_call', fake_signalwire_call)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        duplex_timeout_seconds=60,
+        evaluate=True,
+        user_id='agent-runs-user',
+        project_id='agent-runs-project',
+    )
+
+    queued = start_execution_run(payload)
+    finished = execute_execution_run(queued['execution_run_id'], payload)
+    conversation = finished['conversations'][0]
+
+    assert finished['status'] == 'needs_review'
+    assert conversation['status'] == 'needs_review'
+    assert conversation['verdict'] == 'needs_review'
+    assert conversation['score'] == 0
+    assert conversation['evaluation_findings']['failure_categories'] == [
+        'missing_grounded_agent_transcript'
+    ]
+    assert conversation['final_state']['runtime_provenance']['target_speech_transcript'] == (
+        'untranscribed_remote_audio'
+    )
+
+
 def test_signalwire_holyguacamole_rejects_multi_exchange_request():
     payload = ExecutionRunCreateRequest(
         suite_id='call-center-voice-ai',

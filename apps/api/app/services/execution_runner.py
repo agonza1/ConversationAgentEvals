@@ -405,6 +405,12 @@ def _run_one_conversation(
             score=result.get('score'),
         )
         current = execution_run_store.get_conversation(execution_run_id, conversation_id) or {}
+        verdict = result.get('verdict')
+        status = (
+            'failed' if verdict in {'fail', 'failed'}
+            else 'needs_review' if verdict == 'needs_review'
+            else 'completed'
+        )
         return ConversationRecord(
             conversation_id=conversation_id,
             execution_run_id=execution_run_id,
@@ -412,7 +418,7 @@ def _run_one_conversation(
             scenario_id=scenario_id,
             scenario_title=scenario_title,
             mode=payload.mode,
-            status='failed' if result.get('verdict') in {'fail', 'failed'} else 'completed',
+            status=status,
             iteration=iteration,
             turns=result['turns'],
             live_events=current.get('live_events') or [],
@@ -789,7 +795,8 @@ def _execute_signalwire_holyguacamole_browser(
         'evidence_scope': 'current_run_only',
     }
     report: dict[str, Any] = {}
-    if payload.evaluate and len(transcription) > 1:
+    agent_transcribed = any(item.speaker == 'Agent' for item in transcription)
+    if payload.evaluate and agent_transcribed:
         report = run_scenario(BenchmarkRunRequest(
             suite_id=suite_id,
             scenario_id=scenario_id,
@@ -799,6 +806,22 @@ def _execute_signalwire_holyguacamole_browser(
             user_id=payload.user_id,
             project_id=payload.project_id,
         ))
+    elif payload.evaluate:
+        report = {
+            'verdict': 'needs_review',
+            'overall_score': 0,
+            'score': 0,
+            'summary': (
+                'SignalWire evaluation skipped because current-run remote agent speech '
+                'was captured as audio but was not transcribed into grounded agent text.'
+            ),
+            'failure_categories': ['missing_grounded_agent_transcript'],
+            'failure_modes': ['signalwire_remote_speech_untranscribed'],
+            'suggested_fixes': [
+                'Provide a grounded remote-speech transcript before scoring or claiming completion.',
+            ],
+            'scoring_mode': 'skipped_needs_review',
+        }
 
     latency = result.get('latency_metrics') if isinstance(result.get('latency_metrics'), dict) else {}
     media = result.get('media') if isinstance(result.get('media'), dict) else {}
@@ -819,7 +842,7 @@ def _execute_signalwire_holyguacamole_browser(
         'target_media': 'current_run_signalwire_webrtc',
         'target_speech_transcript': (
             'current_run_asr'
-            if any(item.speaker == 'Agent' for item in transcription)
+            if agent_transcribed
             else 'untranscribed_remote_audio'
         ),
         'max_exchanges': 1,

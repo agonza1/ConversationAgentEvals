@@ -134,3 +134,16 @@ def test_signalwire_target_accepts_only_remote_speech_transcript_sources(tmp_pat
         'I want a taco.',
         'Welcome to Holy Guacamole.',
     ]
+
+
+def test_signalwire_browser_smoke_plays_caller_once_and_uses_audible_latency():
+    repo_root = Path(signalwire_target.__file__).resolve().parents[4]
+    script = (repo_root / 'scripts' / 'signalwire_holyguacamole_smoke.mjs').read_text(
+        encoding='utf-8'
+    )
+
+    assert 'source.loop = false' in script
+    assert 'source.stop(startAt + buffer.duration)' in script
+    assert 'firstAudibleAudioEpochMs' in script
+    assert 'connect_click_to_first_audible_audio_ms' in script
+    assert 'connect_click_to_remote_audio_ms = clickMs ? remoteAudioMs - clickMs : null' not in script

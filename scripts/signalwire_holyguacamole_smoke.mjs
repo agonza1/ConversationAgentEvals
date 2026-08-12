@@ -132,7 +132,9 @@ function baseResult(args, startedAt) {
       page_load_ms: null,
       connect_click_to_token_response_ms: null,
       connect_click_to_ui_connected_ms: null,
+      connect_click_to_remote_track_ms: null,
       connect_click_to_remote_audio_ms: null,
+      connect_click_to_first_audible_audio_ms: null,
       total_run_ms: null,
     },
     transcript: {
@@ -261,13 +263,20 @@ async function runSmoke(args) {
         const buffer = await context.decodeAudioData(bytes.buffer.slice(0));
         const source = context.createBufferSource();
         source.buffer = buffer;
-        source.loop = true;
+        source.loop = false;
         const gain = context.createGain();
         gain.gain.value = 0.95;
         source.connect(gain).connect(destination);
-        source.start(context.currentTime + 5);
+        const startAt = context.currentTime + 5;
+        source.start(startAt);
+        source.stop(startAt + buffer.duration);
         window.__caeInjectedAudioContext = context;
         window.__caeInjectedAudioSource = source;
+        window.__caeInjectedAudioPlayback = {
+          loop: false,
+          duration_ms: Math.round(buffer.duration * 1000),
+          start_delay_ms: 5000,
+        };
         return destination.stream;
       };
     }, { audioBase64: callerBytes.toString('base64') });
@@ -323,6 +332,7 @@ async function runSmoke(args) {
       if (!video || !video.srcObject || !video.srcObject.getAudioTracks().length) {
         return { ok: false, reason: 'remote_stream_timeout' };
       }
+      const trackAttachedEpochMs = Date.now();
       const stream = video.captureStream ? video.captureStream() : video.srcObject;
       const audioOnly = new MediaStream(stream.getAudioTracks());
       const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm';
@@ -331,6 +341,35 @@ async function runSmoke(args) {
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size) chunks.push(event.data);
       };
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      const audioContext = AudioContextClass ? new AudioContextClass() : null;
+      let sourceNode = null;
+      let processor = null;
+      let sink = null;
+      let firstAudibleAudioEpochMs = null;
+      if (audioContext) {
+        await audioContext.resume().catch(() => {});
+        sourceNode = audioContext.createMediaStreamSource(audioOnly);
+        processor = audioContext.createScriptProcessor(2048, 1, 1);
+        sink = audioContext.createGain();
+        sink.gain.value = 0;
+        processor.onaudioprocess = (event) => {
+          if (firstAudibleAudioEpochMs !== null) return;
+          const input = event.inputBuffer.getChannelData(0);
+          let peak = 0;
+          for (let index = 0; index < input.length; index += 1) {
+            const sample = Math.abs(input[index]);
+            if (sample > peak) peak = sample;
+            if (peak >= 0.001) {
+              firstAudibleAudioEpochMs = Date.now();
+              return;
+            }
+          }
+        };
+        sourceNode.connect(processor);
+        processor.connect(sink);
+        sink.connect(audioContext.destination);
+      }
       const started = Date.now();
       recorder.start(250);
       await new Promise((resolve) => setTimeout(resolve, Math.min(18000, Math.max(4000, timeoutMs - 10000))));
@@ -338,6 +377,10 @@ async function runSmoke(args) {
         recorder.onstop = resolve;
         recorder.stop();
       });
+      if (processor) processor.disconnect();
+      if (sourceNode) sourceNode.disconnect();
+      if (sink) sink.disconnect();
+      if (audioContext) await audioContext.close().catch(() => {});
       const blob = new Blob(chunks, { type: mimeType });
       const array = new Uint8Array(await blob.arrayBuffer());
       let binary = '';
@@ -348,6 +391,8 @@ async function runSmoke(args) {
         base64: btoa(binary),
         bytes: array.length,
         durationMs: Date.now() - started,
+        trackAttachedEpochMs,
+        firstAudibleAudioEpochMs,
       };
     }, { timeoutMs: args.timeoutMs });
 
@@ -377,7 +422,7 @@ async function runSmoke(args) {
       if (state.remoteAudio && !remoteAudioMs) {
         remoteAudioMs = Date.now();
         result.connection.remote_stream_seen = true;
-        result.latency_metrics.connect_click_to_remote_audio_ms = clickMs ? remoteAudioMs - clickMs : null;
+        result.latency_metrics.connect_click_to_remote_track_ms = clickMs ? remoteAudioMs - clickMs : null;
       }
       if (connectedMs && Date.now() - connectedMs > 12000) break;
       await page.waitForTimeout(500);
@@ -391,15 +436,23 @@ async function runSmoke(args) {
         durationMs: recorded.durationMs,
         extension: 'target-audio.webm',
       };
+      if (Number.isFinite(recorded.firstAudibleAudioEpochMs) && clickMs) {
+        const latencyMs = recorded.firstAudibleAudioEpochMs - clickMs;
+        if (latencyMs >= 0) {
+          result.connection.remote_audio_sample_seen = true;
+          result.latency_metrics.connect_click_to_remote_audio_ms = latencyMs;
+          result.latency_metrics.connect_click_to_first_audible_audio_ms = latencyMs;
+        }
+      }
     }
     deriveTranscript(result, args);
-    if (result.connection.ui_connected && targetAudio?.buffer?.length) {
+    if (result.connection.ui_connected && targetAudio?.buffer?.length && result.connection.remote_audio_sample_seen) {
       result.status = 'pass';
-      result.reason = 'Holy Guacamole SignalWire connected and remote audio was captured.';
+      result.reason = 'Holy Guacamole SignalWire connected and audible remote audio was captured.';
     } else {
       result.status = 'blocked';
-      result.reason_code = recorded.reason || 'remote_audio_not_captured';
-      result.reason = 'The public SignalWire page was reached, but remote audio evidence was not captured before timeout.';
+      result.reason_code = recorded.reason || 'remote_audible_audio_not_captured';
+      result.reason = 'The public SignalWire page was reached, but audible remote audio evidence was not captured before timeout.';
     }
 
     await page.locator('#hangupBtn').click({ timeout: 3000 }).catch(() => {});
