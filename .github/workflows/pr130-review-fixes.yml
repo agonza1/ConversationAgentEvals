@@ -1,0 +1,78 @@
+name: Apply PR 130 review fixes
+
+on:
+  push:
+    branches:
+      - agent/use-assert-judge-button
+
+permissions:
+  contents: write
+
+jobs:
+  apply-review-fixes:
+    if: github.event.head_commit.message == 'Apply PR 130 review test updates'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/use-assert-judge-button
+          fetch-depth: 0
+
+      - name: Retarget existing run-analysis judge mocks
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('apps/web/tests/runs-analysis.spec.ts')
+          text = path.read_text(encoding='utf-8')
+
+          old_route = "await page.route('**/api/product/judge'"
+          new_route = "await page.route('**/api/assert/runs/**/conversations/**/judge'"
+          route_count = text.count(old_route)
+          if route_count != 4:
+              raise SystemExit(f'expected 4 legacy judge route mocks, found {route_count}')
+          text = text.replace(old_route, new_route)
+
+          replacements = {
+              """  expect(judgeRequest).toMatchObject({
+            plan: 'free',
+            user_id: 'demo-user',
+            execution_run_id: 'exec-demo123',
+            conversation_id: conversation.conversation_id,
+          });
+          expect(judgeRequest).not.toHaveProperty('project_id');
+          expect(judgeRequest).not.toHaveProperty('transcript');
+          expect(judgeRequest).not.toHaveProperty('report');""":
+              """  expect(judgeRequest).toEqual({ user_id: 'demo-user' });""",
+              """    expect(payload).toMatchObject({
+                execution_run_id: 'exec-demo123',
+                conversation_id: conversation.conversation_id,
+                user_id: 'demo-user',
+              });""":
+              """    expect(payload).toEqual({ user_id: 'demo-user' });""",
+              """  expect(judgeRequest).toMatchObject({
+            execution_run_id: 'exec-demo123',
+            conversation_id: failedConversation.conversation_id,
+            user_id: 'demo-user',
+          });
+          expect(judgeRequest).not.toHaveProperty('report');
+          expect(judgeRequest).not.toHaveProperty('transcript');""":
+              """  expect(judgeRequest).toEqual({ user_id: 'demo-user' });""",
+          }
+
+          for old, new in replacements.items():
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected one payload assertion block, found {text.count(old)}')
+              text = text.replace(old, new)
+
+          path.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Commit targeted test updates
+        run: |
+          rm .github/workflows/pr130-review-fixes.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/web/tests/runs-analysis.spec.ts .github/workflows/pr130-review-fixes.yml
+          git commit -m "Retarget run-analysis judge specs to ASSERT"
+          git push origin HEAD:agent/use-assert-judge-button
