@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
+from app.models.entities import ProductProject
 from app.schemas.assert_contracts import AssertRunCreateRequest
 from app.services import execution_run_store
 from app.services.assert_sidecar import create_local_assert_sidecar_run, load_local_assert_sidecar_run
@@ -31,6 +32,22 @@ class AssertExecutionJudgeRequest(BaseModel):
     user_id: str = Field(min_length=1)
     model_name: str | None = Field(default=None, min_length=1, max_length=160)
     judge_n: int = Field(default=1, ge=1, le=3)
+
+
+def _product_plan(db: Session, *, user_id: str, project_id: str | None) -> str:
+    """Return the persisted project plan without treating a feature requirement as entitlement."""
+    if not project_id:
+        return 'free'
+    project = (
+        db.query(ProductProject)
+        .filter(
+            ProductProject.user_id == user_id,
+            ProductProject.project_key == project_id,
+        )
+        .first()
+    )
+    plan = str(project.plan or '').strip().lower() if project is not None else ''
+    return plan if plan in {'free', 'starter', 'team'} else 'free'
 
 
 @router.post('/runs')
@@ -101,7 +118,7 @@ def judge_execution_conversation(
         db=db,
         user_id=payload.user_id,
         project_id=project_id,
-        plan=str(response.get('required_plan') or 'starter'),
+        plan=_product_plan(db, user_id=payload.user_id, project_id=project_id),
         status=str(response.get('status') or 'ready'),
         credits=int(response.get('credits') or 0),
         provider=str(response.get('provider') or '').strip() or None,
