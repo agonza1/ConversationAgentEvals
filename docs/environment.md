@@ -79,6 +79,7 @@ KOKORO_MODEL=kokoro
 KOKORO_TESTER_VOICE=af_heart
 KOKORO_TARGET_VOICE=af_bella
 REFERENCE_LLM_MODEL=gpt-5.4-mini
+REFERENCE_TESTER_LLM_MODEL=gpt-5.4-mini
 OLLAMA_BASE_URL=http://localhost:11434
 REFERENCE_OLLAMA_MODEL=gemma2:2b
 ```
@@ -89,20 +90,32 @@ streaming OpenAI-compatible/Codex or local Ollama LLM deltas → adaptive stream
 Kokoro reply audio → Silero + rtc-asr tester observation. Select
 distinct `KOKORO_TESTER_VOICE` and `KOKORO_TARGET_VOICE` values so recordings
 and live playback make the caller and evaluated agent easy to distinguish. The
-legacy `KOKORO_VOICE` variable is accepted as a target-voice fallback when it is
-different from the tester voice. CAE discovers the backend and model currently
+target and tester LLMs are independent: the Target model dropdown changes only
+the evaluated agent, while `REFERENCE_TESTER_LLM_MODEL` controls the scenario
+tester. CAE validates both providers before queueing an Ollama-backed voice run.
+The legacy `KOKORO_VOICE` variable is accepted as a target-voice fallback when it
+is different from the tester voice. CAE discovers the backend and model currently
 loaded by rtc-asr and records both in run provenance. Whisper, MLX Parakeet, and
 other backends can be used without matching CAE-side model settings, provided the
 rtc-asr service is ready and implements the configured `local-stt.v1` stream.
 
-To run the target generalist model through Ollama instead of GPT, start Ollama,
+To run the evaluated generalist target through Ollama instead of GPT, start Ollama,
 pull the configured Gemma model, then select `ollama/gemma2:2b` in the Target model
 dropdown:
 
 ```bash
 ollama pull gemma2:2b
 OLLAMA_BASE_URL=http://localhost:11434
-REFERENCE_LLM_MODEL=ollama/gemma2:2b
+REFERENCE_OLLAMA_MODEL=gemma2:2b
+REFERENCE_TESTER_LLM_MODEL=gpt-5.4-mini
+```
+
+The configuration above keeps an independent GPT tester and therefore still
+requires OpenAI API-key or Codex OAuth access. For a fully local run, use Ollama
+for the tester as well:
+
+```bash
+REFERENCE_TESTER_LLM_MODEL=ollama/gemma2:2b
 ```
 
 HeyGen is not part of voice evaluation. Avatar support, when separately installed and
