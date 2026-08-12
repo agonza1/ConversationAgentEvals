@@ -336,6 +336,18 @@ class PublicPipecatDuplexRequest(PublicPipecatRunRequest):
     session_id: str | None = None
 
 
+class SignalWireHolyGuacamoleDuplexRequest(BaseModel):
+    caller_text: str = Field(min_length=1, max_length=2_000)
+    timeout_seconds: int = Field(default=90, ge=30, le=300)
+    scenario: dict[str, Any] = Field(default_factory=dict)
+    max_turn_pairs: int = Field(default=1, ge=1, le=1)
+    tester_model_name: str | None = None
+    execution_run_id: str | None = None
+    session_id: str | None = None
+    target_url: str = 'https://holyguacamole.signalwire.me/'
+    voice: str = 'elevenlabs.adam'
+
+
 class ReferenceDuplexRunRequest(BaseModel):
     session_id: str
     execution_run_id: str
@@ -1815,6 +1827,124 @@ async def public_pipecat_duplex(
         )
     return StreamingResponse(
         _public_pipecat_duplex_events(payload),
+        media_type='application/x-ndjson',
+        headers={'Cache-Control': 'no-store'},
+    )
+
+
+async def _signalwire_holyguacamole_duplex_events(
+    payload: SignalWireHolyGuacamoleDuplexRequest,
+) -> AsyncIterator[str]:
+    queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+    broadcast: _ReferenceDuplexBroadcast | None = None
+    bus: _LocalDuplexFrameBus | None = None
+    marked_listener_audio: set[str] = set()
+
+    if payload.execution_run_id:
+        session_id = payload.session_id or f'{payload.execution_run_id}:signalwire-holyguacamole'
+        existing = REFERENCE_DUPLEX_RUNS.get(payload.execution_run_id)
+        if existing is not None and existing.active:
+            broadcast = existing
+        else:
+            broadcast = _ReferenceDuplexBroadcast(
+                execution_run_id=payload.execution_run_id,
+                session_id=session_id,
+            )
+            if existing is not None:
+                broadcast.listeners.update(existing.listeners)
+                existing.listeners.clear()
+            REFERENCE_DUPLEX_RUNS[payload.execution_run_id] = broadcast
+        broadcast.active = True
+        broadcast.active_publishers += 1
+        bus = _LocalDuplexFrameBus(session_id, broadcast)
+
+    async def publish(event: dict[str, Any]) -> None:
+        direction = str(event.get('direction') or '')
+        turn_pair = int(event.get('turn_pair') or 0)
+        if bus is not None and direction in {'tester_to_target', 'target_to_tester'}:
+            event = {
+                **event,
+                'listener_media_key': f'{bus.session_id}:{turn_pair}:{direction}',
+            }
+            audio_payload = event.get('audio_wav_base64')
+            if isinstance(audio_payload, str) and audio_payload:
+                try:
+                    audio_bytes = base64.b64decode(audio_payload)
+                except ValueError:
+                    audio_bytes = b''
+                listener_media_key = str(event.get('listener_media_key') or '')
+                if audio_bytes and listener_media_key not in marked_listener_audio:
+                    bus.mark_audio_started(turn_pair=turn_pair, direction=direction)
+                    marked_listener_audio.add(listener_media_key)
+                # The listener path is opportunistic here; the authoritative
+                # persisted artifacts are returned in the completion payload.
+        await queue.put(event)
+
+    async def execute() -> None:
+        try:
+            from signalwire_holyguacamole_target import (
+                SignalWireHolyGuacamoleError,
+                SignalWireHolyGuacamoleRequest,
+                run_signalwire_holyguacamole_direct,
+            )
+            result = await run_signalwire_holyguacamole_direct(
+                SignalWireHolyGuacamoleRequest(**payload.model_dump()),
+                kokoro_base_url=KOKORO_BASE_URL,
+                kokoro_model=KOKORO_MODEL,
+                kokoro_voice=KOKORO_TESTER_VOICE,
+                event_callback=publish,
+            )
+            await publish({'type': 'complete', 'result': result})
+        except (ImportError, ModuleNotFoundError):
+            await publish({
+                'type': 'error',
+                'detail': 'Install the SignalWire direct runner dependencies in the Pipecat service.',
+            })
+        except Exception as exc:
+            detail = (
+                str(exc)
+                if exc.__class__.__name__ == 'SignalWireHolyGuacamoleError'
+                else 'Holy Guacamole SignalWire direct execution failed.'
+            )
+            await publish({'type': 'error', 'detail': detail})
+
+    task = asyncio.create_task(execute())
+    try:
+        while True:
+            event = await queue.get()
+            yield json.dumps(event, separators=(',', ':')) + '\n'
+            if event.get('type') in {'complete', 'error'}:
+                break
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if broadcast is not None:
+            broadcast.active_publishers = max(0, broadcast.active_publishers - 1)
+            if broadcast.active_publishers == 0:
+                broadcast.active = False
+                asyncio.create_task(_retire_reference_broadcast(broadcast))
+
+
+@app.post('/signalwire-holyguacamole/duplex')
+async def signalwire_holyguacamole_duplex(
+    payload: SignalWireHolyGuacamoleDuplexRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+):
+    """Stream a CAE tester session through direct SignalWire SDK WebRTC."""
+    _require_reference_token(x_cae_reference_token)
+    if not KOKORO_BASE_URL:
+        raise HTTPException(
+            status_code=503,
+            detail='Holy Guacamole SignalWire direct execution requires Kokoro.',
+        )
+    if os.getenv('CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE', '').strip().lower() not in {'1', 'true', 'yes'}:
+        raise HTTPException(
+            status_code=403,
+            detail='Holy Guacamole SignalWire execution requires CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE=1.',
+        )
+    return StreamingResponse(
+        _signalwire_holyguacamole_duplex_events(payload),
         media_type='application/x-ndjson',
         headers={'Cache-Control': 'no-store'},
     )

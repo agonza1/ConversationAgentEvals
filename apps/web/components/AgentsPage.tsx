@@ -474,12 +474,12 @@ function AgentFormModal({
             <fieldset className="agents-connection-fields">
               <legend>
                 {target === 'signalwire_holy_guacamole'
-                  ? 'Holy Guacamole SignalWire browser WebRTC target'
+                  ? 'Holy Guacamole SignalWire direct WebRTC target'
                   : 'Public Pipecat direct WebRTC target'}
               </legend>
               <p>
                 {target === 'signalwire_holy_guacamole'
-                  ? 'CAE drives the public SignalWire browser flow with synthesized scenario speech, then captures current-run remote audio, latency, and redacted provenance.'
+                  ? 'CAE drives the public SignalWire SDK flow directly through the Pipecat service with synthesized scenario speech, then captures current-run remote audio, latency, and redacted provenance.'
                   : 'CAE joins the demo&apos;s ephemeral Daily room directly through Pipecat, sends synthesized scenario speech, and captures current-run response audio, transcript, latency, and redacted provenance.'}
               </p>
               <label>

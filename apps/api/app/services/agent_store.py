@@ -76,8 +76,8 @@ SEED_AGENTS: list[dict[str, Any]] = [
         'connection': {'endpoint_url': 'https://holyguacamole.signalwire.me/'},
         'description': (
             'Real external SignalWire voice target for the Holy Guacamole drive-thru demo. '
-            'CAE drives the public browser WebRTC flow with current-run tester audio and '
-            'captures remote media, page events, transcript, timeline, and provenance artifacts.'
+            'CAE drives the public SignalWire SDK flow directly with current-run tester audio and '
+            'captures remote media, transcript, timeline, and provenance artifacts.'
         ),
         'metadata': {'model_name': 'signalwire-ai-agent', 'prompt_version': 'external'},
     },
