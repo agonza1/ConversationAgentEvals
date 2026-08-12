@@ -12,6 +12,7 @@ const execFileAsync = promisify(execFile);
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_TARGET_URL = 'https://holyguacamole.signalwire.me/';
 const RESULT_SCHEMA_VERSION = 'signalwire-holyguacamole-smoke-result-v1';
+const POST_CALLER_REMOTE_AUDIO_GRACE_MS = 500;
 
 function parseArgs(argv) {
   const args = {
@@ -135,6 +136,7 @@ function baseResult(args, startedAt) {
       remote_stream_seen: false,
       caller_audio_played: false,
       caller_audio_completed: false,
+      remote_audio_after_caller_seen: false,
       terminal_status: null,
     },
     latency_metrics: {
@@ -144,6 +146,7 @@ function baseResult(args, startedAt) {
       connect_click_to_remote_track_ms: null,
       connect_click_to_remote_audio_ms: null,
       connect_click_to_first_audible_audio_ms: null,
+      caller_audio_completed_to_remote_audio_ms: null,
       total_run_ms: null,
     },
     transcript: {
@@ -375,7 +378,7 @@ async function runSmoke(args) {
     clickMs = Date.now();
     await connectButton.first().click({ timeout: Math.min(args.timeoutMs, 15000) });
 
-    const recorderPromise = page.evaluate(async ({ timeoutMs }) => {
+    const recorderPromise = page.evaluate(async ({ timeoutMs, postCallerRemoteAudioGraceMs }) => {
       const deadline = Date.now() + timeoutMs;
       let video = null;
       while (Date.now() < deadline) {
@@ -401,6 +404,7 @@ async function runSmoke(args) {
       let processor = null;
       let sink = null;
       let firstAudibleAudioEpochMs = null;
+      let firstAudibleAudioAfterCallerEpochMs = null;
       if (audioContext) {
         await audioContext.resume().catch(() => {});
         sourceNode = audioContext.createMediaStreamSource(audioOnly);
@@ -408,15 +412,22 @@ async function runSmoke(args) {
         sink = audioContext.createGain();
         sink.gain.value = 0;
         processor.onaudioprocess = (event) => {
-          if (firstAudibleAudioEpochMs !== null) return;
           const input = event.inputBuffer.getChannelData(0);
           let peak = 0;
           for (let index = 0; index < input.length; index += 1) {
             const sample = Math.abs(input[index]);
             if (sample > peak) peak = sample;
-            if (peak >= 0.001) {
-              firstAudibleAudioEpochMs = Date.now();
-              return;
+          }
+          if (peak >= 0.001) {
+            const sampleEpochMs = Date.now();
+            if (firstAudibleAudioEpochMs === null) firstAudibleAudioEpochMs = sampleEpochMs;
+            const callerPlayback = window.__caeInjectedAudioPlayback || null;
+            if (
+              callerPlayback?.ended_epoch_ms
+              && sampleEpochMs >= callerPlayback.ended_epoch_ms + postCallerRemoteAudioGraceMs
+              && firstAudibleAudioAfterCallerEpochMs === null
+            ) {
+              firstAudibleAudioAfterCallerEpochMs = sampleEpochMs;
             }
           }
         };
@@ -426,7 +437,13 @@ async function runSmoke(args) {
       }
       const started = Date.now();
       recorder.start(250);
-      await new Promise((resolve) => setTimeout(resolve, Math.min(18000, Math.max(4000, timeoutMs - 10000))));
+      const recordDeadline = Date.now() + Math.min(18000, Math.max(4000, timeoutMs - 1000));
+      while (Date.now() < recordDeadline) {
+        if (firstAudibleAudioAfterCallerEpochMs !== null && Date.now() - firstAudibleAudioAfterCallerEpochMs >= 1000) {
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
       await new Promise((resolve) => {
         recorder.onstop = resolve;
         recorder.stop();
@@ -447,8 +464,10 @@ async function runSmoke(args) {
         durationMs: Date.now() - started,
         trackAttachedEpochMs,
         firstAudibleAudioEpochMs,
+        firstAudibleAudioAfterCallerEpochMs,
+        postCallerRemoteAudioGraceMs,
       };
-    }, { timeoutMs: args.timeoutMs });
+    }, { timeoutMs: args.timeoutMs, postCallerRemoteAudioGraceMs: POST_CALLER_REMOTE_AUDIO_GRACE_MS });
 
     const deadline = startedMs + args.timeoutMs;
     while (Date.now() < deadline) {
@@ -510,6 +529,13 @@ async function runSmoke(args) {
           result.latency_metrics.connect_click_to_first_audible_audio_ms = latencyMs;
         }
       }
+      if (Number.isFinite(recorded.firstAudibleAudioAfterCallerEpochMs) && callerPlayback?.ended_epoch_ms) {
+        const latencyMs = recorded.firstAudibleAudioAfterCallerEpochMs - callerPlayback.ended_epoch_ms;
+        if (latencyMs >= 0) {
+          result.connection.remote_audio_after_caller_seen = true;
+          result.latency_metrics.caller_audio_completed_to_remote_audio_ms = latencyMs;
+        }
+      }
     }
     deriveTranscript(result, args);
     if (
@@ -518,17 +544,20 @@ async function runSmoke(args) {
       && result.connection.caller_audio_completed
       && targetAudio?.buffer?.length
       && result.connection.remote_audio_sample_seen
+      && result.connection.remote_audio_after_caller_seen
     ) {
       result.status = 'pass';
-      result.reason = 'Holy Guacamole SignalWire connected, caller audio playback was observed, and audible remote audio was captured.';
+      result.reason = 'Holy Guacamole SignalWire connected, caller audio playback was observed, and post-caller audible remote audio was captured.';
     } else {
       result.status = 'blocked';
       result.reason_code = !result.connection.caller_audio_played
         ? 'caller_audio_not_played'
         : !result.connection.caller_audio_completed
           ? 'caller_audio_not_completed'
-          : recorded.reason || 'remote_audible_audio_not_captured';
-      result.reason = 'The public SignalWire page was reached, but grounded caller playback and audible remote audio evidence were not both captured before timeout.';
+          : !result.connection.remote_audio_after_caller_seen
+            ? 'post_caller_remote_audible_audio_not_captured'
+            : recorded.reason || 'remote_audible_audio_not_captured';
+      result.reason = 'The public SignalWire page was reached, but grounded caller playback and post-caller audible remote audio evidence were not both captured before timeout.';
     }
 
     await page.locator('#hangupBtn').click({ timeout: 3000 }).catch(() => {});

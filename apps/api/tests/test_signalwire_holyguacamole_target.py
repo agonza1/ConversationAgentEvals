@@ -150,6 +150,11 @@ def test_signalwire_browser_smoke_plays_caller_once_and_uses_audible_latency():
     assert 'first_outbound_sample_epoch_ms' in script
     assert 'caller_audio_played' in script
     assert 'caller_audio_completed' in script
+    assert 'remote_audio_after_caller_seen' in script
+    assert 'firstAudibleAudioAfterCallerEpochMs' in script
+    assert 'POST_CALLER_REMOTE_AUDIO_GRACE_MS = 500' in script
+    assert 'post_caller_remote_audible_audio_not_captured' in script
     assert 'caller_audio_not_played' in script
     assert 'connect_click_to_first_audible_audio_ms' in script
+    assert 'caller_audio_completed_to_remote_audio_ms' in script
     assert 'connect_click_to_remote_audio_ms = clickMs ? remoteAudioMs - clickMs : null' not in script
