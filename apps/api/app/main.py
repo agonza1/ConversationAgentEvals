@@ -17,7 +17,10 @@ register_builtin_benchmark_extensions()
 # File-backed user-created scenarios merge into the same catalog (_SUITES_BY_ID).
 ensure_user_scenarios_registered()
 
-from app.routes.assert_sidecar import router as assert_sidecar_router
+from app.routes.assert_sidecar import (
+    judge_router as assert_judge_router,
+    router as assert_sidecar_router,
+)
 from app.routes.agents import router as agents_router
 from app.routes.benchmarks import router as benchmarks_router
 from app.routes.bootstrap import router as bootstrap_router
@@ -117,6 +120,9 @@ app.add_middleware(
 
 if settings.assert_local_sidecar_enabled:
     app.include_router(assert_sidecar_router)
+# The execution-conversation judge is a product API and must remain available in
+# production even when the development-only ASSERT sidecar lifecycle is disabled.
+app.include_router(assert_judge_router)
 app.include_router(decks_router)
 app.include_router(sessions_router)
 app.include_router(realtime_router)
