@@ -67,6 +67,8 @@ POST /api/assert/runs/<execution-run-id>/conversations/<conversation-id>/judge
 
 The browser sends only the run owner identifier. The server reloads the persisted conversation and constructs the ASSERT transcript, taxonomy, and judge configuration from trusted run evidence.
 
+Successful ASSERT review requests also write the existing `judge.requested` product audit event, including the trusted project, provider, model, credit, status, and agreement metadata.
+
 The legacy endpoint remains available for standalone report or transcript reviews that are not attached to an execution conversation:
 
 ```text
@@ -80,6 +82,8 @@ Therefore the product boundary is explicit:
 - deterministic execution, final-state, media, and voice checks -> CAE.
 
 There is no silent fallback from ASSERT to the legacy judge for execution conversations. Missing configuration or an ASSERT failure is surfaced rather than changing judge semantics without notice.
+
+The dedicated routing test and the existing run-analysis Playwright specifications all intercept the ASSERT endpoint and verify that the browser submits only `user_id` for execution-conversation reviews.
 
 ## Run against a completed conversation directly
 
