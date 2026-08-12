@@ -330,6 +330,7 @@ def test_public_duplex_reuses_rtvi_text_for_next_tester_turn(monkeypatch):
         )
         caller_text, caller_wav = await kwargs['next_turn'](
             2,
+            'I need a Sunday visit.',
             'I can provide information, but I cannot book appointments.',
             outbound_voice.pcm_to_wav(bytes([2, 0]) * 320, 16_000, 1),
         )
@@ -337,6 +338,7 @@ def test_public_duplex_reuses_rtvi_text_for_next_tester_turn(monkeypatch):
         observed['caller_wav'] = caller_wav
         await kwargs['next_turn'](
             3,
+            'When did this cough start?',
             'What symptoms are you experiencing?',
             outbound_voice.pcm_to_wav(bytes([4, 0]) * 320, 16_000, 1),
         )
@@ -370,14 +372,21 @@ def test_public_duplex_reuses_rtvi_text_for_next_tester_turn(monkeypatch):
     assert 'verify account using two identifiers' not in request.act_objective
     assert 'patient with a persistent cough' in request.act_objective
     assert request.history == [
-        {'speaker': 'Caller', 'text': 'I need a same-day visit.'},
+        {'speaker': 'Caller', 'text': 'I need a Sunday visit.'},
         {
             'speaker': 'Agent',
             'text': 'I can provide information, but I cannot book appointments.',
         },
-        {'speaker': 'Caller', 'text': 'Could you tell me when the cough started?'},
+        {'speaker': 'Caller', 'text': 'When did this cough start?'},
         {'speaker': 'Agent', 'text': 'What symptoms are you experiencing?'},
     ]
+    assert all(
+        item['text'] not in {
+            'I need a same-day visit.',
+            'Could you tell me when the cough started?',
+        }
+        for item in request.history
+    )
     assert events == [{'type': 'complete', 'result': {'status': 'pass'}}]
     broadcast = server.REFERENCE_DUPLEX_RUNS.pop('exec-public-listener')
     assert broadcast.audio_publish_sequence == 1

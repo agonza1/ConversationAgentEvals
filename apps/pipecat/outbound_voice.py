@@ -26,7 +26,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 AudioDirection = Literal['tester_to_target', 'target_to_tester']
 EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
 AudioFrameCallback = Callable[[AudioDirection, bytes, int, int, int], Awaitable[None]]
-NextTurnCallback = Callable[[int, str, bytes], Awaitable[tuple[str, bytes]]]
+NextTurnCallback = Callable[[int, str, str, bytes], Awaitable[tuple[str, bytes]]]
 
 
 @dataclass(frozen=True, slots=True)

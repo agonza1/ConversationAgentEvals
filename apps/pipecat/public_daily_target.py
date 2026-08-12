@@ -582,7 +582,12 @@ async def run_public_daily_duplex(
                 break
             if next_turn is None:
                 break
-            current_text, current_wav = await next_turn(turn_pair + 1, target_text, target_wav)
+            current_text, current_wav = await next_turn(
+                turn_pair + 1,
+                caller_transcript,
+                target_text,
+                target_wav,
+            )
             if not str(current_text).strip() or not current_wav:
                 raise PublicDailyTargetError(
                     f'Public Pipecat tester graph returned no caller media for turn {turn_pair + 1}.'

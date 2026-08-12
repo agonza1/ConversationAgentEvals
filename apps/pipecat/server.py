@@ -1653,9 +1653,7 @@ async def _public_pipecat_duplex_events(
     broadcast: _ReferenceDuplexBroadcast | None = None
     bus: _LocalDuplexFrameBus | None = None
     marked_listener_audio: set[str] = set()
-    conversation_history: list[dict[str, str]] = [
-        {'speaker': 'Caller', 'text': payload.caller_text},
-    ]
+    conversation_history: list[dict[str, str]] = []
 
     if payload.execution_run_id:
         session_id = payload.session_id or f'{payload.execution_run_id}:public-pipecat'
@@ -1700,7 +1698,12 @@ async def _public_pipecat_duplex_events(
             marked_listener_audio.add(listener_media_key)
         bus.publish_chunk(audio, sample_rate=sample_rate, channels=channels)
 
-    async def next_turn(turn_pair: int, target_text: str, target_wav: bytes) -> tuple[str, bytes]:
+    async def next_turn(
+        turn_pair: int,
+        recognized_caller_text: str,
+        target_text: str,
+        target_wav: bytes,
+    ) -> tuple[str, bytes]:
         goal = str(payload.scenario.get('goal') or 'Continue the scenario naturally.').strip()
         persona = str(payload.scenario.get('persona') or 'the original caller').strip()
         objective = (
@@ -1708,7 +1711,13 @@ async def _public_pipecat_duplex_events(
             f'{goal} Supply requested caller-side information when appropriate, but do not claim '
             'to perform verification, updates, bookings, or other target-agent actions.'
         )
-        conversation_history.append({'speaker': 'Agent', 'text': target_text})
+        # History must match the transcript being evaluated. The public target's
+        # RTVI ASR receipt is authoritative when it differs from tester source
+        # text, including for the opening utterance.
+        conversation_history.extend([
+            {'speaker': 'Caller', 'text': recognized_caller_text},
+            {'speaker': 'Agent', 'text': target_text},
+        ])
         request = ReferenceTesterTurnRequest(
             scenario_instruction=(
                 f'{payload.scenario.get("id") or "public-pipecat"}: '
@@ -1737,7 +1746,6 @@ async def _public_pipecat_duplex_events(
             ) from exc
         caller_wav = _pcm_to_wav(collector.audio, collector.sample_rate, collector.channels)
         caller_text = collector.agent_text.strip()
-        conversation_history.append({'speaker': 'Caller', 'text': caller_text})
         return caller_text, caller_wav
 
     async def execute() -> None:
