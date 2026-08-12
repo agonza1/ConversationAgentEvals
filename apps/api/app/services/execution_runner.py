@@ -153,6 +153,7 @@ def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool =
         scenario_ids=scenario_ids,
         user_id=resolved.user_id,
         project_id=resolved.project_id,
+        product_project_id=resolved.product_project_id,
         agent_id=resolved.agent_id,
         agent_name=(agent or {}).get('name'),
         model_name=model_name,

@@ -337,6 +337,96 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
   await expect(results.getByText(/vCon|recording metadata|Pipecat capture proof|sample-based score/i).first()).toBeVisible();
 });
 
+test('voice eval sends the selected exact project identity', async ({ page }) => {
+  let posted: Record<string, unknown> | null = null;
+
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'voice-user');
+    window.localStorage.setItem('conversation-evals-demo-project', 'conversation-agent-evals');
+    window.localStorage.setItem('conversation-evals-demo-product-project-id', 'voice-project-shared');
+  });
+  await page.route('**/api/product/projects?*', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          id: 'voice-project-personal',
+          user_id: 'voice-user',
+          workspace_id: null,
+          project_id: 'conversation-agent-evals',
+          name: 'Personal voice project',
+          plan: 'free',
+        },
+        {
+          id: 'voice-project-shared',
+          user_id: 'workspace-owner',
+          workspace_id: 'voice-workspace',
+          project_id: 'conversation-agent-evals',
+          name: 'Shared voice project',
+          plan: 'team',
+        },
+      ]),
+    });
+  });
+  await page.route('**/api/agents', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        agents: [{
+          id: 'generalist-voice-agent',
+          name: 'Built-in generalist voice agent',
+          channel: 'voice',
+          target: 'builtin_sample_voice',
+        }],
+      }),
+    });
+  });
+  await page.route('**/api/execution/health', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, reference_voice: { ready: true, llm_mode: 'real', dependencies: [] } }),
+    });
+  });
+  await page.route('**/api/execution/runs**', async (route) => {
+    if (route.request().method() === 'POST') {
+      posted = JSON.parse(route.request().postData() ?? '{}') as Record<string, unknown>;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        execution_run_id: 'voice-project-run',
+        status: 'completed',
+        mode: 'pipecat_webrtc',
+        suite_id: 'call-center-voice-ai',
+        scenario_ids: ['cancellation-rescue'],
+        user_id: 'voice-user',
+        project_id: 'conversation-agent-evals',
+        product_project_id: 'voice-project-shared',
+        progress: { completed_conversations: 1, total_conversations: 1, percent: 100 },
+        conversations: [],
+      }),
+    });
+  });
+
+  await page.goto('/voice?api_base=http%3A%2F%2Fapi.example.test');
+  await expect(page.getByLabel('Voice execution project')).toHaveValue('voice-project-shared');
+  await page.getByLabel('Voice execution project').selectOption('voice-project-personal');
+  await expect(page.getByLabel('Voice execution project')).toHaveValue('voice-project-personal');
+  await page.getByLabel('Voice execution project').selectOption('voice-project-shared');
+  await page.getByRole('button', { name: 'Run evaluation' }).click();
+
+  await expect.poll(() => posted).not.toBeNull();
+  expect(posted).toMatchObject({
+    user_id: 'voice-user',
+    project_id: 'conversation-agent-evals',
+    product_project_id: 'voice-project-shared',
+  });
+});
+
 test('browser listener page polls token-scoped live events', async ({ page }) => {
   let listenerPolls = 0;
   let webrtcOffers = 0;

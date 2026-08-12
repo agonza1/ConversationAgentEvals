@@ -1,12 +1,19 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.orm import Session
 
+from app.db.database import get_db
 from app.schemas.assert_contracts import AssertRunCreateRequest
 from app.services import execution_run_store
 from app.services.assert_sidecar import create_local_assert_sidecar_run, load_local_assert_sidecar_run
 from app.services.benchmark_service import get_scenario_contract
+from app.services.product_service import (
+    find_visible_project,
+    record_judge_request,
+    resolve_execution_product_project_id,
+)
 from app.services.upstream_assert_judge import (
     UpstreamAssertJudgeBudgetExceeded,
     UpstreamAssertJudgeBusy,
@@ -30,6 +37,26 @@ class AssertExecutionJudgeRequest(BaseModel):
     judge_n: int = Field(default=1, ge=1, le=3)
 
 
+def _product_plan(
+    db: Session,
+    *,
+    user_id: str,
+    project_id: str | None,
+    product_project_id: str | None = None,
+) -> str:
+    """Return the persisted project plan without treating a feature requirement as entitlement."""
+    if not project_id:
+        return 'free'
+    project = find_visible_project(
+        db=db,
+        user_id=user_id,
+        project_id=project_id,
+        product_project_id=product_project_id,
+    )
+    plan = str(project.plan or '').strip().lower() if project is not None else ''
+    return plan if plan in {'free', 'starter', 'team', 'business'} else 'free'
+
+
 @router.post('/runs')
 def create_assert_sidecar_run(payload: AssertRunCreateRequest):
     record = create_local_assert_sidecar_run(payload)
@@ -49,6 +76,7 @@ def judge_execution_conversation(
     execution_run_id: str,
     conversation_id: str,
     payload: AssertExecutionJudgeRequest,
+    db: Session = Depends(get_db),
 ):
     """Run upstream ASSERT judging over completed CAE text or voice evidence."""
     run = execution_run_store.get_execution_run(execution_run_id)
@@ -67,6 +95,22 @@ def judge_execution_conversation(
             status_code=409,
             detail='The conversation must have a deterministic verdict before ASSERT judging.',
         )
+
+    project_id = str(run.get('project_id') or '').strip() or None
+    product_project_id = str(run.get('product_project_id') or '').strip() or None
+    if project_id:
+        try:
+            product_project_id = resolve_execution_product_project_id(
+                db=db,
+                user_id=payload.user_id,
+                project_id=project_id,
+                product_project_id=product_project_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f'{exc} Rerun after selecting the exact personal or workspace project.',
+            ) from exc
 
     deterministic_snapshot = execution_run_store.deterministic_evaluation_snapshot(conversation)
     scenario_contract = get_scenario_contract(
@@ -89,6 +133,27 @@ def judge_execution_conversation(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    judge_result = response.get('judge_result')
+    agrees = judge_result.get('agrees') if isinstance(judge_result, dict) else None
+    record_judge_request(
+        db=db,
+        user_id=payload.user_id,
+        project_id=project_id,
+        plan=_product_plan(
+            db,
+            user_id=payload.user_id,
+            project_id=project_id,
+            product_project_id=product_project_id,
+        ),
+        status=str(response.get('status') or 'ready'),
+        credits=int(response.get('credits') or 0),
+        product_project_id=product_project_id,
+        provider=str(response.get('provider') or '').strip() or None,
+        model=str(response.get('model') or '').strip() or None,
+        judge_output=str(response.get('judge_output') or '').strip() or None,
+        agrees=agrees if isinstance(agrees, bool) else None,
+    )
 
     try:
         review = execution_run_store.record_judge_review(

@@ -23,6 +23,7 @@ from app.schemas.execution import ExecutionRunCreateRequest
 from app.services import execution_run_store
 from app.services.execution_audio import describe_execution_audio_capabilities
 from app.services.execution_runner import execute_execution_run, start_execution_run
+from app.services.product_service import resolve_execution_product_project_id
 from app.services.reference_generalist_agent import (
     ReferenceRuntimeError,
     ReferenceRuntimeConfig,
@@ -189,8 +190,20 @@ def execution_reference_stream(
 
 
 @router.post('/runs')
-def create_execution_run(payload: ExecutionRunCreateRequest, background_tasks: BackgroundTasks):
+def create_execution_run(
+    payload: ExecutionRunCreateRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     try:
+        payload = payload.model_copy(update={
+            'product_project_id': resolve_execution_product_project_id(
+                db=db,
+                user_id=payload.user_id,
+                project_id=payload.project_id,
+                product_project_id=payload.product_project_id,
+            ),
+        })
         payload = prepare_execution_reference_models(payload)
         queued = start_execution_run(payload, preflight=True)
     except (ValueError, ReferenceRuntimeError) as exc:
