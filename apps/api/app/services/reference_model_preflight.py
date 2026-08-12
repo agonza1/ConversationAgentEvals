@@ -1,26 +1,33 @@
-"""Model-aware preflight for built-in generalist execution targets.
+"""Model-aware preflight and provider routing for built-in generalist targets.
 
-Target and tester are separate participants. A target-model selection must never
-silently replace the tester model, but every provider needed by an Ollama-backed
-run must be ready before the run is queued. Ollama selections are also checked
-against the local model inventory so failures include the exact pull command.
+Target and tester are separate participants. Model selections are materialized in
+the immutable execution request, every provider needed by an Ollama-backed run is
+validated before queueing, and completion calls are routed by the model attached
+to each participant rather than by the target's provider alone.
 """
 
 from __future__ import annotations
 
 import os
+import time
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
 
 from app.schemas.execution import ExecutionRunCreateRequest
+from app.services.agent_store import get_agent
 from app.services.reference_generalist_agent import (
     DEFAULT_OLLAMA_GENERALIST_MODEL,
     OLLAMA_MODEL_PREFIX,
+    CompletionProvider,
+    ReferencePipecatAgentTransport as _BaseReferencePipecatAgentTransport,
     ReferenceRuntimeConfig,
     ReferenceRuntimeError,
     resolve_reference_completion_provider,
 )
+from app.services.two_agent_pipecat_duplex import build_builtin_sample_voice_graphs
+
 
 _OLLAMA_TAGS_TIMEOUT_SECONDS = 2.0
 
@@ -110,14 +117,14 @@ def probe_ollama_model(model_name: str) -> dict[str, str]:
 def _ensure_reference_model_ready(model_name: str, *, role: str) -> dict[str, str]:
     selected = model_name.strip()
     if not selected:
-        raise ReferenceRuntimeError(f'Built-in voice {role} model is not configured.')
+        raise ReferenceRuntimeError(f'Built-in generalist {role} model is not configured.')
 
     if _native_ollama_model(selected) is not None:
         try:
             return probe_ollama_model(selected)
         except ReferenceRuntimeError as exc:
             raise ReferenceRuntimeError(
-                f'Built-in voice {role} model {selected} is not ready: {exc}'
+                f'Built-in generalist {role} model {selected} is not ready: {exc}'
             ) from exc
 
     try:
@@ -125,11 +132,11 @@ def _ensure_reference_model_ready(model_name: str, *, role: str) -> dict[str, st
         status = provider.status()
     except ReferenceRuntimeError as exc:
         raise ReferenceRuntimeError(
-            f'Built-in voice {role} model {selected} is not ready: {exc}'
+            f'Built-in generalist {role} model {selected} is not ready: {exc}'
         ) from exc
     if status.get('status') != 'connected':
         raise ReferenceRuntimeError(
-            f'Built-in voice {role} model {selected} is not ready: '
+            f'Built-in generalist {role} model {selected} is not ready: '
             f'{status.get("message") or "provider is disconnected"}.'
         )
     return {
@@ -138,48 +145,283 @@ def _ensure_reference_model_ready(model_name: str, *, role: str) -> dict[str, st
     }
 
 
+def _saved_agent_target(payload: ExecutionRunCreateRequest) -> str | None:
+    if not payload.agent_id:
+        return None
+    agent = get_agent(payload.agent_id)
+    if not isinstance(agent, dict):
+        return None
+    target = str(agent.get('target') or '').strip()
+    return target or None
+
+
 def _is_local_generalist_voice(payload: ExecutionRunCreateRequest) -> bool:
-    return (
+    if (
         payload.mode == 'pipecat_webrtc'
         and payload.executor_id == 'cae_local_audio_loop'
-    )
+    ):
+        return True
+    return _saved_agent_target(payload) == 'builtin_sample_voice'
 
 
 def _is_generalist_text(payload: ExecutionRunCreateRequest) -> bool:
-    return payload.mode == 'text_callable' and payload.text_callable == 'openai_codex'
+    if payload.mode != 'text_callable':
+        return False
+    if payload.text_callable == 'openai_codex':
+        return True
+    return _saved_agent_target(payload) == 'openai_codex'
 
 
 def prepare_execution_reference_models(
     payload: ExecutionRunCreateRequest,
 ) -> ExecutionRunCreateRequest:
-    """Fail closed for every provider participating in an Ollama-backed run."""
+    """Materialize model choices and fail closed before an Ollama-backed run."""
     if _is_local_generalist_voice(payload):
         config = ReferenceRuntimeConfig()
         target_model = (payload.model_name or config.llm_model).strip()
         tester_model = (payload.tester_model_name or config.tester_llm_model).strip()
+        normalized = (
+            payload
+            if payload.tester_model_name == tester_model
+            else payload.model_copy(update={'tester_model_name': tester_model})
+        )
         if (
             _native_ollama_model(target_model) is not None
             or _native_ollama_model(tester_model) is not None
         ):
-            readiness: dict[str, dict[str, str]] = {}
+            checked: dict[str, dict[str, str]] = {}
             for role, model_name in (
                 ('target', target_model),
                 ('tester', tester_model),
             ):
-                if model_name not in readiness:
-                    readiness[model_name] = _ensure_reference_model_ready(
+                if model_name not in checked:
+                    checked[model_name] = _ensure_reference_model_ready(
                         model_name,
                         role=role,
                     )
-    elif _is_generalist_text(payload) and payload.model_name:
-        selected = payload.model_name.strip()
-        if _native_ollama_model(selected) is not None:
-            _ensure_reference_model_ready(selected, role='target')
+        return normalized
 
-    # Target and tester remain independently configured. The immutable execution
-    # snapshot will resolve tester_model_name from ReferenceRuntimeConfig when the
-    # request does not carry an explicit tester override.
+    if _is_generalist_text(payload) and payload.model_name:
+        target_model = payload.model_name.strip()
+        tester_model = (payload.tester_model_name or target_model).strip()
+        if (
+            _native_ollama_model(target_model) is not None
+            or _native_ollama_model(tester_model) is not None
+        ):
+            checked: dict[str, dict[str, str]] = {}
+            for role, model_name in (
+                ('target', target_model),
+                ('tester', tester_model),
+            ):
+                if model_name not in checked:
+                    checked[model_name] = _ensure_reference_model_ready(
+                        model_name,
+                        role=role,
+                    )
+
     return payload
+
+
+class _ModelRoutingCompletionProvider:
+    """Route each completion call through the provider implied by its model id."""
+
+    def __init__(
+        self,
+        *,
+        default_model: str,
+        default_provider: CompletionProvider | None = None,
+    ) -> None:
+        self.default_model = default_model.strip()
+        if not self.default_model:
+            raise ReferenceRuntimeError('Reference completion model is not configured.')
+        provider = default_provider or resolve_reference_completion_provider(self.default_model)
+        self._providers: dict[str, CompletionProvider] = {self.default_model: provider}
+        self.provider_id = provider.provider_id
+
+    def _provider_for(
+        self,
+        model_name: str | None,
+    ) -> tuple[str, CompletionProvider]:
+        selected = (model_name or self.default_model).strip() or self.default_model
+        provider = self._providers.get(selected)
+        if provider is None:
+            provider = resolve_reference_completion_provider(selected)
+            self._providers[selected] = provider
+        return selected, provider
+
+    def status(self) -> dict[str, Any]:
+        return self._providers[self.default_model].status()
+
+    def complete(self, prompt: str, *, model_name: str | None = None) -> str:
+        selected, provider = self._provider_for(model_name)
+        return provider.complete(prompt, model_name=selected)
+
+    def complete_with_metrics(
+        self,
+        prompt: str,
+        *,
+        model_name: str | None = None,
+    ) -> dict[str, Any]:
+        selected, provider = self._provider_for(model_name)
+        complete_with_metrics = getattr(provider, 'complete_with_metrics', None)
+        if callable(complete_with_metrics):
+            return complete_with_metrics(prompt, model_name=selected)
+        started_at = time.perf_counter()
+        text = provider.complete(prompt, model_name=selected)
+        return {
+            'text': text,
+            'ttft_ms': None,
+            'total_ms': round((time.perf_counter() - started_at) * 1000, 3),
+        }
+
+    def stream_with_metrics(
+        self,
+        prompt: str,
+        *,
+        model_name: str | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        selected, provider = self._provider_for(model_name)
+        stream = getattr(provider, 'stream_with_metrics', None)
+        if callable(stream):
+            yield from stream(prompt, model_name=selected)
+            return
+        started_at = time.perf_counter()
+        text = provider.complete(prompt, model_name=selected)
+        yield {'type': 'delta', 'text': text}
+        yield {
+            'type': 'completed',
+            'text': text,
+            'ttft_ms': None,
+            'total_ms': round((time.perf_counter() - started_at) * 1000, 3),
+        }
+
+
+def _resolve_routed_completion_provider(
+    model_name: str | None = None,
+) -> CompletionProvider:
+    selected = (model_name or ReferenceRuntimeConfig().llm_model).strip()
+    provider = resolve_reference_completion_provider(selected)
+    return _ModelRoutingCompletionProvider(
+        default_model=selected,
+        default_provider=provider,
+    )
+
+
+def _voice_graphs(
+    *,
+    config: ReferenceRuntimeConfig,
+    runtime: dict[str, Any],
+    target_provider: str,
+    tester_provider: str,
+) -> tuple[Any, Any]:
+    stt_runtime = runtime.get('stt') if isinstance(runtime.get('stt'), dict) else {}
+    return build_builtin_sample_voice_graphs(
+        tester_llm_provider=tester_provider,
+        tester_llm_model=config.tester_llm_model,
+        target_llm_provider=target_provider,
+        target_llm_model=config.llm_model,
+        stt_model=str(stt_runtime.get('model') or 'service-selected'),
+        tts_model=config.kokoro_model,
+        tester_tts_voice=config.kokoro_tester_voice,
+        target_tts_voice=config.kokoro_target_voice,
+        llm_mode='real',
+    )
+
+
+class _ModelAwareReferencePipecatAgentTransport(_BaseReferencePipecatAgentTransport):
+    """Retain independent target/tester provider readiness and provenance."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        config = self.config
+        provider_split_required = (
+            _native_ollama_model(config.llm_model) is not None
+            or _native_ollama_model(config.tester_llm_model) is not None
+        )
+        self._model_aware_graphs = self.graphs
+        if not provider_split_required:
+            return
+
+        target_status = self.completion.status()
+        target_provider = str(
+            target_status.get('provider') or self.completion.provider_id
+        )
+        if config.tester_llm_model == config.llm_model:
+            tester_provider = target_provider
+        else:
+            tester_completion = resolve_reference_completion_provider(
+                config.tester_llm_model
+            )
+            tester_status = tester_completion.status()
+            if tester_status.get('status') != 'connected':
+                raise ReferenceRuntimeError(
+                    tester_status.get('message')
+                    or 'Reference tester LLM is not connected.'
+                )
+            tester_provider = str(
+                tester_status.get('provider') or tester_completion.provider_id
+            )
+
+        tester_graph, target_graph = _voice_graphs(
+            config=config,
+            runtime=self.runtime,
+            target_provider=target_provider,
+            tester_provider=tester_provider,
+        )
+        self._tester_graph = tester_graph
+        self._target_graph = target_graph
+        self._model_aware_graphs = {
+            'tester': tester_graph.as_dict(),
+            'target': target_graph.as_dict(),
+        }
+        self.graphs = self._model_aware_graphs
+        self.runtime['llm'] = {
+            'provider': target_provider,
+            'model': config.llm_model,
+            'status': 'ready',
+        }
+        self.runtime['tester_llm'] = {
+            'provider': tester_provider,
+            'model': config.tester_llm_model,
+            'status': 'ready',
+        }
+
+    async def run_duplex_session(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        result = await super().run_duplex_session(*args, **kwargs)
+        if self.graphs is self._model_aware_graphs:
+            return result
+
+        # The current Pipecat service reports one legacy provider field for both
+        # graphs. Completion callbacks are already routed by model_name; replace
+        # only that legacy proof with the independently validated local graph.
+        self.graphs = self._model_aware_graphs
+        session_id = str(args[0] if args else kwargs.get('session_id') or '')
+        state = self._sessions.get(session_id)
+        if state is not None:
+            state.remote_graphs = self._model_aware_graphs
+        proof = result.get('proof')
+        if isinstance(proof, dict):
+            result['proof'] = {**proof, 'graphs': self._model_aware_graphs}
+        return result
+
+
+def _install_execution_model_routing() -> None:
+    """Install routing at the execution boundary without changing callback APIs."""
+    from app.services import execution_runner, reference_generalist_agent
+
+    marker = '_reference_model_routing_installed'
+    if getattr(execution_runner, marker, False):
+        return
+    execution_runner.resolve_reference_completion_provider = (
+        _resolve_routed_completion_provider
+    )
+    execution_runner.ReferencePipecatAgentTransport = (
+        _ModelAwareReferencePipecatAgentTransport
+    )
+    reference_generalist_agent.ReferencePipecatAgentTransport = (
+        _ModelAwareReferencePipecatAgentTransport
+    )
+    setattr(execution_runner, marker, True)
 
 
 def _configured_ollama_model_id() -> str | None:
@@ -195,13 +437,7 @@ def _configured_ollama_model_id() -> str | None:
 
 
 def augment_reference_voice_preflight(report: dict[str, Any]) -> dict[str, Any]:
-    """Add configured Ollama target readiness without conflating the tester.
-
-    The browser requests generic voice health before launching a specific run.
-    When the configured primary provider is unavailable but an Ollama target is
-    configured, validate both that target and the independently configured tester.
-    Exact per-run selections are validated again by prepare_execution_reference_models.
-    """
+    """Add configured Ollama target readiness without conflating the tester."""
     dependencies = [
         dict(item) if isinstance(item, dict) else item
         for item in report.get('dependencies') or []
@@ -265,7 +501,12 @@ def augment_reference_voice_preflight(report: dict[str, Any]) -> dict[str, Any]:
             **llm_dependency,
             'ready': False,
             'detail': ' '.join(
-                part for part in (existing_detail, f'Configured Ollama path: {exc}') if part
+                part
+                for part in (
+                    existing_detail,
+                    f'Configured Ollama path: {exc}',
+                )
+                if part
             ),
         }
 
@@ -275,3 +516,6 @@ def augment_reference_voice_preflight(report: dict[str, Any]) -> dict[str, Any]:
         for item in dependencies
     )
     return augmented
+
+
+_install_execution_model_routing()
