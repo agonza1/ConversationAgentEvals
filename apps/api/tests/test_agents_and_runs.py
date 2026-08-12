@@ -7,7 +7,11 @@ import pytest
 
 from app.main import app
 from app.services import acc_connection, agent_store, execution_run_store
-from app.services.execution_runner import execute_execution_run, start_execution_run
+from app.services.execution_runner import (
+    _scenario_user_opener,
+    execute_execution_run,
+    start_execution_run,
+)
 from app.services.target_secrets import resolve_http_target_secret
 from app.schemas.execution import ExecutionRunCreateRequest
 
@@ -616,6 +620,10 @@ def test_signalwire_holyguacamole_agent_uses_gated_direct_executor(monkeypatch):
     assert recording_response.status_code == 200
     assert recording_response.headers['content-type'] == 'audio/wav'
     assert recording_response.content == b'current-run-signalwire-audio'
+    recording_attachment = conversation['vcon_export']['attachments'][0]
+    assert recording_attachment['type'] == 'recording'
+    assert recording_attachment['url'] == conversation['recording']['recording_url']
+    assert conversation['recording']['uri'] not in json.dumps(conversation['vcon_export'])
     assert conversation['latency_marks'][0]['kind'] == 'tester_speech_end_to_first_target_audio'
     assert conversation['latency_marks'][0]['latency_ms'] == 640.0
     assert conversation['final_state']['runtime_provenance']['browser_peer'] is False
@@ -702,6 +710,23 @@ def test_signalwire_holyguacamole_rejects_multi_exchange_request():
 
     with pytest.raises(ValueError, match='max_exchanges=1'):
         start_execution_run(payload)
+
+
+def test_user_created_scenario_opener_preserves_custom_prompt_details():
+    scenario = {
+        'id': 'account-access-issue',
+        'title': 'Account access issue',
+        'source': 'user_created',
+        'simulated_user_prompt': (
+            'The user is unable to access his account. He recently changed his password, '
+            'but when he tries to log in, the system says that the password is incorrect.'
+        ),
+    }
+
+    opener = _scenario_user_opener(scenario)
+
+    assert 'recently changed his password' in opener
+    assert 'password is incorrect' in opener
 
 
 def test_saved_voice_agent_ignores_serialized_request_placeholders():

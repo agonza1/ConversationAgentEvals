@@ -174,6 +174,12 @@ def test_signalwire_direct_runner_documents_no_browser_token_persistence():
     assert 'RTCAudioSink' in script
     assert 'remote_audio_after_caller_seen' in script
     assert 'captured no audible post-caller remote response' in script
+    assert 'CANONICAL_SIGNALWIRE_ADDRESS' in script
+    assert 'canonicalDialAddress(targetUrl, bootstrap.address)' in script
+    assert 'client.dial(dialAddress' in script
+    assert 'target_address_observed: dialAddress' in script
+    assert 'firstRemoteAfterCallerAt === null' in script
+    assert 'now - callerEndedAt >= POST_CALLER_REMOTE_AUDIO_GRACE_MS' in script
     assert 'chromium' not in script.lower()
     assert 'playwright' not in script.lower()
     assert 'guest_token_persisted: false' in script

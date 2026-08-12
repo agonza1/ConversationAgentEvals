@@ -6,6 +6,7 @@ import WebSocket from 'ws';
 import { filter, firstValueFrom, timeout as rxTimeout } from 'rxjs';
 
 const DEFAULT_TARGET_URL = 'https://holyguacamole.signalwire.me/';
+const CANONICAL_SIGNALWIRE_ADDRESS = '/public/holyguacamole?channel=audio';
 const DEFAULT_VOICE = 'elevenlabs.adam';
 const POST_CALLER_REMOTE_AUDIO_GRACE_MS = 500;
 const REMOTE_AUDIO_SILENCE_BOUNDARY_MS = 900;
@@ -140,6 +141,24 @@ async function fetchGuestToken(targetUrl, voice, includeVoice) {
   return { token: String(payload.token), address: String(payload.address) };
 }
 
+function canonicalDialAddress(targetUrl, address) {
+  let parsed;
+  try {
+    parsed = new URL(address, targetUrl);
+  } catch {
+    throw new Error('Holy Guacamole token bootstrap returned an invalid address.');
+  }
+  const expected = new URL(CANONICAL_SIGNALWIRE_ADDRESS, targetUrl);
+  if (
+    parsed.origin !== expected.origin
+    || parsed.pathname !== expected.pathname
+    || parsed.search !== expected.search
+  ) {
+    throw new Error('Holy Guacamole token bootstrap returned a noncanonical address.');
+  }
+  return CANONICAL_SIGNALWIRE_ADDRESS;
+}
+
 async function wait(ms) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -166,6 +185,7 @@ async function main() {
     remote_audio_after_caller_seen: false,
   };
   const bootstrap = await fetchGuestToken(targetUrl, voice, true);
+  const dialAddress = canonicalDialAddress(targetUrl, bootstrap.address);
   connection.token_bootstrap = true;
 
   const source = new wrtc.nonstandard.RTCAudioSource();
@@ -217,7 +237,7 @@ async function main() {
     ));
     connection.sdk_connected = true;
 
-    const call = await client.dial(bootstrap.address, {
+    const call = await client.dial(dialAddress, {
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
       video: false,
       receiveVideo: false,
@@ -243,9 +263,11 @@ async function main() {
             connection.remote_audio_sample_seen = true;
             if (firstRemoteAudioAt === null) firstRemoteAudioAt = now;
             lastRemoteAudibleAt = now;
+            if (callerEndedAt && firstRemoteAfterCallerAt === null) {
+              firstRemoteAfterCallerAt = now;
+            }
             if (callerEndedAt && now - callerEndedAt >= POST_CALLER_REMOTE_AUDIO_GRACE_MS) {
               connection.remote_audio_after_caller_seen = true;
-              if (firstRemoteAfterCallerAt === null) firstRemoteAfterCallerAt = now;
             }
           }
           if (captureResponse) {
@@ -374,7 +396,7 @@ async function main() {
         tester_media: 'current_run_kokoro',
         target_media: 'current_run_signalwire_webrtc',
         token_bootstrap_endpoint: '/get_token',
-        target_address_observed: '/public/holyguacamole?channel=audio',
+        target_address_observed: dialAddress,
       },
     };
     console.log(JSON.stringify(result));

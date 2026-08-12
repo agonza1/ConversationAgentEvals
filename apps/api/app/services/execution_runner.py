@@ -828,6 +828,12 @@ def _execute_signalwire_holyguacamole_direct(
         }
 
     latency = result.get('latency_metrics') if isinstance(result.get('latency_metrics'), dict) else {}
+    recording_url = (
+        f'/api/execution/runs/{quote(execution_run_id)}/conversations/'
+        f'{quote(conversation_id)}/recording?user_id={quote(payload.user_id)}'
+    )
+    vcon_recording = recording.as_call_media()
+    vcon_recording['recording_url'] = recording_url
     runtime_provenance = {
         'execution_engine': 'signalwire_js_node_webrtc',
         'target_agent_id': payload.agent_id,
@@ -858,7 +864,7 @@ def _execute_signalwire_holyguacamole_direct(
         scenario_id=scenario_id,
         transport='signalwire_direct_webrtc',
         transcription_turns=transcription,
-        recording=recording,
+        recording=vcon_recording,
         termination_reason='signalwire_direct_complete',
         tester_provenance=runtime_provenance,
         extra_analysis_body={
@@ -869,10 +875,7 @@ def _execute_signalwire_holyguacamole_direct(
     )
     recording_media = recording.as_call_media()
     recording_media['uri'] = recording.uri
-    recording_media['recording_url'] = (
-        f'/api/execution/runs/{quote(execution_run_id)}/conversations/'
-        f'{quote(conversation_id)}/recording?user_id={quote(payload.user_id)}'
-    )
+    recording_media['recording_url'] = recording_url
     latency_marks = []
     first_audio_ms = latency.get('tester_speech_end_to_first_target_audio_received_ms')
     if isinstance(first_audio_ms, (int, float)):
@@ -1304,15 +1307,36 @@ def _scenario_definition(suite_id: str, scenario_id: str) -> dict[str, Any]:
 def _scenario_user_opener(scenario: dict[str, Any]) -> str:
     """Return caller-facing speech, never the internal persona/checklist description."""
     sample = str(scenario.get('sample_transcript') or '')
-    for line in sample.splitlines():
+    opener = _first_caller_line(sample)
+    if opener:
+        return opener
+    if str(scenario.get('source') or '').strip() == 'user_created':
+        prompt = str(
+            scenario.get('simulated_user_prompt')
+            or scenario.get('prompt')
+            or scenario.get('persona')
+            or ''
+        ).strip()
+        opener = _first_caller_line(prompt) or _compact_caller_prompt(prompt)
+        if opener:
+            return opener
+    title = str(scenario.get('title') or scenario.get('id') or 'this request').strip()
+    return f'Hi, I need help with {title.lower()}.'
+
+
+def _first_caller_line(value: str) -> str:
+    for line in value.splitlines():
         stripped = line.strip()
         speaker, separator, text = stripped.partition(':')
         if separator and speaker.strip().lower() in {'user', 'caller', 'customer', 'patient', 'learner'}:
             opener = text.strip()
             if opener:
                 return opener
-    title = str(scenario.get('title') or scenario.get('id') or 'this request').strip()
-    return f'Hi, I need help with {title.lower()}.'
+    return ''
+
+
+def _compact_caller_prompt(value: str) -> str:
+    return ' '.join(value.split())
 
 
 def _conversation_history_text(history: list[dict[str, str]]) -> str:
