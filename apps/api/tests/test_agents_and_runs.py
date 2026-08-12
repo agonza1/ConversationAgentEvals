@@ -469,13 +469,22 @@ def test_public_pipecat_agent_uses_direct_daily_executor(monkeypatch, tmp_path):
             ),
         }
 
+    observed_benchmark_request = None
+
+    def fake_run_scenario(request):
+        nonlocal observed_benchmark_request
+        observed_benchmark_request = request
+        return {'verdict': 'pass', 'overall_score': 100}
+
     monkeypatch.setattr(execution_runner, 'run_public_pipecat_call', fake_public_call)
+    monkeypatch.setattr(execution_runner, 'run_scenario', fake_run_scenario)
     payload = ExecutionRunCreateRequest(
         suite_id='call-center-voice-ai',
         scenario_ids=['cancellation-rescue'],
         agent_id='pipecat-public-demo',
+        model_name='gpt-5.4-mini',
         duplex_timeout_seconds=60,
-        evaluate=False,
+        evaluate=True,
         user_id='agent-runs-user',
         project_id='agent-runs-project',
     )
@@ -485,6 +494,8 @@ def test_public_pipecat_agent_uses_direct_daily_executor(monkeypatch, tmp_path):
     assert queued['executor_id'] == 'pipecat_public_daily'
     assert queued['max_exchanges'] == 3
     assert queued['execution_snapshot']['request']['audio_transport'] == 'pipecat_daily_webrtc'
+    assert queued['model_name'] == '10-gradium'
+    assert queued['execution_snapshot']['request']['model_name'] == '10-gradium'
     assert queued['provenance']['live_external_connection'] is True
     assert queued['provenance']['evidence_source'] == 'external_webrtc'
 
@@ -508,6 +519,9 @@ def test_public_pipecat_agent_uses_direct_daily_executor(monkeypatch, tmp_path):
     assert conversation['latency_marks'][0]['remote_target'] is True
     assert conversation['final_state']['runtime_provenance']['browser_peer'] is False
     assert [turn['speaker'] for turn in conversation['turns']] == ['caller', 'agent']
+    assert observed_benchmark_request is not None
+    assert 'final_state' not in observed_benchmark_request.model_fields_set
+    assert observed_benchmark_request.final_state == {}
 
 
 def test_signalwire_holyguacamole_agent_uses_gated_browser_executor(monkeypatch):

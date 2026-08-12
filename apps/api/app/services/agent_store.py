@@ -65,7 +65,7 @@ SEED_AGENTS: list[dict[str, Any]] = [
             'Real external voice target against the public Pipecat demo. CAE joins its ephemeral '
             'Daily room directly, sends current-run tester audio, and captures response media and transcript evidence.'
         ),
-        'metadata': {'model_name': 'public-demo-selected-agent', 'prompt_version': 'external'},
+        'metadata': {'model_name': '10-gradium', 'prompt_version': 'external'},
     },
     {
         'id': 'holyguacamole-signalwire-agent',

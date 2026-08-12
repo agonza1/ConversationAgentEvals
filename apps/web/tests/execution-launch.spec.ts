@@ -140,6 +140,14 @@ test('launch evaluation streams conversations into the live list', async ({ page
             connection: { endpoint_url: 'https://holyguacamole.signalwire.me/' },
             metadata: { model_name: 'signalwire-ai-agent' },
           },
+          {
+            id: 'pipecat-public-demo',
+            name: 'Pipecat public demo',
+            channel: 'voice',
+            target: 'pipecat_public_demo',
+            description: 'Public Daily WebRTC target',
+            metadata: { model_name: '10-gradium' },
+          },
         ],
       }),
     });
@@ -170,6 +178,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   const textPostAttempts: Record<string, unknown>[] = [];
   let voicePosted: Record<string, unknown> | null = null;
   let signalwirePosted: Record<string, unknown> | null = null;
+  let publicPipecatPosted: Record<string, unknown> | null = null;
   let voiceRunCount = 0;
   const listenerRunIds: string[] = [];
   let firstListenerPollStarted = false;
@@ -209,8 +218,12 @@ test('launch evaluation streams conversations into the live list', async ({ page
         });
         return;
       }
-      if (body.agent_id === 'generalist-voice-agent') {
-        voicePosted = body;
+      if (body.agent_id === 'generalist-voice-agent' || body.agent_id === 'pipecat-public-demo') {
+        if (body.agent_id === 'pipecat-public-demo') {
+          publicPipecatPosted = body;
+        } else {
+          voicePosted = body;
+        }
         voiceRunCount += 1;
         const executionRunId = `exec-ui-voice-${voiceRunCount}`;
         await route.fulfill({
@@ -594,6 +607,21 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect(page.getByRole('heading', { name: 'Recent runs' })).toBeVisible();
   await expect(page.getByRole('link', { name: /Mock text agent/ })).toContainText('queued');
 
+  await launch.getByLabel('Execution agent target').selectOption('pipecat-public-demo');
+  await expect(launch.getByLabel('Execution model')).toHaveCount(0);
+  await launch.getByRole('button', { name: 'Run evaluation' }).click();
+  await expect.poll(() => publicPipecatPosted).not.toBeNull();
+  expect(publicPipecatPosted).toMatchObject({
+    mode: 'pipecat_webrtc',
+    agent_id: 'pipecat-public-demo',
+    tester_id: 'pipecat_tester',
+    executor_id: 'pipecat_public_daily',
+    audio_transport: 'pipecat_daily_webrtc',
+  });
+  expect(publicPipecatPosted).not.toHaveProperty('model_name');
+
+  await page.goto('/runs?api_base=http%3A%2F%2Fapi.example.test&suite_id=call-center-voice-ai&scenario_id=billing-address-change');
+  await expect(launch.getByLabel('Selected run scope')).toContainText('Billing Address Change');
   await launch.getByLabel('Execution agent target').selectOption('holyguacamole-signalwire-agent');
   await expect(launch.getByLabel('Maximum exchanges')).toBeDisabled();
   await expect(launch).toContainText('SignalWire browser runs capture one caller turn');

@@ -3568,9 +3568,11 @@ export function BenchmarkRunner({
     setRunError(null);
 
     try {
-      const modelNameForExecutionRun = signalwireAgent
-        ? 'signalwire-ai-agent'
-        : executionModelName || DEFAULT_EXECUTION_MODEL;
+      const modelNameForExecutionRun = publicPipecatAgent
+        ? undefined
+        : signalwireAgent
+          ? 'signalwire-ai-agent'
+          : executionModelName || DEFAULT_EXECUTION_MODEL;
       const queued = await createExecutionRun({
         suite_id: suiteForRun,
         scenario_ids: scenarioIds,

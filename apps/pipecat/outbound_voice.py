@@ -26,7 +26,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 AudioDirection = Literal['tester_to_target', 'target_to_tester']
 EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
 AudioFrameCallback = Callable[[AudioDirection, bytes, int, int, int], Awaitable[None]]
-NextTurnCallback = Callable[[int, str, bytes], Awaitable[tuple[str, bytes]]]
+NextTurnCallback = Callable[[int, str, str, bytes], Awaitable[tuple[str, bytes]]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,10 +62,14 @@ class OutboundVoiceEvidence:
     target_ready: asyncio.Event = field(default_factory=asyncio.Event)
     target_stopped: asyncio.Event = field(default_factory=asyncio.Event)
     response_complete: asyncio.Event = field(default_factory=asyncio.Event)
+    transport_error: asyncio.Event = field(default_factory=asyncio.Event)
     target_participant_id: str | None = None
     caller_transcripts: list[str] = field(default_factory=list)
     target_transcripts: list[str] = field(default_factory=list)
     target_output_segments: list[str] = field(default_factory=list)
+    caller_transcript_keys: set[str] = field(default_factory=set)
+    target_transcript_keys: set[str] = field(default_factory=set)
+    target_output_keys: set[str] = field(default_factory=set)
     target_audio: bytearray = field(default_factory=bytearray)
     target_audio_sample_rate: int = 16_000
     target_audio_channels: int = 1
@@ -77,6 +81,7 @@ class OutboundVoiceEvidence:
     response_started_at: float | None = None
     first_target_audio_at: float | None = None
     first_target_speech_at: float | None = None
+    last_target_audio_at: float | None = None
     response_complete_at: float | None = None
     initial_target_turn_complete: bool = False
     initial_target_transcript_count: int = 0
@@ -135,6 +140,9 @@ class OutboundVoiceRunContext:
         evidence.response_complete.clear()
         evidence.initial_target_transcript_count = len(evidence.target_transcripts)
         evidence.initial_target_output_count = len(evidence.target_output_segments)
+        evidence.caller_transcript_keys.clear()
+        evidence.target_transcript_keys.clear()
+        evidence.target_output_keys.clear()
         evidence.target_audio.clear()
         evidence.target_audio_frames = 0
         evidence.capture_response_audio = False
@@ -142,6 +150,7 @@ class OutboundVoiceRunContext:
         evidence.response_started_at = None
         evidence.first_target_audio_at = None
         evidence.first_target_speech_at = None
+        evidence.last_target_audio_at = None
         evidence.response_complete_at = None
         return caller_transcript_count
 
@@ -340,6 +349,10 @@ class OutboundTargetAudioCollector(FrameProcessor):
                     self.evidence.current_turn_pair,
                 )
             await self._observe_speech(frame, received_at)
+            # Track target media even while response capture is closed. The
+            # public Daily adapter uses this to drain delayed greeting packets
+            # before opening exchange 1 capture.
+            self.evidence.last_target_audio_at = received_at
             if not self.evidence.capture_response_audio:
                 return
             if self.evidence.first_target_audio_at is None:
@@ -405,15 +418,28 @@ async def pace_pcm(
     audio_frame_callback: AudioFrameCallback | None = None,
     turn_pair: int = 0,
 ) -> int:
+    """Queue PCM to the target in real time while prebuffering live observers.
+
+    The WebRTC listener track already owns playout pacing. Publishing the caller
+    audio to it one 20 ms frame at a time couples that track to Daily's send loop
+    and lets scheduler jitter produce audible silence insertions. Give observers
+    the complete utterance first, then independently pace only the target output.
+    """
+    if audio_frame_callback is not None and pcm:
+        await audio_frame_callback('tester_to_target', pcm, sample_rate, channels, turn_pair)
+
     bytes_per_chunk = max(2, int(sample_rate * channels * 2 * 0.02))
+    bytes_per_second = sample_rate * channels * 2
     frames_sent = 0
+    started_at = time.perf_counter()
     for offset in range(0, len(pcm), bytes_per_chunk):
         chunk = pcm[offset:offset + bytes_per_chunk]
         await task.queue_frame(OutputAudioRawFrame(chunk, sample_rate, channels))
-        if audio_frame_callback is not None:
-            await audio_frame_callback('tester_to_target', chunk, sample_rate, channels, turn_pair)
         frames_sent += 1
-        await asyncio.sleep(0.02)
+        playback_deadline = started_at + min(offset + len(chunk), len(pcm)) / bytes_per_second
+        delay = playback_deadline - time.perf_counter()
+        if delay > 0:
+            await asyncio.sleep(delay)
     return frames_sent
 
 

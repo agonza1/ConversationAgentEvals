@@ -54,6 +54,7 @@ DEFAULT_VOICE_FIXTURE = 'docs/examples/agentic-contact-center-run-fixture.json'
 DEFAULT_AUDIO_PLAN = 'docs/examples/agentic-contact-center-audio-plan.json'
 DEFAULT_CANCELLATION_SCENARIO = 'docs/examples/agentic-contact-center-cancellation-rescue.json'
 DEFAULT_EXECUTION_MODEL = 'gpt-5.4-mini'
+PUBLIC_PIPECAT_AGENT = '10-gradium'
 FIXTURE_BACKED_SCENARIO_IDS = frozenset({'cancellation-rescue'})
 ALLOWED_FIXTURE_ROOTS = (
     REPO_ROOT / 'docs' / 'examples',
@@ -562,6 +563,10 @@ def _resolve_max_exchanges_for_target(
 
 
 def _execution_model_name(payload: ExecutionRunCreateRequest, *, target: str) -> str:
+    if target == 'pipecat_public_demo':
+        # This black-box target runs Pipecat's fixed public agent; an OpenAI
+        # model selection from another UI target must not leak into metadata.
+        return PUBLIC_PIPECAT_AGENT
     explicit = (payload.model_name or '').strip()
     if explicit:
         return explicit
@@ -627,7 +632,6 @@ def _execute_public_pipecat_daily(
             scenario_id=scenario_id,
             transcript=transcript,
             action_trace=[],
-            final_state=current_final_state,
             user_id=payload.user_id,
             project_id=payload.project_id,
         ))
