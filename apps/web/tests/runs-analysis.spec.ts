@@ -292,7 +292,7 @@ test('run detail requests the LLM judge for the selected persisted conversation'
   await page.route('**/api/execution/runs/exec-demo123**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(reviewRun) });
   });
-  await page.route('**/api/product/judge', async (route) => {
+  await page.route('**/api/assert/runs/**/conversations/**/judge', async (route) => {
     judgeCalls += 1;
     judgeRequest = route.request().postDataJSON() as Record<string, unknown>;
     if (judgeCalls === 2) {
@@ -344,15 +344,7 @@ test('run detail requests the LLM judge for the selected persisted conversation'
   await expect(page.getByLabel('LLM judge result')).toContainText('gpt-5.4-mini');
   await expect(page.getByLabel('LLM judge result')).toContainText('190 daily credits remaining');
   expect(judgeCalls).toBe(1);
-  expect(judgeRequest).toMatchObject({
-    plan: 'free',
-    user_id: 'demo-user',
-    execution_run_id: 'exec-demo123',
-    conversation_id: conversation.conversation_id,
-  });
-  expect(judgeRequest).not.toHaveProperty('project_id');
-  expect(judgeRequest).not.toHaveProperty('transcript');
-  expect(judgeRequest).not.toHaveProperty('report');
+  expect(judgeRequest).toEqual({ user_id: 'demo-user' });
 
   await page.getByRole('button', { name: 'What the judge saw' }).click();
   await expect(page.getByText('Deterministic verdict: needs_review')).toBeVisible();
@@ -469,13 +461,9 @@ test('user can confirm an LLM adjudication while the automatic evaluation remain
       body: JSON.stringify(currentRun),
     });
   });
-  await page.route('**/api/product/judge', async (route) => {
+  await page.route('**/api/assert/runs/**/conversations/**/judge', async (route) => {
     const payload = route.request().postDataJSON();
-    expect(payload).toMatchObject({
-      execution_run_id: 'exec-demo123',
-      conversation_id: conversation.conversation_id,
-      user_id: 'demo-user',
-    });
+    expect(payload).toEqual({ user_id: 'demo-user' });
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -589,7 +577,7 @@ test('resolution evidence handles failed and not-evaluated conversations without
   await expect(page.getByText('The run recorded an execution error.')).toBeVisible();
 
   let judgeRequest: Record<string, unknown> | null = null;
-  await page.route('**/api/product/judge', async (route) => {
+  await page.route('**/api/assert/runs/**/conversations/**/judge', async (route) => {
     judgeRequest = route.request().postDataJSON() as Record<string, unknown>;
     await route.fulfill({
       status: 200,
@@ -606,13 +594,7 @@ test('resolution evidence handles failed and not-evaluated conversations without
   });
   await page.getByRole('button', { name: 'Review with LLM judge' }).click();
   await expect(page.getByLabel('LLM judge result')).toContainText('LLM judge unavailable');
-  expect(judgeRequest).toMatchObject({
-    execution_run_id: 'exec-demo123',
-    conversation_id: failedConversation.conversation_id,
-    user_id: 'demo-user',
-  });
-  expect(judgeRequest).not.toHaveProperty('report');
-  expect(judgeRequest).not.toHaveProperty('transcript');
+  expect(judgeRequest).toEqual({ user_id: 'demo-user' });
 
   await page.getByLabel('Conversation', { exact: true }).selectOption('exec-demo123-not-evaluated-1');
   await expect(page.getByLabel('Resolution verification status')).toContainText('Not evaluated');
@@ -653,7 +635,7 @@ test('LLM judge stays disabled while conversation evidence is still changing', a
   await page.route('**/api/execution/runs/exec-demo123**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(activeRun) });
   });
-  await page.route('**/api/product/judge', async (route) => {
+  await page.route('**/api/assert/runs/**/conversations/**/judge', async (route) => {
     judgeCalls += 1;
     await route.fulfill({ status: 500, contentType: 'application/json', body: '{}' });
   });
