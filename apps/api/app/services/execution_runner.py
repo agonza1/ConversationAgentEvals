@@ -1082,6 +1082,15 @@ def _scenario_definition(suite_id: str, scenario_id: str) -> dict[str, Any]:
 
 def _scenario_user_opener(scenario: dict[str, Any]) -> str:
     """Return caller-facing speech, never the internal persona/checklist description."""
+    configured_prompt = str(
+        scenario.get('simulated_user_prompt')
+        or scenario.get('simulatedUserPrompt')
+        or scenario.get('prompt')
+        or ''
+    ).strip()
+    if configured_prompt:
+        return configured_prompt
+
     sample = str(scenario.get('sample_transcript') or '')
     for line in sample.splitlines():
         stripped = line.strip()

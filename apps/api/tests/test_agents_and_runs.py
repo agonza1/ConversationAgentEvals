@@ -7,12 +7,36 @@ import pytest
 
 from app.main import app
 from app.services import acc_connection, agent_store, execution_run_store
-from app.services.execution_runner import execute_execution_run, start_execution_run
+from app.services.execution_runner import (
+    _scenario_user_opener,
+    execute_execution_run,
+    start_execution_run,
+)
 from app.services.target_secrets import resolve_http_target_secret
 from app.schemas.execution import ExecutionRunCreateRequest
 
 
 client = TestClient(app)
+
+
+def test_user_scenario_opener_uses_the_configured_prompt():
+    assert _scenario_user_opener({
+        'id': 'custom-account-access',
+        'title': 'Account access issue',
+        'simulated_user_prompt': 'I changed my password and now I cannot sign in.',
+    }) == 'I changed my password and now I cannot sign in.'
+    assert _scenario_user_opener({
+        'id': 'legacy-custom-account-access',
+        'title': 'Account access issue',
+        'prompt': 'Please help me regain access to my account.',
+    }) == 'Please help me regain access to my account.'
+
+
+def test_configured_user_prompt_takes_precedence_over_generated_sample_transcript():
+    assert _scenario_user_opener({
+        'simulated_user_prompt': 'Use my configured opening request.',
+        'sample_transcript': 'Caller: Do not replace the configured request.',
+    }) == 'Use my configured opening request.'
 
 
 @pytest.fixture(autouse=True)
