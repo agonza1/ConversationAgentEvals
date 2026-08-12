@@ -332,6 +332,49 @@ def list_projects(db: Session, user_id: str) -> list[ProductProjectResponse]:
     return [_serialize_project(project, run_count=run_count) for project, run_count in rows]
 
 
+def find_visible_projects(db: Session, user_id: str, project_id: str) -> list[ProductProject]:
+    """Return projects with this key that are visible through ownership or workspace membership."""
+    workspace_ids = _member_workspace_ids(db=db, user_id=user_id)
+    return (
+        db.query(ProductProject)
+        .filter(
+            ProductProject.project_key == project_id,
+            _visible_project_clause(user_id=user_id, workspace_ids=workspace_ids),
+        )
+        .all()
+    )
+
+
+def find_visible_project(
+    db: Session,
+    user_id: str,
+    project_id: str,
+    product_project_id: str | None = None,
+) -> ProductProject | None:
+    """Resolve one visible project without guessing between duplicate visible keys."""
+    projects = find_visible_projects(db=db, user_id=user_id, project_id=project_id)
+    if product_project_id:
+        return next((project for project in projects if project.id == product_project_id), None)
+    return projects[0] if len(projects) == 1 else None
+
+
+def resolve_execution_product_project_id(
+    db: Session,
+    user_id: str,
+    project_id: str,
+    product_project_id: str | None,
+) -> str | None:
+    """Capture the stable project identity used by an execution run."""
+    projects = find_visible_projects(db=db, user_id=user_id, project_id=project_id)
+    if product_project_id:
+        if any(project.id == product_project_id for project in projects):
+            return product_project_id
+        raise ValueError('The selected product project is not visible or does not match the project key.')
+    if len(projects) > 1:
+        raise ValueError('The project key is ambiguous; supply product_project_id for the selected project.')
+    return projects[0].id if projects else None
+
+
 def update_project_settings(db: Session, project_id: str, payload: ProductProjectSettingsRequest) -> ProductProjectResponse | None:
     project = _project_for_settings_editor(db=db, project_id=project_id, user_id=payload.user_id)
     if project is None:
@@ -867,6 +910,7 @@ def record_judge_request(
     status: str,
     credits: int,
     *,
+    product_project_id: str | None = None,
     provider: str | None = None,
     model: str | None = None,
     judge_output: str | None = None,
@@ -874,7 +918,13 @@ def record_judge_request(
 ) -> None:
     project = None
     if project_id:
-        project = _get_or_create_project(db=db, user_id=user_id, project_id=project_id, plan=plan)
+        visible_projects = find_visible_projects(db=db, user_id=user_id, project_id=project_id)
+        if product_project_id:
+            project = next((item for item in visible_projects if item.id == product_project_id), None)
+        elif len(visible_projects) == 1:
+            project = visible_projects[0]
+        if project is None and not visible_projects and not product_project_id:
+            project = _get_or_create_project(db=db, user_id=user_id, project_id=project_id, plan=plan)
     output_preview = (judge_output or '').strip()
     payload: dict[str, Any] = {
         'project_id': project_id,

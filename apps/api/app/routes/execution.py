@@ -24,11 +24,16 @@ from app.schemas.execution import ExecutionRunCreateRequest
 from app.services import execution_run_store
 from app.services.execution_audio import describe_execution_audio_capabilities
 from app.services.execution_runner import execute_execution_run, start_execution_run
+from app.services.product_service import resolve_execution_product_project_id
 from app.services.reference_generalist_agent import (
     ReferenceRuntimeError,
     ReferenceRuntimeConfig,
     discover_rtc_asr_runtime,
     resolve_reference_completion_provider,
+)
+from app.services.reference_model_preflight import (
+    augment_reference_voice_preflight,
+    prepare_execution_reference_models,
 )
 from app.services.acc_connection import acc_connection_status, test_acc_connection
 
@@ -40,7 +45,7 @@ _LISTENER_TURN_USERNAME = os.getenv('LISTENER_TURN_USERNAME', '').strip()
 _LISTENER_TURN_CREDENTIAL = os.getenv('LISTENER_TURN_CREDENTIAL', '').strip()
 _LISTENER_TURN_SHARED_SECRET = os.getenv('LISTENER_TURN_SHARED_SECRET', '').strip()
 _REFERENCE_DEPENDENCY_SETUP_URLS = {
-    'openai': 'https://platform.openai.com/docs/quickstart',
+    'llm': 'https://github.com/agonza1/ConversationAgentEvals/blob/main/docs/environment.md#live-asr-and-voice-experiments',
     'shared_token': 'https://github.com/agonza1/ConversationAgentEvals/blob/main/docs/environment.md#live-asr-and-voice-experiments',
     'pipecat': 'https://github.com/pipecat-ai/pipecat',
     'rtc_asr': 'https://github.com/agonza1/rtc-asr',
@@ -103,7 +108,7 @@ def execution_reference_complete(
     if not x_cae_reference_token or not secrets.compare_digest(x_cae_reference_token, expected_token):
         raise HTTPException(status_code=403, detail='Invalid local reference-agent token.')
     try:
-        provider = resolve_reference_completion_provider()
+        provider = resolve_reference_completion_provider(payload.model_name)
         started_at = time.perf_counter()
         complete_with_metrics = getattr(provider, 'complete_with_metrics', None)
         if callable(complete_with_metrics):
@@ -147,7 +152,7 @@ def execution_reference_stream(
     ):
         raise HTTPException(status_code=403, detail='Invalid local reference-agent token.')
     try:
-        provider = resolve_reference_completion_provider()
+        provider = resolve_reference_completion_provider(payload.model_name)
         provider_status = provider.status()
     except (ReferenceRuntimeError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -186,8 +191,21 @@ def execution_reference_stream(
 
 
 @router.post('/runs')
-def create_execution_run(payload: ExecutionRunCreateRequest, background_tasks: BackgroundTasks):
+def create_execution_run(
+    payload: ExecutionRunCreateRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     try:
+        payload = payload.model_copy(update={
+            'product_project_id': resolve_execution_product_project_id(
+                db=db,
+                user_id=payload.user_id,
+                project_id=payload.project_id,
+                product_project_id=payload.product_project_id,
+            ),
+        })
+        payload = prepare_execution_reference_models(payload)
         queued = start_execution_run(payload, preflight=True)
     except (ValueError, ReferenceRuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -574,20 +592,21 @@ def _reference_voice_preflight() -> dict[str, Any]:
     dependencies: list[dict[str, Any]] = []
 
     try:
-        provider = resolve_reference_completion_provider()
+        provider = resolve_reference_completion_provider(config.llm_model)
         status = provider.status()
         llm_ready = status.get('status') == 'connected'
+        provider_label = status.get('provider') or provider.provider_id
         dependencies.append({
-            'id': 'openai',
-            'label': 'OpenAI API key or Codex OAuth',
+            'id': 'llm',
+            'label': 'Generalist LLM provider',
             'ready': llm_ready,
             'detail': (
-                f'{status.get("provider") or provider.provider_id} ready for both agents.'
-                if llm_ready else status.get('message') or 'Connect OpenAI for both agents.'
+                f'{provider_label} ready for both agents.'
+                if llm_ready else status.get('message') or 'Configure OpenAI or local Ollama for both agents.'
             ),
         })
     except Exception as exc:  # noqa: BLE001
-        dependencies.append({'id': 'openai', 'label': 'OpenAI API key or Codex OAuth', 'ready': False, 'detail': str(exc)})
+        dependencies.append({'id': 'llm', 'label': 'Generalist LLM provider', 'ready': False, 'detail': str(exc)})
 
     token_ready = bool(config.internal_token)
     dependencies.append({
@@ -695,6 +714,6 @@ def execution_health(db: Session = Depends(get_db)):
         'ok': True,
         'surface': 'execution',
         'audio': describe_execution_audio_capabilities().model_dump(mode='json'),
-        'reference_voice': _reference_voice_preflight(),
+        'reference_voice': augment_reference_voice_preflight(_reference_voice_preflight()),
         'acc_connection': acc_connection_status(),
     }

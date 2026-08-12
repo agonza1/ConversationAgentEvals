@@ -32,6 +32,10 @@ from app.services.two_agent_pipecat_duplex import (
     build_builtin_sample_voice_graphs,
 )
 
+OLLAMA_MODEL_PREFIX = 'ollama/'
+DEFAULT_OLLAMA_GENERALIST_MODEL = os.getenv('REFERENCE_OLLAMA_MODEL', 'gemma2:2b').strip() or 'gemma2:2b'
+DEFAULT_OLLAMA_GENERALIST_MODEL_ID = f'{OLLAMA_MODEL_PREFIX}{DEFAULT_OLLAMA_GENERALIST_MODEL}'
+
 
 class ReferenceRuntimeError(RuntimeError):
     """Actionable fail-closed error from a required reference runtime."""
@@ -225,7 +229,107 @@ class OpenAICompatibleApiKeyProvider:
         }
 
 
-def resolve_reference_completion_provider() -> CompletionProvider:
+def _ollama_model_name(model_name: str | None) -> str | None:
+    selected = (model_name or '').strip()
+    if not selected.lower().startswith(OLLAMA_MODEL_PREFIX):
+        return None
+    model = selected[len(OLLAMA_MODEL_PREFIX):].strip()
+    if not model:
+        raise ReferenceRuntimeError('Ollama target model must include a model tag, for example ollama/gemma2:2b.')
+    return model
+
+
+class OllamaCompletionProvider:
+    provider_id = 'ollama'
+
+    def __init__(self, *, client: httpx.Client | None = None) -> None:
+        self.base_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434').rstrip('/')
+        self.default_model = DEFAULT_OLLAMA_GENERALIST_MODEL
+        self._client = client
+
+    def status(self) -> dict[str, Any]:
+        client = self._client or httpx.Client(timeout=5)
+        try:
+            response = client.get(f'{self.base_url}/api/tags')
+            response.raise_for_status()
+        except Exception as exc:  # noqa: BLE001 - keep status safe for UI/preflight
+            return {
+                'status': 'disconnected',
+                'provider': 'ollama',
+                'message': f'Ollama is unavailable at {self.base_url}: {exc}',
+            }
+        return {
+            'status': 'connected',
+            'provider': 'ollama',
+            'base_url': self.base_url,
+            'default_model': self.default_model,
+            'message': f'Ollama ready at {self.base_url}.',
+        }
+
+    def complete(self, prompt: str, *, model_name: str | None = None) -> str:
+        model = _ollama_model_name(model_name) or self.default_model
+        client = self._client or httpx.Client(timeout=120)
+        response = client.post(
+            f'{self.base_url}/api/generate',
+            json={'model': model, 'prompt': prompt, 'stream': False},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        text = payload.get('response')
+        if not isinstance(text, str) or not text.strip():
+            raise ReferenceRuntimeError('Ollama returned no response text.')
+        return text.strip()
+
+    def stream_with_metrics(
+        self,
+        prompt: str,
+        *,
+        model_name: str | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        model = _ollama_model_name(model_name) or self.default_model
+        started_at = time.perf_counter()
+        client = self._client or httpx.Client(timeout=120)
+        chunks: list[str] = []
+        ttft_ms: float | None = None
+        with client.stream(
+            'POST',
+            f'{self.base_url}/api/generate',
+            json={'model': model, 'prompt': prompt, 'stream': True},
+        ) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if not line:
+                    continue
+                event = json.loads(line)
+                delta = event.get('response')
+                if isinstance(delta, str) and delta:
+                    if ttft_ms is None:
+                        ttft_ms = round((time.perf_counter() - started_at) * 1000, 3)
+                    chunks.append(delta)
+                    yield {'type': 'delta', 'text': delta}
+                if event.get('done') is True:
+                    break
+        text = ''.join(chunks).strip()
+        if not text:
+            raise ReferenceRuntimeError('Ollama returned no response text.')
+        yield {
+            'type': 'completed',
+            'text': text,
+            'ttft_ms': ttft_ms,
+            'total_ms': round((time.perf_counter() - started_at) * 1000, 3),
+        }
+
+
+def resolve_reference_completion_provider(model_name: str | None = None) -> CompletionProvider:
+    if _ollama_model_name(model_name) is not None:
+        ollama = OllamaCompletionProvider()
+        status = ollama.status()
+        if status.get('status') == 'connected':
+            return ollama
+        raise ReferenceRuntimeError(
+            status.get('message')
+            or 'Ollama is unavailable. Start Ollama and pull the selected model.'
+        )
     api_key_provider = OpenAICompatibleApiKeyProvider()
     if api_key_provider.status()['status'] == 'connected':
         return api_key_provider
@@ -233,7 +337,8 @@ def resolve_reference_completion_provider() -> CompletionProvider:
     if oauth.status().get('status') == 'connected':
         return oauth
     raise ReferenceRuntimeError(
-        'Built-in generalist target requires an LLM. Set OPENAI_API_KEY or connect OpenAI/Codex OAuth.'
+        'Built-in generalist target requires an LLM. Set OPENAI_API_KEY, connect OpenAI/Codex OAuth, '
+        f'or select {DEFAULT_OLLAMA_GENERALIST_MODEL_ID} with Ollama running.'
     )
 
 

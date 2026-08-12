@@ -155,6 +155,7 @@ def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool =
         scenario_ids=scenario_ids,
         user_id=resolved.user_id,
         project_id=resolved.project_id,
+        product_project_id=resolved.product_project_id,
         agent_id=resolved.agent_id,
         agent_name=(agent or {}).get('name'),
         model_name=model_name,
@@ -1017,7 +1018,7 @@ def _preflight_reference_runtime(
 ) -> None:
     """Fail closed before queueing a built-in voice run."""
     config = _reference_runtime_config(payload)
-    completion = resolve_reference_completion_provider()
+    completion = resolve_reference_completion_provider(config.llm_model)
     ReferencePipecatAgentTransport(
         artifact_dir=REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id / 'audio',
         media=ReferenceMediaServices(config),
@@ -1261,7 +1262,7 @@ def _execute_openai_codex_text_agent(
         raise ValueError(f'Unknown agent: {payload.agent_id}')
     scenario = _scenario_definition(suite_id, scenario_id)
 
-    provider = resolve_reference_completion_provider()
+    provider = resolve_reference_completion_provider(payload.model_name)
     status = provider.status()
     if status.get('status') != 'connected':
         raise ValueError(
@@ -1502,7 +1503,7 @@ async def _execute_pipecat_webrtc(
 
     artifact_dir = REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id / 'audio'
     config = _reference_runtime_config(payload)
-    completion = resolve_reference_completion_provider()
+    completion = resolve_reference_completion_provider(config.llm_model)
     # Construction performs fail-closed readiness checks before a session is opened.
     transport = ReferencePipecatAgentTransport(
         artifact_dir=artifact_dir,

@@ -56,6 +56,15 @@ export interface AgentRecord {
   updated_at?: string;
 }
 
+export interface ProductProjectOption {
+  id: string;
+  user_id: string;
+  workspace_id?: string | null;
+  project_id: string;
+  name: string;
+  plan: 'free' | 'starter' | 'team' | 'business';
+}
+
 export interface LatencyStats {
   count: number;
   avg_ms?: number | null;
@@ -160,6 +169,7 @@ export interface ExecutionRunRecord {
   scenario_ids: string[];
   user_id: string;
   project_id: string;
+  product_project_id?: string | null;
   agent_id?: string | null;
   agent_name?: string | null;
   model_name?: string | null;
@@ -261,6 +271,11 @@ export interface LlmJudgeResponse {
   latency_ms?: number | null;
   review_id?: string | null;
   block_reason?: 'provider' | 'budget' | 'provider_error' | 'evidence' | null;
+  engine?: string | null;
+  assert_version?: string | null;
+  assert_result?: Record<string, unknown> | null;
+  artifacts?: Record<string, string> | null;
+  input_fingerprint?: string | null;
   spend_control?: {
     estimated_credits?: number;
     daily_credit_limit?: number;
@@ -403,6 +418,13 @@ export async function listAgents(): Promise<AgentRecord[]> {
   return payload.agents ?? [];
 }
 
+export async function listProductProjects(userId: string): Promise<ProductProjectOption[]> {
+  const payload = await handleJson<unknown>(
+    await fetch(`${getApiBase()}/api/product/projects?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
+  );
+  return Array.isArray(payload) ? payload as ProductProjectOption[] : [];
+}
+
 export async function requestLlmJudge(payload: {
   plan?: 'free' | 'starter' | 'team';
   report?: Record<string, unknown>;
@@ -412,6 +434,26 @@ export async function requestLlmJudge(payload: {
   execution_run_id?: string;
   conversation_id?: string;
 }): Promise<LlmJudgeResponse> {
+  const executionRunId = payload.execution_run_id;
+  const conversationId = payload.conversation_id;
+  const userId = payload.user_id;
+
+  if (executionRunId && conversationId && userId) {
+    // Completed execution conversations are judged by upstream ASSERT. The legacy
+    // product judge remains available only for standalone report/transcript reviews.
+    return handleJson(
+      await fetch(
+        `${getApiBase()}/api/assert/runs/${encodeURIComponent(executionRunId)}`
+        + `/conversations/${encodeURIComponent(conversationId)}/judge`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: userId }),
+        },
+      ),
+    );
+  }
+
   return handleJson(
     await fetch(`${getApiBase()}/api/product/judge`, {
       method: 'POST',
@@ -521,6 +563,7 @@ export async function createExecutionRun(payload: {
   duplex_timeout_seconds?: number;
   user_id: string;
   project_id: string;
+  product_project_id?: string;
   agent_id?: string;
   text_callable?: string;
   model_name?: string;

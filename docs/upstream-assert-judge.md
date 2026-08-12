@@ -59,13 +59,15 @@ ASSERT_JUDGE_TIMEOUT_SECONDS=300
 
 ## Run-analysis UI integration
 
-The separate stacked PR #130 routes the existing run-analysis **Review with LLM judge** action through the upstream ASSERT endpoint:
+The existing run-analysis **Review with LLM judge** action routes completed execution conversations through the upstream ASSERT endpoint:
 
 ```text
 POST /api/assert/runs/<execution-run-id>/conversations/<conversation-id>/judge
 ```
 
 The browser sends only the run owner identifier. The server reloads the persisted conversation and constructs the ASSERT transcript, taxonomy, and judge configuration from trusted run evidence.
+
+Successful ASSERT review requests also write the existing `judge.requested` product audit event, including the trusted project, provider, model, credit, status, and agreement metadata.
 
 The legacy endpoint remains available for standalone report or transcript reviews that are not attached to an execution conversation:
 
@@ -78,6 +80,10 @@ Therefore the product boundary is explicit:
 - execution-conversation button -> upstream ASSERT judge;
 - standalone report/transcript review -> legacy CAE product judge;
 - deterministic execution, final-state, media, and voice checks -> CAE.
+
+There is no silent fallback from ASSERT to the legacy judge for execution conversations. Missing configuration or an ASSERT failure is surfaced rather than changing judge semantics without notice.
+
+The dedicated routing test and the existing run-analysis Playwright specifications all intercept the ASSERT endpoint and verify that the browser submits only `user_id` for execution-conversation reviews.
 
 ## Run against a completed conversation directly
 
@@ -92,7 +98,7 @@ curl -X POST \
   }'
 ```
 
-The endpoint rejects active runs and conversations. It executes the existing command:
+The endpoint rejects active runs and conversations, as well as conversations that do not have a deterministic verdict. It executes the existing command:
 
 ```bash
 assert-ai run --config <judge-only.yaml> --force-stage judge --output json
@@ -122,6 +128,7 @@ A zero exit code from `assert-ai` is not sufficient. CAE accepts a semantic resu
 - the raw and inferred `judge_status` are both `ok`;
 - all built-in and CAE custom dimensions are strict booleans;
 - all dimension justifications are present;
+- the node-judgment set covers every generated taxonomy behavior;
 - every returned node judgment references a real taxonomy behavior and has valid fields;
 - the narrative and score JSON are structurally valid.
 
@@ -157,6 +164,7 @@ Applying the review continues to use CAE's existing confirmation flow and does n
 
 ## Initial limitations
 
+- The run UI uses the ASSERT path for execution conversations, but still presents the shared LLM-review result component. A later UX slice can expose ASSERT dimensions, behavior-node judgments, and artifact links more directly.
 - The taxonomy is compiled from the active CAE scenario contract. A later slice should use the approved, versioned editable ASSERT spec directly.
 - OpenTelemetry/OpenInference trace import remains a separate future path. Structured CAE action and final-state evidence are mapped directly for now.
 - Automatic judgment for every run is intentionally not enabled because it incurs model cost and requires provider credentials.

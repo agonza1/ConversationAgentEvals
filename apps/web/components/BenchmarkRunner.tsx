@@ -5,6 +5,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiAwareLink } from './ApiAwareLink';
 import { LiveRunFeedback, type LiveRunEvent } from './LiveRunFeedback';
 import { apiErrorMessage } from '@/lib/apiError';
+import { listProductProjects, type ProductProjectOption } from '@/lib/execution';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -277,8 +278,10 @@ interface OpenAIProviderStatus {
 }
 
 const DEFAULT_EXECUTION_MODEL = 'gpt-5.4-mini';
+const LOCAL_EXECUTION_MODELS = ['ollama/gemma2:2b'];
 const FALLBACK_EXECUTION_MODELS = [
   'gpt-5.4-mini',
+  ...LOCAL_EXECUTION_MODELS,
   'gpt-5.4',
   'gpt-5.2',
   'gpt-4.1',
@@ -292,7 +295,7 @@ const FALLBACK_EXECUTION_MODELS = [
 async function fetchOpenAIModels(): Promise<{ models: string[]; message: string | null }> {
   const response = await fetch(`${getApiBase()}/api/product/providers/openai/models`, { cache: 'no-store' });
   if (response.status === 401) {
-    return { models: [DEFAULT_EXECUTION_MODEL], message: 'Connect OpenAI to load models' };
+    return { models: [DEFAULT_EXECUTION_MODEL, ...LOCAL_EXECUTION_MODELS], message: 'Connect OpenAI to load GPT models; local Ollama models stay available.' };
   }
   if (!response.ok) {
     // Never leave the dropdown empty on transient API failures.
@@ -310,7 +313,7 @@ async function fetchOpenAIModels(): Promise<{ models: string[]; message: string 
   const ids = (payload.models ?? [])
     .map((item) => (typeof item === 'string' ? item : item.id))
     .filter((id): id is string => Boolean(id && id.trim()));
-  const merged = Array.from(new Set([DEFAULT_EXECUTION_MODEL, ...ids]));
+  const merged = Array.from(new Set([DEFAULT_EXECUTION_MODEL, ...LOCAL_EXECUTION_MODELS, ...ids]));
   merged.sort((a, b) => {
     if (a === DEFAULT_EXECUTION_MODEL) return -1;
     if (b === DEFAULT_EXECUTION_MODEL) return 1;
@@ -1009,6 +1012,7 @@ async function createExecutionRun(payload: {
   duplex_timeout_seconds?: number;
   user_id: string;
   project_id: string;
+  product_project_id?: string;
   evaluate?: boolean;
   agent_id?: string;
   model_name?: string;
@@ -2225,6 +2229,8 @@ export function BenchmarkRunner({
   const [contractManifestError, setContractManifestError] = useState<string | null>(null);
   const [userId, setUserId] = useState('');
   const [projectId, setProjectId] = useState('call-center-demo');
+  const [productProjects, setProductProjects] = useState<ProductProjectOption[]>([]);
+  const [productProjectId, setProductProjectId] = useState('');
   const [plan, setPlan] = useState<PricingPlan['id']>('free');
   const [productConfig, setProductConfig] = useState<ProductConfig | null>(null);
   const [savedRuns, setSavedRuns] = useState<SavedRun[]>([]);
@@ -2292,6 +2298,10 @@ export function BenchmarkRunner({
   const supportsSuiteExecutionScope = Boolean(
     selectedScoreAgent?.channel === 'text'
     && !isSavedReplayTargetId(selectedScoreAgent.target),
+  );
+  const matchingProductProjects = useMemo(
+    () => productProjects.filter((project) => project.project_id === projectId),
+    [productProjects, projectId],
   );
   function clearStructuredEvidenceFields() {
     setActionTrace('');
@@ -2511,7 +2521,7 @@ export function BenchmarkRunner({
     async function loadExecutionModels() {
       if (openaiProvider?.status !== 'connected') {
         setExecutionModelOptions([DEFAULT_EXECUTION_MODEL, ...FALLBACK_EXECUTION_MODELS.filter((id) => id !== DEFAULT_EXECUTION_MODEL)]);
-        setExecutionModelsMessage('Connect OpenAI to load models');
+        setExecutionModelsMessage('Connect OpenAI to load GPT models; local Ollama models stay available.');
         setExecutionModelName((current) => current || DEFAULT_EXECUTION_MODEL);
         return;
       }
@@ -2704,6 +2714,36 @@ export function BenchmarkRunner({
     setProjectId(nextProject);
     setPlan(nextPlan);
   }, []);
+
+  useEffect(() => {
+    if (!userId) {
+      setProductProjects([]);
+      setProductProjectId('');
+      return;
+    }
+    let active = true;
+    listProductProjects(userId)
+      .then((projects) => {
+        if (!active) return;
+        setProductProjects(projects);
+        const matching = projects.filter((project) => project.project_id === projectId);
+        const stored = window.localStorage.getItem('conversation-evals-demo-product-project-id') || '';
+        const selected = matching.some((project) => project.id === stored)
+          ? stored
+          : matching.length === 1
+            ? matching[0].id
+            : '';
+        setProductProjectId(selected);
+      })
+      .catch(() => {
+        if (!active) return;
+        setProductProjects([]);
+        setProductProjectId('');
+      });
+    return () => {
+      active = false;
+    };
+  }, [projectId, userId]);
 
   useEffect(() => {
     if (!userId) {
@@ -3482,6 +3522,11 @@ export function BenchmarkRunner({
     if (!selectedSuite) return null;
     const identity = ensureDemoIdentity();
 
+    if (matchingProductProjects.length > 1 && !productProjectId) {
+      setExecutionMessage('Select the personal or workspace project for this run.');
+      return null;
+    }
+
     if (!selectedScoreAgent) {
       setExecutionMessage('Select an agent target before launching.');
       return null;
@@ -3585,6 +3630,7 @@ export function BenchmarkRunner({
         duplex_timeout_seconds: sampleVoiceAgent || publicPipecatAgent || signalwireAgent ? executionDuplexTimeoutSeconds : undefined,
         user_id: identity.userId,
         project_id: identity.projectId,
+        product_project_id: productProjectId || undefined,
         evaluate: true,
         agent_id: selectedAgentId || undefined,
         model_name: modelNameForExecutionRun,
@@ -4638,6 +4684,32 @@ export function BenchmarkRunner({
           </fieldset>
         ) : null}
 
+        {matchingProductProjects.length > 1 ? (
+          <label style={{ display: 'grid', gap: 8, maxWidth: 420 }}>
+            <span style={{ fontWeight: 700 }}>Project for this run</span>
+            <select
+              aria-label="Execution project"
+              value={productProjectId}
+              onChange={(event) => {
+                const next = event.target.value;
+                setProductProjectId(next);
+                if (next) window.localStorage.setItem('conversation-evals-demo-product-project-id', next);
+                else window.localStorage.removeItem('conversation-evals-demo-product-project-id');
+              }}
+            >
+              <option value="">Select personal or workspace project</option>
+              {matchingProductProjects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name} · {project.workspace_id ? 'workspace' : 'personal'}
+                </option>
+              ))}
+            </select>
+            <span style={{ color: 'var(--muted)', fontSize: 13 }}>
+              Multiple visible projects use the key {projectId}; this keeps run history and ASSERT audits attached correctly.
+            </span>
+          </label>
+        ) : null}
+
         <div className="run-config-grid">
           <div className="run-config-step">
             <div className="run-config-step-heading">
@@ -4813,7 +4885,7 @@ export function BenchmarkRunner({
             {openaiProvider?.status !== 'connected' ? (
               <span style={{ color: 'var(--muted)', fontSize: 13 }}>
                 {selectedScoreAgent.id === 'generalist-text-agent' || selectedScoreAgent.target === 'builtin_sample_voice'
-                  ? 'This reference target can use OPENAI_API_KEY from the API environment, or you can connect OpenAI here. '
+                  ? 'This reference target can use OPENAI_API_KEY, a connected OpenAI account, or local Ollama for ollama/... model ids. '
                   : 'Connect OpenAI to run this target. '}
                 <button type="button" className="secondary-link" disabled={isConnectingOpenAI} onClick={() => void onConnectOpenAI()} style={{ padding: 0, border: 0, background: 'transparent', color: 'var(--accent)', fontWeight: 700, cursor: 'pointer' }}>
                   {isConnectingOpenAI ? 'Connecting…' : 'Connect OpenAI'}
@@ -4903,6 +4975,7 @@ export function BenchmarkRunner({
               || isSimulating
               || !selectedSuite
               || !selectedScoreAgent
+              || (matchingProductProjects.length > 1 && !productProjectId)
               || ((selectedScoreAgent?.target === 'openai_codex'
                 || selectedScoreAgent?.target === 'builtin_sample_voice'
                 || selectedScoreAgent?.target === 'pipecat_public_demo'
