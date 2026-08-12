@@ -661,7 +661,8 @@ def test_signalwire_holyguacamole_evaluation_without_agent_transcript_needs_revi
     assert finished['status'] == 'needs_review'
     assert conversation['status'] == 'needs_review'
     assert conversation['verdict'] == 'needs_review'
-    assert conversation['score'] == 0
+    assert conversation['score'] is None
+    assert 'overall_score' not in conversation['evaluation_findings']
     assert conversation['evaluation_findings']['failure_categories'] == [
         'missing_grounded_agent_transcript'
     ]
@@ -891,6 +892,25 @@ def test_execution_persists_model_name_default_and_override():
     )
     assert via_api.status_code == 200, via_api.text
     assert via_api.json()['model_name'] == 'gpt-4.1'
+
+    signalwire = client.post(
+        '/api/execution/runs',
+        json={
+            'suite_id': 'call-center-voice-ai',
+            'scenario_ids': ['cancellation-rescue'],
+            'agent_id': 'holyguacamole-signalwire-agent',
+            'user_id': 'agent-runs-user',
+            'project_id': 'agent-runs-project',
+            'model_name': 'gpt-4.1',
+            'iterations': 1,
+        },
+    )
+    assert signalwire.status_code == 200, signalwire.text
+    signalwire_body = signalwire.json()
+    assert signalwire_body['model_name'] == 'signalwire-ai-agent'
+    assert signalwire_body['execution_snapshot']['request']['model_name'] == (
+        'signalwire-ai-agent'
+    )
 
 
 def test_generalist_voice_honors_reference_model_env_and_explicit_override(monkeypatch):

@@ -55,6 +55,7 @@ DEFAULT_AUDIO_PLAN = 'docs/examples/agentic-contact-center-audio-plan.json'
 DEFAULT_CANCELLATION_SCENARIO = 'docs/examples/agentic-contact-center-cancellation-rescue.json'
 DEFAULT_EXECUTION_MODEL = 'gpt-5.4-mini'
 PUBLIC_PIPECAT_AGENT = '10-gradium'
+SIGNALWIRE_HOLY_GUACAMOLE_MODEL = 'signalwire-ai-agent'
 FIXTURE_BACKED_SCENARIO_IDS = frozenset({'cancellation-rescue'})
 ALLOWED_FIXTURE_ROOTS = (
     REPO_ROOT / 'docs' / 'examples',
@@ -567,13 +568,13 @@ def _execution_model_name(payload: ExecutionRunCreateRequest, *, target: str) ->
         # This black-box target runs Pipecat's fixed public agent; an OpenAI
         # model selection from another UI target must not leak into metadata.
         return PUBLIC_PIPECAT_AGENT
+    if target == 'signalwire_holy_guacamole':
+        return SIGNALWIRE_HOLY_GUACAMOLE_MODEL
     explicit = (payload.model_name or '').strip()
     if explicit:
         return explicit
     if target == 'builtin_sample_voice':
         return ReferenceRuntimeConfig().llm_model
-    if target == 'signalwire_holy_guacamole':
-        return 'signalwire-ai-agent'
     return DEFAULT_EXECUTION_MODEL
 
 
@@ -813,8 +814,6 @@ def _execute_signalwire_holyguacamole_browser(
     elif payload.evaluate:
         report = {
             'verdict': 'needs_review',
-            'overall_score': 0,
-            'score': 0,
             'summary': (
                 'SignalWire evaluation skipped because current-run remote agent speech '
                 'was captured as audio but was not transcribed into grounded agent text.'
