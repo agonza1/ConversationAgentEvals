@@ -29,6 +29,10 @@ from app.services.reference_generalist_agent import (
     discover_rtc_asr_runtime,
     resolve_reference_completion_provider,
 )
+from app.services.reference_model_preflight import (
+    augment_reference_voice_preflight,
+    prepare_execution_reference_models,
+)
 from app.services.acc_connection import acc_connection_status, test_acc_connection
 
 
@@ -187,6 +191,7 @@ def execution_reference_stream(
 @router.post('/runs')
 def create_execution_run(payload: ExecutionRunCreateRequest, background_tasks: BackgroundTasks):
     try:
+        payload = prepare_execution_reference_models(payload)
         queued = start_execution_run(payload, preflight=True)
     except (ValueError, ReferenceRuntimeError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -688,6 +693,6 @@ def execution_health(db: Session = Depends(get_db)):
         'ok': True,
         'surface': 'execution',
         'audio': describe_execution_audio_capabilities().model_dump(mode='json'),
-        'reference_voice': _reference_voice_preflight(),
+        'reference_voice': augment_reference_voice_preflight(_reference_voice_preflight()),
         'acc_connection': acc_connection_status(),
     }
