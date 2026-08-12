@@ -52,6 +52,8 @@ const EMPTY_FORM: AgentFormState = {
   description: '',
 };
 
+const PIPECAT_PUBLIC_DEMO_URL = 'https://www.pipecat.ai/';
+
 const TARGET_OPTIONS: Record<
   AgentRecord['channel'],
   Array<{
@@ -67,6 +69,7 @@ const TARGET_OPTIONS: Record<
     { value: 'mock_agent', label: 'Built-in sample text agent', group: 'Built-in samples' },
   ],
   voice: [
+    { value: 'pipecat_public_demo', label: 'Pipecat demo', group: 'Live connections' },
     { value: 'browser_webrtc_agent', label: 'ACC browser WebRTC (coming soon)', group: 'Live connections', comingSoon: true },
     { value: 'sip_agent', label: 'ACC SIP URI (coming soon)', group: 'Live connections', comingSoon: true },
     { value: 'phone_agent', label: 'ACC phone number (coming soon)', group: 'Live connections', comingSoon: true },
@@ -87,6 +90,7 @@ function targetLabel(target: FormTarget) {
   if (target === 'openai_codex') return 'OpenAI endpoint (live)';
   if (target === 'offline_acc_fixture') return 'Saved ACC text replay';
   if (target === 'http_endpoint') return 'HTTP JSON endpoint (live)';
+  if (target === 'pipecat_public_demo') return 'Pipecat public demo (direct Daily WebRTC)';
   if (target === 'browser_webrtc_agent') return 'ACC browser WebRTC (coming soon)';
   if (target === 'sip_agent') return 'ACC SIP URI (coming soon)';
   if (target === 'phone_agent') return 'ACC phone number (coming soon)';
@@ -107,6 +111,9 @@ function isAccTarget(target: FormTarget) {
 }
 
 function connectionFromForm(values: AgentFormState): AgentRecord['connection'] {
+  if (values.target === 'pipecat_public_demo') {
+    return { endpoint_url: values.endpointUrl.trim() || PIPECAT_PUBLIC_DEMO_URL };
+  }
   if (values.target === 'http_endpoint') {
     return {
       endpoint_url: values.endpointUrl.trim(),
@@ -184,6 +191,8 @@ function AgentConfigRows({ agent }: { agent: AgentRecord }) {
       label: 'Evidence',
       value: agent.target === 'builtin_sample_voice'
         ? 'Current-run local pipeline · no saved evidence'
+        : agent.target === 'pipecat_public_demo'
+          ? 'Current-run direct Daily WebRTC media and transcript'
         : isBuiltInTarget(agent.target)
           ? 'Generated during the run'
           : isSavedReplayTarget(agent.target)
@@ -352,7 +361,24 @@ function AgentFormModal({
   function onChannelChange(nextChannel: AgentRecord['channel']) {
     setChannel(nextChannel);
     if (!TARGET_OPTIONS[nextChannel].some((option) => option.value === target)) {
-      setTarget(TARGET_OPTIONS[nextChannel][0].value);
+      const nextTarget = TARGET_OPTIONS[nextChannel][0].value;
+      setTarget(nextTarget);
+      if (nextTarget === 'pipecat_public_demo') {
+        setEndpointUrl(PIPECAT_PUBLIC_DEMO_URL);
+        setEnvironment('production');
+      } else if (target === 'pipecat_public_demo') {
+        setEndpointUrl('');
+      }
+    }
+  }
+
+  function onTargetChange(nextTarget: FormTarget) {
+    setTarget(nextTarget);
+    if (nextTarget === 'pipecat_public_demo') {
+      setEndpointUrl(PIPECAT_PUBLIC_DEMO_URL);
+      setEnvironment('production');
+    } else if (target === 'pipecat_public_demo') {
+      setEndpointUrl('');
     }
   }
 
@@ -409,7 +435,7 @@ function AgentFormModal({
             <select
               aria-label="Target connection"
               value={target}
-              onChange={(event) => setTarget(event.target.value as FormTarget)}
+              onChange={(event) => onTargetChange(event.target.value as FormTarget)}
             >
               {(['Live connections', 'Built-in samples'] as const).map((group) => {
                 const options = TARGET_OPTIONS[channel].filter((option) => option.group === group);
@@ -432,6 +458,25 @@ function AgentFormModal({
                   : 'Uses predictable responses generated during this run. It does not contact a deployed agent.'}
               </span>
             </div>
+          ) : target === 'pipecat_public_demo' ? (
+            <fieldset className="agents-connection-fields">
+              <legend>Public Pipecat direct WebRTC target</legend>
+              <p>
+                CAE joins the demo&apos;s ephemeral Daily room directly through Pipecat, sends synthesized scenario
+                speech, and captures current-run response audio, transcript, latency, and redacted provenance.
+              </p>
+              <label>
+                <span>Target URL</span>
+                <input
+                  required
+                  readOnly
+                  type="url"
+                  aria-label="Pipecat demo URL"
+                  value={endpointUrl || PIPECAT_PUBLIC_DEMO_URL}
+                />
+              </label>
+              <small>The adapter is limited to the public demo; room credentials are ephemeral and never persisted.</small>
+            </fieldset>
           ) : isSavedReplayTarget(target) ? (
             <div className="agents-form-notice" role="note">
               <strong>Saved evidence</strong>
@@ -720,7 +765,9 @@ export function AgentsPage() {
                   <h2>{agent.name}</h2>
                   <div className="agents-badges">
                     <span className="agents-badge agents-badge-channel">{channelLabel(agent.channel)}</span>
-                    {isBuiltInAgent(agent) ? (
+                    {agent.target === 'pipecat_public_demo' ? (
+                      <span className="agents-badge agents-badge-channel">Public external target</span>
+                    ) : isBuiltInAgent(agent) ? (
                       <span className="agents-badge agents-badge-builtin">Built-in testing target</span>
                     ) : (
                       <span className="agents-badge agents-badge-channel">Custom target</span>

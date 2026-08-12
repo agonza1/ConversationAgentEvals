@@ -8,7 +8,7 @@ from app.services.run_provenance import ExecutionRunProvenance, ExecutorId, Test
 
 
 ExecutionMode = Literal['text_callable', 'voice_fixture', 'pipecat_webrtc']
-AudioTransportId = Literal['none', 'pipecat_small_webrtc', 'freeswitch_verto_sip']
+AudioTransportId = Literal['none', 'pipecat_small_webrtc', 'pipecat_daily_webrtc', 'freeswitch_verto_sip']
 TextCallableId = Literal['mock_agent', 'offline_acc_fixture', 'openai_codex', 'http_endpoint']
 ConversationStatus = Literal['queued', 'running', 'completed', 'failed']
 ExecutionRunStatus = Literal['queued', 'running', 'completed', 'needs_review', 'failed']
@@ -48,9 +48,18 @@ class ExecutionRunCreateRequest(BaseModel):
                 raise ValueError('pipecat_webrtc mode requires tester_id=pipecat_tester')
             if 'executor_id' not in self.model_fields_set or self.executor_id == 'local_async_runner':
                 self.executor_id = 'cae_local_audio_loop'
-            elif self.executor_id != 'cae_local_audio_loop':
-                raise ValueError('pipecat_webrtc mode requires executor_id=cae_local_audio_loop')
-            if self.audio_transport in {'none', 'pipecat_small_webrtc'}:
+            elif self.executor_id not in {'cae_local_audio_loop', 'pipecat_public_daily'}:
+                raise ValueError(
+                    'pipecat_webrtc mode requires executor_id=cae_local_audio_loop or pipecat_public_daily'
+                )
+            if self.executor_id == 'pipecat_public_daily':
+                if self.audio_transport in {'none', 'pipecat_daily_webrtc'}:
+                    self.audio_transport = 'pipecat_daily_webrtc'
+                else:
+                    raise ValueError(
+                        'executor_id=pipecat_public_daily requires audio_transport=pipecat_daily_webrtc'
+                    )
+            elif self.audio_transport in {'none', 'pipecat_small_webrtc'}:
                 self.audio_transport = 'pipecat_small_webrtc'
             elif self.audio_transport == 'freeswitch_verto_sip':
                 raise ValueError(
@@ -58,7 +67,7 @@ class ExecutionRunCreateRequest(BaseModel):
                     'Use pipecat_small_webrtc for local execution audio hooks.'
                 )
             else:
-                raise ValueError('pipecat_webrtc mode requires audio_transport=pipecat_small_webrtc')
+                raise ValueError('Local pipecat_webrtc mode requires audio_transport=pipecat_small_webrtc')
         elif self.audio_transport == 'freeswitch_verto_sip':
             raise ValueError(
                 'audio_transport=freeswitch_verto_sip is deferred. '

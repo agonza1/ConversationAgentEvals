@@ -242,6 +242,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
                   executionRunId={run.execution_run_id}
                   userId={run.user_id || userId}
                   runStatus={run.status}
+                  autoExpandLiveEvents
                 />
               ) : null}
               {(conversation?.turns || []).length ? (
@@ -1662,5 +1663,6 @@ function fmtDuration(value: number) {
 
 function fmtMs(value?: number | null) {
   if (value == null || Number.isNaN(value)) return 'n/a';
+  if (value > 0 && value < 10) return `${value.toFixed(1).replace(/\.0$/, '')}ms`;
   return `${Math.round(value)}ms`;
 }

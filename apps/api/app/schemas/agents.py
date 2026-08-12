@@ -18,6 +18,7 @@ AgentTarget = Literal[
     'offline_acc_fixture',
     'voice_fixture',  # legacy saved-replay target; new records are rejected
     'builtin_sample_voice',
+    'pipecat_public_demo',
     'sip_agent',
     'phone_agent',
     'browser_webrtc_agent',
@@ -26,7 +27,14 @@ AgentTarget = Literal[
 
 _TEXT_AGENT_TARGETS = frozenset({'mock_agent', 'openai_codex', 'offline_acc_fixture', 'http_endpoint'})
 _VOICE_AGENT_TARGETS = frozenset(
-    {'voice_fixture', 'builtin_sample_voice', 'sip_agent', 'phone_agent', 'browser_webrtc_agent'}
+    {
+        'voice_fixture',
+        'builtin_sample_voice',
+        'pipecat_public_demo',
+        'sip_agent',
+        'phone_agent',
+        'browser_webrtc_agent',
+    }
 )
 _EXTERNAL_VOICE_TARGETS = frozenset({'sip_agent', 'phone_agent', 'browser_webrtc_agent'})
 
@@ -133,6 +141,32 @@ class AgentUpdateRequest(BaseModel):
 
 
 def validate_agent_connection(target: AgentTarget, connection: AgentConnection) -> None:
+    if target == 'pipecat_public_demo':
+        endpoint = (connection.endpoint_url or '').strip()
+        if not endpoint:
+            raise ValueError('Pipecat demo targets require connection.endpoint_url.')
+        parsed = urlparse(endpoint)
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError('Pipecat demo targets must use https://www.pipecat.ai/.') from exc
+        if (
+            parsed.scheme != 'https'
+            or parsed.hostname != 'www.pipecat.ai'
+            or parsed.username
+            or parsed.password
+            or port is not None
+            or parsed.path not in {'', '/'}
+        ):
+            raise ValueError('Pipecat demo targets must use https://www.pipecat.ai/.')
+        if parsed.query or parsed.fragment:
+            raise ValueError('Pipecat demo target URLs cannot contain query strings or fragments.')
+        if connection.auth_type != 'none' or connection.secret_ref:
+            raise ValueError('The public Pipecat demo target does not accept stored credentials.')
+        if connection.sip_uri or connection.phone_number or connection.acc_base_url:
+            raise ValueError('Pipecat demo targets cannot include ACC voice destination fields.')
+        return
+
     if target == 'http_endpoint':
         endpoint = (connection.endpoint_url or '').strip()
         if not endpoint:

@@ -6,6 +6,7 @@ Maps to the ACC pattern:
 CAE tester / audio plan
   -> ExecutionAudioTransport
        - pipecat_small_webrtc (this slice: local/mocked)
+       - pipecat_daily_webrtc (public Pipecat target)
        - freeswitch_verto_sip (deferred extension point)
   -> target session send/receive
   -> recording + transcription handles
@@ -30,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.services.acc_realtime_target import AccAudioFixture, AccAudioStep
 
 
-AudioTransportId = Literal['none', 'pipecat_small_webrtc', 'freeswitch_verto_sip']
+AudioTransportId = Literal['none', 'pipecat_small_webrtc', 'pipecat_daily_webrtc', 'freeswitch_verto_sip']
 
 
 class ExecutionAudioTransportInfo(BaseModel):
@@ -81,6 +82,19 @@ def describe_execution_audio_capabilities() -> ExecutionAudioCapabilities:
                 ),
             ),
             ExecutionAudioTransportInfo(
+                id='pipecat_daily_webrtc',
+                label='Public Pipecat target over Daily WebRTC',
+                available=True,
+                status='available',
+                requires_freeswitch=False,
+                requires_live_pipecat=True,
+                notes=(
+                    'Joins the public Pipecat demo Daily room directly from the Pipecat service, '
+                    'publishes current-run tester audio, and captures transcript, response audio, '
+                    'timing, evaluation, and vCon evidence without a browser.'
+                ),
+            ),
+            ExecutionAudioTransportInfo(
                 id='freeswitch_verto_sip',
                 label='FreeSWITCH Verto outbound SIP',
                 available=False,
@@ -114,6 +128,7 @@ def describe_execution_audio_capabilities() -> ExecutionAudioCapabilities:
             'Default CI must not require FreeSWITCH, live SIP, or a browser WebRTC client.',
             'ACC mirrors: Pipecat + SmallWebRTC for media, FreeSWITCH Verto for outbound SIP.',
             'Use execution mode pipecat_webrtc with audio_transport=pipecat_small_webrtc for vCon capture.',
+            'The public Pipecat target uses pipecat_daily_webrtc for direct external Daily media.',
             'freeswitch_verto_sip remains a deferred extension point (see FreeSwitchVertoSipTransport).',
         ],
     )
@@ -128,7 +143,11 @@ class AudioRecordingHandle:
     sha256: str | None = None
     duration_ms: int | None = None
     bytes_captured: int = 0
-    transport: Literal['pipecat_small_webrtc', 'freeswitch_verto_sip'] = 'pipecat_small_webrtc'
+    transport: Literal[
+        'pipecat_small_webrtc',
+        'pipecat_daily_webrtc',
+        'freeswitch_verto_sip',
+    ] = 'pipecat_small_webrtc'
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def as_call_media(self) -> dict[str, Any]:

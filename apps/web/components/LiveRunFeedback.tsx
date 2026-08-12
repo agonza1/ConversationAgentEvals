@@ -27,6 +27,18 @@ function listenerMediaKey(event: LiveRunEvent) {
   return typeof value === 'string' && value ? value : null;
 }
 
+function connectionPhaseLabel(event: LiveRunEvent) {
+  const phase = event.frame_metadata?.connection_phase;
+  if (typeof phase !== 'string' || !phase) return null;
+  const labels: Record<string, string> = {
+    bot_joined: 'bot joined',
+    greeting: 'greeting',
+    caller_speaking: 'caller speaking',
+    bot_responding: 'bot responding',
+  };
+  return labels[phase] || phase.replaceAll('_', ' ');
+}
+
 export interface LiveRunConversation {
   conversation_id: string;
   live_events?: LiveRunEvent[];
@@ -39,6 +51,7 @@ interface LiveRunFeedbackProps {
   executionRunId?: string;
   userId?: string;
   runStatus?: string;
+  autoExpandLiveEvents?: boolean;
 }
 
 function mediaUrl(apiBase: string, value: string) {
@@ -100,6 +113,7 @@ export function LiveRunFeedback({
   executionRunId,
   userId,
   runStatus,
+  autoExpandLiveEvents = false,
 }: LiveRunFeedbackProps) {
   const [expanded, setExpanded] = useState(false);
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>('idle');
@@ -111,6 +125,7 @@ export function LiveRunFeedback({
   const [listenerMessage, setListenerMessage] = useState<string | null>(null);
   const [isCreatingListener, setIsCreatingListener] = useState(false);
   const [webrtcStatus, setWebrtcStatus] = useState<'idle' | 'connecting' | 'listening' | 'fallback' | 'error'>('idle');
+  const autoExpandedRef = useRef(false);
   const queuedRef = useRef(new Set<string>());
   const blockedLiveQueueKeysRef = useRef(new Set<string>());
   const playbackModeRef = useRef<PlaybackMode>('idle');
@@ -147,6 +162,12 @@ export function LiveRunFeedback({
   );
   const audioEventsRef = useRef(audioEvents);
   audioEventsRef.current = audioEvents;
+
+  useEffect(() => {
+    if (!autoExpandLiveEvents || !listenerActive || !events.length || autoExpandedRef.current) return;
+    autoExpandedRef.current = true;
+    setExpanded(true);
+  }, [autoExpandLiveEvents, events.length, listenerActive]);
 
   const refreshListener = useCallback(async (token = listenerToken?.token) => {
     if (!token) return;
@@ -875,7 +896,9 @@ export function LiveRunFeedback({
           {events.length ? events.map((event) => (
             <div key={`${event.conversationId}-${event.sequence}`} style={{ display: 'grid', gap: 2 }}>
               <strong style={{ fontSize: 13 }}>
-                {event.speaker}{directionLabel(event.direction) ? ` · ${directionLabel(event.direction)}` : ''}
+                {connectionPhaseLabel(event)
+                  ? `Connection · ${connectionPhaseLabel(event)}`
+                  : `${event.speaker}${directionLabel(event.direction) ? ` · ${directionLabel(event.direction)}` : ''}`}
               </strong>
               <span style={{ whiteSpace: 'pre-wrap' }}>
                 {event.llm_output ? 'Spoken (LLM output): ' : ''}{event.llm_output || event.text}
