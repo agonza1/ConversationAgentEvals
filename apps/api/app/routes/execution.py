@@ -39,7 +39,7 @@ _LISTENER_TURN_USERNAME = os.getenv('LISTENER_TURN_USERNAME', '').strip()
 _LISTENER_TURN_CREDENTIAL = os.getenv('LISTENER_TURN_CREDENTIAL', '').strip()
 _LISTENER_TURN_SHARED_SECRET = os.getenv('LISTENER_TURN_SHARED_SECRET', '').strip()
 _REFERENCE_DEPENDENCY_SETUP_URLS = {
-    'openai': 'https://platform.openai.com/docs/quickstart',
+    'llm': 'https://github.com/agonza1/ConversationAgentEvals/blob/main/docs/environment.md#live-asr-and-voice-experiments',
     'shared_token': 'https://github.com/agonza1/ConversationAgentEvals/blob/main/docs/environment.md#live-asr-and-voice-experiments',
     'pipecat': 'https://github.com/pipecat-ai/pipecat',
     'rtc_asr': 'https://github.com/agonza1/rtc-asr',
@@ -102,7 +102,7 @@ def execution_reference_complete(
     if not x_cae_reference_token or not secrets.compare_digest(x_cae_reference_token, expected_token):
         raise HTTPException(status_code=403, detail='Invalid local reference-agent token.')
     try:
-        provider = resolve_reference_completion_provider()
+        provider = resolve_reference_completion_provider(payload.model_name)
         started_at = time.perf_counter()
         complete_with_metrics = getattr(provider, 'complete_with_metrics', None)
         if callable(complete_with_metrics):
@@ -146,7 +146,7 @@ def execution_reference_stream(
     ):
         raise HTTPException(status_code=403, detail='Invalid local reference-agent token.')
     try:
-        provider = resolve_reference_completion_provider()
+        provider = resolve_reference_completion_provider(payload.model_name)
         provider_status = provider.status()
     except (ReferenceRuntimeError, ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -566,20 +566,21 @@ def _reference_voice_preflight() -> dict[str, Any]:
     dependencies: list[dict[str, Any]] = []
 
     try:
-        provider = resolve_reference_completion_provider()
+        provider = resolve_reference_completion_provider(config.llm_model)
         status = provider.status()
         llm_ready = status.get('status') == 'connected'
+        provider_label = status.get('provider') or provider.provider_id
         dependencies.append({
-            'id': 'openai',
-            'label': 'OpenAI API key or Codex OAuth',
+            'id': 'llm',
+            'label': 'Generalist LLM provider',
             'ready': llm_ready,
             'detail': (
-                f'{status.get("provider") or provider.provider_id} ready for both agents.'
-                if llm_ready else status.get('message') or 'Connect OpenAI for both agents.'
+                f'{provider_label} ready for both agents.'
+                if llm_ready else status.get('message') or 'Configure OpenAI or local Ollama for both agents.'
             ),
         })
     except Exception as exc:  # noqa: BLE001
-        dependencies.append({'id': 'openai', 'label': 'OpenAI API key or Codex OAuth', 'ready': False, 'detail': str(exc)})
+        dependencies.append({'id': 'llm', 'label': 'Generalist LLM provider', 'ready': False, 'detail': str(exc)})
 
     token_ready = bool(config.internal_token)
     dependencies.append({

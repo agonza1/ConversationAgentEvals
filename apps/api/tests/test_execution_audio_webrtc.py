@@ -76,7 +76,7 @@ def test_execution_health_includes_audio_capabilities():
     preflight = response.json()['reference_voice']
     assert preflight['llm_mode'] == 'real'
     assert {item['id'] for item in preflight['dependencies']} == {
-        'openai', 'shared_token', 'pipecat', 'rtc_asr', 'kokoro'
+        'llm', 'shared_token', 'pipecat', 'rtc_asr', 'kokoro'
     }
     assert all(item['detail'] for item in preflight['dependencies'])
     assert all(item['setup_url'].startswith('https://') for item in preflight['dependencies'])
@@ -390,7 +390,7 @@ def test_pipecat_webrtc_execution_fails_closed_without_reference_services(monkey
         def status(self):
             return {'status': 'connected', 'provider': 'fake'}
 
-    monkeypatch.setattr(execution_runner, 'resolve_reference_completion_provider', lambda: _ConnectedProvider())
+    monkeypatch.setattr(execution_runner, 'resolve_reference_completion_provider', lambda *_args: _ConnectedProvider())
     monkeypatch.delenv('RTC_ASR_BASE_URL', raising=False)
     monkeypatch.delenv('KOKORO_BASE_URL', raising=False)
     queued = client.post(
@@ -454,7 +454,7 @@ def test_pipecat_webrtc_propagates_tester_needs_review(monkeypatch, tmp_path):
             return {'status': 'connected'}
 
     monkeypatch.setattr(execution_runner, 'ReferencePipecatAgentTransport', _FakeReferenceTransport)
-    monkeypatch.setattr(execution_runner, 'resolve_reference_completion_provider', lambda: _FakeCompletion())
+    monkeypatch.setattr(execution_runner, 'resolve_reference_completion_provider', lambda *_args: _FakeCompletion())
     def _turns(self, session_id):  # noqa: ANN001
         return [
             TranscriptionTurn(turn_index=1, speaker='Caller', text='hi', act_id='a'),

@@ -18,6 +18,7 @@ from app.services.execution_audio import ExecutionAudioTargetAdapter
 from app.services.pipecat_tester_agent import PipecatTesterAgentRunner
 from app.services.reference_generalist_agent import (
     KokoroTesterTtsRenderer,
+    OllamaCompletionProvider,
     OpenAICompatibleApiKeyProvider,
     ReferenceMediaServices,
     ReferencePipecatAgentTransport,
@@ -25,6 +26,7 @@ from app.services.reference_generalist_agent import (
     ReferenceRuntimeConfig,
     ReferenceRuntimeError,
     discover_rtc_asr_runtime,
+    resolve_reference_completion_provider,
 )
 
 
@@ -58,6 +60,61 @@ def test_api_key_stream_accepts_final_only_response_event(monkeypatch):
     assert events[1]['type'] == 'completed'
     assert events[1]['text'] == 'Final-only API response'
     assert isinstance(events[1]['ttft_ms'], float)
+
+
+def test_ollama_provider_completes_with_selected_model(monkeypatch):
+    monkeypatch.setenv('OLLAMA_BASE_URL', 'http://ollama.test')
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == '/api/generate'
+        payload = json.loads(request.content.decode())
+        assert payload['model'] == 'gemma2:2b'
+        assert payload['prompt'] == 'Hello'
+        assert payload['stream'] is False
+        return httpx.Response(200, json={'response': 'Local Gemma reply'})
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as ollama_client:
+        provider = OllamaCompletionProvider(client=ollama_client)
+        assert provider.complete('Hello', model_name='ollama/gemma2:2b') == 'Local Gemma reply'
+
+
+def test_ollama_provider_streams_native_generate_events(monkeypatch):
+    monkeypatch.setenv('OLLAMA_BASE_URL', 'http://ollama.test')
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == '/api/generate'
+        return httpx.Response(
+            200,
+            content=(
+                b'{"response":"Local ","done":false}\n'
+                b'{"response":"Gemma","done":false}\n'
+                b'{"done":true}\n'
+            ),
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as ollama_client:
+        provider = OllamaCompletionProvider(client=ollama_client)
+        events = list(provider.stream_with_metrics('Hello', model_name='ollama/gemma2:2b'))
+
+    assert events[0] == {'type': 'delta', 'text': 'Local '}
+    assert events[1] == {'type': 'delta', 'text': 'Gemma'}
+    assert events[2]['type'] == 'completed'
+    assert events[2]['text'] == 'Local Gemma'
+
+
+def test_selected_ollama_model_routes_reference_provider(monkeypatch):
+    monkeypatch.setenv('OLLAMA_BASE_URL', 'http://ollama.test')
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == '/api/tags'
+        return httpx.Response(200, json={'models': [{'name': 'gemma2:2b'}]})
+
+    class FakeOllamaProvider(OllamaCompletionProvider):
+        def __init__(self):
+            super().__init__(client=httpx.Client(transport=httpx.MockTransport(respond)))
+
+    monkeypatch.setattr('app.services.reference_generalist_agent.OllamaCompletionProvider', FakeOllamaProvider)
+    assert resolve_reference_completion_provider('ollama/gemma2:2b').provider_id == 'ollama'
 
 
 def _wav(value: int = 1) -> bytes:
@@ -635,7 +692,7 @@ def test_reference_completion_callback_requires_internal_token(monkeypatch):
     denied = client.post('/api/execution/reference/complete', json={'prompt': 'hello', 'model_name': 'fake'})
     assert denied.status_code == 403
 
-    monkeypatch.setattr(execution_routes, 'resolve_reference_completion_provider', lambda: FakeCompletion())
+    monkeypatch.setattr(execution_routes, 'resolve_reference_completion_provider', lambda *_args: FakeCompletion())
     accepted = client.post(
         '/api/execution/reference/complete',
         headers={'x-cae-reference-token': 'shared-test-token'},
@@ -659,7 +716,7 @@ def test_reference_completion_stream_forwards_deltas_and_metrics(monkeypatch):
     monkeypatch.setattr(
         execution_routes,
         'resolve_reference_completion_provider',
-        lambda: FakeCompletion(),
+        lambda *_args: FakeCompletion(),
     )
     response = client.post(
         '/api/execution/reference/stream',
