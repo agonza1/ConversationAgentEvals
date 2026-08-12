@@ -300,12 +300,13 @@ async function runSmoke(args) {
           const processor = context.createScriptProcessor(2048, 1, 1);
           const sink = context.createGain();
           sink.gain.value = 0;
-          const startAt = context.currentTime + 5;
           const playback = {
             loop: false,
             duration_ms: Math.round(buffer.duration * 1000),
-            start_delay_ms: 5000,
-            scheduled_start_epoch_ms: Date.now() + 5000,
+            start_delay_ms: 0,
+            readiness_trigger: null,
+            readiness_triggered_epoch_ms: null,
+            scheduled_start_epoch_ms: null,
             first_outbound_sample_epoch_ms: null,
             first_outbound_sample_offset_ms: null,
             ended_epoch_ms: null,
@@ -313,6 +314,8 @@ async function runSmoke(args) {
             observed_peak: 0,
             get_user_media_request_count: 1,
           };
+          let scheduledStartContextTime = null;
+          let started = false;
           processor.onaudioprocess = (event) => {
             const input = event.inputBuffer.getChannelData(0);
             let peak = 0;
@@ -323,7 +326,9 @@ async function runSmoke(args) {
             if (peak > playback.observed_peak) playback.observed_peak = peak;
             if (playback.first_outbound_sample_epoch_ms === null && peak >= 0.001) {
               playback.first_outbound_sample_epoch_ms = Date.now();
-              playback.first_outbound_sample_offset_ms = Math.max(0, Math.round((context.currentTime - startAt) * 1000));
+              playback.first_outbound_sample_offset_ms = scheduledStartContextTime === null
+                ? null
+                : Math.max(0, Math.round((context.currentTime - scheduledStartContextTime) * 1000));
             }
           };
           source.onended = () => {
@@ -338,8 +343,18 @@ async function runSmoke(args) {
           processor.connect(sink);
           sink.connect(context.destination);
           await context.resume().catch(() => {});
-          source.start(startAt);
-          source.stop(startAt + buffer.duration);
+          window.__caeStartInjectedAudio = async (reason = 'webrtc_media_ready') => {
+            if (started) return playback;
+            started = true;
+            await context.resume().catch(() => {});
+            scheduledStartContextTime = context.currentTime;
+            playback.readiness_trigger = reason;
+            playback.readiness_triggered_epoch_ms = Date.now();
+            playback.scheduled_start_epoch_ms = playback.readiness_triggered_epoch_ms;
+            source.start(scheduledStartContextTime);
+            source.stop(scheduledStartContextTime + buffer.duration);
+            return playback;
+          };
           window.__caeInjectedAudioContext = context;
           window.__caeInjectedAudioSource = source;
           window.__caeInjectedAudioPlayback = playback;
@@ -492,8 +507,22 @@ async function runSmoke(args) {
           connected: Boolean(document.querySelector('#remote-video')) || document.body.innerText.includes('Connected!'),
           remoteAudio: Boolean(document.querySelector('#remote-video')?.srcObject?.getAudioTracks?.().length),
           callerPlayback: window.__caeInjectedAudioPlayback || null,
+          canStartCallerPlayback: typeof window.__caeStartInjectedAudio === 'function',
         };
       });
+      if (
+        state.connected
+        && state.remoteAudio
+        && state.canStartCallerPlayback
+        && !state.callerPlayback?.readiness_triggered_epoch_ms
+      ) {
+        const startedPlayback = await page.evaluate(async () => (
+          window.__caeStartInjectedAudio
+            ? window.__caeStartInjectedAudio('webrtc_connected_remote_audio_track')
+            : null
+        )).catch(() => null);
+        if (startedPlayback) state.callerPlayback = startedPlayback;
+      }
       if (state.callerPlayback) {
         result.tester.caller_audio_playback = state.callerPlayback;
         result.connection.caller_audio_played = Boolean(state.callerPlayback.first_outbound_sample_epoch_ms);
@@ -515,7 +544,7 @@ async function runSmoke(args) {
         result.connection.remote_stream_seen = true;
         result.latency_metrics.connect_click_to_remote_track_ms = clickMs ? remoteAudioMs - clickMs : null;
       }
-      if (connectedMs && Date.now() - connectedMs > 12000) break;
+      if (state.callerPlayback?.ended_epoch_ms && Date.now() - state.callerPlayback.ended_epoch_ms > 1500) break;
       await page.waitForTimeout(500);
     }
 
