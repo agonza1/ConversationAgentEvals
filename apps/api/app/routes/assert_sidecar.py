@@ -33,11 +33,22 @@ class AssertExecutionJudgeRequest(BaseModel):
     judge_n: int = Field(default=1, ge=1, le=3)
 
 
-def _product_plan(db: Session, *, user_id: str, project_id: str | None) -> str:
+def _product_plan(
+    db: Session,
+    *,
+    user_id: str,
+    project_id: str | None,
+    product_project_id: str | None = None,
+) -> str:
     """Return the persisted project plan without treating a feature requirement as entitlement."""
     if not project_id:
         return 'free'
-    project = find_visible_project(db=db, user_id=user_id, project_id=project_id)
+    project = find_visible_project(
+        db=db,
+        user_id=user_id,
+        project_id=project_id,
+        product_project_id=product_project_id,
+    )
     plan = str(project.plan or '').strip().lower() if project is not None else ''
     return plan if plan in {'free', 'starter', 'team', 'business'} else 'free'
 
@@ -106,13 +117,20 @@ def judge_execution_conversation(
     judge_result = response.get('judge_result')
     agrees = judge_result.get('agrees') if isinstance(judge_result, dict) else None
     project_id = str(run.get('project_id') or '').strip() or None
+    product_project_id = str(run.get('product_project_id') or '').strip() or None
     record_judge_request(
         db=db,
         user_id=payload.user_id,
         project_id=project_id,
-        plan=_product_plan(db, user_id=payload.user_id, project_id=project_id),
+        plan=_product_plan(
+            db,
+            user_id=payload.user_id,
+            project_id=project_id,
+            product_project_id=product_project_id,
+        ),
         status=str(response.get('status') or 'ready'),
         credits=int(response.get('credits') or 0),
+        product_project_id=product_project_id,
         provider=str(response.get('provider') or '').strip() or None,
         model=str(response.get('model') or '').strip() or None,
         judge_output=str(response.get('judge_output') or '').strip() or None,

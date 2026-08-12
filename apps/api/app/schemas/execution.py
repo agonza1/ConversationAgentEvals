@@ -26,6 +26,7 @@ class ExecutionRunCreateRequest(BaseModel):
     concurrent_sessions: int = Field(default=1, ge=1, le=4)
     user_id: str = Field(default='execution-user', min_length=1)
     project_id: str = Field(default='conversation-agent-evals', min_length=1)
+    product_project_id: str | None = Field(default=None, min_length=1)
     evaluate: bool = True
     text_callable: TextCallableId = 'mock_agent'
     voice_fixture_path: str | None = None
@@ -224,6 +225,7 @@ class ExecutionRunRecord(BaseModel):
     scenario_ids: list[str]
     user_id: str
     project_id: str
+    product_project_id: str | None = None
     agent_id: str | None = None
     agent_name: str | None = None
     model_name: str | None = None

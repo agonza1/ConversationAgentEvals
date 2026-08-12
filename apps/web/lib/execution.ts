@@ -153,6 +153,7 @@ export interface ExecutionRunRecord {
   scenario_ids: string[];
   user_id: string;
   project_id: string;
+  product_project_id?: string | null;
   agent_id?: string | null;
   agent_name?: string | null;
   model_name?: string | null;
@@ -531,6 +532,7 @@ export async function createExecutionRun(payload: {
   duplex_timeout_seconds?: number;
   user_id: string;
   project_id: string;
+  product_project_id?: string;
   agent_id?: string;
   text_callable?: string;
   model_name?: string;
