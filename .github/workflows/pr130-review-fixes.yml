@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   apply-review-fixes:
-    if: github.event.head_commit.message == 'Apply PR 130 review test updates'
+    if: github.event.head_commit.message == 'Retry PR 130 review test updates'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,39 +33,76 @@ jobs:
               raise SystemExit(f'expected 4 legacy judge route mocks, found {route_count}')
           text = text.replace(old_route, new_route)
 
-          replacements = {
-              """  expect(judgeRequest).toMatchObject({
-            plan: 'free',
-            user_id: 'demo-user',
-            execution_run_id: 'exec-demo123',
-            conversation_id: conversation.conversation_id,
-          });
-          expect(judgeRequest).not.toHaveProperty('project_id');
-          expect(judgeRequest).not.toHaveProperty('transcript');
-          expect(judgeRequest).not.toHaveProperty('report');""":
-              """  expect(judgeRequest).toEqual({ user_id: 'demo-user' });""",
-              """    expect(payload).toMatchObject({
-                execution_run_id: 'exec-demo123',
-                conversation_id: conversation.conversation_id,
-                user_id: 'demo-user',
-              });""":
-              """    expect(payload).toEqual({ user_id: 'demo-user' });""",
-              """  expect(judgeRequest).toMatchObject({
-            execution_run_id: 'exec-demo123',
-            conversation_id: failedConversation.conversation_id,
-            user_id: 'demo-user',
-          });
-          expect(judgeRequest).not.toHaveProperty('report');
-          expect(judgeRequest).not.toHaveProperty('transcript');""":
-              """  expect(judgeRequest).toEqual({ user_id: 'demo-user' });""",
+          lines = text.splitlines()
+          output: list[str] = []
+          replaced = {
+              'selected_conversation': 0,
+              'adjudication': 0,
+              'failed_conversation': 0,
           }
+          index = 0
 
-          for old, new in replacements.items():
-              if text.count(old) != 1:
-                  raise SystemExit(f'expected one payload assertion block, found {text.count(old)}')
-              text = text.replace(old, new)
+          while index < len(lines):
+              line = lines[index]
+              stripped = line.strip()
 
-          path.write_text(text, encoding='utf-8')
+              if stripped == 'expect(judgeRequest).toMatchObject({':
+                  preview = '\n'.join(lines[index:index + 12])
+                  indent = line[:len(line) - len(line.lstrip())]
+                  if "plan: 'free'" in preview and 'conversation_id: conversation.conversation_id' in preview:
+                      end = index
+                      while end < len(lines) and "not.toHaveProperty('report')" not in lines[end]:
+                          end += 1
+                      if end >= len(lines):
+                          raise SystemExit('selected-conversation assertion block did not terminate')
+                      output.append(f"{indent}expect(judgeRequest).toEqual({{ user_id: 'demo-user' }});")
+                      replaced['selected_conversation'] += 1
+                      index = end + 1
+                      continue
+                  if 'conversation_id: failedConversation.conversation_id' in preview:
+                      end = index
+                      while end < len(lines) and "not.toHaveProperty('transcript')" not in lines[end]:
+                          end += 1
+                      if end >= len(lines):
+                          raise SystemExit('failed-conversation assertion block did not terminate')
+                      output.append(f"{indent}expect(judgeRequest).toEqual({{ user_id: 'demo-user' }});")
+                      replaced['failed_conversation'] += 1
+                      index = end + 1
+                      continue
+
+              if stripped == 'expect(payload).toMatchObject({':
+                  preview = '\n'.join(lines[index:index + 8])
+                  if (
+                      "execution_run_id: 'exec-demo123'" in preview
+                      and 'conversation_id: conversation.conversation_id' in preview
+                      and "user_id: 'demo-user'" in preview
+                  ):
+                      indent = line[:len(line) - len(line.lstrip())]
+                      end = index
+                      while end < len(lines) and lines[end].strip() != '});':
+                          end += 1
+                      if end >= len(lines):
+                          raise SystemExit('adjudication assertion block did not terminate')
+                      output.append(f"{indent}expect(payload).toEqual({{ user_id: 'demo-user' }});")
+                      replaced['adjudication'] += 1
+                      index = end + 1
+                      continue
+
+              output.append(line)
+              index += 1
+
+          expected = {
+              'selected_conversation': 1,
+              'adjudication': 1,
+              'failed_conversation': 1,
+          }
+          if replaced != expected:
+              raise SystemExit(f'unexpected assertion replacements: {replaced}')
+
+          updated = '\n'.join(output) + '\n'
+          if updated.count(new_route) != 4 or old_route in updated:
+              raise SystemExit('judge route replacement validation failed')
+          path.write_text(updated, encoding='utf-8')
           PY
 
       - name: Commit targeted test updates
