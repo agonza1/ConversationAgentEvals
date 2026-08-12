@@ -1,10 +1,9 @@
 """Model-aware preflight for built-in generalist execution targets.
 
-The execution UI exposes one target-model selector. For the local two-agent
-voice path, an explicit Ollama selection is applied to both the tester and
-evaluated target unless the caller deliberately supplied a separate tester
-model. Ollama selections are also checked against the local model inventory so
-a run fails before it is queued instead of later inside the media pipeline.
+Target and tester are separate participants. A target-model selection must never
+silently replace the tester model, but every provider needed by an Ollama-backed
+run must be ready before the run is queued. Ollama selections are also checked
+against the local model inventory so failures include the exact pull command.
 """
 
 from __future__ import annotations
@@ -20,6 +19,7 @@ from app.services.reference_generalist_agent import (
     OLLAMA_MODEL_PREFIX,
     ReferenceRuntimeConfig,
     ReferenceRuntimeError,
+    resolve_reference_completion_provider,
 )
 
 _OLLAMA_TAGS_TIMEOUT_SECONDS = 2.0
@@ -107,6 +107,37 @@ def probe_ollama_model(model_name: str) -> dict[str, str]:
     }
 
 
+def _ensure_reference_model_ready(model_name: str, *, role: str) -> dict[str, str]:
+    selected = model_name.strip()
+    if not selected:
+        raise ReferenceRuntimeError(f'Built-in voice {role} model is not configured.')
+
+    if _native_ollama_model(selected) is not None:
+        try:
+            return probe_ollama_model(selected)
+        except ReferenceRuntimeError as exc:
+            raise ReferenceRuntimeError(
+                f'Built-in voice {role} model {selected} is not ready: {exc}'
+            ) from exc
+
+    try:
+        provider = resolve_reference_completion_provider(selected)
+        status = provider.status()
+    except ReferenceRuntimeError as exc:
+        raise ReferenceRuntimeError(
+            f'Built-in voice {role} model {selected} is not ready: {exc}'
+        ) from exc
+    if status.get('status') != 'connected':
+        raise ReferenceRuntimeError(
+            f'Built-in voice {role} model {selected} is not ready: '
+            f'{status.get("message") or "provider is disconnected"}.'
+        )
+    return {
+        'provider': str(status.get('provider') or provider.provider_id),
+        'model_name': selected,
+    }
+
+
 def _is_local_generalist_voice(payload: ExecutionRunCreateRequest) -> bool:
     return (
         payload.mode == 'pipecat_webrtc'
@@ -121,36 +152,34 @@ def _is_generalist_text(payload: ExecutionRunCreateRequest) -> bool:
 def prepare_execution_reference_models(
     payload: ExecutionRunCreateRequest,
 ) -> ExecutionRunCreateRequest:
-    """Normalize voice model selection and preflight selected Ollama models."""
-    normalized = payload
-    local_voice = _is_local_generalist_voice(payload)
-    selected_ollama_model = _native_ollama_model(payload.model_name)
-
-    if local_voice and selected_ollama_model is not None and not payload.tester_model_name:
-        normalized = payload.model_copy(
-            update={'tester_model_name': payload.model_name},
-        )
-
-    model_names: list[str] = []
-    if local_voice:
+    """Fail closed for every provider participating in an Ollama-backed run."""
+    if _is_local_generalist_voice(payload):
         config = ReferenceRuntimeConfig()
-        model_names.extend((
-            normalized.model_name or config.llm_model,
-            normalized.tester_model_name or config.tester_llm_model,
-        ))
-    elif _is_generalist_text(normalized) and normalized.model_name:
-        model_names.append(normalized.model_name)
-
-    checked: set[str] = set()
-    for model_name in model_names:
-        selected = (model_name or '').strip()
-        if not selected or selected in checked:
-            continue
-        checked.add(selected)
+        target_model = (payload.model_name or config.llm_model).strip()
+        tester_model = (payload.tester_model_name or config.tester_llm_model).strip()
+        if (
+            _native_ollama_model(target_model) is not None
+            or _native_ollama_model(tester_model) is not None
+        ):
+            readiness: dict[str, dict[str, str]] = {}
+            for role, model_name in (
+                ('target', target_model),
+                ('tester', tester_model),
+            ):
+                if model_name not in readiness:
+                    readiness[model_name] = _ensure_reference_model_ready(
+                        model_name,
+                        role=role,
+                    )
+    elif _is_generalist_text(payload) and payload.model_name:
+        selected = payload.model_name.strip()
         if _native_ollama_model(selected) is not None:
-            probe_ollama_model(selected)
+            _ensure_reference_model_ready(selected, role='target')
 
-    return normalized
+    # Target and tester remain independently configured. The immutable execution
+    # snapshot will resolve tester_model_name from ReferenceRuntimeConfig when the
+    # request does not carry an explicit tester override.
+    return payload
 
 
 def _configured_ollama_model_id() -> str | None:
@@ -166,12 +195,12 @@ def _configured_ollama_model_id() -> str | None:
 
 
 def augment_reference_voice_preflight(report: dict[str, Any]) -> dict[str, Any]:
-    """Let generic voice health discover a configured, pulled Ollama fallback.
+    """Add configured Ollama target readiness without conflating the tester.
 
-    The browser requests generic voice health before it has a selected model. If
-    the configured OpenAI path is unavailable but local Ollama is configured, this
-    replaces only the LLM dependency while preserving Pipecat, ASR, TTS, and token
-    checks from the existing reference preflight.
+    The browser requests generic voice health before launching a specific run.
+    When the configured primary provider is unavailable but an Ollama target is
+    configured, validate both that target and the independently configured tester.
+    Exact per-run selections are validated again by prepare_execution_reference_models.
     """
     dependencies = [
         dict(item) if isinstance(item, dict) else item
@@ -189,27 +218,46 @@ def augment_reference_voice_preflight(report: dict[str, Any]) -> dict[str, Any]:
         return report
 
     llm_dependency = dependencies[llm_index]
-    configured_model = _configured_ollama_model_id()
+    configured_target_model = _configured_ollama_model_id()
     explicitly_ollama = bool(
         os.getenv('REFERENCE_LLM_MODEL', '').strip().lower().startswith(OLLAMA_MODEL_PREFIX)
     )
     if llm_dependency.get('ready') and not explicitly_ollama:
         return report
-    if configured_model is None:
+    if configured_target_model is None:
         return report
 
+    config = ReferenceRuntimeConfig()
+    tester_model = config.tester_llm_model
     try:
-        status = probe_ollama_model(configured_model)
+        target_status = _ensure_reference_model_ready(
+            configured_target_model,
+            role='target',
+        )
+        tester_status = (
+            target_status
+            if tester_model == configured_target_model
+            else _ensure_reference_model_ready(tester_model, role='tester')
+        )
+        if tester_model == configured_target_model:
+            detail = (
+                f'Ollama ready for the built-in target and tester with '
+                f'{target_status["model_name"]}.'
+            )
+        else:
+            detail = (
+                f'Target {target_status["model_name"]} via {target_status["provider"]}; '
+                f'tester {tester_status["model_name"]} via {tester_status["provider"]} ready.'
+            )
         dependencies[llm_index] = {
             **llm_dependency,
             'ready': True,
-            'detail': (
-                f'Ollama ready for the built-in tester and target with '
-                f'{status["model_name"]}.'
-            ),
-            'provider': status['provider'],
-            'target_model': status['model_name'],
-            'tester_model': status['model_name'],
+            'detail': detail,
+            'provider': target_status['provider'],
+            'target_provider': target_status['provider'],
+            'tester_provider': tester_status['provider'],
+            'target_model': target_status['model_name'],
+            'tester_model': tester_status['model_name'],
         }
     except ReferenceRuntimeError as exc:
         existing_detail = str(llm_dependency.get('detail') or '').strip()
@@ -217,7 +265,7 @@ def augment_reference_voice_preflight(report: dict[str, Any]) -> dict[str, Any]:
             **llm_dependency,
             'ready': False,
             'detail': ' '.join(
-                part for part in (existing_detail, f'Local Ollama: {exc}') if part
+                part for part in (existing_detail, f'Configured Ollama path: {exc}') if part
             ),
         }
 
