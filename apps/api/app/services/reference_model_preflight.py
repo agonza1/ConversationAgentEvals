@@ -437,7 +437,7 @@ def _configured_ollama_model_id() -> str | None:
 
 
 def augment_reference_voice_preflight(report: dict[str, Any]) -> dict[str, Any]:
-    """Add configured Ollama target readiness without conflating the tester."""
+    """Add configured Ollama readiness without conflating target and tester."""
     dependencies = [
         dict(item) if isinstance(item, dict) else item
         for item in report.get('dependencies') or []
@@ -454,28 +454,37 @@ def augment_reference_voice_preflight(report: dict[str, Any]) -> dict[str, Any]:
         return report
 
     llm_dependency = dependencies[llm_index]
-    configured_target_model = _configured_ollama_model_id()
-    explicitly_ollama = bool(
-        os.getenv('REFERENCE_LLM_MODEL', '').strip().lower().startswith(OLLAMA_MODEL_PREFIX)
-    )
-    if llm_dependency.get('ready') and not explicitly_ollama:
-        return report
-    if configured_target_model is None:
-        return report
-
     config = ReferenceRuntimeConfig()
+    primary_target_model = config.llm_model
     tester_model = config.tester_llm_model
+    configured_ollama_target = _configured_ollama_model_id()
+    primary_target_is_ollama = (
+        _native_ollama_model(primary_target_model) is not None
+    )
+    tester_is_ollama = _native_ollama_model(tester_model) is not None
+
+    if llm_dependency.get('ready') and not primary_target_is_ollama:
+        # Preserve an already-ready hosted target only when its independently
+        # configured tester does not add another provider dependency.
+        if not tester_is_ollama:
+            return report
+        target_model = primary_target_model
+    else:
+        if configured_ollama_target is None:
+            return report
+        target_model = configured_ollama_target
+
     try:
         target_status = _ensure_reference_model_ready(
-            configured_target_model,
+            target_model,
             role='target',
         )
         tester_status = (
             target_status
-            if tester_model == configured_target_model
+            if tester_model == target_model
             else _ensure_reference_model_ready(tester_model, role='tester')
         )
-        if tester_model == configured_target_model:
+        if tester_model == target_model:
             detail = (
                 f'Ollama ready for the built-in target and tester with '
                 f'{target_status["model_name"]}.'
