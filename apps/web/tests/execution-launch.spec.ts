@@ -94,6 +94,31 @@ test('launch evaluation streams conversations into the live list', async ({ page
       });
       return;
     }
+    if (url.includes('/projects?')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            id: 'proj-personal-call-center',
+            user_id: 'demo-user-exec',
+            workspace_id: null,
+            project_id: 'call-center-demo',
+            name: 'Personal call center',
+            plan: 'free',
+          },
+          {
+            id: 'proj-shared-call-center',
+            user_id: 'workspace-owner',
+            workspace_id: 'workspace-support',
+            project_id: 'call-center-demo',
+            name: 'Shared call center',
+            plan: 'team',
+          },
+        ]),
+      });
+      return;
+    }
     if (url.includes('/runs') || url.includes('/audit-events') || url.includes('/regression-summary') || url.includes('/export')) {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
       return;
@@ -437,6 +462,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user-exec');
     window.localStorage.setItem('conversation-evals-demo-project', 'call-center-demo');
     window.localStorage.setItem('conversation-evals-demo-plan', 'free');
+    window.localStorage.setItem('conversation-evals-demo-product-project-id', 'proj-shared-call-center');
   });
 
   await page.goto('/runs?api_base=http%3A%2F%2Fapi.example.test&suite_id=call-center-voice-ai&scenario_id=billing-address-change');
@@ -453,6 +479,10 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect(launch.getByLabel('Selected run scope')).toContainText('Billing Address Change');
   await expect(launch.getByLabel('Execution tester')).toContainText('Scenario user (AI)');
   await expect(launch.getByLabel('Execution runner')).toContainText(/local async runner/i);
+  await expect(launch.getByLabel('Execution project')).toHaveValue('proj-shared-call-center');
+  await launch.getByLabel('Execution project').selectOption('proj-personal-call-center');
+  await expect(launch.getByLabel('Execution project')).toHaveValue('proj-personal-call-center');
+  await launch.getByLabel('Execution project').selectOption('proj-shared-call-center');
   await expect(launch.locator('.run-config-step-heading strong')).toHaveText([
     'Tester',
     'Agent target',
@@ -496,6 +526,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
     executor_id: 'local_async_runner',
     scenario_ids: ['billing-address-change', 'cancellation-rescue'],
     max_exchanges: 3,
+    product_project_id: 'proj-shared-call-center',
   });
   await launch.getByLabel('Execution agent target').selectOption('generalist-text-agent');
   await expect(launch.getByLabel('Maximum exchanges')).toHaveValue('3');

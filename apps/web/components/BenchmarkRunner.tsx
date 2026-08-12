@@ -335,6 +335,15 @@ interface SavedRun {
   created_at: string;
 }
 
+interface ProductProjectOption {
+  id: string;
+  user_id: string;
+  workspace_id?: string | null;
+  project_id: string;
+  name: string;
+  plan: PricingPlan['id'];
+}
+
 interface ProjectRegressionSummary {
   run_count: number;
   latest_run_id?: string | null;
@@ -1011,6 +1020,7 @@ async function createExecutionRun(payload: {
   duplex_timeout_seconds?: number;
   user_id: string;
   project_id: string;
+  product_project_id?: string;
   evaluate?: boolean;
   agent_id?: string;
   model_name?: string;
@@ -1026,6 +1036,13 @@ async function createExecutionRun(payload: {
       body: JSON.stringify(payload),
     }),
   );
+}
+
+async function listProductProjects(userId: string): Promise<ProductProjectOption[]> {
+  const payload = await handleJson<unknown>(
+    await fetch(`${getApiBase()}/api/product/projects?user_id=${encodeURIComponent(userId)}`, { cache: 'no-store' }),
+  );
+  return Array.isArray(payload) ? payload as ProductProjectOption[] : [];
 }
 
 type ScoreAgentOption = {
@@ -2227,6 +2244,8 @@ export function BenchmarkRunner({
   const [contractManifestError, setContractManifestError] = useState<string | null>(null);
   const [userId, setUserId] = useState('');
   const [projectId, setProjectId] = useState('call-center-demo');
+  const [productProjects, setProductProjects] = useState<ProductProjectOption[]>([]);
+  const [productProjectId, setProductProjectId] = useState('');
   const [plan, setPlan] = useState<PricingPlan['id']>('free');
   const [productConfig, setProductConfig] = useState<ProductConfig | null>(null);
   const [savedRuns, setSavedRuns] = useState<SavedRun[]>([]);
@@ -2294,6 +2313,10 @@ export function BenchmarkRunner({
   const supportsSuiteExecutionScope = Boolean(
     selectedScoreAgent?.channel === 'text'
     && !isSavedReplayTargetId(selectedScoreAgent.target),
+  );
+  const matchingProductProjects = useMemo(
+    () => productProjects.filter((project) => project.project_id === projectId),
+    [productProjects, projectId],
   );
   function clearStructuredEvidenceFields() {
     setActionTrace('');
@@ -2701,6 +2724,36 @@ export function BenchmarkRunner({
     setProjectId(nextProject);
     setPlan(nextPlan);
   }, []);
+
+  useEffect(() => {
+    if (!userId) {
+      setProductProjects([]);
+      setProductProjectId('');
+      return;
+    }
+    let active = true;
+    listProductProjects(userId)
+      .then((projects) => {
+        if (!active) return;
+        setProductProjects(projects);
+        const matching = projects.filter((project) => project.project_id === projectId);
+        const stored = window.localStorage.getItem('conversation-evals-demo-product-project-id') || '';
+        const selected = matching.some((project) => project.id === stored)
+          ? stored
+          : matching.length === 1
+            ? matching[0].id
+            : '';
+        setProductProjectId(selected);
+      })
+      .catch(() => {
+        if (!active) return;
+        setProductProjects([]);
+        setProductProjectId('');
+      });
+    return () => {
+      active = false;
+    };
+  }, [projectId, userId]);
 
   useEffect(() => {
     if (!userId) {
@@ -3479,6 +3532,11 @@ export function BenchmarkRunner({
     if (!selectedSuite) return null;
     const identity = ensureDemoIdentity();
 
+    if (matchingProductProjects.length > 1 && !productProjectId) {
+      setExecutionMessage('Select the personal or workspace project for this run.');
+      return null;
+    }
+
     if (!selectedScoreAgent) {
       setExecutionMessage('Select an agent target before launching.');
       return null;
@@ -3573,6 +3631,7 @@ export function BenchmarkRunner({
         duplex_timeout_seconds: sampleVoiceAgent || publicPipecatAgent ? executionDuplexTimeoutSeconds : undefined,
         user_id: identity.userId,
         project_id: identity.projectId,
+        product_project_id: productProjectId || undefined,
         evaluate: true,
         agent_id: selectedAgentId || undefined,
         model_name: publicPipecatAgent
@@ -4626,6 +4685,32 @@ export function BenchmarkRunner({
           </fieldset>
         ) : null}
 
+        {matchingProductProjects.length > 1 ? (
+          <label style={{ display: 'grid', gap: 8, maxWidth: 420 }}>
+            <span style={{ fontWeight: 700 }}>Project for this run</span>
+            <select
+              aria-label="Execution project"
+              value={productProjectId}
+              onChange={(event) => {
+                const next = event.target.value;
+                setProductProjectId(next);
+                if (next) window.localStorage.setItem('conversation-evals-demo-product-project-id', next);
+                else window.localStorage.removeItem('conversation-evals-demo-product-project-id');
+              }}
+            >
+              <option value="">Select personal or workspace project</option>
+              {matchingProductProjects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name} · {project.workspace_id ? 'workspace' : 'personal'}
+                </option>
+              ))}
+            </select>
+            <span style={{ color: 'var(--muted)', fontSize: 13 }}>
+              Multiple visible projects use the key {projectId}; this keeps run history and ASSERT audits attached correctly.
+            </span>
+          </label>
+        ) : null}
+
         <div className="run-config-grid">
           <div className="run-config-step">
             <div className="run-config-step-heading">
@@ -4867,6 +4952,7 @@ export function BenchmarkRunner({
               || isSimulating
               || !selectedSuite
               || !selectedScoreAgent
+              || (matchingProductProjects.length > 1 && !productProjectId)
               || ((selectedScoreAgent?.target === 'openai_codex'
                 || selectedScoreAgent?.target === 'builtin_sample_voice'
                 || selectedScoreAgent?.target === 'pipecat_public_demo')
