@@ -833,6 +833,7 @@ async function runSmoke(args) {
         turn_pair: turnPair,
         caller_text: callerText,
         caller_audio_source: turnPair === 1 ? result.artifacts.caller_audio : 'reference-tester/turn',
+        ...(turnPair > 1 ? { caller_audio_wav_base64: callerWav.toString('base64') } : {}),
         agent_text: '',
         target_response_audio_turn: turnPair,
         target_response_latency_ms: latencyMs,

@@ -323,8 +323,12 @@ def run_signalwire_holyguacamole_call(
                 exchange_caller_path = caller_audio_dir / (
                     f'{conversation_id}-caller-turn-{exchange_index}.wav'
                 )
-                if exchange_caller_audio:
-                    exchange_caller_path.write_bytes(exchange_caller_audio)
+                if not exchange_caller_audio:
+                    raise RuntimeError(
+                        'SignalWire direct execution omitted caller audio evidence '
+                        f'for exchange {exchange_index}.'
+                    )
+                exchange_caller_path.write_bytes(exchange_caller_audio)
             caller_turn_paths.append(exchange_caller_path)
             transcript_turns.append(TranscriptionTurn(
                 turn_index=len(transcript_turns) + 1,

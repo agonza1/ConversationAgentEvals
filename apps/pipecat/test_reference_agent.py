@@ -230,6 +230,7 @@ class _Response:
 class _AsyncClient:
     completion_prompts: list[str] = []
     speech_voices: list[str] = []
+    speech_speeds: list[float] = []
 
     def __init__(self, *args, **kwargs):
         pass
@@ -253,6 +254,7 @@ class _AsyncClient:
         assert method == 'POST'
         if url.endswith('/v1/audio/speech'):
             type(self).speech_voices.append(kwargs['json']['voice'])
+            type(self).speech_speeds.append(kwargs['json']['speed'])
             return _Response(content=_wav())
         raise AssertionError(url)
 
@@ -306,6 +308,7 @@ class _DivergentReceiptAsyncClient:
 def test_reference_turn_runs_real_pipecat_pipeline(monkeypatch):
     _AsyncClient.completion_prompts.clear()
     _AsyncClient.speech_voices.clear()
+    _AsyncClient.speech_speeds.clear()
     monkeypatch.setattr(server, 'RTC_ASR_BASE_URL', 'http://rtc-asr.test')
     monkeypatch.setattr(server, 'KOKORO_BASE_URL', 'http://kokoro.test')
     monkeypatch.setattr(server, 'REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
@@ -332,10 +335,12 @@ def test_reference_turn_runs_real_pipecat_pipeline(monkeypatch):
     assert 'Avoid filler, recaps, and repeating information' in _AsyncClient.completion_prompts[0]
     assert 'Do not use markdown, bullets, or numbered lists' in _AsyncClient.completion_prompts[0]
     assert _AsyncClient.speech_voices == ['af_bella']
+    assert _AsyncClient.speech_speeds == [1.0]
 
 
 def test_reference_tester_turn_runs_real_pipecat_pipeline(monkeypatch):
     _AsyncClient.speech_voices.clear()
+    _AsyncClient.speech_speeds.clear()
     monkeypatch.setattr(server, 'RTC_ASR_BASE_URL', 'http://rtc-asr.test')
     monkeypatch.setattr(server, 'KOKORO_BASE_URL', 'http://kokoro.test')
     monkeypatch.setattr(server, 'REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
@@ -361,6 +366,7 @@ def test_reference_tester_turn_runs_real_pipecat_pipeline(monkeypatch):
     assert payload['pipeline']['processors'] == ['rtc-asr', 'llm', 'kokoro']
     assert base64.b64decode(payload['tester_audio_wav_base64']).startswith(b'RIFF')
     assert _AsyncClient.speech_voices == ['af_heart']
+    assert _AsyncClient.speech_speeds == [1.2]
 
 
 def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):

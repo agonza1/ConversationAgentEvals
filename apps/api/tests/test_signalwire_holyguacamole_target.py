@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 
@@ -248,6 +249,74 @@ def test_signalwire_target_accepts_only_remote_speech_transcript_sources(tmp_pat
     assert result['transcription_turns'][0].frame_metadata['caller_text_source'] == 'cae_kokoro_tts'
 
 
+def test_signalwire_target_preserves_followup_caller_audio_for_replay(tmp_path, monkeypatch):
+    result_dir = tmp_path / 'webrtc-result'
+    result_dir.mkdir()
+    target_audio = result_dir / 'target-audio.wav'
+    target_audio.write_bytes(b'current-run-signalwire-audio')
+    first_response = result_dir / 'target-response-turn-1.wav'
+    first_response.write_bytes(b'first-response-audio')
+    second_response = result_dir / 'target-response-turn-2.wav'
+    second_response.write_bytes(b'second-response-audio')
+    followup_audio = b'RIFF-followup-caller-wav'
+    result_path = result_dir / 'result.json'
+    result_path.write_text(json.dumps({
+        'status': 'pass',
+        'connection': {'call_connected': True, 'remote_stream_seen': True},
+        'tester': {'media_source': 'supplied_audio_file'},
+        'media': {'target_audio_duration_ms': 5000},
+        'transcript': {},
+        'exchanges': [
+            {'caller_text': 'I need help.', 'agent_text': 'How can I help?'},
+            {
+                'caller_text': 'I need a refill.',
+                'caller_audio_wav_base64': base64.b64encode(followup_audio).decode('ascii'),
+                'agent_text': 'Which medication?',
+            },
+        ],
+        'artifacts': {
+            'target_audio': str(target_audio),
+            'target_audio_mime': 'audio/wav',
+            'caller_audio': str(target_audio),
+            'target_response_audio_turns': [
+                {'turn': 1, 'path': str(first_response)},
+                {'turn': 2, 'path': str(second_response)},
+            ],
+            'result_json': str(result_path),
+        },
+    }), encoding='utf-8')
+
+    class Completed:
+        stdout = json.dumps({'result_path': str(result_path)})
+        stderr = ''
+        returncode = 0
+
+    monkeypatch.setenv(signalwire_target.SIGNALWIRE_PUBLIC_GATE_ENV, '1')
+    monkeypatch.setattr(
+        signalwire_target.subprocess,
+        'run',
+        lambda *args, **kwargs: Completed(),
+    )
+
+    result = run_signalwire_holyguacamole_call(
+        caller_text='I need help.',
+        artifact_dir=tmp_path / 'api-artifacts',
+        conversation_id='conversation-two-turns',
+        timeout_seconds=60,
+        max_exchanges=2,
+    )
+
+    caller_uris = result['recording_handle'].metadata['caller_audio_turn_uris']
+    assert len(caller_uris) == 2
+    assert Path(caller_uris[1]).read_bytes() == followup_audio
+    assert [(turn.speaker, turn.text) for turn in result['transcription_turns']] == [
+        ('Caller', 'I need help.'),
+        ('Agent', 'How can I help?'),
+        ('Caller', 'I need a refill.'),
+        ('Agent', 'Which medication?'),
+    ]
+
+
 def test_signalwire_target_transcribes_captured_response_with_existing_rtc_asr(
     tmp_path,
     monkeypatch,
@@ -390,6 +459,7 @@ def test_signalwire_smoke_uses_direct_webrtc_and_audible_latency():
     assert 'supplied audio file (speech text unverified)' in script
     assert 'remote_audio_after_caller_seen' in script
     assert '/reference-tester/turn' in script
+    assert "caller_audio_wav_base64: callerWav.toString('base64')" in script
     assert '--max-exchanges must be 1 or 2.' in script
     assert 'POST_CALLER_GRACE_MS = 300' in script
     assert 'PRE_RESPONSE_SILENCE_MS = 700' in script

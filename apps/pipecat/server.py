@@ -241,6 +241,13 @@ LISTENER_TURN_CREDENTIAL = os.getenv('LISTENER_TURN_CREDENTIAL', '').strip()
 LISTENER_TURN_SHARED_SECRET = os.getenv('LISTENER_TURN_SHARED_SECRET', '').strip()
 KOKORO_MODEL = os.getenv('KOKORO_MODEL', 'kokoro')
 KOKORO_TESTER_VOICE = os.getenv('KOKORO_TESTER_VOICE', 'af_heart')
+try:
+    KOKORO_TESTER_SPEED = min(
+        2.0,
+        max(0.5, float(os.getenv('KOKORO_TESTER_SPEED', '1.2'))),
+    )
+except ValueError:
+    KOKORO_TESTER_SPEED = 1.2
 _KOKORO_LEGACY_VOICE = os.getenv('KOKORO_VOICE', '').strip()
 KOKORO_TARGET_VOICE = os.getenv('KOKORO_TARGET_VOICE', '').strip() or (
     _KOKORO_LEGACY_VOICE
@@ -855,9 +862,10 @@ if PIPECAT_RUNTIME_AVAILABLE:
             await self.push_frame(_AgentTextFrame(text), direction)
 
     class _ReferenceKokoroProcessor(FrameProcessor):
-        def __init__(self, voice: str, *, graph_started_at: float):
+        def __init__(self, voice: str, *, graph_started_at: float, speed: float = 1.0):
             super().__init__()
             self.voice = voice
+            self.speed = speed
             self.graph_started_at = graph_started_at
             self.first_audio_byte_latency_ms: float | None = None
 
@@ -875,6 +883,7 @@ if PIPECAT_RUNTIME_AVAILABLE:
                         'model': KOKORO_MODEL,
                         'voice': self.voice,
                         'input': frame.text,
+                        'speed': self.speed,
                         'response_format': 'wav',
                     },
                 ) as response:
@@ -1265,7 +1274,13 @@ async def _run_streaming_exchange(
             await session.close()
 
 
-async def _run_reference_graph(input_frame: Any, llm_processor: Any, *, voice: str) -> tuple[Any, Any]:
+async def _run_reference_graph(
+    input_frame: Any,
+    llm_processor: Any,
+    *,
+    voice: str,
+    speed: float = 1.0,
+) -> tuple[Any, Any]:
     """Run one bounded turn through an actual Pipecat ASR -> LLM -> TTS graph."""
     graph_started_at = time.perf_counter()
     collector = _ReferenceCollector()
@@ -1273,6 +1288,7 @@ async def _run_reference_graph(input_frame: Any, llm_processor: Any, *, voice: s
     kokoro_processor = _ReferenceKokoroProcessor(
         voice,
         graph_started_at=graph_started_at,
+        speed=speed,
     )
     pipeline = Pipeline([
         asr_processor,
@@ -1759,6 +1775,7 @@ async def _public_pipecat_duplex_events(
                 TextFrame(target_text),
                 _ReferenceTesterLlmProcessor(request),
                 voice=KOKORO_TESTER_VOICE,
+                speed=KOKORO_TESTER_SPEED,
             )
         except Exception as exc:
             from public_daily_target import PublicDailyTargetError
@@ -2125,6 +2142,7 @@ async def reference_tester_turn(
             first_frame,
             _ReferenceTesterLlmProcessor(payload),
             voice=KOKORO_TESTER_VOICE,
+            speed=KOKORO_TESTER_SPEED,
         )
         output_wav = _pcm_to_wav(collector.audio, collector.sample_rate, collector.channels)
         return {
