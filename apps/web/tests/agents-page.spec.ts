@@ -76,6 +76,16 @@ async function mockRunnerApis(page: import('@playwright/test').Page, options: Mo
             metadata: { model_name: 'public-demo-selected-agent', prompt_version: 'external' },
           },
           {
+            id: 'holyguacamole-signalwire-agent',
+            name: 'Holy Guacamole SignalWire drive-thru',
+            channel: 'voice',
+            target: 'signalwire_holy_guacamole',
+            environment: 'production',
+            connection: { endpoint_url: 'https://holyguacamole.signalwire.me/' },
+            description: 'Real external SignalWire browser WebRTC target.',
+            metadata: { model_name: 'signalwire-ai-agent', prompt_version: 'external' },
+          },
+          {
             id: 'live-openai-agent',
             name: 'Live OpenAI agent',
             channel: 'text',
@@ -220,6 +230,13 @@ test('targets page shows agent target cards and try-it-out deep links', async ({
   await expect(publicPipecatCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
     'href',
     '/runs?launch=demo&agent_id=pipecat-public-demo',
+  );
+  const signalwireCard = page.getByRole('article').filter({ hasText: 'Holy Guacamole SignalWire drive-thru' });
+  await expect(signalwireCard.getByText('Public external target')).toBeVisible();
+  await expect(signalwireCard).toContainText('https://holyguacamole.signalwire.me');
+  await expect(signalwireCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
+    'href',
+    '/runs?launch=demo&agent_id=holyguacamole-signalwire-agent',
   );
   await expect(page.getByRole('article').filter({ hasText: 'Saved voice evidence' })).toHaveCount(0);
   await expect(mockCard.getByRole('button', { name: 'Actions for Mock text agent' })).toHaveCount(0);
@@ -400,9 +417,14 @@ test('agent target form only offers connections compatible with its selected cha
 
   await channel.selectOption('voice');
   await expect(target).toHaveValue('pipecat_public_demo');
-  await expect(target.getByRole('option')).toHaveCount(5);
+  await expect(target.getByRole('option')).toHaveCount(6);
   await expect(target.locator('option[value="pipecat_public_demo"]')).toHaveText('Pipecat demo');
   await expect(page.getByLabel('Pipecat demo URL')).toHaveValue('https://www.pipecat.ai/');
+  await expect(page.getByRole('button', { name: 'Create target' })).toBeEnabled();
+
+  await target.selectOption('signalwire_holy_guacamole');
+  await expect(target.locator('option[value="signalwire_holy_guacamole"]')).toHaveText('Holy Guacamole SignalWire');
+  await expect(page.getByLabel('Holy Guacamole SignalWire URL')).toHaveValue('https://holyguacamole.signalwire.me/');
   await expect(page.getByRole('button', { name: 'Create target' })).toBeEnabled();
 
   await target.selectOption('browser_webrtc_agent');

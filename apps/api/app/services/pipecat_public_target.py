@@ -13,9 +13,9 @@ from app.services.reference_generalist_agent import ReferenceRuntimeConfig
 
 
 DEFAULT_PUBLIC_AGENT = '10-gradium'
-# The Pipecat route starts its response deadline only after TTS synthesis, public-room
-# creation, Daily connect/join, RTVI readiness, and real-time caller playback. Keep the
-# HTTP client alive for those bounded setup stages plus the longest accepted caller text.
+# The Pipecat route starts its session deadline only after TTS synthesis, public-room
+# creation, Daily connect/join, RTVI readiness, and greeting drain. Keep the HTTP client
+# alive for those bounded setup stages plus the configured whole-session budget.
 PUBLIC_PIPECAT_SETUP_AND_PLAYBACK_ALLOWANCE_SECONDS = 360
 
 
@@ -40,7 +40,7 @@ def run_public_pipecat_call(
             'Public Pipecat execution requires REFERENCE_AGENT_INTERNAL_TOKEN shared by the API and Pipecat service.'
         )
     request_client = client or httpx.Client(timeout=(
-        timeout_seconds * max_exchanges + PUBLIC_PIPECAT_SETUP_AND_PLAYBACK_ALLOWANCE_SECONDS
+        timeout_seconds + PUBLIC_PIPECAT_SETUP_AND_PLAYBACK_ALLOWANCE_SECONDS
     ))
     try:
         request_payload = {

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +14,7 @@ from public_daily_target import (
     PublicDailyTargetError,
     PublicDailyTargetRequest,
     _append_unique_message_text,
+    _await_before_run_timeout,
     _completed_bot_output_text,
     _current_target_text,
     _message_completes_bot_turn,
@@ -37,6 +39,23 @@ def test_public_target_timeout_matches_execution_api_limit():
 
     assert service_request.timeout_seconds == 300
     assert daily_request.timeout_seconds == 300
+
+
+def test_public_daily_duplex_uses_one_session_deadline():
+    source = public_daily_target.__loader__.get_source(public_daily_target.__name__)
+
+    assert 'session_deadline = time.monotonic() + request.timeout_seconds' in source
+    assert 'timeout=request.timeout_seconds' not in source
+    assert '_await_before_run_timeout(' in source
+
+
+def test_public_daily_deadline_wrapper_fails_closed_after_budget():
+    with pytest.raises(PublicDailyTargetError, match='run timeout'):
+        asyncio.run(_await_before_run_timeout(
+            asyncio.sleep(0),
+            session_deadline=time.monotonic() - 0.01,
+            timeout_message='Public Pipecat session exceeded the run timeout.',
+        ))
 
 
 def test_public_daily_target_implements_outbound_adapter_contract():

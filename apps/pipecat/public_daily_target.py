@@ -171,6 +171,24 @@ async def _wait_for_target_audio_drain(
     _raise_transport_error(evidence)
 
 
+async def _await_before_run_timeout(
+    awaitable: Any,
+    *,
+    session_deadline: float,
+    timeout_message: str,
+) -> Any:
+    remaining = session_deadline - time.monotonic()
+    if remaining <= 0:
+        close = getattr(awaitable, 'close', None)
+        if callable(close):
+            close()
+        raise PublicDailyTargetError(timeout_message)
+    try:
+        return await asyncio.wait_for(awaitable, timeout=remaining)
+    except TimeoutError as exc:
+        raise PublicDailyTargetError(timeout_message) from exc
+
+
 def _completed_bot_output_text(message: Any) -> str:
     """Return only the completed spoken representation from an RTVI bot-output event."""
     data = _message_data(message)
@@ -551,32 +569,45 @@ async def run_public_daily_duplex(
 
         current_text = request.caller_text
         current_wav = caller_wav
+        session_deadline = time.monotonic() + request.timeout_seconds
         for turn_pair in range(1, request.max_turn_pairs + 1):
             caller_pcm, caller_rate, caller_channels = wav_to_pcm(current_wav)
             caller_transcript_count = run.begin_turn(turn_pair)
-
-            sent = await _play_caller_turn(
-                run,
-                task,
-                turn_pair=turn_pair,
-                caller_text=current_text,
-                caller_wav=current_wav,
-                caller_pcm=caller_pcm,
-                sample_rate=caller_rate,
-                channels=caller_channels,
-                audio_frame_callback=audio_frame_callback,
+            timeout_message = (
+                f'Public Pipecat bot did not complete response {turn_pair} before the run timeout.'
             )
+
+            sent = await _await_before_run_timeout(
+                _play_caller_turn(
+                    run,
+                    task,
+                    turn_pair=turn_pair,
+                    caller_text=current_text,
+                    caller_wav=current_wav,
+                    caller_pcm=caller_pcm,
+                    sample_rate=caller_rate,
+                    channels=caller_channels,
+                    audio_frame_callback=audio_frame_callback,
+                ),
+                session_deadline=session_deadline,
+                timeout_message=timeout_message,
+            )
+            remaining_timeout = session_deadline - time.monotonic()
+            if remaining_timeout <= 0:
+                raise PublicDailyTargetError(timeout_message)
             await _wait_for_event_or_error(
                 evidence.response_complete,
                 evidence,
-                timeout=request.timeout_seconds,
-                timeout_message=(
-                    f'Public Pipecat bot did not complete response {turn_pair} before the run timeout.'
-                ),
+                timeout=remaining_timeout,
+                timeout_message=timeout_message,
             )
-            await _wait_for_target_audio_drain(
-                evidence,
-                completed_at=evidence.response_complete_at,
+            await _await_before_run_timeout(
+                _wait_for_target_audio_drain(
+                    evidence,
+                    completed_at=evidence.response_complete_at,
+                ),
+                session_deadline=session_deadline,
+                timeout_message=timeout_message,
             )
 
             caller_receipts = evidence.caller_transcripts[caller_transcript_count:]
@@ -607,11 +638,18 @@ async def run_public_daily_duplex(
                 break
             if next_turn is None:
                 break
-            current_text, current_wav = await next_turn(
-                turn_pair + 1,
-                caller_transcript,
-                target_text,
-                target_wav,
+            current_text, current_wav = await _await_before_run_timeout(
+                next_turn(
+                    turn_pair + 1,
+                    caller_transcript,
+                    target_text,
+                    target_wav,
+                ),
+                session_deadline=session_deadline,
+                timeout_message=(
+                    f'Public Pipecat tester graph did not prepare turn {turn_pair + 1} '
+                    'before the run timeout.'
+                ),
             )
             if not str(current_text).strip() or not current_wav:
                 raise PublicDailyTargetError(
