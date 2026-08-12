@@ -417,6 +417,40 @@ def test_voice_health_validates_independent_tester_provider(monkeypatch):
     assert 'tester gpt-4.1-mini via fake ready' in llm['detail']
 
 
+def test_voice_health_validates_ollama_tester_when_gpt_target_is_ready(monkeypatch):
+    _mock_ollama_inventory(monkeypatch, 'gemma2:2b')
+    monkeypatch.setenv('REFERENCE_LLM_MODEL', 'gpt-5.4-mini')
+    monkeypatch.setenv('REFERENCE_TESTER_LLM_MODEL', 'ollama/gemma2:2b')
+    monkeypatch.setattr(
+        model_preflight,
+        'resolve_reference_completion_provider',
+        lambda _model_name: _ConnectedProvider(),
+    )
+    base = {
+        'ready': True,
+        'llm_mode': 'real',
+        'dependencies': [
+            {
+                'id': 'llm',
+                'ready': True,
+                'detail': 'Hosted target ready.',
+                'provider': 'fake',
+            },
+            {'id': 'pipecat', 'ready': True, 'detail': 'ready'},
+        ],
+    }
+
+    report = augment_reference_voice_preflight(base)
+    llm = next(item for item in report['dependencies'] if item['id'] == 'llm')
+
+    assert report is not base
+    assert report['ready'] is True
+    assert llm['target_model'] == 'gpt-5.4-mini'
+    assert llm['target_provider'] == 'fake'
+    assert llm['tester_model'] == 'ollama/gemma2:2b'
+    assert llm['tester_provider'] == 'ollama'
+
+
 def test_voice_health_preserves_ready_openai_when_ollama_is_only_optional(monkeypatch):
     monkeypatch.setenv('OLLAMA_BASE_URL', 'http://ollama.test')
     monkeypatch.delenv('REFERENCE_LLM_MODEL', raising=False)
