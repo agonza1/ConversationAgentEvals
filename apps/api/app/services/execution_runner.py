@@ -42,7 +42,9 @@ from app.services.execution_vcon import build_execution_vcon, vcon_summary
 from app.services.reference_generalist_agent import (
     ReferencePipecatAgentTransport,
     ReferenceMediaServices,
+    ReferenceRuntimeError,
     ReferenceRuntimeConfig,
+    discover_rtc_asr_runtime,
     resolve_reference_completion_provider,
 )
 from app.services.run_provenance import (
@@ -1095,9 +1097,51 @@ def _preflight_signalwire_caller_tts_runtime(payload: ExecutionRunCreateRequest)
         ) from exc
 
 
+def _preflight_signalwire_rtc_asr_runtime(
+    config: ReferenceRuntimeConfig,
+    *,
+    timeout_seconds: float,
+) -> None:
+    service_url = str(config.rtc_asr_base_url or '').rstrip('/')
+    if not service_url:
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire execution requires RTC_ASR_BASE_URL '
+            'for second-turn target audio transcription before queueing.'
+        )
+    request = Request(
+        f'{service_url}{config.rtc_asr_health_path}',
+        headers={'accept': 'application/json'},
+        method='GET',
+    )
+    try:
+        with urlopen(request, timeout=min(10.0, timeout_seconds)) as response:  # noqa: S310
+            payload = json.loads(response.read().decode('utf-8'))
+        discover_rtc_asr_runtime(payload)
+    except HTTPError as exc:
+        detail = exc.read().decode('utf-8', errors='replace')[:400]
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire execution requires ready rtc-asr; '
+            f'got HTTP {exc.code}: {detail or exc.reason}'
+        ) from exc
+    except URLError as exc:
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire execution requires reachable rtc-asr: '
+            f'{exc.reason}'
+        ) from exc
+    except (TimeoutError, OSError) as exc:
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire execution requires reachable rtc-asr.'
+        ) from exc
+    except (UnicodeDecodeError, json.JSONDecodeError, ReferenceRuntimeError) as exc:
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire execution requires ready rtc-asr.'
+        ) from exc
+
+
 def _preflight_signalwire_followup_runtime(payload: ExecutionRunCreateRequest) -> None:
     """Fail closed before spending a live SignalWire call that needs a tester follow-up."""
     config = _reference_runtime_config(payload)
+    preflight_timeout = max(1.0, min(config.timeout_seconds, payload.duplex_timeout_seconds))
     service_url = str(config.pipecat_service_url or '').rstrip('/')
     if not service_url:
         raise ValueError(
@@ -1109,6 +1153,7 @@ def _preflight_signalwire_followup_runtime(payload: ExecutionRunCreateRequest) -
             'Two-exchange Holy Guacamole SignalWire execution requires '
             'REFERENCE_AGENT_INTERNAL_TOKEN shared by the API and Pipecat service.'
         )
+    _preflight_signalwire_rtc_asr_runtime(config, timeout_seconds=preflight_timeout)
 
     request_payload = {
         'scenario_instruction': (
@@ -1133,7 +1178,7 @@ def _preflight_signalwire_followup_runtime(payload: ExecutionRunCreateRequest) -
         method='POST',
     )
     try:
-        with urlopen(request, timeout=min(10.0, config.timeout_seconds)) as response:  # noqa: S310
+        with urlopen(request, timeout=preflight_timeout) as response:  # noqa: S310
             response_payload = json.loads(response.read().decode('utf-8'))
     except HTTPError as exc:
         detail = exc.read().decode('utf-8', errors='replace')[:400]

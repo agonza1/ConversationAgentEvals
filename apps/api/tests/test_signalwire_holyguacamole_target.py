@@ -522,6 +522,10 @@ def test_signalwire_smoke_uses_direct_webrtc_and_audible_latency():
     assert 'createPcmWav(capture.chunks' in script
     assert "extension: 'target-audio.wav'" in script
     assert 'const deadline = startedMs + args.timeoutMs' in script
+    assert 'fetchGuestCredential(targetUrl, includeVoice, result, timeoutMs)' in script
+    assert 'fetchGuestCredential(args.targetUrl, true, result, remaining())' in script
+    assert 'fetchGuestCredential(args.targetUrl, false, result, remaining())' in script
+    assert 'AbortSignal.timeout(15000)' not in script
     assert 'CaeLiveAudioPublisher' in script
     assert '/outbound-voice/broadcast/open' in script
     assert '/outbound-voice/broadcast/audio' in script

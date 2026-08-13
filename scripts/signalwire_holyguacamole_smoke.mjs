@@ -753,10 +753,10 @@ function deriveTranscript(result, args) {
   result.transcript.text = verified ? `Caller: ${args.callerText}` : 'Caller audio: supplied audio file (speech text unverified)';
 }
 
-async function fetchGuestCredential(targetUrl, includeVoice, result) {
+async function fetchGuestCredential(targetUrl, includeVoice, result, timeoutMs) {
   const url = new URL(includeVoice ? '/get_token?voice=elevenlabs.adam' : '/get_token', targetUrl);
   const startedAt = Date.now();
-  const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+  const response = await fetch(url, { signal: AbortSignal.timeout(Math.max(1, timeoutMs)) });
   result.connection.token_endpoint_seen = true;
   result.connection.token_status = response.status;
   result.network_events.push({ kind: 'guest_token', status: response.status, t_ms: Date.now() - startedAt });
@@ -795,7 +795,7 @@ async function runSmoke(args) {
     result.tester.caller_text_verified = callerAudio.callerTextVerified === true;
     result.artifacts.caller_audio = relativeToRepo(callerAudio.path);
 
-    const firstCredential = await fetchGuestCredential(args.targetUrl, true, result);
+    const firstCredential = await fetchGuestCredential(args.targetUrl, true, result, remaining());
     result.latency_metrics.token_fetch_ms = firstCredential.elapsedMs;
     let usedInitialToken = false;
     const credentialProvider = {
@@ -804,7 +804,7 @@ async function runSmoke(args) {
           usedInitialToken = true;
           return { token: firstCredential.token };
         }
-        return { token: (await fetchGuestCredential(args.targetUrl, false, result)).token };
+        return { token: (await fetchGuestCredential(args.targetUrl, false, result, remaining())).token };
       },
     };
     const mediaDevices = {

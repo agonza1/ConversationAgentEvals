@@ -56,12 +56,16 @@ def _allow_signalwire_followup_preflight(monkeypatch) -> list[dict]:
     calls: list[dict] = []
     _allow_signalwire_public_gate(monkeypatch)
     monkeypatch.setenv('REFERENCE_AGENT_INTERNAL_TOKEN', 'test-reference-token')
+    monkeypatch.setenv('RTC_ASR_BASE_URL', 'http://rtc-asr.test')
 
     def fake_urlopen(request, timeout=None):
+        if request.full_url == 'http://rtc-asr.test/health':
+            assert timeout == 10.0
+            return _JsonResponse({'status': 'ready', 'ready': True})
         assert request.full_url == 'http://localhost:8110/reference-tester/turn'
         assert request.get_header('X-cae-reference-token') == 'test-reference-token'
-        assert timeout == 10.0
         payload = json.loads(request.data.decode('utf-8'))
+        payload['_timeout_seconds'] = timeout
         calls.append(payload)
         return _JsonResponse({
             'tester_text': 'Thanks, I have one follow-up question.',
@@ -828,6 +832,7 @@ def test_signalwire_holyguacamole_rejects_two_exchanges_without_followup_token(m
 
 
 def test_signalwire_holyguacamole_preflights_two_exchange_tester_runtime(monkeypatch):
+    monkeypatch.setenv('REFERENCE_AGENT_TIMEOUT_SECONDS', '75')
     preflight_calls = _allow_signalwire_followup_preflight(monkeypatch)
     payload = ExecutionRunCreateRequest(
         suite_id='call-center-voice-ai',
@@ -835,6 +840,7 @@ def test_signalwire_holyguacamole_preflights_two_exchange_tester_runtime(monkeyp
         agent_id='holyguacamole-signalwire-agent',
         max_exchanges=2,
         tester_model_name='tester-model',
+        duplex_timeout_seconds=90,
         user_id='agent-runs-user',
         project_id='agent-runs-project',
     )
@@ -845,13 +851,17 @@ def test_signalwire_holyguacamole_preflights_two_exchange_tester_runtime(monkeyp
     assert len(preflight_calls) == 1
     assert preflight_calls[0]['act_id'] == 'signalwire-followup-preflight'
     assert preflight_calls[0]['model_name'] == 'tester-model'
+    assert preflight_calls[0]['_timeout_seconds'] == 75.0
 
 
 def test_signalwire_holyguacamole_rejects_unhealthy_followup_runtime(monkeypatch):
     _allow_signalwire_public_gate(monkeypatch)
     monkeypatch.setenv('REFERENCE_AGENT_INTERNAL_TOKEN', 'test-reference-token')
+    monkeypatch.setenv('RTC_ASR_BASE_URL', 'http://rtc-asr.test')
 
-    def fake_urlopen(_request, timeout=None):
+    def fake_urlopen(request, timeout=None):
+        if request.full_url == 'http://rtc-asr.test/health':
+            return _JsonResponse({'status': 'ready', 'ready': True})
         return _JsonResponse({'tester_text': '', 'pipeline': {'processors': ['rtc-asr']}})
 
     monkeypatch.setattr(execution_runner, 'urlopen', fake_urlopen)
@@ -866,6 +876,35 @@ def test_signalwire_holyguacamole_rejects_unhealthy_followup_runtime(monkeypatch
 
     with pytest.raises(ValueError, match='incomplete tester text/audio pipeline evidence'):
         start_execution_run(payload)
+
+
+def test_signalwire_holyguacamole_rejects_unreachable_followup_rtc_asr_before_queueing(monkeypatch):
+    _allow_signalwire_public_gate(monkeypatch)
+    monkeypatch.setenv('REFERENCE_AGENT_INTERNAL_TOKEN', 'test-reference-token')
+    monkeypatch.setenv('RTC_ASR_BASE_URL', 'http://rtc-asr.test')
+
+    def fake_urlopen(request, timeout=None):
+        if request.full_url == 'http://rtc-asr.test/health':
+            raise URLError('connection refused')
+        raise AssertionError('tester follow-up preflight should wait for rtc-asr readiness')
+
+    monkeypatch.setattr(execution_runner, 'urlopen', fake_urlopen)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        max_exchanges=2,
+        user_id='agent-runs-user-unhealthy-asr',
+        project_id='agent-runs-project-unhealthy-asr',
+    )
+
+    with pytest.raises(ValueError, match='reachable rtc-asr'):
+        start_execution_run(payload)
+
+    assert execution_run_store.list_execution_runs(
+        user_id='agent-runs-user-unhealthy-asr',
+        project_id='agent-runs-project-unhealthy-asr',
+    ) == []
 
 
 def test_signalwire_holyguacamole_rejects_disabled_public_gate_before_queueing(monkeypatch):
