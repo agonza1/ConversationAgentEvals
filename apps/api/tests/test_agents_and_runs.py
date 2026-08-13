@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.main import app
-from app.services import acc_connection, agent_store, execution_run_store
+from app.services import acc_connection, agent_store, execution_run_store, execution_runner
 from app.services.execution_runner import execute_execution_run, start_execution_run
 from app.services.target_secrets import resolve_http_target_secret
 from app.schemas.execution import ExecutionRunCreateRequest
@@ -26,6 +26,40 @@ def isolated_agent_registry(tmp_path, monkeypatch):
     execution_run_store.reset_execution_runs_for_tests()
     acc_connection.reset_acc_connections_for_tests()
     agent_store.reset_agents_for_tests(clear_files=True)
+
+
+class _JsonResponse:
+    def __init__(self, payload: dict):
+        self._payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self) -> bytes:
+        return json.dumps(self._payload).encode('utf-8')
+
+
+def _allow_signalwire_followup_preflight(monkeypatch) -> list[dict]:
+    calls: list[dict] = []
+    monkeypatch.setenv('REFERENCE_AGENT_INTERNAL_TOKEN', 'test-reference-token')
+
+    def fake_urlopen(request, timeout=None):
+        assert request.full_url == 'http://localhost:8110/reference-tester/turn'
+        assert request.get_header('X-cae-reference-token') == 'test-reference-token'
+        assert timeout == 10.0
+        payload = json.loads(request.data.decode('utf-8'))
+        calls.append(payload)
+        return _JsonResponse({
+            'tester_text': 'Thanks, I have one follow-up question.',
+            'tester_audio_wav_base64': 'UklGRg==',
+            'pipeline': {'processors': ['rtc-asr', 'llm', 'kokoro']},
+        })
+
+    monkeypatch.setattr(execution_runner, 'urlopen', fake_urlopen)
+    return calls
 
 
 def test_agent_crud_round_trip():
@@ -687,6 +721,7 @@ def test_signalwire_holyguacamole_evaluation_with_incomplete_agent_transcript_ne
         }
 
     monkeypatch.setattr(execution_runner, 'run_signalwire_holyguacamole_call', fake_signalwire_call)
+    _allow_signalwire_followup_preflight(monkeypatch)
     payload = ExecutionRunCreateRequest(
         suite_id='call-center-voice-ai',
         scenario_ids=['cancellation-rescue'],
@@ -726,6 +761,61 @@ def test_signalwire_holyguacamole_rejects_more_than_two_exchanges():
     )
 
     with pytest.raises(ValueError, match='max_exchanges up to 2'):
+        start_execution_run(payload)
+
+
+def test_signalwire_holyguacamole_rejects_two_exchanges_without_followup_token(monkeypatch):
+    monkeypatch.delenv('REFERENCE_AGENT_INTERNAL_TOKEN', raising=False)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        max_exchanges=2,
+        user_id='agent-runs-user',
+        project_id='agent-runs-project',
+    )
+
+    with pytest.raises(ValueError, match='REFERENCE_AGENT_INTERNAL_TOKEN'):
+        start_execution_run(payload)
+
+
+def test_signalwire_holyguacamole_preflights_two_exchange_tester_runtime(monkeypatch):
+    preflight_calls = _allow_signalwire_followup_preflight(monkeypatch)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        max_exchanges=2,
+        tester_model_name='tester-model',
+        user_id='agent-runs-user',
+        project_id='agent-runs-project',
+    )
+
+    queued = start_execution_run(payload)
+
+    assert queued['status'] == 'queued'
+    assert len(preflight_calls) == 1
+    assert preflight_calls[0]['act_id'] == 'signalwire-followup-preflight'
+    assert preflight_calls[0]['model_name'] == 'tester-model'
+
+
+def test_signalwire_holyguacamole_rejects_unhealthy_followup_runtime(monkeypatch):
+    monkeypatch.setenv('REFERENCE_AGENT_INTERNAL_TOKEN', 'test-reference-token')
+
+    def fake_urlopen(_request, timeout=None):
+        return _JsonResponse({'tester_text': '', 'pipeline': {'processors': ['rtc-asr']}})
+
+    monkeypatch.setattr(execution_runner, 'urlopen', fake_urlopen)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        max_exchanges=2,
+        user_id='agent-runs-user',
+        project_id='agent-runs-project',
+    )
+
+    with pytest.raises(ValueError, match='incomplete tester text/audio pipeline evidence'):
         start_execution_run(payload)
 
 
@@ -796,6 +886,7 @@ def test_signalwire_holyguacamole_runs_two_exchanges_in_one_webrtc_call(monkeypa
         }
 
     monkeypatch.setattr(execution_runner, 'run_signalwire_holyguacamole_call', fake_signalwire_call)
+    preflight_calls = _allow_signalwire_followup_preflight(monkeypatch)
     payload = ExecutionRunCreateRequest(
         suite_id='call-center-voice-ai',
         scenario_ids=['cancellation-rescue'],
@@ -813,6 +904,7 @@ def test_signalwire_holyguacamole_runs_two_exchanges_in_one_webrtc_call(monkeypa
     conversation = finished['conversations'][0]
 
     assert queued['max_exchanges'] == 2
+    assert len(preflight_calls) == 1
     assert [turn['speaker'] for turn in conversation['turns']] == [
         'caller', 'agent', 'caller', 'agent'
     ]

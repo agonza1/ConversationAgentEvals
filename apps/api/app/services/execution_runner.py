@@ -132,12 +132,17 @@ def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool =
         _repo_path(resolved.audio_plan_path)
     if preflight and resolved.mode == 'pipecat_webrtc' and resolved.executor_id == 'cae_local_audio_loop':
         _preflight_reference_runtime(resolved, execution_run_id=f'preflight-{uuid.uuid4().hex[:12]}')
-    total = len(scenario_ids) * resolved.iterations
-    now = datetime.now(UTC).isoformat()
-    execution_run_id = f'exec-{uuid.uuid4().hex[:12]}'
     agent = get_agent(resolved.agent_id) if resolved.agent_id else None
     if resolved.agent_id and agent is None:
         raise ValueError(f'Unknown agent: {resolved.agent_id}')
+    if (
+        resolved.max_exchanges > 1
+        and _execution_target(resolved, agent) == 'signalwire_holy_guacamole'
+    ):
+        _preflight_signalwire_followup_runtime(resolved)
+    total = len(scenario_ids) * resolved.iterations
+    now = datetime.now(UTC).isoformat()
+    execution_run_id = f'exec-{uuid.uuid4().hex[:12]}'
     model_name = (resolved.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
     provenance = build_run_provenance(
         agent=agent,
@@ -1025,6 +1030,81 @@ def _preflight_reference_runtime(
         completion=completion,
         config=config,
     )
+
+
+def _preflight_signalwire_followup_runtime(payload: ExecutionRunCreateRequest) -> None:
+    """Fail closed before spending a live SignalWire call that needs a tester follow-up."""
+    config = _reference_runtime_config(payload)
+    service_url = str(config.pipecat_service_url or '').rstrip('/')
+    if not service_url:
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire execution requires PIPECAT_SERVICE_URL '
+            'for the Pipecat tester runtime.'
+        )
+    if not config.internal_token:
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire execution requires '
+            'REFERENCE_AGENT_INTERNAL_TOKEN shared by the API and Pipecat service.'
+        )
+
+    request_payload = {
+        'scenario_instruction': (
+            'Preflight only: verify the CAE tester follow-up runtime before queueing a '
+            'live two-exchange Holy Guacamole SignalWire call.'
+        ),
+        'act_id': 'signalwire-followup-preflight',
+        'act_objective': 'Return a short harmless caller follow-up for runtime readiness.',
+        'example_utterance': 'Thanks, I have one follow-up question.',
+        'history': [],
+        'target_audio_wav_base64': None,
+        'model_name': config.tester_llm_model,
+    }
+    request = Request(
+        f'{service_url}/reference-tester/turn',
+        data=json.dumps(request_payload).encode('utf-8'),
+        headers={
+            'content-type': 'application/json',
+            'accept': 'application/json',
+            'x-cae-reference-token': config.internal_token,
+        },
+        method='POST',
+    )
+    try:
+        with urlopen(request, timeout=min(10.0, config.timeout_seconds)) as response:  # noqa: S310
+            response_payload = json.loads(response.read().decode('utf-8'))
+    except HTTPError as exc:
+        detail = exc.read().decode('utf-8', errors='replace')[:400]
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire execution requires a working '
+            f'PIPECAT_SERVICE_URL /reference-tester/turn runtime; got HTTP {exc.code}: '
+            f'{detail or exc.reason}'
+        ) from exc
+    except URLError as exc:
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire execution requires a reachable '
+            f'PIPECAT_SERVICE_URL /reference-tester/turn runtime: {exc.reason}'
+        ) from exc
+    except (TimeoutError, OSError) as exc:
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire execution requires a reachable '
+            'PIPECAT_SERVICE_URL /reference-tester/turn runtime.'
+        ) from exc
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire tester preflight did not return valid JSON.'
+        ) from exc
+
+    if not isinstance(response_payload, dict):
+        response_payload = {}
+    tester_text = str(response_payload.get('tester_text') or '').strip()
+    tester_audio = str(response_payload.get('tester_audio_wav_base64') or '').strip()
+    pipeline = response_payload.get('pipeline')
+    processors = pipeline.get('processors') if isinstance(pipeline, dict) else None
+    if not tester_text or not tester_audio or processors != ['rtc-asr', 'llm', 'kokoro']:
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire tester preflight returned incomplete '
+            'tester text/audio pipeline evidence.'
+        )
 
 
 def _queued_execution_context(
