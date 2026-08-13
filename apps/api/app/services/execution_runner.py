@@ -820,13 +820,22 @@ def _execute_signalwire_holyguacamole_webrtc(
         response_audio_uris = [recording_metadata.get('response_audio_uri')]
     for item in transcription:
         if event_observer is not None:
-            exchange_index = int(item.frame_metadata.get('exchange') or ((item.turn_index + 1) // 2))
-            audio_uris = caller_audio_uris if item.speaker == 'Caller' else response_audio_uris
-            completed_audio = (
-                read_captured_wav(audio_uris[exchange_index - 1])
-                if exchange_index <= len(audio_uris)
-                else None
+            exchange_index = int(
+                item.frame_metadata['exchange']
+                if 'exchange' in item.frame_metadata
+                else ((item.turn_index + 1) // 2)
             )
+            if item.frame_metadata.get('greeting') is True:
+                completed_audio = read_captured_wav(
+                    recording_metadata.get('target_greeting_audio_uri')
+                )
+            else:
+                audio_uris = caller_audio_uris if item.speaker == 'Caller' else response_audio_uris
+                completed_audio = (
+                    read_captured_wav(audio_uris[exchange_index - 1])
+                    if 1 <= exchange_index <= len(audio_uris)
+                    else None
+                )
             live_event: dict[str, Any] = {
                 'speaker': item.speaker,
                 'text': item.text,
@@ -868,7 +877,11 @@ def _execute_signalwire_holyguacamole_webrtc(
     }
     report: dict[str, Any] = {}
     transcribed_agent_exchanges = {
-        int(item.frame_metadata.get('exchange') or ((item.turn_index + 1) // 2))
+        int(
+            item.frame_metadata['exchange']
+            if 'exchange' in item.frame_metadata
+            else ((item.turn_index + 1) // 2)
+        )
         for item in transcription
         if item.speaker == 'Agent'
     }
@@ -882,7 +895,6 @@ def _execute_signalwire_holyguacamole_webrtc(
             scenario_id=scenario_id,
             transcript=transcript,
             action_trace=[],
-            final_state=current_final_state,
             user_id=payload.user_id,
             project_id=payload.project_id,
         ))

@@ -575,6 +575,7 @@ def test_signalwire_holyguacamole_agent_uses_gated_direct_webrtc_executor(monkey
     from app.services.execution_audio import AudioRecordingHandle, TranscriptionTurn
 
     _allow_signalwire_public_gate(monkeypatch)
+    observed_benchmark_request = None
 
     def fake_signalwire_call(**kwargs):
         assert kwargs['caller_text']
@@ -587,6 +588,8 @@ def test_signalwire_holyguacamole_agent_uses_gated_direct_webrtc_executor(monkey
         response_audio.write_bytes(b'current-run-signalwire-audio')
         caller_wav = response_audio.parent / 'caller.wav'
         caller_wav.write_bytes(b'RIFF-current-run-caller-wav')
+        target_greeting_wav = response_audio.parent / 'target-greeting.wav'
+        target_greeting_wav.write_bytes(b'RIFF-current-run-target-greeting-wav')
         target_response_wav = response_audio.parent / 'target-response.wav'
         target_response_wav.write_bytes(b'RIFF-current-run-target-response-wav')
         return {
@@ -602,6 +605,19 @@ def test_signalwire_holyguacamole_agent_uses_gated_direct_webrtc_executor(monkey
             'transcription_turns': [
                 TranscriptionTurn(
                     turn_index=1,
+                    speaker='Agent',
+                    text='Welcome to Holy Guacamole.',
+                    source='signalwire_webrtc',
+                    direction='target_to_tester',
+                    evidence_role='target',
+                    frame_metadata={
+                        'transcript_source': 'rtc-asr.current_run',
+                        'exchange': 0,
+                        'greeting': True,
+                    },
+                ),
+                TranscriptionTurn(
+                    turn_index=2,
                     speaker='Caller',
                     text='I need help with a cancellation.',
                     source='signalwire_webrtc',
@@ -609,13 +625,16 @@ def test_signalwire_holyguacamole_agent_uses_gated_direct_webrtc_executor(monkey
                     evidence_role='tester',
                 ),
                 TranscriptionTurn(
-                    turn_index=2,
+                    turn_index=3,
                     speaker='Agent',
                     text='Welcome to Holy Guacamole. What would you like to order?',
                     source='signalwire_webrtc',
                     direction='target_to_tester',
                     evidence_role='target',
-                    frame_metadata={'transcript_source': 'rtc-asr.current_run'},
+                    frame_metadata={
+                        'transcript_source': 'rtc-asr.current_run',
+                        'exchange': 1,
+                    },
                 ),
             ],
             'recording_handle': AudioRecordingHandle(
@@ -625,18 +644,26 @@ def test_signalwire_holyguacamole_agent_uses_gated_direct_webrtc_executor(monkey
                 transport='signalwire_webrtc',
                 metadata={
                     'cae_caller_audio_uri': str(caller_wav),
+                    'target_greeting_audio_uri': str(target_greeting_wav),
                     'response_audio_uri': str(target_response_wav),
                 },
             ),
         }
 
     monkeypatch.setattr(execution_runner, 'run_signalwire_holyguacamole_call', fake_signalwire_call)
+
+    def fake_run_scenario(request):
+        nonlocal observed_benchmark_request
+        observed_benchmark_request = request
+        return {'verdict': 'pass', 'overall_score': 100}
+
+    monkeypatch.setattr(execution_runner, 'run_scenario', fake_run_scenario)
     payload = ExecutionRunCreateRequest(
         suite_id='call-center-voice-ai',
         scenario_ids=['cancellation-rescue'],
         agent_id='holyguacamole-signalwire-agent',
         duplex_timeout_seconds=60,
-        evaluate=False,
+        evaluate=True,
         user_id='agent-runs-user',
         project_id='agent-runs-project',
     )
@@ -669,13 +696,20 @@ def test_signalwire_holyguacamole_agent_uses_gated_direct_webrtc_executor(monkey
     assert conversation['final_state']['runtime_provenance']['target_speech_transcript'] == (
         'current_run_asr'
     )
-    assert [turn['speaker'] for turn in conversation['turns']] == ['caller', 'agent']
-    assert [event['kind'] for event in conversation['live_events']] == ['audio', 'audio']
-    assert [event['speaker'] for event in conversation['live_events']] == ['Caller', 'Agent']
+    assert [turn['speaker'] for turn in conversation['turns']] == ['agent', 'caller', 'agent']
+    assert [event['kind'] for event in conversation['live_events']] == ['audio', 'audio', 'audio']
+    # The caller live event is pre-registered while connecting and updated in place
+    # after playback; persisted transcript turns retain the observed greeting-first order.
+    assert [event['speaker'] for event in conversation['live_events']] == ['Caller', 'Agent', 'Agent']
     caller_live_audio = client.get(conversation['live_events'][0]['media_url'])
-    target_live_audio = client.get(conversation['live_events'][1]['media_url'])
+    greeting_live_audio = client.get(conversation['live_events'][1]['media_url'])
+    target_live_audio = client.get(conversation['live_events'][2]['media_url'])
+    assert greeting_live_audio.content == b'RIFF-current-run-target-greeting-wav'
     assert caller_live_audio.content == b'RIFF-current-run-caller-wav'
     assert target_live_audio.content == b'RIFF-current-run-target-response-wav'
+    assert observed_benchmark_request is not None
+    assert 'final_state' not in observed_benchmark_request.model_fields_set
+    assert observed_benchmark_request.final_state == {}
 
 
 def test_signalwire_holyguacamole_evaluation_with_incomplete_agent_transcript_needs_review(monkeypatch):

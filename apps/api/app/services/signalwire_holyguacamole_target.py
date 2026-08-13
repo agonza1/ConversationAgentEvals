@@ -31,14 +31,17 @@ def _aggregate_transcript_source(
     transcript_turns: list[TranscriptionTurn],
     *,
     max_exchanges: int,
+    greeting_expected: bool = False,
 ) -> str:
     grounded_agent_exchanges = {
         int(turn.frame_metadata.get('exchange') or 0)
         for turn in transcript_turns
-        if turn.speaker == 'Agent' and int(turn.frame_metadata.get('exchange') or 0) > 0
+        if turn.speaker == 'Agent'
     }
     required_agent_exchanges = set(range(1, max_exchanges + 1))
     if required_agent_exchanges.issubset(grounded_agent_exchanges):
+        if greeting_expected and 0 not in grounded_agent_exchanges:
+            return 'rtc-asr.partial_current_run'
         return 'rtc-asr.current_run'
     if grounded_agent_exchanges:
         return 'rtc-asr.partial_current_run'
@@ -321,6 +324,35 @@ def run_signalwire_holyguacamole_call(
     )
     caller_turn_paths: list[Path] = []
     response_turn_paths: list[Path] = []
+    greeting_audio_value = str(
+        (result.get('artifacts') or {}).get('target_greeting_audio') or ''
+    ).strip()
+    greeting_audio_path = repo_root / greeting_audio_value if greeting_audio_value else None
+    greeting_expected = bool(greeting_audio_path is not None and greeting_audio_path.exists())
+    if greeting_expected and greeting_audio_path is not None:
+        try:
+            greeting_text = media_services.transcribe(greeting_audio_path.read_bytes())
+        except Exception as exc:  # noqa: BLE001 - preserve audio when optional ASR fails
+            transcript_payload['greeting_asr_error'] = (
+                f'rtc-asr greeting transcription failed: {exc}'
+            )[:400]
+        else:
+            if greeting_text:
+                transcript_turns.append(TranscriptionTurn(
+                    turn_index=1,
+                    speaker='Agent',
+                    text=greeting_text,
+                    source='signalwire_webrtc',
+                    event_types=['remote_greeting_captured', 'remote_speech_transcribed'],
+                    direction='target_to_tester',
+                    evidence_role='target',
+                    frame_metadata={
+                        'transcript_source': 'rtc-asr.current_run',
+                        'exchange': 0,
+                        'greeting': True,
+                        'response_audio_uri': str(greeting_audio_path),
+                    },
+                ))
     if exchange_payloads:
         for exchange_index, exchange in enumerate(exchange_payloads, start=1):
             if not isinstance(exchange, dict):
@@ -445,6 +477,26 @@ def run_signalwire_holyguacamole_call(
     aggregate_transcript_source = _aggregate_transcript_source(
         transcript_turns,
         max_exchanges=max_exchanges,
+        greeting_expected=greeting_expected,
+    )
+    grounded_caller_exchanges = {
+        int(turn.frame_metadata.get('exchange') or 0)
+        for turn in transcript_turns
+        if turn.speaker == 'Caller'
+    }
+    grounded_agent_exchanges = {
+        int(turn.frame_metadata.get('exchange') or 0)
+        for turn in transcript_turns
+        if turn.speaker == 'Agent'
+    }
+    expected_exchange_ids = set(range(1, max_exchanges + 1))
+    target_audio_fully_transcribed = (
+        expected_exchange_ids.issubset(grounded_agent_exchanges)
+        and (not greeting_expected or 0 in grounded_agent_exchanges)
+    )
+    complete_as_observed = (
+        expected_exchange_ids.issubset(grounded_caller_exchanges)
+        and target_audio_fully_transcribed
     )
     transcript_payload.update({
         'text': '\n'.join(f'{turn.speaker}: {turn.text}' for turn in transcript_turns),
@@ -453,8 +505,8 @@ def run_signalwire_holyguacamole_call(
             '',
         ),
         'agent_text_available': any(turn.speaker == 'Agent' for turn in transcript_turns),
-        'complete_as_observed': len(transcript_turns) == max_exchanges * 2,
-        'untranscribed_target_audio': len(transcript_turns) != max_exchanges * 2,
+        'complete_as_observed': complete_as_observed,
+        'untranscribed_target_audio': not target_audio_fully_transcribed,
         'source': aggregate_transcript_source,
     })
     result['transcript'] = transcript_payload
@@ -483,6 +535,9 @@ def run_signalwire_holyguacamole_call(
             } if (result.get('artifacts') or {}).get('target_response_audio') else {}),
             'caller_audio_turn_uris': [str(path) for path in caller_turn_paths],
             'response_audio_turn_uris': [str(path) for path in response_turn_paths],
+            **({
+                'target_greeting_audio_uri': str(greeting_audio_path),
+            } if greeting_expected and greeting_audio_path is not None else {}),
         },
     )
     return {

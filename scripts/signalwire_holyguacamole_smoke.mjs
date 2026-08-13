@@ -444,6 +444,9 @@ class RemoteAudioMonitor {
     this.silentSince = Date.now();
     this.turnPair = 1;
     this.capture = null;
+    this.greetingCaptureActive = true;
+    this.greetingAudible = false;
+    this.greetingChunks = [];
   }
   attach(track) {
     if (this.sink) return;
@@ -472,6 +475,10 @@ class RemoteAudioMonitor {
       this.silentSince = null;
     } else if (this.silentSince === null) {
       this.silentSince = receivedAt;
+    }
+    if (this.greetingCaptureActive) {
+      this.greetingChunks.push(pcm);
+      if (audible) this.greetingAudible = true;
     }
     const capture = this.capture;
     if (!capture) return;
@@ -506,10 +513,17 @@ class RemoteAudioMonitor {
   async waitForGreetingBoundary(timeoutMs) {
     const startedAt = Date.now();
     while (Date.now() - startedAt < timeoutMs) {
-      if (this.firstAudibleAt && this.silentSince && Date.now() - this.silentSince >= PRE_RESPONSE_SILENCE_MS) return;
-      if (!this.firstAudibleAt && this.firstFrameAt && Date.now() - this.firstFrameAt >= 1500) return;
+      if (this.firstAudibleAt && this.silentSince && Date.now() - this.silentSince >= PRE_RESPONSE_SILENCE_MS) break;
+      if (!this.firstAudibleAt && this.firstFrameAt && Date.now() - this.firstFrameAt >= 1500) break;
       await sleep(50);
     }
+    this.greetingCaptureActive = false;
+    if (!this.greetingAudible || !this.greetingChunks.length || !this.sampleRate) return null;
+    const buffer = createPcmWav(this.greetingChunks, this.sampleRate);
+    return {
+      buffer,
+      durationMs: Math.round((buffer.length - 44) / 2 * 1000 / this.sampleRate),
+    };
   }
   arm(turnPair) {
     this.turnPair = turnPair;
@@ -675,11 +689,14 @@ function combineResponseWavs(responseAudios) {
   };
 }
 
-async function writeArtifacts(result, runDir, responseAudios) {
+async function writeArtifacts(result, runDir, responseAudios, greetingAudio) {
   const transcriptPath = path.join(runDir, 'transcript.txt');
   await fs.writeFile(transcriptPath, `${result.transcript.text || ''}\n`, 'utf8');
   result.transcript.artifact_path = relativeToRepo(transcriptPath);
-  const targetAudio = combineResponseWavs(responseAudios);
+  const targetAudio = combineResponseWavs([
+    ...(greetingAudio ? [greetingAudio] : []),
+    ...responseAudios,
+  ]);
   if (targetAudio) {
     const audioPath = path.join(runDir, targetAudio.extension);
     await fs.writeFile(audioPath, targetAudio.buffer);
@@ -690,6 +707,15 @@ async function writeArtifacts(result, runDir, responseAudios) {
     result.artifacts.target_audio_sha256 = crypto.createHash('sha256').update(targetAudio.buffer).digest('hex');
   }
   result.artifacts.target_response_audio_turns = [];
+  if (greetingAudio) {
+    const greetingPath = path.join(runDir, 'target-greeting.wav');
+    await fs.writeFile(greetingPath, greetingAudio.buffer);
+    result.artifacts.target_greeting_audio = relativeToRepo(greetingPath);
+    result.artifacts.target_greeting_audio_mime = 'audio/wav';
+    result.artifacts.target_greeting_audio_sha256 = crypto.createHash('sha256').update(greetingAudio.buffer).digest('hex');
+    result.media.target_greeting_audio_bytes = greetingAudio.buffer.length;
+    result.media.target_greeting_audio_duration_ms = greetingAudio.durationMs;
+  }
   for (let index = 0; index < responseAudios.length; index += 1) {
     const audio = responseAudios[index];
     const turnPath = path.join(runDir, `target-response-turn-${index + 1}.wav`);
@@ -757,6 +783,7 @@ async function runSmoke(args) {
   const remoteMonitor = new RemoteAudioMonitor(livePublisher);
   const subscriptions = [];
   const responseAudios = [];
+  let greetingAudio = null;
   let client = null;
   let call = null;
   try {
@@ -842,7 +869,7 @@ async function runSmoke(args) {
     result.latency_metrics.call_connected_to_remote_track_ms = Date.now() - callConnectedAt;
     await waitUntil(() => remoteMonitor.firstFrameAt, Math.min(5000, remaining()), 'first remote PCM frame');
     result.connection.remote_audio_sample_seen = true;
-    await remoteMonitor.waitForGreetingBoundary(Math.min(7000, remaining()));
+    greetingAudio = await remoteMonitor.waitForGreetingBoundary(Math.min(7000, remaining()));
 
     let callerText = args.callerText;
     let callerWav = firstCallerWav;
@@ -902,7 +929,7 @@ async function runSmoke(args) {
     audioTrack.stop();
     await livePublisher.close();
     if (livePublisher.error) result.connection.cae_live_broadcast_error = livePublisher.error;
-    await writeArtifacts(result, runDir, responseAudios);
+    await writeArtifacts(result, runDir, responseAudios, greetingAudio);
   }
   return { ...result, artifact_path: result.artifacts.result_json };
 }

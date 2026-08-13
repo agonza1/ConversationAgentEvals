@@ -255,6 +255,8 @@ def test_signalwire_target_preserves_followup_caller_audio_for_replay(tmp_path, 
     result_dir.mkdir()
     target_audio = result_dir / 'target-audio.wav'
     target_audio.write_bytes(b'current-run-signalwire-audio')
+    greeting = result_dir / 'target-greeting.wav'
+    greeting.write_bytes(b'greeting-audio')
     first_response = result_dir / 'target-response-turn-1.wav'
     first_response.write_bytes(b'first-response-audio')
     second_response = result_dir / 'target-response-turn-2.wav'
@@ -279,6 +281,7 @@ def test_signalwire_target_preserves_followup_caller_audio_for_replay(tmp_path, 
             'target_audio': str(target_audio),
             'target_audio_mime': 'audio/wav',
             'caller_audio': str(target_audio),
+            'target_greeting_audio': str(greeting),
             'target_response_audio_turns': [
                 {'turn': 1, 'path': str(first_response)},
                 {'turn': 2, 'path': str(second_response)},
@@ -298,6 +301,15 @@ def test_signalwire_target_preserves_followup_caller_audio_for_replay(tmp_path, 
         'run',
         lambda *args, **kwargs: Completed(),
     )
+    monkeypatch.setattr(
+        signalwire_target.ReferenceMediaServices,
+        'transcribe',
+        lambda _self, audio: (
+            'Welcome to Holy Guacamole.'
+            if audio == b'greeting-audio'
+            else pytest.fail('Only the greeting should require ASR in this fixture.')
+        ),
+    )
 
     result = run_signalwire_holyguacamole_call(
         caller_text='I need help.',
@@ -311,12 +323,15 @@ def test_signalwire_target_preserves_followup_caller_audio_for_replay(tmp_path, 
     assert len(caller_uris) == 2
     assert Path(caller_uris[1]).read_bytes() == followup_audio
     assert [(turn.speaker, turn.text) for turn in result['transcription_turns']] == [
+        ('Agent', 'Welcome to Holy Guacamole.'),
         ('Caller', 'I need help.'),
         ('Agent', 'How can I help?'),
         ('Caller', 'I need a refill.'),
         ('Agent', 'Which medication?'),
     ]
     assert result['transcript']['source'] == 'rtc-asr.current_run'
+    assert result['transcript']['complete_as_observed'] is True
+    assert result['recording_handle'].metadata['target_greeting_audio_uri'] == str(greeting)
 
 
 def test_signalwire_target_marks_incomplete_agent_asr_as_partial():
@@ -333,6 +348,19 @@ def test_signalwire_target_marks_incomplete_agent_asr_as_partial():
     assert signalwire_target._aggregate_transcript_source(
         turns,
         max_exchanges=2,
+    ) == 'rtc-asr.partial_current_run'
+    assert signalwire_target._aggregate_transcript_source(
+        [
+            signalwire_target.TranscriptionTurn(
+                turn_index=1,
+                speaker='Agent',
+                text='Your order is ready.',
+                source='signalwire_webrtc',
+                frame_metadata={'exchange': 1},
+            ),
+        ],
+        max_exchanges=1,
+        greeting_expected=True,
     ) == 'rtc-asr.partial_current_run'
 
 
@@ -506,3 +534,6 @@ def test_signalwire_smoke_uses_direct_webrtc_and_audible_latency():
     )
     assert 'synthesizeCallerAudio(args, runDir, remaining())' in script
     assert 'signal: AbortSignal.timeout(Math.max(1, timeoutMs))' in script
+    assert 'this.greetingChunks.push(pcm)' in script
+    assert "result.artifacts.target_greeting_audio = relativeToRepo(greetingPath)" in script
+    assert '...(greetingAudio ? [greetingAudio] : [])' in script
