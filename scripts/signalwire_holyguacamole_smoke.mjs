@@ -629,7 +629,7 @@ async function generateTesterFollowup(args, targetAudioWavBase64, history, turnP
   return { testerText, testerAudioWavBase64, targetText };
 }
 
-async function synthesizeCallerAudio(args, runDir) {
+async function synthesizeCallerAudio(args, runDir, timeoutMs) {
   if (args.callerAudio) {
     const source = path.resolve(REPO_ROOT, args.callerAudio);
     const sourceStat = await fs.stat(source);
@@ -649,6 +649,7 @@ async function synthesizeCallerAudio(args, runDir) {
         input: args.callerText,
         response_format: 'wav',
       }),
+      signal: AbortSignal.timeout(Math.max(1, timeoutMs)),
     });
     if (!response.ok) throw new Error(`Kokoro returned HTTP ${response.status}`);
     await fs.writeFile(target, Buffer.from(await response.arrayBuffer()));
@@ -760,7 +761,7 @@ async function runSmoke(args) {
   let call = null;
   try {
     result.connection.cae_live_broadcast_connected = await livePublisher.open();
-    const callerAudio = await synthesizeCallerAudio(args, runDir);
+    const callerAudio = await synthesizeCallerAudio(args, runDir, remaining());
     const firstCallerWav = await fs.readFile(callerAudio.path);
     parsePcmWav(firstCallerWav);
     result.tester.media_source = callerAudio.source;

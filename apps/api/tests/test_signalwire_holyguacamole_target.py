@@ -504,3 +504,5 @@ def test_signalwire_smoke_uses_direct_webrtc_and_audible_latency():
     assert script.index('await writeStdout(JSON.stringify(summary') < script.index(
         "process.exit(result.status === 'pass' ? 0 : 2)"
     )
+    assert 'synthesizeCallerAudio(args, runDir, remaining())' in script
+    assert 'signal: AbortSignal.timeout(Math.max(1, timeoutMs))' in script

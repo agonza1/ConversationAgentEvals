@@ -51,10 +51,6 @@ from app.services.run_provenance import (
     execution_defaults_for_target,
 )
 from app.services.target_secrets import resolve_http_target_secret
-from app.services.signalwire_holyguacamole_target import (
-    SIGNALWIRE_PUBLIC_GATE_ENV,
-    run_signalwire_holyguacamole_call,
-)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -149,6 +145,8 @@ def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool =
             f'Holy Guacamole SignalWire execution requires '
             f'{SIGNALWIRE_PUBLIC_GATE_ENV}=1 before queueing or tester preflight.'
         )
+    if target == 'signalwire_holy_guacamole':
+        _preflight_signalwire_caller_tts_runtime(resolved)
     if (
         resolved.max_exchanges > 1
         and target == 'signalwire_holy_guacamole'
@@ -1049,6 +1047,40 @@ def _preflight_reference_runtime(
 def _signalwire_public_gate_enabled() -> bool:
     value = str(os.getenv(SIGNALWIRE_PUBLIC_GATE_ENV) or '').strip().lower()
     return value in {'1', 'true', 'yes'}
+
+
+def _preflight_signalwire_caller_tts_runtime(payload: ExecutionRunCreateRequest) -> None:
+    """Verify required caller speech synthesis before queueing a public call."""
+    config = _reference_runtime_config(payload)
+    service_url = str(config.kokoro_base_url or '').rstrip('/')
+    if not service_url:
+        raise ValueError(
+            'Holy Guacamole SignalWire execution requires KOKORO_BASE_URL '
+            'for caller audio synthesis before queueing.'
+        )
+    request = Request(
+        f'{service_url}/health',
+        headers={'accept': 'application/json'},
+        method='GET',
+    )
+    try:
+        with urlopen(request, timeout=min(10.0, config.timeout_seconds)) as response:  # noqa: S310
+            response.read()
+    except HTTPError as exc:
+        detail = exc.read().decode('utf-8', errors='replace')[:400]
+        raise ValueError(
+            'Holy Guacamole SignalWire caller TTS is unavailable at KOKORO_BASE_URL; '
+            f'got HTTP {exc.code}: {detail or exc.reason}'
+        ) from exc
+    except URLError as exc:
+        raise ValueError(
+            'Holy Guacamole SignalWire caller TTS is unreachable at KOKORO_BASE_URL: '
+            f'{exc.reason}'
+        ) from exc
+    except (TimeoutError, OSError) as exc:
+        raise ValueError(
+            'Holy Guacamole SignalWire caller TTS is unreachable at KOKORO_BASE_URL.'
+        ) from exc
 
 
 def _preflight_signalwire_followup_runtime(payload: ExecutionRunCreateRequest) -> None:

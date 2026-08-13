@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from urllib.error import URLError
 
 from fastapi.testclient import TestClient
 import pytest
@@ -44,6 +45,11 @@ class _JsonResponse:
 
 def _allow_signalwire_public_gate(monkeypatch) -> None:
     monkeypatch.setenv('CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE', '1')
+    monkeypatch.setattr(
+        execution_runner,
+        '_preflight_signalwire_caller_tts_runtime',
+        lambda _payload: None,
+    )
 
 
 def _allow_signalwire_followup_preflight(monkeypatch) -> list[dict]:
@@ -851,6 +857,73 @@ def test_signalwire_holyguacamole_rejects_disabled_public_gate_before_queueing(m
         user_id='agent-runs-user-disabled-gate',
         project_id='agent-runs-project-disabled-gate',
     ) == []
+
+
+def test_signalwire_holyguacamole_rejects_missing_caller_tts_before_queueing(monkeypatch):
+    monkeypatch.setenv('CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE', '1')
+    monkeypatch.delenv('KOKORO_BASE_URL', raising=False)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        max_exchanges=1,
+        user_id='agent-runs-user-missing-kokoro',
+        project_id='agent-runs-project-missing-kokoro',
+    )
+
+    with pytest.raises(ValueError, match='requires KOKORO_BASE_URL'):
+        start_execution_run(payload)
+
+    assert execution_run_store.list_execution_runs(
+        user_id='agent-runs-user-missing-kokoro',
+        project_id='agent-runs-project-missing-kokoro',
+    ) == []
+
+
+def test_signalwire_holyguacamole_rejects_unhealthy_caller_tts_before_queueing(monkeypatch):
+    monkeypatch.setenv('CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE', '1')
+    monkeypatch.setenv('KOKORO_BASE_URL', 'http://kokoro.test')
+
+    def unavailable_urlopen(_request, timeout=None):
+        raise URLError('connection refused')
+
+    monkeypatch.setattr(execution_runner, 'urlopen', unavailable_urlopen)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        max_exchanges=1,
+        user_id='agent-runs-user-unhealthy-kokoro',
+        project_id='agent-runs-project-unhealthy-kokoro',
+    )
+
+    with pytest.raises(ValueError, match='caller TTS is unreachable'):
+        start_execution_run(payload)
+
+
+def test_signalwire_holyguacamole_accepts_ready_caller_tts(monkeypatch):
+    monkeypatch.setenv('CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE', '1')
+    monkeypatch.setenv('KOKORO_BASE_URL', 'http://kokoro.test')
+    requests: list[tuple[str, float | None]] = []
+
+    def ready_urlopen(request, timeout=None):
+        requests.append((request.full_url, timeout))
+        return _JsonResponse({'status': 'ready'})
+
+    monkeypatch.setattr(execution_runner, 'urlopen', ready_urlopen)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        max_exchanges=1,
+        user_id='agent-runs-user-ready-kokoro',
+        project_id='agent-runs-project-ready-kokoro',
+    )
+
+    queued = start_execution_run(payload)
+
+    assert queued['status'] == 'queued'
+    assert requests == [('http://kokoro.test/health', 10.0)]
 
 
 def test_signalwire_holyguacamole_runs_two_exchanges_in_one_webrtc_call(monkeypatch):
