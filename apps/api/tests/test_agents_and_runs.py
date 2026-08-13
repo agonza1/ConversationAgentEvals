@@ -42,8 +42,13 @@ class _JsonResponse:
         return json.dumps(self._payload).encode('utf-8')
 
 
+def _allow_signalwire_public_gate(monkeypatch) -> None:
+    monkeypatch.setenv('CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE', '1')
+
+
 def _allow_signalwire_followup_preflight(monkeypatch) -> list[dict]:
     calls: list[dict] = []
+    _allow_signalwire_public_gate(monkeypatch)
     monkeypatch.setenv('REFERENCE_AGENT_INTERNAL_TOKEN', 'test-reference-token')
 
     def fake_urlopen(request, timeout=None):
@@ -563,6 +568,8 @@ def test_signalwire_holyguacamole_agent_uses_gated_direct_webrtc_executor(monkey
     from app.services import execution_runner
     from app.services.execution_audio import AudioRecordingHandle, TranscriptionTurn
 
+    _allow_signalwire_public_gate(monkeypatch)
+
     def fake_signalwire_call(**kwargs):
         assert kwargs['caller_text']
         assert kwargs['timeout_seconds'] == 60
@@ -765,6 +772,7 @@ def test_signalwire_holyguacamole_rejects_more_than_two_exchanges():
 
 
 def test_signalwire_holyguacamole_rejects_two_exchanges_without_followup_token(monkeypatch):
+    _allow_signalwire_public_gate(monkeypatch)
     monkeypatch.delenv('REFERENCE_AGENT_INTERNAL_TOKEN', raising=False)
     payload = ExecutionRunCreateRequest(
         suite_id='call-center-voice-ai',
@@ -800,6 +808,7 @@ def test_signalwire_holyguacamole_preflights_two_exchange_tester_runtime(monkeyp
 
 
 def test_signalwire_holyguacamole_rejects_unhealthy_followup_runtime(monkeypatch):
+    _allow_signalwire_public_gate(monkeypatch)
     monkeypatch.setenv('REFERENCE_AGENT_INTERNAL_TOKEN', 'test-reference-token')
 
     def fake_urlopen(_request, timeout=None):
@@ -817,6 +826,31 @@ def test_signalwire_holyguacamole_rejects_unhealthy_followup_runtime(monkeypatch
 
     with pytest.raises(ValueError, match='incomplete tester text/audio pipeline evidence'):
         start_execution_run(payload)
+
+
+def test_signalwire_holyguacamole_rejects_disabled_public_gate_before_queueing(monkeypatch):
+    monkeypatch.delenv('CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE', raising=False)
+
+    def fail_if_called(_payload):
+        raise AssertionError('follow-up preflight should not run when the public gate is disabled')
+
+    monkeypatch.setattr(execution_runner, '_preflight_signalwire_followup_runtime', fail_if_called)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        max_exchanges=2,
+        user_id='agent-runs-user-disabled-gate',
+        project_id='agent-runs-project-disabled-gate',
+    )
+
+    with pytest.raises(ValueError, match='CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE=1'):
+        start_execution_run(payload)
+
+    assert execution_run_store.list_execution_runs(
+        user_id='agent-runs-user-disabled-gate',
+        project_id='agent-runs-project-disabled-gate',
+    ) == []
 
 
 def test_signalwire_holyguacamole_runs_two_exchanges_in_one_webrtc_call(monkeypatch):
@@ -1084,7 +1118,7 @@ def test_rejects_incompatible_executor_for_builtin_sample_voice():
     assert 'cae_local_audio_loop' in response.text
 
 
-def test_execution_persists_model_name_default_and_override():
+def test_execution_persists_model_name_default_and_override(monkeypatch):
     queued_default = start_execution_run(
         ExecutionRunCreateRequest(
             suite_id='call-center-voice-ai',
@@ -1125,6 +1159,7 @@ def test_execution_persists_model_name_default_and_override():
     assert via_api.status_code == 200, via_api.text
     assert via_api.json()['model_name'] == 'gpt-4.1'
 
+    _allow_signalwire_public_gate(monkeypatch)
     signalwire = client.post(
         '/api/execution/runs',
         json={

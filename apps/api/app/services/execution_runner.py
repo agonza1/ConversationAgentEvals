@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 import uuid
 from datetime import UTC, datetime
@@ -22,7 +23,10 @@ from app.schemas.execution import (
 )
 from app.services import execution_run_store
 from app.services.pipecat_public_target import run_public_pipecat_call
-from app.services.signalwire_holyguacamole_target import run_signalwire_holyguacamole_call
+from app.services.signalwire_holyguacamole_target import (
+    SIGNALWIRE_PUBLIC_GATE_ENV,
+    run_signalwire_holyguacamole_call,
+)
 from app.services.agent_store import get_agent
 from app.services.execution_metrics import build_metrics_and_timeline
 from app.services.acc_realtime_target import (
@@ -47,6 +51,10 @@ from app.services.run_provenance import (
     execution_defaults_for_target,
 )
 from app.services.target_secrets import resolve_http_target_secret
+from app.services.signalwire_holyguacamole_target import (
+    SIGNALWIRE_PUBLIC_GATE_ENV,
+    run_signalwire_holyguacamole_call,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -135,9 +143,15 @@ def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool =
     agent = get_agent(resolved.agent_id) if resolved.agent_id else None
     if resolved.agent_id and agent is None:
         raise ValueError(f'Unknown agent: {resolved.agent_id}')
+    target = _execution_target(resolved, agent)
+    if target == 'signalwire_holy_guacamole' and not _signalwire_public_gate_enabled():
+        raise ValueError(
+            f'Holy Guacamole SignalWire execution requires '
+            f'{SIGNALWIRE_PUBLIC_GATE_ENV}=1 before queueing or tester preflight.'
+        )
     if (
         resolved.max_exchanges > 1
-        and _execution_target(resolved, agent) == 'signalwire_holy_guacamole'
+        and target == 'signalwire_holy_guacamole'
     ):
         _preflight_signalwire_followup_runtime(resolved)
     total = len(scenario_ids) * resolved.iterations
@@ -146,7 +160,7 @@ def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool =
     model_name = (resolved.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
     provenance = build_run_provenance(
         agent=agent,
-        agent_target=_execution_target(resolved, agent),
+        agent_target=target,
         tester_id=resolved.tester_id,
         executor_id=resolved.executor_id,
         mode=resolved.mode,
@@ -1030,6 +1044,11 @@ def _preflight_reference_runtime(
         completion=completion,
         config=config,
     )
+
+
+def _signalwire_public_gate_enabled() -> bool:
+    value = str(os.getenv(SIGNALWIRE_PUBLIC_GATE_ENV) or '').strip().lower()
+    return value in {'1', 'true', 'yes'}
 
 
 def _preflight_signalwire_followup_runtime(payload: ExecutionRunCreateRequest) -> None:
