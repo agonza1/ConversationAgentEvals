@@ -59,6 +59,8 @@ Execute-stage **local Pipecat SmallWebRTC audio in/out hooks** with vCon recordi
 
 The opt-in public Pipecat demo target is available from **Targets** and runs a real evaluation over direct server-side Daily WebRTC, without Chromium. It records current-run caller/target audio, transcript, latency, evaluation, and vCon evidence; see [docs/pipecat-public-target-execution.md](docs/pipecat-public-target-execution.md). The separate browser compatibility probe remains documented in [docs/pipecat-public-voice-smoke.md](docs/pipecat-public-voice-smoke.md).
 
+The opt-in Holy Guacamole SignalWire target drives `https://holyguacamole.signalwire.me/` through a gated browser WebRTC executor and records current-run caller audio, remote target audio, timing, provenance, and vCon media evidence; see [docs/signalwire-holyguacamole-target-execution.md](docs/signalwire-holyguacamole-target-execution.md).
+
 Standalone offline example after `npm run setup`:
 
 ```bash

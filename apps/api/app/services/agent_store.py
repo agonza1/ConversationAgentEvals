@@ -68,6 +68,20 @@ SEED_AGENTS: list[dict[str, Any]] = [
         'metadata': {'model_name': '10-gradium', 'prompt_version': 'external'},
     },
     {
+        'id': 'holyguacamole-signalwire-agent',
+        'name': 'Holy Guacamole SignalWire drive-thru',
+        'channel': 'voice',
+        'target': 'signalwire_holy_guacamole',
+        'environment': 'production',
+        'connection': {'endpoint_url': 'https://holyguacamole.signalwire.me/'},
+        'description': (
+            'Real external SignalWire voice target for the Holy Guacamole drive-thru demo. '
+            'CAE drives the public browser WebRTC flow with current-run tester audio and '
+            'captures remote media, page events, transcript, timeline, and provenance artifacts.'
+        ),
+        'metadata': {'model_name': 'signalwire-ai-agent', 'prompt_version': 'external'},
+    },
+    {
         'id': 'generalist-text-agent',
         'name': 'Built-in generalist text agent',
         'channel': 'text',

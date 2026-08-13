@@ -114,7 +114,11 @@ def upsert_conversation(execution_run_id: str, conversation: ConversationRecord)
                 break
         if not replaced:
             conversations.append(payload)
-        completed = sum(1 for item in conversations if item.get('status') in {'completed', 'failed'})
+        completed = sum(
+            1
+            for item in conversations
+            if item.get('status') in {'completed', 'needs_review', 'failed'}
+        )
         total = int((run.get('progress') or {}).get('total_conversations') or max(len(conversations), 1))
         percent = round((completed / total) * 100, 1) if total else 0.0
         active_id = None

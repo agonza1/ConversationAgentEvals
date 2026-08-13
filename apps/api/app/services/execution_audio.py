@@ -7,6 +7,7 @@ CAE tester / audio plan
   -> ExecutionAudioTransport
        - pipecat_small_webrtc (this slice: local/mocked)
        - pipecat_daily_webrtc (public Pipecat target)
+       - signalwire_webrtc (public SignalWire target)
        - freeswitch_verto_sip (deferred extension point)
   -> target session send/receive
   -> recording + transcription handles
@@ -31,7 +32,13 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.services.acc_realtime_target import AccAudioFixture, AccAudioStep
 
 
-AudioTransportId = Literal['none', 'pipecat_small_webrtc', 'pipecat_daily_webrtc', 'freeswitch_verto_sip']
+AudioTransportId = Literal[
+    'none',
+    'pipecat_small_webrtc',
+    'pipecat_daily_webrtc',
+    'signalwire_webrtc',
+    'freeswitch_verto_sip',
+]
 
 
 class ExecutionAudioTransportInfo(BaseModel):
@@ -95,6 +102,19 @@ def describe_execution_audio_capabilities() -> ExecutionAudioCapabilities:
                 ),
             ),
             ExecutionAudioTransportInfo(
+                id='signalwire_webrtc',
+                label='Holy Guacamole direct SignalWire WebRTC',
+                available=True,
+                status='available',
+                requires_freeswitch=False,
+                requires_live_pipecat=False,
+                notes=(
+                    'Opt-in direct SignalWire WebRTC executor that sends current-run tester '
+                    'audio and captures remote PCM, timing, recording evidence, and vCon media '
+                    'without launching a browser.'
+                ),
+            ),
+            ExecutionAudioTransportInfo(
                 id='freeswitch_verto_sip',
                 label='FreeSWITCH Verto outbound SIP',
                 available=False,
@@ -129,6 +149,7 @@ def describe_execution_audio_capabilities() -> ExecutionAudioCapabilities:
             'ACC mirrors: Pipecat + SmallWebRTC for media, FreeSWITCH Verto for outbound SIP.',
             'Use execution mode pipecat_webrtc with audio_transport=pipecat_small_webrtc for vCon capture.',
             'The public Pipecat target uses pipecat_daily_webrtc for direct external Daily media.',
+            'The Holy Guacamole target uses signalwire_webrtc behind an explicit env gate.',
             'freeswitch_verto_sip remains a deferred extension point (see FreeSwitchVertoSipTransport).',
         ],
     )
@@ -146,6 +167,7 @@ class AudioRecordingHandle:
     transport: Literal[
         'pipecat_small_webrtc',
         'pipecat_daily_webrtc',
+        'signalwire_webrtc',
         'freeswitch_verto_sip',
     ] = 'pipecat_small_webrtc'
     metadata: dict[str, Any] = field(default_factory=dict)

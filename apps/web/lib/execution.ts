@@ -1,13 +1,19 @@
 import { apiErrorMessage } from './apiError';
 
 export type ExecutionMode = 'text_callable' | 'voice_fixture' | 'pipecat_webrtc';
-export type AudioTransportId = 'none' | 'pipecat_small_webrtc' | 'pipecat_daily_webrtc' | 'freeswitch_verto_sip';
+export type AudioTransportId =
+  | 'none'
+  | 'pipecat_small_webrtc'
+  | 'pipecat_daily_webrtc'
+  | 'signalwire_webrtc'
+  | 'freeswitch_verto_sip';
 export type TesterId = 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
 export type ExecutorId =
   | 'local_async_runner'
   | 'evidence_replay'
   | 'cae_local_audio_loop'
   | 'pipecat_public_daily'
+  | 'signalwire_public_webrtc'
   | 'acc_browser_webrtc'
   | 'acc_sip'
   | 'acc_phone';
@@ -18,6 +24,7 @@ export type AgentTarget =
   | 'voice_fixture'
   | 'builtin_sample_voice'
   | 'pipecat_public_demo'
+  | 'signalwire_holy_guacamole'
   | 'sip_agent'
   | 'phone_agent'
   | 'browser_webrtc_agent'
@@ -368,6 +375,14 @@ export function applyAgentLaunchDefaults(
       testerId: 'pipecat_tester',
       executorId: 'pipecat_public_daily',
       audioTransport: 'pipecat_daily_webrtc',
+    };
+  }
+  if (agent.target === 'signalwire_holy_guacamole') {
+    return {
+      mode: 'pipecat_webrtc',
+      testerId: 'pipecat_tester',
+      executorId: 'signalwire_public_webrtc',
+      audioTransport: 'signalwire_webrtc',
     };
   }
   if (agent.target === 'voice_fixture') {

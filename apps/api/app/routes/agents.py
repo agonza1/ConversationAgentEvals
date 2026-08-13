@@ -64,6 +64,7 @@ _TARGET_OPTIONS: tuple[AgentTarget, ...] = (
     'mock_agent',
     'builtin_sample_voice',
     'pipecat_public_demo',
+    'signalwire_holy_guacamole',
     'browser_webrtc_agent',
     'sip_agent',
     'phone_agent',
@@ -75,6 +76,7 @@ _TARGET_LABELS: dict[AgentTarget, str] = {
     'mock_agent': 'Built-in sample text agent',
     'builtin_sample_voice': 'Built-in generalist voice agent',
     'pipecat_public_demo': 'Pipecat demo',
+    'signalwire_holy_guacamole': 'Holy Guacamole SignalWire',
     'browser_webrtc_agent': 'ACC browser WebRTC',
     'sip_agent': 'ACC SIP URI',
     'phone_agent': 'ACC phone number',
@@ -89,6 +91,7 @@ _TARGET_CHANNELS: dict[AgentTarget, str] = {
     'offline_acc_fixture': 'text',
     'builtin_sample_voice': 'voice',
     'pipecat_public_demo': 'voice',
+    'signalwire_holy_guacamole': 'voice',
     'voice_fixture': 'voice',
     'browser_webrtc_agent': 'voice',
     'sip_agent': 'voice',
@@ -101,6 +104,7 @@ _TARGET_GROUPS: dict[AgentTarget, str] = {
     'mock_agent': 'built_in_sample',
     'builtin_sample_voice': 'built_in_sample',
     'pipecat_public_demo': 'live_connection',
+    'signalwire_holy_guacamole': 'live_connection',
     'browser_webrtc_agent': 'planned_live_connection',
     'sip_agent': 'planned_live_connection',
     'phone_agent': 'planned_live_connection',
@@ -111,6 +115,7 @@ _TARGET_GROUPS: dict[AgentTarget, str] = {
 _CONNECTION_REQUIREMENTS: dict[AgentTarget, tuple[str, ...]] = {
     'http_endpoint': ('endpoint_url',),
     'pipecat_public_demo': ('endpoint_url',),
+    'signalwire_holy_guacamole': ('endpoint_url',),
     'browser_webrtc_agent': ('acc_base_url',),
     'sip_agent': ('acc_base_url', 'sip_uri'),
     'phone_agent': ('acc_base_url', 'phone_number'),
@@ -133,6 +138,26 @@ def _target_option(target: AgentTarget) -> dict[str, object]:
                 'tester_id': 'pipecat_tester',
                 'executor_id': 'pipecat_public_daily',
                 'audio_transport': 'pipecat_daily_webrtc',
+            },
+        }
+    if target == 'signalwire_holy_guacamole':
+        return {
+            'id': target,
+            'label': _TARGET_LABELS[target],
+            'channel': _TARGET_CHANNELS[target],
+            'group': _TARGET_GROUPS[target],
+            'available': True,
+            'unavailable_reason': None,
+            'requires_connection': ['endpoint_url'],
+            'default_connection': {'endpoint_url': 'https://holyguacamole.signalwire.me/'},
+            'defaults': {
+                'mode': 'pipecat_webrtc',
+                'tester_id': 'pipecat_tester',
+                'executor_id': 'signalwire_public_webrtc',
+                'audio_transport': 'signalwire_webrtc',
+                'max_exchanges': 1,
+                'max_exchanges_configurable': True,
+                'max_exchanges_limit': 2,
             },
         }
     defaults = execution_defaults_for_target(target)

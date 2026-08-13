@@ -1,4 +1,8 @@
 node_modules
+.venv
+.local
+artifacts
+storage
 apps/web/node_modules
 apps/web/.next
 apps/web/.next-*
@@ -11,3 +15,5 @@ apps/**/__pycache__
 .trash
 playwright-report
 test-results
+.playwright-browsers
+apps/web/test-results

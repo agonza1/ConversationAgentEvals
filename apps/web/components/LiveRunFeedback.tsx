@@ -551,12 +551,12 @@ export function LiveRunFeedback({
       events.map(listenerMediaKey).filter((value): value is string => Boolean(value)),
     );
     clearSetupFallbackTimer();
+    setPlaybackMessage('Connecting to the ongoing WebRTC audio stream…');
     setupFallbackTimerRef.current = window.setTimeout(() => {
       setupFallbackTimerRef.current = null;
-      if (!isCurrentAttempt() || peerRef.current?.connectionState === 'connected') return;
+      if (!isCurrentAttempt()) return;
       activateHttpFallback();
     }, 2500);
-    setPlaybackMessage('Connecting to the ongoing WebRTC audio stream…');
     let token: ListenerToken | null = null;
     try {
       // The displayed token may already be attached in a shared browser.
@@ -587,8 +587,21 @@ export function LiveRunFeedback({
     }
     listenerTokenRef.current = token;
     setListenerToken(token);
-    await refreshListener(token.token).catch(() => undefined);
+    try {
+      await refreshListener(token.token);
+    } catch {
+      activateHttpFallback();
+      return;
+    }
     if (!isCurrentAttempt() || liveSegmentFallbackRef.current) return;
+    clearSetupFallbackTimer();
+    // Use a separate deadline after bounded listener API setup completes so
+    // WebRTC negotiation receives its full connection window.
+    setupFallbackTimerRef.current = window.setTimeout(() => {
+      setupFallbackTimerRef.current = null;
+      if (!isCurrentAttempt() || peerRef.current?.connectionState === 'connected') return;
+      activateHttpFallback();
+    }, 2500);
     try {
       await connectWebRTC(
         token,

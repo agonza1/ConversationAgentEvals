@@ -1,42 +1,19 @@
 from __future__ import annotations
 
 import json
+from urllib.error import URLError
 
 from fastapi.testclient import TestClient
 import pytest
 
 from app.main import app
-from app.services import acc_connection, agent_store, execution_run_store
-from app.services.execution_runner import (
-    _scenario_user_opener,
-    execute_execution_run,
-    start_execution_run,
-)
+from app.services import acc_connection, agent_store, execution_run_store, execution_runner
+from app.services.execution_runner import execute_execution_run, start_execution_run
 from app.services.target_secrets import resolve_http_target_secret
 from app.schemas.execution import ExecutionRunCreateRequest
 
 
 client = TestClient(app)
-
-
-def test_user_scenario_opener_uses_the_configured_prompt():
-    assert _scenario_user_opener({
-        'id': 'custom-account-access',
-        'title': 'Account access issue',
-        'simulated_user_prompt': 'I changed my password and now I cannot sign in.',
-    }) == 'I changed my password and now I cannot sign in.'
-    assert _scenario_user_opener({
-        'id': 'legacy-custom-account-access',
-        'title': 'Account access issue',
-        'prompt': 'Please help me regain access to my account.',
-    }) == 'Please help me regain access to my account.'
-
-
-def test_configured_user_prompt_takes_precedence_over_generated_sample_transcript():
-    assert _scenario_user_opener({
-        'simulated_user_prompt': 'Use my configured opening request.',
-        'sample_transcript': 'Caller: Do not replace the configured request.',
-    }) == 'Use my configured opening request.'
 
 
 @pytest.fixture(autouse=True)
@@ -52,6 +29,54 @@ def isolated_agent_registry(tmp_path, monkeypatch):
     agent_store.reset_agents_for_tests(clear_files=True)
 
 
+class _JsonResponse:
+    def __init__(self, payload: dict):
+        self._payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self) -> bytes:
+        return json.dumps(self._payload).encode('utf-8')
+
+
+def _allow_signalwire_public_gate(monkeypatch) -> None:
+    monkeypatch.setenv('CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE', '1')
+    monkeypatch.setattr(
+        execution_runner,
+        '_preflight_signalwire_caller_tts_runtime',
+        lambda _payload: None,
+    )
+
+
+def _allow_signalwire_followup_preflight(monkeypatch) -> list[dict]:
+    calls: list[dict] = []
+    _allow_signalwire_public_gate(monkeypatch)
+    monkeypatch.setenv('REFERENCE_AGENT_INTERNAL_TOKEN', 'test-reference-token')
+    monkeypatch.setenv('RTC_ASR_BASE_URL', 'http://rtc-asr.test')
+
+    def fake_urlopen(request, timeout=None):
+        if request.full_url == 'http://rtc-asr.test/health':
+            assert timeout == 10.0
+            return _JsonResponse({'status': 'ready', 'ready': True})
+        assert request.full_url == 'http://localhost:8110/reference-tester/turn'
+        assert request.get_header('X-cae-reference-token') == 'test-reference-token'
+        payload = json.loads(request.data.decode('utf-8'))
+        payload['_timeout_seconds'] = timeout
+        calls.append(payload)
+        return _JsonResponse({
+            'tester_text': 'Thanks, I have one follow-up question.',
+            'tester_audio_wav_base64': 'UklGRg==',
+            'pipeline': {'processors': ['rtc-asr', 'llm', 'kokoro']},
+        })
+
+    monkeypatch.setattr(execution_runner, 'urlopen', fake_urlopen)
+    return calls
+
+
 def test_agent_crud_round_trip():
     listed = client.get('/api/agents')
     assert listed.status_code == 200
@@ -61,6 +86,7 @@ def test_agent_crud_round_trip():
         'acc-voice-fixture-agent',
         'generalist-voice-agent',
         'pipecat-public-demo',
+        'holyguacamole-signalwire-agent',
     }
 
     created = client.post(
@@ -167,6 +193,22 @@ def test_agent_options_expose_adapter_tester_executor_defaults():
         'audio_transport': 'pipecat_daily_webrtc',
     }
 
+    signalwire = targets['signalwire_holy_guacamole']
+    assert signalwire['label'] == 'Holy Guacamole SignalWire'
+    assert signalwire['channel'] == 'voice'
+    assert signalwire['available'] is True
+    assert signalwire['requires_connection'] == ['endpoint_url']
+    assert signalwire['default_connection'] == {'endpoint_url': 'https://holyguacamole.signalwire.me/'}
+    assert signalwire['defaults'] == {
+        'mode': 'pipecat_webrtc',
+        'tester_id': 'pipecat_tester',
+        'executor_id': 'signalwire_public_webrtc',
+        'audio_transport': 'signalwire_webrtc',
+        'max_exchanges': 1,
+        'max_exchanges_configurable': True,
+        'max_exchanges_limit': 2,
+    }
+
 
 def test_pipecat_public_target_accepts_fixed_public_url():
     created = client.post(
@@ -181,6 +223,21 @@ def test_pipecat_public_target_accepts_fixed_public_url():
     )
     assert created.status_code == 200, created.text
     assert created.json()['connection']['endpoint_url'] == 'https://www.pipecat.ai/'
+
+
+def test_signalwire_holyguacamole_target_accepts_fixed_public_url():
+    created = client.post(
+        '/api/agents',
+        json={
+            'name': 'Holy Guacamole public target',
+            'channel': 'voice',
+            'target': 'signalwire_holy_guacamole',
+            'environment': 'production',
+            'connection': {'endpoint_url': 'https://holyguacamole.signalwire.me/'},
+        },
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()['connection']['endpoint_url'] == 'https://holyguacamole.signalwire.me/'
 
 
 @pytest.mark.parametrize('endpoint_url', [
@@ -202,6 +259,27 @@ def test_pipecat_public_target_rejects_non_public_url(endpoint_url):
     )
     assert response.status_code == 422
     assert 'https://www.pipecat.ai/' in response.text
+
+
+@pytest.mark.parametrize('endpoint_url', [
+    'https://internal.example.test/',
+    'https://holyguacamole.signalwire.me/menu',
+    'https://holyguacamole.signalwire.me:444/',
+    'https://user:secret@holyguacamole.signalwire.me/',
+    'https://holyguacamole.signalwire.me/?token=secret',
+])
+def test_signalwire_holyguacamole_target_rejects_non_public_url(endpoint_url):
+    response = client.post(
+        '/api/agents',
+        json={
+            'name': 'Unsafe Holy Guacamole target',
+            'channel': 'voice',
+            'target': 'signalwire_holy_guacamole',
+            'connection': {'endpoint_url': endpoint_url},
+        },
+    )
+    assert response.status_code == 422
+    assert 'https://holyguacamole.signalwire.me/' in response.text
 
 
 def test_http_target_credentials_only_resolve_from_dedicated_namespace(monkeypatch):
@@ -496,6 +574,529 @@ def test_public_pipecat_agent_uses_direct_daily_executor(monkeypatch, tmp_path):
     assert observed_benchmark_request.final_state == {}
 
 
+def test_signalwire_holyguacamole_agent_uses_gated_direct_webrtc_executor(monkeypatch):
+    from app.services import execution_runner
+    from app.services.execution_audio import AudioRecordingHandle, TranscriptionTurn
+
+    _allow_signalwire_public_gate(monkeypatch)
+    observed_benchmark_request = None
+
+    def fake_signalwire_call(**kwargs):
+        assert kwargs['caller_text']
+        assert kwargs['timeout_seconds'] == 60
+        assert kwargs['execution_run_id'] == queued['execution_run_id']
+        assert kwargs['scenario']['id'] == 'cancellation-rescue'
+        assert kwargs['max_exchanges'] == 1
+        response_audio = kwargs['artifact_dir'] / 'signalwire-webrtc' / 'fake' / 'target-audio.webm'
+        response_audio.parent.mkdir(parents=True, exist_ok=True)
+        response_audio.write_bytes(b'current-run-signalwire-audio')
+        caller_wav = response_audio.parent / 'caller.wav'
+        caller_wav.write_bytes(b'RIFF-current-run-caller-wav')
+        target_greeting_wav = response_audio.parent / 'target-greeting.wav'
+        target_greeting_wav.write_bytes(b'RIFF-current-run-target-greeting-wav')
+        target_response_wav = response_audio.parent / 'target-response.wav'
+        target_response_wav.write_bytes(b'RIFF-current-run-target-response-wav')
+        return {
+            'connection': {'call_connected': True, 'remote_stream_seen': True},
+            'tester': {'media_source': 'macos_say_tts'},
+            'latency_metrics': {
+                'call_connected_to_remote_track_ms': 640.0,
+                'total_run_ms': 6000.0,
+            },
+            'media': {'target_audio_duration_ms': 5000},
+            'call_events': [{'kind': 'status', 'status': 'connected'}],
+            'artifacts': {'result_json': 'artifacts/signalwire/result.json'},
+            'transcription_turns': [
+                TranscriptionTurn(
+                    turn_index=1,
+                    speaker='Agent',
+                    text='Welcome to Holy Guacamole.',
+                    source='signalwire_webrtc',
+                    direction='target_to_tester',
+                    evidence_role='target',
+                    frame_metadata={
+                        'transcript_source': 'rtc-asr.current_run',
+                        'exchange': 0,
+                        'greeting': True,
+                    },
+                ),
+                TranscriptionTurn(
+                    turn_index=2,
+                    speaker='Caller',
+                    text='I need help with a cancellation.',
+                    source='signalwire_webrtc',
+                    direction='tester_to_target',
+                    evidence_role='tester',
+                ),
+                TranscriptionTurn(
+                    turn_index=3,
+                    speaker='Agent',
+                    text='Welcome to Holy Guacamole. What would you like to order?',
+                    source='signalwire_webrtc',
+                    direction='target_to_tester',
+                    evidence_role='target',
+                    frame_metadata={
+                        'transcript_source': 'rtc-asr.current_run',
+                        'exchange': 1,
+                    },
+                ),
+            ],
+            'recording_handle': AudioRecordingHandle(
+                uri=str(response_audio),
+                mime_type='audio/webm',
+                bytes_captured=response_audio.stat().st_size,
+                transport='signalwire_webrtc',
+                metadata={
+                    'cae_caller_audio_uri': str(caller_wav),
+                    'target_greeting_audio_uri': str(target_greeting_wav),
+                    'response_audio_uri': str(target_response_wav),
+                },
+            ),
+        }
+
+    monkeypatch.setattr(execution_runner, 'run_signalwire_holyguacamole_call', fake_signalwire_call)
+
+    def fake_run_scenario(request):
+        nonlocal observed_benchmark_request
+        observed_benchmark_request = request
+        return {'verdict': 'pass', 'overall_score': 100}
+
+    monkeypatch.setattr(execution_runner, 'run_scenario', fake_run_scenario)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        duplex_timeout_seconds=60,
+        evaluate=True,
+        user_id='agent-runs-user',
+        project_id='agent-runs-project',
+    )
+    queued = start_execution_run(payload)
+
+    assert queued['mode'] == 'pipecat_webrtc'
+    assert queued['executor_id'] == 'signalwire_public_webrtc'
+    assert queued['max_exchanges'] == 1
+    assert queued['execution_snapshot']['request']['audio_transport'] == 'signalwire_webrtc'
+    assert queued['execution_snapshot']['request']['max_exchanges'] == 1
+    assert queued['provenance']['target_kind'] == 'signalwire_holy_guacamole'
+    assert queued['provenance']['live_external_connection'] is True
+    assert queued['provenance']['evidence_source'] == 'external_webrtc'
+
+    finished = execute_execution_run(queued['execution_run_id'], payload)
+    conversation = finished['conversations'][0]
+    assert conversation['status'] == 'completed'
+    assert conversation['audio_session']['transport'] == 'signalwire_webrtc'
+    assert conversation['audio_session']['provider'] == 'signalwire'
+    assert conversation['recording']['transport'] == 'signalwire_webrtc'
+    assert conversation['recording']['mime_type'] == 'audio/webm'
+    recording_response = client.get(conversation['recording']['recording_url'])
+    assert recording_response.status_code == 200
+    assert recording_response.headers['content-type'] == 'audio/webm'
+    assert recording_response.content == b'current-run-signalwire-audio'
+    assert conversation['latency_marks'][0]['kind'] == 'call_connected_to_remote_track'
+    assert conversation['latency_marks'][0]['latency_ms'] == 640.0
+    assert conversation['final_state']['runtime_provenance']['browser_peer'] is False
+    assert conversation['final_state']['runtime_provenance']['guest_token_persisted'] is False
+    assert conversation['final_state']['runtime_provenance']['target_speech_transcript'] == (
+        'current_run_asr'
+    )
+    assert [turn['speaker'] for turn in conversation['turns']] == ['agent', 'caller', 'agent']
+    assert [event['kind'] for event in conversation['live_events']] == ['audio', 'audio', 'audio']
+    # The caller live event is pre-registered while connecting and updated in place
+    # after playback; persisted transcript turns retain the observed greeting-first order.
+    assert [event['speaker'] for event in conversation['live_events']] == ['Caller', 'Agent', 'Agent']
+    caller_live_audio = client.get(conversation['live_events'][0]['media_url'])
+    greeting_live_audio = client.get(conversation['live_events'][1]['media_url'])
+    target_live_audio = client.get(conversation['live_events'][2]['media_url'])
+    assert greeting_live_audio.content == b'RIFF-current-run-target-greeting-wav'
+    assert caller_live_audio.content == b'RIFF-current-run-caller-wav'
+    assert target_live_audio.content == b'RIFF-current-run-target-response-wav'
+    assert observed_benchmark_request is not None
+    assert 'final_state' not in observed_benchmark_request.model_fields_set
+    assert observed_benchmark_request.final_state == {}
+
+
+def test_signalwire_holyguacamole_evaluation_with_incomplete_agent_transcript_needs_review(monkeypatch):
+    from app.services import execution_runner
+    from app.services.execution_audio import AudioRecordingHandle, TranscriptionTurn
+
+    def fake_signalwire_call(**kwargs):
+        response_audio = kwargs['artifact_dir'] / 'signalwire-webrtc' / 'fake' / 'target-audio.webm'
+        response_audio.parent.mkdir(parents=True, exist_ok=True)
+        response_audio.write_bytes(b'current-run-signalwire-audio')
+        return {
+            'connection': {
+                'call_connected': True,
+                'remote_stream_seen': True,
+                'remote_audio_sample_seen': True,
+            },
+            'tester': {'media_source': 'macos_say_tts'},
+            'latency_metrics': {'call_connected_to_remote_track_ms': 640.0},
+            'media': {'target_audio_duration_ms': 5000},
+            'call_events': [{'kind': 'status', 'status': 'connected'}],
+            'artifacts': {'result_json': 'artifacts/signalwire/result.json'},
+            'transcription_turns': [
+                TranscriptionTurn(
+                    turn_index=1,
+                    speaker='Caller',
+                    text='I need help with a cancellation.',
+                    source='signalwire_webrtc',
+                    direction='tester_to_target',
+                    evidence_role='tester',
+                ),
+                TranscriptionTurn(
+                    turn_index=2,
+                    speaker='Agent',
+                    text='What would you like to order?',
+                    source='signalwire_webrtc',
+                    direction='target_to_tester',
+                    evidence_role='target',
+                    frame_metadata={'exchange': 1},
+                ),
+                TranscriptionTurn(
+                    turn_index=3,
+                    speaker='Caller',
+                    text='One chicken taco, please.',
+                    source='signalwire_webrtc',
+                    direction='tester_to_target',
+                    evidence_role='tester',
+                    frame_metadata={'exchange': 2},
+                ),
+            ],
+            'recording_handle': AudioRecordingHandle(
+                uri=str(response_audio),
+                mime_type='audio/webm',
+                bytes_captured=response_audio.stat().st_size,
+                transport='signalwire_webrtc',
+            ),
+        }
+
+    monkeypatch.setattr(execution_runner, 'run_signalwire_holyguacamole_call', fake_signalwire_call)
+    _allow_signalwire_followup_preflight(monkeypatch)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        max_exchanges=2,
+        duplex_timeout_seconds=60,
+        evaluate=True,
+        user_id='agent-runs-user',
+        project_id='agent-runs-project',
+    )
+
+    queued = start_execution_run(payload)
+    finished = execute_execution_run(queued['execution_run_id'], payload)
+    conversation = finished['conversations'][0]
+
+    assert finished['status'] == 'needs_review'
+    assert conversation['status'] == 'needs_review'
+    assert conversation['verdict'] == 'needs_review'
+    assert conversation['score'] is None
+    assert 'overall_score' not in conversation['evaluation_findings']
+    assert conversation['evaluation_findings']['failure_categories'] == [
+        'missing_grounded_agent_transcript'
+    ]
+    assert conversation['final_state']['runtime_provenance']['target_speech_transcript'] == (
+        'untranscribed_remote_audio'
+    )
+
+
+def test_signalwire_holyguacamole_rejects_more_than_two_exchanges():
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        max_exchanges=3,
+        user_id='agent-runs-user',
+        project_id='agent-runs-project',
+    )
+
+    with pytest.raises(ValueError, match='max_exchanges up to 2'):
+        start_execution_run(payload)
+
+
+def test_signalwire_holyguacamole_rejects_two_exchanges_without_followup_token(monkeypatch):
+    _allow_signalwire_public_gate(monkeypatch)
+    monkeypatch.delenv('REFERENCE_AGENT_INTERNAL_TOKEN', raising=False)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        max_exchanges=2,
+        user_id='agent-runs-user',
+        project_id='agent-runs-project',
+    )
+
+    with pytest.raises(ValueError, match='REFERENCE_AGENT_INTERNAL_TOKEN'):
+        start_execution_run(payload)
+
+
+def test_signalwire_holyguacamole_preflights_two_exchange_tester_runtime(monkeypatch):
+    monkeypatch.setenv('REFERENCE_AGENT_TIMEOUT_SECONDS', '75')
+    preflight_calls = _allow_signalwire_followup_preflight(monkeypatch)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        max_exchanges=2,
+        tester_model_name='tester-model',
+        duplex_timeout_seconds=90,
+        user_id='agent-runs-user',
+        project_id='agent-runs-project',
+    )
+
+    queued = start_execution_run(payload)
+
+    assert queued['status'] == 'queued'
+    assert len(preflight_calls) == 1
+    assert preflight_calls[0]['act_id'] == 'signalwire-followup-preflight'
+    assert preflight_calls[0]['model_name'] == 'tester-model'
+    assert preflight_calls[0]['_timeout_seconds'] == 75.0
+
+
+def test_signalwire_holyguacamole_rejects_unhealthy_followup_runtime(monkeypatch):
+    _allow_signalwire_public_gate(monkeypatch)
+    monkeypatch.setenv('REFERENCE_AGENT_INTERNAL_TOKEN', 'test-reference-token')
+    monkeypatch.setenv('RTC_ASR_BASE_URL', 'http://rtc-asr.test')
+
+    def fake_urlopen(request, timeout=None):
+        if request.full_url == 'http://rtc-asr.test/health':
+            return _JsonResponse({'status': 'ready', 'ready': True})
+        return _JsonResponse({'tester_text': '', 'pipeline': {'processors': ['rtc-asr']}})
+
+    monkeypatch.setattr(execution_runner, 'urlopen', fake_urlopen)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        max_exchanges=2,
+        user_id='agent-runs-user',
+        project_id='agent-runs-project',
+    )
+
+    with pytest.raises(ValueError, match='incomplete tester text/audio pipeline evidence'):
+        start_execution_run(payload)
+
+
+def test_signalwire_holyguacamole_rejects_unreachable_followup_rtc_asr_before_queueing(monkeypatch):
+    _allow_signalwire_public_gate(monkeypatch)
+    monkeypatch.setenv('REFERENCE_AGENT_INTERNAL_TOKEN', 'test-reference-token')
+    monkeypatch.setenv('RTC_ASR_BASE_URL', 'http://rtc-asr.test')
+
+    def fake_urlopen(request, timeout=None):
+        if request.full_url == 'http://rtc-asr.test/health':
+            raise URLError('connection refused')
+        raise AssertionError('tester follow-up preflight should wait for rtc-asr readiness')
+
+    monkeypatch.setattr(execution_runner, 'urlopen', fake_urlopen)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        max_exchanges=2,
+        user_id='agent-runs-user-unhealthy-asr',
+        project_id='agent-runs-project-unhealthy-asr',
+    )
+
+    with pytest.raises(ValueError, match='reachable rtc-asr'):
+        start_execution_run(payload)
+
+    assert execution_run_store.list_execution_runs(
+        user_id='agent-runs-user-unhealthy-asr',
+        project_id='agent-runs-project-unhealthy-asr',
+    ) == []
+
+
+def test_signalwire_holyguacamole_rejects_disabled_public_gate_before_queueing(monkeypatch):
+    monkeypatch.delenv('CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE', raising=False)
+
+    def fail_if_called(_payload):
+        raise AssertionError('follow-up preflight should not run when the public gate is disabled')
+
+    monkeypatch.setattr(execution_runner, '_preflight_signalwire_followup_runtime', fail_if_called)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        max_exchanges=2,
+        user_id='agent-runs-user-disabled-gate',
+        project_id='agent-runs-project-disabled-gate',
+    )
+
+    with pytest.raises(ValueError, match='CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE=1'):
+        start_execution_run(payload)
+
+    assert execution_run_store.list_execution_runs(
+        user_id='agent-runs-user-disabled-gate',
+        project_id='agent-runs-project-disabled-gate',
+    ) == []
+
+
+def test_signalwire_holyguacamole_rejects_missing_caller_tts_before_queueing(monkeypatch):
+    monkeypatch.setenv('CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE', '1')
+    monkeypatch.delenv('KOKORO_BASE_URL', raising=False)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        max_exchanges=1,
+        user_id='agent-runs-user-missing-kokoro',
+        project_id='agent-runs-project-missing-kokoro',
+    )
+
+    with pytest.raises(ValueError, match='requires KOKORO_BASE_URL'):
+        start_execution_run(payload)
+
+    assert execution_run_store.list_execution_runs(
+        user_id='agent-runs-user-missing-kokoro',
+        project_id='agent-runs-project-missing-kokoro',
+    ) == []
+
+
+def test_signalwire_holyguacamole_rejects_unhealthy_caller_tts_before_queueing(monkeypatch):
+    monkeypatch.setenv('CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE', '1')
+    monkeypatch.setenv('KOKORO_BASE_URL', 'http://kokoro.test')
+
+    def unavailable_urlopen(_request, timeout=None):
+        raise URLError('connection refused')
+
+    monkeypatch.setattr(execution_runner, 'urlopen', unavailable_urlopen)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        max_exchanges=1,
+        user_id='agent-runs-user-unhealthy-kokoro',
+        project_id='agent-runs-project-unhealthy-kokoro',
+    )
+
+    with pytest.raises(ValueError, match='caller TTS is unreachable'):
+        start_execution_run(payload)
+
+
+def test_signalwire_holyguacamole_accepts_ready_caller_tts(monkeypatch):
+    monkeypatch.setenv('CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE', '1')
+    monkeypatch.setenv('KOKORO_BASE_URL', 'http://kokoro.test')
+    requests: list[tuple[str, float | None]] = []
+
+    def ready_urlopen(request, timeout=None):
+        requests.append((request.full_url, timeout))
+        return _JsonResponse({'status': 'ready'})
+
+    monkeypatch.setattr(execution_runner, 'urlopen', ready_urlopen)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        max_exchanges=1,
+        user_id='agent-runs-user-ready-kokoro',
+        project_id='agent-runs-project-ready-kokoro',
+    )
+
+    queued = start_execution_run(payload)
+
+    assert queued['status'] == 'queued'
+    assert requests == [('http://kokoro.test/health', 10.0)]
+
+
+def test_signalwire_holyguacamole_runs_two_exchanges_in_one_webrtc_call(monkeypatch):
+    from app.services import execution_runner
+    from app.services.execution_audio import AudioRecordingHandle, TranscriptionTurn
+
+    def fake_signalwire_call(**kwargs):
+        assert kwargs['max_exchanges'] == 2
+        assert kwargs['tester_model_name'] == 'tester-model'
+        audio_dir = kwargs['artifact_dir'] / 'signalwire-webrtc' / 'two-turns'
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        recording_path = audio_dir / 'target-audio.webm'
+        recording_path.write_bytes(b'current-run-two-exchange-audio')
+        caller_paths = []
+        response_paths = []
+        for index in (1, 2):
+            caller_path = audio_dir / f'caller-{index}.wav'
+            response_path = audio_dir / f'response-{index}.wav'
+            caller_path.write_bytes(f'RIFF-caller-{index}'.encode())
+            response_path.write_bytes(f'RIFF-response-{index}'.encode())
+            caller_paths.append(str(caller_path))
+            response_paths.append(str(response_path))
+        turns = []
+        for index in (1, 2):
+            turns.extend([
+                TranscriptionTurn(
+                    turn_index=index * 2 - 1,
+                    speaker='Caller',
+                    text=f'Caller turn {index}',
+                    source='signalwire_webrtc',
+                    direction='tester_to_target',
+                    evidence_role='tester',
+                    frame_metadata={'exchange': index},
+                ),
+                TranscriptionTurn(
+                    turn_index=index * 2,
+                    speaker='Agent',
+                    text=f'Agent turn {index}',
+                    source='signalwire_webrtc',
+                    direction='target_to_tester',
+                    evidence_role='target',
+                    frame_metadata={'exchange': index},
+                ),
+            ])
+        return {
+            'connection': {'call_connected': True, 'remote_stream_seen': True},
+            'tester': {'media_source': 'cae_kokoro_tts'},
+            'latency_metrics': {},
+            'exchanges': [
+                {'turn_pair': 1, 'target_response_latency_ms': 410.0},
+                {'turn_pair': 2, 'target_response_latency_ms': 525.0},
+            ],
+            'media': {'target_audio_duration_ms': 12000},
+            'call_events': [],
+            'artifacts': {'result_json': 'artifacts/signalwire/result.json'},
+            'transcription_turns': turns,
+            'recording_handle': AudioRecordingHandle(
+                uri=str(recording_path),
+                mime_type='audio/webm',
+                bytes_captured=recording_path.stat().st_size,
+                transport='signalwire_webrtc',
+                metadata={
+                    'caller_audio_turn_uris': caller_paths,
+                    'response_audio_turn_uris': response_paths,
+                },
+            ),
+        }
+
+    monkeypatch.setattr(execution_runner, 'run_signalwire_holyguacamole_call', fake_signalwire_call)
+    preflight_calls = _allow_signalwire_followup_preflight(monkeypatch)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['cancellation-rescue'],
+        agent_id='holyguacamole-signalwire-agent',
+        max_exchanges=2,
+        tester_model_name='tester-model',
+        duplex_timeout_seconds=60,
+        evaluate=False,
+        user_id='agent-runs-user',
+        project_id='agent-runs-project',
+    )
+
+    queued = start_execution_run(payload)
+    finished = execute_execution_run(queued['execution_run_id'], payload)
+    conversation = finished['conversations'][0]
+
+    assert queued['max_exchanges'] == 2
+    assert len(preflight_calls) == 1
+    assert [turn['speaker'] for turn in conversation['turns']] == [
+        'caller', 'agent', 'caller', 'agent'
+    ]
+    assert [event['speaker'] for event in conversation['live_events']] == [
+        'Caller', 'Agent', 'Caller', 'Agent'
+    ]
+    assert [event['kind'] for event in conversation['live_events']] == ['audio'] * 4
+    assert [mark['turn_pair'] for mark in conversation['latency_marks']] == [1, 2]
+    assert [mark['latency_ms'] for mark in conversation['latency_marks']] == [410.0, 525.0]
+    assert conversation['final_state']['runtime_provenance']['max_exchanges'] == 2
+
+
 def test_saved_voice_agent_ignores_serialized_request_placeholders():
     queued = start_execution_run(
         ExecutionRunCreateRequest(
@@ -663,7 +1264,7 @@ def test_rejects_incompatible_executor_for_builtin_sample_voice():
     assert 'cae_local_audio_loop' in response.text
 
 
-def test_execution_persists_model_name_default_and_override():
+def test_execution_persists_model_name_default_and_override(monkeypatch):
     queued_default = start_execution_run(
         ExecutionRunCreateRequest(
             suite_id='call-center-voice-ai',
@@ -703,6 +1304,26 @@ def test_execution_persists_model_name_default_and_override():
     )
     assert via_api.status_code == 200, via_api.text
     assert via_api.json()['model_name'] == 'gpt-4.1'
+
+    _allow_signalwire_public_gate(monkeypatch)
+    signalwire = client.post(
+        '/api/execution/runs',
+        json={
+            'suite_id': 'call-center-voice-ai',
+            'scenario_ids': ['cancellation-rescue'],
+            'agent_id': 'holyguacamole-signalwire-agent',
+            'user_id': 'agent-runs-user',
+            'project_id': 'agent-runs-project',
+            'model_name': 'gpt-4.1',
+            'iterations': 1,
+        },
+    )
+    assert signalwire.status_code == 200, signalwire.text
+    signalwire_body = signalwire.json()
+    assert signalwire_body['model_name'] == 'signalwire-ai-agent'
+    assert signalwire_body['execution_snapshot']['request']['model_name'] == (
+        'signalwire-ai-agent'
+    )
 
 
 def test_generalist_voice_honors_reference_model_env_and_explicit_override(monkeypatch):

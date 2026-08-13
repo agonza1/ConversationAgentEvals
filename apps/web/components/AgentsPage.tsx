@@ -53,6 +53,7 @@ const EMPTY_FORM: AgentFormState = {
 };
 
 const PIPECAT_PUBLIC_DEMO_URL = 'https://www.pipecat.ai/';
+const SIGNALWIRE_HOLY_GUACAMOLE_URL = 'https://holyguacamole.signalwire.me/';
 
 const TARGET_OPTIONS: Record<
   AgentRecord['channel'],
@@ -70,6 +71,7 @@ const TARGET_OPTIONS: Record<
   ],
   voice: [
     { value: 'pipecat_public_demo', label: 'Pipecat demo', group: 'Live connections' },
+    { value: 'signalwire_holy_guacamole', label: 'Holy Guacamole SignalWire', group: 'Live connections' },
     { value: 'browser_webrtc_agent', label: 'ACC browser WebRTC (coming soon)', group: 'Live connections', comingSoon: true },
     { value: 'sip_agent', label: 'ACC SIP URI (coming soon)', group: 'Live connections', comingSoon: true },
     { value: 'phone_agent', label: 'ACC phone number (coming soon)', group: 'Live connections', comingSoon: true },
@@ -91,6 +93,7 @@ function targetLabel(target: FormTarget) {
   if (target === 'offline_acc_fixture') return 'Saved ACC text replay';
   if (target === 'http_endpoint') return 'HTTP JSON endpoint (live)';
   if (target === 'pipecat_public_demo') return 'Pipecat public demo (direct Daily WebRTC)';
+  if (target === 'signalwire_holy_guacamole') return 'Holy Guacamole SignalWire (direct WebRTC)';
   if (target === 'browser_webrtc_agent') return 'ACC browser WebRTC (coming soon)';
   if (target === 'sip_agent') return 'ACC SIP URI (coming soon)';
   if (target === 'phone_agent') return 'ACC phone number (coming soon)';
@@ -110,9 +113,16 @@ function isAccTarget(target: FormTarget) {
   return target === 'sip_agent' || target === 'phone_agent' || target === 'browser_webrtc_agent';
 }
 
+function fixedPublicTargetUrl(target: FormTarget) {
+  if (target === 'pipecat_public_demo') return PIPECAT_PUBLIC_DEMO_URL;
+  if (target === 'signalwire_holy_guacamole') return SIGNALWIRE_HOLY_GUACAMOLE_URL;
+  return null;
+}
+
 function connectionFromForm(values: AgentFormState): AgentRecord['connection'] {
-  if (values.target === 'pipecat_public_demo') {
-    return { endpoint_url: values.endpointUrl.trim() || PIPECAT_PUBLIC_DEMO_URL };
+  const fixedUrl = fixedPublicTargetUrl(values.target);
+  if (fixedUrl) {
+    return { endpoint_url: values.endpointUrl.trim() || fixedUrl };
   }
   if (values.target === 'http_endpoint') {
     return {
@@ -362,22 +372,24 @@ function AgentFormModal({
     setChannel(nextChannel);
     if (!TARGET_OPTIONS[nextChannel].some((option) => option.value === target)) {
       const nextTarget = TARGET_OPTIONS[nextChannel][0].value;
+      const nextFixedUrl = fixedPublicTargetUrl(nextTarget);
       setTarget(nextTarget);
-      if (nextTarget === 'pipecat_public_demo') {
-        setEndpointUrl(PIPECAT_PUBLIC_DEMO_URL);
+      if (nextFixedUrl) {
+        setEndpointUrl(nextFixedUrl);
         setEnvironment('production');
-      } else if (target === 'pipecat_public_demo') {
+      } else if (fixedPublicTargetUrl(target)) {
         setEndpointUrl('');
       }
     }
   }
 
   function onTargetChange(nextTarget: FormTarget) {
+    const nextFixedUrl = fixedPublicTargetUrl(nextTarget);
     setTarget(nextTarget);
-    if (nextTarget === 'pipecat_public_demo') {
-      setEndpointUrl(PIPECAT_PUBLIC_DEMO_URL);
+    if (nextFixedUrl) {
+      setEndpointUrl(nextFixedUrl);
       setEnvironment('production');
-    } else if (target === 'pipecat_public_demo') {
+    } else if (fixedPublicTargetUrl(target)) {
       setEndpointUrl('');
     }
   }
@@ -458,12 +470,17 @@ function AgentFormModal({
                   : 'Uses predictable responses generated during this run. It does not contact a deployed agent.'}
               </span>
             </div>
-          ) : target === 'pipecat_public_demo' ? (
+          ) : fixedPublicTargetUrl(target) ? (
             <fieldset className="agents-connection-fields">
-              <legend>Public Pipecat direct WebRTC target</legend>
+              <legend>
+                {target === 'signalwire_holy_guacamole'
+                  ? 'Holy Guacamole direct SignalWire WebRTC target'
+                  : 'Public Pipecat direct WebRTC target'}
+              </legend>
               <p>
-                CAE joins the demo&apos;s ephemeral Daily room directly through Pipecat, sends synthesized scenario
-                speech, and captures current-run response audio, transcript, latency, and redacted provenance.
+                {target === 'signalwire_holy_guacamole'
+                  ? 'CAE connects directly with the SignalWire SDK, sends synthesized scenario speech, and captures current-run remote audio, latency, and redacted provenance without a browser.'
+                  : 'CAE joins the demo&apos;s ephemeral Daily room directly through Pipecat, sends synthesized scenario speech, and captures current-run response audio, transcript, latency, and redacted provenance.'}
               </p>
               <label>
                 <span>Target URL</span>
@@ -471,11 +488,15 @@ function AgentFormModal({
                   required
                   readOnly
                   type="url"
-                  aria-label="Pipecat demo URL"
-                  value={endpointUrl || PIPECAT_PUBLIC_DEMO_URL}
+                  aria-label={target === 'signalwire_holy_guacamole' ? 'Holy Guacamole SignalWire URL' : 'Pipecat demo URL'}
+                  value={endpointUrl || fixedPublicTargetUrl(target) || ''}
                 />
               </label>
-              <small>The adapter is limited to the public demo; room credentials are ephemeral and never persisted.</small>
+              <small>
+                {target === 'signalwire_holy_guacamole'
+                  ? 'The adapter is limited to the public Holy Guacamole URL; guest/session credentials are never persisted.'
+                  : 'The adapter is limited to the public demo; room credentials are ephemeral and never persisted.'}
+              </small>
             </fieldset>
           ) : isSavedReplayTarget(target) ? (
             <div className="agents-form-notice" role="note">
@@ -765,7 +786,7 @@ export function AgentsPage() {
                   <h2>{agent.name}</h2>
                   <div className="agents-badges">
                     <span className="agents-badge agents-badge-channel">{channelLabel(agent.channel)}</span>
-                    {agent.target === 'pipecat_public_demo' ? (
+                    {agent.target === 'pipecat_public_demo' || agent.target === 'signalwire_holy_guacamole' ? (
                       <span className="agents-badge agents-badge-channel">Public external target</span>
                     ) : isBuiltInAgent(agent) ? (
                       <span className="agents-badge agents-badge-builtin">Built-in testing target</span>

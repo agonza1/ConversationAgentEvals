@@ -1413,7 +1413,7 @@ test('brief WebRTC recovery switches to lossless HTTP fallback', async ({ page }
   ).__playedVoiceUrls.some((url) => url.includes('/audio/1?')))).toBe(false);
 });
 
-test('HTTP fallback queues setup audio while listener-token creation is still pending', async ({ page }) => {
+test('WebRTC setup falls back when the listener token request stalls', async ({ page }) => {
   let runPolls = 0;
   let tokenResponded = false;
   await page.addInitScript(() => {
@@ -1515,16 +1515,45 @@ test('HTTP fallback queues setup audio while listener-token creation is still pe
       }),
     });
   });
+  await page.route('**/api/execution/listeners/live-fallback-token**', async (route) => {
+    if (route.request().url().endsWith('/webrtc')) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ answer: { type: 'answer', sdp: 'test-answer' }, status: 'listening' }),
+      });
+      return;
+    }
+    if (route.request().url().endsWith('/webrtc/stop')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        listener: {
+          read_only: true,
+          can_inject_audio: false,
+          requires_microphone: false,
+          run_status: 'running',
+        },
+        conversations: [{
+          conversation_id: 'exec-live-fallback-1',
+          live_events: audioEvents(true),
+        }],
+      }),
+    });
+  });
   await page.goto('/runs/exec-live-fallback');
   const feedback = page.getByLabel('Live run feedback');
   await feedback.getByRole('button', { name: 'Listen to live WebRTC' }).click();
-  await expect(feedback.getByLabel('WebRTC listener status')).toContainText('HTTP fallback', { timeout: 6000 });
+  await expect(feedback.getByLabel('WebRTC listener status')).toContainText('HTTP fallback', { timeout: 4000 });
   expect(tokenResponded).toBe(false);
-  await expect(feedback.getByRole('button', { name: 'Retry missed live audio' })).toBeVisible();
-  await feedback.getByRole('button', { name: 'Retry missed live audio' }).click();
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
-  ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBe(2);
+  ).__playedVoiceUrls.filter((url) => url.includes('/audio/2?')).length)).toBeGreaterThan(0);
+  await expect.poll(() => tokenResponded).toBe(true);
   expect(await page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
   ).__playedVoiceUrls.some((url) => url.includes('/audio/1?')))).toBe(false);

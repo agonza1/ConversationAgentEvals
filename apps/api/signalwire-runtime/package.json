@@ -1,0 +1,11 @@
+{
+  "name": "cae-signalwire-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal server-side SignalWire WebRTC transport for CAE external-target tests",
+  "dependencies": {
+    "@roamhq/wrtc": "0.10.0",
+    "@signalwire/js": "4.0.0-rc.0",
+    "ws": "8.21.3"
+  }
+}

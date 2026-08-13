@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 import uuid
 from datetime import UTC, datetime
@@ -22,6 +23,10 @@ from app.schemas.execution import (
 )
 from app.services import execution_run_store
 from app.services.pipecat_public_target import run_public_pipecat_call
+from app.services.signalwire_holyguacamole_target import (
+    SIGNALWIRE_PUBLIC_GATE_ENV,
+    run_signalwire_holyguacamole_call,
+)
 from app.services.agent_store import get_agent
 from app.services.execution_metrics import build_metrics_and_timeline
 from app.services.acc_realtime_target import (
@@ -37,7 +42,9 @@ from app.services.execution_vcon import build_execution_vcon, vcon_summary
 from app.services.reference_generalist_agent import (
     ReferencePipecatAgentTransport,
     ReferenceMediaServices,
+    ReferenceRuntimeError,
     ReferenceRuntimeConfig,
+    discover_rtc_asr_runtime,
     resolve_reference_completion_provider,
 )
 from app.services.run_provenance import (
@@ -54,6 +61,7 @@ DEFAULT_AUDIO_PLAN = 'docs/examples/agentic-contact-center-audio-plan.json'
 DEFAULT_CANCELLATION_SCENARIO = 'docs/examples/agentic-contact-center-cancellation-rescue.json'
 DEFAULT_EXECUTION_MODEL = 'gpt-5.4-mini'
 PUBLIC_PIPECAT_AGENT = '10-gradium'
+SIGNALWIRE_HOLY_GUACAMOLE_MODEL = 'signalwire-ai-agent'
 FIXTURE_BACKED_SCENARIO_IDS = frozenset({'cancellation-rescue'})
 ALLOWED_FIXTURE_ROOTS = (
     REPO_ROOT / 'docs' / 'examples',
@@ -130,16 +138,29 @@ def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool =
         _repo_path(resolved.audio_plan_path)
     if preflight and resolved.mode == 'pipecat_webrtc' and resolved.executor_id == 'cae_local_audio_loop':
         _preflight_reference_runtime(resolved, execution_run_id=f'preflight-{uuid.uuid4().hex[:12]}')
-    total = len(scenario_ids) * resolved.iterations
-    now = datetime.now(UTC).isoformat()
-    execution_run_id = f'exec-{uuid.uuid4().hex[:12]}'
     agent = get_agent(resolved.agent_id) if resolved.agent_id else None
     if resolved.agent_id and agent is None:
         raise ValueError(f'Unknown agent: {resolved.agent_id}')
+    target = _execution_target(resolved, agent)
+    if target == 'signalwire_holy_guacamole' and not _signalwire_public_gate_enabled():
+        raise ValueError(
+            f'Holy Guacamole SignalWire execution requires '
+            f'{SIGNALWIRE_PUBLIC_GATE_ENV}=1 before queueing or tester preflight.'
+        )
+    if target == 'signalwire_holy_guacamole':
+        _preflight_signalwire_caller_tts_runtime(resolved)
+    if (
+        resolved.max_exchanges > 1
+        and target == 'signalwire_holy_guacamole'
+    ):
+        _preflight_signalwire_followup_runtime(resolved)
+    total = len(scenario_ids) * resolved.iterations
+    now = datetime.now(UTC).isoformat()
+    execution_run_id = f'exec-{uuid.uuid4().hex[:12]}'
     model_name = (resolved.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
     provenance = build_run_provenance(
         agent=agent,
-        agent_target=_execution_target(resolved, agent),
+        agent_target=target,
         tester_id=resolved.tester_id,
         executor_id=resolved.executor_id,
         mode=resolved.mode,
@@ -377,6 +398,15 @@ def _run_one_conversation(
                 payload=payload,
                 event_observer=publish,
             )
+        elif payload.mode == 'pipecat_webrtc' and payload.executor_id == 'signalwire_public_webrtc':
+            result = _execute_signalwire_holyguacamole_webrtc(
+                execution_run_id=execution_run_id,
+                conversation_id=conversation_id,
+                suite_id=suite_id,
+                scenario_id=scenario_id,
+                payload=payload,
+                event_observer=publish,
+            )
         elif payload.mode == 'pipecat_webrtc':
             result = asyncio.run(
                 _execute_pipecat_webrtc(
@@ -397,6 +427,12 @@ def _run_one_conversation(
             score=result.get('score'),
         )
         current = execution_run_store.get_conversation(execution_run_id, conversation_id) or {}
+        verdict = result.get('verdict')
+        status = (
+            'failed' if verdict in {'fail', 'failed'}
+            else 'needs_review' if verdict == 'needs_review'
+            else 'completed'
+        )
         return ConversationRecord(
             conversation_id=conversation_id,
             execution_run_id=execution_run_id,
@@ -404,7 +440,7 @@ def _run_one_conversation(
             scenario_id=scenario_id,
             scenario_title=scenario_title,
             mode=payload.mode,
-            status='failed' if result.get('verdict') in {'fail', 'failed'} else 'completed',
+            status=status,
             iteration=iteration,
             turns=result['turns'],
             live_events=current.get('live_events') or [],
@@ -454,6 +490,10 @@ def _execution_target(
 ) -> str:
     if agent:
         return str(agent.get('target') or 'mock_agent')
+    if payload.mode == 'pipecat_webrtc' and payload.executor_id == 'pipecat_public_daily':
+        return 'pipecat_public_demo'
+    if payload.mode == 'pipecat_webrtc' and payload.executor_id == 'signalwire_public_webrtc':
+        return 'signalwire_holy_guacamole'
     if payload.mode == 'pipecat_webrtc':
         return 'builtin_sample_voice'
     if payload.mode == 'voice_fixture':
@@ -465,19 +505,21 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
     if not payload.agent_id:
         target = _execution_target(payload)
         model_name = _execution_model_name(payload, target=target)
+        max_exchanges = _resolve_max_exchanges_for_target(payload, target=target)
         assert_execution_compatible(
             agent_target=target,
             mode=payload.mode,
             tester_id=payload.tester_id,
             executor_id=payload.executor_id,
         )
-        return payload.model_copy(update={'model_name': model_name})
+        return payload.model_copy(update={'model_name': model_name, 'max_exchanges': max_exchanges})
 
     agent = get_agent(payload.agent_id)
     if agent is None:
         raise ValueError(f'Unknown agent: {payload.agent_id}')
     target = _execution_target(payload, agent)
     model_name = _execution_model_name(payload, target=target)
+    max_exchanges = _resolve_max_exchanges_for_target(payload, target=target)
     defaults = execution_defaults_for_target(target)
     request_placeholders = {
         'mode': 'text_callable',
@@ -522,8 +564,22 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
         'audio_transport': audio_transport,
         'agent_id': agent['id'],
         'model_name': model_name,
-        'max_exchanges': payload.max_exchanges,
+        'max_exchanges': max_exchanges,
     })
+
+
+def _resolve_max_exchanges_for_target(
+    payload: ExecutionRunCreateRequest,
+    *,
+    target: str,
+) -> int:
+    if target != 'signalwire_holy_guacamole':
+        return payload.max_exchanges
+    if 'max_exchanges' in payload.model_fields_set and payload.max_exchanges > 2:
+        raise ValueError(
+            'Holy Guacamole SignalWire execution currently supports max_exchanges up to 2.'
+        )
+    return payload.max_exchanges if 'max_exchanges' in payload.model_fields_set else 1
 
 
 def _execution_model_name(payload: ExecutionRunCreateRequest, *, target: str) -> str:
@@ -531,6 +587,8 @@ def _execution_model_name(payload: ExecutionRunCreateRequest, *, target: str) ->
         # This black-box target runs Pipecat's fixed public agent; an OpenAI
         # model selection from another UI target must not leak into metadata.
         return PUBLIC_PIPECAT_AGENT
+    if target == 'signalwire_holy_guacamole':
+        return SIGNALWIRE_HOLY_GUACAMOLE_MODEL
     explicit = (payload.model_name or '').strip()
     if explicit:
         return explicit
@@ -667,6 +725,7 @@ def _execute_public_pipecat_daily(
         },
     )
     recording_media = recording.as_call_media()
+    recording_media['uri'] = recording.uri
     recording_media['recording_url'] = (
         f'/api/execution/runs/{quote(execution_run_id)}/conversations/'
         f'{quote(conversation_id)}/recording?user_id={quote(payload.user_id)}'
@@ -699,6 +758,281 @@ def _execute_public_pipecat_daily(
     }
 
 
+def _execute_signalwire_holyguacamole_webrtc(
+    *,
+    execution_run_id: str,
+    conversation_id: str,
+    suite_id: str,
+    scenario_id: str,
+    payload: ExecutionRunCreateRequest,
+    event_observer: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    """Execute a bounded scenario through the public Holy Guacamole SignalWire service."""
+    if payload.audio_transport != 'signalwire_webrtc':
+        raise ValueError(
+            'Holy Guacamole SignalWire execution requires '
+            'audio_transport=signalwire_webrtc.'
+        )
+    scenario = _scenario_definition(suite_id, scenario_id)
+    caller_text = _scenario_user_opener(scenario)
+    artifact_dir = REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id / 'audio'
+    caller_live_audio_key = 'signalwire:1:tester_to_target'
+    if event_observer is not None:
+        event_observer({
+            'speaker': 'Caller',
+            'text': caller_text,
+            'direction': 'tester_to_target',
+            'live_audio_key': caller_live_audio_key,
+            'frame_metadata': {
+                'transport': 'signalwire_webrtc',
+                'phase': 'connecting_to_remote_target',
+                'delivery_state': 'queued_for_remote_playback',
+                'current_run': True,
+            },
+        })
+    result = run_signalwire_holyguacamole_call(
+        caller_text=caller_text,
+        artifact_dir=artifact_dir,
+        conversation_id=conversation_id,
+        execution_run_id=execution_run_id,
+        timeout_seconds=payload.duplex_timeout_seconds,
+        scenario=scenario,
+        max_exchanges=payload.max_exchanges,
+        tester_model_name=payload.tester_model_name,
+    )
+    transcription = result['transcription_turns']
+    recording = result['recording_handle']
+    recording_metadata = dict(recording.metadata)
+
+    def read_captured_wav(value: Any) -> bytes | None:
+        value = str(value or '').strip()
+        if not value:
+            return None
+        path = Path(value)
+        if not path.exists() or not path.is_file():
+            return None
+        audio = path.read_bytes()
+        return audio if audio.startswith(b'RIFF') else None
+
+    caller_audio_uris = recording_metadata.get('caller_audio_turn_uris')
+    if not isinstance(caller_audio_uris, list) or not caller_audio_uris:
+        caller_audio_uris = [recording_metadata.get('cae_caller_audio_uri')]
+    response_audio_uris = recording_metadata.get('response_audio_turn_uris')
+    if not isinstance(response_audio_uris, list) or not response_audio_uris:
+        response_audio_uris = [recording_metadata.get('response_audio_uri')]
+    for item in transcription:
+        if event_observer is not None:
+            exchange_index = int(
+                item.frame_metadata['exchange']
+                if 'exchange' in item.frame_metadata
+                else ((item.turn_index + 1) // 2)
+            )
+            if item.frame_metadata.get('greeting') is True:
+                completed_audio = read_captured_wav(
+                    recording_metadata.get('target_greeting_audio_uri')
+                )
+            else:
+                audio_uris = caller_audio_uris if item.speaker == 'Caller' else response_audio_uris
+                completed_audio = (
+                    read_captured_wav(audio_uris[exchange_index - 1])
+                    if 1 <= exchange_index <= len(audio_uris)
+                    else None
+                )
+            live_event: dict[str, Any] = {
+                'speaker': item.speaker,
+                'text': item.text,
+                'direction': item.direction,
+                'frame_metadata': {
+                    'transport': 'signalwire_webrtc',
+                    'current_run': True,
+                    'media_event': 'completed_audio_turn',
+                    **dict(item.frame_metadata),
+                },
+            }
+            if item.speaker == 'Caller':
+                if exchange_index == 1:
+                    live_event['update_live_audio_key'] = caller_live_audio_key
+                if completed_audio:
+                    live_event['audio'] = completed_audio
+            elif item.speaker == 'Agent' and completed_audio:
+                live_event['audio'] = completed_audio
+            event_observer(live_event)
+
+    turns = [
+        ConversationTurn(
+            turn_index=item.turn_index,
+            speaker=item.speaker.lower(),
+            text=item.text,
+            event_types=list(item.event_types),
+            direction=item.direction,
+            evidence_role=item.evidence_role,
+            frame_metadata=dict(item.frame_metadata),
+        )
+        for item in transcription
+    ]
+    transcript = '\n'.join(f'{item.speaker}: {item.text}' for item in transcription)
+    current_final_state = {
+        'complete': False,
+        'outcome': 'signalwire_holyguacamole_response_captured',
+        'termination_reason': 'max_exchanges',
+        'evidence_scope': 'current_run_only',
+    }
+    report: dict[str, Any] = {}
+    transcribed_agent_exchanges = {
+        int(
+            item.frame_metadata['exchange']
+            if 'exchange' in item.frame_metadata
+            else ((item.turn_index + 1) // 2)
+        )
+        for item in transcription
+        if item.speaker == 'Agent'
+    }
+    all_agent_turns_transcribed = all(
+        exchange in transcribed_agent_exchanges
+        for exchange in range(1, payload.max_exchanges + 1)
+    )
+    if payload.evaluate and all_agent_turns_transcribed:
+        report = run_scenario(BenchmarkRunRequest(
+            suite_id=suite_id,
+            scenario_id=scenario_id,
+            transcript=transcript,
+            action_trace=[],
+            user_id=payload.user_id,
+            project_id=payload.project_id,
+        ))
+    elif payload.evaluate:
+        report = {
+            'verdict': 'needs_review',
+            'summary': (
+                'SignalWire evaluation skipped because one or more requested remote agent '
+                'responses were captured as audio but were not transcribed into grounded text.'
+            ),
+            'failure_categories': ['missing_grounded_agent_transcript'],
+            'failure_modes': ['signalwire_remote_speech_untranscribed'],
+            'suggested_fixes': [
+                'Provide a grounded remote-speech transcript before scoring or claiming completion.',
+            ],
+            'scoring_mode': 'skipped_needs_review',
+        }
+
+    latency = result.get('latency_metrics') if isinstance(result.get('latency_metrics'), dict) else {}
+    media = result.get('media') if isinstance(result.get('media'), dict) else {}
+    runtime_provenance = {
+        'execution_engine': 'signalwire_node_webrtc',
+        'target_agent_id': payload.agent_id,
+        'target_url': 'https://holyguacamole.signalwire.me/',
+        'mode': payload.mode,
+        'audio_transport': 'signalwire_webrtc',
+        'capture_surface': 'signalwire_public_webrtc',
+        'browser_peer': False,
+        'headless_browser': False,
+        'live_external_connection': True,
+        'saved_evidence': False,
+        'fixture_backed_scoring': False,
+        'guest_token_persisted': False,
+        'tester_media': str((result.get('tester') or {}).get('media_source') or 'current_run_tts'),
+        'target_media': 'current_run_signalwire_webrtc',
+        'target_speech_transcript': (
+            'current_run_asr'
+            if all_agent_turns_transcribed
+            else 'untranscribed_remote_audio'
+        ),
+        'max_exchanges': payload.max_exchanges,
+        'public_execution_gate': 'CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE',
+    }
+    vcon_export = build_execution_vcon(
+        conversation_id=conversation_id,
+        execution_run_id=execution_run_id,
+        suite_id=suite_id,
+        scenario_id=scenario_id,
+        transport='signalwire_webrtc',
+        transcription_turns=transcription,
+        recording=recording,
+        termination_reason='signalwire_webrtc_complete',
+        tester_provenance=runtime_provenance,
+        extra_analysis_body={
+            'connection': result.get('connection') if isinstance(result.get('connection'), dict) else {},
+            'latency_metrics': latency,
+            'target_url': 'https://holyguacamole.signalwire.me/',
+            'result_artifact': (result.get('artifacts') or {}).get('result_json'),
+        },
+    )
+    recording_media = recording.as_call_media()
+    recording_media['uri'] = recording.uri
+    recording_media['recording_url'] = (
+        f'/api/execution/runs/{quote(execution_run_id)}/conversations/'
+        f'{quote(conversation_id)}/recording?user_id={quote(payload.user_id)}'
+    )
+    latency_marks = []
+    exchanges = result.get('exchanges') if isinstance(result.get('exchanges'), list) else []
+    for index, exchange in enumerate(exchanges, start=1):
+        if not isinstance(exchange, dict):
+            continue
+        response_latency_ms = exchange.get('target_response_latency_ms')
+        if not isinstance(response_latency_ms, (int, float)) or response_latency_ms < 0:
+            continue
+        turn_pair = int(exchange.get('turn_pair') or index)
+        latency_marks.append({
+            'name': 'tester_speech_end_to_first_target_speech_received',
+            'label': f'End-to-end target response · exchange {turn_pair}',
+            'kind': 'tester_speech_end_to_first_target_speech_received',
+            'response_metric': 'tester_speech_end_to_first_target_speech_received',
+            'participant': 'target',
+            'direction': 'target_to_tester',
+            'turn_pair': turn_pair,
+            'latency_ms': response_latency_ms,
+            'signal_boundary': 'audible_speech_onset',
+            'source': 'signalwire_webrtc',
+            'measurement_scope': 'remote_target_observed_at_tester',
+            'remote_target': True,
+        })
+    if not latency_marks:
+        first_audio_ms = latency.get('call_connected_to_remote_track_ms')
+        if isinstance(first_audio_ms, (int, float)):
+            latency_marks.append({
+                'name': 'call_connected_to_remote_track',
+                'label': 'SignalWire call connected to remote audio track',
+                'kind': 'call_connected_to_remote_track',
+                'response_metric': 'call_connected_to_remote_track',
+                'participant': 'target',
+                'direction': 'target_to_tester',
+                'latency_ms': first_audio_ms,
+                'source': 'signalwire_webrtc',
+                'measurement_scope': 'remote_target_observed_at_tester',
+                'remote_target': True,
+            })
+    return {
+        'turns': turns,
+        'transcript': transcript,
+        'action_trace': [
+            {
+                'type': 'signalwire_call_event',
+                'events': result.get('call_events') if isinstance(result.get('call_events'), list) else [],
+            }
+        ],
+        'final_state': {**current_final_state, 'runtime_provenance': runtime_provenance},
+        'latency_marks': latency_marks,
+        'recording': recording_media,
+        'vcon_export': vcon_export,
+        'vcon_export_summary': vcon_summary(vcon_export),
+        'audio_session': {
+            'transport': 'signalwire_webrtc',
+            'provider': 'signalwire',
+            'bytes_received': recording.bytes_captured,
+            'duration_ms': recording.duration_ms,
+            'negotiated': bool((result.get('connection') or {}).get('call_connected')),
+            'closed': True,
+            'proof': True,
+            'runtime_provenance': runtime_provenance,
+            'artifact_result_json': (result.get('artifacts') or {}).get('result_json'),
+            'target_audio_mime': recording.mime_type,
+        },
+        'verdict': report.get('verdict'),
+        'score': report.get('overall_score'),
+        'evaluation_report': report,
+    }
+
+
 def _reference_runtime_config(payload: ExecutionRunCreateRequest) -> ReferenceRuntimeConfig:
     updates: dict[str, str] = {}
     if payload.model_name:
@@ -722,6 +1056,163 @@ def _preflight_reference_runtime(
         completion=completion,
         config=config,
     )
+
+
+def _signalwire_public_gate_enabled() -> bool:
+    value = str(os.getenv(SIGNALWIRE_PUBLIC_GATE_ENV) or '').strip().lower()
+    return value in {'1', 'true', 'yes'}
+
+
+def _preflight_signalwire_caller_tts_runtime(payload: ExecutionRunCreateRequest) -> None:
+    """Verify required caller speech synthesis before queueing a public call."""
+    config = _reference_runtime_config(payload)
+    service_url = str(config.kokoro_base_url or '').rstrip('/')
+    if not service_url:
+        raise ValueError(
+            'Holy Guacamole SignalWire execution requires KOKORO_BASE_URL '
+            'for caller audio synthesis before queueing.'
+        )
+    request = Request(
+        f'{service_url}/health',
+        headers={'accept': 'application/json'},
+        method='GET',
+    )
+    try:
+        with urlopen(request, timeout=min(10.0, config.timeout_seconds)) as response:  # noqa: S310
+            response.read()
+    except HTTPError as exc:
+        detail = exc.read().decode('utf-8', errors='replace')[:400]
+        raise ValueError(
+            'Holy Guacamole SignalWire caller TTS is unavailable at KOKORO_BASE_URL; '
+            f'got HTTP {exc.code}: {detail or exc.reason}'
+        ) from exc
+    except URLError as exc:
+        raise ValueError(
+            'Holy Guacamole SignalWire caller TTS is unreachable at KOKORO_BASE_URL: '
+            f'{exc.reason}'
+        ) from exc
+    except (TimeoutError, OSError) as exc:
+        raise ValueError(
+            'Holy Guacamole SignalWire caller TTS is unreachable at KOKORO_BASE_URL.'
+        ) from exc
+
+
+def _preflight_signalwire_rtc_asr_runtime(
+    config: ReferenceRuntimeConfig,
+    *,
+    timeout_seconds: float,
+) -> None:
+    service_url = str(config.rtc_asr_base_url or '').rstrip('/')
+    if not service_url:
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire execution requires RTC_ASR_BASE_URL '
+            'for second-turn target audio transcription before queueing.'
+        )
+    request = Request(
+        f'{service_url}{config.rtc_asr_health_path}',
+        headers={'accept': 'application/json'},
+        method='GET',
+    )
+    try:
+        with urlopen(request, timeout=min(10.0, timeout_seconds)) as response:  # noqa: S310
+            payload = json.loads(response.read().decode('utf-8'))
+        discover_rtc_asr_runtime(payload)
+    except HTTPError as exc:
+        detail = exc.read().decode('utf-8', errors='replace')[:400]
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire execution requires ready rtc-asr; '
+            f'got HTTP {exc.code}: {detail or exc.reason}'
+        ) from exc
+    except URLError as exc:
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire execution requires reachable rtc-asr: '
+            f'{exc.reason}'
+        ) from exc
+    except (TimeoutError, OSError) as exc:
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire execution requires reachable rtc-asr.'
+        ) from exc
+    except (UnicodeDecodeError, json.JSONDecodeError, ReferenceRuntimeError) as exc:
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire execution requires ready rtc-asr.'
+        ) from exc
+
+
+def _preflight_signalwire_followup_runtime(payload: ExecutionRunCreateRequest) -> None:
+    """Fail closed before spending a live SignalWire call that needs a tester follow-up."""
+    config = _reference_runtime_config(payload)
+    preflight_timeout = max(1.0, min(config.timeout_seconds, payload.duplex_timeout_seconds))
+    service_url = str(config.pipecat_service_url or '').rstrip('/')
+    if not service_url:
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire execution requires PIPECAT_SERVICE_URL '
+            'for the Pipecat tester runtime.'
+        )
+    if not config.internal_token:
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire execution requires '
+            'REFERENCE_AGENT_INTERNAL_TOKEN shared by the API and Pipecat service.'
+        )
+    _preflight_signalwire_rtc_asr_runtime(config, timeout_seconds=preflight_timeout)
+
+    request_payload = {
+        'scenario_instruction': (
+            'Preflight only: verify the CAE tester follow-up runtime before queueing a '
+            'live two-exchange Holy Guacamole SignalWire call.'
+        ),
+        'act_id': 'signalwire-followup-preflight',
+        'act_objective': 'Return a short harmless caller follow-up for runtime readiness.',
+        'example_utterance': 'Thanks, I have one follow-up question.',
+        'history': [],
+        'target_audio_wav_base64': None,
+        'model_name': config.tester_llm_model,
+    }
+    request = Request(
+        f'{service_url}/reference-tester/turn',
+        data=json.dumps(request_payload).encode('utf-8'),
+        headers={
+            'content-type': 'application/json',
+            'accept': 'application/json',
+            'x-cae-reference-token': config.internal_token,
+        },
+        method='POST',
+    )
+    try:
+        with urlopen(request, timeout=preflight_timeout) as response:  # noqa: S310
+            response_payload = json.loads(response.read().decode('utf-8'))
+    except HTTPError as exc:
+        detail = exc.read().decode('utf-8', errors='replace')[:400]
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire execution requires a working '
+            f'PIPECAT_SERVICE_URL /reference-tester/turn runtime; got HTTP {exc.code}: '
+            f'{detail or exc.reason}'
+        ) from exc
+    except URLError as exc:
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire execution requires a reachable '
+            f'PIPECAT_SERVICE_URL /reference-tester/turn runtime: {exc.reason}'
+        ) from exc
+    except (TimeoutError, OSError) as exc:
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire execution requires a reachable '
+            'PIPECAT_SERVICE_URL /reference-tester/turn runtime.'
+        ) from exc
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire tester preflight did not return valid JSON.'
+        ) from exc
+
+    if not isinstance(response_payload, dict):
+        response_payload = {}
+    tester_text = str(response_payload.get('tester_text') or '').strip()
+    tester_audio = str(response_payload.get('tester_audio_wav_base64') or '').strip()
+    pipeline = response_payload.get('pipeline')
+    processors = pipeline.get('processors') if isinstance(pipeline, dict) else None
+    if not tester_text or not tester_audio or processors != ['rtc-asr', 'llm', 'kokoro']:
+        raise ValueError(
+            'Two-exchange Holy Guacamole SignalWire tester preflight returned incomplete '
+            'tester text/audio pipeline evidence.'
+        )
 
 
 def _queued_execution_context(
@@ -1083,15 +1574,6 @@ def _scenario_definition(suite_id: str, scenario_id: str) -> dict[str, Any]:
 
 def _scenario_user_opener(scenario: dict[str, Any]) -> str:
     """Return caller-facing speech, never the internal persona/checklist description."""
-    configured_prompt = str(
-        scenario.get('simulated_user_prompt')
-        or scenario.get('simulatedUserPrompt')
-        or scenario.get('prompt')
-        or ''
-    ).strip()
-    if configured_prompt:
-        return configured_prompt
-
     sample = str(scenario.get('sample_transcript') or '')
     for line in sample.splitlines():
         stripped = line.strip()

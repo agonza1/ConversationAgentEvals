@@ -241,6 +241,13 @@ LISTENER_TURN_CREDENTIAL = os.getenv('LISTENER_TURN_CREDENTIAL', '').strip()
 LISTENER_TURN_SHARED_SECRET = os.getenv('LISTENER_TURN_SHARED_SECRET', '').strip()
 KOKORO_MODEL = os.getenv('KOKORO_MODEL', 'kokoro')
 KOKORO_TESTER_VOICE = os.getenv('KOKORO_TESTER_VOICE', 'af_heart')
+try:
+    KOKORO_TESTER_SPEED = min(
+        2.0,
+        max(0.5, float(os.getenv('KOKORO_TESTER_SPEED', '1.2'))),
+    )
+except ValueError:
+    KOKORO_TESTER_SPEED = 1.2
 _KOKORO_LEGACY_VOICE = os.getenv('KOKORO_VOICE', '').strip()
 KOKORO_TARGET_VOICE = os.getenv('KOKORO_TARGET_VOICE', '').strip() or (
     _KOKORO_LEGACY_VOICE
@@ -377,6 +384,26 @@ class ReferenceListenerStopRequest(BaseModel):
     listener_id: str
 
 
+class OutboundVoiceBroadcastOpenRequest(BaseModel):
+    execution_run_id: str = Field(min_length=1, max_length=200)
+    session_id: str = Field(min_length=1, max_length=300)
+
+
+class OutboundVoiceBroadcastAudioRequest(BaseModel):
+    execution_run_id: str = Field(min_length=1, max_length=200)
+    publisher_id: str = Field(min_length=1, max_length=200)
+    direction: Literal['tester_to_target', 'target_to_tester']
+    turn_pair: int = Field(default=1, ge=1, le=100)
+    sample_rate: int = Field(ge=8000, le=96000)
+    channels: int = Field(default=1, ge=1, le=2)
+    pcm16_base64: str = Field(min_length=1, max_length=1_500_000)
+
+
+class OutboundVoiceBroadcastCloseRequest(BaseModel):
+    execution_run_id: str = Field(min_length=1, max_length=200)
+    publisher_id: str = Field(min_length=1, max_length=200)
+
+
 @dataclass(slots=True)
 class _ReferenceListener:
     listener_id: str
@@ -393,6 +420,7 @@ class _ReferenceDuplexBroadcast:
     audio_publish_sequence: int = 0
     started_listener_media_keys: set[str] = field(default_factory=set)
     active_publishers: int = 0
+    publisher_ids: set[str] = field(default_factory=set)
 
     def mark_audio_started(self, listener_media_key: str) -> None:
         self.started_listener_media_keys.add(listener_media_key)
@@ -834,9 +862,10 @@ if PIPECAT_RUNTIME_AVAILABLE:
             await self.push_frame(_AgentTextFrame(text), direction)
 
     class _ReferenceKokoroProcessor(FrameProcessor):
-        def __init__(self, voice: str, *, graph_started_at: float):
+        def __init__(self, voice: str, *, graph_started_at: float, speed: float = 1.0):
             super().__init__()
             self.voice = voice
+            self.speed = speed
             self.graph_started_at = graph_started_at
             self.first_audio_byte_latency_ms: float | None = None
 
@@ -854,6 +883,7 @@ if PIPECAT_RUNTIME_AVAILABLE:
                         'model': KOKORO_MODEL,
                         'voice': self.voice,
                         'input': frame.text,
+                        'speed': self.speed,
                         'response_format': 'wav',
                     },
                 ) as response:
@@ -1244,7 +1274,13 @@ async def _run_streaming_exchange(
             await session.close()
 
 
-async def _run_reference_graph(input_frame: Any, llm_processor: Any, *, voice: str) -> tuple[Any, Any]:
+async def _run_reference_graph(
+    input_frame: Any,
+    llm_processor: Any,
+    *,
+    voice: str,
+    speed: float = 1.0,
+) -> tuple[Any, Any]:
     """Run one bounded turn through an actual Pipecat ASR -> LLM -> TTS graph."""
     graph_started_at = time.perf_counter()
     collector = _ReferenceCollector()
@@ -1252,6 +1288,7 @@ async def _run_reference_graph(input_frame: Any, llm_processor: Any, *, voice: s
     kokoro_processor = _ReferenceKokoroProcessor(
         voice,
         graph_started_at=graph_started_at,
+        speed=speed,
     )
     pipeline = Pipeline([
         asr_processor,
@@ -1738,6 +1775,7 @@ async def _public_pipecat_duplex_events(
                 TextFrame(target_text),
                 _ReferenceTesterLlmProcessor(request),
                 voice=KOKORO_TESTER_VOICE,
+                speed=KOKORO_TESTER_SPEED,
             )
         except Exception as exc:
             from public_daily_target import PublicDailyTargetError
@@ -1841,6 +1879,80 @@ async def reference_duplex_run(
         media_type='application/x-ndjson',
         headers={'Cache-Control': 'no-store'},
     )
+
+
+@app.post('/outbound-voice/broadcast/open')
+async def outbound_voice_broadcast_open(
+    payload: OutboundVoiceBroadcastOpenRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Register an external target adapter on CAE's existing live-listener bus."""
+    _require_reference_token(x_cae_reference_token)
+    broadcast = REFERENCE_DUPLEX_RUNS.get(payload.execution_run_id)
+    if broadcast is None or not broadcast.active:
+        replacement = _ReferenceDuplexBroadcast(
+            execution_run_id=payload.execution_run_id,
+            session_id=payload.session_id,
+        )
+        if broadcast is not None:
+            replacement.listeners.update(broadcast.listeners)
+            broadcast.listeners.clear()
+        broadcast = replacement
+        REFERENCE_DUPLEX_RUNS[payload.execution_run_id] = broadcast
+    publisher_id = secrets.token_urlsafe(24)
+    broadcast.active = True
+    broadcast.publisher_ids.add(publisher_id)
+    broadcast.active_publishers += 1
+    return {
+        'status': 'open',
+        'publisher_id': publisher_id,
+        'listener_route': '/reference-duplex/listen',
+    }
+
+
+@app.post('/outbound-voice/broadcast/audio')
+async def outbound_voice_broadcast_audio(
+    payload: OutboundVoiceBroadcastAudioRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Publish external PCM through the same bus used by native CAE targets."""
+    _require_reference_token(x_cae_reference_token)
+    broadcast = REFERENCE_DUPLEX_RUNS.get(payload.execution_run_id)
+    if (
+        broadcast is None
+        or not broadcast.active
+        or payload.publisher_id not in broadcast.publisher_ids
+    ):
+        raise HTTPException(status_code=409, detail='The outbound voice publisher is not active.')
+    try:
+        audio = base64.b64decode(payload.pcm16_base64, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail='pcm16_base64 is invalid.') from exc
+    if not audio or len(audio) % (payload.channels * 2) != 0:
+        raise HTTPException(status_code=422, detail='PCM16 audio is empty or frame-alignment is invalid.')
+    listener_media_key = (
+        f'{broadcast.session_id}:{payload.turn_pair}:{payload.direction}'
+    )
+    broadcast.mark_audio_started(listener_media_key)
+    broadcast.publish(audio, sample_rate=payload.sample_rate, channels=payload.channels)
+    return {'status': 'published', 'bytes': len(audio)}
+
+
+@app.post('/outbound-voice/broadcast/close')
+async def outbound_voice_broadcast_close(
+    payload: OutboundVoiceBroadcastCloseRequest,
+    x_cae_reference_token: str | None = Header(default=None),
+) -> dict[str, str]:
+    _require_reference_token(x_cae_reference_token)
+    broadcast = REFERENCE_DUPLEX_RUNS.get(payload.execution_run_id)
+    if broadcast is None or payload.publisher_id not in broadcast.publisher_ids:
+        return {'status': 'already_closed'}
+    broadcast.publisher_ids.discard(payload.publisher_id)
+    broadcast.active_publishers = max(0, broadcast.active_publishers - 1)
+    if broadcast.active_publishers == 0:
+        broadcast.active = False
+        asyncio.create_task(_retire_reference_broadcast(broadcast))
+    return {'status': 'closed'}
 
 
 @app.post('/reference-duplex/listen')
@@ -2030,6 +2142,7 @@ async def reference_tester_turn(
             first_frame,
             _ReferenceTesterLlmProcessor(payload),
             voice=KOKORO_TESTER_VOICE,
+            speed=KOKORO_TESTER_SPEED,
         )
         output_wav = _pcm_to_wav(collector.audio, collector.sample_rate, collector.channels)
         return {
