@@ -197,6 +197,7 @@ def test_signalwire_target_client_invokes_smoke_and_returns_current_run_evidence
     assert result['recording_handle'].mime_type == 'audio/webm'
     assert result['recording_handle'].bytes_captured == len(b'current-run-signalwire-audio')
     assert result['transcription_turns'][0].frame_metadata['caller_text_source'] == 'cae_kokoro_tts'
+    assert result['transcript']['source'] == 'remote_audio_capture_untranscribed'
     assert 'token' not in str(result).lower()
 
 
@@ -315,6 +316,24 @@ def test_signalwire_target_preserves_followup_caller_audio_for_replay(tmp_path, 
         ('Caller', 'I need a refill.'),
         ('Agent', 'Which medication?'),
     ]
+    assert result['transcript']['source'] == 'rtc-asr.current_run'
+
+
+def test_signalwire_target_marks_incomplete_agent_asr_as_partial():
+    turns = [
+        signalwire_target.TranscriptionTurn(
+            turn_index=1,
+            speaker='Agent',
+            text='How can I help?',
+            source='signalwire_webrtc',
+            frame_metadata={'exchange': 1},
+        ),
+    ]
+
+    assert signalwire_target._aggregate_transcript_source(
+        turns,
+        max_exchanges=2,
+    ) == 'rtc-asr.partial_current_run'
 
 
 def test_signalwire_target_transcribes_captured_response_with_existing_rtc_asr(
@@ -481,3 +500,7 @@ def test_signalwire_smoke_uses_direct_webrtc_and_audible_latency():
     assert '/outbound-voice/broadcast/close' in script
     assert "direction: 'tester_to_target'" in script
     assert "direction: 'target_to_tester'" in script
+    assert 'await writeStdout(JSON.stringify(summary' in script
+    assert script.index('await writeStdout(JSON.stringify(summary') < script.index(
+        "process.exit(result.status === 'pass' ? 0 : 2)"
+    )

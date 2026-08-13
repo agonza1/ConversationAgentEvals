@@ -27,6 +27,24 @@ REMOTE_SPEECH_TRANSCRIPT_SOURCES = {
 }
 
 
+def _aggregate_transcript_source(
+    transcript_turns: list[TranscriptionTurn],
+    *,
+    max_exchanges: int,
+) -> str:
+    grounded_agent_exchanges = {
+        int(turn.frame_metadata.get('exchange') or 0)
+        for turn in transcript_turns
+        if turn.speaker == 'Agent' and int(turn.frame_metadata.get('exchange') or 0) > 0
+    }
+    required_agent_exchanges = set(range(1, max_exchanges + 1))
+    if required_agent_exchanges.issubset(grounded_agent_exchanges):
+        return 'rtc-asr.current_run'
+    if grounded_agent_exchanges:
+        return 'rtc-asr.partial_current_run'
+    return 'remote_audio_capture_untranscribed'
+
+
 def _open_live_audio_broadcast(
     runtime: ReferenceRuntimeConfig,
     *,
@@ -424,6 +442,10 @@ def run_signalwire_holyguacamole_call(
                 },
             ))
 
+    aggregate_transcript_source = _aggregate_transcript_source(
+        transcript_turns,
+        max_exchanges=max_exchanges,
+    )
     transcript_payload.update({
         'text': '\n'.join(f'{turn.speaker}: {turn.text}' for turn in transcript_turns),
         'agent_text': next(
@@ -433,7 +455,7 @@ def run_signalwire_holyguacamole_call(
         'agent_text_available': any(turn.speaker == 'Agent' for turn in transcript_turns),
         'complete_as_observed': len(transcript_turns) == max_exchanges * 2,
         'untranscribed_target_audio': len(transcript_turns) != max_exchanges * 2,
-        'source': 'rtc-asr.current_run',
+        'source': aggregate_transcript_source,
     })
     result['transcript'] = transcript_payload
     result_path.write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')

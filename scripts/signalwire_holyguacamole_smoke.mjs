@@ -915,6 +915,20 @@ function classifyError(error) {
   return 'unsupported_signalwire_media_path';
 }
 
+async function writeStdout(value) {
+  await new Promise((resolve, reject) => {
+    const handleError = (error) => {
+      process.stdout.off('error', handleError);
+      reject(error);
+    };
+    process.stdout.once('error', handleError);
+    process.stdout.write(`${value}\n`, () => {
+      process.stdout.off('error', handleError);
+      resolve();
+    });
+  });
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const result = await runSmoke(args);
@@ -930,9 +944,10 @@ async function main() {
     latency_metrics: result.latency_metrics,
     connection: result.connection,
   };
-  console.log(JSON.stringify(summary, null, args.jsonOnly ? 0 : 2));
+  await writeStdout(JSON.stringify(summary, null, args.jsonOnly ? 0 : 2));
   // Native WebRTC may retain background handles after every call and track has
-  // been closed. This is a bounded CLI process, so terminate deterministically.
+  // been closed. Flush the machine-readable result before terminating this
+  // bounded CLI process so capture_output callers always receive complete JSON.
   process.exit(result.status === 'pass' ? 0 : 2);
 }
 
