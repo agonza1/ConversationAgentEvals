@@ -241,6 +241,69 @@ def test_agent_options_expose_adapter_tester_executor_defaults():
     }
 
 
+def test_http_target_readiness_reports_missing_and_configured_secret(monkeypatch):
+    created = client.post(
+        '/api/agents',
+        json={
+            'name': 'Authenticated support target',
+            'channel': 'text',
+            'target': 'http_endpoint',
+            'environment': 'staging',
+            'connection': {
+                'endpoint_url': 'https://support.example.test/chat',
+                'auth_type': 'bearer_secret',
+                'secret_ref': 'support-agent-token',
+            },
+        },
+    )
+    assert created.status_code == 200, created.text
+    agent_id = created.json()['id']
+
+    missing = client.get(f'/api/agents/{agent_id}/readiness')
+    assert missing.status_code == 200
+    assert missing.json()['executable'] is False
+    assert 'support-agent-token' in missing.text
+    assert 'secret-value' not in missing.text
+
+    monkeypatch.setenv('CAE_HTTP_TARGET_SECRET_SUPPORT_AGENT_TOKEN', 'secret-value')
+    ready = client.get(f'/api/agents/{agent_id}/readiness')
+    assert ready.status_code == 200
+    payload = ready.json()
+    assert payload['executable'] is True
+    assert payload['defaults']['tester_id'] == 'scenario_simulator'
+    assert any(
+        check['name'] == 'credential_reference'
+        and check['ok'] is True
+        and 'HTTP target namespace' in check['message']
+        for check in payload['checks']
+    )
+    assert 'secret-value' not in ready.text
+
+
+def test_planned_voice_target_readiness_is_not_executable():
+    agent_store._AGENTS['planned-sip'] = {
+        'id': 'planned-sip',
+        'name': 'Planned SIP target',
+        'channel': 'voice',
+        'target': 'sip_agent',
+        'environment': 'staging',
+        'connection': {
+            'sip_uri': 'sip:agent@example.test',
+            'acc_base_url': 'https://acc.example.test',
+        },
+        'description': None,
+        'metadata': {},
+        'created_at': '2026-08-24T00:00:00+00:00',
+        'updated_at': '2026-08-24T00:00:00+00:00',
+    }
+
+    response = client.get('/api/agents/planned-sip/readiness')
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['executable'] is False
+    assert any(check['name'] == 'adapter_available' and check['ok'] is False for check in payload['checks'])
+
+
 def test_pipecat_public_target_accepts_fixed_public_url():
     created = client.post(
         '/api/agents',
