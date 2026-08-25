@@ -6,6 +6,7 @@ from urllib.error import URLError
 from fastapi.testclient import TestClient
 import pytest
 
+from app.routes import agents as agents_route
 from app.main import app
 from app.services import acc_connection, agent_store, execution_run_store, execution_runner
 from app.services.execution_runner import execute_execution_run, start_execution_run
@@ -302,6 +303,46 @@ def test_planned_voice_target_readiness_is_not_executable():
     payload = response.json()
     assert payload['executable'] is False
     assert any(check['name'] == 'adapter_available' and check['ok'] is False for check in payload['checks'])
+
+
+def test_signalwire_holyguacamole_readiness_matches_queue_runtime_gates(monkeypatch):
+    monkeypatch.delenv('CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE', raising=False)
+    monkeypatch.delenv('KOKORO_BASE_URL', raising=False)
+    created = client.post(
+        '/api/agents',
+        json={
+            'name': 'Holy Guacamole readiness target',
+            'channel': 'voice',
+            'target': 'signalwire_holy_guacamole',
+            'environment': 'production',
+            'connection': {'endpoint_url': 'https://holyguacamole.signalwire.me/'},
+        },
+    )
+    assert created.status_code == 200, created.text
+    agent_id = created.json()['id']
+
+    blocked = client.get(f'/api/agents/{agent_id}/readiness')
+    assert blocked.status_code == 200
+    blocked_payload = blocked.json()
+    assert blocked_payload['executable'] is False
+    assert any(check['name'] == 'signalwire_public_gate' and check['ok'] is False for check in blocked_payload['checks'])
+    assert any(check['name'] == 'signalwire_caller_tts' and check['ok'] is False for check in blocked_payload['checks'])
+
+    monkeypatch.setenv('CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE', '1')
+    monkeypatch.setenv('KOKORO_BASE_URL', 'http://kokoro.test')
+
+    def ready_urlopen(request, timeout=None):
+        assert request.full_url == 'http://kokoro.test/health'
+        assert timeout == 2.0
+        return _JsonResponse({'status': 'ready'})
+
+    monkeypatch.setattr(agents_route, 'urlopen', ready_urlopen)
+    ready = client.get(f'/api/agents/{agent_id}/readiness')
+    assert ready.status_code == 200
+    ready_payload = ready.json()
+    assert ready_payload['executable'] is True
+    assert any(check['name'] == 'signalwire_public_gate' and check['ok'] is True for check in ready_payload['checks'])
+    assert any(check['name'] == 'signalwire_caller_tts' and check['ok'] is True for check in ready_payload['checks'])
 
 
 def test_pipecat_public_target_accepts_fixed_public_url():
