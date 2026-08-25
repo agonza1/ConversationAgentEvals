@@ -154,7 +154,20 @@ def test_http_target_requires_real_connection_configuration():
 def test_agent_options_expose_adapter_tester_executor_defaults():
     response = client.get('/api/agents/options')
     assert response.status_code == 200
-    targets = {item['id']: item for item in response.json()['targets']}
+    body = response.json()
+    targets = {item['id']: item for item in body['targets']}
+    testers = {item['id']: item for item in body['testers']}
+    executors = {item['id']: item for item in body['executors']}
+
+    assert testers['scenario_simulator']['label'] == 'Scenario user'
+    assert testers['scenario_simulator']['available'] is True
+    assert testers['pipecat_tester']['channel'] == 'voice'
+    assert testers['fixture_replay']['description'].startswith('Replays saved evidence')
+
+    assert executors['local_async_runner']['channel'] == 'text'
+    assert executors['cae_local_audio_loop']['available'] is True
+    assert executors['evidence_replay']['description'].startswith('Scores saved conversations')
+    assert executors['acc_sip']['available'] is False
 
     http_target = targets['http_endpoint']
     assert http_target['channel'] == 'text'
