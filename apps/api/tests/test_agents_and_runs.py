@@ -6,6 +6,7 @@ from urllib.error import URLError
 from fastapi.testclient import TestClient
 import pytest
 
+from app.routes import agents as agents_route
 from app.main import app
 from app.services import acc_connection, agent_store, execution_run_store, execution_runner
 from app.services.execution_runner import execute_execution_run, start_execution_run
@@ -239,6 +240,109 @@ def test_agent_options_expose_adapter_tester_executor_defaults():
         'max_exchanges_configurable': True,
         'max_exchanges_limit': 2,
     }
+
+
+def test_http_target_readiness_reports_missing_and_configured_secret(monkeypatch):
+    created = client.post(
+        '/api/agents',
+        json={
+            'name': 'Authenticated support target',
+            'channel': 'text',
+            'target': 'http_endpoint',
+            'environment': 'staging',
+            'connection': {
+                'endpoint_url': 'https://support.example.test/chat',
+                'auth_type': 'bearer_secret',
+                'secret_ref': 'support-agent-token',
+            },
+        },
+    )
+    assert created.status_code == 200, created.text
+    agent_id = created.json()['id']
+
+    missing = client.get(f'/api/agents/{agent_id}/readiness')
+    assert missing.status_code == 200
+    assert missing.json()['executable'] is False
+    assert 'support-agent-token' in missing.text
+    assert 'secret-value' not in missing.text
+
+    monkeypatch.setenv('CAE_HTTP_TARGET_SECRET_SUPPORT_AGENT_TOKEN', 'secret-value')
+    ready = client.get(f'/api/agents/{agent_id}/readiness')
+    assert ready.status_code == 200
+    payload = ready.json()
+    assert payload['executable'] is True
+    assert payload['defaults']['tester_id'] == 'scenario_simulator'
+    assert any(
+        check['name'] == 'credential_reference'
+        and check['ok'] is True
+        and 'HTTP target namespace' in check['message']
+        for check in payload['checks']
+    )
+    assert 'secret-value' not in ready.text
+
+
+def test_planned_voice_target_readiness_is_not_executable():
+    agent_store._AGENTS['planned-sip'] = {
+        'id': 'planned-sip',
+        'name': 'Planned SIP target',
+        'channel': 'voice',
+        'target': 'sip_agent',
+        'environment': 'staging',
+        'connection': {
+            'sip_uri': 'sip:agent@example.test',
+            'acc_base_url': 'https://acc.example.test',
+        },
+        'description': None,
+        'metadata': {},
+        'created_at': '2026-08-24T00:00:00+00:00',
+        'updated_at': '2026-08-24T00:00:00+00:00',
+    }
+
+    response = client.get('/api/agents/planned-sip/readiness')
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['executable'] is False
+    assert any(check['name'] == 'adapter_available' and check['ok'] is False for check in payload['checks'])
+
+
+def test_signalwire_holyguacamole_readiness_matches_queue_runtime_gates(monkeypatch):
+    monkeypatch.delenv('CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE', raising=False)
+    monkeypatch.delenv('KOKORO_BASE_URL', raising=False)
+    created = client.post(
+        '/api/agents',
+        json={
+            'name': 'Holy Guacamole readiness target',
+            'channel': 'voice',
+            'target': 'signalwire_holy_guacamole',
+            'environment': 'production',
+            'connection': {'endpoint_url': 'https://holyguacamole.signalwire.me/'},
+        },
+    )
+    assert created.status_code == 200, created.text
+    agent_id = created.json()['id']
+
+    blocked = client.get(f'/api/agents/{agent_id}/readiness')
+    assert blocked.status_code == 200
+    blocked_payload = blocked.json()
+    assert blocked_payload['executable'] is False
+    assert any(check['name'] == 'signalwire_public_gate' and check['ok'] is False for check in blocked_payload['checks'])
+    assert any(check['name'] == 'signalwire_caller_tts' and check['ok'] is False for check in blocked_payload['checks'])
+
+    monkeypatch.setenv('CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE', '1')
+    monkeypatch.setenv('KOKORO_BASE_URL', 'http://kokoro.test')
+
+    def ready_urlopen(request, timeout=None):
+        assert request.full_url == 'http://kokoro.test/health'
+        assert timeout == 2.0
+        return _JsonResponse({'status': 'ready'})
+
+    monkeypatch.setattr(agents_route, 'urlopen', ready_urlopen)
+    ready = client.get(f'/api/agents/{agent_id}/readiness')
+    assert ready.status_code == 200
+    ready_payload = ready.json()
+    assert ready_payload['executable'] is True
+    assert any(check['name'] == 'signalwire_public_gate' and check['ok'] is True for check in ready_payload['checks'])
+    assert any(check['name'] == 'signalwire_caller_tts' and check['ok'] is True for check in ready_payload['checks'])
 
 
 def test_pipecat_public_target_accepts_fixed_public_url():

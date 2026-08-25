@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import os
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
 from fastapi import APIRouter, HTTPException
 
 from app.schemas.agents import AgentCreateRequest, AgentTarget, AgentUpdateRequest
 from app.services import agent_store
 from app.services.run_provenance import execution_defaults_for_target
+from app.services.signalwire_holyguacamole_target import SIGNALWIRE_PUBLIC_GATE_ENV
+from app.services.target_secrets import resolve_http_target_secret
 
 
 router = APIRouter(prefix='/api/agents', tags=['agents'])
@@ -30,6 +36,14 @@ def list_agent_options():
         'testers': _tester_options(),
         'executors': _executor_options(),
     }
+
+
+@router.get('/{agent_id}/readiness')
+def get_agent_readiness(agent_id: str):
+    agent = agent_store.get_agent(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail='Agent not found.')
+    return _readiness_for_agent(agent)
 
 
 @router.get('/{agent_id}')
@@ -307,3 +321,113 @@ def _executor_options() -> list[dict[str, object]]:
         }
         for option in _EXECUTOR_OPTIONS
     ]
+
+
+def _readiness_for_agent(agent: dict) -> dict[str, object]:
+    target = str(agent.get('target') or '')
+    connection = agent.get('connection') if isinstance(agent.get('connection'), dict) else {}
+    option = _target_option(target) if target in _TARGET_OPTIONS else None
+    checks: list[dict[str, object]] = []
+
+    def add_check(name: str, ok: bool, message: str) -> None:
+        checks.append({'name': name, 'ok': ok, 'message': message})
+
+    if option is not None and option.get('available') is False:
+        add_check('adapter_available', False, str(option.get('unavailable_reason') or 'Adapter is unavailable.'))
+    else:
+        add_check('adapter_available', True, 'Adapter can be selected for runs.')
+
+    required_fields = list(_CONNECTION_REQUIREMENTS.get(target, ()))
+    missing = [field for field in required_fields if not str(connection.get(field) or '').strip()]
+    add_check(
+        'connection_configuration',
+        not missing,
+        (
+            'Required connection fields are present.'
+            if not missing
+            else f'Missing required connection fields: {", ".join(missing)}.'
+        ),
+    )
+
+    auth_type = str(connection.get('auth_type') or 'none')
+    if target == 'http_endpoint' and auth_type != 'none':
+        secret_ref = str(connection.get('secret_ref') or '').strip()
+        if not secret_ref:
+            add_check('credential_reference', False, 'Authenticated HTTP targets require a credential ID.')
+        else:
+            try:
+                resolve_http_target_secret(secret_ref)
+            except ValueError as exc:
+                add_check('credential_reference', False, str(exc))
+            else:
+                add_check('credential_reference', True, 'Credential ID resolves in the HTTP target namespace.')
+    elif target == 'http_endpoint':
+        add_check('credential_reference', True, 'No credential is required for this HTTP target.')
+
+    if target == 'signalwire_holy_guacamole':
+        gate_enabled = str(os.getenv(SIGNALWIRE_PUBLIC_GATE_ENV) or '').strip().lower() in {'1', 'true', 'yes'}
+        add_check(
+            'signalwire_public_gate',
+            gate_enabled,
+            (
+                f'{SIGNALWIRE_PUBLIC_GATE_ENV} is enabled for public SignalWire execution.'
+                if gate_enabled
+                else f'{SIGNALWIRE_PUBLIC_GATE_ENV}=1 is required before queueing public SignalWire execution.'
+            ),
+        )
+        add_check(*_signalwire_caller_tts_readiness())
+
+    executable = all(item['ok'] for item in checks)
+    return {
+        'agent_id': agent.get('id'),
+        'target': target,
+        'environment': agent.get('environment') or 'local',
+        'executable': executable,
+        'checks': checks,
+        'defaults': (
+            option.get('defaults')
+            if option is not None
+            else execution_defaults_for_target(target).model_dump(mode='json')
+        ),
+    }
+
+
+def _signalwire_caller_tts_readiness() -> tuple[str, bool, str]:
+    service_url = str(os.getenv('KOKORO_BASE_URL') or '').strip().rstrip('/')
+    if not service_url:
+        return (
+            'signalwire_caller_tts',
+            False,
+            'KOKORO_BASE_URL is required for public SignalWire caller audio synthesis before queueing.',
+        )
+    request = Request(
+        f'{service_url}/health',
+        headers={'accept': 'application/json'},
+        method='GET',
+    )
+    try:
+        with urlopen(request, timeout=2.0) as response:  # noqa: S310
+            response.read()
+    except HTTPError as exc:
+        return (
+            'signalwire_caller_tts',
+            False,
+            f'KOKORO_BASE_URL caller TTS health returned HTTP {exc.code}.',
+        )
+    except URLError:
+        return (
+            'signalwire_caller_tts',
+            False,
+            'KOKORO_BASE_URL caller TTS health is unreachable.',
+        )
+    except (TimeoutError, OSError):
+        return (
+            'signalwire_caller_tts',
+            False,
+            'KOKORO_BASE_URL caller TTS health timed out.',
+        )
+    return (
+        'signalwire_caller_tts',
+        True,
+        'KOKORO_BASE_URL caller TTS health is reachable for public SignalWire execution.',
+    )
