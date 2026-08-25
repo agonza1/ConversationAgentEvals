@@ -26,7 +26,7 @@ registered under `/targets`; runs launch from `/runs` and persist snapshots unde
 | Field | Value | Notes |
 | --- | --- | --- |
 | Execution mode | `pipecat_webrtc` | Runs a paced streaming Pipecat exchange graph over an in-process duplex PCM bus |
-| Local transport | `pipecat_small_webrtc` | Default when mode is `pipecat_webrtc` |
+| Local transport | `pipecat_small_webrtc` | API transport identifier for the built-in local reference path; no browser peer is involved |
 | Deferred SIP transport | `freeswitch_verto_sip` | Rejected until `FreeSwitchVertoSipTransport` is implemented |
 
 Legacy names from earlier drafts (`voice_webrtc`, `local_pipecat_webrtc`, `sip_verto`) are **not** accepted on the API.
@@ -59,7 +59,7 @@ External caller PCM
   -> SIP / PSTN target
 ```
 
-CAE’s local two-agent path uses one pipeline for the full duplex session:
+CAE’s current local two-agent path uses one persistent pipeline for the bounded duplex session:
 
 ```text
 scenario + latest target receipt
@@ -83,8 +83,8 @@ scenario + latest target receipt
   -> conversation row on the execution run (inference_set.jsonl)
 
 Later:
-  LocalPipecatSmallWebRtcTransport
-    <-> FreeSwitchVertoSipTransport (same Protocol)
+  current Pipecat duplex/evidence surface
+    <-> FreeSwitchVertoSipTransport
     <-> SIP destination
 ```
 
@@ -128,10 +128,10 @@ curl -s localhost:8000/api/execution/audio/capabilities | jq .
 
 `POST /api/execution/runs` accepts an optional `agent_id` plus explicit `tester_id` and
 `executor_id`. The legacy `/api/agents` registry routes remain the underlying API for targets.
-Completed conversations include metric summaries and timelines, while
-`artifacts/execution-runs/{id}/inference_set.jsonl` stores completed rows.
+Terminal conversations include metric summaries and timelines, while
+`artifacts/execution-runs/{id}/inference_set.jsonl` stores every terminal row, including failed conversations, so mixed and all-failed runs remain auditable.
 
-Run Execute with local WebRTC + vCon capture (cancellation-rescue):
+Run Execute with local Pipecat duplex audio + vCon capture (cancellation-rescue):
 
 ```bash
 curl -s -X POST localhost:8000/api/execution/runs \
@@ -146,12 +146,15 @@ curl -s -X POST localhost:8000/api/execution/runs \
   }'
 ```
 
-Completed conversations include `audio_session` with:
+Built-in reference conversations include `audio_session` with:
 
-- negotiated local offer/answer stubs (`webrtc.offer_type` / `webrtc.answer_type`)
-- `frames_sent` / `frames_received` / byte counters
-- tester proof (`proof.recording`, `proof.transcription_turns`)
-- `extension_points.freeswitch_verto_sip` describing the next SIP plug-in
+- `architecture=persistent_streaming_pipecat_duplex_local_stt_v1`;
+- `duplex.transport=in_process_pipecat_frame_bus` plus directional frame evidence;
+- participant graph and LLM/STT/TTS provider/model provenance;
+- recording, transcription, frame/byte, timing, and tester proof;
+- `extension_points.freeswitch_verto_sip` describing the deferred SIP plug-in.
+
+The legacy `LocalPipecatSmallWebRtcTransport` test/extension surface can emit local offer/answer stubs, but those stubs are not evidence of a browser WebRTC peer and are not the primary built-in reference runtime described above.
 
 While a run is active, each conversation's `live_events` array grows as the tester and
 target turns are observed. Text executions emit the actual request/reply text. Reference
@@ -164,10 +167,10 @@ the listener negotiates a receive-only browser audio transceiver and never reque
 
 | Module | Role |
 | --- | --- |
-| `apps/api/app/services/execution_audio.py` | Transport protocol, local SmallWebRTC loopback, Verto stub, target adapter |
+| `apps/api/app/services/execution_audio.py` | Audio transport contracts, legacy local loopback surface, Verto stub, and target adapter |
 | `apps/api/app/services/execution_vcon.py` | vCon export from recording + transcription turns |
-| `apps/api/app/services/execution_runner.py` | Wires transport into `pipecat_webrtc` Execute |
-| `apps/api/app/services/reference_generalist_agent.py` | Consumes streamed session evidence and persists live events, recordings, and directional receipts |
+| `apps/api/app/services/execution_runner.py` | Wires the selected target/executor into `pipecat_webrtc` Execute |
+| `apps/api/app/services/reference_generalist_agent.py` | Runs the current local reference transport and persists live events, recordings, and directional receipts |
 | `apps/api/app/schemas/execution.py` | `pipecat_webrtc` mode + `audio_transport` field |
 | `apps/api/app/routes/execution.py` | Dependency preflight, owner-scoped listener tokens, and confined WebRTC signaling proxy |
 | `apps/pipecat/streaming_media.py` | Incremental WAV decoding, paced PCM bridges, Silero VAD, rtc-asr Local STT v1, and Pipecat metric collection |
@@ -198,10 +201,7 @@ REFERENCE_AGENT_INTERNAL_TOKEN='<shared-local-token>' \
 npm run test:reference-voice-smoke
 ```
 
-The API and Pipecat processes must share the token. Configure either `OPENAI_API_KEY` or the
-OpenAI/Codex OAuth connection before launch. This smoke makes real model calls for both agents
-and can incur provider cost; it is intentionally excluded from CI. A browser listener is
-optional and has no effect on run completion or evidence capture.
+The API and Pipecat processes must share the token. Configure working providers for both the selected target model (`REFERENCE_LLM_MODEL`, or the run's model override) and `REFERENCE_TESTER_LLM_MODEL`. Those providers may be OpenAI through an API key or local Codex OAuth, Ollama, or a supported combination. A fully local smoke is possible when both target and tester use Ollama. Provider-backed configurations can incur cost; the smoke is intentionally excluded from CI. A browser listener is optional and has no effect on run completion or evidence capture.
 
 ## FreeSWITCH Verto extension points
 
@@ -209,7 +209,7 @@ optional and has no effect on run completion or evidence capture.
 raises `NotImplementedError` with guidance. Next slice should:
 
 1. negotiate Verto WebSocket login/call against FreeSWITCH (env: `FREESWITCH_VERTO_URL`, `SIP_DESTINATION`);
-2. bridge SIP media into the same Pipecat small WebRTC send/receive hooks;
+2. bridge SIP media into the same Pipecat send/receive and evidence hooks;
 3. emit the same `AudioRecordingHandle`, `TranscriptionTurn`, and vCon shape.
 
 Gate behind `audio_transport=freeswitch_verto_sip` and keep default CI on `pipecat_small_webrtc` or `none`.
