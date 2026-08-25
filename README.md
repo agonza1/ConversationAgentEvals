@@ -19,7 +19,7 @@ There is one product and one supported evaluation contract. Users can either run
 - Platform-owned authentication, project lineage, retention, labels, retries, cancellation, quotas, billing hooks, and cost limits.
 - Durable ASSERT artifact manifests with searchable platform metadata indexes.
 - Operator-facing QA reports, saved-run history, regression comparisons, and export workflows.
-- A focused benchmark runner at `/benchmarks`, including an Execute **Launch evaluation** panel that streams conversations into an `inference_set.jsonl` live list for text callables and voice fixtures.
+- A focused benchmark runner at `/benchmarks`, including an Execute **Launch evaluation** panel that streams configured text, replay, and voice conversations into an `inference_set.jsonl` live list.
 - An opt-in `openai_codex` text target that uses connected local Codex OAuth to record a real model response. It does not invent tool events or completed-task state, so reports honestly show missing live-tool evidence.
 - A built-in streaming voice reference target: Pipecat tester → streaming Kokoro PCM → Silero VAD + rtc-asr Local STT v1 → configured OpenAI-compatible/Codex or local Ollama LLM → streaming Kokoro reply → current-run metrics, evaluation, and vCon evidence. This local synthetic-media proof is not browser, SIP, or PSTN validation.
 
