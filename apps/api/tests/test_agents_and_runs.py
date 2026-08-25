@@ -161,13 +161,31 @@ def test_agent_options_expose_adapter_tester_executor_defaults():
 
     assert testers['scenario_simulator']['label'] == 'Scenario user'
     assert testers['scenario_simulator']['available'] is True
+    assert testers['scenario_simulator']['compatible_target_ids'] == [
+        'http_endpoint',
+        'openai_codex',
+        'mock_agent',
+    ]
     assert testers['pipecat_tester']['channel'] == 'voice'
+    assert 'signalwire_holy_guacamole' in testers['pipecat_tester']['compatible_target_ids']
     assert testers['fixture_replay']['description'].startswith('Replays saved evidence')
+    assert testers['fixture_replay']['compatible_target_ids'] == ['offline_acc_fixture', 'voice_fixture']
 
     assert executors['local_async_runner']['channel'] == 'text'
+    assert executors['local_async_runner']['compatible_target_ids'] == [
+        'http_endpoint',
+        'openai_codex',
+        'mock_agent',
+    ]
     assert executors['cae_local_audio_loop']['available'] is True
+    assert executors['cae_local_audio_loop']['compatible_target_ids'] == ['builtin_sample_voice']
     assert executors['evidence_replay']['description'].startswith('Scores saved conversations')
+    assert executors['evidence_replay']['compatible_target_ids'] == [
+        'offline_acc_fixture',
+        'voice_fixture',
+    ]
     assert executors['acc_sip']['available'] is False
+    assert executors['acc_sip']['compatible_target_ids'] == ['sip_agent']
 
     http_target = targets['http_endpoint']
     assert http_target['channel'] == 'text'

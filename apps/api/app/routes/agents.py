@@ -27,8 +27,8 @@ def create_agent(payload: AgentCreateRequest):
 def list_agent_options():
     return {
         'targets': [_target_option(target) for target in _TARGET_OPTIONS],
-        'testers': _TESTER_OPTIONS,
-        'executors': _EXECUTOR_OPTIONS,
+        'testers': _tester_options(),
+        'executors': _executor_options(),
     }
 
 
@@ -123,6 +123,30 @@ _CONNECTION_REQUIREMENTS: dict[AgentTarget, tuple[str, ...]] = {
     'browser_webrtc_agent': ('acc_base_url',),
     'sip_agent': ('acc_base_url', 'sip_uri'),
     'phone_agent': ('acc_base_url', 'phone_number'),
+}
+
+_COMPATIBLE_TARGETS_BY_TESTER: dict[str, tuple[AgentTarget, ...]] = {
+    'scenario_simulator': ('http_endpoint', 'openai_codex', 'mock_agent'),
+    'pipecat_tester': (
+        'builtin_sample_voice',
+        'pipecat_public_demo',
+        'signalwire_holy_guacamole',
+        'browser_webrtc_agent',
+        'sip_agent',
+        'phone_agent',
+    ),
+    'fixture_replay': ('offline_acc_fixture', 'voice_fixture'),
+}
+
+_COMPATIBLE_TARGETS_BY_EXECUTOR: dict[str, tuple[AgentTarget, ...]] = {
+    'local_async_runner': ('http_endpoint', 'openai_codex', 'mock_agent'),
+    'cae_local_audio_loop': ('builtin_sample_voice',),
+    'pipecat_public_daily': ('pipecat_public_demo',),
+    'signalwire_public_webrtc': ('signalwire_holy_guacamole',),
+    'evidence_replay': ('offline_acc_fixture', 'voice_fixture'),
+    'acc_browser_webrtc': ('browser_webrtc_agent',),
+    'acc_sip': ('sip_agent',),
+    'acc_phone': ('phone_agent',),
 }
 
 _TESTER_OPTIONS: tuple[dict[str, object], ...] = (
@@ -263,3 +287,23 @@ def _target_option(target: AgentTarget) -> dict[str, object]:
         'requires_connection': list(_CONNECTION_REQUIREMENTS.get(target, ())),
         'defaults': defaults.model_dump(mode='json'),
     }
+
+
+def _tester_options() -> list[dict[str, object]]:
+    return [
+        {
+            **option,
+            'compatible_target_ids': list(_COMPATIBLE_TARGETS_BY_TESTER[str(option['id'])]),
+        }
+        for option in _TESTER_OPTIONS
+    ]
+
+
+def _executor_options() -> list[dict[str, object]]:
+    return [
+        {
+            **option,
+            'compatible_target_ids': list(_COMPATIBLE_TARGETS_BY_EXECUTOR[str(option['id'])]),
+        }
+        for option in _EXECUTOR_OPTIONS
+    ]
