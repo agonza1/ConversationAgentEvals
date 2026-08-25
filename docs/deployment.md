@@ -1,26 +1,39 @@
 # Deployment
 
 The default production shape uses separate API, web, and Pipecat services so each has one
-public port, health check, and scaling policy. Deploy only the services a target path needs;
+port, health check, and scaling policy. Deploy only the services a target path needs;
 the deterministic benchmark and saved-evidence paths do not require Pipecat.
+
+The current web client makes browser-side requests to the configured public API base. A
+production deployment therefore needs either:
+
+- a browser-reachable authenticated API or API-gateway endpoint; or
+- one browser-facing web/reverse-proxy origin that routes API requests to the private API
+  service and is supplied as the frontend API base.
+
+Pipecat's HTTP service can remain private behind the API. Browser live-listener media still
+requires browser-reachable ICE/TURN infrastructure as documented in `environment.md`.
 
 ## Security boundary
 
-Do not expose the API directly to untrusted clients. Several product and execution endpoints
-accept `user_id` or project ownership fields from the request; those fields scope data but are
-not request authentication.
+Do not expose the API directly to unauthenticated, untrusted clients. Several product and
+execution endpoints accept `user_id` or project ownership fields from the request; those
+fields scope data but are not request authentication.
 
-Put the API behind an authenticated ingress, API gateway, or identity-aware proxy that:
+Put the API behind an authenticated ingress, API gateway, identity-aware proxy, or trusted
+same-origin reverse proxy that:
 
 - authenticates the caller and supplies trusted identity;
 - rejects or replaces caller-provided ownership fields;
-- restricts CORS to the deployed web origin;
+- restricts CORS to the deployed web origin when the API uses a separate origin;
 - rate-limits execution and provider-backed routes;
 - keeps provider credentials and internal service tokens server-side.
 
-Cloud Run services require authentication by default. Do not add
-`--allow-unauthenticated` until an application authentication boundary is implemented and
-verified.
+Cloud Run services require authentication unless unauthenticated invocation is explicitly
+allowed. Do not add `--allow-unauthenticated` to the API until an application authentication
+boundary is implemented and verified. If the browser reaches the API through Cloud Run or a
+gateway, ensure that ingress supplies the required authenticated identity; the CAE frontend
+does not itself mint Cloud Run identity tokens.
 
 ## Data and secrets
 
@@ -30,8 +43,14 @@ verified.
   platform secret manager, not an env file or image.
 - Give the API and Pipecat services the same internal token when the reference voice path is
   enabled.
+- Use provider API credentials for hosted model and upstream ASSERT judging. The local Codex
+  OAuth callback/token store is a development workflow, not a hosted authentication design.
 - Keep generated artifacts in durable object storage before relying on them for retention or
   audit requirements.
+
+`APP_ENV=production` disables the development-only synthetic ASSERT sidecar. The separate
+execution-conversation judge route remains mounted, but upstream judging still requires
+`ASSERT_UPSTREAM_JUDGE_ENABLED=1`, an allowed model, and provider credentials.
 
 ## Build the API image
 
@@ -86,8 +105,11 @@ gcloud run services update conversation-agent-evals-api \
   --set-secrets REFERENCE_AGENT_INTERNAL_TOKEN=reference-agent-internal-token:latest
 ```
 
-Deploy the web and Pipecat containers as separate services. Prefer private service-to-service
-access for Pipecat; only the web ingress should be browser-facing.
+Deploy the web and Pipecat containers as separate services. Keep Pipecat private where
+possible. Expose the API only through the authenticated browser-reachable boundary selected
+above, or route it through the web/reverse-proxy origin. Configure the built frontend's
+`NEXT_PUBLIC_API_BASE_URL` to that browser-reachable URL; an internal Cloud Run service URL is
+not usable by the browser.
 
 ## Release checks
 
