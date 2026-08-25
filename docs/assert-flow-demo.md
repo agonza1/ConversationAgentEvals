@@ -38,7 +38,7 @@ Must not do: <unsafe or out-of-policy action 1>; <unsafe or out-of-policy action
 Expected final state: <observable final workflow state>
 ```
 
-Output of this step: a short requirements block. It feeds the behavior taxonomy in step 2. ConversationAgentEvals does not yet turn arbitrary prose into a saved custom scenario automatically, so this authoring step is manual.
+Output of this step: a short requirements block. This curl-first walkthrough writes it manually. In the web app, `/specs/new` can generate draft success checks, forbidden checks, scenario guidance and examples, deterministic-check guidance, and a judge rubric from a title, role, and objective. Review or edit the generated content, approve it, and save a version before treating it as the evaluation design. A saved editable spec is not yet imported automatically into a runnable benchmark scenario.
 
 ## 2. Behavior taxonomy
 
@@ -55,7 +55,7 @@ The same taxonomy carries forbidden behavior: direct approval, dosage changes, a
 
 For your own use case, convert each `Must do` item into a required action and rubric row, then convert each `Must not do` item into a forbidden action. Keep weights adding up to 100 and use keywords that should appear in transcripts, action traces, or final-state evidence.
 
-Output of this step: required actions, forbidden actions, and rubric checks. In the current repo, seeded benchmark scenarios live in `apps/api/app/services/benchmark_service.py`; adding a brand-new reusable scenario is still a code/config authoring task, not a browser command.
+Output of this step: required actions, forbidden actions, and rubric checks. Seeded benchmark scenarios remain defined in `apps/api/app/services/benchmark_service.py` and registered extensions. A scenario created through `/scenarios` or `POST /api/scenarios` is a lightweight, runnable local scenario: it persists the title, simulated-user prompt, expected output, and description, then derives a generic required-action set and keyword rubric. It does not copy required behaviors, forbidden behaviors, weights, or judge configuration from a saved `/specs/new` design. To evaluate the exact approved taxonomy today, manually translate it into a seeded or registered benchmark scenario definition before running it.
 
 ## 3. Generated scenario / test set
 
@@ -86,7 +86,7 @@ For your own use case, substitute the suite and scenario identifiers after you a
 curl -s http://127.0.0.1:8000/api/benchmarks/<suite_id>/scenarios/<scenario_id>/contract
 ```
 
-Output of this step: a scenario contract with `suite_id`, `scenario_id`, `spec_id`, `spec_version`, required actions, forbidden actions, rubric checks, and expected evidence types. The contract is what the run in step 4 is judged against.
+Output of this step: a scenario contract with `suite_id`, `scenario_id`, `spec_id`, `spec_version`, required actions, forbidden actions, rubric checks, and expected evidence types. The contract—not a separate saved editable spec—is what the run in step 4 is judged against. Always inspect it before launching a custom scenario. In particular, browser-created `user-scenarios` currently expose the lightweight generated contract described above.
 
 ## 4. Target / agent execution
 
@@ -108,7 +108,9 @@ curl -s -X POST http://127.0.0.1:8000/api/benchmarks/telehealth-agent/scenarios/
   }'
 ```
 
-For your own target, first run your agent with your scenario prompt in your own environment, then submit the evidence. The platform expects evidence, not a live agent URL, on the synchronous `/run` path:
+The synchronous benchmark `/run` path below accepts evidence; it does not dereference a target URL. For direct execution, configure a target under `/targets` and launch it from `/runs`. The current arbitrary-URL adapter is the HTTP JSON chat target. Built-in and supported public voice targets can also run directly, while generic browser WebRTC, SIP, and PSTN targets still require dedicated adapters.
+
+To submit evidence captured by an external or unsupported target, use:
 
 ```bash
 curl -s -X POST http://127.0.0.1:8000/api/benchmarks/<suite_id>/scenarios/<scenario_id>/run \
@@ -226,11 +228,11 @@ Use [examples/assert-flow-demo.json](examples/assert-flow-demo.json) when a down
 Use this checklist when adapting the flow to a new domain:
 
 1. Write the natural-language requirements block.
-2. Manually convert it into required actions, forbidden actions, and rubric checks.
-3. Select an existing seeded scenario or add a new scenario definition in `apps/api/app/services/benchmark_service.py`.
-4. Confirm the contract with `GET /api/benchmarks/<suite_id>/scenarios/<scenario_id>/contract`.
-5. Run your real target outside ConversationAgentEvals and capture transcript, action trace, and final state.
-6. Submit the evidence with `POST /api/benchmarks/<suite_id>/scenarios/<scenario_id>/run`.
+2. Optionally generate, edit, approve, save, and export a richer evaluation design in `/specs/new`.
+3. Choose the actual runnable contract: use a matching seeded scenario, or manually translate the approved checks into a seeded or registered benchmark scenario definition. Use `/scenarios` only when its lightweight generic contract is sufficient.
+4. Confirm the exact contract with `GET /api/benchmarks/<suite_id>/scenarios/<scenario_id>/contract`.
+5. Configure a supported live target in `/targets` and launch it from `/runs`, or run an unsupported target externally and capture its evidence.
+6. For externally captured evidence, submit it with `POST /api/benchmarks/<suite_id>/scenarios/<scenario_id>/run`.
 7. Review the report fields and artifact manifests returned by the run.
 
-Unsupported today: automatic requirements-to-taxonomy generation, browser-based custom scenario creation, and direct live-agent execution from an arbitrary target URL. Use the manual placeholders above until those product surfaces exist.
+Supported today: generated draft checks and scenarios in `/specs/new`, browser-created lightweight runnable scenarios in `/scenarios`, and direct execution of configured targets through `/targets` and `/runs`, including arbitrary HTTP JSON endpoints and the supported live voice adapters. Not yet supported is automatic import of a saved editable spec into a runnable benchmark contract. Generated content still requires user review and approval, and generic browser WebRTC, SIP, or PSTN execution requires a dedicated adapter rather than accepting any URL.
