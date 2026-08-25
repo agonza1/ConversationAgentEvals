@@ -161,6 +161,8 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_REALTIME_MODEL=gpt-realtime-mini
 OPENAI_RESPONSES_MODEL=gpt-4.1-mini
 SPEC_GENERATION_MODEL=gpt-5.4-mini
+
+# Standalone CAE product judge (/api/product/judge)
 LLM_JUDGE_PROVIDER=openai_codex
 LLM_JUDGE_MODEL=gpt-5.4-mini
 LLM_JUDGE_API_KEY=
@@ -168,6 +170,19 @@ OPENAI_CODEX_OAUTH_PATH=
 OPENAI_CODEX_IMPORT_HOME=1
 LLM_JUDGE_DAILY_CREDIT_LIMIT=200
 LLM_JUDGE_RESERVED_DAILY_CREDITS=0
+
+# Optional upstream ASSERT judge for completed execution conversations
+ASSERT_UPSTREAM_JUDGE_ENABLED=0
+ASSERT_JUDGE_MODEL=openai/gpt-4.1-mini
+ASSERT_JUDGE_ALLOWED_MODELS=openai/gpt-4.1-mini
+ASSERT_JUDGE_MAX_N=1
+ASSERT_JUDGE_MAX_CONCURRENT=2
+ASSERT_JUDGE_MAX_TOKENS=8000
+ASSERT_JUDGE_TIMEOUT_SECONDS=300
+
+# Development-only synthetic ASSERT lifecycle sidecar
+ASSERT_LOCAL_SIDECAR_ENABLED=
+
 HEYGEN_LIVE_AVATAR_API_KEY=
 HEYGEN_API_KEY=
 HEYGEN_AVATAR_ID=
@@ -188,15 +203,30 @@ STRIPE_TEAM_PRICE_ID=
 STRIPE_CHECKOUT_BASE_URL=
 BUSINESS_CONTACT_URL=
 REALTIME_REQUEST_TIMEOUT_MS=5000
-ASSERT_LOCAL_SIDECAR_ENABLED=
 ```
 
-### Local OpenAI Codex OAuth judge
+### Local CAE product judge through Codex OAuth
 
-`LLM_JUDGE_PROVIDER=openai_codex` uses the Connect OpenAI control in the benchmark runner. OAuth tokens are stored in the gitignored `.local/openai-codex-oauth.json` file by default; set `OPENAI_CODEX_OAUTH_PATH` only to move that local store. An existing `~/.codex/auth.json` is imported when the local store is empty unless `OPENAI_CODEX_IMPORT_HOME=0`. `LLM_JUDGE_API_KEY` remains an optional API-key fallback for CI.
+`LLM_JUDGE_PROVIDER=openai_codex` applies to the standalone CAE product-judge endpoint, `POST /api/product/judge`. It uses the **Connect OpenAI** control in the benchmark runner. OAuth tokens are stored in the gitignored `.local/openai-codex-oauth.json` file by default; set `OPENAI_CODEX_OAUTH_PATH` only to move that local store. An existing `~/.codex/auth.json` is imported when the local store is empty unless `OPENAI_CODEX_IMPORT_HOME=0`. `LLM_JUDGE_API_KEY` remains an optional API-key fallback for CI.
 
 This Codex-style ChatGPT OAuth integration is unofficial, brittle, local-only, and OpenAI-only. It is not a hosted OAuth flow. Claude is not implemented yet, but can be added later through the same provider interface.
 
-For Docker Compose, the API service publishes the fixed mapping `1455:1455` so the browser redirect to `http://localhost:1455/auth/callback` reaches the ephemeral callback listener inside the container. The host callback port is not configurable because the Codex OAuth redirect URI is fixed to `localhost:1455`; choose a different API port if `1455` is already in use. OAuth tokens persist through the `./.local:/workspace/.local` bind mount. Override the listener bind address with `OPENAI_CODEX_CALLBACK_BIND_HOST` only if you need a non-default host interface.
+For Docker Compose, the API service publishes the fixed mapping `1455:1455` so the browser redirect to `http://localhost:1455/auth/callback` reaches the ephemeral callback listener inside the container. The host callback port is not configurable because the Codex OAuth redirect URI is fixed to `localhost:1455`. If port `1455` is occupied, stop the other callback listener or use an API-key/provider configuration; changing `API_PORT` does not change the OAuth callback port. OAuth tokens persist through the `./.local:/workspace/.local` bind mount. Override the listener bind address with `OPENAI_CODEX_CALLBACK_BIND_HOST` only if you need a non-default host interface.
+
+### Upstream ASSERT execution-conversation judge
+
+The run-analysis judge action for a completed execution conversation calls:
+
+```text
+POST /api/assert/runs/{execution_run_id}/conversations/{conversation_id}/judge
+```
+
+Enable it with `ASSERT_UPSTREAM_JUDGE_ENABLED=1` and configure an allowed `ASSERT_JUDGE_MODEL`. The pinned `assert-ai` subprocess uses LiteLLM/provider credentials; the local Codex OAuth session is not forwarded into it. For an OpenAI-backed model, set `OPENAI_API_KEY` or `LLM_JUDGE_API_KEY`. The latter is copied to `OPENAI_API_KEY` for the subprocess when necessary.
+
+This path shares the `LLM_JUDGE_DAILY_CREDIT_LIMIT` and `LLM_JUDGE_RESERVED_DAILY_CREDITS` ledger with the CAE product judge. `ASSERT_JUDGE_MAX_N`, `ASSERT_JUDGE_MAX_CONCURRENT`, token, timeout, and allowlist variables apply only to the upstream judge. See [Upstream ASSERT judging](upstream-assert-judge.md).
+
+### Development-only local ASSERT sidecar
+
+`ASSERT_LOCAL_SIDECAR_ENABLED` controls the synthetic `/api/assert/runs` lifecycle route in development-like environments. The route validates ASSERT-shaped input, queue, ingestion, and artifact contracts; it does not run upstream semantic evaluation. It is disabled on Cloud Run and when `APP_ENV` is production. See [ASSERT Boundary and Schemas](assert-boundary-and-schemas.md).
 
 User-created scenarios persist under `storage/user_scenarios.json` (Compose-mounted at `/workspace/storage`). Override with `USER_SCENARIOS_PATH` if needed. A one-time copy from the legacy `apps/api/data/user_scenarios.json` path runs when the new file is missing.
