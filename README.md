@@ -21,7 +21,7 @@ There is one product and one supported evaluation contract. Users can either run
 - Operator-facing QA reports, saved-run history, regression comparisons, and export workflows.
 - A focused benchmark runner at `/benchmarks`, including an Execute **Launch evaluation** panel that streams conversations into an `inference_set.jsonl` live list for text callables and voice fixtures.
 - An opt-in `openai_codex` text target that uses connected local Codex OAuth to record a real model response. It does not invent tool events or completed-task state, so reports honestly show missing live-tool evidence.
-- A built-in streaming voice reference target: Pipecat tester → streaming Kokoro PCM → Silero VAD + rtc-asr Local STT v1 → configured OpenAI-compatible/Codex LLM → streaming Kokoro reply → current-run metrics, evaluation, and vCon evidence. This local synthetic-media proof is not browser, SIP, or PSTN validation.
+- A built-in streaming voice reference target: Pipecat tester → streaming Kokoro PCM → Silero VAD + rtc-asr Local STT v1 → configured OpenAI-compatible/Codex or local Ollama LLM → streaming Kokoro reply → current-run metrics, evaluation, and vCon evidence. This local synthetic-media proof is not browser, SIP, or PSTN validation.
 
 Evaluation artifacts that conform to the ASSERT boundary remain the canonical results. The application database stores product metadata and indexes; it does not replace the evaluation result model.
 
@@ -49,17 +49,17 @@ npm run dev
 
 Open the printed web URL and visit `/benchmarks`. The basic demo uses transcript, action-trace, and final-state evidence, so it does not require live microphone ASR or any external target application. Advanced environment settings are documented in [docs/environment.md](docs/environment.md). To run multiple agents and local CAE stacks safely, follow [docs/parallel-development.md](docs/parallel-development.md).
 
-Local LLM judge and text-target auth: [docs/openai-codex-oauth.md](docs/openai-codex-oauth.md).
+Local Codex OAuth for CAE's standalone product judge and text-target auth: [docs/openai-codex-oauth.md](docs/openai-codex-oauth.md).
 
 For the shortest standalone end-to-end walkthrough, see [docs/assert-flow-demo.md](docs/assert-flow-demo.md) or its [machine-readable example](docs/examples/assert-flow-demo.json).
 
 For an **optional external-target example**, see [docs/agentic-contact-center-example.md](docs/agentic-contact-center-example.md). The cancellation-rescue scenario is registered as an optional, individually runnable scenario under `call-center-voice-ai`; it is excluded from the default suite coverage denominator. The example can run entirely offline from a checked-in response fixture or against a separately running Agentic Contact Center service.
 
-Execute-stage **local Pipecat SmallWebRTC audio in/out hooks** with vCon recording/transcription capture (no FreeSWITCH required for CI) are documented in [docs/execution-audio-webrtc.md](docs/execution-audio-webrtc.md).
+Execute-stage **local Pipecat duplex audio** with vCon recording/transcription capture (no browser peer or FreeSWITCH required) is documented in [docs/execution-audio-webrtc.md](docs/execution-audio-webrtc.md).
 
-The opt-in public Pipecat demo target is available from **Targets** and runs a real evaluation over direct server-side Daily WebRTC, without Chromium. It records current-run caller/target audio, transcript, latency, evaluation, and vCon evidence; see [docs/pipecat-public-target-execution.md](docs/pipecat-public-target-execution.md). The separate browser compatibility probe remains documented in [docs/pipecat-public-voice-smoke.md](docs/pipecat-public-voice-smoke.md).
+The opt-in public Pipecat demo target is available from **Targets** and runs a real evaluation over direct server-side Daily WebRTC, without Chromium. It records current-run caller/target audio, transcript, per-exchange latency, evaluation, and vCon evidence; see [docs/pipecat-public-target-execution.md](docs/pipecat-public-target-execution.md). The separate browser compatibility probe remains documented in [docs/pipecat-public-voice-smoke.md](docs/pipecat-public-voice-smoke.md).
 
-The opt-in Holy Guacamole SignalWire target drives `https://holyguacamole.signalwire.me/` through a gated browser WebRTC executor and records current-run caller audio, remote target audio, timing, provenance, and vCon media evidence; see [docs/signalwire-holyguacamole-target-execution.md](docs/signalwire-holyguacamole-target-execution.md).
+The opt-in Holy Guacamole SignalWire target drives `https://holyguacamole.signalwire.me/` through a gated direct server-side SignalWire WebRTC executor and records current-run caller audio, remote target audio, timing, provenance, and vCon media evidence without launching a browser; see [docs/signalwire-holyguacamole-target-execution.md](docs/signalwire-holyguacamole-target-execution.md).
 
 Standalone offline example after `npm run setup`:
 
@@ -128,7 +128,7 @@ Canonical ASSERT wrapper anchors:
 - [apps/api/app/services/assert_queue_lifecycle.py](apps/api/app/services/assert_queue_lifecycle.py)
 - [docs/assert-boundary-and-schemas.md](docs/assert-boundary-and-schemas.md)
 
-The primary checked-in runtime evaluates through the local ASSERT-compatible boundary in [apps/api/app/services/benchmark_service.py](apps/api/app/services/benchmark_service.py). The optional `POST /api/assert/runs` endpoint is a synthetic local sidecar adapter used to exercise the same contract. Completed canonical manifests use `local-artifact://assert/runs/{run_id}/manifest.json`.
+The primary checked-in runtime evaluates through the local ASSERT-compatible boundary in [apps/api/app/services/benchmark_service.py](apps/api/app/services/benchmark_service.py). The optional `POST /api/assert/runs` endpoint is a synthetic local sidecar adapter used to exercise the same contract. Completed canonical manifests use `local-artifact://assert/runs/{run_id}/manifest.json`. The separate opt-in upstream semantic judge is documented in [docs/upstream-assert-judge.md](docs/upstream-assert-judge.md).
 
 ## Docker
 
@@ -187,7 +187,7 @@ This project is part of the [WebRTC.ventures](https://webrtc.ventures/) open-sou
 - [ConversationAgentEvals](https://github.com/agonza1/ConversationAgentEvals) orchestrates tests, normalizes evidence, and reports regressions.
 - [Agentic Contact Center](https://github.com/agonza1/agentic-contact-center) is the reference voice-agent target and demonstration.
 - [rtc-asr](https://github.com/agonza1/rtc-asr) provides optional local streaming speech-to-text and reproducible ASR benchmarks.
-- [ASSERT](https://github.com/responsibleai/ASSERT) remains the upstream evaluation engine.
+- [ASSERT](https://github.com/responsibleai/ASSERT) remains the upstream evaluation model and optional semantic-judging package.
 
 ```mermaid
 flowchart LR
