@@ -25,7 +25,11 @@ def create_agent(payload: AgentCreateRequest):
 
 @router.get('/options')
 def list_agent_options():
-    return {'targets': [_target_option(target) for target in _TARGET_OPTIONS]}
+    return {
+        'targets': [_target_option(target) for target in _TARGET_OPTIONS],
+        'testers': _TESTER_OPTIONS,
+        'executors': _EXECUTOR_OPTIONS,
+    }
 
 
 @router.get('/{agent_id}')
@@ -120,6 +124,89 @@ _CONNECTION_REQUIREMENTS: dict[AgentTarget, tuple[str, ...]] = {
     'sip_agent': ('acc_base_url', 'sip_uri'),
     'phone_agent': ('acc_base_url', 'phone_number'),
 }
+
+_TESTER_OPTIONS: tuple[dict[str, object], ...] = (
+    {
+        'id': 'scenario_simulator',
+        'label': 'Scenario user',
+        'channel': 'text',
+        'description': 'Generates user turns from the selected scenario and adapts to target replies.',
+        'available': True,
+    },
+    {
+        'id': 'pipecat_tester',
+        'label': 'Pipecat tester',
+        'channel': 'voice',
+        'description': 'Synthesizes caller speech, observes target audio, and records current-run media evidence.',
+        'available': True,
+    },
+    {
+        'id': 'fixture_replay',
+        'label': 'Fixture replay',
+        'channel': 'text_or_voice',
+        'description': 'Replays saved evidence for regression checks; it is not a live target driver.',
+        'available': True,
+    },
+)
+
+_EXECUTOR_OPTIONS: tuple[dict[str, object], ...] = (
+    {
+        'id': 'local_async_runner',
+        'label': 'Local async runner',
+        'channel': 'text',
+        'description': 'Invokes built-in, OpenAI, or HTTP text targets and stores black-box response evidence.',
+        'available': True,
+    },
+    {
+        'id': 'cae_local_audio_loop',
+        'label': 'CAE local audio loop',
+        'channel': 'voice',
+        'description': 'Runs separate local Pipecat tester and target participants through rtc-asr and Kokoro.',
+        'available': True,
+    },
+    {
+        'id': 'pipecat_public_daily',
+        'label': 'Pipecat public Daily',
+        'channel': 'voice',
+        'description': 'Joins the public Pipecat demo with a direct Daily transport and captures current-run evidence.',
+        'available': True,
+    },
+    {
+        'id': 'signalwire_public_webrtc',
+        'label': 'SignalWire public WebRTC',
+        'channel': 'voice',
+        'description': 'Connects to the public Holy Guacamole SignalWire target behind the explicit run gate.',
+        'available': True,
+    },
+    {
+        'id': 'evidence_replay',
+        'label': 'Evidence replay',
+        'channel': 'text_or_voice',
+        'description': 'Scores saved conversations without launching a target or tester.',
+        'available': True,
+    },
+    {
+        'id': 'acc_browser_webrtc',
+        'label': 'ACC browser WebRTC',
+        'channel': 'voice',
+        'description': 'Planned ACC-owned browser media adapter; readiness is separate from executability.',
+        'available': False,
+    },
+    {
+        'id': 'acc_sip',
+        'label': 'ACC SIP',
+        'channel': 'voice',
+        'description': 'Planned ACC-owned SIP adapter; readiness is separate from executability.',
+        'available': False,
+    },
+    {
+        'id': 'acc_phone',
+        'label': 'ACC phone',
+        'channel': 'voice',
+        'description': 'Planned ACC-owned phone/PSTN adapter; readiness is separate from executability.',
+        'available': False,
+    },
+)
 
 
 def _target_option(target: AgentTarget) -> dict[str, object]:
