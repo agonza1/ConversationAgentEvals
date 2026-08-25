@@ -238,6 +238,7 @@ test('targets page shows agent target cards and try-it-out deep links', async ({
     'href',
     '/runs?launch=demo&agent_id=holyguacamole-signalwire-agent',
   );
+  await expect(signalwireCard.getByRole('button', { name: 'Actions for Holy Guacamole SignalWire drive-thru' })).toHaveCount(0);
   await expect(page.getByRole('article').filter({ hasText: 'Saved voice evidence' })).toHaveCount(0);
   await expect(mockCard.getByRole('button', { name: 'Actions for Mock text agent' })).toHaveCount(0);
   await expect(

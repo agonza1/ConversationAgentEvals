@@ -335,6 +335,7 @@ const BUILT_IN_AGENT_IDS = new Set([
   'generalist-text-agent',
   'generalist-voice-agent',
   'pipecat-public-demo',
+  'holyguacamole-signalwire-agent',
 ]);
 const BUILT_IN_AGENT_TARGETS = new Set<AgentTarget>(['mock_agent', 'builtin_sample_voice']);
 
