@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 TargetKind = Literal[
@@ -45,6 +45,13 @@ EvidenceSource = Literal[
     'external_webrtc',
     'acc_live',
 ]
+TargetEnvironment = Literal[
+    'builtin',
+    'saved_replay',
+    'local',
+    'external_public',
+    'planned_external',
+]
 
 BUILTIN_SAMPLE_VOICE_HONESTY = (
     'Built-in generalist agent · current-run local audio and scoring · no browser, phone, or SIP call'
@@ -75,9 +82,11 @@ class ExecutionRunProvenance(BaseModel):
     target_id: str | None = None
     target_kind: TargetKind
     target_channel: Literal['text', 'voice']
+    target_environment: TargetEnvironment = 'builtin'
     tester_id: TesterId
     executor_id: ExecutorId
     evidence_source: EvidenceSource
+    evidence_capabilities: list[str] = Field(default_factory=list)
     live_external_connection: bool = False
     saved_evidence: bool = False
     synthetic_media: bool = False
@@ -199,6 +208,47 @@ def target_kind_for_agent_target(target: str | None) -> TargetKind:
     return mapping.get(normalize_agent_target(target), 'unknown')
 
 
+def target_environment_for_agent_target(target: str | None) -> TargetEnvironment:
+    normalized = normalize_agent_target(target)
+    if normalized in {'offline_acc_fixture', 'voice_fixture'}:
+        return 'saved_replay'
+    if normalized in {'builtin_sample_voice'}:
+        return 'local'
+    if normalized in {'openai_codex', 'http_endpoint', 'pipecat_public_demo', 'signalwire_holy_guacamole'}:
+        return 'external_public'
+    if normalized in {'sip_agent', 'phone_agent', 'browser_webrtc_agent'}:
+        return 'planned_external'
+    return 'builtin'
+
+
+def evidence_capabilities_for_execution(
+    *,
+    target: str,
+    executor_id: str,
+    evidence_source: EvidenceSource,
+    saved_evidence: bool,
+    synthetic_media: bool,
+) -> list[str]:
+    capabilities: list[str] = []
+    if evidence_source in {'generated_text', 'provider_response', 'saved_replay', 'local_audio_loop', 'external_webrtc'}:
+        capabilities.append('transcript')
+    if evidence_source in {'provider_response', 'local_audio_loop', 'external_webrtc'}:
+        capabilities.append('current_run_response')
+    if evidence_source in {'local_audio_loop', 'external_webrtc'}:
+        capabilities.extend(['audio_capture', 'latency_marks'])
+    if target == 'http_endpoint':
+        capabilities.append('black_box_request_response')
+    if target == 'openai_codex':
+        capabilities.append('provider_model_response')
+    if saved_evidence:
+        capabilities.append('saved_artifact_replay')
+    if synthetic_media:
+        capabilities.append('synthetic_caller_media')
+    if executor_id in _UNAVAILABLE_EXECUTORS:
+        capabilities.append('planned_unavailable')
+    return capabilities
+
+
 def build_run_provenance(
     *,
     agent: dict[str, Any] | None,
@@ -267,9 +317,17 @@ def build_run_provenance(
         target_id=str((agent or {}).get('id') or '') or None,
         target_kind=target_kind_for_agent_target(target),
         target_channel='voice' if channel == 'voice' else 'text',
+        target_environment=target_environment_for_agent_target(target),
         tester_id=tester_id,
         executor_id=executor_id,
         evidence_source=evidence_source,
+        evidence_capabilities=evidence_capabilities_for_execution(
+            target=target,
+            executor_id=executor_id,
+            evidence_source=evidence_source,
+            saved_evidence=saved_evidence,
+            synthetic_media=synthetic_media,
+        ),
         live_external_connection=(
             executor_id in {'pipecat_public_daily', 'signalwire_public_webrtc'}
             or executor_id in _UNAVAILABLE_EXECUTORS

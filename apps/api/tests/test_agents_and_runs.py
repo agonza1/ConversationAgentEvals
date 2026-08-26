@@ -484,6 +484,12 @@ def test_http_target_executes_black_box_contract_and_persists_tester_provenance(
     assert queued['tester_id'] == 'scenario_simulator'
     assert queued['executor_id'] == 'local_async_runner'
     assert queued['execution_snapshot']['agent']['target'] == 'http_endpoint'
+    assert queued['provenance']['target_environment'] == 'external_public'
+    assert queued['provenance']['evidence_capabilities'] == [
+        'transcript',
+        'current_run_response',
+        'black_box_request_response',
+    ]
     finished = execute_execution_run(queued['execution_run_id'], payload)
 
     assert finished['status'] == 'completed'
@@ -574,6 +580,14 @@ def test_builtin_sample_voice_agent_run_uses_local_audio_loop_provenance():
     assert provenance['tester_id'] == 'pipecat_tester'
     assert provenance['executor_id'] == 'cae_local_audio_loop'
     assert provenance['evidence_source'] == 'local_audio_loop'
+    assert provenance['target_environment'] == 'local'
+    assert provenance['evidence_capabilities'] == [
+        'transcript',
+        'current_run_response',
+        'audio_capture',
+        'latency_marks',
+        'synthetic_caller_media',
+    ]
     assert provenance['live_external_connection'] is False
     assert provenance['saved_evidence'] is False
     assert provenance['synthetic_media'] is True
@@ -814,6 +828,14 @@ def test_signalwire_holyguacamole_agent_uses_gated_direct_webrtc_executor(monkey
     assert queued['execution_snapshot']['request']['audio_transport'] == 'signalwire_webrtc'
     assert queued['execution_snapshot']['request']['max_exchanges'] == 1
     assert queued['provenance']['target_kind'] == 'signalwire_holy_guacamole'
+    assert queued['provenance']['target_environment'] == 'external_public'
+    assert queued['provenance']['evidence_capabilities'] == [
+        'transcript',
+        'current_run_response',
+        'audio_capture',
+        'latency_marks',
+        'synthetic_caller_media',
+    ]
     assert queued['provenance']['live_external_connection'] is True
     assert queued['provenance']['evidence_source'] == 'external_webrtc'
 
@@ -1690,6 +1712,11 @@ def test_saved_text_replay_without_scenarios_defaults_to_cancellation_rescue():
     assert queued['tester_id'] == 'fixture_replay'
     assert queued['executor_id'] == 'evidence_replay'
     assert queued['provenance']['saved_evidence'] is True
+    assert queued['provenance']['target_environment'] == 'saved_replay'
+    assert queued['provenance']['evidence_capabilities'] == [
+        'transcript',
+        'saved_artifact_replay',
+    ]
     assert queued['scenario_ids'] == ['cancellation-rescue']
 
 
