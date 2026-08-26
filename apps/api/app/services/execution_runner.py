@@ -165,6 +165,7 @@ def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool =
         executor_id=resolved.executor_id,
         mode=resolved.mode,
         text_callable=resolved.text_callable,
+        model_name=model_name,
     )
     record = ExecutionRunRecord(
         execution_run_id=execution_run_id,

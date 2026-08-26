@@ -488,6 +488,7 @@ def test_http_target_executes_black_box_contract_and_persists_tester_provenance(
     assert queued['provenance']['evidence_capabilities'] == [
         'transcript',
         'current_run_response',
+        'latency_marks',
         'black_box_request_response',
     ]
     finished = execute_execution_run(queued['execution_run_id'], payload)

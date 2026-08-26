@@ -7,7 +7,9 @@ network or mutable readiness state.
 
 from __future__ import annotations
 
+import ipaddress
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -208,11 +210,32 @@ def target_kind_for_agent_target(target: str | None) -> TargetKind:
     return mapping.get(normalize_agent_target(target), 'unknown')
 
 
-def target_environment_for_agent_target(target: str | None) -> TargetEnvironment:
+def _is_local_url(value: str | None) -> bool:
+    hostname = urlparse(str(value or '')).hostname
+    if not hostname:
+        return False
+    if hostname.lower() == 'localhost':
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def target_environment_for_agent_target(
+    target: str | None,
+    *,
+    agent: dict[str, Any] | None = None,
+    model_name: str | None = None,
+) -> TargetEnvironment:
     normalized = normalize_agent_target(target)
     if normalized in {'offline_acc_fixture', 'voice_fixture'}:
         return 'saved_replay'
     if normalized in {'builtin_sample_voice'}:
+        return 'local'
+    if normalized == 'openai_codex' and str(model_name or '').strip().lower().startswith('ollama/'):
+        return 'local'
+    if normalized == 'http_endpoint' and _is_local_url(((agent or {}).get('connection') or {}).get('endpoint_url')):
         return 'local'
     if normalized in {'openai_codex', 'http_endpoint', 'pipecat_public_demo', 'signalwire_holy_guacamole'}:
         return 'external_public'
@@ -235,7 +258,9 @@ def evidence_capabilities_for_execution(
     if evidence_source in {'provider_response', 'local_audio_loop', 'external_webrtc'}:
         capabilities.append('current_run_response')
     if evidence_source in {'local_audio_loop', 'external_webrtc'}:
-        capabilities.extend(['audio_capture', 'latency_marks'])
+        capabilities.append('audio_capture')
+    if evidence_source in {'provider_response', 'local_audio_loop', 'external_webrtc'}:
+        capabilities.append('latency_marks')
     if target == 'http_endpoint':
         capabilities.append('black_box_request_response')
     if target == 'openai_codex':
@@ -257,6 +282,7 @@ def build_run_provenance(
     executor_id: ExecutorId,
     mode: str,
     text_callable: str | None = None,
+    model_name: str | None = None,
 ) -> ExecutionRunProvenance:
     target = normalize_agent_target(agent_target or (agent or {}).get('target') or text_callable)
     voice_targets = {
@@ -317,7 +343,7 @@ def build_run_provenance(
         target_id=str((agent or {}).get('id') or '') or None,
         target_kind=target_kind_for_agent_target(target),
         target_channel='voice' if channel == 'voice' else 'text',
-        target_environment=target_environment_for_agent_target(target),
+        target_environment=target_environment_for_agent_target(target, agent=agent, model_name=model_name),
         tester_id=tester_id,
         executor_id=executor_id,
         evidence_source=evidence_source,
