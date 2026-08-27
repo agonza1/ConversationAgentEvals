@@ -38,3 +38,19 @@ def test_loopback_http_endpoint_execution_is_local():
     )
 
     assert provenance.target_environment == 'local'
+
+
+def test_saved_replay_advertises_latency_marks():
+    provenance = build_run_provenance(
+        agent={'id': 'saved-run', 'target': 'offline_acc_fixture', 'channel': 'text'},
+        agent_target='offline_acc_fixture',
+        tester_id='fixture_replay',
+        executor_id='evidence_replay',
+        mode='text_callable',
+    )
+
+    assert provenance.evidence_capabilities == [
+        'transcript',
+        'latency_marks',
+        'saved_artifact_replay',
+    ]

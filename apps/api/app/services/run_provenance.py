@@ -259,7 +259,7 @@ def evidence_capabilities_for_execution(
         capabilities.append('current_run_response')
     if evidence_source in {'local_audio_loop', 'external_webrtc'}:
         capabilities.append('audio_capture')
-    if evidence_source in {'provider_response', 'local_audio_loop', 'external_webrtc'}:
+    if evidence_source in {'provider_response', 'saved_replay', 'local_audio_loop', 'external_webrtc'}:
         capabilities.append('latency_marks')
     if target == 'http_endpoint':
         capabilities.append('black_box_request_response')
