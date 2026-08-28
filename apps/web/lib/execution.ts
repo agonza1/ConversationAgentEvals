@@ -200,9 +200,11 @@ export interface ExecutionRunProvenance {
   target_id?: string | null;
   target_kind: string;
   target_channel: 'text' | 'voice';
+  target_environment?: string;
   tester_id: TesterId;
   executor_id: ExecutorId;
   evidence_source: string;
+  evidence_capabilities?: string[];
   live_external_connection: boolean;
   saved_evidence: boolean;
   synthetic_media: boolean;

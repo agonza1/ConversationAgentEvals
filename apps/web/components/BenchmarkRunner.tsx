@@ -988,9 +988,11 @@ interface ExecutionRunRecord {
     target_id?: string | null;
     target_kind: string;
     target_channel: 'text' | 'voice';
+    target_environment?: string;
     tester_id: 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
     executor_id: 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'signalwire_public_webrtc' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
     evidence_source: string;
+    evidence_capabilities?: string[];
     live_external_connection: boolean;
     saved_evidence: boolean;
     synthetic_media: boolean;

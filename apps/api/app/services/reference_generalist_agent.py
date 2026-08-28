@@ -320,22 +320,31 @@ class OllamaCompletionProvider:
         }
 
 
-def resolve_reference_completion_provider(model_name: str | None = None) -> CompletionProvider:
+def configured_reference_completion_provider(model_name: str | None = None) -> CompletionProvider:
+    """Select the provider implied by the current model and credentials.
+
+    Selection is deliberately side-effect free so callers can describe the
+    configured execution destination without probing it. Runtime readiness is
+    still enforced by ``resolve_reference_completion_provider``.
+    """
     if _ollama_model_name(model_name) is not None:
-        ollama = OllamaCompletionProvider()
-        status = ollama.status()
-        if status.get('status') == 'connected':
-            return ollama
+        return OllamaCompletionProvider()
+    api_key_provider = OpenAICompatibleApiKeyProvider()
+    if api_key_provider.status()['status'] == 'connected':
+        return api_key_provider
+    return get_provider('openai')
+
+
+def resolve_reference_completion_provider(model_name: str | None = None) -> CompletionProvider:
+    provider = configured_reference_completion_provider(model_name)
+    status = provider.status()
+    if status.get('status') == 'connected':
+        return provider
+    if provider.provider_id == 'ollama':
         raise ReferenceRuntimeError(
             status.get('message')
             or 'Ollama is unavailable. Start Ollama and pull the selected model.'
         )
-    api_key_provider = OpenAICompatibleApiKeyProvider()
-    if api_key_provider.status()['status'] == 'connected':
-        return api_key_provider
-    oauth = get_provider('openai')
-    if oauth.status().get('status') == 'connected':
-        return oauth
     raise ReferenceRuntimeError(
         'Built-in generalist target requires an LLM. Set OPENAI_API_KEY, connect OpenAI/Codex OAuth, '
         f'or select {DEFAULT_OLLAMA_GENERALIST_MODEL_ID} with Ollama running.'
