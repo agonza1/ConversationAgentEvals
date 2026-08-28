@@ -1716,6 +1716,7 @@ def test_saved_text_replay_without_scenarios_defaults_to_cancellation_rescue():
     assert queued['provenance']['target_environment'] == 'saved_replay'
     assert queued['provenance']['evidence_capabilities'] == [
         'transcript',
+        'latency_marks',
         'saved_artifact_replay',
     ]
     assert queued['scenario_ids'] == ['cancellation-rescue']
@@ -1741,6 +1742,59 @@ def test_no_agent_voice_run_uses_inferred_target_provenance(mode: str, target_ki
 
     assert queued['provenance']['target_kind'] == target_kind
     assert queued['provenance']['target_channel'] == 'voice'
+
+
+def test_openai_target_provenance_uses_configured_local_compatible_base_url(monkeypatch):
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-key')
+    monkeypatch.setenv('OPENAI_BASE_URL', 'http://127.0.0.1:8080/v1')
+    created = client.post(
+        '/api/agents',
+        json={
+            'name': 'Local OpenAI-compatible agent',
+            'channel': 'text',
+            'target': 'openai_codex',
+        },
+    )
+    assert created.status_code == 200, created.text
+
+    queued = start_execution_run(
+        ExecutionRunCreateRequest(
+            suite_id='call-center-voice-ai',
+            scenario_ids=['billing-address-change'],
+            agent_id=created.json()['id'],
+            model_name='compatible-model',
+            user_id='agent-runs-user',
+            project_id='agent-runs-project',
+        )
+    )
+
+    assert queued['provenance']['target_environment'] == 'local'
+
+
+def test_ollama_target_provenance_uses_configured_remote_base_url(monkeypatch):
+    monkeypatch.setenv('OLLAMA_BASE_URL', 'https://ollama.example.com')
+    created = client.post(
+        '/api/agents',
+        json={
+            'name': 'Remote Ollama agent',
+            'channel': 'text',
+            'target': 'openai_codex',
+        },
+    )
+    assert created.status_code == 200, created.text
+
+    queued = start_execution_run(
+        ExecutionRunCreateRequest(
+            suite_id='call-center-voice-ai',
+            scenario_ids=['billing-address-change'],
+            agent_id=created.json()['id'],
+            model_name='ollama/qwen3:8b',
+            user_id='agent-runs-user',
+            project_id='agent-runs-project',
+        )
+    )
+
+    assert queued['provenance']['target_environment'] == 'external_public'
 
 
 def test_explicit_openai_target_executes_selected_model_for_any_text_agent_without_fake_tool_evidence():

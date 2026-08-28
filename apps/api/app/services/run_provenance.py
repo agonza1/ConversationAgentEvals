@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import ipaddress
 from typing import Any, Literal
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -211,15 +211,21 @@ def target_kind_for_agent_target(target: str | None) -> TargetKind:
 
 
 def _is_local_url(value: str | None) -> bool:
-    hostname = urlparse(str(value or '')).hostname
-    if not hostname:
-        return False
-    if hostname.lower() == 'localhost':
-        return True
     try:
-        return ipaddress.ip_address(hostname).is_loopback
+        parsed = urlparse(str(value or ''))
+        hostname = parsed.hostname
     except ValueError:
         return False
+    if not hostname:
+        return False
+    normalized_hostname = unquote(hostname).rstrip('.').lower()
+    if normalized_hostname == 'localhost' or normalized_hostname.endswith('.localhost'):
+        return True
+    try:
+        address = ipaddress.ip_address(normalized_hostname)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_private or address.is_link_local
 
 
 def target_environment_for_agent_target(
@@ -227,14 +233,23 @@ def target_environment_for_agent_target(
     *,
     agent: dict[str, Any] | None = None,
     model_name: str | None = None,
+    completion_provider_id: str | None = None,
+    completion_provider_base_url: str | None = None,
 ) -> TargetEnvironment:
     normalized = normalize_agent_target(target)
     if normalized in {'offline_acc_fixture', 'voice_fixture'}:
         return 'saved_replay'
     if normalized in {'builtin_sample_voice'}:
         return 'local'
-    if normalized == 'openai_codex' and str(model_name or '').strip().lower().startswith('ollama/'):
-        return 'local'
+    if normalized == 'openai_codex':
+        provider_id = str(completion_provider_id or '').strip().lower()
+        if provider_id in {'ollama', 'openai_compatible'} and completion_provider_base_url:
+            return 'local' if _is_local_url(completion_provider_base_url) else 'external_public'
+        # Preserve the established direct-call fallback while production runs
+        # pass the selected provider and its concrete destination above.
+        if str(model_name or '').strip().lower().startswith('ollama/'):
+            return 'local'
+        return 'external_public'
     if normalized == 'http_endpoint' and _is_local_url(((agent or {}).get('connection') or {}).get('endpoint_url')):
         return 'local'
     if normalized in {'openai_codex', 'http_endpoint', 'pipecat_public_demo', 'signalwire_holy_guacamole'}:
@@ -283,6 +298,8 @@ def build_run_provenance(
     mode: str,
     text_callable: str | None = None,
     model_name: str | None = None,
+    completion_provider_id: str | None = None,
+    completion_provider_base_url: str | None = None,
 ) -> ExecutionRunProvenance:
     target = normalize_agent_target(agent_target or (agent or {}).get('target') or text_callable)
     voice_targets = {
@@ -343,7 +360,13 @@ def build_run_provenance(
         target_id=str((agent or {}).get('id') or '') or None,
         target_kind=target_kind_for_agent_target(target),
         target_channel='voice' if channel == 'voice' else 'text',
-        target_environment=target_environment_for_agent_target(target, agent=agent, model_name=model_name),
+        target_environment=target_environment_for_agent_target(
+            target,
+            agent=agent,
+            model_name=model_name,
+            completion_provider_id=completion_provider_id,
+            completion_provider_base_url=completion_provider_base_url,
+        ),
         tester_id=tester_id,
         executor_id=executor_id,
         evidence_source=evidence_source,

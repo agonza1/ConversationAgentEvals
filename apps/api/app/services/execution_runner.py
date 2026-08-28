@@ -44,6 +44,7 @@ from app.services.reference_generalist_agent import (
     ReferenceMediaServices,
     ReferenceRuntimeError,
     ReferenceRuntimeConfig,
+    configured_reference_completion_provider,
     discover_rtc_asr_runtime,
     resolve_reference_completion_provider,
 )
@@ -158,6 +159,14 @@ def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool =
     now = datetime.now(UTC).isoformat()
     execution_run_id = f'exec-{uuid.uuid4().hex[:12]}'
     model_name = (resolved.model_name or '').strip() or DEFAULT_EXECUTION_MODEL
+    completion_provider_id = None
+    completion_provider_base_url = None
+    if target == 'openai_codex':
+        completion_provider = configured_reference_completion_provider(model_name)
+        completion_provider_id = str(completion_provider.provider_id or '').strip() or None
+        completion_provider_base_url = (
+            str(getattr(completion_provider, 'base_url', '') or '').strip() or None
+        )
     provenance = build_run_provenance(
         agent=agent,
         agent_target=target,
@@ -166,6 +175,8 @@ def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool =
         mode=resolved.mode,
         text_callable=resolved.text_callable,
         model_name=model_name,
+        completion_provider_id=completion_provider_id,
+        completion_provider_base_url=completion_provider_base_url,
     )
     record = ExecutionRunRecord(
         execution_run_id=execution_run_id,
