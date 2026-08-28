@@ -219,7 +219,7 @@ def _is_local_url(value: str | None) -> bool:
     if not hostname:
         return False
     normalized_hostname = unquote(hostname).rstrip('.').lower()
-    if normalized_hostname == 'localhost' or normalized_hostname.endswith('.localhost'):
+    if normalized_hostname in {'localhost', 'host.docker.internal'} or normalized_hostname.endswith('.localhost'):
         return True
     try:
         address = ipaddress.ip_address(normalized_hostname)

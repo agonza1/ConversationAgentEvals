@@ -34,6 +34,7 @@ def test_ollama_execution_is_local_and_advertises_latency_marks():
     [
         'http://localhost:11434',
         'http://localhost.:11434',
+        'http://host.docker.internal:11434',
         'http://127.0.0.1:11434',
         'http://[::1]:11434',
         'http://192.168.1.20:11434',
