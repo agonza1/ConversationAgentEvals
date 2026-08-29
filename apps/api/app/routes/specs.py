@@ -42,6 +42,12 @@ class SpecSaveRequest(BaseModel):
     spec: EditableAssertSpec
 
 
+class SpecDuplicateRequest(BaseModel):
+    user_id: str = Field(min_length=1)
+    project_id: str = Field(default='default', min_length=1)
+    new_id: str = Field(min_length=1)
+
+
 @router.get('/templates')
 def list_spec_templates():
     return {'templates': default_templates()}
@@ -104,6 +110,20 @@ def update_editable_spec(spec_id: str, payload: SpecSaveRequest, db: Session = D
 def create_editable_spec_version(spec_id: str, payload: SpecSaveRequest, db: Session = Depends(get_db)):
     try:
         return save_spec(db=db, user_id=payload.user_id, project_id=payload.project_id, spec=payload.spec.model_copy(update={'id': spec_id}))
+    except SpecProjectAmbiguous as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post('/{spec_id}/duplicate')
+def duplicate_editable_spec(spec_id: str, payload: SpecDuplicateRequest, db: Session = Depends(get_db)):
+    try:
+        source = get_spec(db, spec_id, user_id=payload.user_id, project_id=payload.project_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail='Spec not found')
+        duplicate = source.spec.model_copy(update={'id': payload.new_id, 'version': None, 'status': 'draft'})
+        return save_spec(db=db, user_id=payload.user_id, project_id=payload.project_id, spec=duplicate)
     except SpecProjectAmbiguous as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
