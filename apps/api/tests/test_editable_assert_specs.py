@@ -391,6 +391,27 @@ def test_json_export_uses_the_immutable_persisted_config(monkeypatch):
     assert exported.json()['default_model']['name'] == 'openai/saved-model'
 
 
+def test_duplicate_creates_an_independent_draft_history():
+    suffix = uuid4().hex
+    user_id = f'duplicate-user-{suffix}'
+    project_id = f'duplicate-project-{suffix}'
+    source = client.post('/api/specs', json={'user_id': user_id, 'project_id': project_id, 'spec': _valid_spec(status='published')})
+    assert source.status_code == 200
+
+    duplicated = client.post(
+        '/api/specs/cancellation-rescue-agent/duplicate',
+        json={'user_id': user_id, 'project_id': project_id, 'new_id': 'cancellation-rescue-copy'},
+    )
+
+    assert duplicated.status_code == 200
+    payload = duplicated.json()
+    assert payload['id'] == 'cancellation-rescue-copy'
+    assert payload['version'] == 1
+    assert payload['spec']['status'] == 'draft'
+    assert payload['spec']['objective'] == source.json()['spec']['objective']
+    assert client.get('/api/specs/cancellation-rescue-agent', params={'user_id': user_id, 'project_id': project_id}).json()['spec']['status'] == 'published'
+
+
 def test_preview_quotes_yaml_scalars_that_look_like_list_markers():
     spec = _valid_spec(
         required_behaviors=[{'id': 'dash-text', 'label': '- do not parse me as a list', 'description': '? keep pasted checklist text scalar'}],
