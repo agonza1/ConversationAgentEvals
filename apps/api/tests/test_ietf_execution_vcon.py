@@ -57,7 +57,7 @@ def test_ietf_execution_vcon_uses_spoken_text_and_keeps_asr_as_analysis():
         score=33,
     )
 
-    assert exported['vcon'] == '0.4.0'
+    assert exported['vcon'] == '0.0.1'
     assert uuid.UUID(exported['uuid']).version == 4
     assert exported['created_at'] == '2026-09-26T10:00:00Z'
     assert exported['parties'] == [
@@ -140,10 +140,10 @@ def test_ietf_execution_vcon_marks_a_target_only_recording_with_the_target_party
     assert exported['dialog'][-1]['parties'] == [1]
 
 
-def test_ietf_execution_vcon_validator_rejects_legacy_cae_object():
-    result = validate_ietf_vcon({'vcon': '0.0.1', 'dialog': []})
+def test_ietf_execution_vcon_validator_rejects_incorrect_format_version():
+    result = validate_ietf_vcon({'vcon': '0.4.0', 'dialog': []})
 
     assert result['valid'] is False
-    assert 'vcon must be 0.4.0' in result['errors']
+    assert 'vcon must be 0.0.1' in result['errors']
     assert 'uuid must be a UUID' in result['errors']
     assert 'parties must contain at least one participant' in result['errors']

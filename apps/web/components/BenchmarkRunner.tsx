@@ -2142,6 +2142,29 @@ function shouldPreloadSampleEvidence() {
   return params.get('demo') === 'sample-evidence' || params.get('sample') === '1';
 }
 
+function vconDialogText(record: JsonRecord): string {
+  if (record.type !== undefined && record.type !== 'text') return '';
+  if (!Object.prototype.hasOwnProperty.call(record, 'body')) {
+    return typeof record.text === 'string'
+      ? record.text
+      : typeof record.transcript === 'string' ? record.transcript : '';
+  }
+  if (typeof record.body !== 'string') return '';
+  if (record.encoding === undefined || record.encoding === 'none' || record.encoding === 'json') {
+    return record.body;
+  }
+  if (record.encoding !== 'base64url') return '';
+  try {
+    const base64 = record.body.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return '';
+  }
+}
+
 function transcriptFromVcon(vcon: JsonRecord): string {
   const parties = Array.isArray(vcon.parties) ? vcon.parties : [];
   const dialog = Array.isArray(vcon.dialog) ? vcon.dialog : [];
@@ -2169,7 +2192,7 @@ function transcriptFromVcon(vcon: JsonRecord): string {
               : typeof reference === 'string' ? reference : '';
         })
         .filter((name): name is string => Boolean(name));
-      const body = String(record.body ?? record.text ?? '').trim();
+      const body = vconDialogText(record).trim();
       return body ? `${names.join(' / ')}${names.length ? ': ' : ''}${body}` : '';
     })
     .filter(Boolean)
@@ -2207,7 +2230,7 @@ function sampleVconFromTranscript(transcriptText: string): string {
     };
   });
   return JSON.stringify({
-    vcon: '0.4.0',
+    vcon: '0.0.1',
     uuid: crypto.randomUUID(),
     created_at: new Date().toISOString(),
     parties,
@@ -2234,13 +2257,17 @@ function describeUploadedEvidence(filename: string, text: string): {
         || (Array.isArray(record.parties) && Array.isArray(record.dialog));
       if (looksVcon) {
         const derived = transcriptFromVcon(record);
+        const isIetfCore04 = record.vcon === '0.0.1'
+          && typeof record.uuid === 'string'
+          && typeof record.created_at === 'string'
+          && Array.isArray(record.parties);
         return {
           kind: 'vcon',
           vcon: JSON.stringify(parsed, null, 2),
           transcript: derived || undefined,
-          message: record.vcon === '0.4.0'
-            ? `Loaded IETF vCon draft-ietf-vcon-vcon-core-04 (v0.4.0) from ${filename}.`
-            : `Loaded vCon${typeof record.vcon === 'string' ? ` v${record.vcon}` : ''} from ${filename}. CAE reads its text dialogs; the fully supported portable format is IETF vCon draft-ietf-vcon-vcon-core-04 (v0.4.0).`,
+          message: isIetfCore04
+            ? `Loaded IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.0.1) from ${filename}.`
+            : `Loaded vCon${typeof record.vcon === 'string' ? ` v${record.vcon}` : ''} from ${filename}. CAE reads its text dialogs; the fully supported portable format is IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.0.1).`,
         };
       }
       if (typeof record.transcript === 'string') {
@@ -4247,12 +4274,12 @@ export function BenchmarkRunner({
             <div className="score-upload-copy">
               <p className="eyebrow">Evidence intake</p>
               <h2>Upload a vCon or transcript</h2>
-              <p>Best support: IETF vCon draft-ietf-vcon-vcon-core-04 (v0.4.0). CAE-compatible legacy vCon records with text dialogs are also accepted.</p>
+              <p>Best support: IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.0.1). CAE-compatible legacy vCon records with text dialogs are also accepted.</p>
             </div>
             <div className="score-upload-actions">
               <label className="score-upload-drop">
                 <span>Upload vCon or transcript</span>
-                <small>Supports IETF vCon draft-ietf-vcon-vcon-core-04 (v0.4.0), plus .json, .txt, and .md</small>
+                <small>Supports IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.0.1), plus .json, .txt, and .md</small>
                 <input
                   type="file"
                   accept=".vcon,.json,.txt,.md,application/json,text/plain,text/markdown"
@@ -4431,8 +4458,8 @@ export function BenchmarkRunner({
                 </label>
                 <label style={{ display: 'grid', gap: 8 }}>
                   <span style={{ fontWeight: 700 }}>vCon record</span>
-                  <small>Preferred: IETF vCon draft-ietf-vcon-vcon-core-04 (v0.4.0). Recording dialogs need an HTTPS URL and SHA-512 content hash.</small>
-                  <textarea value={vconEvidence} onChange={(event) => setVconEvidence(event.target.value)} rows={7} placeholder='{"vcon":"0.4.0","uuid":"...","created_at":"2026-09-26T10:00:00Z","parties":[{"name":"Caller","type":"person"}],"dialog":[{"type":"text","parties":[0],"mediatype":"text/plain","body":"I need a human.","encoding":"none"}]}' style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
+                  <small>Preferred: IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.0.1). Recording dialogs need an HTTPS URL and SHA-512 content hash.</small>
+                  <textarea value={vconEvidence} onChange={(event) => setVconEvidence(event.target.value)} rows={7} placeholder='{"vcon":"0.0.1","uuid":"...","created_at":"2026-09-26T10:00:00Z","parties":[{"name":"Caller","type":"person"}],"dialog":[{"type":"text","parties":[0],"mediatype":"text/plain","body":"I need a human.","encoding":"none"}]}' style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
                 </label>
               </div>
             </details>

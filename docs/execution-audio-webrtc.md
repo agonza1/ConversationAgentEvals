@@ -113,7 +113,7 @@ During `pipecat_webrtc` execution:
 7. `build_execution_vcon(...)` builds CAE's existing evidence object with the richer dialog,
    receipt, recording-pointer, and evaluator metadata used by benchmark/product flows.
 8. `build_ietf_execution_vcon(...)` separately builds a portable
-   `draft-ietf-vcon-vcon-core-04` vCon (`vcon: "0.4.0"`, UUID, timestamps, parties,
+   `draft-ietf-vcon-vcon-core-04` vCon (`vcon: "0.0.1"`, UUID, timestamps, parties,
    standard text/recording dialogs, and linked analysis). It never re-labels the CAE evidence
    object as an IETF document.
 9. The conversation record stores `vcon_export`, `vcon_export_summary`,

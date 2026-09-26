@@ -141,7 +141,7 @@ function evidenceLine(conversation: ExecutionConversation) {
   if (typeof summary?.dialog_turns === 'number') parts.push(`vCon · ${summary.dialog_turns} turns`);
   else if (summary) parts.push('vCon');
   const portable = conversation.ietf_vcon_export_summary;
-  const portableVersion = typeof portable?.version === 'string' ? portable.version : '0.4.0';
+  const portableVersion = typeof portable?.version === 'string' ? portable.version : '0.0.1';
   const portableDraft = typeof portable?.standard_draft === 'string'
     ? portable.standard_draft
     : 'draft-ietf-vcon-vcon-core-04';
@@ -352,7 +352,7 @@ export function VoiceEvalPage() {
           <strong>Evidence captured</strong>
           <span>Transcript</span>
           <span>Recording metadata</span>
-          <span>CAE evidence and IETF vCon draft-ietf-vcon-vcon-core-04 (v0.4.0)</span>
+          <span>CAE evidence and IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.0.1)</span>
           <span>Transport frames</span>
         </div>
       </aside>

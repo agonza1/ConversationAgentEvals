@@ -12,7 +12,7 @@ test('eval page uploads vCon and loads sample call-center evidence', async ({ pa
   writeFileSync(
     vconPath,
     JSON.stringify({
-      vcon: '0.4.0',
+      vcon: '0.0.1',
       uuid: '4ea8e824-b894-4bc8-a53d-8c2f52d42b1d',
       created_at: '2026-09-26T10:00:00Z',
       parties: [{ name: 'Caller', type: 'person' }, { name: 'Agent', type: 'bot' }],
@@ -28,17 +28,26 @@ test('eval page uploads vCon and loads sample call-center evidence', async ({ pa
           type: 'text',
           parties: [1],
           mediatype: 'text/plain',
-          encoding: 'none',
-          body: 'I can help with that.',
+          encoding: 'base64url',
+          body: 'SSBjYW4gaGVscCB3aXRoIHRoYXQu',
+        },
+        {
+          type: 'recording',
+          parties: [0, 1],
+          mediatype: 'audio/wav',
+          encoding: 'base64url',
+          body: 'VGhpcyBpcyBhIHJlY29yZGluZywgbm90IGEgdHJhbnNjcmlwdC4',
         },
       ],
     }),
   );
 
   await page.getByLabel('Upload vCon or transcript file').setInputFiles(vconPath);
-  await expect(page.getByText(/Loaded IETF vCon draft-ietf-vcon-vcon-core-04 \(v0\.4\.0\) from sample\.vcon/)).toBeVisible();
+  await expect(page.getByText(/Loaded IETF vCon draft-ietf-vcon-vcon-core-04 \(vCon format 0\.0\.1\) from sample\.vcon/)).toBeVisible();
   await expect(page.getByText(/Check “Include structured evidence” if you also want the vCon artifact evaluated/)).toBeVisible();
   await expect(page.locator('textarea').first()).toHaveValue(/Caller: I need to change my billing address/);
+  await expect(page.locator('textarea').first()).toHaveValue(/Agent: I can help with that/);
+  await expect(page.locator('textarea').first()).not.toHaveValue(/VGhpcyBpcyBhIHJlY29yZGluZw/);
   await expect(page.getByLabel('Include structured evidence in Evaluate')).not.toBeChecked();
 
   await page.getByRole('button', { name: 'Load sample evidence' }).click();
