@@ -793,6 +793,62 @@ def test_run_endpoint_accepts_vcon_record_evidence():
     assert run['vcon_export']['analysis'][-1]['type'] == 'agentic_benchmark_eval'
 
 
+def test_run_endpoint_accepts_ietf_vcon_core_04_text_dialogs():
+    response = client.post(
+        '/api/benchmarks/run',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'qa-project',
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'angry-outage-escalation',
+            'vcon': {
+                'vcon': '0.4.0',
+                'uuid': '4ea8e824-b894-4bc8-a53d-8c2f52d42b1d',
+                'created_at': '2026-09-26T10:00:00Z',
+                'parties': [
+                    {'name': 'Caller', 'type': 'person'},
+                    {'name': 'Agent', 'type': 'bot'},
+                ],
+                'dialog': [
+                    {
+                        'type': 'text',
+                        'parties': [0],
+                        'mediatype': 'text/plain',
+                        'encoding': 'none',
+                        'body': 'This outage is frustrating and I want a human.',
+                    },
+                    {
+                        'type': 'text',
+                        'parties': [1],
+                        'mediatype': 'text/plain',
+                        'encoding': 'none',
+                        'body': (
+                            'I am sorry. I checked outage status, created ticket ABC, offered '
+                            'troubleshooting because there is no area outage, and will escalate '
+                            'to a representative.'
+                        ),
+                    },
+                    {
+                        'type': 'recording',
+                        'parties': [1],
+                        'mediatype': 'audio/wav',
+                        'url': 'https://evidence.example.test/target.wav',
+                        'content_hash': 'sha512-test',
+                    },
+                ],
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    run = response.json()
+    assert run['verdict'] == 'pass'
+    assert run['transcript_preview'].startswith('Caller: This outage is frustrating')
+    assert 'recording' not in run['transcript_preview'].lower()
+    assert run['vcon_export']['vcon'] == '0.4.0'
+    assert run['vcon_export']['source_format'] == 'vcon'
+
+
 def test_run_audit_artifact_view_endpoint_returns_operator_evidence_bundle():
     response = client.post(
         '/api/benchmarks/run',

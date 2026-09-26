@@ -950,6 +950,8 @@ interface ExecutionConversationRecord {
   recording?: JsonRecord | null;
   vcon_export?: JsonRecord | null;
   vcon_export_summary?: JsonRecord | null;
+  ietf_vcon_export?: JsonRecord | null;
+  ietf_vcon_export_summary?: JsonRecord | null;
   audio_session?: JsonRecord | null;
   verdict?: string | null;
   score?: number | null;
@@ -1167,6 +1169,25 @@ function executionVconSummary(
     recordingAttached ? 'recording attached' : 'no recording',
   ].filter(Boolean);
   return parts.join(' · ');
+}
+
+function executionIetfVconSummary(
+  summary?: JsonRecord | null,
+  exportPayload?: JsonRecord | null,
+): string | null {
+  if (!summary && !exportPayload) return null;
+  const version =
+    (typeof summary?.version === 'string' && summary.version) ||
+    (typeof exportPayload?.vcon === 'string' && exportPayload.vcon) ||
+    'unknown version';
+  const draft = typeof summary?.standard_draft === 'string'
+    ? summary.standard_draft
+    : 'draft-ietf-vcon-vcon-core-04';
+  const valid = summary?.valid === true;
+  const recording = summary?.recording_portable === true
+    ? 'portable recording'
+    : 'text and analysis only';
+  return `${draft} (${version}) · ${valid ? 'validated portable export' : 'validation needs attention'} · ${recording}`;
 }
 
 function executionAudioSessionSummary(session?: JsonRecord | null): string | null {
@@ -2127,11 +2148,29 @@ function transcriptFromVcon(vcon: JsonRecord): string {
   return dialog
     .map((item) => {
       const record = asRecord(item);
-      const partyIndex = Number(record.party ?? 0);
-      const party = asRecord(parties[partyIndex]);
-      const name = String(party.name ?? party.role ?? `party-${partyIndex}`);
+      const partyReferences = Array.isArray(record.parties)
+        ? record.parties
+        : record.party == null ? [] : [record.party];
+      const names = partyReferences
+        .map((reference) => {
+          if (typeof reference === 'number' && Number.isInteger(reference)) {
+            const party = asRecord(parties[reference]);
+            return typeof party.name === 'string'
+              ? party.name
+              : typeof party.role === 'string'
+                ? party.role
+                : `party-${reference}`;
+          }
+          const party = asRecord(reference);
+          return typeof party.name === 'string'
+            ? party.name
+            : typeof party.role === 'string'
+              ? party.role
+              : typeof reference === 'string' ? reference : '';
+        })
+        .filter((name): name is string => Boolean(name));
       const body = String(record.body ?? record.text ?? '').trim();
-      return body ? `${name}: ${body}` : '';
+      return body ? `${names.join(' / ')}${names.length ? ': ' : ''}${body}` : '';
     })
     .filter(Boolean)
     .join('\n');
@@ -2142,17 +2181,39 @@ function sampleVconFromTranscript(transcriptText: string): string {
     .split(/\n/)
     .map((line) => line.trim())
     .filter(Boolean);
-  const parties = [{ name: 'Caller' }, { name: 'Agent' }];
+  const parties = [
+    { name: 'Caller', type: 'bot', validation: 'none' },
+    { name: 'Agent', type: 'bot', validation: 'none' },
+  ];
   const dialog = lines.map((line) => {
     const matched = line.match(/^(caller|agent|user|customer)\s*:\s*(.*)$/i);
     if (matched) {
       const speaker = matched[1].toLowerCase();
       const party = speaker === 'agent' ? 1 : 0;
-      return { party, body: matched[2] };
+      return {
+        type: 'text',
+        parties: [party],
+        mediatype: 'text/plain',
+        encoding: 'none',
+        body: matched[2],
+      };
     }
-    return { party: 0, body: line };
+    return {
+      type: 'text',
+      parties: [0],
+      mediatype: 'text/plain',
+      encoding: 'none',
+      body: line,
+    };
   });
-  return JSON.stringify({ vcon: '0.0.1', parties, dialog }, null, 2);
+  return JSON.stringify({
+    vcon: '0.4.0',
+    uuid: crypto.randomUUID(),
+    created_at: new Date().toISOString(),
+    parties,
+    dialog,
+    analysis: [],
+  }, null, 2);
 }
 
 function describeUploadedEvidence(filename: string, text: string): {
@@ -2177,7 +2238,9 @@ function describeUploadedEvidence(filename: string, text: string): {
           kind: 'vcon',
           vcon: JSON.stringify(parsed, null, 2),
           transcript: derived || undefined,
-          message: `Loaded vCon from ${filename}.`,
+          message: record.vcon === '0.4.0'
+            ? `Loaded IETF vCon draft-ietf-vcon-vcon-core-04 (v0.4.0) from ${filename}.`
+            : `Loaded vCon${typeof record.vcon === 'string' ? ` v${record.vcon}` : ''} from ${filename}. CAE reads its text dialogs; the fully supported portable format is IETF vCon draft-ietf-vcon-vcon-core-04 (v0.4.0).`,
         };
       }
       if (typeof record.transcript === 'string') {
@@ -4184,12 +4247,12 @@ export function BenchmarkRunner({
             <div className="score-upload-copy">
               <p className="eyebrow">Evidence intake</p>
               <h2>Upload a vCon or transcript</h2>
-              <p>Drop in your own conversation artifact, or load clearly labeled sample evidence.</p>
+              <p>Best support: IETF vCon draft-ietf-vcon-vcon-core-04 (v0.4.0). CAE-compatible legacy vCon records with text dialogs are also accepted.</p>
             </div>
             <div className="score-upload-actions">
               <label className="score-upload-drop">
                 <span>Upload vCon or transcript</span>
-                <small>Accepts .vcon, .json, .txt, .md</small>
+                <small>Supports IETF vCon draft-ietf-vcon-vcon-core-04 (v0.4.0), plus .json, .txt, and .md</small>
                 <input
                   type="file"
                   accept=".vcon,.json,.txt,.md,application/json,text/plain,text/markdown"
@@ -4368,7 +4431,8 @@ export function BenchmarkRunner({
                 </label>
                 <label style={{ display: 'grid', gap: 8 }}>
                   <span style={{ fontWeight: 700 }}>vCon record</span>
-                  <textarea value={vconEvidence} onChange={(event) => setVconEvidence(event.target.value)} rows={7} placeholder='{"vcon":"0.0.1","parties":[{"name":"Caller"},{"name":"Agent"}],"dialog":[{"party":0,"body":"I need a human."}]}' style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
+                  <small>Preferred: IETF vCon draft-ietf-vcon-vcon-core-04 (v0.4.0). Recording dialogs need an HTTPS URL and SHA-512 content hash.</small>
+                  <textarea value={vconEvidence} onChange={(event) => setVconEvidence(event.target.value)} rows={7} placeholder='{"vcon":"0.4.0","uuid":"...","created_at":"2026-09-26T10:00:00Z","parties":[{"name":"Caller","type":"person"}],"dialog":[{"type":"text","parties":[0],"mediatype":"text/plain","body":"I need a human.","encoding":"none"}]}' style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
                 </label>
               </div>
             </details>
@@ -5049,6 +5113,10 @@ export function BenchmarkRunner({
                     conversation.vcon_export_summary,
                     conversation.vcon_export,
                   );
+                  const ietfVconSummary = executionIetfVconSummary(
+                    conversation.ietf_vcon_export_summary,
+                    conversation.ietf_vcon_export,
+                  );
                   const audioSessionSummary = executionAudioSessionSummary(conversation.audio_session);
                   return (
                     <article
@@ -5092,8 +5160,35 @@ export function BenchmarkRunner({
                       ) : null}
                       {vconSummary ? (
                         <p style={{ margin: 0, fontSize: 13, color: 'var(--text)' }}>
-                          <strong>vCon:</strong> {vconSummary}
+                          <strong>CAE vCon-compatible evidence:</strong> {vconSummary}
                         </p>
+                      ) : null}
+                      {ietfVconSummary ? (
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <p
+                            style={{
+                              margin: 0,
+                              fontSize: 13,
+                              color: conversation.ietf_vcon_export_summary?.valid === true
+                                ? 'var(--success-text)'
+                                : 'var(--warn-text, #9a6700)',
+                            }}
+                          >
+                            <strong>Portable IETF vCon:</strong> {ietfVconSummary}
+                          </p>
+                          {conversation.ietf_vcon_export ? (
+                            <button
+                              type="button"
+                              onClick={() => downloadJson(
+                                `${conversation.conversation_id}.vcon`,
+                                conversation.ietf_vcon_export,
+                              )}
+                              style={{ border: '1px solid var(--border)', borderRadius: 6, background: 'white', padding: '4px 8px', fontWeight: 700, cursor: 'pointer' }}
+                            >
+                              Download .vcon
+                            </button>
+                          ) : null}
+                        </div>
                       ) : null}
                       {audioSessionSummary ? (
                         <p style={{ margin: 0, fontSize: 13, color: 'var(--muted)' }}>

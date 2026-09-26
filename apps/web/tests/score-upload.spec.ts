@@ -8,21 +8,35 @@ test('eval page uploads vCon and loads sample call-center evidence', async ({ pa
   await expect(page.getByText('Loading benchmark suites...')).toHaveCount(0);
 
   const dir = mkdtempSync(path.join(tmpdir(), 'score-upload-'));
-  const vconPath = path.join(dir, 'sample.vcon.json');
+  const vconPath = path.join(dir, 'sample.vcon');
   writeFileSync(
     vconPath,
     JSON.stringify({
-      vcon: '0.0.1',
-      parties: [{ name: 'Caller' }, { name: 'Agent' }],
+      vcon: '0.4.0',
+      uuid: '4ea8e824-b894-4bc8-a53d-8c2f52d42b1d',
+      created_at: '2026-09-26T10:00:00Z',
+      parties: [{ name: 'Caller', type: 'person' }, { name: 'Agent', type: 'bot' }],
       dialog: [
-        { party: 0, body: 'I need to change my billing address.' },
-        { party: 1, body: 'I can help with that.' },
+        {
+          type: 'text',
+          parties: [0],
+          mediatype: 'text/plain',
+          encoding: 'none',
+          body: 'I need to change my billing address.',
+        },
+        {
+          type: 'text',
+          parties: [1],
+          mediatype: 'text/plain',
+          encoding: 'none',
+          body: 'I can help with that.',
+        },
       ],
     }),
   );
 
   await page.getByLabel('Upload vCon or transcript file').setInputFiles(vconPath);
-  await expect(page.getByText(/Loaded vCon from sample\.vcon\.json/)).toBeVisible();
+  await expect(page.getByText(/Loaded IETF vCon draft-ietf-vcon-vcon-core-04 \(v0\.4\.0\) from sample\.vcon/)).toBeVisible();
   await expect(page.getByText(/Check “Include structured evidence” if you also want the vCon artifact evaluated/)).toBeVisible();
   await expect(page.locator('textarea').first()).toHaveValue(/Caller: I need to change my billing address/);
   await expect(page.getByLabel('Include structured evidence in Evaluate')).not.toBeChecked();

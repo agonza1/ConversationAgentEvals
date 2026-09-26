@@ -152,6 +152,10 @@ export interface ConversationRecord {
   judge_reviews?: JudgeReviewRecord[];
   evaluation_adjudication?: EvaluationAdjudication | null;
   recording?: Record<string, unknown> | null;
+  vcon_export?: Record<string, unknown> | null;
+  vcon_export_summary?: Record<string, unknown> | null;
+  ietf_vcon_export?: Record<string, unknown> | null;
+  ietf_vcon_export_summary?: Record<string, unknown> | null;
   audio_session?: Record<string, unknown> | null;
   latency_marks?: Array<Record<string, unknown>>;
   metrics_summary?: ConversationMetricsSummary | null;

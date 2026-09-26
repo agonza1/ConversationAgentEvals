@@ -12,6 +12,7 @@ from app.services.assert_artifact_store import persist_assert_run_artifacts
 from app.services.assert_trace import FAILURE_VALUES, parse_action_trace
 from app.schemas.assert_contracts import AssertResultManifest, AssertRunCreateRequest
 from app.services.assert_boundary import ingest_assert_run_result, queue_assert_run, with_default_runtime_config
+from app.services.vcon_interop import vcon_dialog_turns
 
 BenchmarkScenario = dict[str, Any]
 BenchmarkSuite = dict[str, Any]
@@ -2457,6 +2458,10 @@ def _conversation_text(payload: dict[str, Any]) -> str:
 
 
 def _structured_conversation_turns(value: dict[str, Any]) -> list[str]:
+    if isinstance(value.get('vcon'), str):
+        vcon_turns = vcon_dialog_turns(value)
+        if vcon_turns:
+            return vcon_turns
     turns = []
     for key in ('dialog', 'messages', 'utterances', 'transcript', 'turns'):
         items = value.get(key)

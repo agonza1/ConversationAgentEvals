@@ -53,6 +53,7 @@ interface ExecutionConversation {
   transcript?: string | null;
   recording?: JsonRecord | null;
   vcon_export_summary?: JsonRecord | null;
+  ietf_vcon_export_summary?: JsonRecord | null;
   audio_session?: JsonRecord | null;
   verdict?: string | null;
   score?: number | null;
@@ -139,6 +140,13 @@ function evidenceLine(conversation: ExecutionConversation) {
   const summary = conversation.vcon_export_summary;
   if (typeof summary?.dialog_turns === 'number') parts.push(`vCon · ${summary.dialog_turns} turns`);
   else if (summary) parts.push('vCon');
+  const portable = conversation.ietf_vcon_export_summary;
+  const portableVersion = typeof portable?.version === 'string' ? portable.version : '0.4.0';
+  const portableDraft = typeof portable?.standard_draft === 'string'
+    ? portable.standard_draft
+    : 'draft-ietf-vcon-vcon-core-04';
+  if (portable?.valid === true) parts.push(`portable vCon ${portableDraft} (${portableVersion})`);
+  else if (portable) parts.push('portable vCon needs attention');
   if (typeof session?.frames_sent === 'number' || typeof session?.frames_received === 'number') {
     parts.push(`frames ${session.frames_sent ?? 0}/${session.frames_received ?? 0}`);
   }
@@ -344,7 +352,7 @@ export function VoiceEvalPage() {
           <strong>Evidence captured</strong>
           <span>Transcript</span>
           <span>Recording metadata</span>
-          <span>vCon export</span>
+          <span>CAE evidence and IETF vCon draft-ietf-vcon-vcon-core-04 (v0.4.0)</span>
           <span>Transport frames</span>
         </div>
       </aside>
