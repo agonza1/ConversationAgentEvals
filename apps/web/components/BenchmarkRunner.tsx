@@ -2230,7 +2230,7 @@ function sampleVconFromTranscript(transcriptText: string): string {
     };
   });
   return JSON.stringify({
-    vcon: '0.0.1',
+    vcon: '0.4.0',
     uuid: crypto.randomUUID(),
     created_at: new Date().toISOString(),
     parties,
@@ -2257,7 +2257,7 @@ function describeUploadedEvidence(filename: string, text: string): {
         || (Array.isArray(record.parties) && Array.isArray(record.dialog));
       if (looksVcon) {
         const derived = transcriptFromVcon(record);
-        const isIetfCore04 = record.vcon === '0.0.1'
+        const isIetfCore04 = record.vcon === '0.4.0'
           && typeof record.uuid === 'string'
           && typeof record.created_at === 'string'
           && Array.isArray(record.parties);
@@ -2266,8 +2266,8 @@ function describeUploadedEvidence(filename: string, text: string): {
           vcon: JSON.stringify(parsed, null, 2),
           transcript: derived || undefined,
           message: isIetfCore04
-            ? `Loaded IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.0.1) from ${filename}.`
-            : `Loaded vCon${typeof record.vcon === 'string' ? ` v${record.vcon}` : ''} from ${filename}. CAE reads its text dialogs; the fully supported portable format is IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.0.1).`,
+            ? `Loaded IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.4.0) from ${filename}.`
+            : `Loaded vCon${typeof record.vcon === 'string' ? ` v${record.vcon}` : ''} from ${filename}. CAE reads its text dialogs; the fully supported portable format is IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.4.0).`,
         };
       }
       if (typeof record.transcript === 'string') {
@@ -2512,7 +2512,7 @@ export function BenchmarkRunner({
       const loaded = describeUploadedEvidence(file.name, text);
       if (loaded.kind === 'vcon') {
         setVconEvidence(loaded.vcon || '');
-        if (loaded.transcript) setTranscript(loaded.transcript);
+        setTranscript(loaded.transcript || '');
         setCallEvidence('');
         // Keep the uploaded vCon available under structured evidence, but do not auto-include it on /eval.
         if (view === 'score') {
@@ -4274,12 +4274,12 @@ export function BenchmarkRunner({
             <div className="score-upload-copy">
               <p className="eyebrow">Evidence intake</p>
               <h2>Upload a vCon or transcript</h2>
-              <p>Best support: IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.0.1). CAE-compatible legacy vCon records with text dialogs are also accepted.</p>
+              <p>Best support: IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.4.0). CAE-compatible legacy vCon records with text dialogs are also accepted.</p>
             </div>
             <div className="score-upload-actions">
               <label className="score-upload-drop">
                 <span>Upload vCon or transcript</span>
-                <small>Supports IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.0.1), plus .json, .txt, and .md</small>
+                <small>Supports IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.4.0), plus .json, .txt, and .md</small>
                 <input
                   type="file"
                   accept=".vcon,.json,.txt,.md,application/json,text/plain,text/markdown"
@@ -4458,8 +4458,8 @@ export function BenchmarkRunner({
                 </label>
                 <label style={{ display: 'grid', gap: 8 }}>
                   <span style={{ fontWeight: 700 }}>vCon record</span>
-                  <small>Preferred: IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.0.1). Recording dialogs need an HTTPS URL and base64url SHA-512 content hash.</small>
-                  <textarea value={vconEvidence} onChange={(event) => setVconEvidence(event.target.value)} rows={7} placeholder='{"vcon":"0.0.1","uuid":"...","created_at":"2026-09-26T10:00:00Z","parties":[{"name":"Caller","type":"person"}],"dialog":[{"type":"text","parties":[0],"mediatype":"text/plain","body":"I need a human.","encoding":"none"}]}' style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
+                  <small>Preferred: IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.4.0). Recording dialogs need an HTTPS URL and base64url SHA-512 content hash.</small>
+                  <textarea value={vconEvidence} onChange={(event) => setVconEvidence(event.target.value)} rows={7} placeholder='{"vcon":"0.4.0","uuid":"...","created_at":"2026-09-26T10:00:00Z","parties":[{"name":"Caller","type":"person"}],"dialog":[{"type":"text","parties":[0],"mediatype":"text/plain","body":"I need a human.","encoding":"none"}]}' style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
                 </label>
               </div>
             </details>

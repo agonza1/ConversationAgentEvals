@@ -8,9 +8,8 @@ from typing import Any
 
 
 IETF_VCON_CORE_DRAFT = 'draft-ietf-vcon-vcon-core-04'
-# This is the vCon container syntax version, not the Internet-Draft revision.
-# draft-ietf-vcon-vcon-core-04 specifies the historical ``0.0.1`` value.
-IETF_VCON_VERSION = '0.0.1'
+# The draft revision and the vCon container syntax intentionally align here.
+IETF_VCON_VERSION = '0.4.0'
 IETF_VCON_VENDOR = 'ConversationAgentEvals'
 IETF_VCON_PRODUCT = 'CAE Execution'
 

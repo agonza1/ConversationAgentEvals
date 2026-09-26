@@ -803,7 +803,7 @@ def test_run_endpoint_accepts_ietf_vcon_core_04_text_dialogs():
             'suite_id': 'call-center-voice-ai',
             'scenario_id': 'angry-outage-escalation',
             'vcon': {
-                'vcon': '0.0.1',
+                'vcon': '0.4.0',
                 'uuid': '4ea8e824-b894-4bc8-a53d-8c2f52d42b1d',
                 'created_at': '2026-09-26T10:00:00Z',
                 'parties': [
@@ -846,13 +846,13 @@ def test_run_endpoint_accepts_ietf_vcon_core_04_text_dialogs():
     assert run['verdict'] == 'pass'
     assert run['transcript_preview'].startswith('Caller: This outage is frustrating')
     assert 'recording' not in run['transcript_preview'].lower()
-    assert run['vcon_export']['vcon'] == '0.0.1'
+    assert run['vcon_export']['vcon'] == '0.4.0'
     assert run['vcon_export']['source_format'] == 'vcon'
 
 
 def test_vcon_text_import_decodes_text_and_ignores_inline_recording_bodies():
     turns = vcon_dialog_turns({
-        'vcon': '0.0.1',
+        'vcon': '0.4.0',
         'parties': [{'name': 'Caller'}, {'name': 'Agent'}],
         'dialog': [
             {
@@ -877,7 +877,7 @@ def test_vcon_text_import_decodes_text_and_ignores_inline_recording_bodies():
 
 def test_vcon_recording_only_import_never_falls_back_to_generic_dialog_text():
     turns = _structured_conversation_turns({
-        'vcon': '0.0.1',
+        'vcon': '0.4.0',
         'parties': [{'name': 'Caller'}, {'name': 'Agent'}],
         'dialog': [{
             'type': 'recording',
