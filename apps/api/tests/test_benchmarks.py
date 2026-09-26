@@ -9,6 +9,7 @@ from app.services.benchmark_service import get_suite, get_suite_contract_manifes
 from app.db.database import SessionLocal
 from app.services.benchmark_run_store import _history_scenario_coverage, reset_benchmark_run_records_for_tests
 from app.services.benchmark_suite_run_store import _suite_history_scenario_coverage, create_benchmark_suite_run_record, reset_benchmark_suite_run_records_for_tests
+from app.services.vcon_interop import vcon_dialog_turns
 
 client = TestClient(app)
 
@@ -847,6 +848,31 @@ def test_run_endpoint_accepts_ietf_vcon_core_04_text_dialogs():
     assert 'recording' not in run['transcript_preview'].lower()
     assert run['vcon_export']['vcon'] == '0.4.0'
     assert run['vcon_export']['source_format'] == 'vcon'
+
+
+def test_vcon_text_import_decodes_text_and_ignores_inline_recording_bodies():
+    turns = vcon_dialog_turns({
+        'vcon': '0.4.0',
+        'parties': [{'name': 'Caller'}, {'name': 'Agent'}],
+        'dialog': [
+            {
+                'type': 'text',
+                'parties': [0],
+                'mediatype': 'text/plain',
+                'encoding': 'base64url',
+                'body': 'SGVsbG8gdGhlcmU',
+            },
+            {
+                'type': 'recording',
+                'parties': [0, 1],
+                'mediatype': 'audio/wav',
+                'encoding': 'base64url',
+                'body': 'VGhpcyBpcyBhdWRpbywgbm90IGEgdHJhbnNjcmlwdC4',
+            },
+        ],
+    })
+
+    assert turns == ['Caller: Hello there']
 
 
 def test_run_audit_artifact_view_endpoint_returns_operator_evidence_bundle():
