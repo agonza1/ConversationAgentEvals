@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import uuid
 
 from app.services.execution_vcon import (
@@ -7,6 +8,9 @@ from app.services.execution_vcon import (
     ietf_vcon_summary,
     validate_ietf_vcon,
 )
+
+
+SHA512_BASE64URL = base64.urlsafe_b64encode(bytes(64)).decode('ascii').rstrip('=')
 
 
 def test_ietf_execution_vcon_uses_spoken_text_and_keeps_asr_as_analysis():
@@ -42,7 +46,7 @@ def test_ietf_execution_vcon_uses_spoken_text_and_keeps_asr_as_analysis():
         ],
         recording={
             'recording_url': 'https://evidence.example.test/runs/exec-1.wav',
-            'recording_sha512': 'abc123',
+            'recording_sha512': SHA512_BASE64URL,
             'mime_type': 'audio/wav',
             'duration_ms': 2500,
         },
@@ -77,7 +81,7 @@ def test_ietf_execution_vcon_uses_spoken_text_and_keeps_asr_as_analysis():
         'parties': [0, 1],
         'mediatype': 'audio/wav',
         'url': 'https://evidence.example.test/runs/exec-1.wav',
-        'content_hash': 'sha512-abc123',
+        'content_hash': SHA512_BASE64URL,
         'duration': 2.5,
     }
     transcript_turns = exported['analysis'][0]['body']['turns']
@@ -129,7 +133,7 @@ def test_ietf_execution_vcon_marks_a_target_only_recording_with_the_target_party
         turns=[{'turn_index': 1, 'speaker': 'agent', 'text': 'I can help.'}],
         recording={
             'recording_url': 'https://evidence.example.test/runs/exec-3-target.wav',
-            'recording_sha512': 'target-only',
+            'recording_sha512': SHA512_BASE64URL,
             'metadata': {'scope': 'target_response_only'},
         },
         created_at='2026-09-26T10:00:00Z',
@@ -138,6 +142,27 @@ def test_ietf_execution_vcon_marks_a_target_only_recording_with_the_target_party
 
     assert exported['dialog'][-1]['type'] == 'recording'
     assert exported['dialog'][-1]['parties'] == [1]
+
+
+def test_ietf_execution_vcon_omits_recording_with_an_invalid_content_hash():
+    exported = build_ietf_execution_vcon(
+        conversation_id='conversation-4',
+        execution_run_id='exec-4',
+        suite_id='voice',
+        scenario_id='appointment',
+        scenario_title=None,
+        mode='pipecat_webrtc',
+        turns=[{'turn_index': 1, 'speaker': 'agent', 'text': 'I can help.'}],
+        recording={
+            'recording_url': 'https://evidence.example.test/runs/exec-4.wav',
+            'recording_sha512': 'sha512-not-a-standard-digest',
+        },
+        created_at='2026-09-26T10:00:00Z',
+        updated_at='2026-09-26T10:00:03Z',
+    )
+
+    assert [item['type'] for item in exported['dialog']] == ['text']
+    assert exported['analysis'][1]['body']['recording']['status'] == 'not_portable'
 
 
 def test_ietf_execution_vcon_validator_rejects_incorrect_format_version():

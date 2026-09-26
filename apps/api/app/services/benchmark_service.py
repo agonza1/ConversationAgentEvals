@@ -2459,9 +2459,10 @@ def _conversation_text(payload: dict[str, Any]) -> str:
 
 def _structured_conversation_turns(value: dict[str, Any]) -> list[str]:
     if isinstance(value.get('vcon'), str):
-        vcon_turns = vcon_dialog_turns(value)
-        if vcon_turns:
-            return vcon_turns
+        # A recognised vCon is authoritative.  Falling through to the generic
+        # dialog parser would turn a recording-only inline body into transcript
+        # text after vCon-specific filtering intentionally returned no turns.
+        return vcon_dialog_turns(value)
     turns = []
     for key in ('dialog', 'messages', 'utterances', 'transcript', 'turns'):
         items = value.get(key)

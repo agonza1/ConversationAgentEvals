@@ -6,6 +6,8 @@ attachments, and analysis records stay aligned with saved-run / product export.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -287,8 +289,10 @@ def validate_ietf_vcon(vcon_export: Any) -> dict[str, Any]:
             parsed = urlparse(str(item.get('url') or ''))
             if parsed.scheme != 'https':
                 errors.append(f'dialog[{index}] recording URL must use HTTPS')
-            if not str(item.get('content_hash') or '').startswith('sha512-'):
-                errors.append(f'dialog[{index}] recording content_hash must use sha512')
+            if not _is_sha512_base64url(item.get('content_hash')):
+                errors.append(
+                    f'dialog[{index}] recording content_hash must be a base64url SHA-512 digest'
+                )
         else:
             errors.append(f'dialog[{index}] has unsupported type')
     analysis = vcon_export.get('analysis')
@@ -395,7 +399,15 @@ def _portable_recording_dialog(
             'status': 'not_portable',
             'reason': 'Portable vCon recording requires a SHA-512 content hash.',
         }
-    content_hash = digest if digest.startswith('sha512-') else f'sha512-{digest}'
+    if not _is_sha512_base64url(digest):
+        return None, {
+            'status': 'not_portable',
+            'reason': (
+                'Portable vCon recording requires a base64url-encoded SHA-512 '
+                'content hash.'
+            ),
+        }
+    content_hash = digest
     metadata = media.get('metadata')
     scope = str(metadata.get('scope') or '') if isinstance(metadata, dict) else ''
     parties = [1] if 'target' in scope else [0] if 'caller' in scope else [0, 1]
@@ -433,6 +445,21 @@ def _is_timestamp(value: Any) -> bool:
     except ValueError:
         return False
     return parsed.tzinfo is not None
+
+
+def _is_sha512_base64url(value: Any) -> bool:
+    """Return whether ``value`` is an unpadded/optionally padded SHA-512 digest."""
+    if not isinstance(value, str) or not value.strip() or value.startswith('sha512-'):
+        return False
+    try:
+        digest = value.strip()
+        padded = digest + ('=' * (-len(digest) % 4))
+        decoded = base64.b64decode(
+            padded.encode('ascii'), altchars=b'-_', validate=True
+        )
+    except (UnicodeEncodeError, ValueError, binascii.Error):
+        return False
+    return len(decoded) == 64
 
 
 def _transcript_from_dialog(dialog: list[dict[str, Any]]) -> str:

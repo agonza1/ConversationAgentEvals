@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.services.assert_artifact_store import load_assert_run_artifact_manifest
-from app.services.benchmark_service import get_suite, get_suite_contract_manifest, list_suites, run_scenario, run_suite, simulate_scenario, simulate_suite
+from app.services.benchmark_service import _structured_conversation_turns, get_suite, get_suite_contract_manifest, list_suites, run_scenario, run_suite, simulate_scenario, simulate_suite
 from app.db.database import SessionLocal
 from app.services.benchmark_run_store import _history_scenario_coverage, reset_benchmark_run_records_for_tests
 from app.services.benchmark_suite_run_store import _suite_history_scenario_coverage, create_benchmark_suite_run_record, reset_benchmark_suite_run_records_for_tests
@@ -873,6 +873,22 @@ def test_vcon_text_import_decodes_text_and_ignores_inline_recording_bodies():
     })
 
     assert turns == ['Caller: Hello there']
+
+
+def test_vcon_recording_only_import_never_falls_back_to_generic_dialog_text():
+    turns = _structured_conversation_turns({
+        'vcon': '0.0.1',
+        'parties': [{'name': 'Caller'}, {'name': 'Agent'}],
+        'dialog': [{
+            'type': 'recording',
+            'parties': [0, 1],
+            'mediatype': 'audio/wav',
+            'encoding': 'base64url',
+            'body': 'VGhpcyBpcyBhIHJlY29yZGluZywgbm90IGEgdHJhbnNjcmlwdC4',
+        }],
+    })
+
+    assert turns == []
 
 
 def test_run_audit_artifact_view_endpoint_returns_operator_evidence_bundle():

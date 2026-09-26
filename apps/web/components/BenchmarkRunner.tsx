@@ -4458,7 +4458,7 @@ export function BenchmarkRunner({
                 </label>
                 <label style={{ display: 'grid', gap: 8 }}>
                   <span style={{ fontWeight: 700 }}>vCon record</span>
-                  <small>Preferred: IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.0.1). Recording dialogs need an HTTPS URL and SHA-512 content hash.</small>
+                  <small>Preferred: IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.0.1). Recording dialogs need an HTTPS URL and base64url SHA-512 content hash.</small>
                   <textarea value={vconEvidence} onChange={(event) => setVconEvidence(event.target.value)} rows={7} placeholder='{"vcon":"0.0.1","uuid":"...","created_at":"2026-09-26T10:00:00Z","parties":[{"name":"Caller","type":"person"}],"dialog":[{"type":"text","parties":[0],"mediatype":"text/plain","body":"I need a human.","encoding":"none"}]}' style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
                 </label>
               </div>
