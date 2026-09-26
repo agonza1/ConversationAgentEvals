@@ -133,7 +133,7 @@ def sync_catalog() -> None:
         'id': USER_SCENARIOS_SUITE_ID,
         'name': USER_SCENARIOS_SUITE_NAME,
         'provider': 'User',
-        'description': 'Scenarios created from the AgentBench UI (file-backed local store).',
+        'description': 'Scenarios created from the ConVoice QA UI (file-backed local store).',
         'scenarios': scenarios,
     }
     benchmark_service._SUITES_BY_ID[USER_SCENARIOS_SUITE_ID] = suite

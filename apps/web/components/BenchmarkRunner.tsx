@@ -1269,7 +1269,7 @@ function buildSavedRunAuditArtifactExport(userId: string, run: SavedRun): Benchm
   const artifacts = Array.isArray(evidenceArtifacts.artifacts) ? evidenceArtifacts.artifacts : [];
   const exportReadiness = report.evidence_audit_summary?.export_readiness;
   const runId = report.run_id ?? run.id;
-  const filenameParts = ['agentbench', report.suite_id, report.scenario_id, runId, 'audit-artifacts']
+  const filenameParts = ['convoice-qa', report.suite_id, report.scenario_id, runId, 'audit-artifacts']
     .filter(Boolean)
     .map(slugFilenamePart);
 
@@ -1282,7 +1282,7 @@ function buildSavedRunAuditArtifactExport(userId: string, run: SavedRun): Benchm
     user_id: userId,
     project_id: run.project_id,
     status: report.run_status ?? report.verdict ?? report.overall,
-    filename: `${filenameParts.join('-') || 'agentbench-run-audit-artifacts'}.json`,
+    filename: `${filenameParts.join('-') || 'convoice-qa-run-audit-artifacts'}.json`,
     operator_summary: {
       verdict: report.verdict ?? report.overall,
       overall_score: report.overall_score ?? report.score,
@@ -3383,20 +3383,20 @@ export function BenchmarkRunner({
 
   function onExportCurrentVcon() {
     if (!report?.vcon_export) return;
-    const filenameParts = ['agentbench', report.suite_id, report.scenario_id, report.run_id, 'vcon']
+    const filenameParts = ['convoice-qa', report.suite_id, report.scenario_id, report.run_id, 'vcon']
       .filter(Boolean)
       .map(slugFilenamePart);
-    downloadJson(`${filenameParts.join('-') || 'agentbench-vcon'}.json`, report.vcon_export);
+    downloadJson(`${filenameParts.join('-') || 'convoice-qa-vcon'}.json`, report.vcon_export);
     setExportMessage('Exported vCon-compatible benchmark record.');
   }
 
   function onExportCurrentReport() {
     if (!report) return;
-    const filenameParts = ['agentbench', report.suite_id, report.scenario_id, report.run_id, 'report']
+    const filenameParts = ['convoice-qa', report.suite_id, report.scenario_id, report.run_id, 'report']
       .filter(Boolean)
       .map(slugFilenamePart);
 
-    downloadJson(`${filenameParts.join('-') || 'agentbench-report'}.json`, {
+    downloadJson(`${filenameParts.join('-') || 'convoice-qa-report'}.json`, {
       report,
       transcript: report.transcript ?? transcript,
       action_trace: report.action_trace ?? parseMaybeJson(actionTrace),
@@ -3416,10 +3416,10 @@ export function BenchmarkRunner({
       return;
     }
 
-    const filenameParts = ['agentbench', suiteSimulation.suite_id, suiteSimulation.suite_run_id, 'vcon-bundle']
+    const filenameParts = ['convoice-qa', suiteSimulation.suite_id, suiteSimulation.suite_run_id, 'vcon-bundle']
       .filter(Boolean)
       .map((part) => String(part).replace(/[^a-z0-9-]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase());
-    downloadJson(`${filenameParts.join('-') || 'agentbench-suite-vcon-bundle'}.json`, {
+    downloadJson(`${filenameParts.join('-') || 'convoice-qa-suite-vcon-bundle'}.json`, {
       suite_run_id: suiteSimulation.suite_run_id,
       suite_id: suiteSimulation.suite_id,
       suite_name: suiteSimulation.suite_name,

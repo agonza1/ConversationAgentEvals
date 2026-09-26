@@ -97,7 +97,7 @@ test('product eval API journey works end to end', async ({ request, baseURL }) =
   expect(exportResponse.ok()).toBeTruthy();
   await expect(exportResponse.json()).resolves.toEqual(expect.objectContaining({
     id: saved.id,
-    filename: `agentbench-call-center-demo-${saved.id}.json`,
+    filename: `convoice-qa-call-center-demo-${saved.id}.json`,
     report: expect.objectContaining({ verdict: 'pass' }),
     artifacts: expect.objectContaining({
       vcon_export: expect.objectContaining({ available: true }),
@@ -108,7 +108,7 @@ test('product eval API journey works end to end', async ({ request, baseURL }) =
   const projectExportResponse = await request.get(`/api/product/projects/call-center-demo/export?user_id=${userId}`);
   expect(projectExportResponse.ok()).toBeTruthy();
   await expect(projectExportResponse.json()).resolves.toEqual(expect.objectContaining({
-    filename: 'agentbench-call-center-demo-project-export.json',
+    filename: 'convoice-qa-call-center-demo-project-export.json',
     project_id: 'call-center-demo',
     run_count: 1,
     summary: expect.objectContaining({ latest_status: 'baseline' }),
@@ -130,7 +130,7 @@ test('product eval API journey works end to end', async ({ request, baseURL }) =
   );
   expect(filteredProjectExportResponse.ok()).toBeTruthy();
   await expect(filteredProjectExportResponse.json()).resolves.toEqual(expect.objectContaining({
-    filename: `agentbench-call-center-demo-${suiteId}-${scenarioId}-project-export.json`,
+    filename: `convoice-qa-call-center-demo-${suiteId}-${scenarioId}-project-export.json`,
     suite_id: suiteId,
     scenario_id: scenarioId,
     run_count: 1,

@@ -1304,7 +1304,7 @@ def test_saved_run_export_returns_owner_scoped_json_payload():
     assert export_response.status_code == 200
     exported = export_response.json()
     assert exported['id'] == saved['id']
-    assert exported['filename'] == f"agentbench-call-center-{saved['id']}.json"
+    assert exported['filename'] == f"convoice-qa-call-center-{saved['id']}.json"
     assert exported['project_name'] == 'Call Center'
     assert exported['firestore_path'] == f"users/demo-user/projects/call-center/runs/{saved['id']}"
     assert exported['report']['overall_score'] == 92
@@ -1353,7 +1353,7 @@ def test_project_export_returns_owner_scoped_history_bundle():
 
     assert export_response.status_code == 200
     exported = export_response.json()
-    assert exported['filename'] == 'agentbench-call-center-project-export.json'
+    assert exported['filename'] == 'convoice-qa-call-center-project-export.json'
     assert exported['project_id'] == 'call-center'
     assert exported['project_name'] == 'Call Center'
     assert exported['firestore_collection_path'] == 'users/demo-user/projects/call-center/runs'
@@ -1405,7 +1405,7 @@ def test_project_export_returns_owner_scoped_history_bundle():
     )
     assert filtered_response.status_code == 200
     filtered = filtered_response.json()
-    assert filtered['filename'] == 'agentbench-call-center-call-center-voice-ai-angry-outage-escalation-project-export.json'
+    assert filtered['filename'] == 'convoice-qa-call-center-call-center-voice-ai-angry-outage-escalation-project-export.json'
     assert filtered['suite_id'] == 'call-center-voice-ai'
     assert filtered['scenario_id'] == 'angry-outage-escalation'
     assert filtered['run_count'] == 2
