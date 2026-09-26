@@ -662,7 +662,7 @@ def test_runs_export_returns_owner_scoped_history_bundle_with_vcon_summary():
 
     assert export_response.status_code == 200
     exported = export_response.json()
-    assert exported['filename'] == 'agentbench-qa-project-call-center-voice-ai-benchmark-history.json'
+    assert exported['filename'] == 'convoice-qa-qa-project-call-center-voice-ai-benchmark-history.json'
     assert exported['run_count'] == 2
     assert exported['summary']['status_counts'] == {'completed': 2}
     assert exported['summary']['latest_run_id'] == second.json()['run_id']
@@ -819,7 +819,7 @@ def test_run_audit_artifact_view_endpoint_returns_operator_evidence_bundle():
 
     assert artifact_response.status_code == 200, artifact_response.text
     payload = artifact_response.json()
-    assert payload['filename'] == f"agentbench-fintech-support-agent-suspicious-card-charge-{run['run_id']}-audit-artifacts.json"
+    assert payload['filename'] == f"convoice-qa-fintech-support-agent-suspicious-card-charge-{run['run_id']}-audit-artifacts.json"
     assert payload['operator_summary'] == {
         'verdict': run['verdict'],
         'overall_score': run['overall_score'],
@@ -943,7 +943,7 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
 
     assert export_response.status_code == 200
     export_payload = export_response.json()
-    assert export_payload['filename'] == f"agentbench-call-center-voice-ai-{simulation['suite_run_id']}-vcon-bundle.json"
+    assert export_payload['filename'] == f"convoice-qa-call-center-voice-ai-{simulation['suite_run_id']}-vcon-bundle.json"
     assert export_payload['record_count'] == simulation['scenario_count'] + 1
     assert export_payload['records'][0]['source_format'] == 'benchmark_suite'
     assert {record['appended_analysis_type'] for record in export_payload['records']} == {
@@ -958,7 +958,7 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
 
     assert history_export_response.status_code == 200
     history_export = history_export_response.json()
-    assert history_export['filename'] == 'agentbench-qa-project-call-center-voice-ai-suite-run-history.json'
+    assert history_export['filename'] == 'convoice-qa-qa-project-call-center-voice-ai-suite-run-history.json'
     assert history_export['suite_run_count'] == 1
     assert history_export['summary']['latest_suite_run_id'] == simulation['suite_run_id']
     assert history_export['summary']['status_counts'] == {'completed': 1}
@@ -995,7 +995,7 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
 
     assert audit_export_response.status_code == 200
     audit_export = audit_export_response.json()
-    assert audit_export['filename'] == f"agentbench-call-center-voice-ai-{simulation['suite_run_id']}-suite-audit-artifacts.json"
+    assert audit_export['filename'] == f"convoice-qa-call-center-voice-ai-{simulation['suite_run_id']}-suite-audit-artifacts.json"
     assert audit_export['operator_summary']['ready_for_export'] is True
     assert audit_export['operator_summary']['ready_scenarios'] == simulation['scenario_count']
     assert audit_export['operator_summary']['missing_scenarios'] == 0
@@ -1040,7 +1040,7 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
 
     assert run_export_response.status_code == 200
     run_export = run_export_response.json()
-    assert run_export['filename'] == f'agentbench-call-center-voice-ai-billing-address-change-{saved_run_id}-vcon.json'
+    assert run_export['filename'] == f'convoice-qa-call-center-voice-ai-billing-address-change-{saved_run_id}-vcon.json'
     assert run_export['record']['appended_analysis_type'] == 'agentic_benchmark_eval'
     assert run_export['record']['analysis'][-1]['body']['run_id'] == saved_run_id
 

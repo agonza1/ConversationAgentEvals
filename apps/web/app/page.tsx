@@ -102,7 +102,7 @@ export default function HomePage() {
   return (
     <main className="saas-shell">
       <nav className="top-nav" aria-label="Primary">
-        <ApiAwareLink className="brand" href="/">AgentBench</ApiAwareLink>
+        <ApiAwareLink className="brand" href="/">ConVoice QA</ApiAwareLink>
         <div>
           <a href="#product">Product</a>
           <ApiAwareLink href="/scenarios">Scenarios</ApiAwareLink>
@@ -153,7 +153,7 @@ export default function HomePage() {
         </div>
         <div className="product-flow-visual">
           <Image
-            src="/images/agentbench-evaluation-pipeline.png"
+            src="/images/convoice-qa-evaluation-pipeline.png"
             alt="Run an agent or import transcript or vCon evidence, then evaluate and report"
             width={1774}
             height={887}
