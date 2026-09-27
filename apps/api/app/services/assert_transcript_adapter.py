@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any
 
-from assert_ai.core.transcript import (
+from app.integrations.assert_runtime import (
     AddMessageEdit,
     Message,
     ToolCallEdit,

@@ -7,6 +7,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
+from app.integrations.assert_runtime import (
+    AssertRuntimeUnavailable,
+    EXPECTED_ASSERT_VERSION,
+    behavior_preset,
+    behavior_presets,
+    judge_preset,
+    judge_presets,
+)
 
 from app.services.editable_assert_spec import (
     EditableAssertSpec,
@@ -51,6 +59,42 @@ class SpecDuplicateRequest(BaseModel):
 @router.get('/templates')
 def list_spec_templates():
     return {'templates': default_templates()}
+
+
+@router.get('/assert-library/behaviors')
+def list_assert_behavior_presets():
+    try:
+        return {'assert_version': EXPECTED_ASSERT_VERSION, 'behaviors': behavior_presets()}
+    except AssertRuntimeUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get('/assert-library/behaviors/{name}')
+def get_assert_behavior_preset(name: str):
+    try:
+        return {'assert_version': EXPECTED_ASSERT_VERSION, 'behavior': behavior_preset(name)}
+    except AssertRuntimeUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get('/assert-library/judges')
+def list_assert_judge_presets():
+    try:
+        return {'assert_version': EXPECTED_ASSERT_VERSION, 'judges': judge_presets()}
+    except AssertRuntimeUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.get('/assert-library/judges/{name}')
+def get_assert_judge_preset(name: str):
+    try:
+        return {'assert_version': EXPECTED_ASSERT_VERSION, 'judge': judge_preset(name)}
+    except AssertRuntimeUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post('/generate')

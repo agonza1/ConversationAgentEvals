@@ -5,8 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect, text
 
-from app.config import settings
 from app.db.database import Base, engine
+from app.integrations.assert_runtime import ensure_expected_version
 from app.services.benchmark_catalog_extensions import register_builtin_benchmark_extensions
 from app.services.user_scenario_store import ensure_user_scenarios_registered
 
@@ -17,10 +17,7 @@ register_builtin_benchmark_extensions()
 # File-backed user-created scenarios merge into the same catalog (_SUITES_BY_ID).
 ensure_user_scenarios_registered()
 
-from app.routes.assert_sidecar import (
-    judge_router as assert_judge_router,
-    router as assert_sidecar_router,
-)
+from app.routes.assert_judge import router as assert_judge_router
 from app.routes.agents import router as agents_router
 from app.routes.benchmarks import router as benchmarks_router
 from app.routes.bootstrap import router as bootstrap_router
@@ -34,6 +31,7 @@ from app.routes.specs import router as specs_router
 from app.services.agent_store import ensure_seeded as ensure_agents_seeded
 
 ensure_agents_seeded()
+ensure_expected_version()
 
 Base.metadata.create_all(bind=engine)
 
@@ -118,10 +116,6 @@ app.add_middleware(
     allow_headers=['*'],
 )
 
-if settings.assert_local_sidecar_enabled:
-    app.include_router(assert_sidecar_router)
-# The execution-conversation judge is a product API and must remain available in
-# production even when the development-only ASSERT sidecar lifecycle is disabled.
 app.include_router(assert_judge_router)
 app.include_router(decks_router)
 app.include_router(sessions_router)

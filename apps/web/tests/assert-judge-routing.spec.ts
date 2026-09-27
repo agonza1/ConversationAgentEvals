@@ -127,6 +127,23 @@ test('run analysis judge button uses the upstream ASSERT path', async ({ page })
             agrees: true,
             rationale: 'The transcript contains an unsupported refund claim.',
             next_action: 'Review the refund claim and preserve the deterministic evidence gap.',
+            provenance: {
+              engine: 'assert',
+              assert_version: '0.3.0',
+              evidence_level: 'black_box',
+              dimensions: {
+                policy_violation: true,
+                unsupported_operational_claim: true,
+              },
+              dimension_applicability: {
+                policy_violation: true,
+                unsupported_operational_claim: true,
+              },
+              dimension_justifications: {
+                policy_violation: 'The claimed refund is unsupported.',
+                unsupported_operational_claim: 'No matching tool result exists.',
+              },
+            },
             proposed_evaluation: {
               verdict: 'needs_review',
               summary: 'The conversation requires review because refund execution is unverified.',
@@ -138,7 +155,7 @@ test('run analysis judge button uses the upstream ASSERT path', async ({ page })
           model: 'openai/gpt-4.1-mini',
           latency_ms: 640,
           review_id: 'judge-review-assert-ui',
-          assert_version: '0.1.0',
+          assert_version: '0.3.0',
           assert_result: {
             judge_status: 'ok',
             verdict: {
@@ -182,6 +199,8 @@ test('run analysis judge button uses the upstream ASSERT path', async ({ page })
   await expect(result).toContainText('openai/gpt-4.1-mini');
   await expect(result).toContainText('The transcript contains an unsupported refund claim.');
   await expect(result).toContainText('No refund tool result or final-state receipt was recorded.');
+  await expect(result).toContainText('ASSERT 0.3.0 · Transcript-only evidence');
+  await expect(result).toContainText('Unsupported Operational Claim: Flagged');
 
   expect(assertRequest).toEqual({ user_id: 'demo-user' });
   expect(legacyJudgeCalls).toBe(0);

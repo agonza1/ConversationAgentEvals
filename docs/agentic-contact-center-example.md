@@ -65,7 +65,6 @@ Useful variants:
 
 ```bash
 npm run example:acc -- --skip-submit
-npm run example:acc -- --also-submit-assert-wrapper
 ```
 
 The adapter maps external target output to the reusable evidence model:

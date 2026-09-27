@@ -19,13 +19,12 @@ ASSERT_BOUNDARY_NAME = 'assert_run_boundary'
 
 
 def default_invocation_target(*, environment: str) -> dict[str, str | int]:
-    base_url = 'http://assert-sidecar:8091' if environment == 'production' else 'http://127.0.0.1:8091'
     return {
-        'transport': 'http_sidecar',
+        'transport': 'in_process',
         'environment': environment,
-        'base_url': base_url,
-        'package_name': 'assert',
-        'entrypoint': '/api/assert/runs',
+        'base_url': 'cae://deterministic-evaluator',
+        'package_name': 'conversation-agent-evals',
+        'entrypoint': 'benchmark_service.run_scenario',
         'timeout_seconds': 300,
     }
 

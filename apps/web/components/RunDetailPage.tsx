@@ -845,6 +845,9 @@ function JudgeResult({
   onRequestApply: () => void;
 }) {
   const agrees = judge.judge_result?.agrees;
+  const assertProvenance = judge.judge_result?.provenance?.engine === 'assert'
+    ? judge.judge_result.provenance
+    : null;
   const title = judge.status === 'blocked'
     ? 'LLM judge unavailable'
     : agrees === true
@@ -874,6 +877,7 @@ function JudgeResult({
       {judge.judge_result?.next_action ? (
         <p><b>Next action:</b> {judge.judge_result.next_action}</p>
       ) : null}
+      {assertProvenance ? <AssertDimensionResults provenance={assertProvenance} /> : null}
       {judge.judge_result?.proposed_evaluation ? (
         <div className="resolution-judge-proposal">
           <p>
@@ -933,6 +937,52 @@ function JudgeResult({
         </div>
       ) : null}
     </div>
+  );
+}
+
+function AssertDimensionResults({
+  provenance,
+}: {
+  provenance: NonNullable<NonNullable<LlmJudgeResponse['judge_result']>['provenance']>;
+}) {
+  const dimensions = Object.entries(provenance.dimensions || {});
+  const evidenceLabel = provenance.evidence_level === 'gray_box'
+    ? 'Trace-backed evidence'
+    : provenance.evidence_level === 'partial_structured'
+      ? 'Partially structured evidence'
+      : 'Transcript-only evidence';
+
+  return (
+    <section className="assert-dimension-results" aria-label="ASSERT evaluation details">
+      <p className="resolution-judge-meta">
+        {[
+          provenance.assert_version ? `ASSERT ${provenance.assert_version}` : 'ASSERT',
+          evidenceLabel,
+        ].join(' · ')}
+      </p>
+      {dimensions.length ? (
+        <ul>
+          {dimensions.map(([name, value]) => {
+            const applicable = provenance.dimension_applicability?.[name] !== false;
+            const displayValue = applicable
+              ? value === true
+                ? 'Flagged'
+                : value === false
+                  ? 'Clear'
+                  : String(value)
+              : 'Not applicable';
+            return (
+              <li key={name}>
+                <b>{formatRuntimeId(name)}:</b> {displayValue}
+                {provenance.dimension_justifications?.[name]
+                  ? ` — ${provenance.dimension_justifications[name]}`
+                  : ''}
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+    </section>
   );
 }
 

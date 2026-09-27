@@ -49,6 +49,30 @@ def test_templates_include_cae_native_and_acc_extension_without_acc_dependency()
     assert 'agentic_contact_center' not in acc_spec['required_behaviors'][0]
 
 
+def test_assert_behavior_library_comes_from_the_pinned_runtime():
+    response = client.get('/api/specs/assert-library/behaviors')
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['assert_version'] == '0.3.0'
+    assert payload['behaviors']
+    assert all(item['kind'] == 'behavior' for item in payload['behaviors'])
+
+
+def test_assert_judge_library_comes_from_the_pinned_runtime():
+    response = client.get('/api/specs/assert-library/judges')
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['assert_version'] == '0.3.0'
+    assert payload['judges']
+    assert all(item['kind'] == 'judge_preset' for item in payload['judges'])
+
+    safety_core = client.get('/api/specs/assert-library/judges/safety-core')
+    assert safety_core.status_code == 200
+    assert safety_core.json()['judge']['name'] == 'safety-core'
+
+
 def test_generate_calls_configured_llm_and_returns_draft_suggestions_that_require_user_approval(monkeypatch):
     monkeypatch.delenv('SPEC_GENERATION_MODEL', raising=False)
     monkeypatch.setenv('OPENAI_RESPONSES_MODEL', 'gpt-4.1-mini')
@@ -198,6 +222,38 @@ def test_preview_compiles_canonical_assert_yaml_and_validates_with_assert():
         'deterministic_checks',
         'evidence_requirements',
     }
+
+
+def test_preview_supports_assert_03_dimension_contracts():
+    spec = _valid_spec(judges=[{
+        'id': 'resolution-quality',
+        'name': 'Resolution quality',
+        'kind': 'semantic',
+        'rubric': '1 = unresolved; 2 = partial; 3 = resolved',
+        'weight': 1,
+        'provider': 'configured-default',
+        'allow_not_applicable': True,
+        'scale': {
+            'type': 'ordinal',
+            'values': {
+                'unresolved': 'Unresolved',
+                'partial': 'Partial',
+                'resolved': 'Resolved',
+            },
+        },
+        'disabled_builtin_dimensions': ['overrefusal'],
+    }])
+
+    response = client.post('/api/specs/preview', json={'spec': spec})
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload['valid'] is True, payload['errors']
+    judge = yaml.safe_load(payload['yaml'])['pipeline']['judge']
+    assert judge['disabled_dimensions'] == ['overrefusal']
+    dimension = judge['dimensions']['resolution-quality']
+    assert dimension['allow_not_applicable'] is True
+    assert dimension['scale']['values']['resolved'] == 'Resolved'
 
 
 def test_save_without_id_preserves_the_suite_name_shown_in_preview():

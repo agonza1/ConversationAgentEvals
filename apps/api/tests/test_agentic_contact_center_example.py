@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 from app.services.agentic_contact_center_example import (
-    build_assert_run_request,
     build_benchmark_run_request,
     normalize_acc_run,
 )
@@ -139,35 +138,6 @@ def test_build_benchmark_run_request_uses_registered_catalog_scenario():
     assert request.metadata['scenario_contract']['deterministic_checks'] == scenario['deterministic_checks']
     assert request.user_id == 'alberto'
     assert request.project_id == 'acc-cluecon'
-
-
-def test_build_assert_run_request_uses_canonical_evidence_contract():
-    scenario = _scenario()
-    normalized = normalize_acc_run(_acc_payload(), scenario=scenario)
-
-    request = build_assert_run_request(
-        normalized,
-        scenario=scenario,
-        user_id='alberto',
-        project_id='acc-cluecon',
-    )
-
-    assert request.spec_ref.spec_id == 'call-center-voice-ai/cancellation-rescue'
-    assert request.spec_ref.spec_kind == 'scenario'
-    assert request.evidence.transcript is not None
-    assert request.evidence.transcript.inline_data.startswith('Caller:')
-    assert request.evidence.conversation is not None
-    assert request.evidence.action_trace is not None
-    assert request.evidence.final_state is not None
-    assert request.evidence.assert_bundle is not None
-    assert len(request.evidence.additional_artifacts) == 2
-    assert request.evidence.provenance['call_id'] == 'demo-call-98'
-    assert request.runtime_config.invocation_target.entrypoint == '/api/assert/runs'
-    assert request.runtime_config.scenario_overrides['required_actions'] == scenario['required_actions']
-    assert request.runtime_config.scenario_overrides['deterministic_checks'] == scenario['deterministic_checks']
-    assert request.platform_metadata.user_id == 'alberto'
-    assert request.platform_metadata.project_id == 'acc-cluecon'
-    assert 'acc_http_scripted_fixture' in request.platform_metadata.labels
 
 
 def test_non_terminal_acc_payload_does_not_claim_completion():

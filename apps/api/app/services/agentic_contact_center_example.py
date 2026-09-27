@@ -1,17 +1,13 @@
 from __future__ import annotations
 
-import hashlib
-import json
 from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
 
-from app.schemas.assert_contracts import AssertRunCreateRequest
 from app.schemas.benchmarks import BenchmarkRunRequest
 
 
 EXAMPLE_ADAPTER_VERSION = 'conversation-agent-evals-acc-http-example-v1'
-DEFAULT_ASSERT_SIDECAR_URL = 'http://127.0.0.1:8091'
 
 
 def normalize_acc_run(payload: dict[str, Any], *, scenario: dict[str, Any]) -> dict[str, Any]:
@@ -131,82 +127,6 @@ def build_benchmark_run_request(
     )
 
 
-def build_assert_run_request(
-    evidence: dict[str, Any],
-    *,
-    scenario: dict[str, Any],
-    assert_sidecar_url: str = DEFAULT_ASSERT_SIDECAR_URL,
-    user_id: str = 'acc-example-user',
-    project_id: str = 'agentic-contact-center',
-) -> AssertRunCreateRequest:
-    """Build and validate the canonical ASSERT wrapper request for the ACC example."""
-
-    spec = scenario['spec_ref']
-    run_label = f"{scenario['scenario_id']}:{evidence.get('call_id') or 'unknown-call'}"
-    request = {
-        'spec_ref': {
-            'spec_id': spec['spec_id'],
-            'spec_kind': spec.get('spec_kind', 'scenario'),
-            'spec_version': spec.get('spec_version'),
-            'spec_hash': spec.get('spec_hash'),
-            'assert_project': spec.get('assert_project', 'conversation-agent-evals'),
-            'assert_commit': spec.get('assert_commit'),
-        },
-        'evidence': {
-            'transcript': _pointer('acc-transcript', 'transcript', evidence['transcript']),
-            'conversation': _pointer('acc-conversation', 'conversation', evidence['conversation']),
-            'action_trace': _pointer('acc-action-trace', 'action_trace', evidence['action_trace']),
-            'final_state': _pointer('acc-final-state', 'final_state', evidence['final_state']),
-            'assert_bundle': _pointer('acc-proof-bundle', 'assert_bundle', evidence),
-            'additional_artifacts': [
-                _pointer('acc-latency-evidence', 'report', evidence['latency_evidence']),
-                _pointer(
-                    'acc-runtime-caveats',
-                    'report',
-                    {
-                        'execution_mode': evidence['execution_mode'],
-                        'limitations': evidence['runtime_caveats'],
-                        'claim': 'This Phase 1 example validates target integration and evidence ingestion, not live full-duplex audio.',
-                    },
-                ),
-            ],
-            'provenance': deepcopy(evidence['provenance']),
-        },
-        'runtime_config': {
-            'execution_mode': 'async',
-            'invocation_target': {
-                'transport': 'http_sidecar',
-                'environment': 'local',
-                'base_url': assert_sidecar_url,
-                'package_name': 'assert',
-                'entrypoint': '/api/assert/runs',
-                'timeout_seconds': 300,
-            },
-            'retry_policy': {'max_attempts': 1, 'retryable_statuses': ['error', 'failed']},
-            'scenario_overrides': {
-                'required_actions': scenario.get('required_actions', []),
-                'forbidden_actions': scenario.get('forbidden_actions', []),
-                'expected_final_state': scenario.get('expected_final_state', {}),
-                'deterministic_checks': scenario.get('deterministic_checks', []),
-                'evidence_requirements': scenario.get('evidence_requirements', {}),
-            },
-            'environment_labels': ['agentic-contact-center', evidence['execution_mode'], 'external-target-example'],
-        },
-        'platform_metadata': {
-            'user_id': user_id,
-            'project_id': project_id,
-            'project_run_label': run_label,
-            'initiated_by': 'agentic-contact-center-example',
-            'notes': 'Optional scripted ACC HTTP target example; realtime audio remains a later transport mode.',
-            'labels': ['acc-example', 'assert-ingestion', evidence['execution_mode']],
-            'retention_days': 90,
-            'billing_tags': {},
-            'quota_scope': evidence.get('call_id'),
-        },
-    }
-    return AssertRunCreateRequest.model_validate(request)
-
-
 def _extract_call(payload: dict[str, Any]) -> dict[str, Any]:
     for key in ('call', 'finalCall', 'snapshot'):
         value = payload.get(key)
@@ -274,22 +194,6 @@ def _normalize_latency(value: Any) -> list[dict[str, Any]]:
             }
         )
     return normalized
-
-
-def _pointer(artifact_id: str, kind: str, value: Any) -> dict[str, Any]:
-    encoded = json.dumps(value, sort_keys=True, separators=(',', ':'), default=str)
-    return {
-        'artifact_id': artifact_id,
-        'kind': kind,
-        'role': 'input',
-        'inline_data': deepcopy(value),
-        'mime_type': 'application/json' if isinstance(value, (dict, list)) else 'text/plain',
-        'sha256': hashlib.sha256(encoded.encode('utf-8')).hexdigest(),
-        'size_bytes': len(encoded.encode('utf-8')),
-        'source': EXAMPLE_ADAPTER_VERSION,
-        'readiness': 'ready',
-        'metadata': {'adapter_version': EXAMPLE_ADAPTER_VERSION},
-    }
 
 
 def _within_budget(mark: dict[str, Any]) -> bool | None:

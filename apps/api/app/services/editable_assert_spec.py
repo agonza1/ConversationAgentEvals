@@ -10,7 +10,6 @@ import uuid
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Literal
 
 import yaml
@@ -19,6 +18,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.integrations.assert_runtime import validate_config
 from app.models.entities import EditableAssertSpecVersion, ProductProject, ProductWorkspaceMember
 from app.services.llm_providers import get_provider
 from app.services.ssl_util import verified_ssl_context
@@ -53,6 +53,10 @@ class AssertJudge(BaseModel):
     weight: float = Field(default=1.0, ge=0)
     provider: str = 'configured-default'
     model: str | None = None
+    allow_not_applicable: bool = False
+    scale: dict[str, Any] | None = None
+    disabled_builtin_dimensions: list[Literal['policy_violation', 'overrefusal']] = Field(default_factory=list)
+    presets: list[str] = Field(default_factory=list)
 
 
 class EditableAssertSpec(BaseModel):
@@ -386,15 +390,25 @@ def _compile_assert_config(spec: EditableAssertSpec) -> dict[str, Any]:
             'max_turns': _coerce_max_turns(spec.runtime_overrides.get('max_turns')) or 10,
         }
     judge = spec.judges[0]
-    pipeline['judge'] = {
+    judge_dimension: dict[str, Any] = {
+        'description': judge.name,
+        'rubric': judge.rubric,
+    }
+    if judge.allow_not_applicable:
+        judge_dimension['allow_not_applicable'] = True
+    if judge.scale:
+        judge_dimension['scale'] = deepcopy(judge.scale)
+    judge_stage: dict[str, Any] = {
         'model': {'name': judge.model or model_name},
         'dimensions': {
-            _slug(judge.id): {
-                'description': judge.name,
-                'rubric': judge.rubric,
-            }
+            _slug(judge.id): judge_dimension,
         },
     }
+    if judge.disabled_builtin_dimensions:
+        judge_stage['disabled_dimensions'] = list(dict.fromkeys(judge.disabled_builtin_dimensions))
+    if judge.presets:
+        judge_stage['preset'] = list(dict.fromkeys(item.strip() for item in judge.presets if item.strip()))
+    pipeline['judge'] = judge_stage
 
     return {
         'suite': _slug(spec.id or spec.title),
@@ -412,15 +426,7 @@ def _compile_assert_config(spec: EditableAssertSpec) -> dict[str, Any]:
 
 def _assert_validation_errors(config: dict[str, Any]) -> list[SpecValidationMessage]:
     try:
-        from assert_ai.config import load_runtime_context
-
-        stage_modules = {
-            'systematize': SimpleNamespace(SCOPE='suite'),
-            'test_set': SimpleNamespace(SCOPE='suite'),
-            'inference': SimpleNamespace(SCOPE='run'),
-            'judge': SimpleNamespace(SCOPE='run'),
-        }
-        load_runtime_context(deepcopy(config), Path('/tmp/cae-assert/eval_config.yaml'), stage_modules=stage_modules)
+        validate_config(config, config_path=Path('/tmp/cae-assert/eval_config.yaml'))
     except Exception as exc:
         return [SpecValidationMessage(field='assert_config', message=f'ASSERT rejected the compiled eval_config: {exc}')]
     return []

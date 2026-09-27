@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.metadata
 import json
 import os
-import shutil
 import subprocess
 import time
 import uuid
@@ -15,9 +13,14 @@ from threading import Lock
 from typing import Any, Iterator
 
 import yaml
-from assert_ai.core.judge import (
+
+from app.integrations.assert_runtime import (
+    AssertRuntimeUnavailable,
     BUILT_IN_DIMENSIONS,
+    cli_executable,
     infer_judge_status,
+    installed_version,
+    is_not_applicable_dimension,
     is_valid_confidence_label,
     is_valid_event_flag,
 )
@@ -84,11 +87,10 @@ def run_upstream_assert_judge(
         default=str,
     ).encode()).hexdigest()[:16]
 
-    executable = shutil.which('assert-ai')
-    if not executable:
-        raise UpstreamAssertJudgeUnavailable(
-            'The assert-ai command is unavailable. Install the pinned API requirements first.'
-        )
+    try:
+        executable = cli_executable()
+    except AssertRuntimeUnavailable as exc:
+        raise UpstreamAssertJudgeUnavailable(str(exc)) from exc
     environment = os.environ.copy()
     if model.startswith('openai/') and not environment.get('OPENAI_API_KEY') and environment.get('LLM_JUDGE_API_KEY'):
         environment['OPENAI_API_KEY'] = environment['LLM_JUDGE_API_KEY']
@@ -204,8 +206,21 @@ def run_upstream_assert_judge(
                 'input_fingerprint': fingerprint,
                 'score_sha256': score_sha256,
                 'artifacts': deepcopy(artifacts),
+                'evidence_level': str(
+                    (inference.get('dimensions') or {}).get('evidence_level') or 'black_box'
+                ),
+                'score_keys': deepcopy(score['score_keys']),
+                'not_applicable_score_keys': deepcopy(score['not_applicable_score_keys']),
+                'dimension_scales': deepcopy(score.get('dimension_scales') or {}),
                 'dimensions': deepcopy(score['verdict']['dimensions']),
+                'dimension_justifications': deepcopy(
+                    score['verdict'].get('dimension_justifications') or {}
+                ),
+                'dimension_applicability': deepcopy(
+                    score['verdict'].get('dimension_applicability') or {}
+                ),
                 'node_judgments': deepcopy(score['verdict']['node_judgments']),
+                'multi_judge': deepcopy(score.get('multi_judge')),
             }
             response = {
                 'status': 'ready',
@@ -257,9 +272,8 @@ def _select_valid_score(
 
     score = matches[0]
     raw_status = score.get('judge_status')
-    inferred_status = infer_judge_status(score)
-    if raw_status != 'ok' or inferred_status != 'ok':
-        detail = str(score.get('judge_error') or raw_status or inferred_status)
+    if raw_status != 'ok':
+        detail = str(score.get('judge_error') or raw_status)
         raise UpstreamAssertJudgeFailed(
             f'ASSERT did not produce a valid judgment for {test_case_id!r}: {detail[:1000]}'
         )
@@ -275,13 +289,38 @@ def _select_valid_score(
         *(str(item['name']) for item in BUILT_IN_DIMENSIONS),
         *_judge_dimensions().keys(),
     ]
+    score_keys = score.get('score_keys')
+    if not isinstance(score_keys, list) or not all(isinstance(name, str) for name in score_keys):
+        raise UpstreamAssertJudgeFailed('ASSERT 0.3 score is missing its score_keys contract.')
+    if score_keys != expected_dimensions:
+        raise UpstreamAssertJudgeFailed(
+            'ASSERT 0.3 score_keys do not match the configured dimensions: '
+            + ', '.join(score_keys)
+        )
+    not_applicable_score_keys = score.get('not_applicable_score_keys')
+    if (
+        not isinstance(not_applicable_score_keys, list)
+        or not all(isinstance(name, str) for name in not_applicable_score_keys)
+        or not set(not_applicable_score_keys).issubset(score_keys)
+    ):
+        raise UpstreamAssertJudgeFailed(
+            'ASSERT 0.3 score has an invalid not_applicable_score_keys contract.'
+        )
+    dimension_scales = score.get('dimension_scales', {})
+    if not isinstance(dimension_scales, dict):
+        raise UpstreamAssertJudgeFailed('ASSERT 0.3 score has an invalid dimension_scales contract.')
     invalid_dimensions = [
         name for name in expected_dimensions
-        if not is_valid_event_flag(dimensions.get(name))
+        if not _valid_dimension_value(
+            verdict=verdict,
+            name=name,
+            not_applicable_score_keys=set(not_applicable_score_keys),
+            dimension_scales=dimension_scales,
+        )
     ]
     if invalid_dimensions:
         raise UpstreamAssertJudgeFailed(
-            'ASSERT verdict has missing or non-boolean dimensions: '
+            'ASSERT verdict has missing or invalid dimension values: '
             + ', '.join(invalid_dimensions)
         )
 
@@ -348,7 +387,42 @@ def _select_valid_score(
         )
     if not isinstance(verdict.get('narrative'), str):
         raise UpstreamAssertJudgeFailed('ASSERT verdict is missing its narrative string.')
+    inferred_status = infer_judge_status(score)
+    if inferred_status != 'ok':
+        detail = str(score.get('judge_error') or inferred_status)
+        raise UpstreamAssertJudgeFailed(
+            f'ASSERT did not produce a valid judgment for {test_case_id!r}: {detail[:1000]}'
+        )
     return score
+
+
+def _valid_dimension_value(
+    *,
+    verdict: dict[str, Any],
+    name: str,
+    not_applicable_score_keys: set[str],
+    dimension_scales: dict[str, Any],
+) -> bool:
+    dimensions = verdict.get('dimensions')
+    if not isinstance(dimensions, dict):
+        return False
+    value = dimensions.get(name)
+    if is_valid_event_flag(value):
+        return name not in dimension_scales
+    if name in not_applicable_score_keys and is_not_applicable_dimension(verdict, name):
+        return True
+    scale = dimension_scales.get(name)
+    if not isinstance(scale, dict) or scale.get('type') != 'ordinal':
+        return False
+    allowed = [
+        entry.get('value')
+        for entry in scale.get('values', [])
+        if isinstance(entry, dict) and 'value' in entry
+    ]
+    if not allowed or isinstance(value, bool):
+        return False
+    expected_type = str if isinstance(allowed[0], str) else int
+    return isinstance(value, expected_type) and value in allowed
 
 
 def _resolve_model(model_name: str | None) -> str:
@@ -545,10 +619,7 @@ def _artifact_path(path: Path) -> str:
 
 
 def _assert_version() -> str:
-    try:
-        return importlib.metadata.version('assert-ai')
-    except importlib.metadata.PackageNotFoundError:
-        return 'unknown'
+    return installed_version()
 
 
 def _positive_int_env(name: str, default: int) -> int:

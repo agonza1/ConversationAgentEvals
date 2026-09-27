@@ -48,8 +48,7 @@ does not itself mint Cloud Run identity tokens.
 - Keep generated artifacts in durable object storage before relying on them for retention or
   audit requirements.
 
-`APP_ENV=production` disables the development-only synthetic ASSERT sidecar. The separate
-execution-conversation judge route remains mounted, but upstream judging still requires
+The execution-conversation ASSERT judge route remains mounted in production, but judging requires
 `ASSERT_UPSTREAM_JUDGE_ENABLED=1`, an allowed model, and provider credentials.
 
 ## Build the API image
