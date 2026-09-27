@@ -517,6 +517,9 @@ def run_signalwire_holyguacamole_call(
         uri=str(target_audio_path),
         mime_type=str((result.get('artifacts') or {}).get('target_audio_mime') or 'audio/webm'),
         sha256=str((result.get('artifacts') or {}).get('target_audio_sha256') or ''),
+        sha512=base64.urlsafe_b64encode(
+            hashlib.sha512(audio_bytes).digest()
+        ).decode('ascii').rstrip('='),
         duration_ms=(result.get('media') or {}).get('target_audio_duration_ms'),
         bytes_captured=len(audio_bytes),
         transport='signalwire_webrtc',

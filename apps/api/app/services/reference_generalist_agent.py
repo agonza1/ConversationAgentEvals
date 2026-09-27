@@ -1110,6 +1110,9 @@ class ReferencePipecatAgentTransport:
         state.recording = AudioRecordingHandle(
             uri=str(path),
             sha256=hashlib.sha256(payload).hexdigest(),
+            sha512=base64.urlsafe_b64encode(
+                hashlib.sha512(payload).digest()
+            ).decode('ascii').rstrip('='),
             bytes_captured=len(payload),
             duration_ms=None,
             metadata={'source': 'current_run', 'segments': len(state.recording_wavs), 'synthetic_local_media': True},

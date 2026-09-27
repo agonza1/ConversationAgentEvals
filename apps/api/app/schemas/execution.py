@@ -214,8 +214,12 @@ class ConversationRecord(BaseModel):
     metrics_summary: ConversationMetricsSummary | None = None
     timeline: list[TimelineEvent] = Field(default_factory=list)
     recording: dict[str, Any] | None = None
+    # CAE's historical evidence object remains available as ``vcon_export``.
+    # ``ietf_vcon_export`` is the portable draft-ietf-vcon-vcon-core document.
     vcon_export: dict[str, Any] | None = None
     vcon_export_summary: dict[str, Any] | None = None
+    ietf_vcon_export: dict[str, Any] | None = None
+    ietf_vcon_export_summary: dict[str, Any] | None = None
     audio_session: dict[str, Any] | None = None
     verdict: str | None = None
     score: float | None = None

@@ -20,6 +20,7 @@ documents the plug-in surface and refuses to run until implemented.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import os
 import uuid
@@ -162,6 +163,7 @@ class AudioRecordingHandle:
     uri: str
     mime_type: str = 'audio/wav'
     sha256: str | None = None
+    sha512: str | None = None
     duration_ms: int | None = None
     bytes_captured: int = 0
     transport: Literal[
@@ -180,6 +182,8 @@ class AudioRecordingHandle:
         }
         if self.sha256:
             media['recording_sha256'] = self.sha256
+        if self.sha512:
+            media['recording_sha512'] = self.sha512
         if self.duration_ms is not None:
             media['duration_ms'] = self.duration_ms
         if self.bytes_captured:
@@ -410,6 +414,9 @@ class LocalPipecatSmallWebRtcTransport:
         state.recording_active = False
         payload = b''.join(state.recording_chunks) or b'empty-execution-audio'
         digest = hashlib.sha256(payload).hexdigest()
+        digest_sha512 = base64.urlsafe_b64encode(
+            hashlib.sha512(payload).digest()
+        ).decode('ascii').rstrip('=')
         if self.artifact_dir is not None:
             self.artifact_dir.mkdir(parents=True, exist_ok=True)
             path = self.artifact_dir / f'{session_id}.wav'
@@ -422,6 +429,7 @@ class LocalPipecatSmallWebRtcTransport:
             uri=uri,
             mime_type='audio/wav',
             sha256=digest,
+            sha512=digest_sha512,
             duration_ms=max(250, 250 * max(1, len(state.outbound))),
             bytes_captured=len(payload),
             transport=self.transport_id,

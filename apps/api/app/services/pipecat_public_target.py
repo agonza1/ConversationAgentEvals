@@ -162,10 +162,14 @@ def run_public_pipecat_call(
     caller_path.write_bytes(caller_wav)
     target_path.write_bytes(target_wav)
     target_sha = hashlib.sha256(target_wav).hexdigest()
+    target_sha512 = base64.urlsafe_b64encode(
+        hashlib.sha512(target_wav).digest()
+    ).decode('ascii').rstrip('=')
     recording = AudioRecordingHandle(
         uri=str(target_path),
         mime_type='audio/wav',
         sha256=target_sha,
+        sha512=target_sha512,
         bytes_captured=len(target_wav),
         transport='pipecat_daily_webrtc',
         metadata={

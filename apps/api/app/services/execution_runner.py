@@ -38,7 +38,12 @@ from app.services.acc_realtime_target import (
 from app.services.agentic_contact_center_example import build_benchmark_run_request, normalize_acc_run
 from app.services.benchmark_catalog_extensions import register_builtin_benchmark_extensions
 from app.services.benchmark_service import get_suite, run_scenario, simulate_scenario
-from app.services.execution_vcon import build_execution_vcon, vcon_summary
+from app.services.execution_vcon import (
+    build_execution_vcon,
+    build_ietf_execution_vcon,
+    ietf_vcon_summary,
+    vcon_summary,
+)
 from app.services.reference_generalist_agent import (
     ReferencePipecatAgentTransport,
     ReferenceMediaServices,
@@ -445,6 +450,22 @@ def _run_one_conversation(
             else 'needs_review' if verdict == 'needs_review'
             else 'completed'
         )
+        completed_at = datetime.now(UTC).isoformat()
+        ietf_vcon_export = build_ietf_execution_vcon(
+            conversation_id=conversation_id,
+            execution_run_id=execution_run_id,
+            suite_id=suite_id,
+            scenario_id=scenario_id,
+            scenario_title=scenario_title,
+            mode=payload.mode,
+            turns=result['turns'],
+            recording=result.get('recording'),
+            created_at=started,
+            updated_at=completed_at,
+            final_state=result.get('final_state'),
+            verdict=verdict,
+            score=result.get('score'),
+        )
         return ConversationRecord(
             conversation_id=conversation_id,
             execution_run_id=execution_run_id,
@@ -466,11 +487,13 @@ def _run_one_conversation(
             recording=result.get('recording'),
             vcon_export=result.get('vcon_export'),
             vcon_export_summary=result.get('vcon_export_summary'),
+            ietf_vcon_export=ietf_vcon_export,
+            ietf_vcon_export_summary=ietf_vcon_summary(ietf_vcon_export),
             audio_session=result.get('audio_session'),
             verdict=result.get('verdict'),
             score=result.get('score'),
             started_at=started,
-            completed_at=datetime.now(UTC).isoformat(),
+            completed_at=completed_at,
             error=(
                 str((result.get('final_state') or {}).get('tester_error'))
                 if (result.get('final_state') or {}).get('tester_error')

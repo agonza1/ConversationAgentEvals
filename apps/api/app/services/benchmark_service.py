@@ -12,6 +12,7 @@ from app.services.assert_artifact_store import persist_assert_run_artifacts
 from app.services.assert_trace import FAILURE_VALUES, parse_action_trace
 from app.schemas.assert_contracts import AssertResultManifest, AssertRunCreateRequest
 from app.services.assert_boundary import ingest_assert_run_result, queue_assert_run, with_default_runtime_config
+from app.services.vcon_interop import vcon_dialog_turns
 
 BenchmarkScenario = dict[str, Any]
 BenchmarkSuite = dict[str, Any]
@@ -2457,6 +2458,11 @@ def _conversation_text(payload: dict[str, Any]) -> str:
 
 
 def _structured_conversation_turns(value: dict[str, Any]) -> list[str]:
+    if isinstance(value.get('vcon'), str):
+        # A recognised vCon is authoritative.  Falling through to the generic
+        # dialog parser would turn a recording-only inline body into transcript
+        # text after vCon-specific filtering intentionally returned no turns.
+        return vcon_dialog_turns(value)
     turns = []
     for key in ('dialog', 'messages', 'utterances', 'transcript', 'turns'):
         items = value.get(key)

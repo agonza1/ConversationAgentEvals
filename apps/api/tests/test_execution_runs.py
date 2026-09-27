@@ -108,6 +108,21 @@ def test_text_callable_execution_appends_conversations_and_writes_inference_set(
     ]
     assert all(event['kind'] == 'message' for event in conversation['live_events'])
     assert conversation['verdict'] in {'pass', 'needs_review'}
+    portable_vcon = conversation['ietf_vcon_export']
+    assert portable_vcon['vcon'] == '0.4.0'
+    assert portable_vcon['uuid']
+    assert portable_vcon['dialog']
+    assert all(item['type'] == 'text' for item in portable_vcon['dialog'])
+    assert conversation['ietf_vcon_export_summary'] == {
+        'available': True,
+        'valid': True,
+        'standard_draft': 'draft-ietf-vcon-vcon-core-04',
+        'version': '0.4.0',
+        'dialog_turns': len(portable_vcon['dialog']),
+        'recording_portable': False,
+        'signed': False,
+        'errors': [],
+    }
     assert completed['inference_set_path']
     inference_path = Path(completed['inference_set_path'])
     if not inference_path.is_absolute():
