@@ -950,7 +950,9 @@ function AssertDimensionResults({
     ? 'Trace-backed evidence'
     : provenance.evidence_level === 'partial_structured'
       ? 'Partially structured evidence'
-      : 'Transcript-only evidence';
+      : provenance.evidence_level === 'black_box'
+        ? 'Transcript-only evidence'
+        : 'Evidence level unavailable';
 
   return (
     <section className="assert-dimension-results" aria-label="ASSERT evaluation details">
