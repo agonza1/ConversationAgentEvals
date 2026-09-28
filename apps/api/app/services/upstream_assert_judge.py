@@ -151,6 +151,8 @@ def run_upstream_assert_judge(
 
             command = [
                 executable,
+                '-m',
+                'assert_ai.cli',
                 'run',
                 '--config', str(config_path),
                 '--force-stage', 'judge',

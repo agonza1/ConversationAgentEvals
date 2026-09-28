@@ -46,7 +46,7 @@ def _configure(monkeypatch, tmp_path, *, daily_limit=200, max_concurrent=1):
     monkeypatch.setenv('LLM_JUDGE_DAILY_CREDIT_LIMIT', str(daily_limit))
     monkeypatch.setenv('LLM_JUDGE_RESERVED_DAILY_CREDITS', '0')
     monkeypatch.setattr(product_service, '_judge_spend_path', lambda: tmp_path / 'judge-spend.json')
-    monkeypatch.setattr(upstream_assert_judge, 'cli_executable', lambda: '/venv/bin/assert-ai')
+    monkeypatch.setattr(upstream_assert_judge, 'cli_executable', lambda: '/venv/bin/python')
     monkeypatch.setattr(
         upstream_assert_judge.subprocess,
         'run',

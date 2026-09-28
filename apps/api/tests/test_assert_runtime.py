@@ -1,4 +1,5 @@
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -15,6 +16,10 @@ def test_assert_runtime_rejects_any_other_installed_version(monkeypatch):
 
     with pytest.raises(assert_runtime.AssertRuntimeUnavailable, match='requires assert-ai==0.3.0'):
         assert_runtime.ensure_expected_version()
+
+
+def test_assert_cli_uses_the_same_interpreter_as_the_validated_package():
+    assert assert_runtime.cli_executable() == sys.executable
 
 
 def test_judge_score_contract_is_derived_from_the_configured_dimensions():

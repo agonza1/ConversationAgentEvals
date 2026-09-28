@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import importlib.metadata
-import shutil
+import sys
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -54,12 +54,7 @@ def ensure_expected_version() -> str:
 
 def cli_executable() -> str:
     ensure_expected_version()
-    executable = shutil.which('assert-ai')
-    if not executable:
-        raise AssertRuntimeUnavailable(
-            f'The assert-ai {EXPECTED_ASSERT_VERSION} command is unavailable.'
-        )
-    return executable
+    return sys.executable
 
 
 def validate_config(config: dict[str, Any], *, config_path: Path) -> None:

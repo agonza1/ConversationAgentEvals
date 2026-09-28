@@ -155,7 +155,7 @@ def _valid_score(run, conversation, judge_model, *, status='ok'):
 
 
 def _install_fake_assert(monkeypatch, writer):
-    monkeypatch.setattr(upstream_assert_judge, 'cli_executable', lambda: '/venv/bin/assert-ai')
+    monkeypatch.setattr(upstream_assert_judge, 'cli_executable', lambda: '/venv/bin/python')
     captured = {}
 
     def fake_run(command, **kwargs):
@@ -344,7 +344,7 @@ def test_upstream_assert_judge_runs_existing_judge_only_command(monkeypatch, tmp
         artifact_root=tmp_path / 'assert-invocation',
     )
 
-    assert captured['command'][:2] == ['/venv/bin/assert-ai', 'run']
+    assert captured['command'][:4] == ['/venv/bin/python', '-m', 'assert_ai.cli', 'run']
     assert captured['command'][-2:] == ['--output', 'json']
     assert captured['env']['OPENAI_API_KEY'] == 'test-key'
     assert response['status'] == 'ready'
@@ -640,7 +640,7 @@ def test_upstream_assert_judge_requires_api_key_for_openai(monkeypatch, tmp_path
     _configure_assert_runtime(monkeypatch, tmp_path)
     monkeypatch.delenv('LLM_JUDGE_API_KEY', raising=False)
     monkeypatch.delenv('OPENAI_API_KEY', raising=False)
-    monkeypatch.setattr(upstream_assert_judge, 'cli_executable', lambda: '/venv/bin/assert-ai')
+    monkeypatch.setattr(upstream_assert_judge, 'cli_executable', lambda: '/venv/bin/python')
 
     with pytest.raises(UpstreamAssertJudgeUnavailable, match='requires OPENAI_API_KEY'):
         run_upstream_assert_judge(
