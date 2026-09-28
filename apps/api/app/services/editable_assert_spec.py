@@ -18,7 +18,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.integrations.assert_runtime import validate_config
+from app.integrations.assert_runtime import EXPECTED_ASSERT_VERSION, validate_config
 from app.models.entities import EditableAssertSpecVersion, ProductProject, ProductWorkspaceMember
 from app.services.llm_providers import get_provider
 from app.services.ssl_util import verified_ssl_context
@@ -521,6 +521,19 @@ def _spec_lock(project_id: str, spec_id: str) -> threading.Lock:
 
 def _saved_response(*, record: EditableAssertSpecVersion, project: ProductProject) -> SavedEditableAssertSpec:
     spec = EditableAssertSpec.model_validate(json.loads(record.spec_json))
+    try:
+        persisted_config = yaml.safe_load(record.yaml)
+        if not isinstance(persisted_config, dict):
+            raise ValueError('compiled YAML must contain a mapping')
+        validate_config(
+            persisted_config,
+            config_path=Path('/tmp/cae-assert/saved-spec.eval_config.yaml'),
+        )
+    except Exception as exc:
+        raise ValueError(
+            f'Saved spec {record.spec_key!r} version {record.version} is incompatible with '
+            f'assert-ai=={EXPECTED_ASSERT_VERSION}: {exc}'
+        ) from exc
     created = record.created_at.replace(tzinfo=UTC).isoformat().replace('+00:00', 'Z')
     return SavedEditableAssertSpec(
         id=record.spec_key,

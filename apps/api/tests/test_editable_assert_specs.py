@@ -304,6 +304,47 @@ def test_save_rejects_unapproved_generated_draft_and_versions_approved_spec_in_p
         assert sorted(item.version for item in versions) == [1, 2]
 
 
+def test_saved_spec_load_and_export_reject_yaml_that_assert_03_cannot_validate():
+    suffix = uuid4().hex
+    user_id = f'recompile-user-{suffix}'
+    project_id = f'recompile-project-{suffix}'
+    created = client.post(
+        '/api/specs',
+        json={
+            'user_id': user_id,
+            'project_id': project_id,
+            'spec': _valid_spec(objective='Validate this saved spec with the current ASSERT runtime.'),
+        },
+    )
+    assert created.status_code == 200
+
+    with SessionLocal() as db:
+        project = db.query(ProductProject).filter(
+            ProductProject.user_id == user_id,
+            ProductProject.project_key == project_id,
+        ).one()
+        record = db.query(EditableAssertSpecVersion).filter(
+            EditableAssertSpecVersion.project_id == project.id,
+            EditableAssertSpecVersion.spec_key == 'cancellation-rescue-agent',
+        ).one()
+        record.yaml = 'legacy_assert_config: true\n'
+        db.commit()
+
+    loaded = client.get(
+        '/api/specs/cancellation-rescue-agent',
+        params={'user_id': user_id, 'project_id': project_id},
+    )
+    exported = client.get(
+        '/api/specs/cancellation-rescue-agent/export',
+        params={'user_id': user_id, 'project_id': project_id, 'format': 'json'},
+    )
+
+    assert loaded.status_code == 422
+    assert 'incompatible with assert-ai==0.3.0' in loaded.json()['detail']
+    assert exported.status_code == 422
+    assert 'incompatible with assert-ai==0.3.0' in exported.json()['detail']
+
+
 def test_saved_specs_are_scoped_by_owner_and_project():
     suffix = uuid4().hex
     first_user = f'owner-{suffix}'

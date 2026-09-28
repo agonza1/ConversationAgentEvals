@@ -135,6 +135,8 @@ def get_editable_spec(spec_id: str, user_id: str = Query(min_length=1), project_
         saved = get_spec(db, spec_id, user_id=user_id, project_id=project_id)
     except SpecProjectAmbiguous as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if saved is None:
         raise HTTPException(status_code=404, detail='Spec not found')
     return saved
@@ -186,6 +188,8 @@ def export_editable_spec(
         exported = export_saved_spec(db, spec_id, user_id=user_id, project_id=project_id, format=format)
     except SpecProjectAmbiguous as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if exported is None:
         raise HTTPException(status_code=404, detail='Spec not found')
     if format == 'yaml':
