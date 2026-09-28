@@ -18,7 +18,11 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.integrations.assert_runtime import EXPECTED_ASSERT_VERSION, validate_config
+from app.integrations.assert_runtime import (
+    EXPECTED_ASSERT_VERSION,
+    behavior_preset as load_behavior_preset,
+    validate_config,
+)
 from app.models.entities import EditableAssertSpecVersion, ProductProject, ProductWorkspaceMember
 from app.services.llm_providers import get_provider
 from app.services.ssl_util import verified_ssl_context
@@ -65,6 +69,7 @@ class EditableAssertSpec(BaseModel):
     title: str = ''
     role: str = ''
     objective: str = ''
+    behavior_preset: str | None = None
     status: Literal['draft', 'published'] = 'draft'
     generated_content_status: Literal['none', 'draft', 'approved'] = 'none'
     required_behaviors: list[AssertCheck] = Field(default_factory=list)
@@ -341,6 +346,8 @@ def export_saved_spec(db: Session, spec_id: str, *, user_id: str, project_id: st
 
 def _with_defaults(spec: EditableAssertSpec) -> EditableAssertSpec:
     updates: dict[str, Any] = {}
+    if spec.behavior_preset is not None:
+        updates['behavior_preset'] = spec.behavior_preset.strip() or None
     if not spec.judges:
         updates['judges'] = [AssertJudge()]
     if not spec.evidence_requirements:
@@ -373,6 +380,24 @@ def _compile_assert_config(spec: EditableAssertSpec) -> dict[str, Any]:
                 *[f'- {step.strip()}' for step in scenario.steps if step.strip()],
                 f'Expected outcome: {scenario.expected_outcome.strip()}',
             ])
+    behavior_preset_name = spec.behavior_preset
+    if behavior_preset_name:
+        try:
+            preset = load_behavior_preset(behavior_preset_name)
+        except Exception:
+            # ASSERT's validator below produces the canonical error for an
+            # unknown or malformed preset. Keep compilation deterministic so
+            # preview can return that error inline instead of failing the API.
+            preset = None
+        preset_description = preset.get('description') if isinstance(preset, dict) else None
+        if isinstance(preset_description, str) and preset_description.strip():
+            behavior_sections = [
+                f'# ASSERT behavior preset: {behavior_preset_name}',
+                '',
+                preset_description.strip(),
+                '',
+                *behavior_sections,
+            ]
     context_lines = [f'Target role: {spec.role.strip()}']
 
     pipeline: dict[str, Any] = {
@@ -410,12 +435,16 @@ def _compile_assert_config(spec: EditableAssertSpec) -> dict[str, Any]:
         judge_stage['preset'] = list(dict.fromkeys(item.strip() for item in judge.presets if item.strip()))
     pipeline['judge'] = judge_stage
 
+    behavior_config: dict[str, Any] = {
+        'name': _slug(spec.title),
+        'description': '\n'.join(behavior_sections).strip(),
+    }
+    if behavior_preset_name:
+        behavior_config['preset'] = behavior_preset_name
+
     return {
         'suite': _slug(spec.id or spec.title),
-        'behavior': {
-            'name': _slug(spec.title),
-            'description': '\n'.join(behavior_sections).strip(),
-        },
+        'behavior': behavior_config,
         'context': '\n'.join(context_lines),
         'default_model': {'name': model_name},
         'artifacts_root': 'artifacts/assert',

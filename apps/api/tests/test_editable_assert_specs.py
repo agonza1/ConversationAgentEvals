@@ -224,6 +224,40 @@ def test_preview_compiles_canonical_assert_yaml_and_validates_with_assert():
     }
 
 
+def test_preview_compiles_selected_assert_03_behavior_preset_with_custom_contract():
+    response = client.post(
+        '/api/specs/preview',
+        json={'spec': _valid_spec(behavior_preset=' actionability_failures ')},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload['valid'] is True, payload['errors']
+    assert payload['normalized']['behavior_preset'] == 'actionability_failures'
+    behavior = yaml.safe_load(payload['yaml'])['behavior']
+    assert behavior['preset'] == 'actionability_failures'
+    assert behavior['name'] == 'cancellation-rescue-agent'
+    assert 'Actionability failures occur' in behavior['description']
+    assert '## Required behaviors' in behavior['description']
+    assert 'Diagnoses cancellation reason' in behavior['description']
+
+
+def test_preview_rejects_unknown_assert_behavior_preset_inline():
+    response = client.post(
+        '/api/specs/preview',
+        json={'spec': _valid_spec(behavior_preset='not-a-real-assert-preset')},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload['valid'] is False
+    assert payload['assert_validated'] is False
+    assert any(
+        error['field'] == 'assert_config' and 'not-a-real-assert-preset' in error['message']
+        for error in payload['errors']
+    )
+
+
 def test_preview_supports_assert_03_dimension_contracts():
     spec = _valid_spec(judges=[{
         'id': 'resolution-quality',
