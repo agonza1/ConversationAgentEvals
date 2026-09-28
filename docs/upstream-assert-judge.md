@@ -170,7 +170,8 @@ Applying the review continues to use CAE's existing confirmation flow and does n
 ## Current limits
 
 - The run UI exposes the ASSERT version, evidence level, dimension outcomes, and justifications. Artifact links and complete behavior-node drill-down remain future UX work.
-- The taxonomy is compiled from the active CAE scenario contract. Editable specs can use ASSERT 0.3 behavior presets, N/A policies, disabled dimensions, and ordinal scales; execution binding to a separately approved spec version remains future work.
+- The taxonomy is compiled from the active CAE scenario contract. The evaluation-design editor discovers ASSERT 0.3 behavior and judge presets from the pinned runtime and exposes preset selection, N/A policy, built-in-dimension disabling, and ordinal-scale controls; execution binding to a separately approved spec version remains future work.
+- Editable-spec ordinal grades use non-empty string identifiers (for example `unresolved`, `partial`, and `resolved`). This is intentional because JSON object keys cannot preserve numeric key types across the web/API boundary.
 - OpenTelemetry/OpenInference trace import remains a separate future path. Structured CAE action and final-state evidence are mapped directly for now.
 - Automatic judgment for every run is intentionally not enabled because it incurs model cost and requires provider credentials.
 - The process-local concurrency counter does not coordinate across multiple API replicas; production deployments should add a shared queue or distributed limiter when scaling horizontally.

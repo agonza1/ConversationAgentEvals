@@ -1,5 +1,6 @@
 import {
   AskResponse,
+  AssertLibraryPreset,
   BenchmarkRunPayload,
   BenchmarkRunResponse,
   BenchmarkSimulationResponse,
@@ -175,6 +176,18 @@ export async function listEditableAssertTemplates(): Promise<EditableAssertTempl
   const response = await fetch(`${getApiBase()}/api/specs/templates`, { cache: 'no-store' });
   const payload = await handleResponse<{ templates: EditableAssertTemplate[] }>(response);
   return payload.templates;
+}
+
+export async function listAssertBehaviorPresets(): Promise<AssertLibraryPreset[]> {
+  const response = await fetch(`${getApiBase()}/api/specs/assert-library/behaviors`, { cache: 'no-store' });
+  const payload = await handleResponse<{ behaviors: AssertLibraryPreset[] }>(response);
+  return payload.behaviors;
+}
+
+export async function listAssertJudgePresets(): Promise<AssertLibraryPreset[]> {
+  const response = await fetch(`${getApiBase()}/api/specs/assert-library/judges`, { cache: 'no-store' });
+  const payload = await handleResponse<{ judges: AssertLibraryPreset[] }>(response);
+  return payload.judges;
 }
 
 export async function generateEditableAssertDraft(payload: {

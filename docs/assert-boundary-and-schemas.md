@@ -34,6 +34,7 @@ POST /api/assert/runs/{execution_run_id}/conversations/{conversation_id}/judge
 When `ASSERT_UPSTREAM_JUDGE_ENABLED=1` and provider credentials are configured, CAE converts the persisted conversation into ASSERT transcript and taxonomy inputs, invokes the pinned `assert-ai==0.3.0` judge stage, validates the returned score contract, and stores the result as a pending semantic review. API startup fails if a different ASSERT version is installed.
 
 The spec API exposes the behavior and judge-preset libraries shipped by that installed version under `/api/specs/assert-library/behaviors` and `/api/specs/assert-library/judges`; CAE does not copy or fork the preset definitions.
+The evaluation-design editor consumes those endpoints directly. Its behavior preset, judge preset, N/A, disabled built-in dimension, and ordinal scale controls compile through the same validated API model. Ordinal scale grade identifiers are strings because JSON object keys cannot retain numeric key types.
 
 This path does not execute the target, replace CAE's deterministic verdict, or manufacture missing action/final-state evidence. There is no silent fallback to the standalone CAE product judge when upstream ASSERT judging fails. See [upstream-assert-judge.md](upstream-assert-judge.md).
 
