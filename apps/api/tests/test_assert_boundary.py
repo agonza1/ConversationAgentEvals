@@ -191,8 +191,16 @@ def test_default_runtime_config_uses_the_in_process_evaluator_everywhere():
 
     assert local.invocation_target.transport == 'in_process'
     assert local.invocation_target.base_url == 'cae://deterministic-evaluator'
+    assert local.invocation_target.environment == 'local'
+    assert local.execution_mode == 'sync'
     assert production.invocation_target.transport == 'in_process'
     assert production.invocation_target.base_url == 'cae://deterministic-evaluator'
+    assert production.invocation_target.environment == 'production'
+    assert production.execution_mode == 'sync'
+    implicit = type(local).model_validate({
+        'invocation_target': default_invocation_target(environment='local'),
+    })
+    assert implicit.execution_mode == 'sync'
 
 
 def test_boundary_module_exposes_canonical_entrypoints():

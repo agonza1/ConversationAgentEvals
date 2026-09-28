@@ -133,7 +133,7 @@ class AssertInvocationTarget(BaseModel):
 class AssertRuntimeConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
-    execution_mode: ExecutionMode = 'async'
+    execution_mode: ExecutionMode = 'sync'
     invocation_target: AssertInvocationTarget
     worker_queue: str | None = None
     retry_policy: AssertRetryPolicy = Field(default_factory=AssertRetryPolicy)

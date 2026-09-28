@@ -7,6 +7,7 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
 
+from app.config import settings
 from app.services.assert_adapter import normalize_assert_payload
 from app.services.assert_artifact_store import persist_assert_run_artifacts
 from app.services.assert_trace import FAILURE_VALUES, parse_action_trace
@@ -687,7 +688,10 @@ def _assert_run_request(
                 'assert_project': 'conversation-agent-evals',
             },
             'evidence': _assert_evidence_input(payload),
-            'runtime_config': with_default_runtime_config(None, environment='local').model_dump(mode='json'),
+            'runtime_config': with_default_runtime_config(
+                None,
+                environment=_assert_runtime_environment(),
+            ).model_dump(mode='json'),
             'platform_metadata': {
                 'user_id': run_metadata.get('user_id') or 'anonymous',
                 'project_id': run_metadata.get('project_id') or 'default',
@@ -712,6 +716,10 @@ def _assert_run_request(
             },
         }
     )
+
+
+def _assert_runtime_environment() -> str:
+    return 'production' if settings.app_env.strip().lower() in {'production', 'prod'} else 'local'
 
 
 def _assert_evidence_input(payload: dict[str, Any]) -> dict[str, Any]:

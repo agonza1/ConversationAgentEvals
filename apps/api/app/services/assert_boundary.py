@@ -119,7 +119,7 @@ def with_default_runtime_config(runtime_config: AssertRuntimeConfig | None, *, e
         return runtime_config
     return AssertRuntimeConfig.model_validate(
         {
-            'execution_mode': 'async',
+            'execution_mode': 'sync',
             'invocation_target': default_invocation_target(environment=environment),
         }
     )
