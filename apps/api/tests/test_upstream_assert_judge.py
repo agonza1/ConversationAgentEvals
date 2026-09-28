@@ -203,6 +203,17 @@ def test_assert_03_dimension_contract_accepts_not_applicable_and_ordinal_values(
         },
     ) is True
 
+    contradictory = {
+        'dimensions': {'policy_violation': False},
+        'dimension_applicability': {'policy_violation': False},
+    }
+    assert upstream_assert_judge._valid_dimension_value(
+        verdict=contradictory,
+        name='policy_violation',
+        not_applicable_score_keys=set(),
+        dimension_scales={},
+    ) is False
+
 
 def test_assert_inference_adapter_preserves_voice_actions_and_final_state():
     run, conversation = _run_and_conversation()
@@ -228,6 +239,29 @@ def test_assert_inference_adapter_preserves_voice_actions_and_final_state():
     assert 'case-42' in tools[0]['tool_result']
     assert tools[1]['tool_name'] == 'cae_final_state_snapshot'
     assert 'refund_review_opened' in tools[1]['tool_result']
+
+
+def test_assert_inference_adapter_keeps_bookkeeping_final_state_black_box():
+    run, conversation = _run_and_conversation()
+    conversation['action_trace'] = []
+    conversation['final_state'] = {
+        'complete': False,
+        'outcome': 'conversation_only_evidence_recorded',
+        'termination_reason': 'max_exchanges',
+        'runtime_provenance': {
+            'target': 'openai_codex',
+            'live_tool_execution': False,
+        },
+    }
+
+    row = build_assert_inference_row(run=run, conversation=conversation)
+
+    assert row['dimensions']['evidence_level'] == 'black_box'
+    assert not any(
+        event['edit'].get('tool_name') == 'cae_final_state_snapshot'
+        for event in row['events']
+        if event['edit']['type'] == 'tool_call'
+    )
 
 
 def test_assert_inference_adapter_interleaves_explicit_action_anchors():
@@ -450,6 +484,31 @@ def test_upstream_assert_judge_rejects_score_metadata_not_declared_by_config(
             conversation=conversation,
             scenario_contract=_scenario_contract(),
             artifact_root=tmp_path / f'unconfigured-{metadata_kind}',
+        )
+
+    assert _spent_credits() == 0
+
+
+def test_upstream_assert_judge_rejects_false_applicability_for_required_dimension(
+    monkeypatch,
+    tmp_path,
+):
+    run, conversation = _run_and_conversation()
+    _configure_assert_runtime(monkeypatch, tmp_path)
+
+    def writer(score_path, config):
+        score = _valid_score(run, conversation, config['pipeline']['judge']['model']['name'])
+        score['verdict']['dimension_applicability'] = {'policy_violation': False}
+        score_path.write_text(json.dumps(score) + '\n', encoding='utf-8')
+
+    _install_fake_assert(monkeypatch, writer)
+
+    with pytest.raises(UpstreamAssertJudgeFailed, match='missing or invalid dimension values'):
+        run_upstream_assert_judge(
+            run=run,
+            conversation=conversation,
+            scenario_contract=_scenario_contract(),
+            artifact_root=tmp_path / 'invalid-applicability',
         )
 
     assert _spent_credits() == 0

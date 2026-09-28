@@ -416,6 +416,19 @@ def _valid_dimension_value(
     if not isinstance(dimensions, dict):
         return False
     value = dimensions.get(name)
+    applicability = verdict.get('dimension_applicability')
+    if applicability is not None:
+        if not isinstance(applicability, dict):
+            return False
+        if name in applicability:
+            applies = applicability[name]
+            if not isinstance(applies, bool):
+                return False
+            if applies is False:
+                return (
+                    name in not_applicable_score_keys
+                    and is_not_applicable_dimension(verdict, name)
+                )
     if is_valid_event_flag(value):
         return name not in dimension_scales
     if name in not_applicable_score_keys and is_not_applicable_dimension(verdict, name):

@@ -5,6 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect, text
 
+# Load the repository .env before app.db.database constructs its engine.
+from app.config import settings as _settings
 from app.db.database import Base, engine
 from app.integrations.assert_runtime import ensure_expected_version
 from app.services.benchmark_catalog_extensions import register_builtin_benchmark_extensions

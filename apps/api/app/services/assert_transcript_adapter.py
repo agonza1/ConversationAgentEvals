@@ -67,8 +67,8 @@ def build_assert_inference_row(
             continue
         transcript.add_event(_tool_event(action, action_index))
 
-    final_state = conversation.get('final_state')
-    if isinstance(final_state, dict) and final_state:
+    final_state = _structured_final_state(conversation)
+    if final_state is not None:
         transcript.add_event(TranscriptEvent(
             view=['target', 'combined'],
             actor='tool',
@@ -233,8 +233,18 @@ def _action_result(action: dict[str, Any]) -> str:
 
 
 def _evidence_level(conversation: dict[str, Any]) -> str:
-    actions, state = bool(conversation.get('action_trace')), bool(conversation.get('final_state'))
+    actions = bool(conversation.get('action_trace'))
+    state = _structured_final_state(conversation) is not None
     return 'gray_box' if actions and state else 'partial_structured' if actions or state else 'black_box'
+
+
+def _structured_final_state(conversation: dict[str, Any]) -> dict[str, Any] | None:
+    final_state = conversation.get('final_state')
+    if not isinstance(final_state, dict) or not final_state:
+        return None
+    if final_state.get('outcome') == 'conversation_only_evidence_recorded':
+        return None
+    return final_state
 
 
 def _positive_int(value: Any) -> int | None:
