@@ -409,6 +409,52 @@ def test_upstream_assert_judge_rejects_malformed_custom_dimensions(monkeypatch, 
     assert _spent_credits() == 0
 
 
+@pytest.mark.parametrize('metadata_kind', ['not_applicable', 'ordinal'])
+def test_upstream_assert_judge_rejects_score_metadata_not_declared_by_config(
+    monkeypatch,
+    tmp_path,
+    metadata_kind,
+):
+    run, conversation = _run_and_conversation()
+    _configure_assert_runtime(monkeypatch, tmp_path)
+
+    def writer(score_path, config):
+        score = _valid_score(run, conversation, config['pipeline']['judge']['model']['name'])
+        if metadata_kind == 'not_applicable':
+            score['not_applicable_score_keys'] = ['policy_violation']
+            score['verdict']['dimensions']['policy_violation'] = None
+            score['verdict']['dimension_applicability'] = {'policy_violation': False}
+        else:
+            score['dimension_scales'] = {
+                'policy_violation': {
+                    'type': 'ordinal',
+                    'values': [
+                        {'value': 'clear', 'label': 'Clear'},
+                        {'value': 'flagged', 'label': 'Flagged'},
+                    ],
+                },
+            }
+            score['verdict']['dimensions']['policy_violation'] = 'clear'
+        score_path.write_text(json.dumps(score) + '\n', encoding='utf-8')
+
+    _install_fake_assert(monkeypatch, writer)
+
+    message = (
+        'not_applicable_score_keys do not match'
+        if metadata_kind == 'not_applicable'
+        else 'dimension_scales do not match'
+    )
+    with pytest.raises(UpstreamAssertJudgeFailed, match=message):
+        run_upstream_assert_judge(
+            run=run,
+            conversation=conversation,
+            scenario_contract=_scenario_contract(),
+            artifact_root=tmp_path / f'unconfigured-{metadata_kind}',
+        )
+
+    assert _spent_credits() == 0
+
+
 def test_upstream_assert_judge_rejects_unexpected_taxonomy_nodes(monkeypatch, tmp_path):
     run, conversation = _run_and_conversation()
     _configure_assert_runtime(monkeypatch, tmp_path)

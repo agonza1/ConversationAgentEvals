@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from assert_ai.config import load_runtime_context
+from assert_ai.config import load_runtime_context, parse_judge_dimensions
 from assert_ai.core.judge import (
     BUILT_IN_DIMENSIONS,
     infer_judge_status,
@@ -78,6 +78,47 @@ def validate_config(config: dict[str, Any], *, config_path: Path) -> None:
     )
 
 
+def judge_score_contract(
+    dimensions: dict[str, Any],
+    *,
+    disabled_dimensions: list[str] | None = None,
+) -> dict[str, Any]:
+    """Build trusted score metadata from the ASSERT config CAE launches."""
+    ensure_expected_version()
+    parsed_dimensions = parse_judge_dimensions(
+        deepcopy(dimensions),
+        field_name='pipeline.judge.dimensions',
+    )
+    disabled = set(disabled_dimensions or [])
+    builtin_names = {str(dimension['name']) for dimension in BUILT_IN_DIMENSIONS}
+    unknown_disabled = sorted(disabled - builtin_names)
+    if unknown_disabled:
+        raise ValueError(
+            'Unknown disabled ASSERT judge dimensions: ' + ', '.join(unknown_disabled)
+        )
+    configured_by_name = {
+        str(dimension['name']): deepcopy(dimension)
+        for dimension in BUILT_IN_DIMENSIONS
+        if dimension['name'] not in disabled
+    }
+    for dimension in parsed_dimensions:
+        configured_by_name[str(dimension['name'])] = dimension
+    configured = list(configured_by_name.values())
+    return {
+        'score_keys': [dimension['name'] for dimension in configured],
+        'not_applicable_score_keys': [
+            dimension['name']
+            for dimension in configured
+            if dimension.get('allow_not_applicable') is True
+        ],
+        'dimension_scales': {
+            dimension['name']: deepcopy(dimension['scale'])
+            for dimension in configured
+            if dimension.get('scale')
+        },
+    }
+
+
 def behavior_presets() -> list[dict[str, Any]]:
     """Return ASSERT 0.3 behavior presets without copying the library into CAE."""
     ensure_expected_version()
@@ -125,6 +166,7 @@ __all__ = [
     'is_not_applicable_dimension',
     'is_valid_confidence_label',
     'is_valid_event_flag',
+    'judge_score_contract',
     'judge_preset',
     'judge_presets',
     'validate_config',

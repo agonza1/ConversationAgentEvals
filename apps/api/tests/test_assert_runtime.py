@@ -17,6 +17,36 @@ def test_assert_runtime_rejects_any_other_installed_version(monkeypatch):
         assert_runtime.ensure_expected_version()
 
 
+def test_judge_score_contract_is_derived_from_the_configured_dimensions():
+    contract = assert_runtime.judge_score_contract({
+        'resolution_quality': {
+            'description': 'How completely was the request resolved?',
+            'rubric': 'low = unresolved; high = resolved',
+            'allow_not_applicable': True,
+            'scale': {
+                'type': 'ordinal',
+                'values': {'low': 'Unresolved', 'high': 'Resolved'},
+            },
+        },
+    })
+
+    assert contract['score_keys'] == [
+        'policy_violation',
+        'overrefusal',
+        'resolution_quality',
+    ]
+    assert contract['not_applicable_score_keys'] == ['resolution_quality']
+    assert contract['dimension_scales'] == {
+        'resolution_quality': {
+            'type': 'ordinal',
+            'values': [
+                {'value': 'low', 'label': 'Unresolved'},
+                {'value': 'high', 'label': 'Resolved'},
+            ],
+        },
+    }
+
+
 def test_assert_ai_imports_are_centralized_in_the_runtime_boundary():
     app_root = Path(__file__).resolve().parents[1] / 'app'
     integration = app_root / 'integrations' / 'assert_runtime.py'
@@ -29,4 +59,3 @@ def test_assert_ai_imports_are_centralized_in_the_runtime_boundary():
             offenders.append(str(path.relative_to(app_root)))
 
     assert offenders == []
-

@@ -16,13 +16,13 @@ import yaml
 
 from app.integrations.assert_runtime import (
     AssertRuntimeUnavailable,
-    BUILT_IN_DIMENSIONS,
     cli_executable,
     infer_judge_status,
     installed_version,
     is_not_applicable_dimension,
     is_valid_confidence_label,
     is_valid_event_flag,
+    judge_score_contract,
 )
 
 from app.services.assert_taxonomy_adapter import build_assert_taxonomy
@@ -81,6 +81,8 @@ def run_upstream_assert_judge(
 
     taxonomy = build_assert_taxonomy(scenario_contract=scenario_contract, conversation=conversation)
     inference = build_assert_inference_row(run=run, conversation=conversation)
+    judge_dimensions = _judge_dimensions()
+    score_contract = judge_score_contract(judge_dimensions)
     fingerprint = hashlib.sha256(json.dumps(
         {'model': model, 'n': judge_n, 'taxonomy': taxonomy, 'inference': inference},
         sort_keys=True,
@@ -142,7 +144,7 @@ def run_upstream_assert_judge(
                         'inference_set_path': str(inference_path),
                         'taxonomy_path': str(taxonomy_path),
                         'save_dir': str(run_dir),
-                        'dimensions': _judge_dimensions(),
+                        'dimensions': judge_dimensions,
                     }
                 },
             }, sort_keys=False), encoding='utf-8')
@@ -183,6 +185,7 @@ def run_upstream_assert_judge(
                 rows,
                 test_case_id=str(inference['test_case_id']),
                 taxonomy=taxonomy,
+                score_contract=score_contract,
             )
             assert_version = _assert_version()
             artifacts = {
@@ -259,6 +262,7 @@ def _select_valid_score(
     *,
     test_case_id: str,
     taxonomy: dict[str, Any],
+    score_contract: dict[str, Any],
 ) -> dict[str, Any]:
     matches = [row for row in rows if str(row.get('test_case_id') or '') == test_case_id]
     if not matches:
@@ -285,10 +289,9 @@ def _select_valid_score(
     if not isinstance(dimensions, dict):
         raise UpstreamAssertJudgeFailed('ASSERT verdict is missing its dimensions object.')
 
-    expected_dimensions = [
-        *(str(item['name']) for item in BUILT_IN_DIMENSIONS),
-        *_judge_dimensions().keys(),
-    ]
+    expected_dimensions = score_contract['score_keys']
+    expected_not_applicable_score_keys = score_contract['not_applicable_score_keys']
+    expected_dimension_scales = score_contract['dimension_scales']
     score_keys = score.get('score_keys')
     if not isinstance(score_keys, list) or not all(isinstance(name, str) for name in score_keys):
         raise UpstreamAssertJudgeFailed('ASSERT 0.3 score is missing its score_keys contract.')
@@ -298,24 +301,30 @@ def _select_valid_score(
             + ', '.join(score_keys)
         )
     not_applicable_score_keys = score.get('not_applicable_score_keys')
-    if (
-        not isinstance(not_applicable_score_keys, list)
-        or not all(isinstance(name, str) for name in not_applicable_score_keys)
-        or not set(not_applicable_score_keys).issubset(score_keys)
+    if not isinstance(not_applicable_score_keys, list) or not all(
+        isinstance(name, str) for name in not_applicable_score_keys
     ):
         raise UpstreamAssertJudgeFailed(
             'ASSERT 0.3 score has an invalid not_applicable_score_keys contract.'
         )
+    if not_applicable_score_keys != expected_not_applicable_score_keys:
+        raise UpstreamAssertJudgeFailed(
+            'ASSERT 0.3 not_applicable_score_keys do not match the configured dimensions.'
+        )
     dimension_scales = score.get('dimension_scales', {})
     if not isinstance(dimension_scales, dict):
         raise UpstreamAssertJudgeFailed('ASSERT 0.3 score has an invalid dimension_scales contract.')
+    if dimension_scales != expected_dimension_scales:
+        raise UpstreamAssertJudgeFailed(
+            'ASSERT 0.3 dimension_scales do not match the configured dimensions.'
+        )
     invalid_dimensions = [
         name for name in expected_dimensions
         if not _valid_dimension_value(
             verdict=verdict,
             name=name,
-            not_applicable_score_keys=set(not_applicable_score_keys),
-            dimension_scales=dimension_scales,
+            not_applicable_score_keys=set(expected_not_applicable_score_keys),
+            dimension_scales=expected_dimension_scales,
         )
     ]
     if invalid_dimensions:
