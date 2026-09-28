@@ -294,6 +294,12 @@ def _select_valid_score(
     expected_dimensions = score_contract['score_keys']
     expected_not_applicable_score_keys = score_contract['not_applicable_score_keys']
     expected_dimension_scales = score_contract['dimension_scales']
+    if set(dimensions) != set(expected_dimensions):
+        mismatched_dimensions = sorted(set(dimensions).symmetric_difference(expected_dimensions))
+        raise UpstreamAssertJudgeFailed(
+            'ASSERT verdict has missing or invalid dimension values: '
+            + ', '.join(mismatched_dimensions)
+        )
     score_keys = score.get('score_keys')
     if not isinstance(score_keys, list) or not all(isinstance(name, str) for name in score_keys):
         raise UpstreamAssertJudgeFailed('ASSERT 0.3 score is missing its score_keys contract.')
@@ -339,6 +345,10 @@ def _select_valid_score(
     if not isinstance(justifications, dict):
         raise UpstreamAssertJudgeFailed(
             'ASSERT verdict is missing its dimension_justifications object.'
+        )
+    if set(justifications) != set(expected_dimensions):
+        raise UpstreamAssertJudgeFailed(
+            'ASSERT verdict dimension justifications do not match the configured dimensions.'
         )
     invalid_justifications = [
         name for name in expected_dimensions

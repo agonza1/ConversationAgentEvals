@@ -443,6 +443,51 @@ def test_upstream_assert_judge_rejects_malformed_custom_dimensions(monkeypatch, 
     assert _spent_credits() == 0
 
 
+def test_upstream_assert_judge_rejects_dimensions_outside_score_contract(monkeypatch, tmp_path):
+    run, conversation = _run_and_conversation()
+    _configure_assert_runtime(monkeypatch, tmp_path)
+
+    def writer(score_path, config):
+        score = _valid_score(run, conversation, config['pipeline']['judge']['model']['name'])
+        score['verdict']['dimensions']['undeclared_dimension'] = True
+        score['verdict']['dimension_justifications']['undeclared_dimension'] = 'Not configured.'
+        score_path.write_text(json.dumps(score) + '\n', encoding='utf-8')
+
+    _install_fake_assert(monkeypatch, writer)
+
+    with pytest.raises(UpstreamAssertJudgeFailed, match='missing or invalid dimension values'):
+        run_upstream_assert_judge(
+            run=run,
+            conversation=conversation,
+            scenario_contract=_scenario_contract(),
+            artifact_root=tmp_path / 'extra-dimension',
+        )
+
+    assert _spent_credits() == 0
+
+
+def test_upstream_assert_judge_rejects_undeclared_dimension_justification(monkeypatch, tmp_path):
+    run, conversation = _run_and_conversation()
+    _configure_assert_runtime(monkeypatch, tmp_path)
+
+    def writer(score_path, config):
+        score = _valid_score(run, conversation, config['pipeline']['judge']['model']['name'])
+        score['verdict']['dimension_justifications']['undeclared_dimension'] = 'Not configured.'
+        score_path.write_text(json.dumps(score) + '\n', encoding='utf-8')
+
+    _install_fake_assert(monkeypatch, writer)
+
+    with pytest.raises(UpstreamAssertJudgeFailed, match='justifications do not match'):
+        run_upstream_assert_judge(
+            run=run,
+            conversation=conversation,
+            scenario_contract=_scenario_contract(),
+            artifact_root=tmp_path / 'extra-justification',
+        )
+
+    assert _spent_credits() == 0
+
+
 @pytest.mark.parametrize('metadata_kind', ['not_applicable', 'ordinal'])
 def test_upstream_assert_judge_rejects_score_metadata_not_declared_by_config(
     monkeypatch,

@@ -112,6 +112,9 @@ def test_normalize_acc_run_preserves_call_evidence_and_limitations():
     assert normalized['latency_evidence']['over_budget'] == 1
     assert 'Full-duplex media and barge-in are not proven by this example.' in normalized['runtime_caveats']
     assert normalized['provenance']['source_repo'] == 'agonza1/agentic-contact-center'
+    proves = _scenario()['current_mode']['proves']
+    assert 'deterministic evaluation artifact generation' in proves
+    assert 'canonical ASSERT wrapper request creation' not in proves
 
 
 def test_build_benchmark_run_request_uses_registered_catalog_scenario():

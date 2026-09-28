@@ -135,7 +135,7 @@
       "optional external target connectivity",
       "transcript, event, latency, and final-state normalization",
       "native benchmark request and evaluation",
-      "canonical ASSERT wrapper request creation"
+      "deterministic evaluation artifact generation"
     ],
     "limitations": [
       "The caller is a scripted transcript fixture, not realtime audio.",
