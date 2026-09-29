@@ -5,9 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
-from app.schemas.assert_contracts import AssertRunCreateRequest
 from app.services import execution_run_store
-from app.services.assert_sidecar import create_local_assert_sidecar_run, load_local_assert_sidecar_run
 from app.services.benchmark_service import get_scenario_contract
 from app.services.product_service import (
     find_visible_project,
@@ -22,11 +20,7 @@ from app.services.upstream_assert_judge import (
     run_upstream_assert_judge,
 )
 
-# Local sidecar lifecycle routes remain development-only.
-router = APIRouter(prefix='/api/assert', tags=['assert'])
-# Product judgment is mounted independently so production deployments can use it
-# while the local sidecar lifecycle remains disabled.
-judge_router = APIRouter(prefix='/api/assert', tags=['assert-judge'])
+router = APIRouter(prefix='/api/assert', tags=['assert-judge'])
 
 
 class AssertExecutionJudgeRequest(BaseModel):
@@ -57,21 +51,7 @@ def _product_plan(
     return plan if plan in {'free', 'starter', 'team', 'business'} else 'free'
 
 
-@router.post('/runs')
-def create_assert_sidecar_run(payload: AssertRunCreateRequest):
-    record = create_local_assert_sidecar_run(payload)
-    return record.model_dump(mode='json')
-
-
-@router.get('/runs/{platform_run_id}')
-def get_assert_sidecar_run(platform_run_id: str):
-    saved = load_local_assert_sidecar_run(platform_run_id)
-    if saved is None:
-        raise HTTPException(status_code=404, detail='ASSERT sidecar run not found')
-    return saved['record']
-
-
-@judge_router.post('/runs/{execution_run_id}/conversations/{conversation_id}/judge')
+@router.post('/runs/{execution_run_id}/conversations/{conversation_id}/judge')
 def judge_execution_conversation(
     execution_run_id: str,
     conversation_id: str,

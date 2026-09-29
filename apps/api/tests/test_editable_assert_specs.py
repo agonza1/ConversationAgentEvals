@@ -49,6 +49,30 @@ def test_templates_include_cae_native_and_acc_extension_without_acc_dependency()
     assert 'agentic_contact_center' not in acc_spec['required_behaviors'][0]
 
 
+def test_assert_behavior_library_comes_from_the_pinned_runtime():
+    response = client.get('/api/specs/assert-library/behaviors')
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['assert_version'] == '0.3.0'
+    assert payload['behaviors']
+    assert all(item['kind'] == 'behavior' for item in payload['behaviors'])
+
+
+def test_assert_judge_library_comes_from_the_pinned_runtime():
+    response = client.get('/api/specs/assert-library/judges')
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload['assert_version'] == '0.3.0'
+    assert payload['judges']
+    assert all(item['kind'] == 'judge_preset' for item in payload['judges'])
+
+    safety_core = client.get('/api/specs/assert-library/judges/safety-core')
+    assert safety_core.status_code == 200
+    assert safety_core.json()['judge']['name'] == 'safety-core'
+
+
 def test_generate_calls_configured_llm_and_returns_draft_suggestions_that_require_user_approval(monkeypatch):
     monkeypatch.delenv('SPEC_GENERATION_MODEL', raising=False)
     monkeypatch.setenv('OPENAI_RESPONSES_MODEL', 'gpt-4.1-mini')
@@ -200,6 +224,72 @@ def test_preview_compiles_canonical_assert_yaml_and_validates_with_assert():
     }
 
 
+def test_preview_compiles_selected_assert_03_behavior_preset_with_custom_contract():
+    response = client.post(
+        '/api/specs/preview',
+        json={'spec': _valid_spec(behavior_preset=' actionability_failures ')},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload['valid'] is True, payload['errors']
+    assert payload['normalized']['behavior_preset'] == 'actionability_failures'
+    behavior = yaml.safe_load(payload['yaml'])['behavior']
+    assert behavior['preset'] == 'actionability_failures'
+    assert behavior['name'] == 'cancellation-rescue-agent'
+    assert 'Actionability failures occur' in behavior['description']
+    assert '## Required behaviors' in behavior['description']
+    assert 'Diagnoses cancellation reason' in behavior['description']
+
+
+def test_preview_rejects_unknown_assert_behavior_preset_inline():
+    response = client.post(
+        '/api/specs/preview',
+        json={'spec': _valid_spec(behavior_preset='not-a-real-assert-preset')},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload['valid'] is False
+    assert payload['assert_validated'] is False
+    assert any(
+        error['field'] == 'assert_config' and 'not-a-real-assert-preset' in error['message']
+        for error in payload['errors']
+    )
+
+
+def test_preview_supports_assert_03_dimension_contracts():
+    spec = _valid_spec(judges=[{
+        'id': 'resolution-quality',
+        'name': 'Resolution quality',
+        'kind': 'semantic',
+        'rubric': '1 = unresolved; 2 = partial; 3 = resolved',
+        'weight': 1,
+        'provider': 'configured-default',
+        'allow_not_applicable': True,
+        'scale': {
+            'type': 'ordinal',
+            'values': {
+                'unresolved': 'Unresolved',
+                'partial': 'Partial',
+                'resolved': 'Resolved',
+            },
+        },
+        'disabled_builtin_dimensions': ['overrefusal'],
+    }])
+
+    response = client.post('/api/specs/preview', json={'spec': spec})
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload['valid'] is True, payload['errors']
+    judge = yaml.safe_load(payload['yaml'])['pipeline']['judge']
+    assert judge['disabled_dimensions'] == ['overrefusal']
+    dimension = judge['dimensions']['resolution-quality']
+    assert dimension['allow_not_applicable'] is True
+    assert dimension['scale']['values']['resolved'] == 'Resolved'
+
+
 def test_save_without_id_preserves_the_suite_name_shown_in_preview():
     suffix = uuid4().hex
     spec = _valid_spec()
@@ -246,6 +336,47 @@ def test_save_rejects_unapproved_generated_draft_and_versions_approved_spec_in_p
         project = db.query(ProductProject).filter(ProductProject.user_id == user_id, ProductProject.project_key == project_id).one()
         versions = db.query(EditableAssertSpecVersion).filter(EditableAssertSpecVersion.project_id == project.id).all()
         assert sorted(item.version for item in versions) == [1, 2]
+
+
+def test_saved_spec_load_and_export_reject_yaml_that_assert_03_cannot_validate():
+    suffix = uuid4().hex
+    user_id = f'recompile-user-{suffix}'
+    project_id = f'recompile-project-{suffix}'
+    created = client.post(
+        '/api/specs',
+        json={
+            'user_id': user_id,
+            'project_id': project_id,
+            'spec': _valid_spec(objective='Validate this saved spec with the current ASSERT runtime.'),
+        },
+    )
+    assert created.status_code == 200
+
+    with SessionLocal() as db:
+        project = db.query(ProductProject).filter(
+            ProductProject.user_id == user_id,
+            ProductProject.project_key == project_id,
+        ).one()
+        record = db.query(EditableAssertSpecVersion).filter(
+            EditableAssertSpecVersion.project_id == project.id,
+            EditableAssertSpecVersion.spec_key == 'cancellation-rescue-agent',
+        ).one()
+        record.yaml = 'legacy_assert_config: true\n'
+        db.commit()
+
+    loaded = client.get(
+        '/api/specs/cancellation-rescue-agent',
+        params={'user_id': user_id, 'project_id': project_id},
+    )
+    exported = client.get(
+        '/api/specs/cancellation-rescue-agent/export',
+        params={'user_id': user_id, 'project_id': project_id, 'format': 'json'},
+    )
+
+    assert loaded.status_code == 422
+    assert 'incompatible with assert-ai==0.3.0' in loaded.json()['detail']
+    assert exported.status_code == 422
+    assert 'incompatible with assert-ai==0.3.0' in exported.json()['detail']
 
 
 def test_saved_specs_are_scoped_by_owner_and_project():

@@ -14,7 +14,7 @@ def setup_function():
 
 
 def test_assert_judge_endpoint_records_product_audit_metadata(monkeypatch):
-    from app.routes import assert_sidecar
+    from app.routes import assert_judge
 
     run = {
         'execution_run_id': 'exec-assert-audit',
@@ -50,32 +50,32 @@ def test_assert_judge_endpoint_records_product_audit_metadata(monkeypatch):
     }
 
     monkeypatch.setattr(
-        assert_sidecar.execution_run_store,
+        assert_judge.execution_run_store,
         'get_execution_run',
         lambda run_id: run,
     )
     monkeypatch.setattr(
-        assert_sidecar.execution_run_store,
+        assert_judge.execution_run_store,
         'get_conversation',
         lambda run_id, conversation_id: conversation,
     )
     monkeypatch.setattr(
-        assert_sidecar.execution_run_store,
+        assert_judge.execution_run_store,
         'deterministic_evaluation_snapshot',
         lambda value: {'verdict': value.get('verdict')},
     )
     monkeypatch.setattr(
-        assert_sidecar.execution_run_store,
+        assert_judge.execution_run_store,
         'record_judge_review',
         lambda *args, **kwargs: {'review_id': 'judge-review-audit'},
     )
     monkeypatch.setattr(
-        assert_sidecar,
+        assert_judge,
         'get_scenario_contract',
         lambda suite_id, scenario_id: {'goal': 'Review safely.'},
     )
     monkeypatch.setattr(
-        assert_sidecar,
+        assert_judge,
         'run_upstream_assert_judge',
         lambda **kwargs: response_payload,
     )
@@ -84,7 +84,7 @@ def test_assert_judge_endpoint_records_product_audit_metadata(monkeypatch):
     def fake_record_judge_request(**kwargs):
         recorded.update(kwargs)
 
-    monkeypatch.setattr(assert_sidecar, 'record_judge_request', fake_record_judge_request)
+    monkeypatch.setattr(assert_judge, 'record_judge_request', fake_record_judge_request)
 
     response = client.post(
         f"/api/assert/runs/{run['execution_run_id']}"
@@ -109,7 +109,7 @@ def test_assert_judge_endpoint_records_product_audit_metadata(monkeypatch):
 
 
 def test_assert_audit_uses_the_persisted_project_plan():
-    from app.routes import assert_sidecar
+    from app.routes import assert_judge
 
     with SessionLocal() as db:
         project = ProductProject(
@@ -121,7 +121,7 @@ def test_assert_audit_uses_the_persisted_project_plan():
         db.add(project)
         db.commit()
 
-        assert assert_sidecar._product_plan(
+        assert assert_judge._product_plan(
             db,
             user_id='audit-user',
             project_id='audit-project',
@@ -130,7 +130,7 @@ def test_assert_audit_uses_the_persisted_project_plan():
 
 
 def test_assert_audit_reuses_a_project_shared_with_the_workspace_member():
-    from app.routes import assert_sidecar
+    from app.routes import assert_judge
 
     with SessionLocal() as db:
         workspace = ProductWorkspace(
@@ -165,7 +165,7 @@ def test_assert_audit_reuses_a_project_shared_with_the_workspace_member():
         project_database_id = project.id
         workspace_database_id = workspace.id
 
-        plan = assert_sidecar._product_plan(
+        plan = assert_judge._product_plan(
             db,
             user_id='workspace-reviewer',
             project_id='shared-audit-project',
@@ -261,7 +261,7 @@ def test_execution_run_requires_exact_project_identity_for_a_colliding_visible_k
 
 
 def test_assert_judge_rejects_a_legacy_run_with_an_ambiguous_project_key(monkeypatch):
-    from app.routes import assert_sidecar
+    from app.routes import assert_judge
 
     with SessionLocal() as db:
         workspace = ProductWorkspace(
@@ -316,9 +316,9 @@ def test_assert_judge_rejects_a_legacy_run_with_an_ambiguous_project_key(monkeyp
         'status': 'completed',
         'verdict': 'needs_review',
     }
-    monkeypatch.setattr(assert_sidecar.execution_run_store, 'get_execution_run', lambda run_id: run)
+    monkeypatch.setattr(assert_judge.execution_run_store, 'get_execution_run', lambda run_id: run)
     monkeypatch.setattr(
-        assert_sidecar.execution_run_store,
+        assert_judge.execution_run_store,
         'get_conversation',
         lambda run_id, conversation_id: conversation,
     )
@@ -329,7 +329,7 @@ def test_assert_judge_rejects_a_legacy_run_with_an_ambiguous_project_key(monkeyp
         judge_called = True
         return {}
 
-    monkeypatch.setattr(assert_sidecar, 'run_upstream_assert_judge', fake_judge)
+    monkeypatch.setattr(assert_judge, 'run_upstream_assert_judge', fake_judge)
 
     response = client.post(
         f"/api/assert/runs/{run['execution_run_id']}"

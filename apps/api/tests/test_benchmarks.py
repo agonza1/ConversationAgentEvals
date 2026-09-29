@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services import benchmark_service
 from app.services.assert_artifact_store import load_assert_run_artifact_manifest
 from app.services.benchmark_service import _structured_conversation_turns, get_suite, get_suite_contract_manifest, list_suites, run_scenario, run_suite, simulate_scenario, simulate_suite
 from app.db.database import SessionLocal
@@ -224,6 +225,9 @@ def test_run_endpoint_returns_assert_manifest_as_canonical_result():
 
     assert report['assert_boundary'] == 'assert_run_boundary'
     assert report['assert_run_id'].startswith('assert-')
+    runtime_config = report['assert_platform_record']['runtime_config']
+    assert runtime_config['execution_mode'] == 'sync'
+    assert runtime_config['invocation_target']['environment'] == 'local'
     assert manifest['verdict']['status'] == 'pass'
     canonical = report['assert_canonical_artifact']
     assert canonical['uri'].startswith(f"local-artifact://assert/runs/{report['run_id']}/")
@@ -260,6 +264,26 @@ def test_run_endpoint_returns_assert_manifest_as_canonical_result():
     assert durable_manifest['platform_metadata_index']['artifact_manifest_location'] == canonical['uri']
     assert 'assert_result_manifest' not in saved['report']
     assert 'assert_platform_record' not in saved['report']
+
+
+def test_assert_runtime_environment_follows_application_settings(monkeypatch):
+    monkeypatch.setattr(
+        benchmark_service,
+        'settings',
+        type('SettingsStub', (), {'app_env': 'production'})(),
+    )
+
+    request = benchmark_service._assert_run_request(
+        suite_id='call-center-voice-ai',
+        scenario_id='billing-address-change',
+        payload={'transcript': 'Caller: Hello\nAgent: Hi'},
+        run_metadata={},
+        logical_run_id='logical-run',
+        run_id='run-id',
+    )
+
+    assert request.runtime_config.execution_mode == 'sync'
+    assert request.runtime_config.invocation_target.environment == 'production'
 
 
 def test_run_endpoint_normalizes_assert_bundle_into_existing_evidence_pipeline():

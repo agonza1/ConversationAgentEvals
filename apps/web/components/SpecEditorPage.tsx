@@ -5,6 +5,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { SiteNav } from '@/components/SiteNav';
 import {
   generateEditableAssertDraft,
+  listAssertBehaviorPresets,
+  listAssertJudgePresets,
   listEditableAssertTemplates,
   previewEditableAssertSpec,
   saveEditableAssertSpec,
@@ -12,6 +14,7 @@ import {
 import {
   AssertCheck,
   AssertJudge,
+  AssertLibraryPreset,
   AssertScenario,
   EditableAssertPreview,
   EditableAssertSpec,
@@ -46,6 +49,8 @@ const starterSpec: EditableAssertSpec = {
   runtime_overrides: {},
   extensions: {},
 };
+
+type BuiltinJudgeDimension = 'policy_violation' | 'overrefusal';
 
 function lines(value: string) {
   return value.split('\n').map((line) => line.trim()).filter(Boolean);
@@ -105,10 +110,28 @@ function textFromScenarios(scenarios: AssertScenario[]) {
   return scenarios.map((scenario) => `${scenario.title}: ${scenario.description || scenario.expected_outcome || ''}`).join('\n');
 }
 
+function scaleFromText(value: string): AssertJudge['scale'] {
+  const entries = lines(value).flatMap((line) => {
+    const separator = line.indexOf(':');
+    if (separator < 1) return [];
+    const grade = line.slice(0, separator).trim();
+    const label = line.slice(separator + 1).trim();
+    return grade && label ? [[grade, label] as const] : [];
+  });
+  return entries.length ? { type: 'ordinal', values: Object.fromEntries(entries) } : null;
+}
+
+function textFromScale(scale: AssertJudge['scale']) {
+  if (!scale || scale.type !== 'ordinal') return '';
+  return Object.entries(scale.values).map(([grade, label]) => `${grade}: ${label}`).join('\n');
+}
+
 export function SpecEditorPage() {
   const identity = useMemo(() => ({ userId: demoUserId(), projectId: demoProjectId() }), []);
   const [spec, setSpec] = useState<EditableAssertSpec>(starterSpec);
   const [templates, setTemplates] = useState<EditableAssertTemplate[]>([]);
+  const [behaviorPresets, setBehaviorPresets] = useState<AssertLibraryPreset[]>([]);
+  const [judgePresets, setJudgePresets] = useState<AssertLibraryPreset[]>([]);
   const [successChecks, setSuccessChecks] = useState('');
   const [failureChecks, setFailureChecks] = useState('');
   const [scenarioSeeds, setScenarioSeeds] = useState('');
@@ -116,6 +139,10 @@ export function SpecEditorPage() {
   const [deterministicChecks, setDeterministicChecks] = useState('');
   const [evidenceRequirements, setEvidenceRequirements] = useState(starterSpec.evidence_requirements?.join('\n') || '');
   const [judgeRubric, setJudgeRubric] = useState(defaultJudge.rubric);
+  const [judgeAllowsNotApplicable, setJudgeAllowsNotApplicable] = useState(false);
+  const [judgeOrdinalScale, setJudgeOrdinalScale] = useState('');
+  const [disabledBuiltinDimensions, setDisabledBuiltinDimensions] = useState<BuiltinJudgeDimension[]>([]);
+  const [selectedJudgePresets, setSelectedJudgePresets] = useState<string[]>([]);
   const [generatedApproved, setGeneratedApproved] = useState(false);
   const [preview, setPreview] = useState<EditableAssertPreview | null>(null);
   const [saved, setSaved] = useState<SavedEditableAssertSpec | null>(null);
@@ -124,6 +151,24 @@ export function SpecEditorPage() {
 
   const workingSpec = useMemo<EditableAssertSpec>(() => {
     const draft = !generatedApproved && spec.generated_content_status === 'draft';
+    const baseJudge = spec.judges?.[0] || defaultJudge;
+    const nextJudge: AssertJudge = {
+      ...baseJudge,
+      rubric: judgeRubric.trim() || defaultJudge.rubric,
+    };
+    const scale = scaleFromText(judgeOrdinalScale);
+    if (judgeAllowsNotApplicable || baseJudge.allow_not_applicable !== undefined) {
+      nextJudge.allow_not_applicable = judgeAllowsNotApplicable;
+    }
+    if (scale || baseJudge.scale !== undefined) {
+      nextJudge.scale = scale;
+    }
+    if (disabledBuiltinDimensions.length || baseJudge.disabled_builtin_dimensions !== undefined) {
+      nextJudge.disabled_builtin_dimensions = disabledBuiltinDimensions;
+    }
+    if (selectedJudgePresets.length || baseJudge.presets !== undefined) {
+      nextJudge.presets = selectedJudgePresets;
+    }
     return {
       ...spec,
       generated_content_status: spec.generated_content_status === 'draft' && generatedApproved ? 'approved' : spec.generated_content_status,
@@ -133,9 +178,9 @@ export function SpecEditorPage() {
       scenarios: scenariosFromText(scenarios, spec.scenarios || [], draft),
       deterministic_checks: checksFromText(deterministicChecks, spec.deterministic_checks || [], 'deterministic', draft),
       evidence_requirements: lines(evidenceRequirements),
-      judges: [{ ...(spec.judges?.[0] || defaultJudge), rubric: judgeRubric.trim() || defaultJudge.rubric }],
+      judges: [nextJudge],
     };
-  }, [deterministicChecks, evidenceRequirements, failureChecks, generatedApproved, judgeRubric, scenarioSeeds, scenarios, spec, successChecks]);
+  }, [deterministicChecks, disabledBuiltinDimensions, evidenceRequirements, failureChecks, generatedApproved, judgeAllowsNotApplicable, judgeOrdinalScale, judgeRubric, scenarioSeeds, scenarios, selectedJudgePresets, spec, successChecks]);
   const latestWorkingSpec = useRef(workingSpec);
   useEffect(() => {
     latestWorkingSpec.current = workingSpec;
@@ -145,9 +190,16 @@ export function SpecEditorPage() {
   useEffect(() => {
     let active = true;
     setBusy('templates');
-    listEditableAssertTemplates()
-      .then((next) => {
-        if (active) setTemplates(next);
+    Promise.all([
+      listEditableAssertTemplates(),
+      listAssertBehaviorPresets(),
+      listAssertJudgePresets(),
+    ])
+      .then(([nextTemplates, nextBehaviors, nextJudges]) => {
+        if (!active) return;
+        setTemplates(nextTemplates);
+        setBehaviorPresets(nextBehaviors);
+        setJudgePresets(nextJudges);
       })
       .catch((err) => {
         if (active) setError(err instanceof Error ? err.message : 'Could not load templates');
@@ -195,7 +247,12 @@ export function SpecEditorPage() {
     setScenarios(textFromScenarios(nextSpec.scenarios || []));
     setDeterministicChecks(textFromChecks(nextSpec.deterministic_checks || []));
     setEvidenceRequirements((nextSpec.evidence_requirements || []).join('\n'));
-    setJudgeRubric(nextSpec.judges?.[0]?.rubric || defaultJudge.rubric);
+    const nextJudge = nextSpec.judges?.[0] || defaultJudge;
+    setJudgeRubric(nextJudge.rubric || defaultJudge.rubric);
+    setJudgeAllowsNotApplicable(Boolean(nextJudge.allow_not_applicable));
+    setJudgeOrdinalScale(textFromScale(nextJudge.scale));
+    setDisabledBuiltinDimensions(nextJudge.disabled_builtin_dimensions || []);
+    setSelectedJudgePresets(nextJudge.presets || []);
     setGeneratedApproved(nextSpec.generated_content_status !== 'draft');
     setSaved(null);
   }
@@ -291,6 +348,70 @@ export function SpecEditorPage() {
             <label>Evidence guidance (not yet enforced)<textarea rows={5} value={evidenceRequirements} onChange={(event) => setEvidenceRequirements(event.target.value)} /></label>
           </div>
           <label>Judge rubric<textarea rows={4} value={judgeRubric} onChange={(event) => setJudgeRubric(event.target.value)} /></label>
+          <section className="spec-assert-options" aria-labelledby="assert-options-title">
+            <div>
+              <p className="eyebrow">ASSERT 0.3 settings</p>
+              <h2 id="assert-options-title">Preset and scoring controls</h2>
+            </div>
+            <div className="spec-field-row">
+              <label>
+                Behavior preset
+                <select
+                  value={spec.behavior_preset || ''}
+                  onChange={(event) => setSpec({ ...spec, behavior_preset: event.target.value || null })}
+                >
+                  <option value="">Custom CAE behavior only</option>
+                  {behaviorPresets.map((preset) => <option key={preset.name} value={preset.name}>{preset.name.replaceAll('_', ' ')}</option>)}
+                </select>
+                {spec.behavior_preset ? <small>{behaviorPresets.find((preset) => preset.name === spec.behavior_preset)?.summary || 'Combined with this design’s custom behavior contract.'}</small> : null}
+              </label>
+              <label>
+                Judge presets
+                <select
+                  multiple
+                  size={Math.min(5, Math.max(2, judgePresets.length))}
+                  value={selectedJudgePresets}
+                  onChange={(event) => setSelectedJudgePresets(Array.from(event.currentTarget.selectedOptions, (option) => option.value))}
+                >
+                  {judgePresets.map((preset) => <option key={preset.name} value={preset.name}>{preset.name.replaceAll('-', ' ')}</option>)}
+                </select>
+                <small>Select one or more ASSERT dimensions; Ctrl/Cmd-click changes a multi-selection.</small>
+              </label>
+            </div>
+            <div className="spec-field-row">
+              <fieldset className="spec-judge-flags">
+                <legend>Judge behavior</legend>
+                <label className="spec-check-option">
+                  <input type="checkbox" checked={judgeAllowsNotApplicable} onChange={(event) => setJudgeAllowsNotApplicable(event.target.checked)} />
+                  Allow not applicable
+                </label>
+                {(['policy_violation', 'overrefusal'] as BuiltinJudgeDimension[]).map((dimension) => (
+                  <label className="spec-check-option" key={dimension}>
+                    <input
+                      type="checkbox"
+                      checked={disabledBuiltinDimensions.includes(dimension)}
+                      onChange={(event) => setDisabledBuiltinDimensions((current) => (
+                        event.target.checked
+                          ? [...new Set([...current, dimension])]
+                          : current.filter((item) => item !== dimension)
+                      ))}
+                    />
+                    Disable {dimension.replaceAll('_', ' ')}
+                  </label>
+                ))}
+              </fieldset>
+              <label>
+                Ordinal scale
+                <textarea
+                  rows={5}
+                  placeholder={'unresolved: Unresolved\npartial: Partially resolved\nresolved: Resolved'}
+                  value={judgeOrdinalScale}
+                  onChange={(event) => setJudgeOrdinalScale(event.target.value)}
+                />
+                <small>Optional. Use one string grade and label per line: grade: label.</small>
+              </label>
+            </div>
+          </section>
         </section>
 
         <aside className="spec-preview-panel" aria-label="Advanced ASSERT preview and validation">

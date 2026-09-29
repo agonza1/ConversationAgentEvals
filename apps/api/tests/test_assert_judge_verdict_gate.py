@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.routes import assert_sidecar
+from app.routes import assert_judge
 
 
 client = TestClient(app)
@@ -27,17 +27,17 @@ def test_assert_judge_rejects_failed_conversation_without_deterministic_verdict(
         'error': 'Target execution failed before deterministic evaluation.',
     }
     monkeypatch.setattr(
-        assert_sidecar.execution_run_store,
+        assert_judge.execution_run_store,
         'get_execution_run',
         lambda run_id: run,
     )
     monkeypatch.setattr(
-        assert_sidecar.execution_run_store,
+        assert_judge.execution_run_store,
         'get_conversation',
         lambda run_id, conversation_id: conversation,
     )
     monkeypatch.setattr(
-        assert_sidecar,
+        assert_judge,
         'run_upstream_assert_judge',
         lambda **kwargs: pytest.fail('ASSERT must not run without a deterministic verdict.'),
     )

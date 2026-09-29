@@ -280,6 +280,22 @@ export interface AssertJudge {
   weight: number;
   provider: string;
   model?: string | null;
+  allow_not_applicable?: boolean;
+  scale?: {
+    type: 'ordinal';
+    values: Record<string, string>;
+  } | null;
+  disabled_builtin_dimensions?: Array<'policy_violation' | 'overrefusal'>;
+  presets?: string[];
+}
+
+export interface AssertLibraryPreset {
+  kind: 'behavior' | 'judge_preset';
+  name: string;
+  version: string;
+  tags: string[];
+  description: string;
+  summary?: string;
 }
 
 export interface EditableAssertSpec {
@@ -288,6 +304,7 @@ export interface EditableAssertSpec {
   title: string;
   role: string;
   objective: string;
+  behavior_preset?: string | null;
   status?: 'draft' | 'published';
   generated_content_status?: 'none' | 'draft' | 'approved';
   required_behaviors: AssertCheck[];

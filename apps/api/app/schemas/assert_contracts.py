@@ -23,7 +23,7 @@ ArtifactKind = Literal[
 ]
 ArtifactReadiness = Literal['ready', 'pending', 'missing']
 ExecutionMode = Literal['sync', 'async', 'batch']
-TransportKind = Literal['http_sidecar']
+TransportKind = Literal['in_process']
 RunStatus = Literal['queued', 'running', 'completed', 'failed', 'canceled', 'cancelled']
 VerdictStatus = Literal['pass', 'fail', 'needs_review', 'error', 'queued', 'running']
 FailureCategory = Literal[
@@ -122,18 +122,18 @@ class AssertRetryPolicy(BaseModel):
 class AssertInvocationTarget(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
-    transport: TransportKind = 'http_sidecar'
+    transport: TransportKind = 'in_process'
     environment: Literal['local', 'production']
     base_url: str = Field(..., min_length=1)
-    package_name: str = Field(default='assert')
-    entrypoint: str = Field(default='/api/assert/runs')
+    package_name: str = Field(default='conversation-agent-evals')
+    entrypoint: str = Field(default='benchmark_service.run_scenario')
     timeout_seconds: int = Field(default=300, ge=1)
 
 
 class AssertRuntimeConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
-    execution_mode: ExecutionMode = 'async'
+    execution_mode: ExecutionMode = 'sync'
     invocation_target: AssertInvocationTarget
     worker_queue: str | None = None
     retry_policy: AssertRetryPolicy = Field(default_factory=AssertRetryPolicy)

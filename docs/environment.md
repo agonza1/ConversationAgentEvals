@@ -12,7 +12,7 @@ Kokoro services, see [Parallel Development](parallel-development.md).
 | `PORT` | `3012` | Browser-facing web app port. `npm run dev` also uses it for the local web port unless `WEB_PORT` is set. |
 | `API_PORT` | `8025` | Host port for the FastAPI service. |
 | `PIPECAT_PORT` | `8110` | Host port for the Pipecat service. The benchmark demo can run without live microphone ASR. |
-| `APP_ENV` | `development` | Runtime environment label. Local sidecars and demo affordances assume a development-like value. |
+| `APP_ENV` | `development` | Runtime environment label used by local and hosted product affordances. |
 | `PRODUCTION` | `false` | Set `true` only when non-live testing controls should be hidden. |
 
 `npm run check:env`, `npm run dev`, and `npm run test:benchmark-smoke` validate these variables and print a focused error if one is missing or malformed.
@@ -180,9 +180,6 @@ ASSERT_JUDGE_MAX_CONCURRENT=2
 ASSERT_JUDGE_MAX_TOKENS=8000
 ASSERT_JUDGE_TIMEOUT_SECONDS=300
 
-# Development-only synthetic ASSERT lifecycle sidecar
-ASSERT_LOCAL_SIDECAR_ENABLED=
-
 HEYGEN_LIVE_AVATAR_API_KEY=
 HEYGEN_API_KEY=
 HEYGEN_AVATAR_ID=
@@ -224,9 +221,5 @@ POST /api/assert/runs/{execution_run_id}/conversations/{conversation_id}/judge
 Enable it with `ASSERT_UPSTREAM_JUDGE_ENABLED=1` and configure an allowed `ASSERT_JUDGE_MODEL`. The pinned `assert-ai` subprocess uses LiteLLM/provider credentials; the local Codex OAuth session is not forwarded into it. For an OpenAI-backed model, set `OPENAI_API_KEY` or `LLM_JUDGE_API_KEY`. The latter is copied to `OPENAI_API_KEY` for the subprocess when necessary.
 
 This path shares the `LLM_JUDGE_DAILY_CREDIT_LIMIT` and `LLM_JUDGE_RESERVED_DAILY_CREDITS` ledger with the CAE product judge. `ASSERT_JUDGE_MAX_N`, `ASSERT_JUDGE_MAX_CONCURRENT`, token, timeout, and allowlist variables apply only to the upstream judge. See [Upstream ASSERT judging](upstream-assert-judge.md).
-
-### Development-only local ASSERT sidecar
-
-`ASSERT_LOCAL_SIDECAR_ENABLED` controls the synthetic `/api/assert/runs` lifecycle route in development-like environments. The route validates ASSERT-shaped input, queue, ingestion, and artifact contracts; it does not run upstream semantic evaluation. It is disabled on Cloud Run and when `APP_ENV` is production. See [ASSERT Boundary and Schemas](assert-boundary-and-schemas.md).
 
 User-created scenarios persist under `storage/user_scenarios.json` (Compose-mounted at `/workspace/storage`). Override with `USER_SCENARIOS_PATH` if needed. A one-time copy from the legacy `apps/api/data/user_scenarios.json` path runs when the new file is missing.

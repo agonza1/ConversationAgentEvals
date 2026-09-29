@@ -17,7 +17,8 @@ COPY --from=signalwire-runtime /usr/local/bin/node /usr/local/bin/node
 COPY --from=signalwire-runtime /runtime/node_modules /workspace/node_modules
 
 COPY apps/api/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt \
+  && python -m pip check
 
 COPY apps/api /workspace/apps/api
 COPY apps/pipecat /workspace/apps/pipecat

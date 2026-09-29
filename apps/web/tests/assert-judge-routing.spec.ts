@@ -1,6 +1,26 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
-test('run analysis judge button uses the upstream ASSERT path', async ({ page }) => {
+const evidenceCases = [
+  { name: 'black-box', level: 'black_box', label: 'Transcript-only evidence' },
+  { name: 'partially structured', level: 'partial_structured', label: 'Partially structured evidence' },
+  { name: 'gray-box', level: 'gray_box', label: 'Trace-backed evidence' },
+  { name: 'missing', level: undefined, label: 'Evidence level unavailable' },
+  { name: 'null', level: null, label: 'Evidence level unavailable' },
+  { name: 'empty', level: '', label: 'Evidence level unavailable' },
+  { name: 'unrecognized', level: 'future_evidence_level', label: 'Evidence level unavailable' },
+] as const;
+
+for (const { name, level, label } of evidenceCases) {
+  test(`run analysis judge uses the upstream ASSERT path with ${name} evidence metadata`, async ({ page }) => {
+    await checkAssertJudgeRouting(page, level, label);
+  });
+}
+
+async function checkAssertJudgeRouting(
+  page: Page,
+  evidenceLevel: string | null | undefined,
+  evidenceLabel: string,
+) {
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
   });
@@ -127,6 +147,23 @@ test('run analysis judge button uses the upstream ASSERT path', async ({ page })
             agrees: true,
             rationale: 'The transcript contains an unsupported refund claim.',
             next_action: 'Review the refund claim and preserve the deterministic evidence gap.',
+            provenance: {
+              engine: 'assert',
+              assert_version: '0.3.0',
+              evidence_level: evidenceLevel,
+              dimensions: {
+                policy_violation: true,
+                unsupported_operational_claim: true,
+              },
+              dimension_applicability: {
+                policy_violation: true,
+                unsupported_operational_claim: true,
+              },
+              dimension_justifications: {
+                policy_violation: 'The claimed refund is unsupported.',
+                unsupported_operational_claim: 'No matching tool result exists.',
+              },
+            },
             proposed_evaluation: {
               verdict: 'needs_review',
               summary: 'The conversation requires review because refund execution is unverified.',
@@ -138,7 +175,7 @@ test('run analysis judge button uses the upstream ASSERT path', async ({ page })
           model: 'openai/gpt-4.1-mini',
           latency_ms: 640,
           review_id: 'judge-review-assert-ui',
-          assert_version: '0.1.0',
+          assert_version: '0.3.0',
           assert_result: {
             judge_status: 'ok',
             verdict: {
@@ -182,7 +219,12 @@ test('run analysis judge button uses the upstream ASSERT path', async ({ page })
   await expect(result).toContainText('openai/gpt-4.1-mini');
   await expect(result).toContainText('The transcript contains an unsupported refund claim.');
   await expect(result).toContainText('No refund tool result or final-state receipt was recorded.');
+  await expect(result).toContainText(`ASSERT 0.3.0 · ${evidenceLabel}`);
+  await expect(result).toContainText('Unsupported Operational Claim: Flagged');
+  if (evidenceLevel !== 'black_box') {
+    await expect(result).not.toContainText('Transcript-only evidence');
+  }
 
   expect(assertRequest).toEqual({ user_id: 'demo-user' });
   expect(legacyJudgeCalls).toBe(0);
-});
+}

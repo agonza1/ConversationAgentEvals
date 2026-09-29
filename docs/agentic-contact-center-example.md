@@ -65,7 +65,6 @@ Useful variants:
 
 ```bash
 npm run example:acc -- --skip-submit
-npm run example:acc -- --also-submit-assert-wrapper
 ```
 
 The adapter maps external target output to the reusable evidence model:
@@ -98,5 +97,7 @@ The offline and HTTP examples prove adapter behavior, evidence normalization, an
 cancellation-rescue checks. They do not prove live ASR/TTS, full-duplex production media,
 barge-in, browser WebRTC, SIP, or FreeSWITCH Verto.
 
-The optional `/api/assert/runs` sidecar validates evidence ingestion through the local
-ASSERT-compatible contract. It must not be presented as an external semantic ASSERT service.
+Normal benchmark execution evaluates normalized evidence through CAE's in-process
+ASSERT-compatible boundary and persists canonical artifacts. Semantic review is a separate,
+opt-in operation over a completed execution conversation; it does not replace the deterministic
+result or turn CAE into an external ASSERT service.

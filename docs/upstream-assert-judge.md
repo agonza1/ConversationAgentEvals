@@ -1,6 +1,6 @@
 # Upstream ASSERT judging for CAE execution evidence
 
-ConversationAgentEvals owns target execution and evidence capture. The upstream ASSERT package can optionally provide the semantic judgment over that evidence without taking over SIP, PSTN, WebRTC, Pipecat, vendor SDK, or media orchestration.
+ConversationAgentEvals owns target execution and evidence capture. The sole supported semantic runtime is `assert-ai==0.3.0`; it can optionally judge that evidence without taking over SIP, PSTN, WebRTC, Pipecat, vendor SDK, or media orchestration. CAE refuses to start with another ASSERT version installed.
 
 ## Boundary
 
@@ -126,7 +126,10 @@ A zero exit code from `assert-ai` is not sufficient. CAE accepts a semantic resu
 
 - exactly one score row matches the requested conversation;
 - the raw and inferred `judge_status` are both `ok`;
-- all built-in and CAE custom dimensions are strict booleans;
+- every required built-in and CAE custom dimension is present;
+- boolean dimensions are strict booleans;
+- ordinal dimensions use a value declared by their configured scale;
+- `not_applicable` is accepted only for dimensions that explicitly allow it and carry an ASSERT 0.3 N/A score key;
 - all dimension justifications are present;
 - the node-judgment set covers every generated taxonomy behavior;
 - every returned node judgment references a real taxonomy behavior and has valid fields;
@@ -157,15 +160,18 @@ The pending CAE review preserves ASSERT provenance inside `judge_result.provenan
 - input fingerprint;
 - score SHA-256;
 - artifact paths;
+- score keys, N/A keys, and ordinal scales;
 - validated dimensions;
+- per-dimension applicability and justifications;
 - behavior-node judgments.
 
 Applying the review continues to use CAE's existing confirmation flow and does not replace the original deterministic evidence.
 
-## Initial limitations
+## Current limits
 
-- The run UI uses the ASSERT path for execution conversations, but still presents the shared LLM-review result component. A later UX slice can expose ASSERT dimensions, behavior-node judgments, and artifact links more directly.
-- The taxonomy is compiled from the active CAE scenario contract. A later slice should use the approved, versioned editable ASSERT spec directly.
+- The run UI exposes the ASSERT version, evidence level, dimension outcomes, and justifications. Artifact links and complete behavior-node drill-down remain future UX work.
+- The taxonomy is compiled from the active CAE scenario contract. The evaluation-design editor discovers ASSERT 0.3 behavior and judge presets from the pinned runtime and exposes preset selection, N/A policy, built-in-dimension disabling, and ordinal-scale controls; execution binding to a separately approved spec version remains future work.
+- Editable-spec ordinal grades use non-empty string identifiers (for example `unresolved`, `partial`, and `resolved`). This is intentional because JSON object keys cannot preserve numeric key types across the web/API boundary.
 - OpenTelemetry/OpenInference trace import remains a separate future path. Structured CAE action and final-state evidence are mapped directly for now.
 - Automatic judgment for every run is intentionally not enabled because it incurs model cost and requires provider credentials.
 - The process-local concurrency counter does not coordinate across multiple API replicas; production deployments should add a shared queue or distributed limiter when scaling horizontally.
