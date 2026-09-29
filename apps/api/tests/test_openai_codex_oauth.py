@@ -205,6 +205,7 @@ def test_openai_codex_token_store_exchange_and_complete(tmp_path: Path, monkeypa
         assert headers['ChatGPT-Account-Id'] == 'acct_123'
         assert body['store'] is False
         assert body['stream'] is True
+        assert body['model'] == 'gpt-6-luna'
         assert body['input'][0]['content'][0]['text'] == 'judge me'
         return {'output_text': 'Judge says pass.'}
 
@@ -217,6 +218,31 @@ def test_openai_codex_token_store_exchange_and_complete(tmp_path: Path, monkeypa
     assert provider.status()['status'] == 'connected'
     assert provider.complete('judge me') == 'Judge says pass.'
     assert decode_chatgpt_identity(tokens['access_token'])['email'] == 'demo@example.com'
+
+
+def test_openai_codex_replaces_retired_chatgpt_models_before_request(tmp_path: Path):
+    token_path = tmp_path / 'openai-codex-oauth.json'
+    token_path.write_text(
+        json.dumps({
+            'access_token': 'access',
+            'refresh_token': 'refresh',
+            'expires_at': 9_999_999_999,
+            'account_id': 'acct_123',
+        }),
+        encoding='utf-8',
+    )
+    requested_models: list[str] = []
+
+    def fake_json_post(_url: str, body: dict, *, headers: dict[str, str]) -> dict:
+        assert headers['ChatGPT-Account-Id'] == 'acct_123'
+        requested_models.append(body['model'])
+        return {'output_text': 'ok'}
+
+    provider = OpenAICodexProvider(token_path=token_path, http_post_json=fake_json_post)
+
+    assert provider.complete('hello', model_name='gpt-5.4-mini') == 'ok'
+    assert provider.complete('hello', model_name='gpt-5.4') == 'ok'
+    assert requested_models == ['gpt-6-luna', 'gpt-6-sol']
 
 
 def test_codex_responses_sse_parser_collects_text_deltas():
@@ -570,8 +596,8 @@ def test_openai_codex_list_models_filters_and_uses_ssl_get(tmp_path: Path):
     assert captured['headers']['Authorization'] == 'Bearer access'
     assert captured['headers']['ChatGPT-Account-Id'] == 'acct_1'
     ids = [item['id'] for item in payload['models']]
-    assert ids[0] == 'gpt-5.4-mini'
-    assert 'gpt-5.4-mini' in ids
+    assert ids[0] == 'gpt-6-luna'
+    assert 'gpt-6-luna' in ids
     assert 'o3-mini' in ids
     assert 'codex-auto-review' not in ids
     assert 'text-embedding-3-large' not in ids
@@ -609,7 +635,7 @@ def test_openai_codex_list_models_falls_back_on_403(tmp_path: Path):
     assert 'Missing scopes' not in (payload.get('message') or '')
     assert 'Could not list OpenAI models' not in (payload.get('message') or '')
     ids = [item['id'] for item in payload['models']]
-    assert ids[0] == 'gpt-5.4-mini'
+    assert ids[0] == 'gpt-6-luna'
     assert 'gpt-4o' in ids
 
 

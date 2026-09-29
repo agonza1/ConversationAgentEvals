@@ -555,7 +555,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
     mode: 'text_callable',
     text_callable: 'mock_agent',
     agent_id: 'mock-text-agent',
-    model_name: 'gpt-5.4-mini',
+    model_name: 'gpt-6-luna',
     tester_id: 'scenario_simulator',
     executor_id: 'local_async_runner',
     scenario_ids: ['billing-address-change', 'cancellation-rescue'],
@@ -594,7 +594,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await launch.getByLabel('Execution agent target').selectOption('generalist-voice-agent');
   await expect(launch.getByLabel('Execution tester')).toContainText('Scenario user (AI)');
   await expect(launch).toContainText('adapts to the target\'s responses');
-  await expect(launch.getByLabel('Execution model')).toHaveValue('gpt-5.4-mini');
+  await expect(launch.getByLabel('Execution model')).toHaveValue('gpt-6-luna');
   await expect(launch.getByLabel('Duplex session timeout')).toHaveValue('120');
   await launch.getByLabel('Maximum exchanges').fill('5');
   await launch.getByLabel('Duplex session timeout').fill('180');
@@ -609,7 +609,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
     suite_id: 'call-center-voice-ai',
     scenario_ids: ['billing-address-change'],
     max_exchanges: 5,
-    model_name: 'gpt-5.4-mini',
+    model_name: 'gpt-6-luna',
     duplex_timeout_seconds: 180,
   });
   await expect(launch.getByLabel('Run listener link')).toContainText('Available only while this run is active.');

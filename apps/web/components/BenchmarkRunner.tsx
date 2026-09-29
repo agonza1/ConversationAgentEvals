@@ -277,13 +277,15 @@ interface OpenAIProviderStatus {
   last_error?: string | null;
 }
 
-const DEFAULT_EXECUTION_MODEL = 'gpt-5.4-mini';
+const DEFAULT_EXECUTION_MODEL = 'gpt-6-luna';
 const LOCAL_EXECUTION_MODELS = ['ollama/gemma2:2b'];
 const FALLBACK_EXECUTION_MODELS = [
-  'gpt-5.4-mini',
+  'gpt-6-luna',
   ...LOCAL_EXECUTION_MODELS,
-  'gpt-5.4',
-  'gpt-5.2',
+  'gpt-6-sol',
+  'gpt-5.6-luna',
+  'gpt-5.6-terra',
+  'gpt-5.5',
   'gpt-4.1',
   'gpt-4.1-mini',
   'gpt-4o',

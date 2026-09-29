@@ -1500,7 +1500,7 @@ def _judge_model_name(spend_control: dict[str, Any]) -> str:
     if env_model:
         return env_model
     if spend_control.get('oauth_connected'):
-        return 'gpt-5.4-mini'
+        return 'gpt-6-luna'
     return 'gpt-4.1-mini'
 
 

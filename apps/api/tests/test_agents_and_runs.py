@@ -1433,7 +1433,7 @@ def test_execution_persists_model_name_default_and_override(monkeypatch):
             iterations=1,
         )
     )
-    assert queued_default['model_name'] == 'gpt-5.4-mini'
+    assert queued_default['model_name'] == 'gpt-6-luna'
 
     queued = start_execution_run(
         ExecutionRunCreateRequest(

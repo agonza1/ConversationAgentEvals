@@ -86,7 +86,7 @@ def test_generate_calls_configured_llm_and_returns_draft_suggestions_that_requir
             assert 'Every severity must be exactly one of "info", "warning", or "error".' in prompt
             assert 'scenario_seeds is an array of plain strings, never objects.' in prompt
             assert 'judges must contain exactly one object' in prompt
-            assert model_name == 'gpt-5.4-mini'
+            assert model_name == 'gpt-6-luna'
             return json.dumps({
                 'required_behaviors': [{'id': 'diagnose', 'label': 'Diagnose reason', 'description': 'Ask why the caller wants to cancel.', 'severity': 'error'}],
                 'forbidden_behaviors': [{'id': 'no-promises', 'label': 'No unsupported promises', 'description': 'Do not invent a discount.', 'severity': 'error'}],

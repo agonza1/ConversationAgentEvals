@@ -52,7 +52,7 @@ SEED_AGENTS: list[dict[str, Any]] = [
             'Real LLM-backed reference agent for CAE tester-to-agent local audio evaluation. '
             'Requires rtc-asr, Kokoro, and OpenAI API-key or Codex OAuth configuration.'
         ),
-        'metadata': {'model_name': 'gpt-5.4-mini', 'prompt_version': 'generalist-v1'},
+        'metadata': {'model_name': 'gpt-6-luna', 'prompt_version': 'generalist-v1'},
     },
     {
         'id': 'pipecat-public-demo',
@@ -89,7 +89,7 @@ SEED_AGENTS: list[dict[str, Any]] = [
         'environment': 'local',
         'connection': {},
         'description': 'Real generalist text target using OPENAI_API_KEY or connected OpenAI/Codex OAuth.',
-        'metadata': {'model_name': 'gpt-5.4-mini', 'prompt_version': 'generalist-v1'},
+        'metadata': {'model_name': 'gpt-6-luna', 'prompt_version': 'generalist-v1'},
     },
 ]
 

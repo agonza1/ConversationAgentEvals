@@ -92,13 +92,13 @@ class ReferenceRuntimeConfig:
         default_factory=_default_target_voice
     )
     llm_model: str = field(
-        default_factory=lambda: os.getenv('REFERENCE_LLM_MODEL', 'gpt-5.4-mini').strip()
+        default_factory=lambda: os.getenv('REFERENCE_LLM_MODEL', 'gpt-6-luna').strip()
     )
     tester_llm_model: str = field(
         default_factory=lambda: (
             os.getenv('REFERENCE_TESTER_LLM_MODEL')
             or os.getenv('REFERENCE_LLM_MODEL')
-            or 'gpt-5.4-mini'
+            or 'gpt-6-luna'
         ).strip()
     )
     timeout_seconds: float = field(

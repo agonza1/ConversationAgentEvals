@@ -30,11 +30,13 @@ OPENAI_PLATFORM_MODELS_URL = 'https://api.openai.com/v1/models'
 CALLBACK_REDIRECT_HOST = 'localhost'
 CALLBACK_PORT = 1455
 REDIRECT_URI = f'http://{CALLBACK_REDIRECT_HOST}:{CALLBACK_PORT}/auth/callback'
-DEFAULT_EXECUTION_MODEL = 'gpt-5.4-mini'
+DEFAULT_EXECUTION_MODEL = 'gpt-6-luna'
 FALLBACK_CHAT_MODELS = (
-    'gpt-5.4-mini',
-    'gpt-5.4',
-    'gpt-5.2',
+    'gpt-6-luna',
+    'gpt-6-sol',
+    'gpt-5.6-luna',
+    'gpt-5.6-terra',
+    'gpt-5.5',
     'gpt-4.1',
     'gpt-4.1-mini',
     'gpt-4o',
@@ -42,6 +44,10 @@ FALLBACK_CHAT_MODELS = (
     'o3-mini',
     'o4-mini',
 )
+RETIRED_CHATGPT_CODEX_MODEL_REPLACEMENTS = {
+    'gpt-5.4-mini': 'gpt-6-luna',
+    'gpt-5.4': 'gpt-6-sol',
+}
 SCOPE_MISSING_MODELS_HINT = 'Using built-in model list. Re-connect OpenAI to refresh.'
 _CHAT_MODEL_PREFIXES = ('gpt-', 'o1', 'o3', 'o4', 'chatgpt-', 'codex-')
 _CHAT_MODEL_EXCLUDE_PARTS = (
@@ -80,8 +86,14 @@ def _callback_bind_host() -> str:
 # requesting the platform-only api.model.read scope makes authorization fail.
 SCOPE = 'openid profile email offline_access'
 ORIGINATOR = 'conversation-agent-evals'
-DEFAULT_MODEL = 'gpt-5.4-mini'
+DEFAULT_MODEL = 'gpt-6-luna'
 TOKEN_REFRESH_THRESHOLD_SECONDS = 60
+
+
+def _supported_codex_model(model_name: str) -> str:
+    """Replace models retired from Codex ChatGPT sign-in before sending a request."""
+    selected = model_name.strip()
+    return RETIRED_CHATGPT_CODEX_MODEL_REPLACEMENTS.get(selected, selected)
 
 
 class CodexResponseError(RuntimeError):
@@ -289,12 +301,16 @@ class OpenAICodexProvider:
                 last_error = str(exc)
                 continue
 
-            model_ids = _filter_chat_model_ids(payload)
+            model_ids = list(dict.fromkeys(
+                _supported_codex_model(model_id)
+                for model_id in _filter_chat_model_ids(payload)
+            ))
             if not model_ids:
                 last_error = 'Models response did not include usable chat models.'
                 continue
             if DEFAULT_EXECUTION_MODEL not in model_ids:
                 model_ids.insert(0, DEFAULT_EXECUTION_MODEL)
+            model_ids.sort(key=lambda value: (0 if value == DEFAULT_EXECUTION_MODEL else 1, value.lower()))
             return {
                 'provider': 'openai_codex',
                 'status': 'connected',
@@ -345,7 +361,9 @@ class OpenAICodexProvider:
         if not account_id:
             raise RuntimeError('Missing ChatGPT account id for Codex Responses.')
 
-        model = (model_name or os.getenv('LLM_JUDGE_MODEL') or DEFAULT_MODEL).strip()
+        model = _supported_codex_model(
+            (model_name or os.getenv('LLM_JUDGE_MODEL') or DEFAULT_MODEL).strip()
+        )
         body = {
             'model': model,
             # The ChatGPT Codex Responses backend rejects persisted responses.
@@ -410,7 +428,9 @@ class OpenAICodexProvider:
         account_id = tokens.get('account_id')
         if not account_id:
             raise RuntimeError('Missing ChatGPT account id for Codex Responses.')
-        model = (model_name or os.getenv('LLM_JUDGE_MODEL') or DEFAULT_MODEL).strip()
+        model = _supported_codex_model(
+            (model_name or os.getenv('LLM_JUDGE_MODEL') or DEFAULT_MODEL).strip()
+        )
         body = {
             'model': model,
             'store': False,
