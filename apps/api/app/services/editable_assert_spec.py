@@ -28,7 +28,7 @@ from app.services.llm_providers import get_provider
 from app.services.ssl_util import verified_ssl_context
 
 
-DEFAULT_SPEC_GENERATION_MODEL = 'gpt-6-luna'
+DEFAULT_SPEC_GENERATION_MODEL = 'gpt-5.4-mini'
 
 
 class AssertCheck(BaseModel):

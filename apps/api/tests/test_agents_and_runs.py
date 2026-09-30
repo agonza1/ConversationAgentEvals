@@ -1819,6 +1819,35 @@ def test_codex_run_records_effective_model_for_saved_legacy_selection(tmp_path, 
     assert finished['conversations'][0]['turns'][1]['text'] == 'What is your new billing address?'
 
 
+@pytest.mark.parametrize('agent_id', ['pipecat-public-demo', 'holyguacamole-signalwire-agent'])
+def test_external_target_records_effective_oauth_tester_model(agent_id, tmp_path, monkeypatch):
+    from app.services.llm_providers import set_provider_for_tests
+    from app.services.llm_providers.openai_codex import OpenAICodexProvider
+
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    token_path = tmp_path / 'oauth.json'
+    token_path.write_text(json.dumps({
+        'access_token': 'access',
+        'refresh_token': 'refresh',
+        'expires_at': 9_999_999_999,
+        'account_id': 'acct_1',
+    }), encoding='utf-8')
+    set_provider_for_tests('openai', OpenAICodexProvider(token_path=token_path))
+    try:
+        payload = ExecutionRunCreateRequest(
+            suite_id='call-center-voice-ai',
+            scenario_ids=['billing-address-change'],
+            agent_id=agent_id,
+            tester_model_name='gpt-6-sol',
+        )
+        resolved = execution_runner._resolve_agent_payload(payload)
+    finally:
+        set_provider_for_tests('openai', None)
+
+    assert resolved.tester_model_name == 'gpt-6-luna'
+    assert resolved.model_name in {'10-gradium', 'signalwire-ai-agent'}
+
+
 def test_ollama_target_provenance_uses_configured_remote_base_url(monkeypatch):
     monkeypatch.setenv('OLLAMA_BASE_URL', 'https://ollama.example.com')
     created = client.post(

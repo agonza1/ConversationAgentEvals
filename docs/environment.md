@@ -166,11 +166,11 @@ OPENAI_API_KEY=
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_REALTIME_MODEL=gpt-realtime-mini
 OPENAI_RESPONSES_MODEL=gpt-4.1-mini
-SPEC_GENERATION_MODEL=gpt-6-luna
+SPEC_GENERATION_MODEL=
 
 # Standalone CAE product judge (/api/product/judge)
 LLM_JUDGE_PROVIDER=openai_codex
-LLM_JUDGE_MODEL=gpt-6-luna
+LLM_JUDGE_MODEL=
 LLM_JUDGE_API_KEY=
 OPENAI_CODEX_OAUTH_PATH=
 OPENAI_CODEX_IMPORT_HOME=1
@@ -207,6 +207,8 @@ STRIPE_CHECKOUT_BASE_URL=
 BUSINESS_CONTACT_URL=
 REALTIME_REQUEST_TIMEOUT_MS=5000
 ```
+
+Leave `SPEC_GENERATION_MODEL` and `LLM_JUDGE_MODEL` blank for provider-aware defaults: Codex OAuth uses GPT-6 Luna, while the API-key spec generator uses GPT-5.4 Mini and the API-key judge uses GPT-4.1 Mini.
 
 ### Local CAE product judge through Codex OAuth
 
