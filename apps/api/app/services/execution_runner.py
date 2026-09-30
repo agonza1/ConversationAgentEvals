@@ -50,6 +50,7 @@ from app.services.reference_generalist_agent import (
     ReferenceRuntimeError,
     ReferenceRuntimeConfig,
     configured_reference_completion_provider,
+    default_reference_model_name,
     discover_rtc_asr_runtime,
     effective_reference_model_name,
     resolve_reference_completion_provider,
@@ -66,7 +67,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_VOICE_FIXTURE = 'docs/examples/agentic-contact-center-run-fixture.json'
 DEFAULT_AUDIO_PLAN = 'docs/examples/agentic-contact-center-audio-plan.json'
 DEFAULT_CANCELLATION_SCENARIO = 'docs/examples/agentic-contact-center-cancellation-rescue.json'
-DEFAULT_EXECUTION_MODEL = 'gpt-6-luna'
+DEFAULT_EXECUTION_MODEL = 'gpt-4.1-mini'
 PUBLIC_PIPECAT_AGENT = '10-gradium'
 SIGNALWIRE_HOLY_GUACAMOLE_MODEL = 'signalwire-ai-agent'
 FIXTURE_BACKED_SCENARIO_IDS = frozenset({'cancellation-rescue'})
@@ -645,6 +646,8 @@ def _execution_model_name(payload: ExecutionRunCreateRequest, *, target: str) ->
         return explicit
     if target == 'builtin_sample_voice':
         return ReferenceRuntimeConfig().llm_model
+    if target == 'openai_codex':
+        return default_reference_model_name()
     return DEFAULT_EXECUTION_MODEL
 
 

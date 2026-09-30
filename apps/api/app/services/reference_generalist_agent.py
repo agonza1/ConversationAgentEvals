@@ -93,13 +93,13 @@ class ReferenceRuntimeConfig:
         default_factory=_default_target_voice
     )
     llm_model: str = field(
-        default_factory=lambda: os.getenv('REFERENCE_LLM_MODEL', 'gpt-6-luna').strip()
+        default_factory=lambda: (os.getenv('REFERENCE_LLM_MODEL') or default_reference_model_name()).strip()
     )
     tester_llm_model: str = field(
         default_factory=lambda: (
             os.getenv('REFERENCE_TESTER_LLM_MODEL')
             or os.getenv('REFERENCE_LLM_MODEL')
-            or 'gpt-6-luna'
+            or default_reference_model_name()
         ).strip()
     )
     timeout_seconds: float = field(
@@ -348,6 +348,12 @@ def effective_reference_model_name(model_name: str) -> str:
     if isinstance(provider, OpenAICodexProvider):
         return effective_codex_model_name(selected)
     return selected
+
+
+def default_reference_model_name() -> str:
+    """Choose a small default supported by the configured completion provider."""
+    provider = configured_reference_completion_provider('gpt-4.1-mini')
+    return 'gpt-6-luna' if isinstance(provider, OpenAICodexProvider) else 'gpt-4.1-mini'
 
 
 def resolve_reference_completion_provider(model_name: str | None = None) -> CompletionProvider:

@@ -1433,7 +1433,7 @@ def test_execution_persists_model_name_default_and_override(monkeypatch):
             iterations=1,
         )
     )
-    assert queued_default['model_name'] == 'gpt-6-luna'
+    assert queued_default['model_name'] == 'gpt-4.1-mini'
 
     queued = start_execution_run(
         ExecutionRunCreateRequest(
@@ -1846,6 +1846,50 @@ def test_external_target_records_effective_oauth_tester_model(agent_id, tmp_path
 
     assert resolved.tester_model_name == 'gpt-6-luna'
     assert resolved.model_name in {'10-gradium', 'signalwire-ai-agent'}
+
+
+@pytest.mark.parametrize('agent_id', ['generalist-text-agent', 'generalist-voice-agent'])
+def test_generalist_default_is_api_compatible_when_api_key_is_configured(agent_id, monkeypatch):
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-key')
+    monkeypatch.delenv('REFERENCE_LLM_MODEL', raising=False)
+    payload = ExecutionRunCreateRequest(
+        suite_id='call-center-voice-ai',
+        scenario_ids=['billing-address-change'],
+        agent_id=agent_id,
+    )
+
+    resolved = execution_runner._resolve_agent_payload(payload)
+
+    assert resolved.model_name == 'gpt-4.1-mini'
+    assert resolved.model_name != 'gpt-6-luna'
+
+
+@pytest.mark.parametrize('agent_id', ['generalist-text-agent', 'generalist-voice-agent'])
+def test_generalist_default_uses_luna_with_codex_oauth(agent_id, tmp_path, monkeypatch):
+    from app.services.llm_providers import set_provider_for_tests
+    from app.services.llm_providers.openai_codex import OpenAICodexProvider
+
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    monkeypatch.delenv('REFERENCE_LLM_MODEL', raising=False)
+    token_path = tmp_path / 'oauth.json'
+    token_path.write_text(json.dumps({
+        'access_token': 'access',
+        'refresh_token': 'refresh',
+        'expires_at': 9_999_999_999,
+        'account_id': 'acct_1',
+    }), encoding='utf-8')
+    set_provider_for_tests('openai', OpenAICodexProvider(token_path=token_path))
+    try:
+        payload = ExecutionRunCreateRequest(
+            suite_id='call-center-voice-ai',
+            scenario_ids=['billing-address-change'],
+            agent_id=agent_id,
+        )
+        resolved = execution_runner._resolve_agent_payload(payload)
+    finally:
+        set_provider_for_tests('openai', None)
+
+    assert resolved.model_name == 'gpt-6-luna'
 
 
 def test_ollama_target_provenance_uses_configured_remote_base_url(monkeypatch):
