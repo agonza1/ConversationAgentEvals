@@ -242,7 +242,8 @@ def test_openai_codex_replaces_retired_chatgpt_models_before_request(tmp_path: P
 
     assert provider.complete('hello', model_name='gpt-5.4-mini') == 'ok'
     assert provider.complete('hello', model_name='gpt-5.4') == 'ok'
-    assert requested_models == ['gpt-6-luna', 'gpt-6-sol']
+    assert provider.complete('hello', model_name='gpt-6-sol') == 'ok'
+    assert requested_models == ['gpt-6-luna'] * 3
 
 
 def test_codex_responses_sse_parser_collects_text_deltas():
@@ -583,6 +584,7 @@ def test_openai_codex_list_models_filters_and_uses_ssl_get(tmp_path: Path):
             'models': [
                 {'slug': 'gpt-5.4', 'display_name': 'GPT-5.4', 'supported_in_api': True},
                 {'slug': 'gpt-5.4-mini', 'display_name': 'GPT-5.4-Mini', 'supported_in_api': True},
+                {'slug': 'gpt-6-sol', 'display_name': 'GPT-6 Sol', 'supported_in_api': True},
                 {'slug': 'codex-auto-review', 'display_name': 'Codex Auto Review', 'supported_in_api': True},
                 {'id': 'text-embedding-3-large'},
                 {'id': 'whisper-1'},
@@ -598,6 +600,7 @@ def test_openai_codex_list_models_filters_and_uses_ssl_get(tmp_path: Path):
     ids = [item['id'] for item in payload['models']]
     assert ids[0] == 'gpt-6-luna'
     assert 'gpt-6-luna' in ids
+    assert 'gpt-6-sol' not in ids
     assert 'o3-mini' in ids
     assert 'codex-auto-review' not in ids
     assert 'text-embedding-3-large' not in ids
@@ -636,7 +639,8 @@ def test_openai_codex_list_models_falls_back_on_403(tmp_path: Path):
     assert 'Could not list OpenAI models' not in (payload.get('message') or '')
     ids = [item['id'] for item in payload['models']]
     assert ids[0] == 'gpt-6-luna'
-    assert 'gpt-4o' in ids
+    assert 'gpt-5.6-luna' in ids
+    assert 'gpt-6-sol' not in ids
 
 
 def test_oauth_authorize_uses_codex_account_scopes():

@@ -25,6 +25,7 @@ import httpx
 from app.services.acc_realtime_target import AccAudioFixture, AccAudioStep
 from app.services.execution_audio import AudioRecordingHandle, TranscriptionTurn
 from app.services.llm_providers import get_provider
+from app.services.llm_providers.openai_codex import OpenAICodexProvider, effective_codex_model_name
 from app.services.word_error_rate import calculate_word_error_rate
 from app.services.two_agent_pipecat_duplex import (
     InMemoryDuplexFrameTransport,
@@ -104,6 +105,11 @@ class ReferenceRuntimeConfig:
     timeout_seconds: float = field(
         default_factory=lambda: float(os.getenv('REFERENCE_AGENT_TIMEOUT_SECONDS', '60'))
     )
+
+    def __post_init__(self) -> None:
+        for field_name in ('llm_model', 'tester_llm_model'):
+            selected = getattr(self, field_name)
+            object.__setattr__(self, field_name, effective_reference_model_name(selected))
 
 
 def discover_rtc_asr_runtime(payload: Any) -> dict[str, str]:
@@ -333,6 +339,15 @@ def configured_reference_completion_provider(model_name: str | None = None) -> C
     if api_key_provider.status()['status'] == 'connected':
         return api_key_provider
     return get_provider('openai')
+
+
+def effective_reference_model_name(model_name: str) -> str:
+    """Keep model provenance aligned with the provider that will execute a turn."""
+    selected = model_name.strip()
+    provider = configured_reference_completion_provider(selected)
+    if isinstance(provider, OpenAICodexProvider):
+        return effective_codex_model_name(selected)
+    return selected
 
 
 def resolve_reference_completion_provider(model_name: str | None = None) -> CompletionProvider:

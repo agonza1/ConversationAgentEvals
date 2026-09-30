@@ -153,7 +153,8 @@ When `RTC_ASR_BASE_URL` is empty or unhealthy, live session startup records ASR 
 
 For Codex OAuth with a ChatGPT account, CAE defaults to `gpt-6-luna`: it is the
 efficient replacement for the retired `gpt-5.4-mini`. CAE also upgrades either
-retired GPT-5.4 model when a saved configuration still selects one. Explicit API
+retired GPT-5.4 model and Sol selections on Codex OAuth to Luna when a saved
+configuration still selects one. Explicit API
 key configurations can continue to use their own supported model IDs.
 
 ## Optional product integrations

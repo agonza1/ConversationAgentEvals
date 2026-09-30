@@ -601,6 +601,10 @@ def _complete_generation(prompt: str) -> tuple[str, str, str]:
     ).strip() or DEFAULT_SPEC_GENERATION_MODEL
     if status.get('status') == 'connected':
         try:
+            from app.services.llm_providers.openai_codex import OpenAICodexProvider, effective_codex_model_name
+
+            if isinstance(provider, OpenAICodexProvider):
+                model_name = effective_codex_model_name(model_name)
             return provider.complete(prompt, model_name=model_name), str(status.get('provider') or 'openai_codex'), model_name
         except Exception as exc:
             raise SpecGenerationFailed(f'Configured CAE model could not generate a draft: {exc}') from exc

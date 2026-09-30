@@ -33,20 +33,11 @@ REDIRECT_URI = f'http://{CALLBACK_REDIRECT_HOST}:{CALLBACK_PORT}/auth/callback'
 DEFAULT_EXECUTION_MODEL = 'gpt-6-luna'
 FALLBACK_CHAT_MODELS = (
     'gpt-6-luna',
-    'gpt-6-sol',
     'gpt-5.6-luna',
-    'gpt-5.6-terra',
-    'gpt-5.5',
-    'gpt-4.1',
-    'gpt-4.1-mini',
-    'gpt-4o',
-    'o3',
-    'o3-mini',
-    'o4-mini',
 )
 RETIRED_CHATGPT_CODEX_MODEL_REPLACEMENTS = {
     'gpt-5.4-mini': 'gpt-6-luna',
-    'gpt-5.4': 'gpt-6-sol',
+    'gpt-5.4': 'gpt-6-luna',
 }
 SCOPE_MISSING_MODELS_HINT = 'Using built-in model list. Re-connect OpenAI to refresh.'
 _CHAT_MODEL_PREFIXES = ('gpt-', 'o1', 'o3', 'o4', 'chatgpt-', 'codex-')
@@ -90,9 +81,11 @@ DEFAULT_MODEL = 'gpt-6-luna'
 TOKEN_REFRESH_THRESHOLD_SECONDS = 60
 
 
-def _supported_codex_model(model_name: str) -> str:
-    """Replace models retired from Codex ChatGPT sign-in before sending a request."""
+def effective_codex_model_name(model_name: str) -> str:
+    """Return the small model actually used for retired or Sol OAuth selections."""
     selected = model_name.strip()
+    if selected.startswith('gpt-') and 'sol' in selected.split('-'):
+        return DEFAULT_MODEL
     return RETIRED_CHATGPT_CODEX_MODEL_REPLACEMENTS.get(selected, selected)
 
 
@@ -302,7 +295,7 @@ class OpenAICodexProvider:
                 continue
 
             model_ids = list(dict.fromkeys(
-                _supported_codex_model(model_id)
+                effective_codex_model_name(model_id)
                 for model_id in _filter_chat_model_ids(payload)
             ))
             if not model_ids:
@@ -322,8 +315,6 @@ class OpenAICodexProvider:
 
         del last_error
         fallback_ids = list(FALLBACK_CHAT_MODELS)
-        if DEFAULT_EXECUTION_MODEL not in fallback_ids:
-            fallback_ids.insert(0, DEFAULT_EXECUTION_MODEL)
         return {
             'provider': 'openai_codex',
             'status': 'connected',
@@ -361,7 +352,7 @@ class OpenAICodexProvider:
         if not account_id:
             raise RuntimeError('Missing ChatGPT account id for Codex Responses.')
 
-        model = _supported_codex_model(
+        model = effective_codex_model_name(
             (model_name or os.getenv('LLM_JUDGE_MODEL') or DEFAULT_MODEL).strip()
         )
         body = {
@@ -428,7 +419,7 @@ class OpenAICodexProvider:
         account_id = tokens.get('account_id')
         if not account_id:
             raise RuntimeError('Missing ChatGPT account id for Codex Responses.')
-        model = _supported_codex_model(
+        model = effective_codex_model_name(
             (model_name or os.getenv('LLM_JUDGE_MODEL') or DEFAULT_MODEL).strip()
         )
         body = {

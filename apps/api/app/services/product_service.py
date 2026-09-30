@@ -1497,10 +1497,12 @@ def _refund_judge_credits(spend_control: dict[str, Any], *, credits: int) -> dic
 
 def _judge_model_name(spend_control: dict[str, Any]) -> str:
     env_model = (os.getenv('LLM_JUDGE_MODEL') or '').strip()
+    if spend_control.get('oauth_connected'):
+        from app.services.llm_providers.openai_codex import effective_codex_model_name
+
+        return effective_codex_model_name(env_model or 'gpt-6-luna')
     if env_model:
         return env_model
-    if spend_control.get('oauth_connected'):
-        return 'gpt-6-luna'
     return 'gpt-4.1-mini'
 
 

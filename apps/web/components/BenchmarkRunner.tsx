@@ -282,16 +282,7 @@ const LOCAL_EXECUTION_MODELS = ['ollama/gemma2:2b'];
 const FALLBACK_EXECUTION_MODELS = [
   'gpt-6-luna',
   ...LOCAL_EXECUTION_MODELS,
-  'gpt-6-sol',
   'gpt-5.6-luna',
-  'gpt-5.6-terra',
-  'gpt-5.5',
-  'gpt-4.1',
-  'gpt-4.1-mini',
-  'gpt-4o',
-  'o3',
-  'o3-mini',
-  'o4-mini',
 ];
 
 async function fetchOpenAIModels(): Promise<{ models: string[]; message: string | null }> {
@@ -314,7 +305,7 @@ async function fetchOpenAIModels(): Promise<{ models: string[]; message: string 
   }>(response);
   const ids = (payload.models ?? [])
     .map((item) => (typeof item === 'string' ? item : item.id))
-    .filter((id): id is string => Boolean(id && id.trim()));
+    .filter((id): id is string => Boolean(id && id.trim() && !id.trim().split('-').includes('sol')));
   const merged = Array.from(new Set([DEFAULT_EXECUTION_MODEL, ...LOCAL_EXECUTION_MODELS, ...ids]));
   merged.sort((a, b) => {
     if (a === DEFAULT_EXECUTION_MODEL) return -1;
