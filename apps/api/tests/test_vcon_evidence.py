@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.services.benchmark_service import get_suite, run_scenario
-from app.services.execution_vcon import build_ietf_execution_vcon
+from app.services.execution_vcon import build_ietf_execution_vcon, validate_ietf_vcon
 from app.services.vcon_evidence import (
     PURPOSE, attach_evidence, build_benchmark_vcon, decode_evidence, evidence_body, intake_vcon,
     latest_tool_events,
@@ -326,3 +326,47 @@ def test_profile_matches_published_json_schema():
     payload = sample()
     body = decode_evidence(build_benchmark_vcon(payload, payload['transcript']))
     Draft202012Validator(schema).validate(body)
+
+
+@pytest.mark.parametrize('kind', ['benchmark', 'sample', 'telemetry'])
+def test_new_portable_exports_have_validator_accepted_timestamps(kind):
+    payload = sample()
+    if kind == 'benchmark':
+        vcon = run_scenario(payload, persist_artifacts=False)['ietf_vcon_export']
+    elif kind == 'sample':
+        response = TestClient(app).get('/api/benchmarks/evidence/sample-vcon', params={
+            'suite_id': payload['suite_id'], 'scenario_id': payload['scenario_id'],
+        })
+        assert response.status_code == 200
+        vcon = response.json()
+    else:
+        from app.services.voice_telemetry_vcon import build_telemetry_vcon
+        vcon = build_telemetry_vcon(format='pipecat-function-events-v1', data={'events': []})
+    assert vcon['updated_at'] == vcon['created_at']
+    result = validate_ietf_vcon(vcon)
+    assert not any('timestamp' in error for error in result['errors'])
+    if kind == 'benchmark':
+        assert result == {'valid': True, 'errors': []}
+
+
+def test_profile_without_dialog_reevaluates_and_exports_empty_dialog():
+    payload = sample()
+    payload.pop('transcript')
+    original = run_scenario(payload, persist_artifacts=False)
+    vcon = deepcopy(original['ietf_vcon_export'])
+    vcon.pop('dialog')
+    unrelated = {'purpose': 'External metadata', 'body': {'retained': True}}
+    vcon['attachments'].append(unrelated)
+    intake_vcon({'vcon': vcon})
+    replay = run_scenario({'vcon': vcon}, persist_artifacts=False)
+    exported = replay['ietf_vcon_export']
+    assert exported['dialog'] == []
+    assert exported['analysis'][-1]['dialog'] == []
+    assert exported['attachments'][-1] == unrelated
+    assert exported['created_at'] == vcon['created_at']
+    assert exported['updated_at'] == vcon['updated_at']
+    assert 'dialog' not in vcon  # export must not mutate the input
+    assert replay['score_components'] == original['score_components']
+    response = TestClient(app).post('/api/benchmarks/run', json={'vcon': vcon})
+    assert response.status_code == 200
+    assert response.json()['ietf_vcon_export']['dialog'] == []

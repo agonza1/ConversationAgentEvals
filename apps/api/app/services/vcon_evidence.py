@@ -335,6 +335,7 @@ def build_benchmark_vcon(payload: dict[str, Any], transcript: str, report: dict[
     original = payload.get('vcon')
     if isinstance(original, dict) and original.get('vcon') == IETF_VCON_VERSION:
         exported = deepcopy(original)
+        exported.setdefault('dialog', [])
     else:
         dialog = []
         parties: list[dict[str, str]] = []
@@ -347,8 +348,9 @@ def build_benchmark_vcon(payload: dict[str, Any], transcript: str, report: dict[
                 parties.append({'name': name})
             dialog.append({'type': 'text', 'parties': [[p['name'] for p in parties].index(name)],
                            'mediatype': 'text/plain', 'encoding': 'none', 'body': text.strip() if sep else line})
+        timestamp = datetime.now(UTC).isoformat()
         exported = {'vcon': IETF_VCON_VERSION, 'uuid': str(uuid.uuid4()),
-                    'created_at': datetime.now(UTC).isoformat(), 'parties': parties or [{'name': 'CAE'}],
+                    'created_at': timestamp, 'updated_at': timestamp, 'parties': parties or [{'name': 'CAE'}],
                     'dialog': dialog, 'analysis': []}
     existing_body = decode_evidence(exported)
     context = {key: report.get(key) or payload.get(key) for key in
