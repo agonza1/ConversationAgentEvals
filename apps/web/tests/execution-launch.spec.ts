@@ -696,6 +696,10 @@ test('launch evaluation streams conversations into the live list', async ({ page
     agent_id: 'generalist-text-agent',
     model_name: 'gpt-4.1-mini',
   });
+  await launch.getByLabel('Execution model').selectOption('gpt-4.1');
+  await launch.getByRole('button', { name: 'Run evaluation' }).click();
+  await expect.poll(() => textPostAttempts.length).toBe(5);
+  expect(textPostAttempts.at(-1)).toMatchObject({ model_name: 'gpt-4.1' });
 
   oauthConnected = true;
   apiKeyPreferred = true;
@@ -703,7 +707,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await launch.getByLabel('Execution agent target').selectOption('generalist-text-agent');
   await expect(launch.getByLabel('Execution model')).toHaveValue('gpt-4.1-mini');
   await launch.getByRole('button', { name: 'Run evaluation' }).click();
-  await expect.poll(() => textPostAttempts.length).toBe(5);
+  await expect.poll(() => textPostAttempts.length).toBe(6);
   expect(textPostAttempts.at(-1)).toMatchObject({
     agent_id: 'generalist-text-agent',
     model_name: 'gpt-4.1-mini',

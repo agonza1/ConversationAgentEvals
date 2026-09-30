@@ -281,6 +281,14 @@ interface OpenAIProviderStatus {
 
 const DEFAULT_EXECUTION_MODEL = 'gpt-4.1-mini';
 const DEFAULT_CODEX_EXECUTION_MODEL = 'gpt-6-luna';
+const API_KEY_EXECUTION_MODELS = [
+  DEFAULT_EXECUTION_MODEL,
+  'gpt-5.4-mini',
+  'gpt-4o-mini',
+  'gpt-4.1',
+  'gpt-4o',
+  'o3',
+];
 const LOCAL_EXECUTION_MODELS = ['ollama/gemma2:2b'];
 const FALLBACK_EXECUTION_MODELS = [
   DEFAULT_CODEX_EXECUTION_MODEL,
@@ -288,10 +296,16 @@ const FALLBACK_EXECUTION_MODELS = [
   'gpt-5.6-luna',
 ];
 
+function apiKeyModelOrDefault(current: string): string {
+  return API_KEY_EXECUTION_MODELS.includes(current) || LOCAL_EXECUTION_MODELS.includes(current)
+    ? current
+    : DEFAULT_EXECUTION_MODEL;
+}
+
 async function fetchOpenAIModels(): Promise<{ models: string[]; message: string | null }> {
   const response = await fetch(`${getApiBase()}/api/product/providers/openai/models`, { cache: 'no-store' });
   if (response.status === 401) {
-    return { models: [DEFAULT_EXECUTION_MODEL, ...LOCAL_EXECUTION_MODELS], message: 'Connect OpenAI to load GPT models; local Ollama models stay available.' };
+    return { models: [...API_KEY_EXECUTION_MODELS, ...LOCAL_EXECUTION_MODELS], message: 'Connect OpenAI to load GPT models; local Ollama models stay available.' };
   }
   if (!response.ok) {
     // Never leave the dropdown empty on transient API failures.
@@ -2608,9 +2622,9 @@ export function BenchmarkRunner({
     let active = true;
     async function loadExecutionModels() {
       if (openaiProvider?.status !== 'connected' || openaiProvider?.execution_provider !== 'openai_codex') {
-        setExecutionModelOptions([DEFAULT_EXECUTION_MODEL, ...LOCAL_EXECUTION_MODELS]);
+        setExecutionModelOptions([...API_KEY_EXECUTION_MODELS, ...LOCAL_EXECUTION_MODELS]);
         setExecutionModelsMessage('Connect OpenAI to load GPT models; local Ollama models stay available.');
-        setExecutionModelName((current) => LOCAL_EXECUTION_MODELS.includes(current) ? current : DEFAULT_EXECUTION_MODEL);
+        setExecutionModelName(apiKeyModelOrDefault);
         return;
       }
       try {
@@ -3144,9 +3158,9 @@ export function BenchmarkRunner({
           const nextConfig = await fetchProductConfig().catch(() => null);
           if (nextConfig) setProductConfig(nextConfig);
           if (status.execution_provider !== 'openai_codex') {
-            setExecutionModelOptions([DEFAULT_EXECUTION_MODEL, ...LOCAL_EXECUTION_MODELS]);
+            setExecutionModelOptions([...API_KEY_EXECUTION_MODELS, ...LOCAL_EXECUTION_MODELS]);
             setExecutionModelsMessage('API key is the active execution provider.');
-            setExecutionModelName(DEFAULT_EXECUTION_MODEL);
+            setExecutionModelName(apiKeyModelOrDefault);
             break;
           }
           const { models, message } = await fetchOpenAIModels().catch(() => ({
@@ -3172,9 +3186,9 @@ export function BenchmarkRunner({
       await disconnectOpenAIProvider();
       const status = await fetchOpenAIProviderStatus();
       setOpenaiProvider(status);
-      setExecutionModelOptions([DEFAULT_EXECUTION_MODEL]);
+      setExecutionModelOptions([...API_KEY_EXECUTION_MODELS, ...LOCAL_EXECUTION_MODELS]);
       setExecutionModelsMessage('Connect OpenAI to load models');
-      setExecutionModelName(DEFAULT_EXECUTION_MODEL);
+      setExecutionModelName(apiKeyModelOrDefault);
       const nextConfig = await fetchProductConfig().catch(() => null);
       if (nextConfig) setProductConfig(nextConfig);
       setOpenaiProviderMessage('OpenAI disconnected.');
