@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
 
 from app.db.database import SessionLocal, get_db
 from app.schemas.benchmarks import BenchmarkRunRequest, BenchmarkSimulationRequest, BenchmarkSuiteRunRequest
@@ -39,6 +40,35 @@ from app.services.benchmark_suite_run_store import (
 )
 
 router = APIRouter(prefix='/api/benchmarks', tags=['benchmarks'])
+
+
+class VconIntakeRequest(BaseModel):
+    vcon: dict[str, Any]
+
+
+@router.post('/evidence/intake')
+def inspect_vcon_evidence(payload: VconIntakeRequest):
+    from app.services.vcon_evidence import intake_vcon
+    try:
+        evidence, summary = intake_vcon({'vcon': payload.vcon})
+        from app.services.vcon_interop import vcon_dialog_turns
+        evidence.setdefault('transcript', '\n'.join(vcon_dialog_turns(payload.vcon)))
+        return {'evidence': evidence, 'summary': summary}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get('/evidence/sample-vcon')
+def sample_vcon_evidence(suite_id: str, scenario_id: str):
+    from app.services.vcon_evidence import build_benchmark_vcon
+    suite = get_suite(suite_id)
+    scenario = next((s for s in (suite or {}).get('scenarios', []) if s['id'] == scenario_id), None)
+    if scenario is None:
+        raise HTTPException(status_code=404, detail='Benchmark scenario not found')
+    payload = {'suite_id': suite_id, 'scenario_id': scenario_id,
+               'action_trace': scenario.get('sample_action_trace') or [],
+               'final_state': scenario.get('sample_final_state') or {}}
+    return build_benchmark_vcon(payload, scenario.get('sample_transcript') or '', synthetic=True)
 
 
 @router.get('')
@@ -266,7 +296,7 @@ def run_benchmark(payload: BenchmarkRunRequest, db: Session = Depends(get_db)):
         persist_benchmark_run(db=db, report=report, transcript=payload.transcript)
         return report
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404 if str(exc).startswith('Unknown benchmark') else 422, detail=str(exc)) from exc
 
 
 @router.post('/{suite_id}/run')
@@ -325,7 +355,7 @@ def run_benchmark_scenario(suite_id: str, scenario_id: str, payload: BenchmarkRu
         persist_benchmark_run(db=db, report=report, transcript=payload.transcript)
         return report
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404 if str(exc).startswith('Unknown benchmark') else 422, detail=str(exc)) from exc
 
 
 @router.post('/{suite_id}/scenarios/{scenario_id}/simulate')

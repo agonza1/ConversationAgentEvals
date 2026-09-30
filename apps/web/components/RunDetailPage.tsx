@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { ApiAwareLink } from '@/components/ApiAwareLink';
 import { LiveRunFeedback } from '@/components/LiveRunFeedback';
+import { EvidenceTimeline } from '@/components/EvidenceTimeline';
 import { SiteNav } from '@/components/SiteNav';
 import {
   applyLlmJudgeReview,
@@ -258,6 +259,13 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
                 <pre>{conversation?.transcript || 'No transcript available.'}</pre>
               )}
             </section>
+            <EvidenceTimeline vcon={conversation?.ietf_vcon_export} />
+            {conversation?.ietf_vcon_export ? (
+              <p>
+                <a href={`${getApiBase()}/api/execution/runs/${encodeURIComponent(executionRunId)}/conversations/${encodeURIComponent(conversation.conversation_id)}/vcon?user_id=${encodeURIComponent(userId)}`}>Download vCon evidence</a>
+                {conversation.recording ? <> · <a href={`${getApiBase()}/api/execution/runs/${encodeURIComponent(executionRunId)}/conversations/${encodeURIComponent(conversation.conversation_id)}/vcon?user_id=${encodeURIComponent(userId)}&include_audio=true`}>Include local recording (up to 20 MB)</a></> : null}
+              </p>
+            ) : null}
           </div>
         </>
       ) : null}

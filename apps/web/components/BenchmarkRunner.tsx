@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiAwareLink } from './ApiAwareLink';
+import { EvidenceTimeline } from './EvidenceTimeline';
 import { LiveRunFeedback, type LiveRunEvent } from './LiveRunFeedback';
 import { apiErrorMessage } from '@/lib/apiError';
 import { listProductProjects, type ProductProjectOption } from '@/lib/execution';
@@ -90,6 +91,7 @@ interface BenchmarkReport {
   voice_interaction_summary?: VoiceInteractionSummary | null;
   vcon_analysis?: JsonRecord;
   vcon_export?: JsonRecord;
+  ietf_vcon_export?: JsonRecord;
   simulation_validation?: SimulationValidation;
   llm_judge?: JsonRecord;
 }
@@ -801,6 +803,14 @@ async function fetchBenchmarkSuites(signal?: AbortSignal): Promise<BenchmarkSuit
 async function fetchBenchmarkSuiteContractManifest(suiteId: string) {
   return handleJson<BenchmarkSuiteContractManifest>(
     await fetch(`${getApiBase()}/api/benchmarks/suites/${encodeURIComponent(suiteId)}/contract-manifest`, { cache: 'no-store' }),
+  );
+}
+
+async function inspectVcon(vcon: JsonRecord) {
+  return handleJson<{ evidence: JsonRecord; summary: { synthetic: boolean; evidence_level: string; tool_events: number; state_snapshots: number; voice_events: number } }>(
+    await fetch(`${getApiBase()}/api/benchmarks/evidence/intake`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vcon }),
+    }),
   );
 }
 
@@ -2199,46 +2209,6 @@ function transcriptFromVcon(vcon: JsonRecord): string {
     .join('\n');
 }
 
-function sampleVconFromTranscript(transcriptText: string): string {
-  const lines = transcriptText
-    .split(/\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const parties = [
-    { name: 'Caller', type: 'bot', validation: 'none' },
-    { name: 'Agent', type: 'bot', validation: 'none' },
-  ];
-  const dialog = lines.map((line) => {
-    const matched = line.match(/^(caller|agent|user|customer)\s*:\s*(.*)$/i);
-    if (matched) {
-      const speaker = matched[1].toLowerCase();
-      const party = speaker === 'agent' ? 1 : 0;
-      return {
-        type: 'text',
-        parties: [party],
-        mediatype: 'text/plain',
-        encoding: 'none',
-        body: matched[2],
-      };
-    }
-    return {
-      type: 'text',
-      parties: [0],
-      mediatype: 'text/plain',
-      encoding: 'none',
-      body: line,
-    };
-  });
-  return JSON.stringify({
-    vcon: '0.4.0',
-    uuid: crypto.randomUUID(),
-    created_at: new Date().toISOString(),
-    parties,
-    dialog,
-    analysis: [],
-  }, null, 2);
-}
-
 function describeUploadedEvidence(filename: string, text: string): {
   kind: 'vcon' | 'transcript';
   transcript?: string;
@@ -2300,6 +2270,7 @@ export function BenchmarkRunner({
   const loadingSavedRunRef = useRef(false);
   const autoLaunchDemoRef = useRef(false);
   const preserveScoreEvidenceRef = useRef(false);
+  const evidenceRequestRef = useRef(0);
   const [suites, setSuites] = useState<BenchmarkSuite[]>([]);
   const [selectedSuiteId, setSelectedSuiteId] = useState('');
   const [selectedScenarioId, setSelectedScenarioId] = useState('');
@@ -2405,6 +2376,7 @@ export function BenchmarkRunner({
   }
 
   function onTranscriptChange(nextValue: string) {
+    evidenceRequestRef.current += 1;
     preserveScoreEvidenceRef.current = true;
     setTranscript(nextValue);
     if (view !== 'score') return;
@@ -2438,9 +2410,7 @@ export function BenchmarkRunner({
     setFinalState(stringifyEditable(nextScenario.sample_final_state ?? nextScenario.expected_final_state, '{}'));
     setCallEvidence('');
     setGroupCall('');
-    setVconEvidence(
-      nextScenario.sample_transcript ? sampleVconFromTranscript(nextScenario.sample_transcript) : '',
-    );
+    setVconEvidence('');
   }
 
   function loadScenarioStarterData(
@@ -2474,16 +2444,34 @@ export function BenchmarkRunner({
     setUploadMessage(null);
   }
 
-  function onLoadSampleEvidence(scenario: BenchmarkScenario, options: { includeStructuredSample?: boolean } = {}) {
+  async function onLoadSampleEvidence(scenario: BenchmarkScenario, options: { includeStructuredSample?: boolean } = {}) {
+    const requestId = ++evidenceRequestRef.current;
     preserveScoreEvidenceRef.current = true;
     setSelectedScenarioId(scenario.id);
     loadScenarioStarterData(scenario, options);
     setShowSimulateEvidenceOptions(false);
     const withStructured = options.includeStructuredSample === true;
+    if (withStructured && selectedSuite) {
+      try {
+        const params = new URLSearchParams({ suite_id: selectedSuite.id, scenario_id: scenario.id });
+        const vcon = await handleJson<JsonRecord>(await fetch(`${getApiBase()}/api/benchmarks/evidence/sample-vcon?${params}`, { cache: 'no-store' }));
+        const loaded = await inspectVcon(vcon);
+        if (requestId !== evidenceRequestRef.current) return;
+        setTranscript(String(loaded.evidence.transcript ?? ''));
+        setActionTrace(stringifyEditable(loaded.evidence.action_trace, '[]'));
+        setFinalState(stringifyEditable(loaded.evidence.final_state, '{}'));
+        setVconEvidence(JSON.stringify(vcon, null, 2));
+        setIncludeStructuredEvidence(true);
+      } catch (err) {
+        if (requestId !== evidenceRequestRef.current) return;
+        setRunError(err instanceof Error ? err.message : 'Could not load the full sample vCon.');
+        return;
+      }
+    }
     setUploadMessage(
       view === 'score'
         ? withStructured
-          ? `Loaded full sample evidence: ${scenario.title}. Task completion and final state will be measured from the sample traces.`
+          ? `Loaded synthetic vCon: ${scenario.title}. Conversation, tool events and final state are included. Task/Final will be measured.`
           : `Loaded sample transcript: ${scenario.title}. Task/final stay n/a until you include structured evidence.`
         : `Loaded sample evidence: ${scenario.title}. This evidence is synthetic.`,
     );
@@ -2496,6 +2484,7 @@ export function BenchmarkRunner({
     // Task completion / Final state become measurable instead of staying n/a forever.
     if (isBlankJsonField(actionTrace) && isBlankJsonField(finalState)) {
       applyScenarioStructuredSample(selectedScenario);
+      void onLoadSampleEvidence(selectedScenario, { includeStructuredSample: true });
       setUploadMessage(
         `Included sample action trace and final state for ${selectedScenario.title}. Evaluate to measure task completion and final state.`,
       );
@@ -2504,32 +2493,45 @@ export function BenchmarkRunner({
 
   async function onUploadEvidenceFile(file: File | null) {
     if (!file) return;
+    const requestId = ++evidenceRequestRef.current;
     preserveScoreEvidenceRef.current = true;
     setUploadMessage(null);
     setRunError(null);
     try {
       const text = await file.text();
+      if (requestId !== evidenceRequestRef.current) return;
       const loaded = describeUploadedEvidence(file.name, text);
       if (loaded.kind === 'vcon') {
-        setVconEvidence(loaded.vcon || '');
-        setTranscript(loaded.transcript || '');
-        setCallEvidence('');
-        // Keep the uploaded vCon available under structured evidence, but do not auto-include it on /eval.
-        if (view === 'score') {
-          setIncludeStructuredEvidence(false);
-          setUploadMessage(
-            `${loaded.message} Transcript was extracted for scoring. Check “Include structured evidence” if you also want the vCon artifact evaluated.`,
-          );
-          setReport(null);
-          return;
+        const inspected = await inspectVcon(JSON.parse(loaded.vcon || '{}') as JsonRecord);
+        if (requestId !== evidenceRequestRef.current) return;
+        const importedSuite = suites.find((suite) => suite.id === inspected.evidence.suite_id);
+        if (importedSuite && importedSuite.scenarios.some((scenario) => scenario.id === inspected.evidence.scenario_id)) {
+          setSelectedSuiteId(importedSuite.id);
+          setSelectedScenarioId(String(inspected.evidence.scenario_id));
         }
+        setVconEvidence(loaded.vcon || '');
+        setTranscript(String(inspected.evidence.transcript ?? ''));
+        setActionTrace(stringifyEditable(inspected.evidence.action_trace, '[]'));
+        setFinalState(stringifyEditable(inspected.evidence.final_state, '{}'));
+        setCallEvidence('');
+        setGroupCall('');
+        setIncludeStructuredEvidence(true);
+        setUploadMessage(`${inspected.summary.synthetic ? 'Synthetic vCon. ' : ''}${inspected.summary.evidence_level.replaceAll('_', ' ')} · ${inspected.summary.tool_events} tool events · ${inspected.summary.state_snapshots} state snapshots · ${inspected.summary.voice_events} voice events. Imported scores are historical; Evaluate computes a new result.`);
+        setReport(null);
+        return;
       } else {
         setTranscript(loaded.transcript || '');
         setVconEvidence('');
+        setActionTrace('');
+        setFinalState('');
+        setCallEvidence('');
+        setGroupCall('');
+        setIncludeStructuredEvidence(false);
       }
       setReport(null);
       setUploadMessage(loaded.message);
     } catch (err) {
+      if (requestId !== evidenceRequestRef.current) return;
       setRunError(err instanceof Error ? err.message : 'Could not read the uploaded file.');
     }
   }
@@ -3476,8 +3478,8 @@ export function BenchmarkRunner({
     const filenameParts = ['convoice-qa', report.suite_id, report.scenario_id, report.run_id, 'vcon']
       .filter(Boolean)
       .map(slugFilenamePart);
-    downloadJson(`${filenameParts.join('-') || 'convoice-qa-vcon'}.json`, report.vcon_export);
-    setExportMessage('Exported vCon-compatible benchmark record.');
+    downloadJson(`${filenameParts.join('-') || 'convoice-qa-vcon'}.vcon`, report.ietf_vcon_export || report.vcon_export);
+    setExportMessage('Exported vCon with conversation, available tool events and observed state.');
   }
 
   function onExportCurrentReport() {
@@ -4304,7 +4306,7 @@ export function BenchmarkRunner({
                 <p>
                   Synthetic sample for{' '}
                   <strong>{selectedScenario?.title ?? 'the selected scenario'}</strong> — not a live agent run.
-                  Transcript-only keeps Task/Final as n/a. Full sample includes action trace + final state so those tiles are measured.
+                  Transcript-only keeps Task/Final as n/a. Full sample loads a vCon with conversation, tool events and final state.
                 </p>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
                   <button
@@ -4327,6 +4329,7 @@ export function BenchmarkRunner({
               </div>
             ) : null}
             {uploadMessage ? <p className="score-upload-message">{uploadMessage}</p> : null}
+            {vconEvidence ? <EvidenceTimeline vcon={asRecord(parseMaybeJson(vconEvidence))} /> : null}
           </section>
         ) : null}
 
@@ -5624,6 +5627,7 @@ export function BenchmarkRunner({
               </div>
             </section>
           ) : null}
+          <EvidenceTimeline vcon={report.ietf_vcon_export} />
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
             <ReportList title="Failure categories" items={report.failure_categories} empty="No failure categories reported." />

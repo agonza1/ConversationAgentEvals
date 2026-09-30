@@ -60,12 +60,11 @@ test('eval page uploads vCon and loads sample call-center evidence', async ({ pa
   );
 
   await page.getByLabel('Upload vCon or transcript file').setInputFiles(vconPath);
-  await expect(page.getByText(/Loaded IETF vCon draft-ietf-vcon-vcon-core-04 \(vCon format 0\.4\.0\) from sample\.vcon/)).toBeVisible();
-  await expect(page.getByText(/Check “Include structured evidence” if you also want the vCon artifact evaluated/)).toBeVisible();
+  await expect(page.getByText(/transcript only · 0 tool events · 0 state snapshots/)).toBeVisible();
   await expect(page.locator('textarea').first()).toHaveValue(/Caller: I need to change my billing address/);
   await expect(page.locator('textarea').first()).toHaveValue(/Agent: I can help with that/);
   await expect(page.locator('textarea').first()).not.toHaveValue(/VGhpcyBpcyBhIHJlY29yZGluZw/);
-  await expect(page.getByLabel('Include structured evidence in Evaluate')).not.toBeChecked();
+  await expect(page.getByLabel('Include structured evidence in Evaluate')).toBeChecked();
 
   await page.getByLabel('Upload vCon or transcript file').setInputFiles(recordingOnlyVconPath);
   await expect(page.locator('textarea').first()).toHaveValue('');
@@ -88,12 +87,23 @@ test('eval page uploads vCon and loads sample call-center evidence', async ({ pa
 
   await page.getByRole('button', { name: 'Load sample evidence' }).click();
   await page.getByRole('button', { name: 'Load full sample (measure Task/Final)' }).click();
-  await expect(page.getByText(/Loaded full sample evidence: Billing Address Change/)).toBeVisible();
+  await expect(page.getByText(/Loaded synthetic vCon: Billing Address Change/)).toBeVisible();
   await page.getByRole('button', { name: 'Evaluate evidence' }).click();
   await expect(page.getByLabel('Task completion score')).toBeVisible();
   await expect(page.getByLabel('Final state score')).toBeVisible();
   await expect(page.getByLabel('Task completion score')).not.toContainText('n/a');
   await expect(page.getByLabel('Final state score')).not.toContainText('n/a');
+
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download vCon JSON' }).click();
+  const download = await downloadPromise;
+  const exportedPath = await download.path();
+  expect(exportedPath).toBeTruthy();
+  await page.getByLabel('Upload vCon or transcript file').setInputFiles(exportedPath!);
+  await expect(page.getByText(/Synthetic vCon\. state observed/)).toBeVisible();
+  await page.getByRole('button', { name: 'Evaluate evidence' }).click();
+  await expect(page.getByLabel('Task completion score')).toContainText('100');
+  await expect(page.getByLabel('Final state score')).toContainText('100');
 
   await page.getByLabel('Evidence transcript').fill('hello this transcript has none of the required call-center actions');
   await page.getByRole('button', { name: 'Evaluate evidence' }).click();

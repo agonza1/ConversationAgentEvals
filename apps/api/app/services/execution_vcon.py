@@ -129,6 +129,11 @@ def build_ietf_execution_vcon(
     final_state: dict[str, Any] | None = None,
     verdict: str | None = None,
     score: float | None = None,
+    action_trace: Any = None,
+    live_events: list[Any] | None = None,
+    latency_marks: list[Any] | None = None,
+    state_snapshots: list[dict[str, Any]] | None = None,
+    synthetic: bool = False,
 ) -> dict[str, Any]:
     """Build a portable IETF vCon without leaking CAE-only evidence fields.
 
@@ -223,6 +228,15 @@ def build_ietf_execution_vcon(
         'dialog': dialog,
         'analysis': analysis,
     }
+    from app.services.vcon_evidence import attach_evidence, capture_voice_events, evidence_body
+    exported = attach_evidence(exported, evidence_body(
+        action_trace=action_trace, final_state=final_state,
+        state_snapshots=state_snapshots,
+        voice_events=capture_voice_events(turns, live_events or [], latency_marks or []),
+        context={'execution_run_id': execution_run_id, 'conversation_id': conversation_id,
+                 'suite_id': suite_id, 'scenario_id': scenario_id, 'mode': mode,
+                 'completed_at': changed_at}, synthetic=synthetic,
+    ))
     validation = validate_ietf_vcon(exported)
     if not validation['valid']:
         raise ValueError(

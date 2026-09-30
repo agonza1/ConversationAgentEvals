@@ -14,6 +14,7 @@ from app.services.assert_trace import FAILURE_VALUES, parse_action_trace
 from app.schemas.assert_contracts import AssertResultManifest, AssertRunCreateRequest
 from app.services.assert_boundary import ingest_assert_run_result, queue_assert_run, with_default_runtime_config
 from app.services.vcon_interop import vcon_dialog_turns
+from app.services.vcon_evidence import build_benchmark_vcon, intake_vcon
 
 BenchmarkScenario = dict[str, Any]
 BenchmarkSuite = dict[str, Any]
@@ -535,6 +536,7 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, A
     run_started_at = datetime.now(UTC).isoformat()
     payload = _payload_to_dict(request)
     payload, _ = normalize_assert_payload(payload)
+    payload, vcon_intake = intake_vcon(payload)
     suite_id = _first_string(payload, 'suite_id', 'suiteId')
     scenario_id = _first_string(payload, 'scenario_id', 'scenarioId')
     if not suite_id or not scenario_id:
@@ -553,6 +555,12 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, A
     logical_run_id = _logical_run_id(suite_id, scenario_id, evidence_artifacts, run_metadata)
     run_id = _run_id(suite_id, scenario_id, evidence_artifacts, run_metadata, lifecycle_context)
     scenario_contract = _scenario_contract(scenario)
+    imported_profile = vcon_intake.get('profile')
+    if imported_profile:
+        from app.services.vcon_evidence import decode_evidence
+        context = (decode_evidence(payload['vcon']) or {}).get('context', {})
+        if context.get('scenario_contract_sha256') and context['scenario_contract_sha256'] != _stable_digest(scenario_contract):
+            raise ValueError('The vCon scenario contract differs from the current scenario; select matching evidence or regenerate it')
     suite_contract_manifest = get_suite_contract_manifest(suite_id)
     suite_contract_manifest_sha256 = str(suite_contract_manifest['suite_contract_manifest_sha256']) if suite_contract_manifest else ''
 
@@ -612,6 +620,7 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, A
             assert_manifest=assert_manifest,
         ),
         'overall_score': overall_score,
+        'vcon_intake_summary': vcon_intake,
         'score': overall_score,
         'verdict': verdict,
         'required_action_score': assert_fields['required_action_score'],
@@ -641,6 +650,7 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, A
     report['assert_lab_report'] = _assert_lab_report(report)
     report['vcon_analysis'] = _vcon_analysis(report)
     report['vcon_export'] = _vcon_export(payload, transcript, report['vcon_analysis'])
+    report['ietf_vcon_export'] = build_benchmark_vcon(payload, transcript, report) if transcript else None
     return report
 
 
@@ -778,6 +788,9 @@ def _execute_assert_contract(
 ) -> AssertResultManifest:
     scoring_text = '\n'.join(item for item in (transcript, _action_evidence_text(payload)) if item)
     completed_actions = _completed_actions(scoring_text, scenario['required_actions'])
+    # Explicit execution failures or unfinished invocations outrank spoken claims.
+    incomplete = _failed_required_actions(payload.get('action_trace'), scenario['required_actions'])
+    completed_actions = [action for action in completed_actions if action not in incomplete]
     forbidden_hits = _forbidden_hits(scoring_text, scenario['forbidden_actions'])
     rubric_checks = _rubric_checks(transcript, scenario['rubric'])
     required_score = round((len(completed_actions) / len(scenario['required_actions'])) * 100)
@@ -1144,6 +1157,10 @@ def simulate_scenario(request: Any) -> dict[str, Any]:
         }
     )
     benchmark_report['simulation_validation'] = simulation_validation
+    benchmark_report['ietf_vcon_export'] = build_benchmark_vcon(
+        {'suite_id': suite_id, 'scenario_id': scenario_id, 'action_trace': action_trace, 'final_state': final_state},
+        transcript, benchmark_report, synthetic=True,
+    )
     benchmark_report['vcon_analysis'] = _vcon_analysis(benchmark_report)
     benchmark_report['vcon_export'] = _vcon_export(
         {

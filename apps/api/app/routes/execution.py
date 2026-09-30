@@ -8,6 +8,7 @@ import json
 import os
 import secrets
 import time
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
@@ -15,7 +16,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
@@ -537,6 +538,44 @@ def get_conversation_recording(
     if legacy_path.is_relative_to(root) and legacy_path.is_file():
         return FileResponse(legacy_path, media_type='audio/wav')
     raise HTTPException(status_code=404, detail='Conversation recording not found.')
+
+
+@router.get('/runs/{execution_run_id}/conversations/{conversation_id}/vcon')
+def download_conversation_vcon(
+    execution_run_id: str, conversation_id: str, user_id: str = Query(...),
+    include_audio: bool = Query(False),
+):
+    """Opt-in, bounded inline media; never dereference remote or arbitrary paths."""
+    run = execution_run_store.get_execution_run(execution_run_id)
+    if run is None or run.get('user_id') != user_id:
+        raise HTTPException(status_code=404, detail='Execution run not found.')
+    conversation = execution_run_store.get_conversation(execution_run_id, conversation_id)
+    exported = deepcopy((conversation or {}).get('ietf_vcon_export'))
+    if not isinstance(exported, dict):
+        raise HTTPException(status_code=404, detail='Portable conversation evidence not found.')
+    if include_audio:
+        recording = (conversation or {}).get('recording') or {}
+        uri = str(recording.get('uri') or recording.get('recording_url') or '')
+        root = (execution_run_store.RUNS_DIR / execution_run_id).resolve()
+        path = Path(uri).resolve() if uri and '://' not in uri and not uri.startswith('/api/') else None
+        if path is None or not path.is_relative_to(root) or not path.is_file():
+            raise HTTPException(status_code=422, detail='No local recording available for inline export; use the default export for portable remote media.')
+        limit = 20 * 1024 * 1024
+        with path.open('rb') as stream:
+            audio = stream.read(limit + 1)
+        if len(audio) > limit:
+            raise HTTPException(status_code=413, detail='Inline recording exceeds the 20 MB limit.')
+        metadata = recording.get('metadata') or {}
+        scope = str(metadata.get('scope') or '')
+        item = {'type': 'recording', 'parties': [1] if 'target' in scope else [0] if 'caller' in scope else [0, 1],
+                'mediatype': str(recording.get('mime_type') or 'audio/wav'), 'encoding': 'base64url',
+                'body': base64.urlsafe_b64encode(audio).decode('ascii').rstrip('='),
+                'content_hash': base64.urlsafe_b64encode(hashlib.sha512(audio).digest()).decode('ascii').rstrip('=')}
+        exported.setdefault('dialog', []).append(item)
+        for analysis in exported.get('analysis') or []:
+            if analysis.get('schema') == 'cae-execution-evidence-v1':
+                analysis['body']['recording'] = {'status': 'inline', 'dialog': len(exported['dialog']) - 1}
+    return JSONResponse(exported, headers={'Content-Disposition': 'attachment; filename="conversation.vcon"'})
 
 
 def _listener_run_or_403(token: str) -> tuple[dict[str, Any], dict[str, Any]]:
