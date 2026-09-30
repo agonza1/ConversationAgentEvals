@@ -545,6 +545,8 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
         if target in {'openai_codex', 'builtin_sample_voice'}:
             model_name = effective_reference_model_name(model_name)
         tester_model_name = payload.tester_model_name
+        if not tester_model_name and target in {'pipecat_public_demo', 'signalwire_holy_guacamole'}:
+            tester_model_name = default_reference_model_name()
         if tester_model_name:
             tester_model_name = effective_reference_model_name(tester_model_name)
         max_exchanges = _resolve_max_exchanges_for_target(payload, target=target)
@@ -568,6 +570,8 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
     if target in {'openai_codex', 'builtin_sample_voice'}:
         model_name = effective_reference_model_name(model_name)
     tester_model_name = payload.tester_model_name
+    if not tester_model_name and target in {'pipecat_public_demo', 'signalwire_holy_guacamole'}:
+        tester_model_name = default_reference_model_name()
     if tester_model_name:
         tester_model_name = effective_reference_model_name(tester_model_name)
     max_exchanges = _resolve_max_exchanges_for_target(payload, target=target)

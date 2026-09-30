@@ -4,6 +4,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   let polled = 0;
   let voicePreflightReady = true;
   let oauthConnected = true;
+  let apiKeyPreferred = false;
 
   await page.route('**/api/benchmarks/suites**', async (route) => {
     if (route.request().url().includes('/contract-manifest')) {
@@ -79,6 +80,8 @@ test('launch evaluation streams conversations into the live list', async ({ page
         body: JSON.stringify({
           status: oauthConnected ? 'connected' : 'disconnected',
           provider: 'openai_codex',
+          execution_provider: apiKeyPreferred || !oauthConnected ? 'openai_compatible' : 'openai_codex',
+          execution_default_model: apiKeyPreferred || !oauthConnected ? 'gpt-4.1-mini' : 'gpt-6-luna',
         }),
       });
       return;
@@ -689,6 +692,18 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect(launch.getByLabel('Execution model')).toHaveValue('gpt-4.1-mini');
   await launch.getByRole('button', { name: 'Run evaluation' }).click();
   await expect.poll(() => textPostAttempts.length).toBe(4);
+  expect(textPostAttempts.at(-1)).toMatchObject({
+    agent_id: 'generalist-text-agent',
+    model_name: 'gpt-4.1-mini',
+  });
+
+  oauthConnected = true;
+  apiKeyPreferred = true;
+  await page.reload();
+  await launch.getByLabel('Execution agent target').selectOption('generalist-text-agent');
+  await expect(launch.getByLabel('Execution model')).toHaveValue('gpt-4.1-mini');
+  await launch.getByRole('button', { name: 'Run evaluation' }).click();
+  await expect.poll(() => textPostAttempts.length).toBe(5);
   expect(textPostAttempts.at(-1)).toMatchObject({
     agent_id: 'generalist-text-agent',
     model_name: 'gpt-4.1-mini',

@@ -146,7 +146,15 @@ def start_openai_oauth() -> dict[str, Any]:
 
 
 def openai_provider_status() -> dict[str, Any]:
-    return _openai_provider_status()
+    from app.services.reference_generalist_agent import (
+        configured_reference_completion_provider,
+        default_reference_model_name,
+    )
+
+    status = dict(_openai_provider_status())
+    status['execution_provider'] = configured_reference_completion_provider('gpt-4.1-mini').provider_id
+    status['execution_default_model'] = default_reference_model_name()
+    return status
 
 
 def disconnect_openai_provider() -> dict[str, Any]:

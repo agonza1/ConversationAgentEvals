@@ -275,6 +275,8 @@ interface OpenAIProviderStatus {
   plan_type?: string | null;
   message?: string | null;
   last_error?: string | null;
+  execution_provider?: string | null;
+  execution_default_model?: string | null;
 }
 
 const DEFAULT_EXECUTION_MODEL = 'gpt-4.1-mini';
@@ -2605,7 +2607,7 @@ export function BenchmarkRunner({
   useEffect(() => {
     let active = true;
     async function loadExecutionModels() {
-      if (openaiProvider?.status !== 'connected') {
+      if (openaiProvider?.status !== 'connected' || openaiProvider?.execution_provider !== 'openai_codex') {
         setExecutionModelOptions([DEFAULT_EXECUTION_MODEL, ...LOCAL_EXECUTION_MODELS]);
         setExecutionModelsMessage('Connect OpenAI to load GPT models; local Ollama models stay available.');
         setExecutionModelName((current) => LOCAL_EXECUTION_MODELS.includes(current) ? current : DEFAULT_EXECUTION_MODEL);
@@ -2628,7 +2630,7 @@ export function BenchmarkRunner({
     return () => {
       active = false;
     };
-  }, [openaiProvider?.status]);
+  }, [openaiProvider?.status, openaiProvider?.execution_provider]);
 
   useEffect(() => {
     let active = true;
@@ -3141,6 +3143,12 @@ export function BenchmarkRunner({
           setOpenaiProviderMessage(`Connected as ${status.email || status.account_id || 'OpenAI account'}.`);
           const nextConfig = await fetchProductConfig().catch(() => null);
           if (nextConfig) setProductConfig(nextConfig);
+          if (status.execution_provider !== 'openai_codex') {
+            setExecutionModelOptions([DEFAULT_EXECUTION_MODEL, ...LOCAL_EXECUTION_MODELS]);
+            setExecutionModelsMessage('API key is the active execution provider.');
+            setExecutionModelName(DEFAULT_EXECUTION_MODEL);
+            break;
+          }
           const { models, message } = await fetchOpenAIModels().catch(() => ({
             models: FALLBACK_EXECUTION_MODELS,
             message: 'Using built-in model list. Re-connect OpenAI to refresh.',

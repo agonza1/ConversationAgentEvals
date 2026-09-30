@@ -124,6 +124,20 @@ def test_openai_provider_status_and_oauth_start_disconnect():
     assert fake.disconnected is True
 
 
+def test_status_reports_api_key_execution_precedence_even_with_oauth_connected(monkeypatch):
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-key')
+    set_provider_for_tests('openai', FakeOpenAIProvider(connected=True))
+    try:
+        response = client.get('/api/product/providers/openai/status')
+    finally:
+        set_provider_for_tests('openai', None)
+
+    assert response.status_code == 200
+    assert response.json()['status'] == 'connected'
+    assert response.json()['execution_provider'] == 'openai_compatible'
+    assert response.json()['execution_default_model'] == 'gpt-4.1-mini'
+
+
 def test_llm_judge_blocks_without_provider_and_runs_when_connected(tmp_path, monkeypatch):
     from app.services import product_service
 
