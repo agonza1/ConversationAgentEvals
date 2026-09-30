@@ -78,11 +78,13 @@ KOKORO_BASE_URL=http://localhost:8880
 KOKORO_MODEL=kokoro
 KOKORO_TESTER_VOICE=af_heart
 KOKORO_TARGET_VOICE=af_bella
-REFERENCE_LLM_MODEL=gpt-6-luna
-REFERENCE_TESTER_LLM_MODEL=gpt-6-luna
+REFERENCE_LLM_MODEL=
+REFERENCE_TESTER_LLM_MODEL=
 OLLAMA_BASE_URL=http://localhost:11434
 REFERENCE_OLLAMA_MODEL=gemma2:2b
 ```
+
+Leave the reference model overrides blank to use GPT-6 Luna with Codex OAuth or GPT-4.1 Mini with an API key.
 
 The built-in generalist voice target is a real local streaming pipeline:
 Pipecat tester → adaptive streaming Kokoro caller audio → Silero + rtc-asr →
