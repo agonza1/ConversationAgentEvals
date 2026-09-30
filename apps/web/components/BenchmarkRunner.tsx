@@ -277,10 +277,11 @@ interface OpenAIProviderStatus {
   last_error?: string | null;
 }
 
-const DEFAULT_EXECUTION_MODEL = 'gpt-6-luna';
+const DEFAULT_EXECUTION_MODEL = 'gpt-4.1-mini';
+const DEFAULT_CODEX_EXECUTION_MODEL = 'gpt-6-luna';
 const LOCAL_EXECUTION_MODELS = ['ollama/gemma2:2b'];
 const FALLBACK_EXECUTION_MODELS = [
-  'gpt-6-luna',
+  DEFAULT_CODEX_EXECUTION_MODEL,
   ...LOCAL_EXECUTION_MODELS,
   'gpt-5.6-luna',
 ];
@@ -306,10 +307,10 @@ async function fetchOpenAIModels(): Promise<{ models: string[]; message: string 
   const ids = (payload.models ?? [])
     .map((item) => (typeof item === 'string' ? item : item.id))
     .filter((id): id is string => Boolean(id && id.trim() && !id.trim().split('-').includes('sol')));
-  const merged = Array.from(new Set([DEFAULT_EXECUTION_MODEL, ...LOCAL_EXECUTION_MODELS, ...ids]));
+  const merged = Array.from(new Set([DEFAULT_CODEX_EXECUTION_MODEL, ...LOCAL_EXECUTION_MODELS, ...ids]));
   merged.sort((a, b) => {
-    if (a === DEFAULT_EXECUTION_MODEL) return -1;
-    if (b === DEFAULT_EXECUTION_MODEL) return 1;
+    if (a === DEFAULT_CODEX_EXECUTION_MODEL) return -1;
+    if (b === DEFAULT_CODEX_EXECUTION_MODEL) return 1;
     return a.localeCompare(b);
   });
   return {
@@ -2605,9 +2606,9 @@ export function BenchmarkRunner({
     let active = true;
     async function loadExecutionModels() {
       if (openaiProvider?.status !== 'connected') {
-        setExecutionModelOptions([DEFAULT_EXECUTION_MODEL, ...FALLBACK_EXECUTION_MODELS.filter((id) => id !== DEFAULT_EXECUTION_MODEL)]);
+        setExecutionModelOptions([DEFAULT_EXECUTION_MODEL, ...LOCAL_EXECUTION_MODELS]);
         setExecutionModelsMessage('Connect OpenAI to load GPT models; local Ollama models stay available.');
-        setExecutionModelName((current) => current || DEFAULT_EXECUTION_MODEL);
+        setExecutionModelName((current) => LOCAL_EXECUTION_MODELS.includes(current) ? current : DEFAULT_EXECUTION_MODEL);
         return;
       }
       try {
@@ -2615,12 +2616,12 @@ export function BenchmarkRunner({
         if (!active) return;
         setExecutionModelOptions(models);
         setExecutionModelsMessage(message);
-        setExecutionModelName((current) => (models.includes(current) ? current : DEFAULT_EXECUTION_MODEL));
+        setExecutionModelName((current) => (current !== DEFAULT_EXECUTION_MODEL && models.includes(current) ? current : DEFAULT_CODEX_EXECUTION_MODEL));
       } catch {
         if (!active) return;
         setExecutionModelOptions(FALLBACK_EXECUTION_MODELS);
         setExecutionModelsMessage('Using built-in model list. Re-connect OpenAI to refresh.');
-        setExecutionModelName((current) => current || DEFAULT_EXECUTION_MODEL);
+        setExecutionModelName((current) => (current !== DEFAULT_EXECUTION_MODEL && FALLBACK_EXECUTION_MODELS.includes(current) ? current : DEFAULT_CODEX_EXECUTION_MODEL));
       }
     }
     void loadExecutionModels();
@@ -3146,7 +3147,7 @@ export function BenchmarkRunner({
           }));
           setExecutionModelOptions(models);
           setExecutionModelsMessage(message);
-          setExecutionModelName((current) => (models.includes(current) ? current : DEFAULT_EXECUTION_MODEL));
+          setExecutionModelName((current) => (current !== DEFAULT_EXECUTION_MODEL && models.includes(current) ? current : DEFAULT_CODEX_EXECUTION_MODEL));
           break;
         }
       }

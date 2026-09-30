@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test';
 test('launch evaluation streams conversations into the live list', async ({ page }) => {
   let polled = 0;
   let voicePreflightReady = true;
+  let oauthConnected = true;
 
   await page.route('**/api/benchmarks/suites**', async (route) => {
     if (route.request().url().includes('/contract-manifest')) {
@@ -76,7 +77,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          status: 'connected',
+          status: oauthConnected ? 'connected' : 'disconnected',
           provider: 'openai_codex',
         }),
       });
@@ -681,6 +682,17 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await blockedLaunch.getByLabel('Execution agent target').selectOption('generalist-voice-agent');
   await expect(blockedLaunch.getByLabel('Run Agent voice preflight blocked')).toContainText('Set OPENAI_API_KEY');
   await expect(blockedLaunch.getByRole('button', { name: 'Run evaluation' })).toBeDisabled();
+
+  oauthConnected = false;
+  await page.reload();
+  await launch.getByLabel('Execution agent target').selectOption('generalist-text-agent');
+  await expect(launch.getByLabel('Execution model')).toHaveValue('gpt-4.1-mini');
+  await launch.getByRole('button', { name: 'Run evaluation' }).click();
+  await expect.poll(() => textPostAttempts.length).toBe(4);
+  expect(textPostAttempts.at(-1)).toMatchObject({
+    agent_id: 'generalist-text-agent',
+    model_name: 'gpt-4.1-mini',
+  });
 });
 
 test('saved ACC evidence is not offered as a Run Agent target', async ({ page }) => {
