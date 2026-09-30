@@ -8,6 +8,7 @@ from app.services.benchmark_service import get_suite, run_scenario
 from app.services.execution_vcon import build_ietf_execution_vcon
 from app.services.vcon_evidence import (
     PURPOSE, attach_evidence, build_benchmark_vcon, decode_evidence, evidence_body, intake_vcon,
+    latest_tool_events,
 )
 
 
@@ -152,6 +153,79 @@ def test_lifecycle_reducer_uses_capture_sequence_not_array_order():
     assert loaded['action_trace'][0]['status'] == 'success'
     with pytest.raises(ValueError, match='Conflicting scenario_id'):
         intake_vcon({'vcon': vcon, 'scenarioId': 'other'})
+
+
+def test_interleaved_calls_are_reduced_in_terminal_sequence_order():
+    events = [
+        {'call_id': 'a', 'name': 'lookup', 'sequence': 3, 'status': 'success'},
+        {'call_id': 'b', 'name': 'update', 'sequence': 2, 'status': 'success'},
+        {'call_id': 'a', 'name': 'lookup', 'sequence': 1, 'status': 'requested'},
+    ]
+    assert [e['call_id'] for e in latest_tool_events(events)] == ['b', 'a']
+
+
+def test_interleaved_workflow_scores_completion_order_on_direct_and_replay():
+    payload = sample()
+    first, second, *remaining = payload['action_trace']
+    payload['action_trace'] = [
+        {**first, 'call_id': 'a', 'sequence': 1, 'status': 'requested'},
+        {**second, 'call_id': 'b', 'sequence': 2},
+        {**first, 'call_id': 'a', 'sequence': 3},
+        *[{**action, 'sequence': i} for i, action in enumerate(remaining, start=4)],
+    ]
+    original = run_scenario(payload, persist_artifacts=False)
+    assert [e['call_id'] for e in original['action_trace'][:2]] == ['b', 'a']
+    assert original['workflow_order_score'] == 0
+    assert original['workflow_order_issues']
+    assert original['verdict'] == 'needs_review'
+    replay = run_scenario({'vcon': original['ietf_vcon_export']}, persist_artifacts=False)
+    for key in ('workflow_order_score', 'workflow_order_issues', 'verdict', 'score_components'):
+        assert original[key] == replay[key], key
+
+
+@pytest.mark.parametrize('fields', [('action_trace',), ('final_state',), ('action_trace', 'final_state')])
+def test_structured_only_run_exports_and_replays_portable_evidence(fields):
+    payload = sample()
+    payload.pop('transcript')
+    for field in ('action_trace', 'final_state'):
+        if field not in fields:
+            payload.pop(field)
+    original = run_scenario(payload, persist_artifacts=False)
+    vcon = original['ietf_vcon_export']
+    assert vcon is not None
+    assert vcon['vcon'] == '0.4.0'
+    assert vcon['dialog'] == []
+    body = decode_evidence(vcon)
+    assert len(body['tool_events']) == len(payload.get('action_trace', []))
+    assert len(body['state_snapshots']) == int('final_state' in fields)
+    assert 'dialog' not in vcon['attachments'][0]
+    replay = run_scenario({'vcon': vcon}, persist_artifacts=False)
+    for key in ('overall_score', 'verdict', 'task_completion_score', 'final_state_score',
+                'completed_actions', 'missing_actions', 'score_components'):
+        assert original.get(key) == replay.get(key), key
+
+
+def test_saved_structured_only_run_download_uses_portable_profile():
+    payload = sample()
+    payload.pop('transcript')
+    payload.update(user_id='structured-vcon-owner', project_id='structured-vcon-test')
+    client = TestClient(app)
+    response = client.post('/api/benchmarks/run', json=payload)
+    assert response.status_code == 200
+    original = response.json()
+    url = f"/api/benchmarks/runs/{original['run_id']}/vcon"
+    assert client.get(url, params={'user_id': 'other-owner'}).status_code == 404
+    download = client.get(url, params={'user_id': payload['user_id']})
+    assert download.status_code == 200
+    vcon = download.json()['record']
+    assert vcon['vcon'] == '0.4.0'
+    assert vcon['dialog'] == []
+    body = decode_evidence(vcon)
+    assert len(body['tool_events']) == len(payload['action_trace'])
+    assert body['state_snapshots'][0]['state'] == payload['final_state']
+    replay = run_scenario({'vcon': vcon}, persist_artifacts=False)
+    assert replay['score_components'] == original['score_components']
+    assert replay['verdict'] == original['verdict']
 
 
 def test_state_snapshots_preserve_before_after_and_require_unambiguous_final():

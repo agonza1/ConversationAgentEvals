@@ -326,7 +326,7 @@ def latest_tool_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if event['call_id'] in latest and latest[event['call_id']]['name'] != event['name']:
             raise ValueError('An invocation ID cannot refer to different action names')
         latest[event['call_id']] = event
-    return list(latest.values())
+    return sorted(latest.values(), key=lambda e: e['sequence'])
 
 
 def build_benchmark_vcon(payload: dict[str, Any], transcript: str, report: dict[str, Any] | None = None,
