@@ -109,7 +109,7 @@ dropdown:
 ollama pull gemma2:2b
 OLLAMA_BASE_URL=http://localhost:11434
 REFERENCE_OLLAMA_MODEL=gemma2:2b
-REFERENCE_TESTER_LLM_MODEL=gpt-6-luna
+REFERENCE_TESTER_LLM_MODEL=
 ```
 
 The configuration above keeps an independent GPT tester and therefore still
