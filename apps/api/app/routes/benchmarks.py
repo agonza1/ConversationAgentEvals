@@ -46,6 +46,25 @@ class VconIntakeRequest(BaseModel):
     vcon: dict[str, Any]
 
 
+class TelemetryVconRequest(BaseModel):
+    format: str
+    data: dict[str, Any]
+    transcript: str = ''
+    suite_id: str | None = None
+    scenario_id: str | None = None
+    final_state: dict[str, Any] | None = None
+    synthetic: bool = False
+
+
+@router.post('/evidence/telemetry-vcon')
+def source_telemetry_vcon(payload: TelemetryVconRequest):
+    from app.services.voice_telemetry_vcon import build_telemetry_vcon
+    try:
+        return build_telemetry_vcon(**payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post('/evidence/intake')
 def inspect_vcon_evidence(payload: VconIntakeRequest):
     from app.services.vcon_evidence import intake_vcon

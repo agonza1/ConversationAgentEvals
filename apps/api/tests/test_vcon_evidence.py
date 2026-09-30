@@ -208,3 +208,47 @@ def test_unknown_critical_extension_and_duplicate_sequence_rejected():
     events[1]['sequence'] = events[0]['sequence']
     with pytest.raises(ValueError, match='sequence'):
         intake_vcon({'vcon': vcon})
+
+
+@pytest.mark.parametrize('statusless', [False, True])
+def test_direct_lifecycle_and_statusless_trace_have_identical_replay(statusless):
+    payload = sample()
+    action = payload['action_trace'][0]
+    if statusless:
+        action.pop('status', None)
+    else:
+        action['call_id'] = 'call'
+        action['sequence'] = 2
+        payload['action_trace'].insert(0, {**action, 'status': 'requested', 'sequence': 1})
+        for i, other in enumerate(payload['action_trace'][2:], start=3):
+            other['sequence'] = i
+    initial = run_scenario(payload, persist_artifacts=False)
+    replay = run_scenario({'vcon': initial['ietf_vcon_export']}, persist_artifacts=False)
+    for key in ('verdict', 'task_completion_score', 'final_state_score', 'missing_actions'):
+        assert initial[key] == replay[key]
+    assert action['action'] in initial['missing_actions'] if statusless else action['action'] not in initial['missing_actions']
+
+
+def test_successful_distinct_retry_satisfies_action_without_erasing_failure():
+    payload = sample()
+    original = payload['action_trace'][0]
+    original['call_id'] = 'retry'
+    failed = {**original, 'call_id': 'first', 'status': 'timeout'}
+    payload['action_trace'].insert(0, failed)
+    report = run_scenario(payload, persist_artifacts=False)
+    assert original['action'] not in report['missing_actions']
+    assert len(decode_evidence(report['ietf_vcon_export'])['tool_events']) == len(payload['action_trace'])
+    replay = run_scenario({'vcon': report['ietf_vcon_export']}, persist_artifacts=False)
+    assert replay['verdict'] == report['verdict']
+
+
+def test_profile_matches_published_json_schema():
+    import json
+    from pathlib import Path
+    from jsonschema import Draft202012Validator
+    repo = Path(__file__).resolve().parents[3]
+    schema = json.loads((repo / 'docs/schemas/cae-execution-evidence-v1.json').read_text())
+    Draft202012Validator.check_schema(schema)
+    payload = sample()
+    body = decode_evidence(build_benchmark_vcon(payload, payload['transcript']))
+    Draft202012Validator(schema).validate(body)

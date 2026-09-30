@@ -48,7 +48,23 @@ def redact(value: Any, path: str = '', removed: list[str] | None = None) -> Any:
             result[key] = redact(item, location, removed)
         return result
     if isinstance(value, list):
-        return [redact(item, f'{path}/{index}', removed) for index, item in enumerate(value)]
+        result = []
+        for index, item in enumerate(value):
+            location = f'{path}/{index}'
+            # OTLP uses KeyValue arrays rather than a plain attribute map.
+            if isinstance(item, dict) and isinstance(item.get('key'), str) and SECRET_KEYS.match(item['key']):
+                if removed is not None:
+                    removed.append(location)
+                continue
+            result.append(redact(item, location, removed))
+        return result
+    if isinstance(value, str) and value.lstrip().startswith(('{', '[')):
+        try:
+            structured = json.loads(value)
+        except ValueError:
+            return value
+        cleaned = redact(structured, path, removed)
+        return _json(cleaned) if cleaned != structured else value
     return deepcopy(value)
 
 
@@ -64,7 +80,7 @@ def _status(raw: Any, event_type: str = '') -> str:
         return 'cancelled'
     if status in {'timeout', 'timed_out'}:
         return 'timeout'
-    return status if status in {'requested', 'running', 'pending', 'unknown'} else 'unknown'
+    return status if status in {'requested', 'running', 'pending', 'unknown', 'observed'} else 'unknown'
 
 
 def tool_events(action_trace: Any, *, source: str) -> list[dict[str, Any]]:
@@ -74,8 +90,9 @@ def tool_events(action_trace: Any, *, source: str) -> list[dict[str, Any]]:
         event_type = str(raw.get('event_type') or '')
         identity = str(raw.get('event_id') or hashlib.sha256(_json([index, raw]).encode()).hexdigest()[:24])
         event = {
+            **raw,  # Keep contract-relevant act_id/event_types and provider metadata.
             'event_id': identity, 'sequence': raw.get('sequence', index + 1),
-            'event_type': event_type or 'tool_call.result',
+            'event_type': event_type or ('action.observed' if _status(action.status) == 'observed' else 'tool_call.result'),
             'call_id': str(raw.get('call_id') or raw.get('tool_call_id') or identity),
             'name': action.name, 'arguments': action.arguments, 'result': action.result,
             'status': _status(action.status, event_type), 'source': str(raw.get('source') or source),
@@ -222,8 +239,10 @@ def decode_evidence(vcon: dict[str, Any]) -> dict[str, Any] | None:
                 raise ValueError('Tool events require a name and call_id')
             if type(event.get('sequence')) is not int or event['sequence'] < 1:
                 raise ValueError('Tool events require a positive capture sequence')
-            if event.get('status') not in {'success', 'error', 'cancelled', 'timeout', 'requested', 'running', 'pending', 'unknown'}:
+            if event.get('status') not in {'success', 'error', 'cancelled', 'timeout', 'requested', 'running', 'pending', 'unknown', 'observed'}:
                 raise ValueError('Invalid tool event status')
+            if event.get('status') == 'observed' and event.get('event_type') != 'action.observed':
+                raise ValueError('Observed action labels are not tool execution success')
             if not isinstance(event.get('arguments'), dict) or not isinstance(event.get('source'), str):
                 raise ValueError('Tool events require argument and source metadata')
             if 'result' not in event:
@@ -266,18 +285,7 @@ def intake_vcon(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]
         for key in ('suite_id', 'scenario_id'):
             if context.get(key):
                 recovered[key] = context[key]
-        events = body['tool_events']
-        # Sequence is an explicit capture-order key. Do not guess from missing timestamps.
-        if events and all(type(e.get('sequence')) is int for e in events):
-            if len({e['sequence'] for e in events}) != len(events):
-                raise ValueError('Duplicate tool event sequence')
-            events.sort(key=lambda e: e['sequence'])
-        # Each invocation contributes its latest observation to scoring. Retain
-        # every lifecycle event in the attachment for the timeline.
-        latest: dict[str, Any] = {}
-        for event in events:
-            latest[event['call_id']] = event
-        recovered['action_trace'] = list(latest.values())
+        recovered['action_trace'] = latest_tool_events(body['tool_events'])
         recovered['observed_actions'] = body['observed_actions']
         recovered['final_state'] = next((s['state'] for s in body['state_snapshots'] if s.get('phase') == 'final'), {})
     for key, value in recovered.items():
@@ -302,9 +310,23 @@ def intake_vcon(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]
                'voice_events': len(body['voice_events']) if body else 0,
                'redactions': body['redactions'] if body else [],
                'trust': 'source-reported; not independently authenticated',
-               'evidence_level': 'state_observed' if body and recovered.get('final_state') else
+               'evidence_level': 'state_observed' if body and body['state_snapshots'] else
                'tools_observed' if body and body['tool_events'] else 'transcript_only'}
     return normalized, summary
+
+
+def latest_tool_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Shared scoring reduction for direct traces and portable replay."""
+    if any(type(e.get('sequence')) is not int or e['sequence'] < 1 for e in events):
+        raise ValueError('Tool events require a positive capture sequence')
+    if len({e['sequence'] for e in events}) != len(events):
+        raise ValueError('Duplicate tool event sequence')
+    latest: dict[str, Any] = {}
+    for event in sorted(events, key=lambda e: e['sequence']):
+        if event['call_id'] in latest and latest[event['call_id']]['name'] != event['name']:
+            raise ValueError('An invocation ID cannot refer to different action names')
+        latest[event['call_id']] = event
+    return list(latest.values())
 
 
 def build_benchmark_vcon(payload: dict[str, Any], transcript: str, report: dict[str, Any] | None = None,

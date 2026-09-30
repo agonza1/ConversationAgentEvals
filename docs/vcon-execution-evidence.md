@@ -37,3 +37,36 @@ Import is **source-reported, not independently authenticated**. A successful too
 ## Acceptance checks
 
 The API suite covers complete export/import score equality, conflicting evidence, failures/cancellations/timeouts, historical false success, unknown content, redaction, synthetic labelling and actual adapter observations. The browser upload test loads both samples, evaluates, downloads a full vCon, reuploads it and reproduces Task/Final scores, then confirms edited transcript cannot retain the sample's structured evidence.
+
+Direct action traces and imported vCons now use the same invocation reducer before scoring. A request followed by a success is not a permanent failure; a statusless action remains unknown, not a claimed completed execution. Contract-relevant action IDs and event labels are preserved in the exported profile.
+Explicit `status: observed` application events (for example ACC policy-hold events) retain `event_type: action.observed`; they are reported action observations, not successful tool executions. Their contract semantics remain unchanged.
+
+## Provider telemetry alignment (researched after the initial PR push)
+
+There is no universal native voice-agent event format. [Pipecat uses conversation/turn/service OpenTelemetry spans](https://docs.pipecat.ai/api-reference/server/utilities/opentelemetry) and a [FunctionCallEvent lifecycle](https://docs.pipecat.ai/api-reference/server/utilities/observers/function-call-observer). [LiveKit supports OpenTelemetry with `gen_ai.*` and `lk.*` attributes](https://docs.livekit.io/testing/observability/tracing/) and [local SessionReport exports](https://docs.livekit.io/testing/observability/data/). [Vapi stores messages, tool calls/results and derived analysis separately](https://docs.vapi.ai/observability/logs/call-logs). The shared direction is to retain native detail and correlate it, not flatten every platform into invented business events.
+
+`POST /api/benchmarks/evidence/telemetry-vcon` accepts `format`, `data`, optional `transcript`, `suite_id`, `scenario_id`, `final_state` and `synthetic`. It returns a portable vCon ready for the existing upload/Evaluate flow. The native data is preserved as a standard JSON attachment with purpose `Source telemetry (<format>)`, after credential/path redaction. The scoring projection is a separate profile attachment. No provider SDK, collector, webhook endpoint registration or remote fetch is installed by this feature.
+Runtime adapters can also return `source_telemetry: {format, data}`; the common execution exporter adds that native attachment and projected voice observations. Native tool events fill an absent action trace but never blend with or double-count an explicit adapter trace. Existing live targets without native telemetry are not automatically instrumented by this ingestion seam.
+
+| Input format | Projection and constraints |
+| --- | --- |
+| `otlp-json-v1` | Standard JSON ExportTraceServiceRequest (`resourceSpans/scopeSpans/spans`). Preserve resource/scope/schema URLs, trace/span/parent IDs and native attributes. Project `execute_tool` with `gen_ai.tool.name`, `gen_ai.tool.call.id`, arguments/result; also Pipecat's `llm_tool_call/llm_tool_result` with `tool.*`. Explicit tool result status or span OK plus an observed result is needed for success; unset status is unknown. Related lifecycle spans are ordered by reported observation nanoseconds, never OTLP batch order. `metrics.ttfb` is seconds; duration is explicitly milliseconds. |
+| `pipecat-function-events-v1` | `{events: [FunctionCallEvent...]}` in callback capture order. Preserve `tool_call_id`, group/blocking metadata and arguments across started/in-progress/completed/failed/timed-out/cancelled moments. Unix timestamps are seconds. Completed can omit result when the observer did not capture it; this is handler completion, not business-state verification. |
+| `livekit-session-report-v1` | Python `SessionReport.to_dict()` with `chat_history.items`. Preserve SDK/job/session metadata and native events. Correlate function_call and function_call_output by call_id; require explicit is_error. Preserve per-turn metrics with explicit duration units (seconds). Do not treat generated assistant text or the SDK's playback_latency as proof the human heard it. Node's different camelCase/millisecond report is not silently interpreted as Python. |
+| `vapi-call-v1` | Vapi Call object with artifact messages/transcript. Preserve native tool/message/artifact/analysis fields but do not promote successEvaluation or model-extracted structured data to observed actions or final business state. Tool result normalization needs an explicit integration contract; opaque messages remain inspectable voice observations. |
+
+The OpenTelemetry GenAI tool attributes are a developing convention, not a final voice-agent standard: see [the official attribute registry](https://opentelemetry.io/docs/specs/semconv/registry/attributes/gen-ai/). Vendor-native attachments therefore remain the loss-aware source of detail. Unknown versions/unsupported shapes fail validation; import/export does not rewrite them into pretend native OTLP spans. The converter is bounded at 2 MB and 10,000 observed items.
+
+Credentials in OTLP KeyValue arrays and serialized JSON arguments are covered by the same loss-reporting policy. This is still not automatic PII redaction: LiveKit `lk.pii.*` content and any native payload containing transcripts/person identifiers require the producer's configured privacy policy. Strip/redact upstream as appropriate; do not claim complete telemetry when content capture is disabled.
+
+Example request (native data is not a fabricated successful state):
+
+```json
+{
+  "format": "pipecat-function-events-v1",
+  "suite_id": "call-center-voice-ai",
+  "scenario_id": "billing-address-change",
+  "transcript": "Caller: Please update my address.\nAgent: Let me check.",
+  "data": {"events": [{"kind": "function_call_started", "function_name": "update_address", "tool_call_id": "call-1", "timestamp": 1790784000, "arguments": {"account_id": "example"}}]}
+}
+```

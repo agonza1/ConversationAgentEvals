@@ -20,7 +20,7 @@
           "sequence": {"type": "integer", "minimum": 1},
           "name": {"type": "string", "minLength": 1},
           "arguments": {"type": "object"},
-          "status": {"enum": ["success", "error", "cancelled", "timeout", "requested", "running", "pending", "unknown"]}
+          "status": {"enum": ["success", "error", "cancelled", "timeout", "requested", "running", "pending", "unknown", "observed"]}
         }
       }
     },

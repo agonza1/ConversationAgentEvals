@@ -537,6 +537,12 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, A
     payload = _payload_to_dict(request)
     payload, _ = normalize_assert_payload(payload)
     payload, vcon_intake = intake_vcon(payload)
+    # Normalize direct and imported traces identically. Preserve all lifecycle
+    # events for export while scoring the latest observation per invocation.
+    export_payload = deepcopy(payload)
+    if payload.get('action_trace'):
+        from app.services.vcon_evidence import latest_tool_events, tool_events
+        payload['action_trace'] = latest_tool_events(tool_events(payload['action_trace'], source='reported_observation'))
     suite_id = _first_string(payload, 'suite_id', 'suiteId')
     scenario_id = _first_string(payload, 'scenario_id', 'scenarioId')
     if not suite_id or not scenario_id:
@@ -650,7 +656,7 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, A
     report['assert_lab_report'] = _assert_lab_report(report)
     report['vcon_analysis'] = _vcon_analysis(report)
     report['vcon_export'] = _vcon_export(payload, transcript, report['vcon_analysis'])
-    report['ietf_vcon_export'] = build_benchmark_vcon(payload, transcript, report) if transcript else None
+    report['ietf_vcon_export'] = build_benchmark_vcon(export_payload, transcript, report) if transcript else None
     return report
 
 
@@ -2382,11 +2388,16 @@ def _citation_terms(value: str) -> list[str]:
 
 def _failed_required_actions(action_trace: Any, required_actions: list[Any]) -> list[str]:
     failure_statuses = {_normalized_action_status(value) for value in FAILURE_VALUES}
+    events = parse_action_trace(action_trace)
+    successful_names = {
+        _normalize_requirement(event.name) for event in events
+        if _normalized_action_status(event.status) in {'success', 'observed'}
+    }
     failed_names = {
         _normalize_requirement(event.name)
-        for event in parse_action_trace(action_trace)
+        for event in events
         if event.status is not None and _normalized_action_status(event.status) in failure_statuses
-    }
+    } - successful_names  # A successful distinct retry can satisfy the action.
     return [
         _describe_requirement(requirement)
         for requirement in required_actions

@@ -467,6 +467,7 @@ def _run_one_conversation(
             score=result.get('score'),
             action_trace=result.get('action_trace'),
             state_snapshots=result.get('state_snapshots'),
+            source_telemetry=result.get('source_telemetry'),
             live_events=current.get('live_events') or [],
             latency_marks=result.get('latency_marks') or [],
             synthetic=payload.mode == 'voice_fixture',

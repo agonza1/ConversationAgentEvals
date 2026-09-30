@@ -133,6 +133,7 @@ def build_ietf_execution_vcon(
     live_events: list[Any] | None = None,
     latency_marks: list[Any] | None = None,
     state_snapshots: list[dict[str, Any]] | None = None,
+    source_telemetry: dict[str, Any] | None = None,
     synthetic: bool = False,
 ) -> dict[str, Any]:
     """Build a portable IETF vCon without leaking CAE-only evidence fields.
@@ -237,6 +238,9 @@ def build_ietf_execution_vcon(
                  'suite_id': suite_id, 'scenario_id': scenario_id, 'mode': mode,
                  'completed_at': changed_at}, synthetic=synthetic,
     ))
+    if source_telemetry:
+        from app.services.voice_telemetry_vcon import attach_source_telemetry
+        exported = attach_source_telemetry(exported, source_telemetry)
     validation = validate_ietf_vcon(exported)
     if not validation['valid']:
         raise ValueError(
@@ -300,9 +304,16 @@ def validate_ietf_vcon(vcon_export: Any) -> dict[str, Any]:
             if item.get('mediatype') != 'text/plain':
                 errors.append(f'dialog[{index}] text mediatype must be text/plain')
         elif item.get('type') == 'recording':
-            parsed = urlparse(str(item.get('url') or ''))
-            if parsed.scheme != 'https':
-                errors.append(f'dialog[{index}] recording URL must use HTTPS')
+            if item.get('encoding') == 'base64url' and isinstance(item.get('body'), str):
+                try:
+                    data = item['body']
+                    base64.b64decode((data + '=' * (-len(data) % 4)).encode('ascii'), altchars=b'-_', validate=True)
+                except (UnicodeEncodeError, ValueError, binascii.Error):
+                    errors.append(f'dialog[{index}] recording body must be base64url')
+            else:
+                parsed = urlparse(str(item.get('url') or ''))
+                if parsed.scheme != 'https':
+                    errors.append(f'dialog[{index}] recording URL must use HTTPS')
             if not _is_sha512_base64url(item.get('content_hash')):
                 errors.append(
                     f'dialog[{index}] recording content_hash must be a base64url SHA-512 digest'
