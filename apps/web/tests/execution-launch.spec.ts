@@ -3,6 +3,8 @@ import { expect, test } from '@playwright/test';
 test('launch evaluation streams conversations into the live list', async ({ page }) => {
   let polled = 0;
   let voicePreflightReady = true;
+  let oauthConnected = true;
+  let apiKeyPreferred = false;
 
   await page.route('**/api/benchmarks/suites**', async (route) => {
     if (route.request().url().includes('/contract-manifest')) {
@@ -76,8 +78,10 @@ test('launch evaluation streams conversations into the live list', async ({ page
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({
-          status: 'connected',
+          status: oauthConnected ? 'connected' : 'disconnected',
           provider: 'openai_codex',
+          execution_provider: apiKeyPreferred || !oauthConnected ? 'openai_compatible' : 'openai_codex',
+          execution_default_model: apiKeyPreferred || !oauthConnected ? 'gpt-4.1-mini' : 'gpt-6-luna',
         }),
       });
       return;
@@ -555,7 +559,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
     mode: 'text_callable',
     text_callable: 'mock_agent',
     agent_id: 'mock-text-agent',
-    model_name: 'gpt-5.4-mini',
+    model_name: 'gpt-6-luna',
     tester_id: 'scenario_simulator',
     executor_id: 'local_async_runner',
     scenario_ids: ['billing-address-change', 'cancellation-rescue'],
@@ -594,7 +598,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await launch.getByLabel('Execution agent target').selectOption('generalist-voice-agent');
   await expect(launch.getByLabel('Execution tester')).toContainText('Scenario user (AI)');
   await expect(launch).toContainText('adapts to the target\'s responses');
-  await expect(launch.getByLabel('Execution model')).toHaveValue('gpt-5.4-mini');
+  await expect(launch.getByLabel('Execution model')).toHaveValue('gpt-6-luna');
   await expect(launch.getByLabel('Duplex session timeout')).toHaveValue('120');
   await launch.getByLabel('Maximum exchanges').fill('5');
   await launch.getByLabel('Duplex session timeout').fill('180');
@@ -609,7 +613,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
     suite_id: 'call-center-voice-ai',
     scenario_ids: ['billing-address-change'],
     max_exchanges: 5,
-    model_name: 'gpt-5.4-mini',
+    model_name: 'gpt-6-luna',
     duplex_timeout_seconds: 180,
   });
   await expect(launch.getByLabel('Run listener link')).toContainText('Available only while this run is active.');
@@ -681,6 +685,33 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await blockedLaunch.getByLabel('Execution agent target').selectOption('generalist-voice-agent');
   await expect(blockedLaunch.getByLabel('Run Agent voice preflight blocked')).toContainText('Set OPENAI_API_KEY');
   await expect(blockedLaunch.getByRole('button', { name: 'Run evaluation' })).toBeDisabled();
+
+  oauthConnected = false;
+  await page.reload();
+  await launch.getByLabel('Execution agent target').selectOption('generalist-text-agent');
+  await expect(launch.getByLabel('Execution model')).toHaveValue('gpt-4.1-mini');
+  await launch.getByRole('button', { name: 'Run evaluation' }).click();
+  await expect.poll(() => textPostAttempts.length).toBe(4);
+  expect(textPostAttempts.at(-1)).toMatchObject({
+    agent_id: 'generalist-text-agent',
+    model_name: 'gpt-4.1-mini',
+  });
+  await launch.getByLabel('Execution model').selectOption('gpt-4.1');
+  await launch.getByRole('button', { name: 'Run evaluation' }).click();
+  await expect.poll(() => textPostAttempts.length).toBe(5);
+  expect(textPostAttempts.at(-1)).toMatchObject({ model_name: 'gpt-4.1' });
+
+  oauthConnected = true;
+  apiKeyPreferred = true;
+  await page.reload();
+  await launch.getByLabel('Execution agent target').selectOption('generalist-text-agent');
+  await expect(launch.getByLabel('Execution model')).toHaveValue('gpt-4.1-mini');
+  await launch.getByRole('button', { name: 'Run evaluation' }).click();
+  await expect.poll(() => textPostAttempts.length).toBe(6);
+  expect(textPostAttempts.at(-1)).toMatchObject({
+    agent_id: 'generalist-text-agent',
+    model_name: 'gpt-4.1-mini',
+  });
 });
 
 test('saved ACC evidence is not offered as a Run Agent target', async ({ page }) => {

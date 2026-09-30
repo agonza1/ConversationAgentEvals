@@ -124,6 +124,20 @@ def test_openai_provider_status_and_oauth_start_disconnect():
     assert fake.disconnected is True
 
 
+def test_status_reports_api_key_execution_precedence_even_with_oauth_connected(monkeypatch):
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-key')
+    set_provider_for_tests('openai', FakeOpenAIProvider(connected=True))
+    try:
+        response = client.get('/api/product/providers/openai/status')
+    finally:
+        set_provider_for_tests('openai', None)
+
+    assert response.status_code == 200
+    assert response.json()['status'] == 'connected'
+    assert response.json()['execution_provider'] == 'openai_compatible'
+    assert response.json()['execution_default_model'] == 'gpt-4.1-mini'
+
+
 def test_llm_judge_blocks_without_provider_and_runs_when_connected(tmp_path, monkeypatch):
     from app.services import product_service
 
@@ -205,6 +219,7 @@ def test_openai_codex_token_store_exchange_and_complete(tmp_path: Path, monkeypa
         assert headers['ChatGPT-Account-Id'] == 'acct_123'
         assert body['store'] is False
         assert body['stream'] is True
+        assert body['model'] == 'gpt-6-luna'
         assert body['input'][0]['content'][0]['text'] == 'judge me'
         return {'output_text': 'Judge says pass.'}
 
@@ -217,6 +232,32 @@ def test_openai_codex_token_store_exchange_and_complete(tmp_path: Path, monkeypa
     assert provider.status()['status'] == 'connected'
     assert provider.complete('judge me') == 'Judge says pass.'
     assert decode_chatgpt_identity(tokens['access_token'])['email'] == 'demo@example.com'
+
+
+def test_openai_codex_replaces_retired_chatgpt_models_before_request(tmp_path: Path):
+    token_path = tmp_path / 'openai-codex-oauth.json'
+    token_path.write_text(
+        json.dumps({
+            'access_token': 'access',
+            'refresh_token': 'refresh',
+            'expires_at': 9_999_999_999,
+            'account_id': 'acct_123',
+        }),
+        encoding='utf-8',
+    )
+    requested_models: list[str] = []
+
+    def fake_json_post(_url: str, body: dict, *, headers: dict[str, str]) -> dict:
+        assert headers['ChatGPT-Account-Id'] == 'acct_123'
+        requested_models.append(body['model'])
+        return {'output_text': 'ok'}
+
+    provider = OpenAICodexProvider(token_path=token_path, http_post_json=fake_json_post)
+
+    assert provider.complete('hello', model_name='gpt-5.4-mini') == 'ok'
+    assert provider.complete('hello', model_name='gpt-5.4') == 'ok'
+    assert provider.complete('hello', model_name='gpt-6-sol') == 'ok'
+    assert requested_models == ['gpt-6-luna'] * 3
 
 
 def test_codex_responses_sse_parser_collects_text_deltas():
@@ -557,6 +598,7 @@ def test_openai_codex_list_models_filters_and_uses_ssl_get(tmp_path: Path):
             'models': [
                 {'slug': 'gpt-5.4', 'display_name': 'GPT-5.4', 'supported_in_api': True},
                 {'slug': 'gpt-5.4-mini', 'display_name': 'GPT-5.4-Mini', 'supported_in_api': True},
+                {'slug': 'gpt-6-sol', 'display_name': 'GPT-6 Sol', 'supported_in_api': True},
                 {'slug': 'codex-auto-review', 'display_name': 'Codex Auto Review', 'supported_in_api': True},
                 {'id': 'text-embedding-3-large'},
                 {'id': 'whisper-1'},
@@ -570,8 +612,9 @@ def test_openai_codex_list_models_filters_and_uses_ssl_get(tmp_path: Path):
     assert captured['headers']['Authorization'] == 'Bearer access'
     assert captured['headers']['ChatGPT-Account-Id'] == 'acct_1'
     ids = [item['id'] for item in payload['models']]
-    assert ids[0] == 'gpt-5.4-mini'
-    assert 'gpt-5.4-mini' in ids
+    assert ids[0] == 'gpt-6-luna'
+    assert 'gpt-6-luna' in ids
+    assert 'gpt-6-sol' not in ids
     assert 'o3-mini' in ids
     assert 'codex-auto-review' not in ids
     assert 'text-embedding-3-large' not in ids
@@ -609,8 +652,9 @@ def test_openai_codex_list_models_falls_back_on_403(tmp_path: Path):
     assert 'Missing scopes' not in (payload.get('message') or '')
     assert 'Could not list OpenAI models' not in (payload.get('message') or '')
     ids = [item['id'] for item in payload['models']]
-    assert ids[0] == 'gpt-5.4-mini'
-    assert 'gpt-4o' in ids
+    assert ids[0] == 'gpt-6-luna'
+    assert 'gpt-5.6-luna' in ids
+    assert 'gpt-6-sol' not in ids
 
 
 def test_oauth_authorize_uses_codex_account_scopes():

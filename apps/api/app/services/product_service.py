@@ -146,7 +146,15 @@ def start_openai_oauth() -> dict[str, Any]:
 
 
 def openai_provider_status() -> dict[str, Any]:
-    return _openai_provider_status()
+    from app.services.reference_generalist_agent import (
+        configured_reference_completion_provider,
+        default_reference_model_name,
+    )
+
+    status = dict(_openai_provider_status())
+    status['execution_provider'] = configured_reference_completion_provider('gpt-4.1-mini').provider_id
+    status['execution_default_model'] = default_reference_model_name()
+    return status
 
 
 def disconnect_openai_provider() -> dict[str, Any]:
@@ -1497,10 +1505,12 @@ def _refund_judge_credits(spend_control: dict[str, Any], *, credits: int) -> dic
 
 def _judge_model_name(spend_control: dict[str, Any]) -> str:
     env_model = (os.getenv('LLM_JUDGE_MODEL') or '').strip()
+    if spend_control.get('oauth_connected'):
+        from app.services.llm_providers.openai_codex import effective_codex_model_name
+
+        return effective_codex_model_name(env_model or 'gpt-6-luna')
     if env_model:
         return env_model
-    if spend_control.get('oauth_connected'):
-        return 'gpt-5.4-mini'
     return 'gpt-4.1-mini'
 
 

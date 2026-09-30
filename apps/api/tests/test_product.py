@@ -1501,6 +1501,16 @@ def test_llm_judge_is_gated_without_provider_regardless_of_plan():
         set_provider_for_tests('openai', None)
 
 
+def test_codex_judge_reports_the_effective_small_model(monkeypatch):
+    from app.services import product_service
+
+    monkeypatch.setenv('LLM_JUDGE_MODEL', 'gpt-5.4')
+    assert product_service._judge_model_name({'oauth_connected': True}) == 'gpt-6-luna'
+    monkeypatch.setenv('LLM_JUDGE_MODEL', 'gpt-6-sol')
+    assert product_service._judge_model_name({'oauth_connected': True}) == 'gpt-6-luna'
+    assert product_service._judge_model_name({'oauth_connected': False}) == 'gpt-6-sol'
+
+
 def test_llm_judge_spend_control_respects_budget_env(monkeypatch, tmp_path):
     from app.services import product_service
     from app.services.llm_providers import set_provider_for_tests

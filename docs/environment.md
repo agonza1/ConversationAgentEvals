@@ -78,11 +78,13 @@ KOKORO_BASE_URL=http://localhost:8880
 KOKORO_MODEL=kokoro
 KOKORO_TESTER_VOICE=af_heart
 KOKORO_TARGET_VOICE=af_bella
-REFERENCE_LLM_MODEL=gpt-5.4-mini
-REFERENCE_TESTER_LLM_MODEL=gpt-5.4-mini
+REFERENCE_LLM_MODEL=
+REFERENCE_TESTER_LLM_MODEL=
 OLLAMA_BASE_URL=http://localhost:11434
 REFERENCE_OLLAMA_MODEL=gemma2:2b
 ```
+
+Leave the reference model overrides blank to use GPT-6 Luna with Codex OAuth or GPT-4.1 Mini with an API key.
 
 The built-in generalist voice target is a real local streaming pipeline:
 Pipecat tester → adaptive streaming Kokoro caller audio → Silero + rtc-asr →
@@ -107,7 +109,7 @@ dropdown:
 ollama pull gemma2:2b
 OLLAMA_BASE_URL=http://localhost:11434
 REFERENCE_OLLAMA_MODEL=gemma2:2b
-REFERENCE_TESTER_LLM_MODEL=gpt-5.4-mini
+REFERENCE_TESTER_LLM_MODEL=
 ```
 
 The configuration above keeps an independent GPT tester and therefore still
@@ -151,6 +153,12 @@ docker compose --profile voice up --build
 
 When `RTC_ASR_BASE_URL` is empty or unhealthy, live session startup records ASR as `not_configured` or `unavailable` and logs a `rtc_asr_skipped` event. The `/sessions/{id}/ask` transcript loop remains non-production demo support, not the ASR provider contract.
 
+For Codex OAuth with a ChatGPT account, CAE defaults to `gpt-6-luna`: it is the
+efficient replacement for the retired `gpt-5.4-mini`. CAE also upgrades either
+retired GPT-5.4 model and Sol selections on Codex OAuth to Luna when a saved
+configuration still selects one. Explicit API
+key configurations can continue to use their own supported model IDs.
+
 ## Optional product integrations
 
 These are not needed for the minimal local demo. Set them only when working on the related integration path.
@@ -160,11 +168,11 @@ OPENAI_API_KEY=
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_REALTIME_MODEL=gpt-realtime-mini
 OPENAI_RESPONSES_MODEL=gpt-4.1-mini
-SPEC_GENERATION_MODEL=gpt-5.4-mini
+SPEC_GENERATION_MODEL=
 
 # Standalone CAE product judge (/api/product/judge)
 LLM_JUDGE_PROVIDER=openai_codex
-LLM_JUDGE_MODEL=gpt-5.4-mini
+LLM_JUDGE_MODEL=
 LLM_JUDGE_API_KEY=
 OPENAI_CODEX_OAUTH_PATH=
 OPENAI_CODEX_IMPORT_HOME=1
@@ -201,6 +209,8 @@ STRIPE_CHECKOUT_BASE_URL=
 BUSINESS_CONTACT_URL=
 REALTIME_REQUEST_TIMEOUT_MS=5000
 ```
+
+Leave `SPEC_GENERATION_MODEL` and `LLM_JUDGE_MODEL` blank for provider-aware defaults: Codex OAuth uses GPT-6 Luna, while the API-key spec generator uses GPT-5.4 Mini and the API-key judge uses GPT-4.1 Mini.
 
 ### Local CAE product judge through Codex OAuth
 

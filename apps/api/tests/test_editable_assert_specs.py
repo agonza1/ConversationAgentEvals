@@ -169,6 +169,33 @@ def test_generate_fails_closed_when_no_llm_is_configured(monkeypatch):
     assert 'Connect OpenAI Codex OAuth' in response.json()['detail']
 
 
+def test_generation_uses_platform_model_when_only_api_key_is_configured(monkeypatch):
+    from app.services import editable_assert_spec
+
+    class DisconnectedProvider:
+        def status(self):
+            return {'status': 'disconnected'}
+
+    monkeypatch.delenv('SPEC_GENERATION_MODEL', raising=False)
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-key')
+    monkeypatch.delenv('LLM_JUDGE_API_KEY', raising=False)
+    observed = []
+
+    def fake_complete(prompt, *, api_key, model_name):
+        observed.append((prompt, api_key, model_name))
+        return '{}'
+
+    monkeypatch.setattr(editable_assert_spec, '_complete_with_api_key', fake_complete)
+    set_provider_for_tests('openai', DisconnectedProvider())
+    try:
+        result = editable_assert_spec._complete_generation('Generate a draft')
+    finally:
+        set_provider_for_tests('openai', None)
+
+    assert result == ('{}', 'openai_api_key', 'gpt-5.4-mini')
+    assert observed == [('Generate a draft', 'test-key', 'gpt-5.4-mini')]
+
+
 def test_generate_returns_client_safe_error_for_malformed_provider_content():
     class MalformedProvider:
         def status(self):
