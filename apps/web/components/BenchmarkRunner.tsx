@@ -2405,6 +2405,15 @@ export function BenchmarkRunner({
     );
   }
 
+  function onSelectContract(kind: 'suite' | 'scenario', value: string) {
+    evidenceRequestRef.current += 1;
+    preserveScoreEvidenceRef.current = false;
+    clearStructuredEvidenceFields();
+    setUploadMessage(null);
+    if (kind === 'suite') setSelectedSuiteId(value);
+    else setSelectedScenarioId(value);
+  }
+
   function applyScenarioStructuredSample(nextScenario: BenchmarkScenario) {
     setActionTrace(stringifyEditable(nextScenario.sample_action_trace, '[]'));
     setFinalState(stringifyEditable(nextScenario.sample_final_state ?? nextScenario.expected_final_state, '{}'));
@@ -4067,7 +4076,7 @@ export function BenchmarkRunner({
                   aria-label="Evaluation suite"
                   value={selectedSuite?.id ?? ''}
                   disabled={isLoading || !suites.length}
-                  onChange={(event) => setSelectedSuiteId(event.target.value)}
+                  onChange={(event) => onSelectContract('suite', event.target.value)}
                   style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
                 >
                   {suites.map((suite) => (
@@ -4081,7 +4090,7 @@ export function BenchmarkRunner({
                   aria-label="Evaluation scenario"
                   value={selectedScenario?.id ?? ''}
                   disabled={isLoading || !selectedSuite?.scenarios.length}
-                  onChange={(event) => setSelectedScenarioId(event.target.value)}
+                  onChange={(event) => onSelectContract('scenario', event.target.value)}
                   style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
                 >
                   {(selectedSuite?.scenarios ?? []).map((scenario) => (
@@ -4117,7 +4126,7 @@ export function BenchmarkRunner({
             <select
               value={selectedSuite?.id ?? ''}
               disabled={isLoading || !suites.length}
-              onChange={(event) => setSelectedSuiteId(event.target.value)}
+              onChange={(event) => onSelectContract('suite', event.target.value)}
               style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
             >
               {suites.map((suite) => (
@@ -4131,7 +4140,7 @@ export function BenchmarkRunner({
             <select
               value={selectedScenario?.id ?? ''}
               disabled={isLoading || !selectedSuite?.scenarios.length}
-              onChange={(event) => setSelectedScenarioId(event.target.value)}
+              onChange={(event) => onSelectContract('scenario', event.target.value)}
               style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
             >
               {(selectedSuite?.scenarios ?? []).map((scenario) => (

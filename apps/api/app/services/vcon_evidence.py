@@ -69,7 +69,7 @@ def redact(value: Any, path: str = '', removed: list[str] | None = None) -> Any:
 
 
 def _status(raw: Any, event_type: str = '') -> str:
-    status = str(raw or '').lower().replace('-', '_').replace(' ', '_')
+    status = str(raw if raw is not None else '').lower().replace('-', '_').replace(' ', '_')
     if event_type in {'tool_call.requested', 'tool_call.started'}:
         return 'requested' if event_type.endswith('requested') else 'running'
     if status in SUCCESS:
@@ -173,6 +173,7 @@ def evidence_body(*, action_trace: Any = None, observed_actions: list[str] | Non
 
 def attach_evidence(vcon: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
     exported = deepcopy(vcon)
+    decode_evidence(exported)
     body = _redacted_evidence_body(body)
     attachments = exported.setdefault('attachments', [])
     parties = exported.setdefault('parties', [])
@@ -199,6 +200,9 @@ def attach_evidence(vcon: dict[str, Any], body: dict[str, Any]) -> dict[str, Any
 
 def decode_evidence(vcon: dict[str, Any]) -> dict[str, Any] | None:
     if vcon.get('vcon') == IETF_VCON_VERSION:
+        parties = vcon.get('parties')
+        if not isinstance(parties, list) or not parties or any(not isinstance(p, dict) for p in parties):
+            raise ValueError('vCon parties must be a non-empty array of participant objects')
         for field in ('created_at', 'updated_at'):
             if field == 'updated_at' and field not in vcon:
                 continue  # optional on intake; our re-export records the export update time

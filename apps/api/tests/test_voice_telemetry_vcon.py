@@ -79,6 +79,32 @@ def test_otlp_retains_wire_format_ids_and_does_not_infer_success_from_unset_stat
     assert decode_evidence(build_telemetry_vcon(format='otlp-json-v1', data=data))['tool_events'][0]['status'] == 'unknown'
 
 
+@pytest.mark.parametrize('explicit,status', [(False, 'error'), (True, 'success'), (None, 'unknown'), ('', 'unknown'), (0, 'unknown')])
+def test_explicit_otlp_tool_status_overrides_ok_span(explicit, status):
+    data = otlp()
+    span = data['resourceSpans'][0]['scopeSpans'][0]['spans'][0]
+    value_type = 'boolValue' if isinstance(explicit, bool) else 'intValue' if isinstance(explicit, int) else 'stringValue'
+    span['attributes'].append({'key': 'tool.result_status', 'value': {value_type: explicit}})
+    vcon = build_telemetry_vcon(format='otlp-json-v1', data=data)
+    assert decode_evidence(vcon)['tool_events'][0]['status'] == status
+    loaded, _ = intake_vcon({'vcon': vcon})
+    assert loaded['action_trace'][0]['status'] == status
+
+
+def test_explicit_false_otlp_required_action_cannot_pass_evaluation():
+    from app.services.benchmark_service import get_suite, run_scenario
+    scenario = get_suite('call-center-voice-ai')['scenarios'][0]
+    data = otlp()
+    attributes = data['resourceSpans'][0]['scopeSpans'][0]['spans'][0]['attributes']
+    next(a for a in attributes if a['key'] == 'gen_ai.tool.name')['value'] = {'stringValue': scenario['required_actions'][0]}
+    attributes.append({'key': 'tool.result_status', 'value': {'boolValue': False}})
+    vcon = build_telemetry_vcon(format='otlp-json-v1', data=data, transcript=scenario['sample_transcript'],
+                               suite_id='call-center-voice-ai', scenario_id=scenario['id'], final_state=scenario['sample_final_state'])
+    report = run_scenario({'vcon': vcon}, persist_artifacts=False)
+    assert scenario['required_actions'][0] in report['missing_actions']
+    assert report['verdict'] == 'needs_review'
+
+
 def test_vapi_analysis_is_not_business_state_or_action_success():
     data = {'id': 'call', 'artifact': {'transcript': 'Agent: Updated', 'messages': [{'role': 'bot', 'message': 'Updated'}]},
             'analysis': {'successEvaluation': 'true', 'structuredData': {'complete': True}}}

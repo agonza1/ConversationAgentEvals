@@ -101,7 +101,7 @@ def _otlp(data: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, An
                     result = attrs.get('gen_ai.tool.call.result', attrs.get('tool.result'))
                     code = (span.get('status') or {}).get('code')
                     explicit = attrs.get('tool.result_status')
-                    status = _status(explicit) if explicit else 'error' if code in {2, 'STATUS_CODE_ERROR'} else (
+                    status = _status(explicit) if 'tool.result_status' in attrs else 'error' if code in {2, 'STATUS_CODE_ERROR'} else (
                         'success' if code in {1, 'STATUS_CODE_OK'} and result is not None else 'unknown')
                     requested = span.get('name') == 'llm_tool_call'
                     common['timestamp'] = _timestamp(observed_nano, 1_000_000_000)

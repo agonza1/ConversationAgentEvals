@@ -453,3 +453,19 @@ def test_imported_profile_redacts_before_scoring_export_and_saved_download():
     assert replay['score_components'] == report['score_components']
     assert decode_evidence(replay['ietf_vcon_export'])['redactions'] == cleaned['redactions']
     assert vcon == original
+
+
+@pytest.mark.parametrize('parties', [None, {}, 'invalid', [], [None], ['caller'], [42]])
+def test_malformed_imported_parties_return_validation_error(parties):
+    vcon = run_scenario(sample(), persist_artifacts=False)['ietf_vcon_export']
+    vcon['parties'] = parties
+    for with_profile in (True, False):
+        if not with_profile:
+            vcon.pop('attachments')
+        with pytest.raises(ValueError, match='parties'):
+            intake_vcon({'vcon': vcon})
+        with pytest.raises(ValueError, match='parties'):
+            attach_evidence(vcon, evidence_body())
+        response = TestClient(app).post('/api/benchmarks/run', json={'vcon': vcon})
+        assert response.status_code == 422
+        assert 'parties' in response.json()['detail']
