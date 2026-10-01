@@ -406,3 +406,50 @@ def test_imported_vcon_invalid_timestamps_are_rejected_cleanly(field, invalid, w
         assert response.status_code == 422, response.text
         assert field in response.json()['detail']
     assert original[field]  # caller-owned source remains untouched
+
+
+@pytest.mark.parametrize('analysis', [{}, None, 'invalid', 42])
+def test_invalid_imported_analysis_returns_validation_error(analysis):
+    vcon = run_scenario(sample(), persist_artifacts=False)['ietf_vcon_export']
+    vcon['analysis'] = analysis
+    with pytest.raises(ValueError, match='analysis must be an array'):
+        intake_vcon({'vcon': vcon})
+    client = TestClient(app)
+    for url in ('/api/benchmarks/run', '/api/benchmarks/evidence/intake'):
+        response = client.post(url, json={'vcon': vcon})
+        assert response.status_code == 422
+        assert 'analysis must be an array' in response.json()['detail']
+
+
+def test_imported_profile_redacts_before_scoring_export_and_saved_download():
+    import json
+    vcon = run_scenario(sample(), persist_artifacts=False)['ietf_vcon_export']
+    body = vcon['attachments'][0]['body']
+    body['redactions'] = ['/previous/secret']
+    body['tool_events'][0]['arguments'] = {'account_id': '123', 'api_key': 'credential-one'}
+    body['tool_events'][0]['result'] = '{"found":true,"password":"credential-two"}'
+    body['state_snapshots'][0]['state']['authorization'] = 'credential-three'
+    original = deepcopy(vcon)
+    client = TestClient(app)
+    response = client.post('/api/benchmarks/run', json={'vcon': vcon, 'user_id': 'redaction-owner'})
+    assert response.status_code == 200
+    report = response.json()
+    for secret in ('credential-one', 'credential-two', 'credential-three'):
+        assert secret not in response.text
+    cleaned = decode_evidence(report['ietf_vcon_export'])
+    assert cleaned['tool_events'][0]['arguments'] == {'account_id': '123'}
+    assert json.loads(cleaned['tool_events'][0]['result']) == {'found': True}
+    assert set(cleaned['redactions']) == {
+        '/previous/secret', '/tool_events/0/arguments/api_key',
+        '/tool_events/0/result/password', '/state_snapshots/0/state/authorization',
+    }
+    download = client.get(f"/api/benchmarks/runs/{report['run_id']}/vcon", params={'user_id': 'redaction-owner'})
+    assert download.status_code == 200
+    assert decode_evidence(download.json()['record']) == cleaned
+    saved = client.get(f"/api/benchmarks/runs/{report['run_id']}", params={'user_id': 'redaction-owner'})
+    assert saved.status_code == 200
+    assert all(secret not in saved.text for secret in ('credential-one', 'credential-two', 'credential-three'))
+    replay = run_scenario({'vcon': report['ietf_vcon_export']}, persist_artifacts=False)
+    assert replay['score_components'] == report['score_components']
+    assert decode_evidence(replay['ietf_vcon_export'])['redactions'] == cleaned['redactions']
+    assert vcon == original

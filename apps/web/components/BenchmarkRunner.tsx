@@ -3501,7 +3501,7 @@ export function BenchmarkRunner({
   function onExportSuiteVconBundle() {
     if (!suiteSimulation) return;
     const records = [suiteSimulation.vcon_export, ...suiteSimulation.scenario_runs
-      .map((run) => run.benchmark_report.vcon_export)
+      .map((run) => run.benchmark_report.ietf_vcon_export ?? run.benchmark_report.vcon_export)
     ].filter((record): record is JsonRecord => Boolean(record));
     if (!records.length) {
       setExportMessage('No vCon-compatible records are available for this suite run.');

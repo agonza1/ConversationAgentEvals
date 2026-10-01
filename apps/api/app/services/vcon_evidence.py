@@ -173,6 +173,7 @@ def evidence_body(*, action_trace: Any = None, observed_actions: list[str] | Non
 
 def attach_evidence(vcon: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
     exported = deepcopy(vcon)
+    body = _redacted_evidence_body(body)
     attachments = exported.setdefault('attachments', [])
     parties = exported.setdefault('parties', [])
     exporter_party = next((i for i, p in enumerate(parties) if p.get('name') == 'ConVoice QA'), None)
@@ -207,6 +208,8 @@ def decode_evidence(vcon: dict[str, Any]) -> dict[str, Any] | None:
         raise ValueError('Unsupported critical vCon extensions; evidence cannot be interpreted safely')
     if 'attachments' in vcon and not isinstance(vcon['attachments'], list):
         raise ValueError('vCon attachments must be an array')
+    if 'analysis' in vcon and not isinstance(vcon['analysis'], list):
+        raise ValueError('vCon analysis must be an array')
     found = []
     for item in vcon.get('attachments') or []:
         if not isinstance(item, dict) or item.get('purpose') != PURPOSE:
@@ -271,7 +274,14 @@ def decode_evidence(vcon: dict[str, Any]) -> dict[str, Any] | None:
         found.append(body)
     if len(found) > 1:
         raise ValueError('Multiple CAE execution evidence attachments are ambiguous')
-    return deepcopy(found[0]) if found else None
+    return _redacted_evidence_body(found[0]) if found else None
+
+
+def _redacted_evidence_body(body: dict[str, Any]) -> dict[str, Any]:
+    removed: list[str] = []
+    cleaned = redact(body, removed=removed)
+    cleaned['redactions'] = list(dict.fromkeys([*cleaned.get('redactions', []), *removed]))
+    return cleaned
 
 
 def intake_vcon(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -281,6 +291,10 @@ def intake_vcon(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]
     if not isinstance(vcon, dict):
         return normalized, {}
     body = decode_evidence(vcon)
+    if body:
+        for attachment in normalized['vcon'].get('attachments', []):
+            if isinstance(attachment, dict) and attachment.get('purpose') == PURPOSE:
+                attachment['body'] = deepcopy(body)
     text = '\n'.join(vcon_dialog_turns(vcon))
     recovered: dict[str, Any] = {'transcript': text}
     for snake, camel in (('suite_id', 'suiteId'), ('scenario_id', 'scenarioId')):
