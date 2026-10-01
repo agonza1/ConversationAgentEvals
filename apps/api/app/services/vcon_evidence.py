@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.services.assert_trace import parse_action_trace
-from app.services.vcon_interop import IETF_VCON_VERSION, is_vcon_timestamp, vcon_dialog_turns
+from app.services.vcon_interop import IETF_VCON_VERSION, is_vcon_timestamp, vcon_dialog_errors, vcon_dialog_turns
 
 PROFILE = 'cae-execution-evidence-v1'
 PURPOSE = 'CAE execution evidence'
@@ -204,9 +204,9 @@ def decode_evidence(vcon: dict[str, Any]) -> dict[str, Any] | None:
             uuid.UUID(str(vcon.get('uuid')))
         except (ValueError, TypeError, AttributeError) as exc:
             raise ValueError('vCon uuid must be a UUID') from exc
-        if 'dialog' in vcon and (not isinstance(vcon['dialog'], list) or
-                                 any(not isinstance(item, dict) for item in vcon['dialog'])):
-            raise ValueError('vCon dialog must be an array of dialog objects')
+        dialog_errors = vcon_dialog_errors(vcon.get('dialog', []))
+        if dialog_errors:
+            raise ValueError('; '.join(dialog_errors))
         parties = vcon.get('parties')
         if not isinstance(parties, list) or not parties or any(not isinstance(p, dict) for p in parties):
             raise ValueError('vCon parties must be a non-empty array of participant objects')

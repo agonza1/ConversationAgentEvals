@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import pytest
 from fastapi.testclient import TestClient
 
@@ -858,7 +859,7 @@ def test_run_endpoint_accepts_ietf_vcon_core_04_text_dialogs():
                         'parties': [1],
                         'mediatype': 'audio/wav',
                         'url': 'https://evidence.example.test/target.wav',
-                        'content_hash': 'sha512-test',
+                        'content_hash': base64.urlsafe_b64encode(bytes(64)).decode('ascii').rstrip('='),
                     },
                 ],
             },

@@ -534,3 +534,55 @@ def test_structured_only_api_requires_supported_evidence_not_stored_scores(kind)
         vcon['attachments'][0]['body']['observed_actions'] = ['greet caller and identify intent']
     response = TestClient(app).post('/api/benchmarks/run', json={'vcon': vcon})
     assert response.status_code == (200 if kind == 'observed_actions' else 422), response.text
+
+
+@pytest.mark.parametrize('item', [
+    {}, {'type': 'unsupported'}, {'type': 'text', 'mediatype': 'text/plain'},
+    {'type': 'text', 'body': 42, 'mediatype': 'text/plain'},
+    {'type': 'text', 'body': ' ', 'mediatype': 'text/plain'},
+    {'type': 'text', 'body': 'Hello', 'mediatype': 'application/json'},
+    {'type': 'recording', 'url': 'http://private.test/audio', 'content_hash': 'bad'},
+    {'type': 'recording', 'url': 'https://example.test/audio', 'content_hash': 'bad'},
+    {'type': 'recording', 'encoding': 'base64url', 'body': '%%%', 'content_hash': 'bad'},
+])
+@pytest.mark.parametrize('with_profile', [True, False])
+def test_dialog_semantics_use_portability_rules_before_scoring(item, with_profile):
+    payload = sample()
+    vcon = run_scenario(payload, persist_artifacts=False)['ietf_vcon_export']
+    vcon['dialog'] = [item]
+    if not with_profile:
+        vcon.pop('attachments')
+    original = deepcopy(vcon)
+    errors = validate_ietf_vcon(vcon)['errors']
+    assert errors and all('dialog[0]' in error for error in errors)
+    request = {'suite_id': payload['suite_id'], 'scenario_id': payload['scenario_id'],
+               'transcript': payload['transcript'], 'vcon': vcon}
+    with pytest.raises(ValueError, match='dialog') as exc:
+        intake_vcon(request)
+    assert str(exc.value) == '; '.join(errors)
+    response = TestClient(app).post('/api/benchmarks/run', json=request)
+    assert response.status_code == 422
+    assert response.json()['detail'] == '; '.join(errors)
+    assert vcon == original
+
+
+@pytest.mark.parametrize('kind', ['text', 'https_recording', 'inline_recording'])
+def test_valid_portable_dialogs_are_preserved_on_api_replay(kind):
+    import base64
+    payload = sample()
+    vcon = run_scenario(payload, persist_artifacts=False)['ietf_vcon_export']
+    if kind == 'text':
+        item = {'type': 'text', 'parties': [0], 'mediatype': 'text/plain', 'encoding': 'base64url', 'body': 'SGVsbG8'}
+    else:
+        item = {'type': 'recording', 'parties': [0], 'mediatype': 'audio/wav',
+                'content_hash': base64.urlsafe_b64encode(bytes(64)).decode('ascii').rstrip('=')}
+        if kind == 'https_recording':
+            item['url'] = 'https://example.test/audio.wav'
+        else:
+            item.update(encoding='base64url', body=base64.urlsafe_b64encode(b'RIFFaudio').decode('ascii').rstrip('='))
+    vcon['dialog'] = [item]
+    response = TestClient(app).post('/api/benchmarks/run', json={'vcon': vcon})
+    assert response.status_code == 200, response.text
+    exported = response.json()['ietf_vcon_export']
+    assert exported['dialog'] == [item]
+    assert validate_ietf_vcon(exported) == {'valid': True, 'errors': []}
