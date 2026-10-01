@@ -203,6 +203,10 @@ def test_structured_only_run_exports_and_replays_portable_evidence(fields):
     for key in ('overall_score', 'verdict', 'task_completion_score', 'final_state_score',
                 'completed_actions', 'missing_actions', 'score_components'):
         assert original.get(key) == replay.get(key), key
+    response = TestClient(app).post('/api/benchmarks/run', json={'vcon': vcon})
+    assert response.status_code == 200, response.text
+    assert response.json()['score_components'] == original['score_components']
+    assert response.json()['verdict'] == original['verdict']
 
 
 def test_saved_structured_only_run_download_uses_portable_profile():
@@ -500,3 +504,33 @@ def test_invalid_portable_uuid_and_dialog_are_rejected_before_scoring(field, inv
         assert response.status_code == 422
         assert field in response.json()['detail']
     assert vcon == original
+
+
+@pytest.mark.parametrize('item', [None, 'invalid', 42, []])
+@pytest.mark.parametrize('position', [0, 1])
+def test_non_object_attachments_are_rejected_cleanly(item, position):
+    vcon = run_scenario(sample(), persist_artifacts=False)['ietf_vcon_export']
+    vcon['attachments'].insert(position, item)
+    with pytest.raises(ValueError, match='attachment objects'):
+        intake_vcon({'vcon': vcon})
+    with pytest.raises(ValueError, match='attachment objects'):
+        build_benchmark_vcon({'vcon': vcon}, '')
+    client = TestClient(app)
+    for url in ('/api/benchmarks/run', '/api/benchmarks/evidence/intake'):
+        response = client.post(url, json={'vcon': vcon})
+        assert response.status_code == 422
+        assert 'attachment objects' in response.json()['detail']
+
+
+@pytest.mark.parametrize('kind', ['empty_profile', 'unrelated_attachment', 'old_analysis', 'observed_actions'])
+def test_structured_only_api_requires_supported_evidence_not_stored_scores(kind):
+    payload = sample()
+    vcon = build_benchmark_vcon({'suite_id': payload['suite_id'], 'scenario_id': payload['scenario_id']}, '')
+    if kind == 'unrelated_attachment':
+        vcon['attachments'] = [{'purpose': 'Other data', 'body': {'complete': True}}]
+    elif kind == 'old_analysis':
+        vcon['analysis'] = [{'type': 'report', 'body': {'score': 100, 'verdict': 'pass'}}]
+    elif kind == 'observed_actions':
+        vcon['attachments'][0]['body']['observed_actions'] = ['greet caller and identify intent']
+    response = TestClient(app).post('/api/benchmarks/run', json={'vcon': vcon})
+    assert response.status_code == (200 if kind == 'observed_actions' else 422), response.text

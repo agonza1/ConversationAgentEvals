@@ -219,6 +219,8 @@ def decode_evidence(vcon: dict[str, Any]) -> dict[str, Any] | None:
         raise ValueError('Unsupported critical vCon extensions; evidence cannot be interpreted safely')
     if 'attachments' in vcon and not isinstance(vcon['attachments'], list):
         raise ValueError('vCon attachments must be an array')
+    if any(not isinstance(item, dict) for item in vcon.get('attachments', [])):
+        raise ValueError('vCon attachments must contain only attachment objects')
     if 'analysis' in vcon and not isinstance(vcon['analysis'], list):
         raise ValueError('vCon analysis must be an array')
     found = []
