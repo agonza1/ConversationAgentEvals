@@ -469,3 +469,34 @@ def test_malformed_imported_parties_return_validation_error(parties):
         response = TestClient(app).post('/api/benchmarks/run', json={'vcon': vcon})
         assert response.status_code == 422
         assert 'parties' in response.json()['detail']
+
+
+@pytest.mark.parametrize('field,invalid', [
+    ('dialog', None), ('dialog', {}), ('dialog', 'invalid'), ('dialog', 42),
+    ('dialog', [None]), ('dialog', ['invalid']),
+    ('uuid', 'missing'), ('uuid', None), ('uuid', ''), ('uuid', 'not-a-uuid'),
+    ('uuid', []), ('uuid', {}), ('uuid', 42),
+])
+@pytest.mark.parametrize('with_profile', [True, False])
+def test_invalid_portable_uuid_and_dialog_are_rejected_before_scoring(field, invalid, with_profile):
+    payload = sample()
+    vcon = run_scenario(payload, persist_artifacts=False)['ietf_vcon_export']
+    if not with_profile:
+        vcon.pop('attachments')
+    if invalid == 'missing':
+        vcon.pop(field)
+    else:
+        vcon[field] = invalid
+    original = deepcopy(vcon)
+    request = {'suite_id': payload['suite_id'], 'scenario_id': payload['scenario_id'],
+               'transcript': payload['transcript'], 'vcon': vcon}
+    with pytest.raises(ValueError, match=field):
+        intake_vcon(request)
+    with pytest.raises(ValueError, match=field):
+        build_benchmark_vcon(request, '')
+    client = TestClient(app)
+    for url in ('/api/benchmarks/run', '/api/benchmarks/evidence/intake'):
+        response = client.post(url, json=request)
+        assert response.status_code == 422
+        assert field in response.json()['detail']
+    assert vcon == original

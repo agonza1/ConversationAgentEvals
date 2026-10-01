@@ -200,6 +200,13 @@ def attach_evidence(vcon: dict[str, Any], body: dict[str, Any]) -> dict[str, Any
 
 def decode_evidence(vcon: dict[str, Any]) -> dict[str, Any] | None:
     if vcon.get('vcon') == IETF_VCON_VERSION:
+        try:
+            uuid.UUID(str(vcon.get('uuid')))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ValueError('vCon uuid must be a UUID') from exc
+        if 'dialog' in vcon and (not isinstance(vcon['dialog'], list) or
+                                 any(not isinstance(item, dict) for item in vcon['dialog'])):
+            raise ValueError('vCon dialog must be an array of dialog objects')
         parties = vcon.get('parties')
         if not isinstance(parties, list) or not parties or any(not isinstance(p, dict) for p in parties):
             raise ValueError('vCon parties must be a non-empty array of participant objects')
