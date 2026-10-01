@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+from datetime import datetime
 from typing import Any
 
 
@@ -12,6 +13,17 @@ IETF_VCON_CORE_DRAFT = 'draft-ietf-vcon-vcon-core-04'
 IETF_VCON_VERSION = '0.4.0'
 IETF_VCON_VENDOR = 'ConversationAgentEvals'
 IETF_VCON_PRODUCT = 'CAE Execution'
+
+
+def is_vcon_timestamp(value: Any) -> bool:
+    """Shared timestamp rule for portable vCon export and evidence intake."""
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
 
 
 def vcon_dialog_turns(vcon: dict[str, Any]) -> list[str]:

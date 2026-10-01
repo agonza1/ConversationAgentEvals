@@ -20,6 +20,7 @@ from app.services.vcon_interop import (
     IETF_VCON_PRODUCT,
     IETF_VCON_VENDOR,
     IETF_VCON_VERSION,
+    is_vcon_timestamp,
 )
 
 
@@ -285,7 +286,7 @@ def validate_ietf_vcon(vcon_export: Any) -> dict[str, Any]:
     except (TypeError, ValueError, AttributeError):
         errors.append('uuid must be a UUID')
     for key in ('created_at', 'updated_at'):
-        if not _is_timestamp(vcon_export.get(key)):
+        if not is_vcon_timestamp(vcon_export.get(key)):
             errors.append(f'{key} must be an RFC 3339 timestamp')
     parties = vcon_export.get('parties')
     if not isinstance(parties, list) or not parties:
@@ -460,16 +461,6 @@ def _normalise_timestamp(value: str | None, *, fallback: str | None = None) -> s
         except ValueError:
             pass
     return datetime.now(UTC).isoformat().replace('+00:00', 'Z')
-
-
-def _is_timestamp(value: Any) -> bool:
-    if not isinstance(value, str) or not value:
-        return False
-    try:
-        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
-    except ValueError:
-        return False
-    return parsed.tzinfo is not None
 
 
 def _is_sha512_base64url(value: Any) -> bool:

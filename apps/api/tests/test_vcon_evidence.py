@@ -370,3 +370,39 @@ def test_profile_without_dialog_reevaluates_and_exports_empty_dialog():
     response = TestClient(app).post('/api/benchmarks/run', json={'vcon': vcon})
     assert response.status_code == 200
     assert response.json()['ietf_vcon_export']['dialog'] == []
+
+
+@pytest.mark.parametrize('field', ['created_at', 'updated_at'])
+@pytest.mark.parametrize('invalid', ['missing', None, 'not-a-date', '2026-09-30T12:00:00', []])
+@pytest.mark.parametrize('with_profile', [True, False])
+def test_imported_vcon_invalid_timestamps_are_rejected_cleanly(field, invalid, with_profile):
+    payload = sample()
+    original = run_scenario(payload, persist_artifacts=False)['ietf_vcon_export']
+    vcon = deepcopy(original)
+    if not with_profile:
+        vcon.pop('attachments')
+    if invalid == 'missing':
+        vcon.pop(field)
+    else:
+        vcon[field] = invalid
+    request = {'suite_id': payload['suite_id'], 'scenario_id': payload['scenario_id'], 'vcon': vcon}
+    if field == 'updated_at' and invalid == 'missing':
+        intake_vcon(request)
+        exported = build_benchmark_vcon(request, '')
+        assert exported['created_at'] == original['created_at']
+        assert validate_ietf_vcon(exported) == {'valid': True, 'errors': []}
+        response = TestClient(app).post('/api/benchmarks/run', json=request)
+        assert response.status_code == 200
+        assert validate_ietf_vcon(response.json()['ietf_vcon_export']) == {'valid': True, 'errors': []}
+        assert 'updated_at' not in vcon
+        return
+    with pytest.raises(ValueError, match=field):
+        intake_vcon(request)
+    with pytest.raises(ValueError, match=field):
+        build_benchmark_vcon(request, '')
+    client = TestClient(app)
+    for url in ('/api/benchmarks/run', '/api/benchmarks/evidence/intake'):
+        response = client.post(url, json=request)
+        assert response.status_code == 422, response.text
+        assert field in response.json()['detail']
+    assert original[field]  # caller-owned source remains untouched

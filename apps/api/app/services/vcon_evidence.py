@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.services.assert_trace import parse_action_trace
-from app.services.vcon_interop import IETF_VCON_VERSION, vcon_dialog_turns
+from app.services.vcon_interop import IETF_VCON_VERSION, is_vcon_timestamp, vcon_dialog_turns
 
 PROFILE = 'cae-execution-evidence-v1'
 PURPOSE = 'CAE execution evidence'
@@ -197,6 +197,12 @@ def attach_evidence(vcon: dict[str, Any], body: dict[str, Any]) -> dict[str, Any
 
 
 def decode_evidence(vcon: dict[str, Any]) -> dict[str, Any] | None:
+    if vcon.get('vcon') == IETF_VCON_VERSION:
+        for field in ('created_at', 'updated_at'):
+            if field == 'updated_at' and field not in vcon:
+                continue  # optional on intake; our re-export records the export update time
+            if not is_vcon_timestamp(vcon.get(field)):
+                raise ValueError(f'vCon {field} must be an RFC 3339 timestamp')
     if vcon.get('critical'):
         raise ValueError('Unsupported critical vCon extensions; evidence cannot be interpreted safely')
     if 'attachments' in vcon and not isinstance(vcon['attachments'], list):
@@ -336,6 +342,7 @@ def build_benchmark_vcon(payload: dict[str, Any], transcript: str, report: dict[
     if isinstance(original, dict) and original.get('vcon') == IETF_VCON_VERSION:
         exported = deepcopy(original)
         exported.setdefault('dialog', [])
+        exported.setdefault('updated_at', datetime.now(UTC).isoformat())
     else:
         dialog = []
         parties: list[dict[str, str]] = []
