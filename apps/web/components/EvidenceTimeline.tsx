@@ -6,7 +6,12 @@ const record = (value: unknown): RecordValue => value && typeof value === 'objec
 export function EvidenceTimeline({ vcon }: { vcon?: RecordValue | null }) {
   if (!vcon) return null;
   const attachments = Array.isArray(vcon.attachments) ? vcon.attachments : [];
-  const body = record(attachments.map(record).find((a) => record(a.body).schema === 'cae-execution-evidence-v1')?.body);
+  const body = record(attachments.map(record).find((a) =>
+    a.purpose === 'CAE execution evidence'
+    && a.mediatype === 'application/json'
+    && a.encoding === 'json'
+    && record(a.body).schema === 'cae-execution-evidence-v1'
+  )?.body);
   const tools = Array.isArray(body.tool_events) ? body.tool_events.map(record) : [];
   const voice = Array.isArray(body.voice_events) ? body.voice_events.map(record) : [];
   const states = Array.isArray(body.state_snapshots) ? body.state_snapshots.map(record) : [];
