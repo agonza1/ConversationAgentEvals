@@ -586,3 +586,45 @@ def test_valid_portable_dialogs_are_preserved_on_api_replay(kind):
     exported = response.json()['ietf_vcon_export']
     assert exported['dialog'] == [item]
     assert validate_ietf_vcon(exported) == {'valid': True, 'errors': []}
+
+
+@pytest.mark.parametrize('encoding,body', [
+    ('brotli', 'Hello'), (42, 'Hello'), ([], 'Hello'),
+    ('base64url', '%%%'), ('base64url', '_w'), ('base64url', 'IA'),
+    ('base64url', 'a'), ('base64url', 'é'),
+])
+def test_invalid_text_encoding_cannot_silently_drop_transcript(encoding, body):
+    vcon = run_scenario(sample(), persist_artifacts=False)['ietf_vcon_export']
+    vcon['dialog'] = [{'type': 'text', 'parties': [0], 'mediatype': 'text/plain',
+                       'encoding': encoding, 'body': body}]
+    errors = validate_ietf_vcon(vcon)['errors']
+    assert errors and all('dialog[0] text' in error for error in errors)
+    with pytest.raises(ValueError, match='text'):
+        intake_vcon({'vcon': vcon})
+    for url in ('/api/benchmarks/run', '/api/benchmarks/evidence/intake'):
+        response = TestClient(app).post(url, json={'vcon': vcon})
+        assert response.status_code == 422
+        assert response.json()['detail'] == '; '.join(errors)
+
+
+@pytest.mark.parametrize('encoding', [None, 'none', 'json', 'base64url'])
+def test_supported_text_encodings_preserve_utf8_transcript_and_scores(encoding):
+    import base64
+    payload = sample()
+    payload['transcript'] += '\nAgent: Thank you — café.'
+    original = run_scenario(payload, persist_artifacts=False)
+    vcon = deepcopy(original['ietf_vcon_export'])
+    for dialog in vcon['dialog']:
+        if encoding is None:
+            dialog.pop('encoding')
+        else:
+            dialog['encoding'] = encoding
+        if encoding == 'base64url':
+            dialog['body'] = base64.urlsafe_b64encode(dialog['body'].encode('utf-8')).decode('ascii').rstrip('=')
+    loaded, _ = intake_vcon({'vcon': vcon})
+    assert loaded['transcript'] == payload['transcript']
+    replay = TestClient(app).post('/api/benchmarks/run', json={'vcon': vcon})
+    assert replay.status_code == 200, replay.text
+    assert replay.json()['score_components'] == original['score_components']
+    assert replay.json()['verdict'] == original['verdict']
+    assert validate_ietf_vcon(replay.json()['ietf_vcon_export']) == {'valid': True, 'errors': []}

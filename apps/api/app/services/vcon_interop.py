@@ -53,6 +53,12 @@ def vcon_dialog_errors(dialog: Any) -> list[str]:
                 errors.append(f'dialog[{index}] text body is required')
             if item.get('mediatype') != 'text/plain':
                 errors.append(f'dialog[{index}] text mediatype must be text/plain')
+            if item.get('encoding') not in (None, 'none', 'json', 'base64url'):
+                errors.append(f'dialog[{index}] text encoding is unsupported')
+            elif item.get('encoding') == 'base64url':
+                decoded = _dialog_text_body(item)
+                if decoded is None or not decoded.strip():
+                    errors.append(f'dialog[{index}] text body must decode as non-empty UTF-8 base64url')
         elif item.get('type') == 'recording':
             if item.get('encoding') == 'base64url' and isinstance(item.get('body'), str):
                 try:
