@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import pytest
 from fastapi.testclient import TestClient
 
@@ -858,7 +859,7 @@ def test_run_endpoint_accepts_ietf_vcon_core_04_text_dialogs():
                         'parties': [1],
                         'mediatype': 'audio/wav',
                         'url': 'https://evidence.example.test/target.wav',
-                        'content_hash': 'sha512-test',
+                        'content_hash': base64.urlsafe_b64encode(bytes(64)).decode('ascii').rstrip('='),
                     },
                 ],
             },
@@ -1068,10 +1069,9 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
     assert export_payload['filename'] == f"convoice-qa-call-center-voice-ai-{simulation['suite_run_id']}-vcon-bundle.json"
     assert export_payload['record_count'] == simulation['scenario_count'] + 1
     assert export_payload['records'][0]['source_format'] == 'benchmark_suite'
-    assert {record['appended_analysis_type'] for record in export_payload['records']} == {
-        'agentic_benchmark_suite_eval',
-        'agentic_benchmark_eval',
-    }
+    assert export_payload['records'][0]['appended_analysis_type'] == 'agentic_benchmark_suite_eval'
+    assert all(record['vcon'] == '0.4.0' for record in export_payload['records'][1:])
+    assert all(record['attachments'][0]['body']['schema'] == 'cae-execution-evidence-v1' for record in export_payload['records'][1:])
 
     history_export_response = client.get(
         '/api/benchmarks/suite-runs/export',
@@ -1163,8 +1163,9 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
     assert run_export_response.status_code == 200
     run_export = run_export_response.json()
     assert run_export['filename'] == f'convoice-qa-call-center-voice-ai-billing-address-change-{saved_run_id}-vcon.json'
-    assert run_export['record']['appended_analysis_type'] == 'agentic_benchmark_eval'
-    assert run_export['record']['analysis'][-1]['body']['run_id'] == saved_run_id
+    assert run_export['record']['vcon'] == '0.4.0'
+    assert run_export['record']['analysis'][-1]['schema'] == 'cae-deterministic-evaluation-v1'
+    assert run_export['record']['attachments'][0]['body']['tool_events']
 
     missing_run_export = client.get(
         f'/api/benchmarks/runs/{saved_run_id}/vcon',

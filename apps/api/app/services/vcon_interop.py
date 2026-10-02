@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 import binascii
+from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 
 IETF_VCON_CORE_DRAFT = 'draft-ietf-vcon-vcon-core-04'
@@ -12,6 +14,67 @@ IETF_VCON_CORE_DRAFT = 'draft-ietf-vcon-vcon-core-04'
 IETF_VCON_VERSION = '0.4.0'
 IETF_VCON_VENDOR = 'ConversationAgentEvals'
 IETF_VCON_PRODUCT = 'CAE Execution'
+
+
+def is_vcon_timestamp(value: Any) -> bool:
+    """Shared timestamp rule for portable vCon export and evidence intake."""
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
+
+
+def is_vcon_sha512(value: Any) -> bool:
+    if not isinstance(value, str) or not value.strip() or value.startswith('sha512-'):
+        return False
+    try:
+        digest = value.strip()
+        decoded = base64.b64decode((digest + '=' * (-len(digest) % 4)).encode('ascii'),
+                                   altchars=b'-_', validate=True)
+    except (UnicodeEncodeError, ValueError, binascii.Error):
+        return False
+    return len(decoded) == 64
+
+
+def vcon_dialog_errors(dialog: Any) -> list[str]:
+    """Shared semantic rules for CAE's supported portable text/recording subset."""
+    if not isinstance(dialog, list):
+        return ['dialog must be a list']
+    errors: list[str] = []
+    for index, item in enumerate(dialog):
+        if not isinstance(item, dict):
+            errors.append(f'dialog[{index}] must be an object')
+            continue
+        if item.get('type') == 'text':
+            if not isinstance(item.get('body'), str) or not item['body'].strip():
+                errors.append(f'dialog[{index}] text body is required')
+            if item.get('mediatype') != 'text/plain':
+                errors.append(f'dialog[{index}] text mediatype must be text/plain')
+            if item.get('encoding') not in (None, 'none', 'json', 'base64url'):
+                errors.append(f'dialog[{index}] text encoding is unsupported')
+            elif item.get('encoding') == 'base64url':
+                decoded = _dialog_text_body(item)
+                if decoded is None or not decoded.strip():
+                    errors.append(f'dialog[{index}] text body must decode as non-empty UTF-8 base64url')
+        elif item.get('type') == 'recording':
+            if item.get('encoding') == 'base64url' and isinstance(item.get('body'), str):
+                try:
+                    data = item['body']
+                    base64.b64decode((data + '=' * (-len(data) % 4)).encode('ascii'), altchars=b'-_', validate=True)
+                except (UnicodeEncodeError, ValueError, binascii.Error):
+                    errors.append(f'dialog[{index}] recording body must be base64url')
+            else:
+                parsed = urlparse(str(item.get('url') or ''))
+                if parsed.scheme != 'https':
+                    errors.append(f'dialog[{index}] recording URL must use HTTPS')
+            if not is_vcon_sha512(item.get('content_hash')):
+                errors.append(f'dialog[{index}] recording content_hash must be a base64url SHA-512 digest')
+        else:
+            errors.append(f'dialog[{index}] has unsupported type')
+    return errors
 
 
 def vcon_dialog_turns(vcon: dict[str, Any]) -> list[str]:

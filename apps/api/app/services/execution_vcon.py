@@ -6,8 +6,6 @@ attachments, and analysis records stay aligned with saved-run / product export.
 
 from __future__ import annotations
 
-import base64
-import binascii
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -20,6 +18,9 @@ from app.services.vcon_interop import (
     IETF_VCON_PRODUCT,
     IETF_VCON_VENDOR,
     IETF_VCON_VERSION,
+    is_vcon_timestamp,
+    is_vcon_sha512 as _is_sha512_base64url,
+    vcon_dialog_errors,
 )
 
 
@@ -129,6 +130,12 @@ def build_ietf_execution_vcon(
     final_state: dict[str, Any] | None = None,
     verdict: str | None = None,
     score: float | None = None,
+    action_trace: Any = None,
+    live_events: list[Any] | None = None,
+    latency_marks: list[Any] | None = None,
+    state_snapshots: list[dict[str, Any]] | None = None,
+    source_telemetry: dict[str, Any] | None = None,
+    synthetic: bool = False,
 ) -> dict[str, Any]:
     """Build a portable IETF vCon without leaking CAE-only evidence fields.
 
@@ -223,6 +230,18 @@ def build_ietf_execution_vcon(
         'dialog': dialog,
         'analysis': analysis,
     }
+    from app.services.vcon_evidence import attach_evidence, capture_voice_events, evidence_body
+    exported = attach_evidence(exported, evidence_body(
+        action_trace=action_trace, final_state=final_state,
+        state_snapshots=state_snapshots,
+        voice_events=capture_voice_events(turns, live_events or [], latency_marks or []),
+        context={'execution_run_id': execution_run_id, 'conversation_id': conversation_id,
+                 'suite_id': suite_id, 'scenario_id': scenario_id, 'mode': mode,
+                 'completed_at': changed_at}, synthetic=synthetic,
+    ))
+    if source_telemetry:
+        from app.services.voice_telemetry_vcon import attach_source_telemetry
+        exported = attach_source_telemetry(exported, source_telemetry)
     validation = validate_ietf_vcon(exported)
     if not validation['valid']:
         raise ValueError(
@@ -267,34 +286,12 @@ def validate_ietf_vcon(vcon_export: Any) -> dict[str, Any]:
     except (TypeError, ValueError, AttributeError):
         errors.append('uuid must be a UUID')
     for key in ('created_at', 'updated_at'):
-        if not _is_timestamp(vcon_export.get(key)):
+        if not is_vcon_timestamp(vcon_export.get(key)):
             errors.append(f'{key} must be an RFC 3339 timestamp')
     parties = vcon_export.get('parties')
     if not isinstance(parties, list) or not parties:
         errors.append('parties must contain at least one participant')
-    dialog = vcon_export.get('dialog')
-    if not isinstance(dialog, list):
-        errors.append('dialog must be a list')
-        dialog = []
-    for index, item in enumerate(dialog):
-        if not isinstance(item, dict):
-            errors.append(f'dialog[{index}] must be an object')
-            continue
-        if item.get('type') == 'text':
-            if not isinstance(item.get('body'), str) or not item['body'].strip():
-                errors.append(f'dialog[{index}] text body is required')
-            if item.get('mediatype') != 'text/plain':
-                errors.append(f'dialog[{index}] text mediatype must be text/plain')
-        elif item.get('type') == 'recording':
-            parsed = urlparse(str(item.get('url') or ''))
-            if parsed.scheme != 'https':
-                errors.append(f'dialog[{index}] recording URL must use HTTPS')
-            if not _is_sha512_base64url(item.get('content_hash')):
-                errors.append(
-                    f'dialog[{index}] recording content_hash must be a base64url SHA-512 digest'
-                )
-        else:
-            errors.append(f'dialog[{index}] has unsupported type')
+    errors.extend(vcon_dialog_errors(vcon_export.get('dialog')))
     analysis = vcon_export.get('analysis')
     if not isinstance(analysis, list) or not analysis:
         errors.append('analysis must contain CAE provenance')
@@ -435,31 +432,6 @@ def _normalise_timestamp(value: str | None, *, fallback: str | None = None) -> s
         except ValueError:
             pass
     return datetime.now(UTC).isoformat().replace('+00:00', 'Z')
-
-
-def _is_timestamp(value: Any) -> bool:
-    if not isinstance(value, str) or not value:
-        return False
-    try:
-        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
-    except ValueError:
-        return False
-    return parsed.tzinfo is not None
-
-
-def _is_sha512_base64url(value: Any) -> bool:
-    """Return whether ``value`` is an unpadded/optionally padded SHA-512 digest."""
-    if not isinstance(value, str) or not value.strip() or value.startswith('sha512-'):
-        return False
-    try:
-        digest = value.strip()
-        padded = digest + ('=' * (-len(digest) % 4))
-        decoded = base64.b64decode(
-            padded.encode('ascii'), altchars=b'-_', validate=True
-        )
-    except (UnicodeEncodeError, ValueError, binascii.Error):
-        return False
-    return len(decoded) == 64
 
 
 def _transcript_from_dialog(dialog: list[dict[str, Any]]) -> str:

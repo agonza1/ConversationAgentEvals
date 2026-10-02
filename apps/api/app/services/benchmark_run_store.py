@@ -82,7 +82,7 @@ def export_benchmark_run_vcon(db: Session, *, user_id: str, run_id: str) -> dict
         return None
 
     report = record.get('report') if isinstance(record.get('report'), dict) else {}
-    vcon_export = report.get('vcon_export') if isinstance(report.get('vcon_export'), dict) else None
+    vcon_export = report.get('ietf_vcon_export') or report.get('vcon_export')
     if vcon_export is None:
         return None
 

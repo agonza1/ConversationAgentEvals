@@ -8,7 +8,8 @@ ACTION_NAME_KEYS = ('name', 'action', 'tool', 'tool_name', 'function', 'operatio
 ACTION_ARGS_KEYS = ('arguments', 'args', 'input', 'inputs', 'parameters', 'params', 'payload')
 ACTION_RESULT_KEYS = ('result', 'output', 'outputs', 'response')
 ACTION_STATUS_KEYS = ('status', 'state', 'outcome')
-FAILURE_VALUES = {'fail', 'failed', 'failure', 'error', 'errored', 'cancelled', 'canceled', False}
+FAILURE_VALUES = {'fail', 'failed', 'failure', 'error', 'errored', 'cancelled', 'canceled',
+                  'timeout', 'timed_out', 'requested', 'pending', 'running', 'unknown', False}
 
 
 @dataclass(frozen=True)

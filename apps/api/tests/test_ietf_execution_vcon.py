@@ -67,6 +67,7 @@ def test_ietf_execution_vcon_uses_spoken_text_and_keeps_asr_as_analysis():
     assert exported['parties'] == [
         {'name': 'Caller', 'type': 'bot', 'validation': 'none'},
         {'name': 'Agent', 'type': 'bot', 'validation': 'none'},
+        {'name': 'ConVoice QA', 'type': 'bot', 'validation': 'none'},
     ]
     assert exported['dialog'][0] == {
         'type': 'text',

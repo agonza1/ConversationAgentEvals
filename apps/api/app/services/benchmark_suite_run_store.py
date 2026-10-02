@@ -326,7 +326,7 @@ def _suite_vcon_records(suite_report: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(item, dict):
             continue
         report = item.get('benchmark_report') if isinstance(item.get('benchmark_report'), dict) else item
-        vcon_export = report.get('vcon_export') if isinstance(report, dict) else None
+        vcon_export = (report.get('ietf_vcon_export') or report.get('vcon_export')) if isinstance(report, dict) else None
         if isinstance(vcon_export, dict):
             records.append(vcon_export)
     return records
