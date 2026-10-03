@@ -37,7 +37,7 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
             channel: 'voice',
             target: 'builtin_sample_voice',
             description: 'Built-in target for cancellation-rescue voice evaluation.',
-            metadata: { model_name: 'gpt-5.4-mini', prompt_version: 'generalist-v1' },
+            metadata: { model_name: 'gpt-6-luna', prompt_version: 'generalist-v1' },
           },
           {
             id: 'acc-offline-fixture-agent',

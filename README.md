@@ -2,7 +2,7 @@
 
 Open-source QA and regression testing for voice and conversation agents, powered by [ASSERT](https://github.com/responsibleai/ASSERT).
 
-ConversationAgentEvals is an application and workflow wrapper around ASSERT-compatible contracts. ASSERT defines the upstream specification, scenario, failure-taxonomy, and portable-artifact model. This repository currently provides the standalone evaluation implementation as well as the product layer around it: target execution, evidence ingestion, projects and runs, queue lifecycle, persistence, reports, exports, and deployment. The ASSERT boundary keeps that local runtime replaceable by an external engine without changing product-facing contracts.
+ConversationAgentEvals is an application and workflow layer around ASSERT 0.3 contracts. ASSERT defines the upstream specification, scenario, failure-taxonomy, and portable-artifact model. CAE provides target execution, deterministic evaluation, evidence ingestion, projects and runs, persistence, reports, exports, and deployment. Its semantic judge uses one centrally integrated `assert-ai==0.3.0` runtime rather than version-specific adapters.
 
 **ConversationAgentEvals is independently installable, testable, and usable.** Its built-in benchmark suites, evidence APIs, ASSERT boundary, reports, exports, and saved-run workflows do not require Agentic Contact Center or another target repository. External systems are optional target adapters and examples, never runtime dependencies of the core product.
 
@@ -15,13 +15,13 @@ There is one product and one supported evaluation contract. Users can either run
 ## What this repository adds
 
 - Hosted projects, suites, runs, reruns, comparisons, exports, and audit views.
-- Evidence normalization for transcripts, conversations, vCon records, tool/action traces, final-state snapshots, audio pointers, and voice metadata.
+- Evidence normalization for transcripts, conversations, CAE vCon-compatible records, portable IETF vCon `draft-ietf-vcon-vcon-core-04` (vCon format `0.4.0`) exports, tool/action traces, final-state snapshots, audio pointers, and voice metadata.
 - Platform-owned authentication, project lineage, retention, labels, retries, cancellation, quotas, billing hooks, and cost limits.
 - Durable ASSERT artifact manifests with searchable platform metadata indexes.
 - Operator-facing QA reports, saved-run history, regression comparisons, and export workflows.
 - A focused benchmark runner at `/benchmarks`, including an Execute **Launch evaluation** panel that streams configured text, replay, and voice conversations into an `inference_set.jsonl` live list.
 - An opt-in `openai_codex` text target that uses connected local Codex OAuth to record a real model response. It does not invent tool events or completed-task state, so reports honestly show missing live-tool evidence.
-- A built-in streaming voice reference target: Pipecat tester → streaming Kokoro PCM → Silero VAD + rtc-asr Local STT v1 → configured OpenAI-compatible/Codex or local Ollama LLM → streaming Kokoro reply → current-run metrics, evaluation, and vCon evidence. This local synthetic-media proof is not browser, SIP, or PSTN validation.
+- A built-in streaming voice reference target: Pipecat tester → streaming Kokoro PCM → Silero VAD + rtc-asr Local STT v1 → configured OpenAI-compatible/Codex or local Ollama LLM → streaming Kokoro reply → current-run metrics, evaluation, CAE evidence, and a portable IETF vCon `draft-ietf-vcon-vcon-core-04` (vCon format `0.4.0`) export. This local synthetic-media proof is not browser, SIP, or PSTN validation.
 
 Evaluation artifacts that conform to the ASSERT boundary remain the canonical results. The application database stores product metadata and indexes; it does not replace the evaluation result model.
 
@@ -116,7 +116,7 @@ flowchart LR
 Core ownership:
 
 - `apps/web`: Next.js product UI and benchmark runner.
-- `apps/api`: FastAPI product API, ASSERT boundary, evidence ingestion, persistence, queue lifecycle, and exports.
+- `apps/api`: FastAPI product API, ASSERT 0.3 boundary, evidence ingestion, persistence, evaluation lifecycle, and exports.
 - `apps/pipecat`: media orchestration groundwork for voice and WebRTC paths.
 - `docs`: environment, operations, demos, and product-specific implementation notes.
 
@@ -124,11 +124,11 @@ Canonical ASSERT wrapper anchors:
 
 - [apps/api/app/schemas/assert_contracts.py](apps/api/app/schemas/assert_contracts.py)
 - [apps/api/app/services/assert_boundary.py](apps/api/app/services/assert_boundary.py)
+- [apps/api/app/integrations/assert_runtime.py](apps/api/app/integrations/assert_runtime.py)
 - [apps/api/app/services/assert_artifact_store.py](apps/api/app/services/assert_artifact_store.py)
-- [apps/api/app/services/assert_queue_lifecycle.py](apps/api/app/services/assert_queue_lifecycle.py)
 - [docs/assert-boundary-and-schemas.md](docs/assert-boundary-and-schemas.md)
 
-The primary checked-in runtime evaluates through the local ASSERT-compatible boundary in [apps/api/app/services/benchmark_service.py](apps/api/app/services/benchmark_service.py). The optional `POST /api/assert/runs` endpoint is a synthetic local sidecar adapter used to exercise the same contract. Completed canonical manifests use `local-artifact://assert/runs/{run_id}/manifest.json`. The separate opt-in upstream semantic judge is documented in [docs/upstream-assert-judge.md](docs/upstream-assert-judge.md).
+The primary runtime evaluates through the in-process ASSERT-compatible boundary in [apps/api/app/services/benchmark_service.py](apps/api/app/services/benchmark_service.py). The separately enabled semantic judge uses the single pinned `assert-ai==0.3.0` runtime and is documented in [docs/upstream-assert-judge.md](docs/upstream-assert-judge.md). Completed canonical manifests use `local-artifact://assert/runs/{run_id}/manifest.json`.
 
 ## Docker
 

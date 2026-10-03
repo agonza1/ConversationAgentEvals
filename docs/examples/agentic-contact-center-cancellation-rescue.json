@@ -135,7 +135,7 @@
       "optional external target connectivity",
       "transcript, event, latency, and final-state normalization",
       "native benchmark request and evaluation",
-      "canonical ASSERT wrapper request creation"
+      "deterministic evaluation artifact generation"
     ],
     "limitations": [
       "The caller is a scripted transcript fixture, not realtime audio.",
@@ -143,7 +143,7 @@
       "Live Kokoro TTS and remote playback are not proven by this example.",
       "Full-duplex media and barge-in are not proven by this example.",
       "SIP / FreeSWITCH transport is not proven by this example.",
-      "The local ASSERT sidecar validates ingestion and artifact readiness; it is not by itself a semantic ASSERT judge run."
+      "The in-process CAE evaluator proves normalized evidence ingestion and deterministic artifact generation; semantic ASSERT judging is a separate optional review of completed execution conversations."
     ]
   },
   "future_realtime_audio": {

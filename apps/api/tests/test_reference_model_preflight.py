@@ -445,7 +445,7 @@ def test_voice_health_validates_ollama_tester_when_gpt_target_is_ready(monkeypat
 
     assert report is not base
     assert report['ready'] is True
-    assert llm['target_model'] == 'gpt-5.4-mini'
+    assert llm['target_model'] == 'gpt-6-luna'
     assert llm['target_provider'] == 'fake'
     assert llm['tester_model'] == 'ollama/gemma2:2b'
     assert llm['tester_provider'] == 'ollama'

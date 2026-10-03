@@ -12,7 +12,7 @@ Kokoro services, see [Parallel Development](parallel-development.md).
 | `PORT` | `3012` | Browser-facing web app port. `npm run dev` also uses it for the local web port unless `WEB_PORT` is set. |
 | `API_PORT` | `8025` | Host port for the FastAPI service. |
 | `PIPECAT_PORT` | `8110` | Host port for the Pipecat service. The benchmark demo can run without live microphone ASR. |
-| `APP_ENV` | `development` | Runtime environment label. Local sidecars and demo affordances assume a development-like value. |
+| `APP_ENV` | `development` | Runtime environment label used by local and hosted product affordances. |
 | `PRODUCTION` | `false` | Set `true` only when non-live testing controls should be hidden. |
 
 `npm run check:env`, `npm run dev`, and `npm run test:benchmark-smoke` validate these variables and print a focused error if one is missing or malformed.
@@ -78,11 +78,13 @@ KOKORO_BASE_URL=http://localhost:8880
 KOKORO_MODEL=kokoro
 KOKORO_TESTER_VOICE=af_heart
 KOKORO_TARGET_VOICE=af_bella
-REFERENCE_LLM_MODEL=gpt-5.4-mini
-REFERENCE_TESTER_LLM_MODEL=gpt-5.4-mini
+REFERENCE_LLM_MODEL=
+REFERENCE_TESTER_LLM_MODEL=
 OLLAMA_BASE_URL=http://localhost:11434
 REFERENCE_OLLAMA_MODEL=gemma2:2b
 ```
+
+Leave the reference model overrides blank to use GPT-6 Luna with Codex OAuth or GPT-4.1 Mini with an API key.
 
 The built-in generalist voice target is a real local streaming pipeline:
 Pipecat tester → adaptive streaming Kokoro caller audio → Silero + rtc-asr →
@@ -107,7 +109,7 @@ dropdown:
 ollama pull gemma2:2b
 OLLAMA_BASE_URL=http://localhost:11434
 REFERENCE_OLLAMA_MODEL=gemma2:2b
-REFERENCE_TESTER_LLM_MODEL=gpt-5.4-mini
+REFERENCE_TESTER_LLM_MODEL=
 ```
 
 The configuration above keeps an independent GPT tester and therefore still
@@ -151,6 +153,12 @@ docker compose --profile voice up --build
 
 When `RTC_ASR_BASE_URL` is empty or unhealthy, live session startup records ASR as `not_configured` or `unavailable` and logs a `rtc_asr_skipped` event. The `/sessions/{id}/ask` transcript loop remains non-production demo support, not the ASR provider contract.
 
+For Codex OAuth with a ChatGPT account, CAE defaults to `gpt-6-luna`: it is the
+efficient replacement for the retired `gpt-5.4-mini`. CAE also upgrades either
+retired GPT-5.4 model and Sol selections on Codex OAuth to Luna when a saved
+configuration still selects one. Explicit API
+key configurations can continue to use their own supported model IDs.
+
 ## Optional product integrations
 
 These are not needed for the minimal local demo. Set them only when working on the related integration path.
@@ -160,11 +168,11 @@ OPENAI_API_KEY=
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_REALTIME_MODEL=gpt-realtime-mini
 OPENAI_RESPONSES_MODEL=gpt-4.1-mini
-SPEC_GENERATION_MODEL=gpt-5.4-mini
+SPEC_GENERATION_MODEL=
 
 # Standalone CAE product judge (/api/product/judge)
 LLM_JUDGE_PROVIDER=openai_codex
-LLM_JUDGE_MODEL=gpt-5.4-mini
+LLM_JUDGE_MODEL=
 LLM_JUDGE_API_KEY=
 OPENAI_CODEX_OAUTH_PATH=
 OPENAI_CODEX_IMPORT_HOME=1
@@ -179,9 +187,6 @@ ASSERT_JUDGE_MAX_N=1
 ASSERT_JUDGE_MAX_CONCURRENT=2
 ASSERT_JUDGE_MAX_TOKENS=8000
 ASSERT_JUDGE_TIMEOUT_SECONDS=300
-
-# Development-only synthetic ASSERT lifecycle sidecar
-ASSERT_LOCAL_SIDECAR_ENABLED=
 
 HEYGEN_LIVE_AVATAR_API_KEY=
 HEYGEN_API_KEY=
@@ -205,6 +210,8 @@ BUSINESS_CONTACT_URL=
 REALTIME_REQUEST_TIMEOUT_MS=5000
 ```
 
+Leave `SPEC_GENERATION_MODEL` and `LLM_JUDGE_MODEL` blank for provider-aware defaults: Codex OAuth uses GPT-6 Luna, while the API-key spec generator uses GPT-5.4 Mini and the API-key judge uses GPT-4.1 Mini.
+
 ### Local CAE product judge through Codex OAuth
 
 `LLM_JUDGE_PROVIDER=openai_codex` applies to the standalone CAE product-judge endpoint, `POST /api/product/judge`. It uses the **Connect OpenAI** control in the benchmark runner. OAuth tokens are stored in the gitignored `.local/openai-codex-oauth.json` file by default; set `OPENAI_CODEX_OAUTH_PATH` only to move that local store. An existing `~/.codex/auth.json` is imported when the local store is empty unless `OPENAI_CODEX_IMPORT_HOME=0`. `LLM_JUDGE_API_KEY` remains an optional API-key fallback for CI.
@@ -224,9 +231,5 @@ POST /api/assert/runs/{execution_run_id}/conversations/{conversation_id}/judge
 Enable it with `ASSERT_UPSTREAM_JUDGE_ENABLED=1` and configure an allowed `ASSERT_JUDGE_MODEL`. The pinned `assert-ai` subprocess uses LiteLLM/provider credentials; the local Codex OAuth session is not forwarded into it. For an OpenAI-backed model, set `OPENAI_API_KEY` or `LLM_JUDGE_API_KEY`. The latter is copied to `OPENAI_API_KEY` for the subprocess when necessary.
 
 This path shares the `LLM_JUDGE_DAILY_CREDIT_LIMIT` and `LLM_JUDGE_RESERVED_DAILY_CREDITS` ledger with the CAE product judge. `ASSERT_JUDGE_MAX_N`, `ASSERT_JUDGE_MAX_CONCURRENT`, token, timeout, and allowlist variables apply only to the upstream judge. See [Upstream ASSERT judging](upstream-assert-judge.md).
-
-### Development-only local ASSERT sidecar
-
-`ASSERT_LOCAL_SIDECAR_ENABLED` controls the synthetic `/api/assert/runs` lifecycle route in development-like environments. The route validates ASSERT-shaped input, queue, ingestion, and artifact contracts; it does not run upstream semantic evaluation. It is disabled on Cloud Run and when `APP_ENV` is production. See [ASSERT Boundary and Schemas](assert-boundary-and-schemas.md).
 
 User-created scenarios persist under `storage/user_scenarios.json` (Compose-mounted at `/workspace/storage`). Override with `USER_SCENARIOS_PATH` if needed. A one-time copy from the legacy `apps/api/data/user_scenarios.json` path runs when the new file is missing.

@@ -131,6 +131,8 @@ def _valid_score(run, conversation, judge_model, *, status='ok'):
         'judge_model': judge_model,
         'judge_status': status,
         'judge_error': None,
+        'score_keys': list(dimensions),
+        'not_applicable_score_keys': [],
         'verdict': {
             'dimensions': dimensions,
             'dimension_justifications': {
@@ -153,7 +155,7 @@ def _valid_score(run, conversation, judge_model, *, status='ok'):
 
 
 def _install_fake_assert(monkeypatch, writer):
-    monkeypatch.setattr(upstream_assert_judge.shutil, 'which', lambda name: '/venv/bin/assert-ai')
+    monkeypatch.setattr(upstream_assert_judge, 'cli_executable', lambda: '/venv/bin/python')
     captured = {}
 
     def fake_run(command, **kwargs):
@@ -171,6 +173,46 @@ def _install_fake_assert(monkeypatch, writer):
 
 def _spent_credits():
     return int(product_service._load_judge_spend().get('spent') or 0)
+
+
+def test_assert_03_dimension_contract_accepts_not_applicable_and_ordinal_values():
+    not_applicable = {
+        'dimensions': {'resolution_quality': None},
+        'dimension_applicability': {'resolution_quality': False},
+    }
+    assert upstream_assert_judge._valid_dimension_value(
+        verdict=not_applicable,
+        name='resolution_quality',
+        not_applicable_score_keys={'resolution_quality'},
+        dimension_scales={},
+    ) is True
+
+    ordinal = {'dimensions': {'resolution_quality': 'resolved'}}
+    assert upstream_assert_judge._valid_dimension_value(
+        verdict=ordinal,
+        name='resolution_quality',
+        not_applicable_score_keys=set(),
+        dimension_scales={
+            'resolution_quality': {
+                'type': 'ordinal',
+                'values': [
+                    {'value': 'unresolved', 'label': 'Unresolved'},
+                    {'value': 'resolved', 'label': 'Resolved'},
+                ],
+            },
+        },
+    ) is True
+
+    contradictory = {
+        'dimensions': {'policy_violation': False},
+        'dimension_applicability': {'policy_violation': False},
+    }
+    assert upstream_assert_judge._valid_dimension_value(
+        verdict=contradictory,
+        name='policy_violation',
+        not_applicable_score_keys=set(),
+        dimension_scales={},
+    ) is False
 
 
 def test_assert_inference_adapter_preserves_voice_actions_and_final_state():
@@ -197,6 +239,29 @@ def test_assert_inference_adapter_preserves_voice_actions_and_final_state():
     assert 'case-42' in tools[0]['tool_result']
     assert tools[1]['tool_name'] == 'cae_final_state_snapshot'
     assert 'refund_review_opened' in tools[1]['tool_result']
+
+
+def test_assert_inference_adapter_keeps_bookkeeping_final_state_black_box():
+    run, conversation = _run_and_conversation()
+    conversation['action_trace'] = []
+    conversation['final_state'] = {
+        'complete': False,
+        'outcome': 'conversation_only_evidence_recorded',
+        'termination_reason': 'max_exchanges',
+        'runtime_provenance': {
+            'target': 'openai_codex',
+            'live_tool_execution': False,
+        },
+    }
+
+    row = build_assert_inference_row(run=run, conversation=conversation)
+
+    assert row['dimensions']['evidence_level'] == 'black_box'
+    assert not any(
+        event['edit'].get('tool_name') == 'cae_final_state_snapshot'
+        for event in row['events']
+        if event['edit']['type'] == 'tool_call'
+    )
 
 
 def test_assert_inference_adapter_interleaves_explicit_action_anchors():
@@ -279,7 +344,7 @@ def test_upstream_assert_judge_runs_existing_judge_only_command(monkeypatch, tmp
         artifact_root=tmp_path / 'assert-invocation',
     )
 
-    assert captured['command'][:2] == ['/venv/bin/assert-ai', 'run']
+    assert captured['command'][:4] == ['/venv/bin/python', '-m', 'assert_ai.cli', 'run']
     assert captured['command'][-2:] == ['--output', 'json']
     assert captured['env']['OPENAI_API_KEY'] == 'test-key'
     assert response['status'] == 'ready'
@@ -367,12 +432,128 @@ def test_upstream_assert_judge_rejects_malformed_custom_dimensions(monkeypatch, 
 
     _install_fake_assert(monkeypatch, writer)
 
-    with pytest.raises(UpstreamAssertJudgeFailed, match='missing or non-boolean dimensions'):
+    with pytest.raises(UpstreamAssertJudgeFailed, match='missing or invalid dimension values'):
         run_upstream_assert_judge(
             run=run,
             conversation=conversation,
             scenario_contract=_scenario_contract(),
             artifact_root=tmp_path / 'malformed-dimensions',
+        )
+
+    assert _spent_credits() == 0
+
+
+def test_upstream_assert_judge_rejects_dimensions_outside_score_contract(monkeypatch, tmp_path):
+    run, conversation = _run_and_conversation()
+    _configure_assert_runtime(monkeypatch, tmp_path)
+
+    def writer(score_path, config):
+        score = _valid_score(run, conversation, config['pipeline']['judge']['model']['name'])
+        score['verdict']['dimensions']['undeclared_dimension'] = True
+        score['verdict']['dimension_justifications']['undeclared_dimension'] = 'Not configured.'
+        score_path.write_text(json.dumps(score) + '\n', encoding='utf-8')
+
+    _install_fake_assert(monkeypatch, writer)
+
+    with pytest.raises(UpstreamAssertJudgeFailed, match='missing or invalid dimension values'):
+        run_upstream_assert_judge(
+            run=run,
+            conversation=conversation,
+            scenario_contract=_scenario_contract(),
+            artifact_root=tmp_path / 'extra-dimension',
+        )
+
+    assert _spent_credits() == 0
+
+
+def test_upstream_assert_judge_rejects_undeclared_dimension_justification(monkeypatch, tmp_path):
+    run, conversation = _run_and_conversation()
+    _configure_assert_runtime(monkeypatch, tmp_path)
+
+    def writer(score_path, config):
+        score = _valid_score(run, conversation, config['pipeline']['judge']['model']['name'])
+        score['verdict']['dimension_justifications']['undeclared_dimension'] = 'Not configured.'
+        score_path.write_text(json.dumps(score) + '\n', encoding='utf-8')
+
+    _install_fake_assert(monkeypatch, writer)
+
+    with pytest.raises(UpstreamAssertJudgeFailed, match='justifications do not match'):
+        run_upstream_assert_judge(
+            run=run,
+            conversation=conversation,
+            scenario_contract=_scenario_contract(),
+            artifact_root=tmp_path / 'extra-justification',
+        )
+
+    assert _spent_credits() == 0
+
+
+@pytest.mark.parametrize('metadata_kind', ['not_applicable', 'ordinal'])
+def test_upstream_assert_judge_rejects_score_metadata_not_declared_by_config(
+    monkeypatch,
+    tmp_path,
+    metadata_kind,
+):
+    run, conversation = _run_and_conversation()
+    _configure_assert_runtime(monkeypatch, tmp_path)
+
+    def writer(score_path, config):
+        score = _valid_score(run, conversation, config['pipeline']['judge']['model']['name'])
+        if metadata_kind == 'not_applicable':
+            score['not_applicable_score_keys'] = ['policy_violation']
+            score['verdict']['dimensions']['policy_violation'] = None
+            score['verdict']['dimension_applicability'] = {'policy_violation': False}
+        else:
+            score['dimension_scales'] = {
+                'policy_violation': {
+                    'type': 'ordinal',
+                    'values': [
+                        {'value': 'clear', 'label': 'Clear'},
+                        {'value': 'flagged', 'label': 'Flagged'},
+                    ],
+                },
+            }
+            score['verdict']['dimensions']['policy_violation'] = 'clear'
+        score_path.write_text(json.dumps(score) + '\n', encoding='utf-8')
+
+    _install_fake_assert(monkeypatch, writer)
+
+    message = (
+        'not_applicable_score_keys do not match'
+        if metadata_kind == 'not_applicable'
+        else 'dimension_scales do not match'
+    )
+    with pytest.raises(UpstreamAssertJudgeFailed, match=message):
+        run_upstream_assert_judge(
+            run=run,
+            conversation=conversation,
+            scenario_contract=_scenario_contract(),
+            artifact_root=tmp_path / f'unconfigured-{metadata_kind}',
+        )
+
+    assert _spent_credits() == 0
+
+
+def test_upstream_assert_judge_rejects_false_applicability_for_required_dimension(
+    monkeypatch,
+    tmp_path,
+):
+    run, conversation = _run_and_conversation()
+    _configure_assert_runtime(monkeypatch, tmp_path)
+
+    def writer(score_path, config):
+        score = _valid_score(run, conversation, config['pipeline']['judge']['model']['name'])
+        score['verdict']['dimension_applicability'] = {'policy_violation': False}
+        score_path.write_text(json.dumps(score) + '\n', encoding='utf-8')
+
+    _install_fake_assert(monkeypatch, writer)
+
+    with pytest.raises(UpstreamAssertJudgeFailed, match='missing or invalid dimension values'):
+        run_upstream_assert_judge(
+            run=run,
+            conversation=conversation,
+            scenario_contract=_scenario_contract(),
+            artifact_root=tmp_path / 'invalid-applicability',
         )
 
     assert _spent_credits() == 0
@@ -504,7 +685,7 @@ def test_upstream_assert_judge_requires_api_key_for_openai(monkeypatch, tmp_path
     _configure_assert_runtime(monkeypatch, tmp_path)
     monkeypatch.delenv('LLM_JUDGE_API_KEY', raising=False)
     monkeypatch.delenv('OPENAI_API_KEY', raising=False)
-    monkeypatch.setattr(upstream_assert_judge.shutil, 'which', lambda name: '/venv/bin/assert-ai')
+    monkeypatch.setattr(upstream_assert_judge, 'cli_executable', lambda: '/venv/bin/python')
 
     with pytest.raises(UpstreamAssertJudgeUnavailable, match='requires OPENAI_API_KEY'):
         run_upstream_assert_judge(
@@ -535,22 +716,22 @@ def test_upstream_assert_judge_is_explicitly_opt_in(monkeypatch):
     ],
 )
 def test_assert_judge_endpoint_maps_control_failures(monkeypatch, exception, status_code):
-    from app.routes import assert_sidecar
+    from app.routes import assert_judge
 
     run, conversation = _run_and_conversation()
-    monkeypatch.setattr(assert_sidecar.execution_run_store, 'get_execution_run', lambda run_id: run)
+    monkeypatch.setattr(assert_judge.execution_run_store, 'get_execution_run', lambda run_id: run)
     monkeypatch.setattr(
-        assert_sidecar.execution_run_store,
+        assert_judge.execution_run_store,
         'get_conversation',
         lambda run_id, conversation_id: conversation,
     )
     monkeypatch.setattr(
-        assert_sidecar,
+        assert_judge,
         'get_scenario_contract',
         lambda suite_id, scenario_id: {'goal': 'Review safely.'},
     )
     monkeypatch.setattr(
-        assert_sidecar,
+        assert_judge,
         'run_upstream_assert_judge',
         lambda **kwargs: (_ for _ in ()).throw(exception),
     )
@@ -565,17 +746,17 @@ def test_assert_judge_endpoint_maps_control_failures(monkeypatch, exception, sta
 
 
 def test_assert_judge_endpoint_persists_pending_review(monkeypatch):
-    from app.routes import assert_sidecar
+    from app.routes import assert_judge
 
     run, conversation = _run_and_conversation()
-    monkeypatch.setattr(assert_sidecar.execution_run_store, 'get_execution_run', lambda run_id: run)
+    monkeypatch.setattr(assert_judge.execution_run_store, 'get_execution_run', lambda run_id: run)
     monkeypatch.setattr(
-        assert_sidecar.execution_run_store,
+        assert_judge.execution_run_store,
         'get_conversation',
         lambda run_id, conversation_id: conversation,
     )
     monkeypatch.setattr(
-        assert_sidecar.execution_run_store,
+        assert_judge.execution_run_store,
         'deterministic_evaluation_snapshot',
         lambda value: {'verdict': value.get('verdict')},
     )
@@ -587,7 +768,7 @@ def test_assert_judge_endpoint_persists_pending_review(monkeypatch):
 
     provenance = {
         'engine': 'assert',
-        'assert_version': '0.1.0',
+        'assert_version': '0.3.0',
         'judge_status': 'ok',
         'input_fingerprint': 'fingerprint',
         'score_sha256': 'score-sha',
@@ -595,13 +776,13 @@ def test_assert_judge_endpoint_persists_pending_review(monkeypatch):
         'dimensions': {'policy_violation': False},
         'node_judgments': [],
     }
-    monkeypatch.setattr(assert_sidecar.execution_run_store, 'record_judge_review', fake_record)
+    monkeypatch.setattr(assert_judge.execution_run_store, 'record_judge_review', fake_record)
     monkeypatch.setattr(
-        assert_sidecar,
+        assert_judge,
         'get_scenario_contract',
         lambda suite_id, scenario_id: {'goal': 'Review safely.'},
     )
-    monkeypatch.setattr(assert_sidecar, 'run_upstream_assert_judge', lambda **kwargs: {
+    monkeypatch.setattr(assert_judge, 'run_upstream_assert_judge', lambda **kwargs: {
         'status': 'ready',
         'required_plan': 'starter',
         'credits': 10,
@@ -627,7 +808,7 @@ def test_assert_judge_endpoint_persists_pending_review(monkeypatch):
         'latency_ms': 12,
         'assert_result': {'judge_status': 'ok'},
         'artifacts': {'scores': 'scores.jsonl'},
-        'assert_version': '0.1.0',
+        'assert_version': '0.3.0',
         'input_fingerprint': 'fingerprint',
     })
 

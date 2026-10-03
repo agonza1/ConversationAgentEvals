@@ -14,7 +14,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / 'apps' / 'api'))
 
 from app.services.agentic_contact_center_example import (
-    build_assert_run_request,
     build_benchmark_run_request,
     normalize_acc_run,
 )
@@ -87,17 +86,7 @@ def main(argv: list[str] | None = None) -> int:
         ).model_dump(mode='json', exclude_none=True)
         _write_json(output_dir / 'benchmark-run-request.json', benchmark_request)
 
-        assert_request = build_assert_run_request(
-            normalized,
-            scenario=scenario,
-            assert_sidecar_url=args.assert_sidecar_url,
-            user_id=args.user_id,
-            project_id=args.project_id,
-        ).model_dump(mode='json', exclude_none=True)
-        _write_json(output_dir / 'assert-run-request.json', assert_request)
-
         benchmark_response = None
-        assert_response = None
         if not args.skip_submit:
             benchmark_endpoint = _join_url(args.conversation_agent_evals_url, '/api/benchmarks/run')
             benchmark_response = _json_request(
@@ -107,16 +96,6 @@ def main(argv: list[str] | None = None) -> int:
                 timeout=args.timeout,
             )
             _write_json(output_dir / 'benchmark-evaluation-response.json', benchmark_response)
-
-            if args.also_submit_assert_wrapper:
-                assert_endpoint = _join_url(args.conversation_agent_evals_url, '/api/assert/runs')
-                assert_response = _json_request(
-                    'POST',
-                    assert_endpoint,
-                    assert_request,
-                    timeout=args.timeout,
-                )
-                _write_json(output_dir / 'assert-ingestion-response.json', assert_response)
 
         summary = {
             'ok': True,
@@ -130,11 +109,9 @@ def main(argv: list[str] | None = None) -> int:
             'action_events': len(normalized.get('action_trace', [])),
             'latency_marks': len(normalized.get('latency_evidence', {}).get('marks', [])),
             'submitted_to_benchmark': benchmark_response is not None,
-            'submitted_to_assert_wrapper': assert_response is not None,
             'benchmark_run_id': benchmark_response.get('run_id') if isinstance(benchmark_response, dict) else None,
             'benchmark_verdict': benchmark_response.get('verdict') if isinstance(benchmark_response, dict) else None,
             'benchmark_score': benchmark_response.get('overall_score') if isinstance(benchmark_response, dict) else None,
-            'assert_platform_run_id': assert_response.get('platform_run_id') if isinstance(assert_response, dict) else None,
             'output_dir': str(output_dir),
             'limitations': normalized.get('runtime_caveats', []),
             'result_label': (
@@ -188,11 +165,6 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help='Running ConversationAgentEvals API base URL when submitting the benchmark or ASSERT request.',
     )
     parser.add_argument(
-        '--assert-sidecar-url',
-        default=os.getenv('ASSERT_SIDECAR_BASE_URL', 'http://127.0.0.1:8091'),
-        help='ASSERT invocation target recorded in the canonical request.',
-    )
-    parser.add_argument(
         '--output-root',
         type=Path,
         default=PROJECT_ROOT / 'artifacts' / 'agentic-contact-center-example',
@@ -205,11 +177,6 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         '--skip-submit',
         action='store_true',
         help='Normalize evidence and write requests without calling the ConversationAgentEvals API.',
-    )
-    parser.add_argument(
-        '--also-submit-assert-wrapper',
-        action='store_true',
-        help='After the benchmark run, also submit the canonical wrapper request to /api/assert/runs.',
     )
     return parser.parse_args(argv)
 

@@ -98,7 +98,7 @@ def main() -> None:
         params={'user_id': 'smoke-user'},
     )))
     _assert(exported['id'] == saved['id'], 'expected export id')
-    _assert(exported['filename'] == f"agentbench-issue-5-human-behavior-{saved['id']}.json", 'expected export filename')
+    _assert(exported['filename'] == f"convoice-qa-issue-5-human-behavior-{saved['id']}.json", 'expected export filename')
     _assert(exported['project_id'] == 'issue-5-human-behavior', 'expected export project id')
     _assert(exported['report']['run_id'] == pass_report['run_id'], 'expected export report run id')
     _assert(exported['report']['run_metadata'] == pass_report['run_metadata'], 'expected export metadata')

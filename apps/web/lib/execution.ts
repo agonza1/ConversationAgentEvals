@@ -152,6 +152,10 @@ export interface ConversationRecord {
   judge_reviews?: JudgeReviewRecord[];
   evaluation_adjudication?: EvaluationAdjudication | null;
   recording?: Record<string, unknown> | null;
+  vcon_export?: Record<string, unknown> | null;
+  vcon_export_summary?: Record<string, unknown> | null;
+  ietf_vcon_export?: Record<string, unknown> | null;
+  ietf_vcon_export_summary?: Record<string, unknown> | null;
   audio_session?: Record<string, unknown> | null;
   latency_marks?: Array<Record<string, unknown>>;
   metrics_summary?: ConversationMetricsSummary | null;
@@ -217,6 +221,28 @@ export interface LlmJudgeResult {
   next_action?: string | null;
   proposed_evaluation?: JudgeProposedEvaluation | null;
   raw_output?: string | null;
+  provenance?: AssertJudgeProvenance | null;
+}
+
+export interface AssertJudgeProvenance {
+  engine?: string;
+  assert_version?: string;
+  judge_status?: string;
+  evidence_level?: 'black_box' | 'partial_structured' | 'gray_box' | string;
+  score_keys?: string[];
+  not_applicable_score_keys?: string[];
+  dimensions?: Record<string, boolean | number | string | null>;
+  dimension_applicability?: Record<string, boolean>;
+  dimension_justifications?: Record<string, string>;
+  dimension_scales?: Record<string, {
+    type?: string;
+    values?: Array<{ value: number | string; label: string }>;
+  }>;
+  node_judgments?: Array<Record<string, unknown>>;
+  multi_judge?: Record<string, unknown> | null;
+  artifacts?: Record<string, string>;
+  input_fingerprint?: string;
+  score_sha256?: string;
 }
 
 export interface JudgeProposedEvaluation {

@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CAE execution evidence v1 attachment body",
+  "type": "object",
+  "required": ["schema", "synthetic", "context", "tool_events", "observed_actions", "state_snapshots", "voice_events", "redactions"],
+  "properties": {
+    "schema": {"const": "cae-execution-evidence-v1"},
+    "synthetic": {"type": "boolean"},
+    "context": {"type": "object"},
+    "observed_actions": {"type": "array", "maxItems": 10000, "items": {"type": "string"}},
+    "redactions": {"type": "array", "maxItems": 10000, "items": {"type": "string"}},
+    "voice_events": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/event"}},
+    "tool_events": {
+      "type": "array", "maxItems": 10000,
+      "items": {
+        "allOf": [{"$ref": "#/$defs/event"}],
+        "required": ["call_id", "sequence", "name", "arguments", "result", "status", "source"],
+        "properties": {
+          "call_id": {"type": "string", "minLength": 1},
+          "sequence": {"type": "integer", "minimum": 1},
+          "name": {"type": "string", "minLength": 1},
+          "arguments": {"type": "object"},
+          "status": {"enum": ["success", "error", "cancelled", "timeout", "requested", "running", "pending", "unknown", "observed"]}
+        }
+      }
+    },
+    "state_snapshots": {
+      "type": "array", "maxItems": 10000,
+      "items": {
+        "type": "object", "required": ["snapshot_id", "phase", "source", "state"],
+        "properties": {
+          "snapshot_id": {"type": "string", "minLength": 1},
+          "phase": {"enum": ["before", "after", "final"]},
+          "source": {"type": "string"},
+          "observed_at": {"type": ["string", "null"]},
+          "state": {"type": "object"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "event": {
+      "type": "object", "required": ["event_id", "event_type", "source"],
+      "properties": {
+        "event_id": {"type": "string", "minLength": 1},
+        "event_type": {"type": "string", "minLength": 1},
+        "source": {"type": "string"},
+        "dialog": {"type": "integer", "minimum": 0},
+        "timestamp": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

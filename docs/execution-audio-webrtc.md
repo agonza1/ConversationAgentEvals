@@ -109,14 +109,36 @@ During `pipecat_webrtc` execution:
 3. Kokoro response bytes are decoded incrementally into 20 ms `OutputAudioRawFrame` chunks.
 4. The paced bridge publishes each chunk and converts it to 16 kHz mono `InputAudioRawFrame` data for Silero and rtc-asr Local STT v1.
 5. Each direction retains LLM output, opposite-side rtc-asr receipt, timing, and frame metadata in `TranscriptionTurn` rows.
-6. Session close finalizes an `AudioRecordingHandle` (`uri`, `sha256`, `mime_type`, `duration_ms`).
-7. `build_execution_vcon(...)` builds a payload with `conversation.dialog` + `call.recording_*` and
-   calls the same `_vcon_export` helper used by benchmark/product flows.
-8. The conversation record stores `vcon_export`, `vcon_export_summary`, and `recording`.
+6. Session close finalizes an `AudioRecordingHandle` (`uri`, `sha256`, `sha512`, `mime_type`, `duration_ms`).
+7. `build_execution_vcon(...)` builds CAE's existing evidence object with the richer dialog,
+   receipt, recording-pointer, and evaluator metadata used by benchmark/product flows.
+8. `build_ietf_execution_vcon(...)` separately builds a portable
+   `draft-ietf-vcon-vcon-core-04` vCon (`vcon: "0.4.0"`, UUID, timestamps, parties,
+   standard text/recording dialogs, and linked analysis). It never re-labels the CAE evidence
+   object as an IETF document.
+9. The conversation record stores `vcon_export`, `vcon_export_summary`,
+   `ietf_vcon_export`, `ietf_vcon_export_summary`, and `recording`.
 
 Analysis record type: `execution_audio_capture`.
 
 Source format label: `pipecat_execution`.
+
+### Portable vCon boundary
+
+The portable vCon uses the text sent to TTS as the text dialog body when that source text
+exists. Peer ASR receipts and word-error-rate observations are linked transcript analysis,
+not substituted for what was spoken. This keeps playback, conversation text, and recognition
+quality evidence distinct.
+
+Current-run recordings are retained as owner-scoped CAE artifacts. A recording is added to the
+portable vCon only when its URL is HTTPS and it has a SHA-512 content hash, as required for
+external vCon media references. Local paths and relative API URLs are therefore intentionally
+omitted from the portable document; the text and analysis vCon remains valid.
+
+The portable document is currently unsigned and is not a redacted sharing artifact. CAE marks
+that state in its summary rather than implying authenticity or privacy guarantees. Add a signing
+key and an explicit redaction policy before sending a downloaded `.vcon` outside the CAE trust
+boundary.
 
 ## API usage
 

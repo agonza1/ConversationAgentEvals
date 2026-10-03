@@ -1304,7 +1304,7 @@ def test_saved_run_export_returns_owner_scoped_json_payload():
     assert export_response.status_code == 200
     exported = export_response.json()
     assert exported['id'] == saved['id']
-    assert exported['filename'] == f"agentbench-call-center-{saved['id']}.json"
+    assert exported['filename'] == f"convoice-qa-call-center-{saved['id']}.json"
     assert exported['project_name'] == 'Call Center'
     assert exported['firestore_path'] == f"users/demo-user/projects/call-center/runs/{saved['id']}"
     assert exported['report']['overall_score'] == 92
@@ -1353,7 +1353,7 @@ def test_project_export_returns_owner_scoped_history_bundle():
 
     assert export_response.status_code == 200
     exported = export_response.json()
-    assert exported['filename'] == 'agentbench-call-center-project-export.json'
+    assert exported['filename'] == 'convoice-qa-call-center-project-export.json'
     assert exported['project_id'] == 'call-center'
     assert exported['project_name'] == 'Call Center'
     assert exported['firestore_collection_path'] == 'users/demo-user/projects/call-center/runs'
@@ -1405,7 +1405,7 @@ def test_project_export_returns_owner_scoped_history_bundle():
     )
     assert filtered_response.status_code == 200
     filtered = filtered_response.json()
-    assert filtered['filename'] == 'agentbench-call-center-call-center-voice-ai-angry-outage-escalation-project-export.json'
+    assert filtered['filename'] == 'convoice-qa-call-center-call-center-voice-ai-angry-outage-escalation-project-export.json'
     assert filtered['suite_id'] == 'call-center-voice-ai'
     assert filtered['scenario_id'] == 'angry-outage-escalation'
     assert filtered['run_count'] == 2
@@ -1499,6 +1499,16 @@ def test_llm_judge_is_gated_without_provider_regardless_of_plan():
         assert payload['spend_control']['spent_daily_credits'] == 0
     finally:
         set_provider_for_tests('openai', None)
+
+
+def test_codex_judge_reports_the_effective_small_model(monkeypatch):
+    from app.services import product_service
+
+    monkeypatch.setenv('LLM_JUDGE_MODEL', 'gpt-5.4')
+    assert product_service._judge_model_name({'oauth_connected': True}) == 'gpt-6-luna'
+    monkeypatch.setenv('LLM_JUDGE_MODEL', 'gpt-6-sol')
+    assert product_service._judge_model_name({'oauth_connected': True}) == 'gpt-6-luna'
+    assert product_service._judge_model_name({'oauth_connected': False}) == 'gpt-6-sol'
 
 
 def test_llm_judge_spend_control_respects_budget_env(monkeypatch, tmp_path):

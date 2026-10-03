@@ -29,15 +29,18 @@ def request(path: str, *, payload: dict | None = None) -> dict:
         raise SystemExit(f'{path} failed ({exc.code}): {exc.read().decode()}') from exc
 
 
-queued = request('/api/execution/runs', payload={
+run_payload = {
     'suite_id': 'call-center-voice-ai',
     'scenario_ids': ['cancellation-rescue'],
     'agent_id': 'generalist-voice-agent',
     'user_id': USER,
     'project_id': 'reference-voice-smoke',
     'iterations': 1,
-    'model_name': os.getenv('REFERENCE_LLM_MODEL', 'gpt-5.4-mini'),
-})
+}
+configured_model = os.getenv('REFERENCE_LLM_MODEL', '').strip()
+if configured_model:
+    run_payload['model_name'] = configured_model
+queued = request('/api/execution/runs', payload=run_payload)
 run_id = queued['execution_run_id']
 deadline = time.time() + 300
 while time.time() < deadline:

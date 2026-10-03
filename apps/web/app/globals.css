@@ -1514,7 +1514,8 @@ select {
 
 .spec-editor-toolbar select,
 .spec-form-card input,
-.spec-form-card textarea {
+.spec-form-card textarea,
+.spec-form-card select {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1528,6 +1529,55 @@ select {
 .spec-form-card textarea {
   resize: vertical;
   line-height: 1.45;
+}
+
+.spec-assert-options {
+  display: grid;
+  gap: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.spec-assert-options h2 {
+  margin: 4px 0 0;
+  font-size: 18px;
+}
+
+.spec-assert-options small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.spec-judge-flags {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 0;
+  padding: 12px;
+}
+
+.spec-judge-flags legend {
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.spec-form-card .spec-check-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-weight: 650;
+}
+
+.spec-form-card .spec-check-option input {
+  width: auto;
+  margin: 0;
+  padding: 0;
 }
 
 .spec-save-banner,

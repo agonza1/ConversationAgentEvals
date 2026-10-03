@@ -1,5 +1,27 @@
 import { expect, test } from '@playwright/test';
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/specs/assert-library/behaviors', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      assert_version: '0.3.0',
+      behaviors: [{ kind: 'behavior', name: 'actionability_failures', version: '1.0', tags: ['quality'], description: 'Concrete answers.', summary: 'Detect vague answers.' }],
+    }),
+  }));
+  await page.route('**/api/specs/assert-library/judges', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      assert_version: '0.3.0',
+      judges: [
+        { kind: 'judge_preset', name: 'communication', version: '1.0', tags: ['operational'], description: 'Communication quality.' },
+        { kind: 'judge_preset', name: 'safety-core', version: '1.0', tags: ['safety'], description: 'Core safety.' },
+      ],
+    }),
+  }));
+});
+
 test('spec editor generates draft checks, requires approval, previews YAML, and saves a version', async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'workspace-user');
@@ -101,6 +123,16 @@ test('spec editor generates draft checks, requires approval, previews YAML, and 
   await page.route('**/api/specs', async (route) => {
     const body = JSON.parse(route.request().postData() || '{}');
     expect(body.spec.generated_content_status).toBe('approved');
+    expect(body.spec.behavior_preset).toBe('actionability_failures');
+    expect(body.spec.judges[0]).toMatchObject({
+      allow_not_applicable: true,
+      disabled_builtin_dimensions: ['overrefusal'],
+      presets: ['communication', 'safety-core'],
+      scale: {
+        type: 'ordinal',
+        values: { unresolved: 'Unresolved', resolved: 'Resolved' },
+      },
+    });
     expect(body.user_id).toBe('workspace-user');
     expect(body.project_id).toBe('workspace-project');
     await route.fulfill({
@@ -131,6 +163,11 @@ test('spec editor generates draft checks, requires approval, previews YAML, and 
   await expect(page.getByLabel('Success checks')).toHaveValue(/Completes the stated task/);
   await expect(page.getByText('Generated suggestions must be approved')).toBeVisible();
   await page.getByRole('button', { name: 'Approve generated draft' }).click();
+  await page.getByLabel('Behavior preset').selectOption('actionability_failures');
+  await page.getByLabel('Judge presets').selectOption(['communication', 'safety-core']);
+  await page.getByLabel('Allow not applicable').check();
+  await page.getByLabel('Disable overrefusal').check();
+  await page.getByLabel('Ordinal scale').fill('unresolved: Unresolved\nresolved: Resolved');
   await expect(page.getByText('Valid preview')).toBeVisible();
   await expect(page.getByText('suite: cancellation-rescue-agent')).toBeVisible();
   await expect(page.getByText('Workspace: workspace-project')).toBeVisible();

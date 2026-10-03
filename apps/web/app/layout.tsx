@@ -2,9 +2,9 @@ import './globals.css';
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: 'Agentic AI Benchmark Runner',
+  title: 'ConVoice QA | Voice agent quality assurance',
   description:
-    'Test whether AI agents can actually do the job with domain benchmarks for support, telehealth, teaching, fintech workflows, and text-first progression to voice and WebRTC.',
+    'Quality assurance for conversational voice agents: evaluate conversation quality, tool execution, task outcomes, and evidence across real-world workflows.',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

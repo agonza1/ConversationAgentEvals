@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiAwareLink } from './ApiAwareLink';
+import { EvidenceTimeline } from './EvidenceTimeline';
 import { LiveRunFeedback, type LiveRunEvent } from './LiveRunFeedback';
 import { apiErrorMessage } from '@/lib/apiError';
 import { listProductProjects, type ProductProjectOption } from '@/lib/execution';
@@ -90,6 +91,7 @@ interface BenchmarkReport {
   voice_interaction_summary?: VoiceInteractionSummary | null;
   vcon_analysis?: JsonRecord;
   vcon_export?: JsonRecord;
+  ietf_vcon_export?: JsonRecord;
   simulation_validation?: SimulationValidation;
   llm_judge?: JsonRecord;
 }
@@ -275,27 +277,37 @@ interface OpenAIProviderStatus {
   plan_type?: string | null;
   message?: string | null;
   last_error?: string | null;
+  execution_provider?: string | null;
+  execution_default_model?: string | null;
 }
 
-const DEFAULT_EXECUTION_MODEL = 'gpt-5.4-mini';
-const LOCAL_EXECUTION_MODELS = ['ollama/gemma2:2b'];
-const FALLBACK_EXECUTION_MODELS = [
+const DEFAULT_EXECUTION_MODEL = 'gpt-4.1-mini';
+const DEFAULT_CODEX_EXECUTION_MODEL = 'gpt-6-luna';
+const API_KEY_EXECUTION_MODELS = [
+  DEFAULT_EXECUTION_MODEL,
   'gpt-5.4-mini',
-  ...LOCAL_EXECUTION_MODELS,
-  'gpt-5.4',
-  'gpt-5.2',
+  'gpt-4o-mini',
   'gpt-4.1',
-  'gpt-4.1-mini',
   'gpt-4o',
   'o3',
-  'o3-mini',
-  'o4-mini',
 ];
+const LOCAL_EXECUTION_MODELS = ['ollama/gemma2:2b'];
+const FALLBACK_EXECUTION_MODELS = [
+  DEFAULT_CODEX_EXECUTION_MODEL,
+  ...LOCAL_EXECUTION_MODELS,
+  'gpt-5.6-luna',
+];
+
+function apiKeyModelOrDefault(current: string): string {
+  return API_KEY_EXECUTION_MODELS.includes(current) || LOCAL_EXECUTION_MODELS.includes(current)
+    ? current
+    : DEFAULT_EXECUTION_MODEL;
+}
 
 async function fetchOpenAIModels(): Promise<{ models: string[]; message: string | null }> {
   const response = await fetch(`${getApiBase()}/api/product/providers/openai/models`, { cache: 'no-store' });
   if (response.status === 401) {
-    return { models: [DEFAULT_EXECUTION_MODEL, ...LOCAL_EXECUTION_MODELS], message: 'Connect OpenAI to load GPT models; local Ollama models stay available.' };
+    return { models: [...API_KEY_EXECUTION_MODELS, ...LOCAL_EXECUTION_MODELS], message: 'Connect OpenAI to load GPT models; local Ollama models stay available.' };
   }
   if (!response.ok) {
     // Never leave the dropdown empty on transient API failures.
@@ -312,11 +324,11 @@ async function fetchOpenAIModels(): Promise<{ models: string[]; message: string 
   }>(response);
   const ids = (payload.models ?? [])
     .map((item) => (typeof item === 'string' ? item : item.id))
-    .filter((id): id is string => Boolean(id && id.trim()));
-  const merged = Array.from(new Set([DEFAULT_EXECUTION_MODEL, ...LOCAL_EXECUTION_MODELS, ...ids]));
+    .filter((id): id is string => Boolean(id && id.trim() && !id.trim().split('-').includes('sol')));
+  const merged = Array.from(new Set([DEFAULT_CODEX_EXECUTION_MODEL, ...LOCAL_EXECUTION_MODELS, ...ids]));
   merged.sort((a, b) => {
-    if (a === DEFAULT_EXECUTION_MODEL) return -1;
-    if (b === DEFAULT_EXECUTION_MODEL) return 1;
+    if (a === DEFAULT_CODEX_EXECUTION_MODEL) return -1;
+    if (b === DEFAULT_CODEX_EXECUTION_MODEL) return 1;
     return a.localeCompare(b);
   });
   return {
@@ -804,6 +816,14 @@ async function fetchBenchmarkSuiteContractManifest(suiteId: string) {
   );
 }
 
+async function inspectVcon(vcon: JsonRecord) {
+  return handleJson<{ evidence: JsonRecord; summary: { synthetic: boolean; evidence_level: string; tool_events: number; state_snapshots: number; voice_events: number } }>(
+    await fetch(`${getApiBase()}/api/benchmarks/evidence/intake`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vcon }),
+    }),
+  );
+}
+
 async function runBenchmark(payload: {
   suite_id: string;
   scenario_id: string;
@@ -950,6 +970,8 @@ interface ExecutionConversationRecord {
   recording?: JsonRecord | null;
   vcon_export?: JsonRecord | null;
   vcon_export_summary?: JsonRecord | null;
+  ietf_vcon_export?: JsonRecord | null;
+  ietf_vcon_export_summary?: JsonRecord | null;
   audio_session?: JsonRecord | null;
   verdict?: string | null;
   score?: number | null;
@@ -1169,6 +1191,25 @@ function executionVconSummary(
   return parts.join(' · ');
 }
 
+function executionIetfVconSummary(
+  summary?: JsonRecord | null,
+  exportPayload?: JsonRecord | null,
+): string | null {
+  if (!summary && !exportPayload) return null;
+  const version =
+    (typeof summary?.version === 'string' && summary.version) ||
+    (typeof exportPayload?.vcon === 'string' && exportPayload.vcon) ||
+    'unknown version';
+  const draft = typeof summary?.standard_draft === 'string'
+    ? summary.standard_draft
+    : 'draft-ietf-vcon-vcon-core-04';
+  const valid = summary?.valid === true;
+  const recording = summary?.recording_portable === true
+    ? 'portable recording'
+    : 'text and analysis only';
+  return `${draft} (${version}) · ${valid ? 'validated portable export' : 'validation needs attention'} · ${recording}`;
+}
+
 function executionAudioSessionSummary(session?: JsonRecord | null): string | null {
   if (!session || typeof session !== 'object') return null;
   const parts = [
@@ -1269,7 +1310,7 @@ function buildSavedRunAuditArtifactExport(userId: string, run: SavedRun): Benchm
   const artifacts = Array.isArray(evidenceArtifacts.artifacts) ? evidenceArtifacts.artifacts : [];
   const exportReadiness = report.evidence_audit_summary?.export_readiness;
   const runId = report.run_id ?? run.id;
-  const filenameParts = ['agentbench', report.suite_id, report.scenario_id, runId, 'audit-artifacts']
+  const filenameParts = ['convoice-qa', report.suite_id, report.scenario_id, runId, 'audit-artifacts']
     .filter(Boolean)
     .map(slugFilenamePart);
 
@@ -1282,7 +1323,7 @@ function buildSavedRunAuditArtifactExport(userId: string, run: SavedRun): Benchm
     user_id: userId,
     project_id: run.project_id,
     status: report.run_status ?? report.verdict ?? report.overall,
-    filename: `${filenameParts.join('-') || 'agentbench-run-audit-artifacts'}.json`,
+    filename: `${filenameParts.join('-') || 'convoice-qa-run-audit-artifacts'}.json`,
     operator_summary: {
       verdict: report.verdict ?? report.overall,
       overall_score: report.overall_score ?? report.score,
@@ -2121,38 +2162,61 @@ function shouldPreloadSampleEvidence() {
   return params.get('demo') === 'sample-evidence' || params.get('sample') === '1';
 }
 
+function vconDialogText(record: JsonRecord): string {
+  if (record.type !== undefined && record.type !== 'text') return '';
+  if (!Object.prototype.hasOwnProperty.call(record, 'body')) {
+    return typeof record.text === 'string'
+      ? record.text
+      : typeof record.transcript === 'string' ? record.transcript : '';
+  }
+  if (typeof record.body !== 'string') return '';
+  if (record.encoding === undefined || record.encoding === 'none' || record.encoding === 'json') {
+    return record.body;
+  }
+  if (record.encoding !== 'base64url') return '';
+  try {
+    const base64 = record.body.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return '';
+  }
+}
+
 function transcriptFromVcon(vcon: JsonRecord): string {
   const parties = Array.isArray(vcon.parties) ? vcon.parties : [];
   const dialog = Array.isArray(vcon.dialog) ? vcon.dialog : [];
   return dialog
     .map((item) => {
       const record = asRecord(item);
-      const partyIndex = Number(record.party ?? 0);
-      const party = asRecord(parties[partyIndex]);
-      const name = String(party.name ?? party.role ?? `party-${partyIndex}`);
-      const body = String(record.body ?? record.text ?? '').trim();
-      return body ? `${name}: ${body}` : '';
+      const partyReferences = Array.isArray(record.parties)
+        ? record.parties
+        : record.party == null ? [] : [record.party];
+      const names = partyReferences
+        .map((reference) => {
+          if (typeof reference === 'number' && Number.isInteger(reference)) {
+            const party = asRecord(parties[reference]);
+            return typeof party.name === 'string'
+              ? party.name
+              : typeof party.role === 'string'
+                ? party.role
+                : `party-${reference}`;
+          }
+          const party = asRecord(reference);
+          return typeof party.name === 'string'
+            ? party.name
+            : typeof party.role === 'string'
+              ? party.role
+              : typeof reference === 'string' ? reference : '';
+        })
+        .filter((name): name is string => Boolean(name));
+      const body = vconDialogText(record).trim();
+      return body ? `${names.join(' / ')}${names.length ? ': ' : ''}${body}` : '';
     })
     .filter(Boolean)
     .join('\n');
-}
-
-function sampleVconFromTranscript(transcriptText: string): string {
-  const lines = transcriptText
-    .split(/\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const parties = [{ name: 'Caller' }, { name: 'Agent' }];
-  const dialog = lines.map((line) => {
-    const matched = line.match(/^(caller|agent|user|customer)\s*:\s*(.*)$/i);
-    if (matched) {
-      const speaker = matched[1].toLowerCase();
-      const party = speaker === 'agent' ? 1 : 0;
-      return { party, body: matched[2] };
-    }
-    return { party: 0, body: line };
-  });
-  return JSON.stringify({ vcon: '0.0.1', parties, dialog }, null, 2);
 }
 
 function describeUploadedEvidence(filename: string, text: string): {
@@ -2173,11 +2237,17 @@ function describeUploadedEvidence(filename: string, text: string): {
         || (Array.isArray(record.parties) && Array.isArray(record.dialog));
       if (looksVcon) {
         const derived = transcriptFromVcon(record);
+        const isIetfCore04 = record.vcon === '0.4.0'
+          && typeof record.uuid === 'string'
+          && typeof record.created_at === 'string'
+          && Array.isArray(record.parties);
         return {
           kind: 'vcon',
           vcon: JSON.stringify(parsed, null, 2),
           transcript: derived || undefined,
-          message: `Loaded vCon from ${filename}.`,
+          message: isIetfCore04
+            ? `Loaded IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.4.0) from ${filename}.`
+            : `Loaded vCon${typeof record.vcon === 'string' ? ` v${record.vcon}` : ''} from ${filename}. CAE reads its text dialogs; the fully supported portable format is IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.4.0).`,
         };
       }
       if (typeof record.transcript === 'string') {
@@ -2210,6 +2280,7 @@ export function BenchmarkRunner({
   const loadingSavedRunRef = useRef(false);
   const autoLaunchDemoRef = useRef(false);
   const preserveScoreEvidenceRef = useRef(false);
+  const evidenceRequestRef = useRef(0);
   const [suites, setSuites] = useState<BenchmarkSuite[]>([]);
   const [selectedSuiteId, setSelectedSuiteId] = useState('');
   const [selectedScenarioId, setSelectedScenarioId] = useState('');
@@ -2315,6 +2386,7 @@ export function BenchmarkRunner({
   }
 
   function onTranscriptChange(nextValue: string) {
+    evidenceRequestRef.current += 1;
     preserveScoreEvidenceRef.current = true;
     setTranscript(nextValue);
     if (view !== 'score') return;
@@ -2343,14 +2415,21 @@ export function BenchmarkRunner({
     );
   }
 
+  function onSelectContract(kind: 'suite' | 'scenario', value: string) {
+    evidenceRequestRef.current += 1;
+    preserveScoreEvidenceRef.current = false;
+    clearStructuredEvidenceFields();
+    setUploadMessage(null);
+    if (kind === 'suite') setSelectedSuiteId(value);
+    else setSelectedScenarioId(value);
+  }
+
   function applyScenarioStructuredSample(nextScenario: BenchmarkScenario) {
     setActionTrace(stringifyEditable(nextScenario.sample_action_trace, '[]'));
     setFinalState(stringifyEditable(nextScenario.sample_final_state ?? nextScenario.expected_final_state, '{}'));
     setCallEvidence('');
     setGroupCall('');
-    setVconEvidence(
-      nextScenario.sample_transcript ? sampleVconFromTranscript(nextScenario.sample_transcript) : '',
-    );
+    setVconEvidence('');
   }
 
   function loadScenarioStarterData(
@@ -2384,16 +2463,34 @@ export function BenchmarkRunner({
     setUploadMessage(null);
   }
 
-  function onLoadSampleEvidence(scenario: BenchmarkScenario, options: { includeStructuredSample?: boolean } = {}) {
+  async function onLoadSampleEvidence(scenario: BenchmarkScenario, options: { includeStructuredSample?: boolean } = {}) {
+    const requestId = ++evidenceRequestRef.current;
     preserveScoreEvidenceRef.current = true;
     setSelectedScenarioId(scenario.id);
     loadScenarioStarterData(scenario, options);
     setShowSimulateEvidenceOptions(false);
     const withStructured = options.includeStructuredSample === true;
+    if (withStructured && selectedSuite) {
+      try {
+        const params = new URLSearchParams({ suite_id: selectedSuite.id, scenario_id: scenario.id });
+        const vcon = await handleJson<JsonRecord>(await fetch(`${getApiBase()}/api/benchmarks/evidence/sample-vcon?${params}`, { cache: 'no-store' }));
+        const loaded = await inspectVcon(vcon);
+        if (requestId !== evidenceRequestRef.current) return;
+        setTranscript(String(loaded.evidence.transcript ?? ''));
+        setActionTrace(stringifyEditable(loaded.evidence.action_trace, '[]'));
+        setFinalState(stringifyEditable(loaded.evidence.final_state, '{}'));
+        setVconEvidence(JSON.stringify(vcon, null, 2));
+        setIncludeStructuredEvidence(true);
+      } catch (err) {
+        if (requestId !== evidenceRequestRef.current) return;
+        setRunError(err instanceof Error ? err.message : 'Could not load the full sample vCon.');
+        return;
+      }
+    }
     setUploadMessage(
       view === 'score'
         ? withStructured
-          ? `Loaded full sample evidence: ${scenario.title}. Task completion and final state will be measured from the sample traces.`
+          ? `Loaded synthetic vCon: ${scenario.title}. Conversation, tool events and final state are included. Task/Final will be measured.`
           : `Loaded sample transcript: ${scenario.title}. Task/final stay n/a until you include structured evidence.`
         : `Loaded sample evidence: ${scenario.title}. This evidence is synthetic.`,
     );
@@ -2405,29 +2502,32 @@ export function BenchmarkRunner({
 
   async function onUploadEvidenceFile(file: File | null) {
     if (!file) return;
+    const requestId = ++evidenceRequestRef.current;
     preserveScoreEvidenceRef.current = true;
     setUploadMessage(null);
     setRunError(null);
     try {
       const text = await file.text();
+      if (requestId !== evidenceRequestRef.current) return;
       const loaded = describeUploadedEvidence(file.name, text);
       if (loaded.kind === 'vcon') {
-        // Imported evidence replaces any prior sample or edited evidence. Never
-        // supplement an uploaded record with scenario starter traces or state.
-        setActionTrace('');
-        setFinalState('');
+        const inspected = await inspectVcon(JSON.parse(loaded.vcon || '{}') as JsonRecord);
+        if (requestId !== evidenceRequestRef.current) return;
+        const importedSuite = suites.find((suite) => suite.id === inspected.evidence.suite_id);
+        if (importedSuite && importedSuite.scenarios.some((scenario) => scenario.id === inspected.evidence.scenario_id)) {
+          setSelectedSuiteId(importedSuite.id);
+          setSelectedScenarioId(String(inspected.evidence.scenario_id));
+        }
+        setVconEvidence(loaded.vcon || '');
+        setTranscript(String(inspected.evidence.transcript ?? ''));
+        setActionTrace(stringifyEditable(inspected.evidence.action_trace, '[]'));
+        setFinalState(stringifyEditable(inspected.evidence.final_state, '{}'));
         setCallEvidence('');
         setGroupCall('');
-        setVconEvidence(loaded.vcon || '');
-        setTranscript(loaded.transcript || '');
-        if (view === 'score') {
-          setIncludeStructuredEvidence(true);
-          setUploadMessage(
-            `${loaded.message} Transcript was extracted for scoring and the uploaded vCon will be evaluated as structured evidence.`,
-          );
-          setReport(null);
-          return;
-        }
+        setIncludeStructuredEvidence(true);
+        setUploadMessage(`${inspected.summary.synthetic ? 'Synthetic vCon. ' : ''}${inspected.summary.evidence_level.replaceAll('_', ' ')} · ${inspected.summary.tool_events} tool events · ${inspected.summary.state_snapshots} state snapshots · ${inspected.summary.voice_events} voice events. Imported scores are historical; Evaluate computes a new result.`);
+        setReport(null);
+        return;
       } else {
         setTranscript(loaded.transcript || '');
         clearStructuredEvidenceFields();
@@ -2435,6 +2535,7 @@ export function BenchmarkRunner({
       setReport(null);
       setUploadMessage(loaded.message);
     } catch (err) {
+      if (requestId !== evidenceRequestRef.current) return;
       setRunError(err instanceof Error ? err.message : 'Could not read the uploaded file.');
     }
   }
@@ -2516,10 +2617,10 @@ export function BenchmarkRunner({
   useEffect(() => {
     let active = true;
     async function loadExecutionModels() {
-      if (openaiProvider?.status !== 'connected') {
-        setExecutionModelOptions([DEFAULT_EXECUTION_MODEL, ...FALLBACK_EXECUTION_MODELS.filter((id) => id !== DEFAULT_EXECUTION_MODEL)]);
+      if (openaiProvider?.status !== 'connected' || openaiProvider?.execution_provider !== 'openai_codex') {
+        setExecutionModelOptions([...API_KEY_EXECUTION_MODELS, ...LOCAL_EXECUTION_MODELS]);
         setExecutionModelsMessage('Connect OpenAI to load GPT models; local Ollama models stay available.');
-        setExecutionModelName((current) => current || DEFAULT_EXECUTION_MODEL);
+        setExecutionModelName(apiKeyModelOrDefault);
         return;
       }
       try {
@@ -2527,19 +2628,19 @@ export function BenchmarkRunner({
         if (!active) return;
         setExecutionModelOptions(models);
         setExecutionModelsMessage(message);
-        setExecutionModelName((current) => (models.includes(current) ? current : DEFAULT_EXECUTION_MODEL));
+        setExecutionModelName((current) => (current !== DEFAULT_EXECUTION_MODEL && models.includes(current) ? current : DEFAULT_CODEX_EXECUTION_MODEL));
       } catch {
         if (!active) return;
         setExecutionModelOptions(FALLBACK_EXECUTION_MODELS);
         setExecutionModelsMessage('Using built-in model list. Re-connect OpenAI to refresh.');
-        setExecutionModelName((current) => current || DEFAULT_EXECUTION_MODEL);
+        setExecutionModelName((current) => (current !== DEFAULT_EXECUTION_MODEL && FALLBACK_EXECUTION_MODELS.includes(current) ? current : DEFAULT_CODEX_EXECUTION_MODEL));
       }
     }
     void loadExecutionModels();
     return () => {
       active = false;
     };
-  }, [openaiProvider?.status]);
+  }, [openaiProvider?.status, openaiProvider?.execution_provider]);
 
   useEffect(() => {
     let active = true;
@@ -3052,13 +3153,19 @@ export function BenchmarkRunner({
           setOpenaiProviderMessage(`Connected as ${status.email || status.account_id || 'OpenAI account'}.`);
           const nextConfig = await fetchProductConfig().catch(() => null);
           if (nextConfig) setProductConfig(nextConfig);
+          if (status.execution_provider !== 'openai_codex') {
+            setExecutionModelOptions([...API_KEY_EXECUTION_MODELS, ...LOCAL_EXECUTION_MODELS]);
+            setExecutionModelsMessage('API key is the active execution provider.');
+            setExecutionModelName(apiKeyModelOrDefault);
+            break;
+          }
           const { models, message } = await fetchOpenAIModels().catch(() => ({
             models: FALLBACK_EXECUTION_MODELS,
             message: 'Using built-in model list. Re-connect OpenAI to refresh.',
           }));
           setExecutionModelOptions(models);
           setExecutionModelsMessage(message);
-          setExecutionModelName((current) => (models.includes(current) ? current : DEFAULT_EXECUTION_MODEL));
+          setExecutionModelName((current) => (current !== DEFAULT_EXECUTION_MODEL && models.includes(current) ? current : DEFAULT_CODEX_EXECUTION_MODEL));
           break;
         }
       }
@@ -3075,9 +3182,9 @@ export function BenchmarkRunner({
       await disconnectOpenAIProvider();
       const status = await fetchOpenAIProviderStatus();
       setOpenaiProvider(status);
-      setExecutionModelOptions([DEFAULT_EXECUTION_MODEL]);
+      setExecutionModelOptions([...API_KEY_EXECUTION_MODELS, ...LOCAL_EXECUTION_MODELS]);
       setExecutionModelsMessage('Connect OpenAI to load models');
-      setExecutionModelName(DEFAULT_EXECUTION_MODEL);
+      setExecutionModelName(apiKeyModelOrDefault);
       const nextConfig = await fetchProductConfig().catch(() => null);
       if (nextConfig) setProductConfig(nextConfig);
       setOpenaiProviderMessage('OpenAI disconnected.');
@@ -3378,20 +3485,20 @@ export function BenchmarkRunner({
 
   function onExportCurrentVcon() {
     if (!report?.vcon_export) return;
-    const filenameParts = ['agentbench', report.suite_id, report.scenario_id, report.run_id, 'vcon']
+    const filenameParts = ['convoice-qa', report.suite_id, report.scenario_id, report.run_id, 'vcon']
       .filter(Boolean)
       .map(slugFilenamePart);
-    downloadJson(`${filenameParts.join('-') || 'agentbench-vcon'}.json`, report.vcon_export);
-    setExportMessage('Exported vCon-compatible benchmark record.');
+    downloadJson(`${filenameParts.join('-') || 'convoice-qa-vcon'}.vcon`, report.ietf_vcon_export || report.vcon_export);
+    setExportMessage('Exported vCon with conversation, available tool events and observed state.');
   }
 
   function onExportCurrentReport() {
     if (!report) return;
-    const filenameParts = ['agentbench', report.suite_id, report.scenario_id, report.run_id, 'report']
+    const filenameParts = ['convoice-qa', report.suite_id, report.scenario_id, report.run_id, 'report']
       .filter(Boolean)
       .map(slugFilenamePart);
 
-    downloadJson(`${filenameParts.join('-') || 'agentbench-report'}.json`, {
+    downloadJson(`${filenameParts.join('-') || 'convoice-qa-report'}.json`, {
       report,
       transcript: report.transcript ?? transcript,
       action_trace: report.action_trace ?? parseMaybeJson(actionTrace),
@@ -3404,17 +3511,17 @@ export function BenchmarkRunner({
   function onExportSuiteVconBundle() {
     if (!suiteSimulation) return;
     const records = [suiteSimulation.vcon_export, ...suiteSimulation.scenario_runs
-      .map((run) => run.benchmark_report.vcon_export)
+      .map((run) => run.benchmark_report.ietf_vcon_export ?? run.benchmark_report.vcon_export)
     ].filter((record): record is JsonRecord => Boolean(record));
     if (!records.length) {
       setExportMessage('No vCon-compatible records are available for this suite run.');
       return;
     }
 
-    const filenameParts = ['agentbench', suiteSimulation.suite_id, suiteSimulation.suite_run_id, 'vcon-bundle']
+    const filenameParts = ['convoice-qa', suiteSimulation.suite_id, suiteSimulation.suite_run_id, 'vcon-bundle']
       .filter(Boolean)
       .map((part) => String(part).replace(/[^a-z0-9-]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase());
-    downloadJson(`${filenameParts.join('-') || 'agentbench-suite-vcon-bundle'}.json`, {
+    downloadJson(`${filenameParts.join('-') || 'convoice-qa-suite-vcon-bundle'}.json`, {
       suite_run_id: suiteSimulation.suite_run_id,
       suite_id: suiteSimulation.suite_id,
       suite_name: suiteSimulation.suite_name,
@@ -3970,7 +4077,7 @@ export function BenchmarkRunner({
                   aria-label="Evaluation suite"
                   value={selectedSuite?.id ?? ''}
                   disabled={isLoading || !suites.length}
-                  onChange={(event) => setSelectedSuiteId(event.target.value)}
+                  onChange={(event) => onSelectContract('suite', event.target.value)}
                   style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
                 >
                   {suites.map((suite) => (
@@ -3984,7 +4091,7 @@ export function BenchmarkRunner({
                   aria-label="Evaluation scenario"
                   value={selectedScenario?.id ?? ''}
                   disabled={isLoading || !selectedSuite?.scenarios.length}
-                  onChange={(event) => setSelectedScenarioId(event.target.value)}
+                  onChange={(event) => onSelectContract('scenario', event.target.value)}
                   style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
                 >
                   {(selectedSuite?.scenarios ?? []).map((scenario) => (
@@ -4020,7 +4127,7 @@ export function BenchmarkRunner({
             <select
               value={selectedSuite?.id ?? ''}
               disabled={isLoading || !suites.length}
-              onChange={(event) => setSelectedSuiteId(event.target.value)}
+              onChange={(event) => onSelectContract('suite', event.target.value)}
               style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
             >
               {suites.map((suite) => (
@@ -4034,7 +4141,7 @@ export function BenchmarkRunner({
             <select
               value={selectedScenario?.id ?? ''}
               disabled={isLoading || !selectedSuite?.scenarios.length}
-              onChange={(event) => setSelectedScenarioId(event.target.value)}
+              onChange={(event) => onSelectContract('scenario', event.target.value)}
               style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white' }}
             >
               {(selectedSuite?.scenarios ?? []).map((scenario) => (
@@ -4179,12 +4286,12 @@ export function BenchmarkRunner({
             <div className="score-upload-copy">
               <p className="eyebrow">Evidence intake</p>
               <h2>Upload a vCon or transcript</h2>
-              <p>Drop in your own conversation artifact, or load clearly labeled sample evidence.</p>
+              <p>Best support: IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.4.0). CAE-compatible legacy vCon records with text dialogs are also accepted.</p>
             </div>
             <div className="score-upload-actions">
               <label className="score-upload-drop">
                 <span>Upload vCon or transcript</span>
-                <small>Accepts .vcon, .json, .txt, .md</small>
+                <small>Supports IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.4.0), plus .json, .txt, and .md</small>
                 <input
                   type="file"
                   accept=".vcon,.json,.txt,.md,application/json,text/plain,text/markdown"
@@ -4209,7 +4316,7 @@ export function BenchmarkRunner({
                 <p>
                   Synthetic sample for{' '}
                   <strong>{selectedScenario?.title ?? 'the selected scenario'}</strong> — not a live agent run.
-                  Transcript-only keeps Task/Final as n/a. Full sample includes action trace + final state so those tiles are measured.
+                  Transcript-only keeps Task/Final as n/a. Full sample loads a vCon with conversation, tool events and final state.
                 </p>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
                   <button
@@ -4232,6 +4339,7 @@ export function BenchmarkRunner({
               </div>
             ) : null}
             {uploadMessage ? <p className="score-upload-message">{uploadMessage}</p> : null}
+            {vconEvidence ? <EvidenceTimeline vcon={asRecord(parseMaybeJson(vconEvidence))} /> : null}
           </section>
         ) : null}
 
@@ -4363,7 +4471,8 @@ export function BenchmarkRunner({
                 </label>
                 <label style={{ display: 'grid', gap: 8 }}>
                   <span style={{ fontWeight: 700 }}>vCon record</span>
-                  <textarea value={vconEvidence} onChange={(event) => setVconEvidence(event.target.value)} rows={7} placeholder='{"vcon":"0.0.1","parties":[{"name":"Caller"},{"name":"Agent"}],"dialog":[{"party":0,"body":"I need a human."}]}' style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
+                  <small>Preferred: IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.4.0). Recording dialogs need an HTTPS URL and base64url SHA-512 content hash.</small>
+                  <textarea value={vconEvidence} onChange={(event) => setVconEvidence(event.target.value)} rows={7} placeholder='{"vcon":"0.4.0","uuid":"...","created_at":"2026-09-26T10:00:00Z","parties":[{"name":"Caller","type":"person"}],"dialog":[{"type":"text","parties":[0],"mediatype":"text/plain","body":"I need a human.","encoding":"none"}]}' style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
                 </label>
               </div>
             </details>
@@ -5044,6 +5153,10 @@ export function BenchmarkRunner({
                     conversation.vcon_export_summary,
                     conversation.vcon_export,
                   );
+                  const ietfVconSummary = executionIetfVconSummary(
+                    conversation.ietf_vcon_export_summary,
+                    conversation.ietf_vcon_export,
+                  );
                   const audioSessionSummary = executionAudioSessionSummary(conversation.audio_session);
                   return (
                     <article
@@ -5087,8 +5200,35 @@ export function BenchmarkRunner({
                       ) : null}
                       {vconSummary ? (
                         <p style={{ margin: 0, fontSize: 13, color: 'var(--text)' }}>
-                          <strong>vCon:</strong> {vconSummary}
+                          <strong>CAE vCon-compatible evidence:</strong> {vconSummary}
                         </p>
+                      ) : null}
+                      {ietfVconSummary ? (
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <p
+                            style={{
+                              margin: 0,
+                              fontSize: 13,
+                              color: conversation.ietf_vcon_export_summary?.valid === true
+                                ? 'var(--success-text)'
+                                : 'var(--warn-text, #9a6700)',
+                            }}
+                          >
+                            <strong>Portable IETF vCon:</strong> {ietfVconSummary}
+                          </p>
+                          {conversation.ietf_vcon_export ? (
+                            <button
+                              type="button"
+                              onClick={() => downloadJson(
+                                `${conversation.conversation_id}.vcon`,
+                                conversation.ietf_vcon_export,
+                              )}
+                              style={{ border: '1px solid var(--border)', borderRadius: 6, background: 'white', padding: '4px 8px', fontWeight: 700, cursor: 'pointer' }}
+                            >
+                              Download .vcon
+                            </button>
+                          ) : null}
+                        </div>
                       ) : null}
                       {audioSessionSummary ? (
                         <p style={{ margin: 0, fontSize: 13, color: 'var(--muted)' }}>
@@ -5497,6 +5637,7 @@ export function BenchmarkRunner({
               </div>
             </section>
           ) : null}
+          <EvidenceTimeline vcon={report.ietf_vcon_export} />
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
             <ReportList title="Failure categories" items={report.failure_categories} empty="No failure categories reported." />

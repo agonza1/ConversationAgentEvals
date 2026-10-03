@@ -8,30 +8,75 @@ test('eval page uploads vCon and loads sample call-center evidence', async ({ pa
   await expect(page.getByText('Loading benchmark suites...')).toHaveCount(0);
 
   const dir = mkdtempSync(path.join(tmpdir(), 'score-upload-'));
-  const vconPath = path.join(dir, 'sample.vcon.json');
+  const vconPath = path.join(dir, 'sample.vcon');
+  const recordingOnlyVconPath = path.join(dir, 'recording-only.vcon');
+  const recordingContentHash = 'AeqUGARlZ5IvYmQFlHRGILRPzzN_dOBSudvRQaOHfjnWpszjMhM5soT-QZ4xn90hq0EuZHkYS7Tz-xrt_yGi8A';
   writeFileSync(
     vconPath,
     JSON.stringify({
-      vcon: '0.0.1',
-      parties: [{ name: 'Caller' }, { name: 'Agent' }],
+      vcon: '0.4.0',
+      uuid: '4ea8e824-b894-4bc8-a53d-8c2f52d42b1d',
+      created_at: '2026-09-26T10:00:00Z',
+      parties: [{ name: 'Caller', type: 'person' }, { name: 'Agent', type: 'bot' }],
       dialog: [
-        { party: 0, body: 'I need to change my billing address.' },
-        { party: 1, body: 'I can help with that.' },
+        {
+          type: 'text',
+          parties: [0],
+          mediatype: 'text/plain',
+          encoding: 'none',
+          body: 'I need to change my billing address.',
+        },
+        {
+          type: 'text',
+          parties: [1],
+          mediatype: 'text/plain',
+          encoding: 'base64url',
+          body: 'SSBjYW4gaGVscCB3aXRoIHRoYXQu',
+        },
+        {
+          type: 'recording',
+          parties: [0, 1],
+          mediatype: 'audio/wav',
+          encoding: 'base64url',
+          body: 'VGhpcyBpcyBhIHJlY29yZGluZywgbm90IGEgdHJhbnNjcmlwdC4',
+          content_hash: recordingContentHash,
+        },
       ],
+    }),
+  );
+  writeFileSync(
+    recordingOnlyVconPath,
+    JSON.stringify({
+      vcon: '0.4.0',
+      uuid: '4ea8e824-b894-4bc8-a53d-8c2f52d42b1d',
+      created_at: '2026-09-26T10:00:00Z',
+      parties: [{ name: 'Caller', type: 'person' }, { name: 'Agent', type: 'bot' }],
+      dialog: [{
+        type: 'recording',
+        parties: [0, 1],
+        mediatype: 'audio/wav',
+        encoding: 'base64url',
+        body: 'VGhpcyBpcyBhIHJlY29yZGluZywgbm90IGEgdHJhbnNjcmlwdC4',
+        content_hash: recordingContentHash,
+      }],
     }),
   );
 
   await page.getByLabel('Upload vCon or transcript file').setInputFiles(vconPath);
-  await expect(page.getByText(/Loaded vCon from sample\.vcon\.json/)).toBeVisible();
-  await expect(page.getByText(/uploaded vCon will be evaluated as structured evidence/)).toBeVisible();
+  await expect(page.getByText(/transcript only · 0 tool events · 0 state snapshots/)).toBeVisible();
   await expect(page.locator('textarea').first()).toHaveValue(/Caller: I need to change my billing address/);
+  await expect(page.locator('textarea').first()).toHaveValue(/Agent: I can help with that/);
+  await expect(page.locator('textarea').first()).not.toHaveValue(/VGhpcyBpcyBhIHJlY29yZGluZw/);
   const includeStructuredEvidence = page.getByLabel('Include structured evidence in Evaluate');
   await expect(includeStructuredEvidence).toBeChecked();
   await page.getByText('Structured and channel evidence (optional)', { exact: true }).click();
   await includeStructuredEvidence.uncheck();
   await includeStructuredEvidence.check();
-  await expect(page.getByLabel('Action/tool trace')).toHaveValue('');
-  await expect(page.getByLabel('Final observed state')).toHaveValue('');
+  await expect(page.getByLabel('Action/tool trace')).toHaveValue('[]');
+  await expect(page.getByLabel('Final observed state')).toHaveValue('{}');
+
+  await page.getByLabel('Upload vCon or transcript file').setInputFiles(recordingOnlyVconPath);
+  await expect(page.locator('textarea').first()).toHaveValue('');
 
   await page.getByRole('button', { name: 'Load sample evidence' }).click();
   const sampleOptions = page.getByLabel('Sample evidence options');
@@ -51,17 +96,28 @@ test('eval page uploads vCon and loads sample call-center evidence', async ({ pa
 
   await page.getByRole('button', { name: 'Load sample evidence' }).click();
   await page.getByRole('button', { name: 'Load full sample (measure Task/Final)' }).click();
-  await expect(page.getByText(/Loaded full sample evidence: Billing Address Change/)).toBeVisible();
+  await expect(page.getByText(/Loaded synthetic vCon: Billing Address Change/)).toBeVisible();
   await page.getByRole('button', { name: 'Evaluate evidence' }).click();
   await expect(page.getByLabel('Task completion score')).toBeVisible();
   await expect(page.getByLabel('Final state score')).toBeVisible();
   await expect(page.getByLabel('Task completion score')).not.toContainText('n/a');
   await expect(page.getByLabel('Final state score')).not.toContainText('n/a');
 
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download vCon JSON' }).click();
+  const download = await downloadPromise;
+  const exportedPath = await download.path();
+  expect(exportedPath).toBeTruthy();
+  await page.getByLabel('Upload vCon or transcript file').setInputFiles(exportedPath!);
+  await expect(page.getByText(/Synthetic vCon\. state observed/)).toBeVisible();
+  await page.getByRole('button', { name: 'Evaluate evidence' }).click();
+  await expect(page.getByLabel('Task completion score')).toContainText('100');
+  await expect(page.getByLabel('Final state score')).toContainText('100');
+
   await page.getByLabel('Upload vCon or transcript file').setInputFiles(vconPath);
   await expect(includeStructuredEvidence).toBeChecked();
-  await expect(page.getByLabel('Action/tool trace')).toHaveValue('');
-  await expect(page.getByLabel('Final observed state')).toHaveValue('');
+  await expect(page.getByLabel('Action/tool trace')).toHaveValue('[]');
+  await expect(page.getByLabel('Final observed state')).toHaveValue('{}');
 
   await page.getByLabel('Evidence transcript').fill('hello this transcript has none of the required call-center actions');
   await page.getByRole('button', { name: 'Evaluate evidence' }).click();

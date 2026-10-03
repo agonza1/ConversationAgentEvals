@@ -83,6 +83,7 @@ class BenchmarkRunRequest(BaseModel):
             or _has_text(self.group_call)
             or _has_text(self.groupCall)
             or _has_text(self.vcon)
+            or _has_execution_evidence(self.vcon)
             or _has_text(self.action_trace)
             or _has_text(self.assert_bundle)
             or _has_text(self.assertBundle)
@@ -92,6 +93,17 @@ class BenchmarkRunRequest(BaseModel):
                 self.transcript = self.transcript.strip()
             return self
         raise ValueError('Transcript, conversation, call, group_call, vcon, action_trace, assert_bundle, or final_state evidence is required')
+
+
+def _has_execution_evidence(value: dict[str, Any] | None) -> bool:
+    if not isinstance(value, dict):
+        return False
+    # Presence must use the same validated profile as evaluation, not arbitrary
+    # attachments or historical scores. Keep the import local at this boundary.
+    from app.services.vcon_evidence import decode_evidence
+    body = decode_evidence(value)
+    return bool(body and (body['tool_events'] or body['observed_actions'] or
+                         any(s['phase'] == 'final' and s['state'] for s in body['state_snapshots'])))
 
 
 def _has_text(value: Any) -> bool:

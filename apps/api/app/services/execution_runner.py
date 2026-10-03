@@ -38,14 +38,21 @@ from app.services.acc_realtime_target import (
 from app.services.agentic_contact_center_example import build_benchmark_run_request, normalize_acc_run
 from app.services.benchmark_catalog_extensions import register_builtin_benchmark_extensions
 from app.services.benchmark_service import get_suite, run_scenario, simulate_scenario
-from app.services.execution_vcon import build_execution_vcon, vcon_summary
+from app.services.execution_vcon import (
+    build_execution_vcon,
+    build_ietf_execution_vcon,
+    ietf_vcon_summary,
+    vcon_summary,
+)
 from app.services.reference_generalist_agent import (
     ReferencePipecatAgentTransport,
     ReferenceMediaServices,
     ReferenceRuntimeError,
     ReferenceRuntimeConfig,
     configured_reference_completion_provider,
+    default_reference_model_name,
     discover_rtc_asr_runtime,
+    effective_reference_model_name,
     resolve_reference_completion_provider,
 )
 from app.services.run_provenance import (
@@ -60,7 +67,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 DEFAULT_VOICE_FIXTURE = 'docs/examples/agentic-contact-center-run-fixture.json'
 DEFAULT_AUDIO_PLAN = 'docs/examples/agentic-contact-center-audio-plan.json'
 DEFAULT_CANCELLATION_SCENARIO = 'docs/examples/agentic-contact-center-cancellation-rescue.json'
-DEFAULT_EXECUTION_MODEL = 'gpt-5.4-mini'
+DEFAULT_EXECUTION_MODEL = 'gpt-4.1-mini'
 PUBLIC_PIPECAT_AGENT = '10-gradium'
 SIGNALWIRE_HOLY_GUACAMOLE_MODEL = 'signalwire-ai-agent'
 FIXTURE_BACKED_SCENARIO_IDS = frozenset({'cancellation-rescue'})
@@ -445,6 +452,28 @@ def _run_one_conversation(
             else 'needs_review' if verdict == 'needs_review'
             else 'completed'
         )
+        completed_at = datetime.now(UTC).isoformat()
+        ietf_vcon_export = build_ietf_execution_vcon(
+            conversation_id=conversation_id,
+            execution_run_id=execution_run_id,
+            suite_id=suite_id,
+            scenario_id=scenario_id,
+            scenario_title=scenario_title,
+            mode=payload.mode,
+            turns=result['turns'],
+            recording=result.get('recording'),
+            created_at=started,
+            updated_at=completed_at,
+            final_state=result.get('final_state'),
+            verdict=verdict,
+            score=result.get('score'),
+            action_trace=result.get('action_trace'),
+            state_snapshots=result.get('state_snapshots'),
+            source_telemetry=result.get('source_telemetry'),
+            live_events=current.get('live_events') or [],
+            latency_marks=result.get('latency_marks') or [],
+            synthetic=payload.mode == 'voice_fixture',
+        )
         return ConversationRecord(
             conversation_id=conversation_id,
             execution_run_id=execution_run_id,
@@ -466,11 +495,13 @@ def _run_one_conversation(
             recording=result.get('recording'),
             vcon_export=result.get('vcon_export'),
             vcon_export_summary=result.get('vcon_export_summary'),
+            ietf_vcon_export=ietf_vcon_export,
+            ietf_vcon_export_summary=ietf_vcon_summary(ietf_vcon_export),
             audio_session=result.get('audio_session'),
             verdict=result.get('verdict'),
             score=result.get('score'),
             started_at=started,
-            completed_at=datetime.now(UTC).isoformat(),
+            completed_at=completed_at,
             error=(
                 str((result.get('final_state') or {}).get('tester_error'))
                 if (result.get('final_state') or {}).get('tester_error')
@@ -517,6 +548,13 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
     if not payload.agent_id:
         target = _execution_target(payload)
         model_name = _execution_model_name(payload, target=target)
+        if target in {'openai_codex', 'builtin_sample_voice'}:
+            model_name = effective_reference_model_name(model_name)
+        tester_model_name = payload.tester_model_name
+        if not tester_model_name and target in {'pipecat_public_demo', 'signalwire_holy_guacamole'}:
+            tester_model_name = default_reference_model_name()
+        if tester_model_name:
+            tester_model_name = effective_reference_model_name(tester_model_name)
         max_exchanges = _resolve_max_exchanges_for_target(payload, target=target)
         assert_execution_compatible(
             agent_target=target,
@@ -524,13 +562,24 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
             tester_id=payload.tester_id,
             executor_id=payload.executor_id,
         )
-        return payload.model_copy(update={'model_name': model_name, 'max_exchanges': max_exchanges})
+        return payload.model_copy(update={
+            'model_name': model_name,
+            'tester_model_name': tester_model_name,
+            'max_exchanges': max_exchanges,
+        })
 
     agent = get_agent(payload.agent_id)
     if agent is None:
         raise ValueError(f'Unknown agent: {payload.agent_id}')
     target = _execution_target(payload, agent)
     model_name = _execution_model_name(payload, target=target)
+    if target in {'openai_codex', 'builtin_sample_voice'}:
+        model_name = effective_reference_model_name(model_name)
+    tester_model_name = payload.tester_model_name
+    if not tester_model_name and target in {'pipecat_public_demo', 'signalwire_holy_guacamole'}:
+        tester_model_name = default_reference_model_name()
+    if tester_model_name:
+        tester_model_name = effective_reference_model_name(tester_model_name)
     max_exchanges = _resolve_max_exchanges_for_target(payload, target=target)
     defaults = execution_defaults_for_target(target)
     request_placeholders = {
@@ -576,6 +625,7 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
         'audio_transport': audio_transport,
         'agent_id': agent['id'],
         'model_name': model_name,
+        'tester_model_name': tester_model_name,
         'max_exchanges': max_exchanges,
     })
 
@@ -606,6 +656,8 @@ def _execution_model_name(payload: ExecutionRunCreateRequest, *, target: str) ->
         return explicit
     if target == 'builtin_sample_voice':
         return ReferenceRuntimeConfig().llm_model
+    if target == 'openai_codex':
+        return default_reference_model_name()
     return DEFAULT_EXECUTION_MODEL
 
 

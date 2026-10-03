@@ -146,7 +146,15 @@ def start_openai_oauth() -> dict[str, Any]:
 
 
 def openai_provider_status() -> dict[str, Any]:
-    return _openai_provider_status()
+    from app.services.reference_generalist_agent import (
+        configured_reference_completion_provider,
+        default_reference_model_name,
+    )
+
+    status = dict(_openai_provider_status())
+    status['execution_provider'] = configured_reference_completion_provider('gpt-4.1-mini').provider_id
+    status['execution_default_model'] = default_reference_model_name()
+    return status
 
 
 def disconnect_openai_provider() -> dict[str, Any]:
@@ -658,7 +666,7 @@ def export_saved_run(db: Session, user_id: str, run_id: str) -> SavedRunExportRe
     report = _load_saved_run_report(saved_run)
     return SavedRunExportResponse(
         id=saved_run.id,
-        filename=f'agentbench-{project.project_key}-{saved_run.id}.json',
+        filename=f'convoice-qa-{project.project_key}-{saved_run.id}.json',
         project_id=project.project_key,
         project_name=project.name,
         firestore_path=_firestore_run_path(user_id=saved_run.user_id, project_key=project.project_key, run_id=saved_run.id),
@@ -709,7 +717,7 @@ def export_project_runs(
         runs.append(
             SavedRunExportResponse(
                 id=saved_run.id,
-                filename=f'agentbench-{project.project_key}-{saved_run.id}.json',
+                filename=f'convoice-qa-{project.project_key}-{saved_run.id}.json',
                 project_id=project.project_key,
                 project_name=project.name,
                 firestore_path=_firestore_run_path(user_id=saved_run.user_id, project_key=project.project_key, run_id=saved_run.id),
@@ -720,7 +728,7 @@ def export_project_runs(
             )
         )
 
-    filename_parts = ['agentbench', project.project_key]
+    filename_parts = ['convoice-qa', project.project_key]
     if suite_id:
         filename_parts.append(suite_id)
     if scenario_id:
@@ -1497,10 +1505,12 @@ def _refund_judge_credits(spend_control: dict[str, Any], *, credits: int) -> dic
 
 def _judge_model_name(spend_control: dict[str, Any]) -> str:
     env_model = (os.getenv('LLM_JUDGE_MODEL') or '').strip()
+    if spend_control.get('oauth_connected'):
+        from app.services.llm_providers.openai_codex import effective_codex_model_name
+
+        return effective_codex_model_name(env_model or 'gpt-6-luna')
     if env_model:
         return env_model
-    if spend_control.get('oauth_connected'):
-        return 'gpt-5.4-mini'
     return 'gpt-4.1-mini'
 
 

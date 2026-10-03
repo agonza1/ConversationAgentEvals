@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import base64
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.services import benchmark_service
 from app.services.assert_artifact_store import load_assert_run_artifact_manifest
-from app.services.benchmark_service import get_suite, get_suite_contract_manifest, list_suites, run_scenario, run_suite, simulate_scenario, simulate_suite
+from app.services.benchmark_service import _structured_conversation_turns, get_suite, get_suite_contract_manifest, list_suites, run_scenario, run_suite, simulate_scenario, simulate_suite
 from app.db.database import SessionLocal
 from app.services.benchmark_run_store import _history_scenario_coverage, reset_benchmark_run_records_for_tests
 from app.services.benchmark_suite_run_store import _suite_history_scenario_coverage, create_benchmark_suite_run_record, reset_benchmark_suite_run_records_for_tests
+from app.services.vcon_interop import vcon_dialog_turns
 
 client = TestClient(app)
 
@@ -223,6 +226,9 @@ def test_run_endpoint_returns_assert_manifest_as_canonical_result():
 
     assert report['assert_boundary'] == 'assert_run_boundary'
     assert report['assert_run_id'].startswith('assert-')
+    runtime_config = report['assert_platform_record']['runtime_config']
+    assert runtime_config['execution_mode'] == 'sync'
+    assert runtime_config['invocation_target']['environment'] == 'local'
     assert manifest['verdict']['status'] == 'pass'
     canonical = report['assert_canonical_artifact']
     assert canonical['uri'].startswith(f"local-artifact://assert/runs/{report['run_id']}/")
@@ -259,6 +265,26 @@ def test_run_endpoint_returns_assert_manifest_as_canonical_result():
     assert durable_manifest['platform_metadata_index']['artifact_manifest_location'] == canonical['uri']
     assert 'assert_result_manifest' not in saved['report']
     assert 'assert_platform_record' not in saved['report']
+
+
+def test_assert_runtime_environment_follows_application_settings(monkeypatch):
+    monkeypatch.setattr(
+        benchmark_service,
+        'settings',
+        type('SettingsStub', (), {'app_env': 'production'})(),
+    )
+
+    request = benchmark_service._assert_run_request(
+        suite_id='call-center-voice-ai',
+        scenario_id='billing-address-change',
+        payload={'transcript': 'Caller: Hello\nAgent: Hi'},
+        run_metadata={},
+        logical_run_id='logical-run',
+        run_id='run-id',
+    )
+
+    assert request.runtime_config.execution_mode == 'sync'
+    assert request.runtime_config.invocation_target.environment == 'production'
 
 
 def test_run_endpoint_normalizes_assert_bundle_into_existing_evidence_pipeline():
@@ -662,7 +688,7 @@ def test_runs_export_returns_owner_scoped_history_bundle_with_vcon_summary():
 
     assert export_response.status_code == 200
     exported = export_response.json()
-    assert exported['filename'] == 'agentbench-qa-project-call-center-voice-ai-benchmark-history.json'
+    assert exported['filename'] == 'convoice-qa-qa-project-call-center-voice-ai-benchmark-history.json'
     assert exported['run_count'] == 2
     assert exported['summary']['status_counts'] == {'completed': 2}
     assert exported['summary']['latest_run_id'] == second.json()['run_id']
@@ -793,6 +819,103 @@ def test_run_endpoint_accepts_vcon_record_evidence():
     assert run['vcon_export']['analysis'][-1]['type'] == 'agentic_benchmark_eval'
 
 
+def test_run_endpoint_accepts_ietf_vcon_core_04_text_dialogs():
+    response = client.post(
+        '/api/benchmarks/run',
+        json={
+            'user_id': 'demo-user',
+            'project_id': 'qa-project',
+            'suite_id': 'call-center-voice-ai',
+            'scenario_id': 'angry-outage-escalation',
+            'vcon': {
+                'vcon': '0.4.0',
+                'uuid': '4ea8e824-b894-4bc8-a53d-8c2f52d42b1d',
+                'created_at': '2026-09-26T10:00:00Z',
+                'parties': [
+                    {'name': 'Caller', 'type': 'person'},
+                    {'name': 'Agent', 'type': 'bot'},
+                ],
+                'dialog': [
+                    {
+                        'type': 'text',
+                        'parties': [0],
+                        'mediatype': 'text/plain',
+                        'encoding': 'none',
+                        'body': 'This outage is frustrating and I want a human.',
+                    },
+                    {
+                        'type': 'text',
+                        'parties': [1],
+                        'mediatype': 'text/plain',
+                        'encoding': 'none',
+                        'body': (
+                            'I am sorry. I checked outage status, created ticket ABC, offered '
+                            'troubleshooting because there is no area outage, and will escalate '
+                            'to a representative.'
+                        ),
+                    },
+                    {
+                        'type': 'recording',
+                        'parties': [1],
+                        'mediatype': 'audio/wav',
+                        'url': 'https://evidence.example.test/target.wav',
+                        'content_hash': base64.urlsafe_b64encode(bytes(64)).decode('ascii').rstrip('='),
+                    },
+                ],
+            },
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    run = response.json()
+    assert run['verdict'] == 'pass'
+    assert run['transcript_preview'].startswith('Caller: This outage is frustrating')
+    assert 'recording' not in run['transcript_preview'].lower()
+    assert run['vcon_export']['vcon'] == '0.4.0'
+    assert run['vcon_export']['source_format'] == 'vcon'
+
+
+def test_vcon_text_import_decodes_text_and_ignores_inline_recording_bodies():
+    turns = vcon_dialog_turns({
+        'vcon': '0.4.0',
+        'parties': [{'name': 'Caller'}, {'name': 'Agent'}],
+        'dialog': [
+            {
+                'type': 'text',
+                'parties': [0],
+                'mediatype': 'text/plain',
+                'encoding': 'base64url',
+                'body': 'SGVsbG8gdGhlcmU',
+            },
+            {
+                'type': 'recording',
+                'parties': [0, 1],
+                'mediatype': 'audio/wav',
+                'encoding': 'base64url',
+                'body': 'VGhpcyBpcyBhdWRpbywgbm90IGEgdHJhbnNjcmlwdC4',
+            },
+        ],
+    })
+
+    assert turns == ['Caller: Hello there']
+
+
+def test_vcon_recording_only_import_never_falls_back_to_generic_dialog_text():
+    turns = _structured_conversation_turns({
+        'vcon': '0.4.0',
+        'parties': [{'name': 'Caller'}, {'name': 'Agent'}],
+        'dialog': [{
+            'type': 'recording',
+            'parties': [0, 1],
+            'mediatype': 'audio/wav',
+            'encoding': 'base64url',
+            'body': 'VGhpcyBpcyBhIHJlY29yZGluZywgbm90IGEgdHJhbnNjcmlwdC4',
+        }],
+    })
+
+    assert turns == []
+
+
 def test_run_audit_artifact_view_endpoint_returns_operator_evidence_bundle():
     response = client.post(
         '/api/benchmarks/run',
@@ -819,7 +942,7 @@ def test_run_audit_artifact_view_endpoint_returns_operator_evidence_bundle():
 
     assert artifact_response.status_code == 200, artifact_response.text
     payload = artifact_response.json()
-    assert payload['filename'] == f"agentbench-fintech-support-agent-suspicious-card-charge-{run['run_id']}-audit-artifacts.json"
+    assert payload['filename'] == f"convoice-qa-fintech-support-agent-suspicious-card-charge-{run['run_id']}-audit-artifacts.json"
     assert payload['operator_summary'] == {
         'verdict': run['verdict'],
         'overall_score': run['overall_score'],
@@ -943,13 +1066,12 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
 
     assert export_response.status_code == 200
     export_payload = export_response.json()
-    assert export_payload['filename'] == f"agentbench-call-center-voice-ai-{simulation['suite_run_id']}-vcon-bundle.json"
+    assert export_payload['filename'] == f"convoice-qa-call-center-voice-ai-{simulation['suite_run_id']}-vcon-bundle.json"
     assert export_payload['record_count'] == simulation['scenario_count'] + 1
     assert export_payload['records'][0]['source_format'] == 'benchmark_suite'
-    assert {record['appended_analysis_type'] for record in export_payload['records']} == {
-        'agentic_benchmark_suite_eval',
-        'agentic_benchmark_eval',
-    }
+    assert export_payload['records'][0]['appended_analysis_type'] == 'agentic_benchmark_suite_eval'
+    assert all(record['vcon'] == '0.4.0' for record in export_payload['records'][1:])
+    assert all(record['attachments'][0]['body']['schema'] == 'cae-execution-evidence-v1' for record in export_payload['records'][1:])
 
     history_export_response = client.get(
         '/api/benchmarks/suite-runs/export',
@@ -958,7 +1080,7 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
 
     assert history_export_response.status_code == 200
     history_export = history_export_response.json()
-    assert history_export['filename'] == 'agentbench-qa-project-call-center-voice-ai-suite-run-history.json'
+    assert history_export['filename'] == 'convoice-qa-qa-project-call-center-voice-ai-suite-run-history.json'
     assert history_export['suite_run_count'] == 1
     assert history_export['summary']['latest_suite_run_id'] == simulation['suite_run_id']
     assert history_export['summary']['status_counts'] == {'completed': 1}
@@ -995,7 +1117,7 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
 
     assert audit_export_response.status_code == 200
     audit_export = audit_export_response.json()
-    assert audit_export['filename'] == f"agentbench-call-center-voice-ai-{simulation['suite_run_id']}-suite-audit-artifacts.json"
+    assert audit_export['filename'] == f"convoice-qa-call-center-voice-ai-{simulation['suite_run_id']}-suite-audit-artifacts.json"
     assert audit_export['operator_summary']['ready_for_export'] is True
     assert audit_export['operator_summary']['ready_scenarios'] == simulation['scenario_count']
     assert audit_export['operator_summary']['missing_scenarios'] == 0
@@ -1040,9 +1162,10 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
 
     assert run_export_response.status_code == 200
     run_export = run_export_response.json()
-    assert run_export['filename'] == f'agentbench-call-center-voice-ai-billing-address-change-{saved_run_id}-vcon.json'
-    assert run_export['record']['appended_analysis_type'] == 'agentic_benchmark_eval'
-    assert run_export['record']['analysis'][-1]['body']['run_id'] == saved_run_id
+    assert run_export['filename'] == f'convoice-qa-call-center-voice-ai-billing-address-change-{saved_run_id}-vcon.json'
+    assert run_export['record']['vcon'] == '0.4.0'
+    assert run_export['record']['analysis'][-1]['schema'] == 'cae-deterministic-evaluation-v1'
+    assert run_export['record']['attachments'][0]['body']['tool_events']
 
     missing_run_export = client.get(
         f'/api/benchmarks/runs/{saved_run_id}/vcon',

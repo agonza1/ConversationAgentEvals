@@ -63,7 +63,7 @@ def test_assert_review_provenance_survives_pending_apply_and_disk_round_trip(
 
     provenance = {
         'engine': 'assert',
-        'assert_version': '0.1.0',
+        'assert_version': '0.3.0',
         'judge_status': 'ok',
         'input_fingerprint': 'input-fingerprint',
         'score_sha256': 'score-sha256',

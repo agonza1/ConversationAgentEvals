@@ -10,7 +10,6 @@ import uuid
 from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, Literal
 
 import yaml
@@ -19,6 +18,11 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.integrations.assert_runtime import (
+    EXPECTED_ASSERT_VERSION,
+    behavior_preset as load_behavior_preset,
+    validate_config,
+)
 from app.models.entities import EditableAssertSpecVersion, ProductProject, ProductWorkspaceMember
 from app.services.llm_providers import get_provider
 from app.services.ssl_util import verified_ssl_context
@@ -53,6 +57,10 @@ class AssertJudge(BaseModel):
     weight: float = Field(default=1.0, ge=0)
     provider: str = 'configured-default'
     model: str | None = None
+    allow_not_applicable: bool = False
+    scale: dict[str, Any] | None = None
+    disabled_builtin_dimensions: list[Literal['policy_violation', 'overrefusal']] = Field(default_factory=list)
+    presets: list[str] = Field(default_factory=list)
 
 
 class EditableAssertSpec(BaseModel):
@@ -61,6 +69,7 @@ class EditableAssertSpec(BaseModel):
     title: str = ''
     role: str = ''
     objective: str = ''
+    behavior_preset: str | None = None
     status: Literal['draft', 'published'] = 'draft'
     generated_content_status: Literal['none', 'draft', 'approved'] = 'none'
     required_behaviors: list[AssertCheck] = Field(default_factory=list)
@@ -337,6 +346,8 @@ def export_saved_spec(db: Session, spec_id: str, *, user_id: str, project_id: st
 
 def _with_defaults(spec: EditableAssertSpec) -> EditableAssertSpec:
     updates: dict[str, Any] = {}
+    if spec.behavior_preset is not None:
+        updates['behavior_preset'] = spec.behavior_preset.strip() or None
     if not spec.judges:
         updates['judges'] = [AssertJudge()]
     if not spec.evidence_requirements:
@@ -369,6 +380,24 @@ def _compile_assert_config(spec: EditableAssertSpec) -> dict[str, Any]:
                 *[f'- {step.strip()}' for step in scenario.steps if step.strip()],
                 f'Expected outcome: {scenario.expected_outcome.strip()}',
             ])
+    behavior_preset_name = spec.behavior_preset
+    if behavior_preset_name:
+        try:
+            preset = load_behavior_preset(behavior_preset_name)
+        except Exception:
+            # ASSERT's validator below produces the canonical error for an
+            # unknown or malformed preset. Keep compilation deterministic so
+            # preview can return that error inline instead of failing the API.
+            preset = None
+        preset_description = preset.get('description') if isinstance(preset, dict) else None
+        if isinstance(preset_description, str) and preset_description.strip():
+            behavior_sections = [
+                f'# ASSERT behavior preset: {behavior_preset_name}',
+                '',
+                preset_description.strip(),
+                '',
+                *behavior_sections,
+            ]
     context_lines = [f'Target role: {spec.role.strip()}']
 
     pipeline: dict[str, Any] = {
@@ -386,22 +415,36 @@ def _compile_assert_config(spec: EditableAssertSpec) -> dict[str, Any]:
             'max_turns': _coerce_max_turns(spec.runtime_overrides.get('max_turns')) or 10,
         }
     judge = spec.judges[0]
-    pipeline['judge'] = {
+    judge_dimension: dict[str, Any] = {
+        'description': judge.name,
+        'rubric': judge.rubric,
+    }
+    if judge.allow_not_applicable:
+        judge_dimension['allow_not_applicable'] = True
+    if judge.scale:
+        judge_dimension['scale'] = deepcopy(judge.scale)
+    judge_stage: dict[str, Any] = {
         'model': {'name': judge.model or model_name},
         'dimensions': {
-            _slug(judge.id): {
-                'description': judge.name,
-                'rubric': judge.rubric,
-            }
+            _slug(judge.id): judge_dimension,
         },
     }
+    if judge.disabled_builtin_dimensions:
+        judge_stage['disabled_dimensions'] = list(dict.fromkeys(judge.disabled_builtin_dimensions))
+    if judge.presets:
+        judge_stage['preset'] = list(dict.fromkeys(item.strip() for item in judge.presets if item.strip()))
+    pipeline['judge'] = judge_stage
+
+    behavior_config: dict[str, Any] = {
+        'name': _slug(spec.title),
+        'description': '\n'.join(behavior_sections).strip(),
+    }
+    if behavior_preset_name:
+        behavior_config['preset'] = behavior_preset_name
 
     return {
         'suite': _slug(spec.id or spec.title),
-        'behavior': {
-            'name': _slug(spec.title),
-            'description': '\n'.join(behavior_sections).strip(),
-        },
+        'behavior': behavior_config,
         'context': '\n'.join(context_lines),
         'default_model': {'name': model_name},
         'artifacts_root': 'artifacts/assert',
@@ -412,15 +455,7 @@ def _compile_assert_config(spec: EditableAssertSpec) -> dict[str, Any]:
 
 def _assert_validation_errors(config: dict[str, Any]) -> list[SpecValidationMessage]:
     try:
-        from assert_ai.config import load_runtime_context
-
-        stage_modules = {
-            'systematize': SimpleNamespace(SCOPE='suite'),
-            'test_set': SimpleNamespace(SCOPE='suite'),
-            'inference': SimpleNamespace(SCOPE='run'),
-            'judge': SimpleNamespace(SCOPE='run'),
-        }
-        load_runtime_context(deepcopy(config), Path('/tmp/cae-assert/eval_config.yaml'), stage_modules=stage_modules)
+        validate_config(config, config_path=Path('/tmp/cae-assert/eval_config.yaml'))
     except Exception as exc:
         return [SpecValidationMessage(field='assert_config', message=f'ASSERT rejected the compiled eval_config: {exc}')]
     return []
@@ -515,6 +550,19 @@ def _spec_lock(project_id: str, spec_id: str) -> threading.Lock:
 
 def _saved_response(*, record: EditableAssertSpecVersion, project: ProductProject) -> SavedEditableAssertSpec:
     spec = EditableAssertSpec.model_validate(json.loads(record.spec_json))
+    try:
+        persisted_config = yaml.safe_load(record.yaml)
+        if not isinstance(persisted_config, dict):
+            raise ValueError('compiled YAML must contain a mapping')
+        validate_config(
+            persisted_config,
+            config_path=Path('/tmp/cae-assert/saved-spec.eval_config.yaml'),
+        )
+    except Exception as exc:
+        raise ValueError(
+            f'Saved spec {record.spec_key!r} version {record.version} is incompatible with '
+            f'assert-ai=={EXPECTED_ASSERT_VERSION}: {exc}'
+        ) from exc
     created = record.created_at.replace(tzinfo=UTC).isoformat().replace('+00:00', 'Z')
     return SavedEditableAssertSpec(
         id=record.spec_key,
@@ -553,6 +601,10 @@ def _complete_generation(prompt: str) -> tuple[str, str, str]:
     ).strip() or DEFAULT_SPEC_GENERATION_MODEL
     if status.get('status') == 'connected':
         try:
+            from app.services.llm_providers.openai_codex import OpenAICodexProvider, effective_codex_model_name
+
+            if isinstance(provider, OpenAICodexProvider):
+                model_name = effective_codex_model_name(model_name)
             return provider.complete(prompt, model_name=model_name), str(status.get('provider') or 'openai_codex'), model_name
         except Exception as exc:
             raise SpecGenerationFailed(f'Configured CAE model could not generate a draft: {exc}') from exc
