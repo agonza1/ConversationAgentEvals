@@ -2401,15 +2401,6 @@ export function BenchmarkRunner({
 
   function onToggleStructuredEvidence(checked: boolean) {
     setIncludeStructuredEvidence(checked);
-    if (view !== 'score' || !checked || !selectedScenario) return;
-    // Checking the box with empty fields should load the scenario sample traces so
-    // Task completion / Final state become measurable instead of staying n/a forever.
-    if (isBlankJsonField(actionTrace) && isBlankJsonField(finalState)) {
-      applyScenarioStructuredSample(selectedScenario);
-      setUploadMessage(
-        `Included sample action trace and final state for ${selectedScenario.title}. Evaluate to measure task completion and final state.`,
-      );
-    }
   }
 
   async function onUploadEvidenceFile(file: File | null) {
@@ -2421,21 +2412,25 @@ export function BenchmarkRunner({
       const text = await file.text();
       const loaded = describeUploadedEvidence(file.name, text);
       if (loaded.kind === 'vcon') {
-        setVconEvidence(loaded.vcon || '');
-        if (loaded.transcript) setTranscript(loaded.transcript);
+        // Imported evidence replaces any prior sample or edited evidence. Never
+        // supplement an uploaded record with scenario starter traces or state.
+        setActionTrace('');
+        setFinalState('');
         setCallEvidence('');
-        // Keep the uploaded vCon available under structured evidence, but do not auto-include it on /eval.
+        setGroupCall('');
+        setVconEvidence(loaded.vcon || '');
+        setTranscript(loaded.transcript || '');
         if (view === 'score') {
-          setIncludeStructuredEvidence(false);
+          setIncludeStructuredEvidence(true);
           setUploadMessage(
-            `${loaded.message} Transcript was extracted for scoring. Check “Include structured evidence” if you also want the vCon artifact evaluated.`,
+            `${loaded.message} Transcript was extracted for scoring and the uploaded vCon will be evaluated as structured evidence.`,
           );
           setReport(null);
           return;
         }
       } else {
         setTranscript(loaded.transcript || '');
-        setVconEvidence('');
+        clearStructuredEvidenceFields();
       }
       setReport(null);
       setUploadMessage(loaded.message);
@@ -4343,7 +4338,7 @@ export function BenchmarkRunner({
                     style={{ marginTop: 3 }}
                   />
                   <span style={{ fontSize: 14, lineHeight: 1.4 }}>
-                    Include structured evidence when evaluating (measures Task completion and Final state from action/tool trace and final state below). If those fields are empty, the scenario sample traces are filled in.
+                    Include the structured evidence shown below when evaluating. Missing fields remain missing; enabling this option never fills them with scenario samples.
                   </span>
                 </label>
               ) : null}
