@@ -2498,16 +2498,6 @@ export function BenchmarkRunner({
 
   function onToggleStructuredEvidence(checked: boolean) {
     setIncludeStructuredEvidence(checked);
-    if (view !== 'score' || !checked || !selectedScenario) return;
-    // Checking the box with empty fields should load the scenario sample traces so
-    // Task completion / Final state become measurable instead of staying n/a forever.
-    if (isBlankJsonField(actionTrace) && isBlankJsonField(finalState)) {
-      applyScenarioStructuredSample(selectedScenario);
-      void onLoadSampleEvidence(selectedScenario, { includeStructuredSample: true });
-      setUploadMessage(
-        `Included sample action trace and final state for ${selectedScenario.title}. Evaluate to measure task completion and final state.`,
-      );
-    }
   }
 
   async function onUploadEvidenceFile(file: File | null) {
@@ -2540,12 +2530,7 @@ export function BenchmarkRunner({
         return;
       } else {
         setTranscript(loaded.transcript || '');
-        setVconEvidence('');
-        setActionTrace('');
-        setFinalState('');
-        setCallEvidence('');
-        setGroupCall('');
-        setIncludeStructuredEvidence(false);
+        clearStructuredEvidenceFields();
       }
       setReport(null);
       setUploadMessage(loaded.message);
@@ -4461,7 +4446,7 @@ export function BenchmarkRunner({
                     style={{ marginTop: 3 }}
                   />
                   <span style={{ fontSize: 14, lineHeight: 1.4 }}>
-                    Include structured evidence when evaluating (measures Task completion and Final state from action/tool trace and final state below). If those fields are empty, the scenario sample traces are filled in.
+                    Include the structured evidence shown below when evaluating. Missing fields remain missing; enabling this option never fills them with scenario samples.
                   </span>
                 </label>
               ) : null}

@@ -10,6 +10,7 @@ test('eval page uploads vCon and loads sample call-center evidence', async ({ pa
   const dir = mkdtempSync(path.join(tmpdir(), 'score-upload-'));
   const vconPath = path.join(dir, 'sample.vcon');
   const recordingOnlyVconPath = path.join(dir, 'recording-only.vcon');
+  const recordingContentHash = 'AeqUGARlZ5IvYmQFlHRGILRPzzN_dOBSudvRQaOHfjnWpszjMhM5soT-QZ4xn90hq0EuZHkYS7Tz-xrt_yGi8A';
   writeFileSync(
     vconPath,
     JSON.stringify({
@@ -38,6 +39,7 @@ test('eval page uploads vCon and loads sample call-center evidence', async ({ pa
           mediatype: 'audio/wav',
           encoding: 'base64url',
           body: 'VGhpcyBpcyBhIHJlY29yZGluZywgbm90IGEgdHJhbnNjcmlwdC4',
+          content_hash: recordingContentHash,
         },
       ],
     }),
@@ -55,6 +57,7 @@ test('eval page uploads vCon and loads sample call-center evidence', async ({ pa
         mediatype: 'audio/wav',
         encoding: 'base64url',
         body: 'VGhpcyBpcyBhIHJlY29yZGluZywgbm90IGEgdHJhbnNjcmlwdC4',
+        content_hash: recordingContentHash,
       }],
     }),
   );
@@ -64,7 +67,13 @@ test('eval page uploads vCon and loads sample call-center evidence', async ({ pa
   await expect(page.locator('textarea').first()).toHaveValue(/Caller: I need to change my billing address/);
   await expect(page.locator('textarea').first()).toHaveValue(/Agent: I can help with that/);
   await expect(page.locator('textarea').first()).not.toHaveValue(/VGhpcyBpcyBhIHJlY29yZGluZw/);
-  await expect(page.getByLabel('Include structured evidence in Evaluate')).toBeChecked();
+  const includeStructuredEvidence = page.getByLabel('Include structured evidence in Evaluate');
+  await expect(includeStructuredEvidence).toBeChecked();
+  await page.getByText('Structured and channel evidence (optional)', { exact: true }).click();
+  await includeStructuredEvidence.uncheck();
+  await includeStructuredEvidence.check();
+  await expect(page.getByLabel('Action/tool trace')).toHaveValue('[]');
+  await expect(page.getByLabel('Final observed state')).toHaveValue('{}');
 
   await page.getByLabel('Upload vCon or transcript file').setInputFiles(recordingOnlyVconPath);
   await expect(page.locator('textarea').first()).toHaveValue('');
@@ -104,6 +113,11 @@ test('eval page uploads vCon and loads sample call-center evidence', async ({ pa
   await page.getByRole('button', { name: 'Evaluate evidence' }).click();
   await expect(page.getByLabel('Task completion score')).toContainText('100');
   await expect(page.getByLabel('Final state score')).toContainText('100');
+
+  await page.getByLabel('Upload vCon or transcript file').setInputFiles(vconPath);
+  await expect(includeStructuredEvidence).toBeChecked();
+  await expect(page.getByLabel('Action/tool trace')).toHaveValue('[]');
+  await expect(page.getByLabel('Final observed state')).toHaveValue('{}');
 
   await page.getByLabel('Evidence transcript').fill('hello this transcript has none of the required call-center actions');
   await page.getByRole('button', { name: 'Evaluate evidence' }).click();
