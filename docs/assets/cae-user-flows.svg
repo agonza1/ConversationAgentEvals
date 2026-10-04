@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1920" height="720" viewBox="0 220 1920 720" role="img" aria-labelledby="title desc">
 <title id="title">CAE — ConversationAgentEvals: high-level user flows</title>
-<desc id="desc">Three ways to evaluate a conversation agent. Preferred: upload an existing vCon, with no live test required. Alternatively, import transcripts, audio, action traces and state, or select a target and scenario to run a test caller against a supported live voice agent. All evidence is normalized, with gaps flagged, then evaluated against a selected scenario or test suite using scenario-based checks and an optional ASSERT AI judge. Review verdicts and evidence, compare runs for regressions, and export reports, vCons and ASSERT artifacts. Live tests require a supported target adapter.</desc>
+<desc id="desc">Three ways to evaluate a conversation agent. Preferred: upload an existing vCon, with no live test required. Alternatively, import transcripts, action traces and final-state evidence, or select a target and scenario to run a test caller against a supported live voice agent. All evidence is normalized, with gaps flagged, then evaluated against a selected scenario or test suite using scenario-based checks and an optional ASSERT AI judge. Review verdicts and evidence, compare runs for regressions, and export reports, vCons and ASSERT artifacts. Live tests require a supported target adapter.</desc>
 <metadata>Source: agonza1/ConversationAgentEvals — README.md; docs/assert-flow-demo.md; docs/assert-boundary-and-schemas.md. High-level product diagram, not a claim of generic SIP/PSTN or arbitrary-URL execution support.</metadata>
 <defs>
  <marker id="arrow" viewBox="0 0 9 9" markerWidth="9" markerHeight="9" refX="7.5" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M1 1 L7 4.5 L1 8" fill="none" stroke="#92A5AF" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></marker>
@@ -33,7 +33,7 @@
 <path d="M15 16 H29 M15 23 H29 M15 30 H24"/>
 </g>
 <text x="164" y="580" font-size="28" font-weight="620" fill="#193342" text-anchor="start">Import other evidence</text>
-<text x="164" y="619" font-size="20" font-weight="400" fill="#627580" text-anchor="start">Transcript, audio, actions, state</text>
+<text x="164" y="619" font-size="20" font-weight="400" fill="#627580" text-anchor="start">Transcript, actions, final state</text>
 <rect x="80" y="708" width="480" height="196" rx="20" fill="white" stroke="#D7E1E6" stroke-width="1.5"/>
 <g transform="translate(108 738) scale(0.9)" fill="none" stroke="#627580" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
 <path d="M5 25 V21 C5 10 12 4 22 4 C32 4 39 10 39 21 V25"/>
@@ -63,7 +63,7 @@
 <path d="M35 25 L40 30 L35 35"/>
 </g>
 <text x="742" y="570" font-size="27" font-weight="620" fill="#193342" text-anchor="start">Normalize evidence</text>
-<text x="742" y="610" font-size="20" font-weight="400" fill="#627580" text-anchor="start">Audio, transcript, actions</text>
+<text x="742" y="610" font-size="20" font-weight="400" fill="#627580" text-anchor="start">Transcript, actions, media refs</text>
 <text x="742" y="640" font-size="20" font-weight="400" fill="#627580" text-anchor="start">and outcome evidence</text>
 <rect x="742" y="667" width="244" height="30" rx="15" fill="white" stroke="#D7E1E6" stroke-width="1"/>
 <text x="864" y="687" font-size="16" font-weight="500" fill="#627580" text-anchor="middle">Missing evidence flagged</text>
