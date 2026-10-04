@@ -8,6 +8,8 @@ ConversationAgentEvals is an application and workflow layer around ASSERT 0.3 co
 
 There is one product and one supported evaluation contract. Users can either run a configured agent to produce current-run evidence or submit existing evidence from an outside system; both paths converge on the same normalization, evaluation, artifact, and reporting workflow.
 
+![ConversationAgentEvals user flow](docs/assets/cae-user-flows.svg)
+
 ## Acknowledgment
 
 [Thank you to the ASSERT project and its maintainers](https://github.com/responsibleai/ASSERT) for building and sharing the evaluation foundation this project wraps.
