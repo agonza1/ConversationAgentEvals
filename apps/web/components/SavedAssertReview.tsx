@@ -9,7 +9,7 @@ export function SavedAssertReview({ review, freshness, onRetry, onApply }: {
   const confidence = (value: AssertReviewView['behaviors'][number]['confidence']) =>
     value === null ? 'Unavailable' : typeof value === 'string' && ['high', 'medium', 'low'].includes(value) ? value : `${String(value)} (unsupported recorded label)`;
   return <section className="saved-assert-review" aria-label="Saved ASSERT assessment">
-    <header><h3>Selected ASSERT assessment</h3><p>{review.id} · {review.statusLabel}</p><p>{review.dateLabel}</p>
+    <header><h3>Selected ASSERT assessment</h3><p>{review.statusLabel}</p><p>{review.dateLabel}</p>
       <p>{review.model || 'Model unavailable'} · {review.version ? `ASSERT ${review.version}` : 'ASSERT version unavailable'} · {review.evidenceLabel}</p></header>
     <div className={`assert-freshness is-${freshness?.status || 'loading'}`} role="status" aria-label="Review freshness">
       <strong>{label}</strong><p>{freshness?.message || 'Checking saved evidence against current judging inputs.'}</p>
@@ -28,18 +28,15 @@ export function SavedAssertReview({ review, freshness, onRetry, onApply }: {
     </section>
     <section aria-label="Behavior breakdown"><h4>Behavior breakdown</h4>
       {review.behaviors.length ? review.behaviors.map((node, index) => <details key={index}>
-        <summary>{node.name} · {node.outcome}</summary><p>Relevant: {node.relevant === null ? 'Unavailable' : String(node.relevant)} · Violated: {node.violated === null ? 'Unavailable' : String(node.violated)}</p>
+        <summary>{node.name} · {node.outcome}</summary>
         <p>Confidence: {confidence(node.confidence)}</p><p>{node.reasoning || 'Reasoning unavailable'}</p>
-        {node.references.map((reference, i) => <p key={i}>{reference} — unresolved reference</p>)}
-        <p className="scenarios-muted">Evidence references unresolved: recorded judge turns cannot be mapped reliably to CAE transcript or tool identities.</p>
+        {node.references.length ? <p>{node.references.join(', ')} — unresolved reference</p> : null}
       </details>) : <p>Behavior judgments unavailable</p>}
     </section>
-    <details><summary>Technical provenance</summary><dl>{review.technical.map((field) => <div key={field.label}><dt>{field.label}</dt><dd>{field.value || 'Unavailable'}</dd></div>)}</dl></details>
     {review.citations.length ? <details><summary>Recorded evidence references</summary><ul>{review.citations.map((citation, index) => <li key={index}>{citation} — unresolved reference</li>)}</ul></details> : null}
     {review.proposal ? <details><summary>Selected review proposal</summary><p>{review.proposal.verdict.replaceAll('_', ' ')} — {review.proposal.summary}</p>
-      <p>Corrected findings</p><ul>{review.proposal.corrected_findings.map((finding, index) => <li key={index}>{finding}</li>)}</ul><p>Remaining gaps</p>
-      <ul>{review.proposal.remaining_gaps.map((gap, index) => <li key={index}>{gap}</li>)}</ul></details> : null}
+      {review.proposal.corrected_findings.length ? <><p>Corrected findings</p><ul>{review.proposal.corrected_findings.map((finding, index) => <li key={index}>{finding}</li>)}</ul></> : null}
+      {review.proposal.remaining_gaps.length ? <><p>Remaining gaps</p><ul>{review.proposal.remaining_gaps.map((gap, index) => <li key={index}>{gap}</li>)}</ul></> : null}</details> : null}
     {review.proposal && review.status === 'pending_confirmation' ? <button type="button" className="primary-cta" disabled={freshness?.status !== 'current'} onClick={onApply}>Apply proposed evaluation</button> : null}
-    <p className="scenarios-muted">This selected assessment is separate from the deterministic verdict and currently applied adjudication.</p>
   </section>;
 }

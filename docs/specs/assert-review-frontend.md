@@ -1,6 +1,6 @@
 # ASSERT review details in CAE
 
-Status: implementation in progress; acceptance evidence is required before review readiness.
+Status: implemented in PR #152; UI simplified to prioritize review decisions.
 
 ## Purpose and boundaries
 
@@ -20,9 +20,9 @@ Show a readable recorded timestamp, review status (pending confirmation, applied
 | --- | --- | --- |
 | `dimensions`, `dimension_applicability`, `dimension_justifications` | Continue showing dimension outcome, applicability, and justification. Explicitly distinguish flagged, clear, not applicable, and unavailable. | Null or missing values are unavailable, never clear or zero. Explicit false applicability means not applicable. |
 | `dimension_scales` | For a declared ordinal scale, show the label corresponding to the recorded value, retain that value, and offer the rubric in expandable details. | Match values by their recorded type; never confuse number `2` with string `"2"`. If there is no exact matching label, show the recorded value and indicate that its label is unavailable. Do not invent a favorable meaning for high/low scores. |
-| `node_judgments` | Expandable behavior rows showing `node_name`, `relevant`, `violated`, recorded `confidence`, and `reasoning`. Order flagged relevant behaviors first, then clear relevant behaviors, then irrelevant/unknown entries; keep stable order within groups. | `relevant: false` is not relevant, not a pass. Unknown/null outcome is unavailable, not clear. Show confidence only when recorded, using its label without inventing a percentage. Never aggregate a new verdict from nodes. |
-| `review_id`, review `status`, `created_at`, `model` | A compact selected-review header and history selector with readable status and timestamp. | Invalid dates or unknown status are labeled unavailable/unknown; retain identity for review selection. |
-| `input_fingerprint`, `score_sha256`, `output_sha256`, ASSERT version/model | An expandable technical provenance panel. | Show allowlisted recorded identifiers only. Do not expose `artifacts` paths, raw judge output, credential-bearing metadata, or dump arbitrary JSON. |
+| `node_judgments` | Expandable behavior rows showing `node_name`, an outcome derived from `relevant`/`violated`, recorded `confidence`, and `reasoning`; omit redundant raw booleans. Order flagged relevant behaviors first, then clear relevant behaviors, then irrelevant/unknown entries; keep stable order within groups. | `relevant: false` is not relevant, not a pass. Unknown/null outcome is unavailable, not clear. Show confidence only when recorded, using its label without inventing a percentage. Never aggregate a new verdict from nodes. |
+| `review_id`, review `status`, `created_at`, `model` | A compact selected-review header and history selector with readable status and timestamp. Use numbered review labels instead of raw IDs; retain the exact ID internally for selection/export/apply. | Invalid dates or unknown status are labeled unavailable/unknown; retain identity for review selection. |
+| ASSERT version/model | Compact readable context in the selected-review header. Technical hashes stay in the exported report, outside the review UI. | Do not expose artifact paths, raw judge output, credential-bearing metadata, or arbitrary JSON. |
 | Recorded evidence references | Within behavior details, show any reliably resolved reference and allow navigation to existing transcript/tool evidence. | Unresolved references remain readable with an explicit unavailable/unresolved state and no fake link. |
 
 Persisted ASSERT node contracts use `node_name`, `relevant`, `violated`, `confidence`, and `reasoning`; do not design against the simplified synthetic export fixture alone. Runtime guards must tolerate absent or malformed optional fields without breaking the panel. Use typed display models with explicit normalization rather than unchecked property casts.
@@ -41,7 +41,7 @@ For a stale review, explain that evidence changed and link to the existing expli
 
 Render details beside, or with direct navigation to, CAE's existing transcript and tool evidence. A jump link needs an unambiguous mapping to a recorded message/tool identity. ASSERT judge turn numbers must not be assumed equal to CAE `turn_index`: tools, system messages, and normalized transcripts can use different indexing. Existing string citations without reliable anchors remain unresolved. Do not add a speculative citation resolver in this slice.
 
-Use native disclosures or accessible controls with descriptive names, keyboard navigation, visible focus, and text labels alongside outcome colors. Keep the main panel concise; expand reasoning, rubrics, behavior details, and technical provenance on demand. On narrow screens, stack sections and wrap long labels without horizontal overflow. Retain audio and timeline controls in the existing conversation view.
+Use native disclosures or accessible controls with descriptive names, keyboard navigation, visible focus, and text labels alongside outcome colors. Keep the main panel concise; expand reasoning, rubrics, and behavior details on demand. Omit raw review IDs, technical hash disclosures, duplicate status booleans, repeated caveats, and empty proposal lists. Unresolved references remain explicitly labeled, combined into one line per behavior. On narrow screens, stack sections and wrap long labels without horizontal overflow. Retain audio and timeline controls in the existing conversation view.
 
 ## Acceptance and validation
 
@@ -49,7 +49,7 @@ Use native disclosures or accessible controls with descriptive names, keyboard n
 - Boolean, ordinal numeric/string, null, not-applicable, missing-scale, irrelevant-node, unknown-confidence, and legacy/malformed optional fields render honestly. Tests include actual native ASSERT node shapes.
 - Freshness tests cover changed transcript, tool evidence, final state, target, scenario contract, insufficient provenance, wrong owner, revoked project access, failed requests, and rapid review/conversation switching. No judging, billing, or state mutation occurs.
 - Evidence tests prove that valid anchors navigate to the correct existing item and unresolved/ambiguous references are not clickable. If no supported persisted anchor format exists, test and document the unresolved fallback; do not fabricate anchors to claim integration.
-- Render malicious text as text. Technical details expose only allowlisted fields and omit artifact paths/credentials. Preserve values such as `0`, `false`, and fractional scores.
+- Render malicious text as text. Visible model/version context omits artifact paths/credentials; raw IDs and technical hashes are absent from the review UI. Preserve values such as `0`, `false`, and fractional scores.
 - Browser validation covers persisted reviews, selection, disclosures/keyboard operation, freshness loading/errors, and desktop/mobile layout. Use synthetic saved fixtures, plus a real local API-to-browser check for any added freshness API; no paid judging is required.
 - Run relevant API/frontend tests, lint, production build/types, and required CI. Save and inspect screenshots of the behavior breakdown, ordinal labels, history, and stale/unverifiable states. Implementation is ready for review only when the defined behaviors pass and any remaining limitations are explicit in the PR.
 

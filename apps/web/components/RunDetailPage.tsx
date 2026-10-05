@@ -573,9 +573,9 @@ function MetricDetail({
                 Saved ASSERT review
                 <select aria-label="Saved ASSERT review" value={selectedExportReviewId}
                   onChange={(event) => { setExportReviewId(event.target.value); setExportError(null); setReviewToApply(null); }}>
-                  {exportChoices.map((review) => (
+                  {exportChoices.map((review, index) => (
                     <option key={review.id} value={review.id}>
-                      {review.id} · {review.statusLabel} · {review.dateLabel}
+                      Review {index + 1} · {review.statusLabel} · {review.dateLabel}
                     </option>
                   ))}
                 </select>
