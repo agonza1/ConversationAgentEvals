@@ -64,3 +64,9 @@ New scoring rules or confidence aggregation; suite-level dashboards/comparisons;
 A common server service checks terminal state, deterministic evidence identity, saved ASSERT/model provenance and original input fingerprints across supported judge counts. Export uses the same service. ASSERT application checks it independently inside the execution-store lock, including legacy `assert-ai` reviews missing provenance; non-ASSERT proposal semantics remain unchanged. The client discards responses tagged for previous selections, disables apply until Current, and requires explicit confirmation.
 
 There is no reliable persisted evidence-anchor format in current native nodes/string citations, so all evidence references remain explicitly unresolved text; no turn-index links are fabricated.
+
+## Resolution Evidence simplification
+
+Keep the effective resolution status and recorded evaluator verdict together in one summary. Retain the evaluation score and evaluation basis, including unavailable scores, and all recorded action/error/outcome evidence. Omit optional final-state, termination, and live-tool rows when unreported; recorded false values and zero scores remain explicit.
+
+Consolidate the explanation and actionable gaps under “Why this outcome”. Keep score-versus-resolution-rate guidance in the existing keyboard-accessible evaluation-basis help rather than a repeated panel footnote. Remove the repeated LLM introduction; keep the explicit review action and applied-adjudication audit history. This presentation change must not alter verdicts, scores, judge routing, or apply/export behavior.

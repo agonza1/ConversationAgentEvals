@@ -504,51 +504,40 @@ function MetricDetail({
           aria-label="Resolution verification status"
         >
           <span>Resolution status</span>
-          <strong>{evidence.label}</strong>
-          <p>{evidence.description}</p>
+          <strong>{evidence.label}{evidence.verdict !== 'Not reported' ? ` · ${evidence.verdict}` : ''}</strong>
         </div>
         <dl className="resolution-facts" aria-label="Resolution evidence details">
           <div><dt>Evaluation score</dt><dd>{evidence.score}</dd></div>
-          <div><dt>Evaluator verdict</dt><dd>{evidence.verdict}</dd></div>
           <div>
             <dt>Evaluation basis</dt>
             <dd>
               <EvaluationBasisHelp conversation={conversation} adjudicated={Boolean(adjudication)} />
             </dd>
           </div>
-          <div><dt>Final state</dt><dd>{evidence.finalState}</dd></div>
-          <div><dt>Termination</dt><dd>{evidence.termination}</dd></div>
+          {evidence.finalState !== 'Not reported' ? <div><dt>Final state</dt><dd>{evidence.finalState}</dd></div> : null}
+          {evidence.termination !== 'Not reported' ? <div><dt>Termination</dt><dd>{evidence.termination}</dd></div> : null}
           <div><dt>Action evidence</dt><dd>{evidence.actionEvidence}</dd></div>
-          <div><dt>Live tool execution</dt><dd>{evidence.liveToolExecution}</dd></div>
+          {evidence.liveToolExecution !== 'Not reported' ? <div><dt>Live tool execution</dt><dd>{evidence.liveToolExecution}</dd></div> : null}
           {evidence.outcome ? <div><dt>Recorded outcome</dt><dd>{evidence.outcome}</dd></div> : null}
           {evidence.error ? <div><dt>Recorded error</dt><dd>{evidence.error}</dd></div> : null}
         </dl>
-        {evidence.gaps.length ? (
-          <div className="resolution-gaps">
-            <h3>{adjudication ? 'Remaining gaps after adjudication' : 'Why resolution is not verified'}</h3>
-            <ul>
-              {evidence.gaps.map((gap) => <li key={gap}>{gap}</li>)}
-            </ul>
-          </div>
-        ) : null}
+        <section className="resolution-gaps" aria-label="Resolution explanation">
+          <h3>Why this outcome</h3>
+          <p>{evidence.description}</p>
+          {evidence.gaps.length ? <ul>
+            {evidence.gaps.map((gap) => <li key={gap}>{gap}</li>)}
+          </ul> : null}
+        </section>
         {adjudication && appliedProposal ? (
           <AppliedAdjudication
             adjudication={adjudication}
             originalGaps={automaticResolutionGaps(conversation)}
           />
         ) : null}
-        <p className="resolution-note">
-          The verified rate counts pass verdicts only. Needs-review outcomes stay unverified; the evaluation
-          score is not a resolution percentage.
-        </p>
         <section className="resolution-judge" aria-label="LLM judge">
           <div>
             <p className="eyebrow">LLM second opinion</p>
             <h3>Review the deterministic verdict</h3>
-            <p>
-              The score above is automatic and rule-based. The LLM judge separately reviews the transcript
-              and recorded evidence, then explains whether it agrees.
-            </p>
           </div>
           <button
             type="button"
@@ -1305,6 +1294,7 @@ function EvaluationBasisHelp({
       <span className="evaluation-basis-tooltip" id={tooltipId} role="tooltip">
         <strong>{details.heading}</strong>
         {details.lines.map((line) => <span key={line}>{line}</span>)}
+        <span>The evaluation score is not a resolution percentage. The verified rate counts pass verdicts only.</span>
       </span>
     </span>
   );

@@ -2783,11 +2783,6 @@ select {
   line-height: 1.4;
 }
 
-.resolution-note {
-  padding-top: 2px;
-  font-size: 13px;
-}
-
 .resolution-judge {
   display: grid;
   gap: 12px;
