@@ -64,21 +64,52 @@ def report_filename(run_id: str, conversation_id: str, review_id: str) -> str:
     return f'assert-{safe(run_id)}-{safe(conversation_id)}-{safe(review_id)}.html'
 
 
-# Never link or copy local artifact paths; scrub known credentials from business
-# evidence using CAE's existing redactor, with text protection for path/token values.
+def _sensitive_key(key: Any) -> bool:
+    """Recognize credential conventions across snake, kebab, dotted and camel case."""
+    words = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', '_', str(key)).casefold()
+    parts = set(re.split(r'[^a-z0-9]+', words))
+    normalized = re.sub(r'[^a-z0-9]', '', words)
+    return (bool(parts & {'secret', 'password', 'passwd', 'token', 'credential'})
+            or normalized in {'authorization', 'cookie', 'setcookie', 'passwd'}
+            or any(part in normalized for part in (
+                'password', 'apikey', 'privatekey', 'secretkey', 'secretaccesskey',
+                'clientsecret', 'signingkey', 'credential',
+            ))
+            or normalized.endswith(('secret', 'token'))
+            or normalized.startswith(('secret', 'token')))
+
+
+# Never link or copy local artifact paths. Keep key context while scrubbing nested
+# business evidence, including stringified JSON and OTLP KeyValue records.
 def _clean(value: Any) -> Any:
     value = redact(value)
     if isinstance(value, dict):
+        if 'value' in value and isinstance(value.get('key'), str) and _sensitive_key(value['key']):
+            return {}
         return {str(_clean(str(key))): _clean(item) for key, item in value.items()
-                if not re.search(r'(?:artifact|recording|audio|snapshot|inference).*path|^path$|^artifacts$', str(key), re.I)}
+                if not _sensitive_key(key)
+                and not re.search(r'(?:artifact|recording|audio|snapshot|inference).*path|^path$|^artifacts$', str(key), re.I)}
     if isinstance(value, list):
-        return [_clean(item) for item in value]
+        return [_clean(item) for item in value
+                if not (isinstance(item, dict) and isinstance(item.get('key'), str)
+                        and _sensitive_key(item['key']))]
     if isinstance(value, str):
+        if value.lstrip().startswith(('{', '[')):
+            try:
+                structured = json.loads(value)
+            except ValueError:
+                pass
+            else:
+                cleaned = _clean(structured)
+                if cleaned != structured:
+                    return json.dumps(cleaned, ensure_ascii=False, sort_keys=True)
         value = re.sub(r'(?:file://|local-artifact://)[^\s"<>]+|(?:/Users/|/home/|/private/|/tmp/|/var/|/workspace/|/app/|/opt/|/root/|/mnt/|/Volumes/|/etc/|/srv/)[^\s"<>]+|[A-Za-z]:\\[^\s"<>]+', '[internal path omitted]', value)
         value = re.sub(r'(?i)\b(https?://)[^\s/@]+(?::[^\s/@]*)?@', r'\1[credential omitted]@', value)
-        value = re.sub(r'''(?i)(["']?)(api[_-]?key|access[_-]?token|authorization|password|secret)\1\s*[:=]\s*(["'])(.*?)\3''', r'\2=[credential omitted]', value)
         value = re.sub(r'(?i)\bBearer\s+[^\s"<>]+', 'Bearer [credential omitted]', value)
-        value = re.sub(r'(?i)\b(api[_-]?key|access[_-]?token|authorization|password|secret)\s*[:=]\s*[^\s,;"<>\[]+', r'\1=[credential omitted]', value)
+        assignments = re.compile(r'''(?P<key>"[^"\r\n]+"|'[^'\r\n]+'|[A-Za-z][A-Za-z0-9_.-]*)\s*[:=]\s*(?P<value>"[^"]*"|'[^']*'|[^\s,;"<>\[]+)''')
+        value = assignments.sub(
+            lambda match: f'{match.group("key")}=[credential omitted]'
+            if _sensitive_key(match.group('key').strip('"\'')) else match.group(0), value)
     return value
 
 

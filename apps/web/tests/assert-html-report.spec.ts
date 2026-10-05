@@ -1,8 +1,9 @@
 import { expect, test } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import runFixture from './fixtures/assert-html-report-run.json';
+import runFixture from '../../api/tests/fixtures/assert-html-report-run.json';
 
 const artifactDir = path.resolve(process.cwd(), 'artifacts/assert-html-report-export');
 const report = execFileSync(path.resolve('apps/api/.venv/bin/python'), ['-c', `
@@ -10,7 +11,7 @@ import json
 from pathlib import Path
 from app.services.assert_html_report import render_assert_html_report,validate_saved_review
 from app.services.benchmark_service import get_scenario_contract
-run=json.loads(Path('apps/web/tests/fixtures/assert-html-report-run.json').read_text())
+run=json.loads(Path('apps/api/tests/fixtures/assert-html-report-run.json').read_text())
 conv=run['conversations'][0]; review=conv['judge_reviews'][0]
 p=validate_saved_review(run,conv,review,get_scenario_contract(run['suite_id'],conv['scenario_id']))
 print(render_assert_html_report(run,conv,review,p))
@@ -113,4 +114,55 @@ test('export waits for completion and exposes a stale review error with retry', 
   await expect(page.locator('.assert-report-export [role="alert"]')).toHaveText(/saved ASSERT review is stale/);
   await expect(page.getByRole('button', { name: 'Export ASSERT HTML report' })).toBeEnabled();
   expect(downloads).toBe(0);
+});
+
+
+test('real saved API result downloads through the browser without an export mock', async ({ page, request, context }) => {
+  // Test-only filesystem fixture seed: standard persisted-run loader, no debug route,
+  // provider call or client-supplied report to the export endpoint.
+  const run = structuredClone(runFixture);
+  run.execution_run_id = `exec-assert-api-${randomUUID()}`;
+  run.conversations[0].execution_run_id = run.execution_run_id;
+  const seededDir = path.resolve('artifacts/execution-runs', run.execution_run_id);
+  mkdirSync(seededDir, { recursive: true });
+  writeFileSync(path.join(seededDir, 'run.json'), JSON.stringify(run));
+  const apiBase = process.env.PLAYWRIGHT_API_BASE_URL
+    || `http://127.0.0.1:${process.env.PLAYWRIGHT_API_PORT || process.env.API_PORT || '8425'}`;
+  const conversation = run.conversations[0];
+  const reviewId = conversation.judge_reviews[0].review_id;
+  const endpoint = `${apiBase}/api/assert/runs/${run.execution_run_id}`
+    + `/conversations/${conversation.conversation_id}/reviews/${reviewId}/report.html`;
+  try {
+    const forbidden = await request.get(`${endpoint}?user_id=another-user`);
+    expect(forbidden.status()).toBe(404);
+    const response = await request.get(`${endpoint}?user_id=demo-user`);
+    expect(response.status()).toBe(200);
+    expect(response.headers()['content-type']).toContain('text/html');
+    expect(await response.text()).toContain(run.execution_run_id);
+    let judgeCalls = 0;
+    page.on('request', (req) => { if (req.method() === 'POST' && req.url().endsWith('/judge')) judgeCalls += 1; });
+    await page.goto(`/runs/${run.execution_run_id}`);
+    await expect(page.getByLabel('Saved ASSERT review')).toHaveValue(reviewId);
+    const actualReportResponse = page.waitForResponse((res) => new URL(res.url()).pathname === new URL(endpoint).pathname);
+    const downloadPromise = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Export ASSERT HTML report' }).click();
+    expect((await actualReportResponse).status()).toBe(200);
+    const downloaded = await downloadPromise;
+    expect(downloaded.suggestedFilename()).toContain(run.execution_run_id);
+    const file = path.join(artifactDir, 'real-api-synthetic-report.html');
+    mkdirSync(artifactDir, { recursive: true });
+    await downloaded.saveAs(file);
+    const offline = await context.newPage();
+    const remoteRequests: string[] = [];
+    offline.on('request', (req) => { if (/^https?:/.test(req.url())) remoteRequests.push(req.url()); });
+    await offline.goto(`file://${file}`);
+    await expect(offline.getByText(run.execution_run_id, { exact: true })).toBeVisible();
+    await offline.getByText('Tool evidence 1: open_review_case', { exact: true }).click();
+    await expect(offline.getByText('"refund_issued": false', { exact: false }).first()).toBeVisible();
+    await offline.screenshot({ path: path.join(artifactDir, 'real-api-offline-report.png'), fullPage: true });
+    expect(remoteRequests).toEqual([]);
+    expect(judgeCalls).toBe(0);
+  } finally {
+    rmSync(seededDir, { recursive: true, force: true });
+  }
 });

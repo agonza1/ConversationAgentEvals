@@ -8,12 +8,11 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.routes import assert_judge
-from app.services.assert_html_report import validate_saved_review
 from app.services.benchmark_service import get_scenario_contract
 from app.services.execution_run_store import deterministic_evaluation_snapshot
 from app.services.upstream_assert_judge import assert_judge_input_fingerprint
 
-FIXTURE = Path(__file__).parents[2] / 'web/tests/fixtures/assert-html-report-run.json'
+FIXTURE = Path(__file__).parent / 'fixtures/assert-html-report-run.json'
 client = TestClient(app)
 
 
@@ -226,3 +225,46 @@ def test_real_project_membership_revocation_and_ambiguous_key_are_non_disclosing
             db.delete(personal)
             db.delete(workspace)
             db.commit()
+
+
+@pytest.mark.parametrize('key', [
+    'client_secret', 'clientSecret', 'CLIENT-SECRET', 'private_key', 'privateKey',
+    'aws_secret_access_key', 'AWS.Secret.Access.Key', 'secret_access_key',
+    'db_password', 'password_hash', 'signing_key', 'service_api_key',
+    'database_secret_value', 'serviceTokenValue',
+])
+def test_nested_credential_key_conventions_are_omitted_from_actual_report(saved, key):
+    _, conv, review = saved
+    credential = f'SYNTHETIC-NEVER-EXPORT-{key}'
+    evidence = {
+        'business_receipt': 'case-fixture',
+        'connection': {key: credential},
+        'attributes': [{'key': key, 'value': credential}, {'key': 'case_id', 'value': 'case-fixture'}],
+        'attribute': {'key': key, 'value': credential},
+        'serialized': json.dumps({'nested': {key: credential}, 'case_id': 'case-fixture'}),
+    }
+    conv['action_trace'][0]['result'] = evidence
+    conv['final_state']['nested_result'] = evidence
+    review['judge_result']['provenance']['node_judgments'][0]['evidence'] = evidence
+    resnapshot(saved)
+    response = download(saved)
+    assert response.status_code == 200
+    assert credential not in response.text
+    assert 'business_receipt' in response.text and 'case-fixture' in response.text
+
+
+@pytest.mark.parametrize('key', ['client_secret', 'private_key', 'aws_secret_access_key',
+                                 'privateKey', 'CLIENT-SECRET', 'aws.secret.access.key'])
+@pytest.mark.parametrize('quoted', [False, True])
+def test_credential_text_assignments_are_omitted_from_actual_report(saved, key, quoted):
+    _, conv, review = saved
+    secret = 'SYNTHETIC-ASSIGNMENT-NEVER-EXPORT'
+    text = f'tool debug {key}="{secret}"' if quoted else f'tool debug {key}={secret}'
+    conv['turns'][0]['text'] = text
+    conv['action_trace'][0]['result'] = text
+    review['judge_result']['rationale'] = text
+    resnapshot(saved)
+    response = download(saved)
+    assert response.status_code == 200
+    assert secret not in response.text
+    assert '[credential omitted]' in response.text
