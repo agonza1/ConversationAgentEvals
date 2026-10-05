@@ -12,6 +12,7 @@ import {
   ConversationTurn,
   demoProjectId,
   demoUserId,
+  downloadAssertHtmlReport,
   ExecutionRunRecord,
   getApiBase,
   getExecutionRun,
@@ -367,6 +368,19 @@ function MetricDetail({
   const [reviewToApply, setReviewToApply] = useState<LlmJudgeResponse | null>(null);
   const [isApplyingReview, setIsApplyingReview] = useState(false);
   const [applyReviewError, setApplyReviewError] = useState<string | null>(null);
+  const [exportReviewId, setExportReviewId] = useState('');
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const savedAssertReviews = (conversation?.judge_reviews || []).filter(
+    (review) => review.judge_result?.provenance?.engine === 'assert',
+  );
+  const exportChoices = [...savedAssertReviews];
+  if (judge?.review_id && judge.judge_result?.provenance?.engine === 'assert'
+      && !exportChoices.some((review) => review.review_id === judge.review_id)) {
+    exportChoices.push({ review_id: judge.review_id, status: 'pending_confirmation', created_at: '',
+      judge_result: judge.judge_result });
+  }
+  const selectedExportReviewId = exportReviewId || exportChoices.at(-1)?.review_id || '';
   const summary = conversation?.metrics_summary;
   const deterministicVerdict = summary?.verdict || conversation?.verdict;
   const conversationIsTerminal = Boolean(
@@ -385,6 +399,8 @@ function MetricDetail({
     setJudge(null);
     setIsJudging(true);
     try {
+      setExportReviewId('');
+      setExportError(null);
       setJudge(await requestLlmJudge({
         plan: 'free',
         user_id: run.user_id || userId,
@@ -395,6 +411,21 @@ function MetricDetail({
       setJudgeError(err instanceof Error ? err.message : 'Could not request the LLM judge.');
     } finally {
       setIsJudging(false);
+    }
+  }
+
+  async function onExportAssertReport() {
+    if (!conversation || !conversationIsTerminal || !selectedExportReviewId || isExporting) return;
+    setExportError(null);
+    setIsExporting(true);
+    try {
+      await downloadAssertHtmlReport({ executionRunId: run.execution_run_id,
+        conversationId: conversation.conversation_id, reviewId: selectedExportReviewId,
+        userId: run.user_id || userId });
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : 'Could not export the saved ASSERT report.');
+    } finally {
+      setIsExporting(false);
     }
   }
 
@@ -502,6 +533,29 @@ function MetricDetail({
                   ? 'Run LLM review again'
                   : 'Review with LLM judge'}
           </button>
+          <div className="assert-report-export">
+            {exportChoices.length ? (
+              <label>
+                Saved ASSERT review
+                <select aria-label="Saved ASSERT review" value={selectedExportReviewId}
+                  onChange={(event) => { setExportReviewId(event.target.value); setExportError(null); }}>
+                  {exportChoices.map((review) => (
+                    <option key={review.review_id} value={review.review_id}>
+                      {review.review_id} · {review.status.replaceAll('_', ' ')}{review.created_at ? ` · ${review.created_at}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            <button type="button" className="secondary-link"
+              disabled={isExporting || !conversationIsTerminal || !selectedExportReviewId}
+              onClick={() => void onExportAssertReport()}>
+              {isExporting ? 'Exporting ASSERT report…' : 'Export ASSERT HTML report'}
+            </button>
+            {!selectedExportReviewId ? <p className="scenarios-muted">Export is available after an ASSERT review is saved.</p>
+              : !conversationIsTerminal ? <p className="scenarios-muted">Export is available after the run completes.</p> : null}
+            {exportError ? <p className="resolution-judge-error" role="alert">{exportError}</p> : null}
+          </div>
           {judgeError ? <p className="resolution-judge-error" role="alert">{judgeError}</p> : null}
           {judge ? (
             <JudgeResult

@@ -4509,3 +4509,39 @@ select {
     display: inline-flex;
   }
 }
+
+
+.assert-report-export {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  width: 100%;
+}
+
+.assert-report-export label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.assert-report-export select {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}
+
+.assert-report-export button {
+  justify-self: start;
+}
+
+.assert-report-export button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}

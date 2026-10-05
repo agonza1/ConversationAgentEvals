@@ -1,0 +1,190 @@
+{
+  "execution_run_id": "exec-assert-html-fixture",
+  "status": "needs_review",
+  "mode": "text_callable",
+  "suite_id": "call-center-voice-ai",
+  "scenario_ids": [
+    "refund-policy-boundary"
+  ],
+  "user_id": "demo-user",
+  "agent_id": "fixture-support-agent",
+  "agent_name": "Synthetic support agent",
+  "tester_id": "scenario_simulator",
+  "executor_id": "local_async_runner",
+  "tester_model_name": "fixture-model",
+  "progress": {
+    "phase": "completed",
+    "completed_conversations": 1,
+    "total_conversations": 1,
+    "percent": 100
+  },
+  "created_at": "2026-10-04T12:00:00Z",
+  "updated_at": "2026-10-04T12:01:00Z",
+  "completed_at": "2026-10-04T12:01:00Z",
+  "provenance": {
+    "target_kind": "mock_agent",
+    "target_channel": "text",
+    "tester_id": "scenario_simulator",
+    "executor_id": "local_async_runner",
+    "evidence_source": "fixture",
+    "live_external_connection": false,
+    "saved_evidence": true,
+    "synthetic_media": false,
+    "honesty_label": "Synthetic fixture \u00b7 no live judging or target call"
+  },
+  "conversations": [
+    {
+      "execution_run_id": "exec-assert-html-fixture",
+      "conversation_id": "conversation-refund-fixture",
+      "suite_id": "call-center-voice-ai",
+      "scenario_id": "refund-policy-boundary",
+      "scenario_title": "Refund Policy Boundary (synthetic fixture)",
+      "mode": "text_callable",
+      "status": "completed",
+      "iteration": 1,
+      "verdict": "needs_review",
+      "score": 45,
+      "turns": [
+        {
+          "turn_index": 1,
+          "speaker": "user",
+          "text": "Please refund this charge."
+        },
+        {
+          "turn_index": 2,
+          "speaker": "agent",
+          "text": "I have opened a refund review case. A refund has not been issued."
+        }
+      ],
+      "transcript": "User: Please refund this charge.\nAgent: I have opened a refund review case. A refund has not been issued.",
+      "action_trace": [
+        {
+          "tool_name": "open_review_case",
+          "status": "success",
+          "arguments": {
+            "reason": "refund requested"
+          },
+          "result": {
+            "case_id": "case-fixture",
+            "refund_issued": false
+          }
+        }
+      ],
+      "final_state": {
+        "complete": false,
+        "case_id": "case-fixture",
+        "refund_issued": false
+      },
+      "evaluation_findings": {
+        "missing_actions": [
+          "refund completion is not verified"
+        ]
+      },
+      "metrics_summary": {
+        "verdict": "needs_review",
+        "score": 45,
+        "turn_count": 2,
+        "latency": {
+          "count": 1,
+          "avg_ms": 310,
+          "median_ms": 310,
+          "p90_ms": 310,
+          "min_ms": 310,
+          "max_ms": 310,
+          "outlier_count": 0
+        },
+        "interruption_count": 0,
+        "call_resolution_success": 0
+      },
+      "latency_marks": [
+        {
+          "label": "target response",
+          "latency_ms": 310
+        }
+      ],
+      "judge_reviews": [
+        {
+          "review_id": "judge-review-fixture",
+          "status": "pending_confirmation",
+          "created_at": "2026-10-04T12:01:00Z",
+          "model": "fixture/recorded-model",
+          "provider": "assert-ai",
+          "output_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "evidence_citations": [
+            "refund-review: Case creation is supported by tool evidence."
+          ],
+          "deterministic_snapshot": {
+            "verdict": "needs_review",
+            "score": 45,
+            "evidence_sha256": "c4280732a4747e438954ff51663d89a0cfeb67962bd91b84cd2bd3f07b0be2ee"
+          },
+          "judge_result": {
+            "agrees": true,
+            "rationale": "Synthetic saved judgment: the opened review is evidenced, completion is unverified.",
+            "next_action": "Review the pending refund.",
+            "proposed_evaluation": {
+              "verdict": "needs_review",
+              "summary": "A case exists; no refund completion receipt is recorded.",
+              "corrected_findings": [],
+              "remaining_gaps": [
+                "Refund not completed"
+              ]
+            },
+            "provenance": {
+              "engine": "assert",
+              "judge_status": "ok",
+              "assert_version": "0.3.0",
+              "evidence_level": "gray_box",
+              "dimensions": {
+                "policy_violation": false,
+                "unsupported_operational_claim": false,
+                "completion_quality": 2
+              },
+              "dimension_applicability": {
+                "policy_violation": true,
+                "unsupported_operational_claim": true,
+                "completion_quality": true
+              },
+              "dimension_scales": {
+                "completion_quality": {
+                  "type": "ordinal",
+                  "values": [
+                    {
+                      "value": 1,
+                      "label": "Unresolved"
+                    },
+                    {
+                      "value": 2,
+                      "label": "Review opened"
+                    },
+                    {
+                      "value": 3,
+                      "label": "Resolved"
+                    }
+                  ]
+                }
+              },
+              "dimension_justifications": {
+                "policy_violation": "The agent kept the refund boundary.",
+                "unsupported_operational_claim": "Case creation is supported by the recorded tool result.",
+                "completion_quality": "Review opened; refund completion remains unverified."
+              },
+              "node_judgments": [
+                {
+                  "node_id": "refund-review",
+                  "verdict": "pass",
+                  "justification": "Tool evidence records an opened review case."
+                }
+              ],
+              "score_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "artifacts": {
+                "scores": "/Users/private/judge/scores.json"
+              },
+              "input_fingerprint": "c58945e9ae462ae7"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,228 @@
+"""Saved-result export tests use synthetic evidence; no provider calls or credits."""
+import json
+from copy import deepcopy
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.main import app
+from app.routes import assert_judge
+from app.services.assert_html_report import validate_saved_review
+from app.services.benchmark_service import get_scenario_contract
+from app.services.execution_run_store import deterministic_evaluation_snapshot
+from app.services.upstream_assert_judge import assert_judge_input_fingerprint
+
+FIXTURE = Path(__file__).parents[2] / 'web/tests/fixtures/assert-html-report-run.json'
+client = TestClient(app)
+
+
+@pytest.fixture
+def saved(monkeypatch):
+    run = json.loads(FIXTURE.read_text())
+    conv = run['conversations'][0]
+    review = conv['judge_reviews'][0]
+    monkeypatch.setattr(assert_judge.execution_run_store, 'get_execution_run', lambda run_id: deepcopy(run))
+    def forbidden(**kwargs):
+        pytest.fail('Export must not invoke judging, charge credits, or record judge requests.')
+    monkeypatch.setattr(assert_judge, 'run_upstream_assert_judge', forbidden)
+    monkeypatch.setattr(assert_judge, 'record_judge_request', forbidden)
+    return run, conv, review
+
+
+def download(saved, user='demo-user', review_id=None):
+    run, conv, review = saved
+    return client.get(f"/api/assert/runs/{run['execution_run_id']}/conversations/{conv['conversation_id']}"
+                      f"/reviews/{review_id or review['review_id']}/report.html", params={'user_id': user})
+
+
+def resnapshot(saved):
+    run, conv, review = saved
+    review['deterministic_snapshot'] = deterministic_evaluation_snapshot(conv)
+    review['judge_result']['provenance']['input_fingerprint'] = assert_judge_input_fingerprint(
+        run=run, conversation=conv, scenario_contract=get_scenario_contract(run['suite_id'],conv['scenario_id']),
+        model=review['model'], judge_n=1)
+
+
+def test_valid_download_preserves_saved_values_without_mutation(saved):
+    original = deepcopy(saved)
+    response = download(saved)
+    assert response.status_code == 200
+    assert response.headers['content-type'].startswith('text/html')
+    assert response.headers['content-disposition'] == 'attachment; filename="assert-exec-assert-html-fixture-conversation-refund-fixture-judge-review-fixture.html"'
+    assert response.headers['cache-control'] == 'private, no-store'
+    assert response.headers['x-content-type-options'] == 'nosniff'
+    text = response.text
+    for value in ['CAE deterministic verdict:', 'needs_review', '45', '0.3.0',
+                  'fixture/recorded-model', 'completion_quality', 'Review opened',
+                  'case-fixture', 'refund_issued', 'unresolved citation', 'Audio is not embedded',
+                  'Synthetic fixture', 'Currently applied adjudication:', 'Unavailable']:
+        assert value in text
+    for value in ['/Users/private', 'scores.json', '<script', 'src=', 'href="http', 'url(', 'data:audio']:
+        assert value not in text
+    assert saved == original
+
+
+def test_wrong_owner_is_non_disclosing_before_evidence(saved, monkeypatch):
+    monkeypatch.setattr(assert_judge, 'get_scenario_contract', lambda *args: pytest.fail('Evidence read before owner check'))
+    response = download(saved, user='someone-else')
+    assert response.status_code == 404
+    assert response.json()['detail'] == 'Execution run not found.'
+
+
+@pytest.mark.parametrize('visible', [False, True])
+def test_project_visibility_and_exact_identity(saved, monkeypatch, visible):
+    run, _, _ = saved
+    run.update(project_id='shared-key', product_project_id='exact-project')
+    calls = []
+    def project(**kwargs):
+        calls.append(kwargs)
+        return object() if visible else None
+    monkeypatch.setattr(assert_judge, 'find_visible_project', project)
+    response = download(saved)
+    assert response.status_code == (200 if visible else 404)
+    assert calls[0]['user_id'] == 'demo-user'
+    assert calls[0]['project_id'] == 'shared-key'
+    assert calls[0]['product_project_id'] == 'exact-project'
+
+
+@pytest.mark.parametrize('field,value', [('status','running'),('status','queued'),('status','unknown')])
+@pytest.mark.parametrize('entity', [0, 1])
+def test_nonterminal_unavailable(saved, field, value, entity):
+    saved[entity][field] = value
+    assert download(saved).status_code == 409
+
+
+def test_missing_review_and_wrong_conversation(saved):
+    assert download(saved, review_id='missing').status_code == 409
+    run, conv, review = saved
+    response = client.get(f"/api/assert/runs/{run['execution_run_id']}/conversations/wrong/reviews/{review['review_id']}/report.html?user_id=demo-user")
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize('change', ['turns','action_trace','final_state','verdict','run_target','scenario_contract'])
+def test_stale_input_rejected(saved, monkeypatch, change):
+    run, conv, _ = saved
+    if change == 'run_target':
+        run['agent_name'] = 'Different target'
+    elif change == 'scenario_contract':
+        monkeypatch.setattr(assert_judge, 'get_scenario_contract', lambda *args: {'goal':'Different behavior'})
+    elif change == 'verdict':
+        conv['metrics_summary']['verdict'] = 'pass'
+    else:
+        conv[change] = [] if change in {'turns','action_trace'} else {'complete':True}
+    response = download(saved)
+    assert response.status_code == 409
+    assert 'stale' in response.json()['detail']
+
+
+@pytest.mark.parametrize('change', ['engine','status','dimensions','nodes','fingerprint','snapshot','justifications'])
+def test_malformed_or_missing_result_rejected(saved, change):
+    _, _, review = saved
+    p = review['judge_result']['provenance']
+    if change == 'engine': p['engine'] = 'other'
+    elif change == 'status': p['judge_status'] = 'error'
+    elif change == 'dimensions': p['dimensions'] = {'x':{'bad':'shape'}}
+    elif change == 'nodes': p['node_judgments'] = ['bad']
+    elif change == 'fingerprint': p['input_fingerprint'] = None
+    elif change == 'snapshot': review.pop('deterministic_snapshot')
+    elif change == 'justifications': p['dimension_justifications'] = []
+    assert download(saved).status_code == 409
+
+
+def test_selected_historical_review_and_applied_adjudication_are_distinct(saved):
+    _, conv, review = saved
+    review['status'] = 'superseded'
+    newer = deepcopy(review)
+    newer['review_id'] = 'newer-review'
+    newer['status'] = 'applied'
+    newer['judge_result']['rationale'] = 'NEWER RATIONALE'
+    conv['judge_reviews'].append(newer)
+    conv['evaluation_adjudication'] = {'review_id':'newer-review', 'judge_result':{'proposed_evaluation':{'verdict':'pass'}}}
+    response = download(saved)
+    assert response.status_code == 200
+    assert 'NEWER RATIONALE' not in response.text
+    assert 'newer-review' in response.text
+    assert '<span class="pill">needs_review</span>' in response.text
+
+
+def test_xss_and_internal_evidence_fields_are_removed(saved):
+    run, conv, review = saved
+    evil = '<script>alert("xss")</script><img src="https://evil.example" onerror="alert(1)">'
+    conv['turns'][0]['text'] = evil
+    conv['action_trace'][0].update(arguments={'html':evil,'api_key':'SECRET-CREDENTIAL','authorization':'Bearer DO-NOT-EXPORT'},
+                                  result={'html':evil,'path':'/Users/private/result.json'})
+    review['judge_result']['rationale'] = evil
+    p = review['judge_result']['provenance']
+    p['dimensions'][evil] = False
+    p['dimension_justifications'][evil] = evil
+    p['node_judgments'][0]['justification'] = evil
+    review['evidence_citations'] = [evil]
+    resnapshot(saved)
+    response = download(saved)
+    assert response.status_code == 200
+    assert '<script' not in response.text and '<img' not in response.text
+    assert '&lt;script&gt;' in response.text
+    assert 'SECRET-CREDENTIAL' not in response.text and 'DO-NOT-EXPORT' not in response.text
+    assert '/Users/private/' not in response.text
+
+
+def test_filename_is_bounded_and_header_safe(saved):
+    run, conv, review = saved
+    # Route IDs are not arbitrary header values; renderer also bounds/sanitizes each component.
+    from app.services.assert_html_report import report_filename
+    filename = report_filename('run\r\nInjected: yes', '../conversation', 'x'*1000)
+    assert '\r' not in filename and '\n' not in filename and '/' not in filename
+    assert len(filename) < 200
+
+
+@pytest.mark.parametrize('value,secret', [
+    ('tool debug password: "TOP_SECRET_DEMO"', 'TOP_SECRET_DEMO'),
+    ('tool debug "password": "TOP_SECRET_DEMO"', 'TOP_SECRET_DEMO'),
+    ("tool debug password: 'TOP SECRET DEMO'", 'TOP SECRET DEMO'),
+    ('https://demo-user:TOP_SECRET_DEMO@api.example.invalid/private', 'TOP_SECRET_DEMO'),
+    ('Inference saved to /workspace/artifacts/assert/score.json', '/workspace/artifacts'),
+    ({'/Users/alberto/Codex/private-secret.json':'loaded'}, '/Users/alberto'),
+])
+def test_export_scrubs_quoted_credentials_credential_urls_and_internal_keys(value, secret):
+    from app.services.assert_html_report import _json
+    assert secret not in _json(value)
+
+
+def test_missing_json_evidence_is_explicitly_unavailable():
+    from app.services.assert_html_report import _json
+    assert _json(None) == 'Unavailable'
+
+
+def test_real_project_membership_revocation_and_ambiguous_key_are_non_disclosing(saved):
+    """Exercise the actual database visibility helper, including a colliding personal key."""
+    import uuid
+    from app.db.database import SessionLocal
+    from app.models.entities import ProductProject, ProductWorkspace, ProductWorkspaceMember
+    key = f'export-access-{uuid.uuid4().hex[:8]}'
+    run, _, _ = saved
+    with SessionLocal() as db:
+        workspace = ProductWorkspace(owner_user_id='export-workspace-owner', workspace_key=key)
+        db.add(workspace)
+        db.flush()
+        member = ProductWorkspaceMember(workspace_id=workspace.id, user_id='demo-user', role='viewer')
+        shared = ProductProject(user_id='export-workspace-owner', workspace_id=workspace.id, project_key=key)
+        personal = ProductProject(user_id='demo-user', project_key=key)
+        db.add_all([member, shared, personal])
+        db.commit()
+        try:
+            run['project_id'] = key
+            # Both projects visible: an old run without exact identity must not guess.
+            assert download(saved).status_code == 404
+            run['product_project_id'] = shared.id
+            assert download(saved).status_code == 200
+            db.delete(member)
+            db.commit()
+            response = download(saved)
+            assert response.status_code == 404
+            assert response.json()['detail'] == 'Execution run not found.'
+        finally:
+            db.delete(shared)
+            db.delete(personal)
+            db.delete(workspace)
+            db.commit()
