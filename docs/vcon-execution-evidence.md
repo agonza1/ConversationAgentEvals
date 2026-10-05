@@ -70,3 +70,18 @@ Example request (native data is not a fabricated successful state):
   "data": {"events": [{"kind": "function_call_started", "function_name": "update_address", "tool_call_id": "call-1", "timestamp": 1790784000, "arguments": {"account_id": "example"}}]}
 }
 ```
+
+## Reading conversation and action evidence
+
+The evaluation view orders observations by timestamp only when all displayed rows
+have usable timestamps. Otherwise, it associates events with their explicit
+zero-based `dialog` reference (or a one-based `turn_index`) and shows them beneath
+that transcript turn. This is a turn association, not a claim about exact execution
+timing. Original vCon dialog indices are preserved, including recordings.
+
+Events without a usable transcript link appear in a separate **Unlinked evidence ·
+timing unknown** section. Its placement does not imply they occurred after the
+conversation. Final state remains a separate observation unless it has timing or
+a turn reference. Synthetic full samples include authored turn associations; custom
+sample pairs and imported evidence never gain guessed references. Conversational
+actions are labeled separately from tool calls and do not imply a real tool ran.

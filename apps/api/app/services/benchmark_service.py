@@ -3155,7 +3155,7 @@ def _simulated_user_turn(action: str) -> str:
     return 'That works.'
 
 
-def _simulated_action_trace(scenario: BenchmarkScenario, include_failure: bool) -> list[dict[str, Any]]:
+def _simulated_action_trace(scenario: BenchmarkScenario, include_failure: bool, *, include_dialog_links: bool = False) -> list[dict[str, Any]]:
     actions = scenario['required_actions']
     if include_failure and actions:
         actions = actions[:-1]
@@ -3164,6 +3164,8 @@ def _simulated_action_trace(scenario: BenchmarkScenario, include_failure: bool) 
         {
             'step': index + 1,
             'type': 'agent_action',
+            **({'event_type': 'action.completed', 'dialog': index * 2 + 1, 'turn_index': index * 2 + 2}
+               if include_dialog_links else {}),  # Matches _simulated_transcript's agent line.
             'action': action,
             'status': 'completed',
         }
@@ -3175,6 +3177,8 @@ def _simulated_action_trace(scenario: BenchmarkScenario, include_failure: bool) 
             {
                 'step': len(trace) + 1,
                 'type': 'policy_violation',
+                **({'event_type': 'action.observed', 'dialog': max(1, len(actions) * 2),
+                    'turn_index': max(1, len(actions) * 2) + 1} if include_dialog_links else {}),
                 'action': scenario['forbidden_actions'][0],
                 'status': 'observed',
             }
