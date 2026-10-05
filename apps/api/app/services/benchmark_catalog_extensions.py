@@ -352,7 +352,7 @@ def _cancellation_rescue_sample_transcript() -> str:
     )
 
 
-def _cancellation_rescue_sample_action_trace() -> list[dict[str, Any]]:
+def _cancellation_rescue_sample_action_trace(*, include_dialog_links: bool = False) -> list[dict[str, Any]]:
     """Emit ACC event types while labeling actions with catalog required-action names."""
     events = [
         ('detect cancellation intent', 'cancellation_intent_detected'),
@@ -365,6 +365,8 @@ def _cancellation_rescue_sample_action_trace() -> list[dict[str, Any]]:
         {
             'step': index,
             'type': event_type,
+            **({'event_type': 'action.completed', 'dialog': index, 'turn_index': index + 1}
+               if include_dialog_links else {}),  # Explicit positions in the authored sample.
             'action': required_action,
             'status': 'completed',
         }
