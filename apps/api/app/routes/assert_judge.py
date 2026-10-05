@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
@@ -188,3 +188,28 @@ def export_assert_html_report(execution_run_id: str, conversation_id: str, revie
         'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff',
         'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
     })
+
+
+@router.get('/runs/{execution_run_id}/conversations/{conversation_id}/reviews/{review_id}/status')
+def saved_review_status(execution_run_id: str, conversation_id: str, review_id: str,
+                        user_id: str = Query(min_length=1), db: Session = Depends(get_db)):
+    from app.services.assert_review_status import saved_assert_review_freshness
+    run = execution_run_store.get_execution_run(execution_run_id)
+    if run is None or run.get('user_id') != user_id:
+        raise HTTPException(status_code=404, detail='Execution run not found.')
+    project_id = str(run.get('project_id') or '').strip()
+    if project_id and find_visible_project(db=db, user_id=user_id, project_id=project_id,
+                                          product_project_id=run.get('product_project_id')) is None:
+        raise HTTPException(status_code=404, detail='Execution run not found.')
+    conversation = next((item for item in run.get('conversations') or []
+                         if isinstance(item, dict) and item.get('conversation_id') == conversation_id), None)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail='Conversation not found.')
+    review = next((item for item in conversation.get('judge_reviews') or []
+                   if isinstance(item, dict) and item.get('review_id') == review_id), None)
+    if review is None:
+        raise HTTPException(status_code=404, detail='Saved review not found.')
+    contract = get_scenario_contract(str(conversation.get('suite_id') or run.get('suite_id') or ''),
+                                    str(conversation.get('scenario_id') or ''))
+    return JSONResponse({'execution_run_id': execution_run_id, 'conversation_id': conversation_id, 'review_id': review_id,
+            **saved_assert_review_freshness(run, conversation, review, contract)}, headers={'Cache-Control': 'private, no-store'})

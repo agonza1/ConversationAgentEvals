@@ -207,20 +207,26 @@ async function checkAssertJudgeRouting(
     });
   });
 
+  await page.route('**/reviews/judge-review-assert-ui/status?**', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify({ execution_run_id: 'exec-assert-ui',
+      conversation_id: conversationId, review_id: 'judge-review-assert-ui', status: 'current',
+      reason_code: 'fixture', message: 'Synthetic routing fixture: matching inputs.' }),
+  }));
   await page.goto('/runs/exec-assert-ui');
   await expect(page.getByRole('heading', { name: 'External support agent' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Review the deterministic verdict' })).toBeVisible();
 
   await page.getByRole('button', { name: 'Review with LLM judge' }).click();
 
-  const result = page.getByLabel('LLM judge result');
-  await expect(result).toContainText('Upstream ASSERT semantic judgment completed');
-  await expect(result).toContainText('Provider: assert-ai');
+  const result = page.getByLabel('Saved ASSERT assessment');
+  await result.getByText('Semantic rationale', { exact: true }).click();
+  await result.getByText('Selected review proposal', { exact: true }).click();
   await expect(result).toContainText('openai/gpt-4.1-mini');
   await expect(result).toContainText('The transcript contains an unsupported refund claim.');
   await expect(result).toContainText('No refund tool result or final-state receipt was recorded.');
   await expect(result).toContainText(`ASSERT 0.3.0 · ${evidenceLabel}`);
-  await expect(result).toContainText('Unsupported Operational Claim: Flagged');
+  await expect(result).toContainText('unsupported operational claim');
+  await expect(result).toContainText('Flagged');
   if (evidenceLevel !== 'black_box') {
     await expect(result).not.toContainText('Transcript-only evidence');
   }

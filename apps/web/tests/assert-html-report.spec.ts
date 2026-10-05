@@ -34,6 +34,7 @@ test('saved review export downloads and renders a standalone synthetic report of
   const older = structuredClone(review);
   older.review_id = 'judge-review-older';
   older.status = 'superseded';
+  older.created_at = '2026-10-03T12:00:00Z';
   run.conversations[0].judge_reviews.unshift(older);
   let judgeCalls = 0;
   await page.route('**/api/**/judge', (route) => { judgeCalls += 1; return route.abort(); });

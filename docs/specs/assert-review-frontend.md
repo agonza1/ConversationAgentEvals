@@ -1,12 +1,12 @@
 # ASSERT review details in CAE
 
-Status: proposed implementation spec. This PR defines the work; it does not implement the frontend.
+Status: implementation in progress; acceptance evidence is required before review readiness.
 
 ## Purpose and boundaries
 
 Extend CAE's existing conversation review panel with useful fields from saved ASSERT assessments. Reviewers should understand which behavior failed, what an ordinal score means, which assessment they are reading, and whether its evidence is current. Keep CAE's run navigation, audio, latency, and vCon experience. Do not embed or vendor the ASSERT viewer.
 
-The portable HTML export in PR #151 remains a separate feature. This work may reuse its saved-review validation and input-fingerprint helpers after that change lands. This spec PR targets main and does not include #151's implementation commits.
+PR #152 is temporarily stacked on the open portable HTML export PR #151 (`codex/assert-html-report-export`). It reuses that implementation’s selected export action and shared fingerprint logic. Review #152 against that base; retarget/rebase to main after #151 merges. Neither PR is merged by this task.
 
 ## Review selection and context
 
@@ -56,3 +56,11 @@ Use native disclosures or accessible controls with descriptive names, keyboard n
 ## Out of scope
 
 New scoring rules or confidence aggregation; suite-level dashboards/comparisons; new judges; raw-output persistence; audio playback redesign; new authentication; upstream viewer embedding; inferred citation links; automatically applying or rerunning assessments.
+
+## Implemented API contract
+
+`GET /api/assert/runs/{run_id}/conversations/{conversation_id}/reviews/{review_id}/status?user_id={owner}` returns the exact three IDs plus `status` (`current`, `stale`, `cannot_verify`), a bounded `reason_code`, and a safe message. It never returns paths or raw review metadata. Owner and exact project visibility are checked before review lookup.
+
+A common server service checks terminal state, deterministic evidence identity, saved ASSERT/model provenance and original input fingerprints across supported judge counts. Export uses the same service. ASSERT application checks it independently inside the execution-store lock, including legacy `assert-ai` reviews missing provenance; non-ASSERT proposal semantics remain unchanged. The client discards responses tagged for previous selections, disables apply until Current, and requires explicit confirmation.
+
+There is no reliable persisted evidence-anchor format in current native nodes/string citations, so all evidence references remain explicitly unresolved text; no turn-index links are fabricated.
