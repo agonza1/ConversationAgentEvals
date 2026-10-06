@@ -22,6 +22,14 @@ def build_assert_taxonomy(
 
     required = _descriptions(contract.get('required_actions'))
     forbidden = _descriptions(contract.get('forbidden_actions'))
+    for kind, values in [('required', required), ('forbidden', forbidden)]:
+        # IDs, not labels, distinguish authored rules. Equal labels may have
+        # different definitions; expanding after label de-dup would drop one.
+        rules = [rule for rule in contract.get('behaviors') or []
+                 if isinstance(rule, dict) and rule.get('kind') == kind and rule.get('label') in values]
+        represented = {rule['label'] for rule in rules}
+        expanded = [f'{rule["label"]}: {rule["description"]}' if rule.get('description') else rule['label'] for rule in rules]
+        values[:] = expanded + [value for value in values if value not in represented]
     used_names: set[str] = set()
     categories = []
     for action in required:
@@ -76,6 +84,15 @@ def build_assert_taxonomy(
         behavior_parts.append(goal)
     if expected_final_state:
         behavior_parts.append(f'Expected final state: {expected_final_state}')
+    for key, label in [('requirements', 'Source requirements'), ('permissible_behavior', 'Permissible behavior boundary')]:
+        if contract.get(key):
+            behavior_parts.append(f'{label}: {_contract_text(contract[key])}')
+    if contract.get('behavior_preset'):
+        from app.integrations.assert_runtime import behavior_preset
+        behavior_parts.append('ASSERT library behavior: ' + _contract_text(behavior_preset(contract['behavior_preset'])))
+    if contract.get('scenario_preset'):
+        from app.integrations.assert_runtime import scenario_preset
+        behavior_parts.append('ASSERT application context: ' + _contract_text(scenario_preset(contract['scenario_preset']).get('context')))
     behavior_definition = '\n\n'.join(behavior_parts) or (
         'Evaluate whether the agent follows the approved requirements and reaches a supported outcome.'
     )
@@ -92,6 +109,8 @@ def build_assert_taxonomy(
             'scenario_title': title,
             'goal': goal or None,
             'expected_final_state': expected_final_state or None,
+            'evaluation_spec_ref': contract.get('evaluation_spec_ref'),
+            'target_behavior_id': contract.get('target_behavior_id'),
         },
     }
 

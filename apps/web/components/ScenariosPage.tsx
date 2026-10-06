@@ -19,6 +19,8 @@ interface ScenarioRecord {
   forbidden_actions: string[];
   expected_final_state: string;
   source: string;
+  evaluation_spec_ref: string;
+  caller_steps: string[];
 }
 
 interface ScenarioSuite {
@@ -93,6 +95,8 @@ function normalizeScenario(value: unknown, suiteId: string): ScenarioRecord {
     forbidden_actions: stringList(record.forbidden_actions),
     expected_final_state: displayValue(record.expected_final_state ?? record.expected_output),
     source: String(record.source ?? ''),
+    evaluation_spec_ref: displayValue(record.evaluation_spec_ref),
+    caller_steps: stringList(record.caller_steps),
   };
 }
 
@@ -126,6 +130,8 @@ async function createScenario(payload: {
   simulated_user_prompt: string;
   expected_output: string;
   description: string;
+  required_actions: string[];
+  forbidden_actions: string[];
 }): Promise<ScenarioRecord> {
   const value = await handleJson<unknown>(
     await fetch(`${getApiBase()}/api/scenarios`, {
@@ -216,6 +222,8 @@ export function ScenariosPage() {
   const [simulatedUserPrompt, setSimulatedUserPrompt] = useState('');
   const [expectedOutput, setExpectedOutput] = useState('');
   const [description, setDescription] = useState('');
+  const [requiredActions, setRequiredActions] = useState('');
+  const [forbiddenActions, setForbiddenActions] = useState('');
   const [mirrorPrompt, setMirrorPrompt] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -257,8 +265,9 @@ export function ScenariosPage() {
         if (loadRequestRef.current !== requestId) return;
         setSuites(next);
         const params = new URLSearchParams(window.location.search);
-        const querySelection = params.get('suite_id') && params.get('scenario_id')
-          ? scenarioKey(String(params.get('suite_id')), String(params.get('scenario_id')))
+        const requestedSuite = next.find((suite) => suite.id === params.get('suite_id'));
+        const querySelection = params.get('suite_id') && (params.get('scenario_id') || requestedSuite?.scenarios[0]?.id)
+          ? scenarioKey(String(params.get('suite_id')), String(params.get('scenario_id') || requestedSuite?.scenarios[0]?.id))
           : '';
         const wanted = preferredSelectionRef.current || querySelection;
         preferredSelectionRef.current = '';
@@ -308,6 +317,8 @@ export function ScenariosPage() {
         simulated_user_prompt: simulatedUserPrompt.trim(),
         expected_output: expectedOutput.trim(),
         description: description.trim(),
+        required_actions: stringList(requiredActions),
+        forbidden_actions: stringList(forbiddenActions),
       });
       preferredSelectionRef.current = scenarioKey('user-scenarios', created.id);
       setMode('view');
@@ -316,6 +327,8 @@ export function ScenariosPage() {
       setSimulatedUserPrompt('');
       setExpectedOutput('');
       setDescription('');
+      setRequiredActions('');
+      setForbiddenActions('');
       setMirrorPrompt(true);
       setReloadKey((value) => value + 1);
     } catch (err) {
@@ -350,6 +363,7 @@ export function ScenariosPage() {
             <div>
               <p className="eyebrow">Evaluation suites</p>
               <h2>Scenario catalog</h2>
+              <Link href="/specs/new">Create from requirements →</Link>
             </div>
             <button type="button" className="primary-link" onClick={() => { setMode('create'); setError(null); setSaveMessage(null); }}>
               Create scenario
@@ -409,12 +423,14 @@ export function ScenariosPage() {
               <div>
                 <p className="eyebrow">User Scenarios</p>
                 <h2>Create a scenario</h2>
-                <p className="scenarios-muted">Describe the user request and the outcome the agent must achieve.</p>
+                <p className="scenarios-muted">Enter explicit rules below. Expected outcome text is not automatically converted into rules. For reviewed AI drafts and version-linked cases, use <Link href="/specs/new">Evaluation design</Link>.</p>
               </div>
               {error ? <div className="scenarios-error" role="alert">{error}</div> : null}
               <label htmlFor="scenario-title"><span>Title (optional)</span><input id="scenario-title" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Account lockout handoff" /></label>
               <label htmlFor="scenario-prompt"><span>User prompt / persona</span><textarea id="scenario-prompt" required rows={6} value={simulatedUserPrompt} onChange={(event) => setSimulatedUserPrompt(event.target.value)} placeholder="Describe the user’s situation and request…" /></label>
               <label htmlFor="scenario-expected"><span>Expected outcome</span><textarea id="scenario-expected" required rows={5} value={expectedOutput} onChange={(event) => setExpectedOutput(event.target.value)} placeholder="What the agent should do or say…" /></label>
+              <label htmlFor="scenario-required"><span>Required behaviors (one per line)</span><textarea id="scenario-required" required rows={4} value={requiredActions} onChange={(event) => setRequiredActions(event.target.value)} placeholder="Offer housing options within the caller’s budget" /></label>
+              <label htmlFor="scenario-forbidden"><span>Forbidden behaviors (one per line, optional)</span><textarea id="scenario-forbidden" rows={4} value={forbiddenActions} onChange={(event) => setForbiddenActions(event.target.value)} placeholder="Execute a house sale\nHandle payments" /></label>
               <label htmlFor="scenario-description"><span>Description</span><textarea id="scenario-description" required rows={5} value={description} onChange={(event) => { setMirrorPrompt(false); setDescription(event.target.value); }} placeholder="Often mirrors the user prompt…" /></label>
               <label className="scenarios-checkbox" htmlFor="scenario-mirror"><input id="scenario-mirror" type="checkbox" checked={mirrorPrompt} onChange={(event) => setMirrorPrompt(event.target.checked)} />Keep description mirrored from the user prompt</label>
               <div className="scenarios-actions">
@@ -453,6 +469,8 @@ export function ScenariosPage() {
               <FieldCard title="Required actions" value={listText(selected.scenario.required_actions)} onCopy={(label, text) => void onCopy(label, text)} />
               <FieldCard title="Forbidden behaviors" value={listText(selected.scenario.forbidden_actions)} onCopy={(label, text) => void onCopy(label, text)} />
               <FieldCard title="Expected final state" value={selected.scenario.expected_final_state || selected.scenario.expected_output} onCopy={(label, text) => void onCopy(label, text)} />
+              {selected.scenario.evaluation_spec_ref ? <FieldCard title="Evaluation design version" value={selected.scenario.evaluation_spec_ref} onCopy={(label, text) => void onCopy(label, text)} /> : null}
+              {selected.scenario.caller_steps.length ? <FieldCard title="Caller-side instructions" value={selected.scenario.caller_steps.join('\n')} onCopy={(label, text) => void onCopy(label, text)} /> : null}
               <FieldCard title="Evidence requirements" value={'• Conversation transcript or vCon\n• Action/tool trace\n• Final state'} onCopy={(label, text) => void onCopy(label, text)} />
             </section>
           ) : null}

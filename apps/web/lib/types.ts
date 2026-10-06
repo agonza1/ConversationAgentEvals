@@ -260,6 +260,7 @@ export interface AssertCheck {
   description: string;
   severity?: 'info' | 'warning' | 'error';
   draft?: boolean;
+  source_quote?: string;
 }
 
 export interface AssertScenario {
@@ -270,6 +271,8 @@ export interface AssertScenario {
   steps?: string[];
   expected_outcome?: string;
   draft?: boolean;
+  behavior_id?: string | null;
+  variant?: 'normal' | 'boundary' | 'adversarial';
 }
 
 export interface AssertJudge {
@@ -290,7 +293,7 @@ export interface AssertJudge {
 }
 
 export interface AssertLibraryPreset {
-  kind: 'behavior' | 'judge_preset';
+  kind: 'behavior' | 'judge_preset' | 'scenario';
   name: string;
   version: string;
   tags: string[];
@@ -304,7 +307,11 @@ export interface EditableAssertSpec {
   title: string;
   role: string;
   objective: string;
+  requirements?: string;
+  permissible_behavior?: string;
+  generation_provenance?: Record<string, string>;
   behavior_preset?: string | null;
+  scenario_preset?: string | null;
   status?: 'draft' | 'published';
   generated_content_status?: 'none' | 'draft' | 'approved';
   required_behaviors: AssertCheck[];

@@ -128,6 +128,17 @@ def behavior_preset(name: str) -> dict[str, Any]:
     return dict(load_preset('behavior', name))
 
 
+def scenario_presets() -> list[dict[str, Any]]:
+    """Application context from ASSERT; these are not executable CAE cases."""
+    ensure_expected_version()
+    return [{key: value for key, value in item.items() if key != 'path'} for item in discover(kind='scenario')]
+
+
+def scenario_preset(name: str) -> dict[str, Any]:
+    ensure_expected_version()
+    return dict(load_preset('scenario', name))
+
+
 def judge_presets() -> list[dict[str, Any]]:
     """Return ASSERT 0.3 judge presets without copying the library into CAE."""
     ensure_expected_version()
@@ -164,5 +175,7 @@ __all__ = [
     'judge_score_contract',
     'judge_preset',
     'judge_presets',
+    'scenario_preset',
+    'scenario_presets',
     'validate_config',
 ]

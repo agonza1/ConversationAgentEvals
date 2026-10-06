@@ -315,6 +315,8 @@ _SCENARIOS_BY_ID = {
 
 
 def list_suites() -> list[BenchmarkSuite]:
+    from app.services.spec_scenario_authoring import refresh_published_catalog
+    refresh_published_catalog()
     summaries = [
         {
             'id': suite['id'],
@@ -336,7 +338,7 @@ def list_suites() -> list[BenchmarkSuite]:
     ]
     known_ids = {summary['id'] for summary in summaries}
     # Dynamically registered suites (e.g. file-backed user-created scenarios).
-    for suite_id, suite in _SUITES_BY_ID.items():
+    for suite_id, suite in list(_SUITES_BY_ID.items()):
         if suite_id in known_ids:
             continue
         scenarios = suite.get('scenarios') or []
@@ -367,6 +369,7 @@ def list_suites() -> list[BenchmarkSuite]:
 
 
 def get_suite(suite_id: str) -> BenchmarkSuite | None:
+    _refresh_spec_suite(suite_id)
     suite = _SUITES_BY_ID.get(suite_id)
     if not suite:
         return None
@@ -387,6 +390,7 @@ def _scenario_with_starter_evidence(scenario: BenchmarkScenario) -> BenchmarkSce
 
 
 def get_suite_contract_manifest(suite_id: str) -> dict[str, Any] | None:
+    _refresh_spec_suite(suite_id)
     suite = _SUITES_BY_ID.get(suite_id)
     if not suite:
         return None
@@ -416,6 +420,7 @@ def get_suite_contract_manifest(suite_id: str) -> dict[str, Any] | None:
 
 
 def get_scenario_contract(suite_id: str, scenario_id: str) -> dict[str, Any] | None:
+    _refresh_spec_suite(suite_id)
     suite = _SUITES_BY_ID.get(suite_id)
     scenario = _SCENARIOS_BY_ID.get((suite_id, scenario_id))
     if not suite or not scenario:
@@ -547,6 +552,8 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, A
     scenario_id = _first_string(payload, 'scenario_id', 'scenarioId')
     if not suite_id or not scenario_id:
         raise ValueError('suite_id and scenario_id are required')
+
+    _refresh_spec_suite(suite_id)
 
     suite = _SUITES_BY_ID.get(suite_id)
     scenario = _SCENARIOS_BY_ID.get((suite_id, scenario_id))
@@ -803,6 +810,9 @@ def _execute_assert_contract(
     rubric_score = sum(check['earned_weight'] for check in rubric_checks)
     penalty = min(40, len(forbidden_hits) * 20)
     overall_score = max(0, round((required_score * 0.45) + (rubric_score * 0.55) - penalty))
+    if not scenario['rubric']:
+        # Authored language rules do not invent a keyword rubric.
+        overall_score = max(0, required_score - penalty)
 
     action_trace = payload.get('action_trace')
     final_state = payload.get('final_state')
@@ -839,6 +849,10 @@ def _execute_assert_contract(
         }
 
     status = 'pass' if overall_score >= 75 and not failed_required_actions and not forbidden_observed and not final_state_missing and not workflow_order_issues and not missing_actions else 'needs_review'
+    if scenario.get('evaluation_spec_ref'):
+        # Heuristic action matching cannot prove arbitrary natural-language policy.
+        status = 'needs_review'
+        hard_check_failures.append({'category': 'semantic_review_required', 'message': 'Published design behaviors need semantic review; action matching alone does not verify this policy.'})
     failures = _assert_failures(
         missing_actions=missing_actions,
         forbidden_observed=forbidden_observed,
@@ -1134,6 +1148,7 @@ def simulate_scenario(request: Any) -> dict[str, Any]:
     if not suite_id or not scenario_id:
         raise ValueError('suite_id and scenario_id are required')
 
+    _refresh_spec_suite(suite_id)
     suite = _SUITES_BY_ID.get(suite_id)
     scenario = _SCENARIOS_BY_ID.get((suite_id, scenario_id))
     if not suite or not scenario:
@@ -1228,6 +1243,7 @@ def run_suite(request: Any) -> dict[str, Any]:
     if not suite_id:
         raise ValueError('suite_id is required')
 
+    _refresh_spec_suite(suite_id)
     suite = _SUITES_BY_ID.get(suite_id)
     if not suite:
         raise ValueError(f'Unknown benchmark suite: {suite_id}')
@@ -1326,6 +1342,7 @@ def simulate_suite(request: Any) -> dict[str, Any]:
     if not suite_id:
         raise ValueError('suite_id is required')
 
+    _refresh_spec_suite(suite_id)
     suite = _SUITES_BY_ID.get(suite_id)
     if not suite:
         raise ValueError(f'Unknown benchmark suite: {suite_id}')
@@ -1756,7 +1773,7 @@ def _first_number(mapping: dict[str, Any], *keys: str) -> int | float | None:
 
 
 def _scenario_contract(scenario: BenchmarkScenario) -> dict[str, Any]:
-    return {
+    contract = {
         'id': scenario['id'],
         'title': scenario['title'],
         'persona': scenario['persona'],
@@ -1766,6 +1783,17 @@ def _scenario_contract(scenario: BenchmarkScenario) -> dict[str, Any]:
         'expected_final_state': scenario['expected_final_state'],
         'rubric': deepcopy(scenario['rubric']),
     }
+    for key in ('evaluation_spec_ref', 'behaviors', 'target_behavior_id', 'variant', 'caller_steps',
+                'requirements', 'permissible_behavior', 'evidence_requirements', 'generation_provenance', 'behavior_preset', 'scenario_preset'):
+        if key in scenario:
+            contract[key] = deepcopy(scenario[key])
+    return contract
+
+
+def _refresh_spec_suite(suite_id: str) -> None:
+    if suite_id.startswith('spec-suite-'):
+        from app.services.spec_scenario_authoring import refresh_published_catalog
+        refresh_published_catalog()
 
 
 def _group_call_message_items(value: dict[str, Any]) -> list[Any]:

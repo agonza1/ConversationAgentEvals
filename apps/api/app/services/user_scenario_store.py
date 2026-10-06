@@ -96,6 +96,8 @@ def create_user_scenario(payload: dict[str, Any]) -> dict[str, Any]:
             'source': 'user_created',
             'created_at': now,
             'updated_at': now,
+            'required_actions': payload.get('required_actions'),
+            'forbidden_actions': payload.get('forbidden_actions'),
         }
     )
 
