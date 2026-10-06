@@ -800,19 +800,26 @@ def _execute_assert_contract(
     suite_contract_manifest_sha256: str,
 ) -> AssertResultManifest:
     scoring_text = '\n'.join(item for item in (transcript, _action_evidence_text(payload)) if item)
-    completed_actions = _completed_actions(scoring_text, scenario['required_actions'])
-    # Explicit execution failures or unfinished invocations outrank spoken claims.
-    incomplete = _failed_required_actions(payload.get('action_trace'), scenario['required_actions'])
-    completed_actions = [action for action in completed_actions if action not in incomplete]
-    forbidden_hits = _forbidden_hits(scoring_text, scenario['forbidden_actions'])
+    authored = bool(scenario.get('evaluation_spec_ref'))
+    if authored:
+        completed_actions, incomplete, forbidden_hits = _focused_action_evidence(scenario, payload.get('action_trace'))
+    else:
+        completed_actions = _completed_actions(scoring_text, scenario['required_actions'])
+        # Explicit execution failures or unfinished invocations outrank spoken claims.
+        incomplete = _failed_required_actions(payload.get('action_trace'), scenario['required_actions'])
+        completed_actions = [action for action in completed_actions if action not in incomplete]
+        forbidden_hits = _forbidden_hits(scoring_text, scenario['forbidden_actions'])
     rubric_checks = _rubric_checks(transcript, scenario['rubric'])
-    required_score = round((len(completed_actions) / len(scenario['required_actions'])) * 100)
+    required_score = round((len(completed_actions) / len(scenario['required_actions'])) * 100) if scenario['required_actions'] else None
+    # No required checklist is n/a, not a perfect required-action score. Absence
+    # of ID-linked forbidden evidence cannot prove a natural-language prohibition.
+    forbidden_score = (0 if forbidden_hits else None) if authored else (0 if forbidden_hits else 100)
     rubric_score = sum(check['earned_weight'] for check in rubric_checks)
     penalty = min(40, len(forbidden_hits) * 20)
-    overall_score = max(0, round((required_score * 0.45) + (rubric_score * 0.55) - penalty))
+    overall_score = max(0, round(((required_score or 0) * 0.45) + (rubric_score * 0.55) - penalty))
     if not scenario['rubric']:
         # Authored language rules do not invent a keyword rubric.
-        overall_score = max(0, required_score - penalty)
+        overall_score = max(0, (required_score or 0) - penalty)
 
     action_trace = payload.get('action_trace')
     final_state = payload.get('final_state')
@@ -820,7 +827,7 @@ def _execute_assert_contract(
     forbidden_observed = [hit['action'] for hit in forbidden_hits]
     final_state_missing = _assert_final_state_missing(final_state, required=_artifact_present(action_trace))
     workflow_order_issues = _workflow_order_issues(action_trace, scenario['required_actions'], missing_actions) if _artifact_present(action_trace) else []
-    failed_required_actions = _failed_required_actions(action_trace, scenario['required_actions']) if _artifact_present(action_trace) else []
+    failed_required_actions = incomplete
     hard_check_failures = _hard_check_failures(
         missing_actions=missing_actions,
         forbidden_observed=forbidden_observed,
@@ -830,20 +837,21 @@ def _execute_assert_contract(
     if _has_agentic_evidence(payload):
         # Average only dimensions we can actually measure from supplied evidence.
         # Do not invent 100s for unchecked task/final/workflow slots.
-        components: list[tuple[str, int]] = [
-            ('required_actions', required_score),
-            ('forbidden_actions', 0 if forbidden_observed else 100),
-        ]
+        components: list[tuple[str, int]] = []
+        if required_score is not None:
+            components.append(('required_actions', required_score))
+        if forbidden_score is not None:
+            components.append(('forbidden_actions', forbidden_score))
         if _artifact_present(action_trace):
             components.append(('workflow_order', 0 if workflow_order_issues else 100))
         if _artifact_present(action_trace) or _artifact_present(final_state):
             components.append(('final_state', 0 if final_state_missing else 100))
-        overall_score = round(sum(score for _, score in components) / len(components))
+        overall_score = round(sum(score for _, score in components) / len(components)) if components else 0
         score_components = {name: score for name, score in components}
     else:
         # Transcript-only: required actions + rubric only. No fake agentic dimension scores.
         score_components = {
-            'required_actions': required_score,
+            **({'required_actions': required_score} if required_score is not None else {}),
             'rubric': rubric_score,
             'forbidden_penalty': penalty,
         }
@@ -875,6 +883,9 @@ def _execute_assert_contract(
         'hard_check_failures': hard_check_failures,
         'score_components': score_components,
         'scoring_mode': 'agentic' if _has_agentic_evidence(payload) else 'transcript',
+        'authored_policy': authored,
+        'action_checklist': deepcopy(scenario.get('action_checklist', [])),
+        'forbidden_action_score': forbidden_score,
     }
     return AssertResultManifest.model_validate(
         {
@@ -919,7 +930,7 @@ def _assert_report_fields(assert_manifest: AssertResultManifest, *, payload: dic
     result_payload = result_artifact.inline_data if result_artifact is not None and isinstance(result_artifact.inline_data, dict) else {}
     missing_actions = [str(item) for item in result_payload.get('missing_actions', [])]
     final_state_payload = payload.get('final_state')
-    if isinstance(final_state_payload, dict) and isinstance(final_state_payload.get('missing_actions'), list):
+    if not result_payload.get('authored_policy') and isinstance(final_state_payload, dict) and isinstance(final_state_payload.get('missing_actions'), list):
         missing_actions = sorted({*missing_actions, *[str(item) for item in final_state_payload['missing_actions']]})
     forbidden_hits = result_payload.get('forbidden_action_hits') if isinstance(result_payload.get('forbidden_action_hits'), list) else []
     forbidden_observed = [str(item.get('action')) for item in forbidden_hits if isinstance(item, dict) and item.get('action')]
@@ -961,7 +972,7 @@ def _assert_report_fields(assert_manifest: AssertResultManifest, *, payload: dic
         'scoring_mode': scoring_mode,
         'score_components': score_components,
         'task_completion_score': task_completion_score,
-        'forbidden_action_score': 0 if forbidden_observed else 100,
+        'forbidden_action_score': result_payload.get('forbidden_action_score', 0 if forbidden_observed else 100),
         'final_state_score': final_state_score,
         'workflow_order_score': workflow_order_score,
         'forbidden_actions_observed': forbidden_observed,
@@ -977,7 +988,7 @@ def _assert_report_fields(assert_manifest: AssertResultManifest, *, payload: dic
         'final_state': payload.get('final_state'),
     }
     return {
-        'required_action_score': int(metrics.get('required_action_score', 0)),
+        'required_action_score': metrics.get('required_action_score'),
         'rubric_score': int(metrics.get('rubric_score', 0)),
         'completed_actions': [str(item) for item in result_payload.get('completed_actions', [])],
         'missing_actions': missing_actions,
@@ -1783,7 +1794,7 @@ def _scenario_contract(scenario: BenchmarkScenario) -> dict[str, Any]:
         'expected_final_state': scenario['expected_final_state'],
         'rubric': deepcopy(scenario['rubric']),
     }
-    for key in ('evaluation_spec_ref', 'behaviors', 'target_behavior_id', 'variant', 'caller_steps',
+    for key in ('evaluation_spec_ref', 'behaviors', 'action_checklist', 'target_behavior_id', 'variant', 'caller_steps',
                 'requirements', 'permissible_behavior', 'evidence_requirements', 'generation_provenance', 'behavior_preset', 'scenario_preset'):
         if key in scenario:
             contract[key] = deepcopy(scenario[key])
@@ -2412,6 +2423,36 @@ def _append_transcript_citation(
 def _citation_terms(value: str) -> list[str]:
     stopwords = {'a', 'an', 'and', 'for', 'in', 'of', 'on', 'or', 'the', 'to'}
     return [term for term in _normalize(value).replace('_', ' ').split() if len(term) > 2 and term not in stopwords]
+
+
+def _focused_action_evidence(scenario: BenchmarkScenario, action_trace: Any) -> tuple[list[str], list[str], list[dict[str, str]]]:
+    """Observe ID-linked actions, not fuzzy labels or spoken policy claims.
+
+    A behavior ID is a source-reported association, not semantic verification.
+    Plain labels cannot identify distinct rules that happen to share a name.
+    """
+    completed, failed, forbidden = [], [], []
+    for rule in scenario.get('action_checklist', []):
+        if rule['id'] != scenario.get('target_behavior_id'):
+            continue
+        events = []
+        for event in parse_action_trace(action_trace):
+            raw = event.raw if isinstance(event.raw, dict) else {}
+            matches = raw['behavior_id'] == rule['id'] if 'behavior_id' in raw else event.name in {rule['id'], rule['action']}
+            if matches:
+                events.append(event)
+        observed = any(_normalized_action_status(event.status) in {
+            'success', 'succeeded', 'completed', 'complete', 'ok', 'true', 'observed',
+        } for event in events)
+        if rule['kind'] == 'required':
+            if observed:
+                completed.append(rule['action'])
+            elif events:
+                failed.append(rule['action'])
+        elif observed:
+            forbidden.append({'action': rule['action'], 'behavior_id': rule['id'],
+                              'reason': 'Observed an explicitly ID-linked forbidden action; semantic interpretation requires review.'})
+    return completed, failed, forbidden
 
 
 def _failed_required_actions(action_trace: Any, required_actions: list[Any]) -> list[str]:

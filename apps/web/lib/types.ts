@@ -462,8 +462,8 @@ export interface BenchmarkRunResponse {
   verdict: 'pass' | 'fail' | 'needs_review' | string;
   checks?: BenchmarkRunCheck[];
   task_completion_score?: number;
-  required_action_score?: number;
-  forbidden_action_score?: number;
+  required_action_score?: number | null;
+  forbidden_action_score?: number | null;
   final_state_score?: number;
   rubric_score?: number;
   completed_actions?: string[];

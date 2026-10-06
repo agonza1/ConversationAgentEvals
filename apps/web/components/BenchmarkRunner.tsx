@@ -66,7 +66,7 @@ interface BenchmarkReport {
   scoring_mode?: 'transcript' | 'agentic' | string;
   score_components?: Record<string, number>;
   task_completion_score?: number | null;
-  required_action_score?: number;
+  required_action_score?: number | null;
   rubric_score?: number;
   forbidden_action_score?: number | null;
   evidence_citations?: Array<string | JsonRecord>;

@@ -56,6 +56,10 @@ catalog; this is not a private multi-tenant publishing system.
 The scenario contract (and its digest, recorded run and exported vCon analysis)
 retains the spec/version reference, complete behavior definitions, focus ID,
 variant, caller instructions, permissible boundary and generation provenance.
+Each case's action checklist contains only its focus behavior, with its ID,
+kind, label and definition. Displayed action names include `[behavior-id]` so
+equal labels are not conflated. The complete policy remains context, not a
+claim that this case exercises every rule in the design.
 No duplicate ASSERT runtime or legacy-version implementation is introduced.
 
 ## Evaluation and boundaries
@@ -69,6 +73,13 @@ CAE's automatic rule-based evaluation uses existing action/evidence heuristics.
 Arbitrary natural-language policies are not semantically proved by matching an
 action label. Published designs therefore remain `needs_review` under that
 evaluator, even if its measured action score is 100. No keyword rubric is invented.
+For published designs, rule-action observations require an explicit trace
+`behavior_id`, an action name equal to that ID, or the full displayed action name
+including `[behavior-id]`, plus a successful/observed status. Bare labels or
+spoken claims do not establish which authored rule was exercised. These are
+source-reported associations, not independently verified semantic judgments.
+A forbidden-focus case has required actions n/a, not missing unrelated rules.
+Absence of ID-linked forbidden evidence is also n/a, not a proved 100% pass.
 The optional upstream ASSERT semantic judge receives full definitions, boundary,
 source requirements and library context, and reports its independent judgment.
 It uses the existing provider/credential/budget configuration; a Codex login alone

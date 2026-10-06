@@ -25,11 +25,14 @@ def build_assert_taxonomy(
     for kind, values in [('required', required), ('forbidden', forbidden)]:
         # IDs, not labels, distinguish authored rules. Equal labels may have
         # different definitions; expanding after label de-dup would drop one.
+        focused = bool(contract.get('evaluation_spec_ref') and contract.get('target_behavior_id'))
         rules = [rule for rule in contract.get('behaviors') or []
-                 if isinstance(rule, dict) and rule.get('kind') == kind and rule.get('label') in values]
+                 if isinstance(rule, dict) and rule.get('kind') == kind
+                 and (rule.get('id') == contract['target_behavior_id'] if focused else rule.get('label') in values)]
         represented = {rule['label'] for rule in rules}
-        expanded = [f'{rule["label"]}: {rule["description"]}' if rule.get('description') else rule['label'] for rule in rules]
-        values[:] = expanded + [value for value in values if value not in represented]
+        expanded = [f'{rule["label"]} [{rule["id"]}]: {rule.get("description") or rule["label"]}' if focused
+                    else (f'{rule["label"]}: {rule["description"]}' if rule.get('description') else rule['label']) for rule in rules]
+        values[:] = expanded if focused else expanded + [value for value in values if value not in represented]
     used_names: set[str] = set()
     categories = []
     for action in required:
@@ -87,6 +90,9 @@ def build_assert_taxonomy(
     for key, label in [('requirements', 'Source requirements'), ('permissible_behavior', 'Permissible behavior boundary')]:
         if contract.get(key):
             behavior_parts.append(f'{label}: {_contract_text(contract[key])}')
+    if contract.get('evaluation_spec_ref'):
+        behavior_parts.append('Complete policy context (not a checklist of behaviors exercised by this case): ' + _contract_text(contract.get('behaviors', [])))
+        behavior_parts.append('Evaluate the focus behavior ID: ' + str(contract.get('target_behavior_id')))
     if contract.get('behavior_preset'):
         from app.integrations.assert_runtime import behavior_preset
         behavior_parts.append('ASSERT library behavior: ' + _contract_text(behavior_preset(contract['behavior_preset'])))

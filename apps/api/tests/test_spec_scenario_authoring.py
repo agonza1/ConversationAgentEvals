@@ -102,7 +102,9 @@ def test_publication_is_confirmed_idempotent_versioned_and_restart_safe(isolated
     digest = deepcopy(contract)
     assert contract['evaluation_spec_ref']['version'] == 1
     assert contract['target_behavior_id'] == 'payment'
-    assert contract['forbidden_actions'] == ['Handle payments']
+    assert contract['required_actions'] == []
+    assert contract['forbidden_actions'] == ['Handle payments [payment]']
+    assert contract['action_checklist'][0]['id'] == 'payment'
     assert 'collect or transfer money' in contract['behaviors'][1]['description']
     second_spec = design()
     second_spec['required_behaviors'][0]['description'] = 'Updated policy for a later design.'
@@ -225,3 +227,117 @@ def test_published_rules_do_not_claim_semantic_verification(monkeypatch):
     assert result.verdict.status == 'needs_review'
     report = result.artifacts[0].inline_data
     assert any(f.get('category') == 'semantic_review_required' for f in report['hard_check_failures'])
+
+
+def execute(case, payload):
+    return benchmark_service._execute_assert_contract(
+        payload=payload, transcript=payload.get('transcript', ''), suite={'id': case['suite_id'], 'name': 'Housing'}, scenario=case,
+        evidence_artifacts={}, scenario_contract=benchmark_service._scenario_contract(case), suite_contract_manifest_sha256='test',
+    )
+
+
+def duplicate_label_design():
+    spec = design()
+    spec['required_behaviors'] = [
+        {'id': 'options', 'label': 'Check policy', 'description': 'Offer housing options within budget.'},
+        {'id': 'identity', 'label': 'Check policy', 'description': 'Verify identity before changing an account.'},
+    ]
+    spec['forbidden_behaviors'] = [
+        {'id': 'payment', 'label': 'Check policy', 'description': 'Do not collect money.'},
+    ]
+    for behavior in ('options', 'identity'):
+        spec['scenarios'].append({**spec['scenarios'][0], 'id': f'{behavior}-case', 'behavior_id': behavior})
+    return spec
+
+
+def test_each_case_has_one_id_preserving_checklist_and_complete_policy():
+    suite_id = publish(save(duplicate_label_design())).json()['suite_id']
+    for case in benchmark_service.get_suite(suite_id)['scenarios']:
+        contract = benchmark_service._scenario_contract(case)
+        focus = case['target_behavior_id']
+        assert {rule['id'] for rule in contract['behaviors']} == {'options', 'identity', 'payment'}
+        assert [rule['id'] for rule in contract['action_checklist']] == [focus]
+        assert case['required_actions'] + case['forbidden_actions'] == [f'Check policy [{focus}]']
+        taxonomy = build_assert_taxonomy(scenario_contract=contract, conversation={})
+        focused_categories = [item for item in taxonomy['behavior_categories'] if item['name'].startswith(('missing_required_', 'forbidden_'))]
+        assert len(focused_categories) == 1
+        assert f'[{focus}]' in focused_categories[0]['definition']
+        assert 'Verify identity before changing an account.' in taxonomy['behavior']['definition']
+
+
+@pytest.mark.parametrize('trace', [
+    [{'action': 'Check policy', 'status': 'completed'}],
+    [{'action': 'identity', 'status': 'completed'}],
+    [{'action': 'Check policy [identity]', 'status': 'completed'}],
+    [{'action': 'Check policy [options]', 'behavior_id': 'identity', 'status': 'completed'}],
+    [{'action': 'check', 'behavior_id': 'options', 'status': 'pending'}],
+    [{'action': 'options', 'status': 'error'}],
+    [{'action': 'options'}],
+])
+def test_same_label_wrong_id_or_unfinished_action_cannot_complete_focus(trace):
+    suite_id = publish(save(duplicate_label_design())).json()['suite_id']
+    case = benchmark_service.get_suite(suite_id)['scenarios'][1]
+    result = execute(case, {'action_trace': trace, 'transcript': 'Agent: Check policy. I completed options and verified identity.'})
+    report = result.artifacts[0].inline_data
+    assert report['completed_actions'] == []
+    assert report['missing_actions'] == ['Check policy [options]']
+    assert report['score_components']['required_actions'] == 0
+    assert all(failure.get('action') != 'Check policy [identity]' for failure in report['hard_check_failures'])
+
+
+@pytest.mark.parametrize('trace', [
+    [{'action': 'options', 'status': 'completed'}],
+    [{'action': 'Check policy [options]', 'status': 'completed'}],
+    [{'action': 'offer_housing', 'behavior_id': 'options', 'status': 'success'}],
+    [{'action': 'options', 'status': 'error'}, {'action': 'options', 'status': 'success'}],
+])
+def test_identified_required_action_satisfies_only_the_focus(trace):
+    suite_id = publish(save(duplicate_label_design())).json()['suite_id']
+    case = benchmark_service.get_suite(suite_id)['scenarios'][1]
+    result = execute(case, {'action_trace': trace, 'final_state': {'complete': True}})
+    report = result.artifacts[0].inline_data
+    assert report['completed_actions'] == ['Check policy [options]']
+    assert report['missing_actions'] == []
+    assert result.verdict.metrics['required_action_score'] == 100
+    assert result.verdict.status == 'needs_review'
+
+
+@pytest.mark.parametrize('trace,expected', [
+    ([], []),
+    ([{'action': 'Check policy', 'status': 'completed'}], []),
+    ([{'action': 'options', 'status': 'completed'}], []),
+    ([{'action': 'payment', 'status': 'pending'}], []),
+    ([{'action': 'payment', 'status': 'observed'}], ['Check policy [payment]']),
+    ([{'action': 'collect_deposit', 'behavior_id': 'payment', 'status': 'completed'}], ['Check policy [payment]']),
+])
+def test_forbidden_focus_has_no_unrelated_required_failures_or_fake_perfect_score(trace, expected):
+    suite_id = publish(save(duplicate_label_design())).json()['suite_id']
+    case = benchmark_service.get_suite(suite_id)['scenarios'][0]
+    payload = {'action_trace': trace, 'final_state': {'complete': True, 'missing_actions': ['Verify identity']}}
+    result = execute(case, payload)
+    report = result.artifacts[0].inline_data
+    assert report['missing_actions'] == []
+    assert [hit['action'] for hit in report['forbidden_action_hits']] == expected
+    assert all(hit['behavior_id'] == 'payment' for hit in report['forbidden_action_hits'])
+    assert result.verdict.metrics['required_action_score'] is None
+    fields = benchmark_service._assert_report_fields(result, payload=payload, transcript='')
+    assert fields['required_action_score'] is None
+    assert fields['missing_actions'] == []
+    assert fields['web_result_fields']['forbidden_action_score'] == (0 if expected else None)
+    assert result.verdict.status == 'needs_review'
+
+
+def test_id_linked_action_evidence_survives_public_run_and_vcon_replay(tmp_path, monkeypatch):
+    from app.services import assert_artifact_store
+    monkeypatch.setattr(assert_artifact_store, 'ARTIFACT_ROOT', tmp_path / 'assert-runs')
+    suite_id = publish(save(duplicate_label_design())).json()['suite_id']
+    payload = {'suite_id': suite_id, 'scenario_id': 'options-case', 'transcript': 'Agent: Here are housing options.',
+               'action_trace': [{'action': 'offer_housing', 'behavior_id': 'options', 'status': 'completed'}],
+               'final_state': {'complete': True}}
+    report = benchmark_service.run_scenario(payload)
+    assert report['completed_actions'] == ['Check policy [options]']
+    assert report['missing_actions'] == []
+    replay = benchmark_service.run_scenario({'vcon': report['ietf_vcon_export']})
+    assert replay['completed_actions'] == report['completed_actions']
+    assert replay['missing_actions'] == []
+    assert replay['scenario_contract']['action_checklist'][0]['id'] == 'options'

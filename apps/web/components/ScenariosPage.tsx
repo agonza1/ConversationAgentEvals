@@ -21,6 +21,8 @@ interface ScenarioRecord {
   source: string;
   evaluation_spec_ref: string;
   caller_steps: string[];
+  target_behavior_id: string;
+  policy_context: string;
 }
 
 interface ScenarioSuite {
@@ -97,6 +99,11 @@ function normalizeScenario(value: unknown, suiteId: string): ScenarioRecord {
     source: String(record.source ?? ''),
     evaluation_spec_ref: displayValue(record.evaluation_spec_ref),
     caller_steps: stringList(record.caller_steps),
+    target_behavior_id: String(record.target_behavior_id ?? ''),
+    policy_context: Array.isArray(record.behaviors) ? record.behaviors.map((value) => {
+      const rule = asRecord(value);
+      return `${rule.kind}: ${rule.label} [${rule.id}]\n${rule.description || ''}`;
+    }).join('\n\n') : '',
   };
 }
 
@@ -466,8 +473,10 @@ export function ScenariosPage() {
               <a className="scenario-back-link" href="#scenario-catalog">← Back to scenario catalog</a>
               <FieldCard title="User persona / starting prompt" value={selected.scenario.user_persona || selected.scenario.simulated_user_prompt} onCopy={(label, text) => void onCopy(label, text)} />
               <FieldCard title="Goal" value={selected.scenario.user_goal || selected.scenario.description} onCopy={(label, text) => void onCopy(label, text)} />
-              <FieldCard title="Required actions" value={listText(selected.scenario.required_actions)} onCopy={(label, text) => void onCopy(label, text)} />
-              <FieldCard title="Forbidden behaviors" value={listText(selected.scenario.forbidden_actions)} onCopy={(label, text) => void onCopy(label, text)} />
+              {selected.scenario.target_behavior_id ? <p className="scenarios-muted">This case exercises behavior {selected.scenario.target_behavior_id} only. Other rules remain policy context, not measured coverage.</p> : null}
+              <FieldCard title="Required actions" value={selected.scenario.target_behavior_id && !selected.scenario.required_actions.length ? 'n/a — not this case’s focus.' : listText(selected.scenario.required_actions)} onCopy={(label, text) => void onCopy(label, text)} />
+              <FieldCard title="Forbidden behaviors" value={selected.scenario.target_behavior_id && !selected.scenario.forbidden_actions.length ? 'n/a — not this case’s focus.' : listText(selected.scenario.forbidden_actions)} onCopy={(label, text) => void onCopy(label, text)} />
+              {selected.scenario.policy_context ? <FieldCard title="Complete policy context" value={selected.scenario.policy_context} onCopy={(label, text) => void onCopy(label, text)} /> : null}
               <FieldCard title="Expected final state" value={selected.scenario.expected_final_state || selected.scenario.expected_output} onCopy={(label, text) => void onCopy(label, text)} />
               {selected.scenario.evaluation_spec_ref ? <FieldCard title="Evaluation design version" value={selected.scenario.evaluation_spec_ref} onCopy={(label, text) => void onCopy(label, text)} /> : null}
               {selected.scenario.caller_steps.length ? <FieldCard title="Caller-side instructions" value={selected.scenario.caller_steps.join('\n')} onCopy={(label, text) => void onCopy(label, text)} /> : null}

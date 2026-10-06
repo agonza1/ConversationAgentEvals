@@ -158,13 +158,18 @@ def refresh_published_catalog() -> None:
             rules += [dict(item.model_dump(mode='json'), kind='forbidden') for item in spec.forbidden_behaviors]
             cases = []
             for case in spec.scenarios:
+                focused = next(rule for rule in rules if rule['id'] == case.behavior_id)
+                # Keep the complete policy below, but only exercise this case's
+                # focus. IDs distinguish equal labels (even across rule kinds).
+                action = f'{focused["label"]} [{focused["id"]}]'
                 cases.append({
                     'id': case.id, 'suite_id': publication.suite_id, 'title': case.title, 'type': 'scenario',
                     'persona': case.persona, 'goal': spec.objective, 'prompt': case.steps[0],
                     'simulated_user_prompt': case.steps[0], 'description': case.description,
                     'expected_output': case.expected_outcome, 'expected_final_state': case.expected_outcome,
-                    'required_actions': [item.label for item in spec.required_behaviors],
-                    'forbidden_actions': [item.label for item in spec.forbidden_behaviors],
+                    'required_actions': [action] if focused['kind'] == 'required' else [],
+                    'forbidden_actions': [action] if focused['kind'] == 'forbidden' else [],
+                    'action_checklist': [{**focused, 'action': action}],
                     'rubric': [],
                     'source': 'approved_assert_spec', 'evaluation_spec_ref': ref,
                     'behaviors': rules, 'target_behavior_id': case.behavior_id, 'variant': case.variant,

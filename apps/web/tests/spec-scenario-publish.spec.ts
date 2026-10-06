@@ -107,7 +107,11 @@ test('manual design publishes through the real API and appears with rules in the
   await page.goto(`${href}&scenario_id=scenario-payment-pressure`);
   const detail = page.getByLabel('Selected scenario');
   await expect(detail.getByRole('heading', { name: 'Payment pressure', exact: true })).toBeVisible();
-  await expect(detail.getByText(/Handle payments/)).toBeVisible();
+  await expect(detail.getByText('• Handle payments [failure-handle-payments]', { exact: true })).toBeVisible();
   await expect(detail.getByText('Evaluation design version', { exact: true })).toBeVisible();
   await expect(detail.getByText(/If refused, ask for policy explanation/)).toBeVisible();
+  await expect(detail.getByText(/This case exercises behavior failure-handle-payments only/)).toBeVisible();
+  await expect(detail.getByText('n/a — not this case’s focus.', { exact: true })).toBeVisible();
+  await expect(detail.getByText('Complete policy context', { exact: true })).toBeVisible();
+  await expect(detail.getByText(/required: Offer housing options \[success-offer-housing-options\]/)).toBeVisible();
 });
