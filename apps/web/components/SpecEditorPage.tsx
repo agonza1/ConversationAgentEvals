@@ -164,7 +164,7 @@ export function SpecEditorPage() {
   const [saved, setSaved] = useState<SavedEditableAssertSpec | null>(null);
   const [savedFingerprint, setSavedFingerprint] = useState<string | null>(null);
   const [selectedBehaviors, setSelectedBehaviors] = useState<string[]>([]);
-  const [publishedSuite, setPublishedSuite] = useState<string | null>(null);
+  const [publishedSuite, setPublishedSuite] = useState<{ suite_id: string; scenario_id: string } | null>(null);
   const [publishConfirmed, setPublishConfirmed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<'templates' | 'generate' | 'cases' | 'publish' | 'preview' | 'save' | null>(null);
@@ -376,7 +376,9 @@ export function SpecEditorPage() {
       const result = await publishEditableAssertScenarios(saved.id, {
         user_id: identity.userId, project_id: saved.project_id, version: saved.version, confirm: true,
       });
-      if (latestWorkingSpec.current === submitted) setPublishedSuite(result.suite_id);
+      const scenarioId = result.scenario_ids[0];
+      if (!scenarioId) throw new Error('The published suite returned no runnable scenarios.');
+      if (latestWorkingSpec.current === submitted) setPublishedSuite({ suite_id: result.suite_id, scenario_id: scenarioId });
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not publish cases'); }
     finally { setBusy(null); }
   }
@@ -452,7 +454,7 @@ export function SpecEditorPage() {
             <label className="spec-check-option"><input type="checkbox" checked={publishConfirmed} onChange={(event) => setPublishConfirmed(event.target.checked)} />I reviewed the saved rules and cases; publish this version to the shared local catalog.</label>
             <button className="primary-link" type="button" onClick={publishCases} disabled={mutationBusy || needsApproval || unsavedChanges || !publishConfirmed}>{busy === 'publish' ? 'Publishing…' : 'Publish saved cases to Scenarios'}</button>
             {unsavedChanges ? <p>Save the current design before publishing.</p> : null}
-            {publishedSuite ? <p role="status">Published version {saved?.version}. <Link href={{ pathname: '/scenarios', query: { suite_id: publishedSuite } }}>View runnable scenarios</Link> · <Link href={{ pathname: '/runs', query: { suite_id: publishedSuite } }}>Choose a target and run</Link></p> : null}
+            {publishedSuite ? <p role="status">Published version {saved?.version}. <Link href={{ pathname: '/scenarios', query: publishedSuite }}>View runnable scenarios</Link> · <Link href={{ pathname: '/runs', query: publishedSuite }}>Choose a target and run</Link></p> : null}
           </section>
           <div className="spec-field-row">
             <label>Programmatic check guidance (not yet enforced)<textarea rows={5} value={deterministicChecks} onChange={(event) => setDeterministicChecks(event.target.value)} /></label>

@@ -39,7 +39,7 @@ test('review, generate cases, edit, save, and publish an exact version; unsaved 
   await page.route('**/api/specs/housing/publish-scenarios', async (route) => {
     publishCount += 1;
     expect(route.request().postDataJSON()).toMatchObject({ version: 2, confirm: true });
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ suite_id: 'spec-suite-test', version: 2, scenario_count: 3 }) });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ suite_id: 'spec-suite-test', version: 2, scenario_ids: ['normal', 'boundary', 'adversarial'], scenario_count: 3 }) });
   });
   await page.goto('/specs/new');
   await page.getByLabel('Product requirements / policy').fill('Offer options. Never handle payments.');
@@ -63,6 +63,9 @@ test('review, generate cases, edit, save, and publish an exact version; unsaved 
   await page.getByLabel('Product requirements / policy').fill('Offer options. Never handle payments.');
   await publish.click();
   await expect(page.getByRole('link', { name: 'View runnable scenarios' })).toHaveAttribute('href', /suite_id=spec-suite-test/);
+  const runHref = await page.getByRole('link', { name: 'Choose a target and run' }).getAttribute('href');
+  expect(new URL(runHref!, 'http://localhost').searchParams.get('suite_id')).toBe('spec-suite-test');
+  expect(new URL(runHref!, 'http://localhost').searchParams.get('scenario_id')).toBe('normal');
   expect(publishCount).toBe(1);
 });
 
@@ -87,7 +90,8 @@ test('late generated cases cannot overwrite edits made while the model is respon
 
 test('manual design publishes through the real API and appears with rules in the scenario catalog', async ({ page }) => {
   await page.goto('/specs/new');
-  await page.getByLabel('Title', { exact: true }).fill(`Housing boundary ${Date.now()}`);
+  const title = `Housing boundary ${Date.now()}`;
+  await page.getByLabel('Title', { exact: true }).fill(title);
   await page.getByLabel('Product requirements / policy').fill('Offer options. Never handle payments.');
   await page.getByLabel('Permissible behavior boundary').fill('Discuss options only; no collecting money.');
   await page.getByLabel('Success checks', { exact: true }).fill('Offer housing options');
@@ -104,7 +108,10 @@ test('manual design publishes through the real API and appears with rules in the
   const link = page.getByRole('link', { name: 'View runnable scenarios' });
   await expect(link).toBeVisible();
   const href = await link.getAttribute('href');
-  await page.goto(`${href}&scenario_id=scenario-payment-pressure`);
+  const runHref = await page.getByRole('link', { name: 'Choose a target and run' }).getAttribute('href');
+  const runSelection = new URL(runHref!, 'http://localhost').searchParams;
+  expect(runSelection.get('scenario_id')).toBe('scenario-payment-pressure');
+  await page.goto(href!);
   const detail = page.getByLabel('Selected scenario');
   await expect(detail.getByRole('heading', { name: 'Payment pressure', exact: true })).toBeVisible();
   await expect(detail.getByText('• Handle payments [failure-handle-payments]', { exact: true })).toBeVisible();
@@ -114,4 +121,8 @@ test('manual design publishes through the real API and appears with rules in the
   await expect(detail.getByText('n/a — not this case’s focus.', { exact: true })).toBeVisible();
   await expect(detail.getByText('Complete policy context', { exact: true })).toBeVisible();
   await expect(detail.getByText(/required: Offer housing options \[success-offer-housing-options\]/)).toBeVisible();
+  await page.goto(runHref!);
+  const scope = page.getByLabel('Selected run scope', { exact: true });
+  await expect(scope).toContainText(title);
+  await expect(scope).toContainText('Payment pressure');
 });

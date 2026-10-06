@@ -229,7 +229,7 @@ export async function generateEditableAssertCases(payload: {
 
 export async function publishEditableAssertScenarios(specId: string, payload: {
   user_id: string; project_id: string; version: number; confirm: boolean;
-}): Promise<{ suite_id: string; version: number; scenario_count: number; note: string }> {
+}): Promise<{ suite_id: string; version: number; scenario_ids: string[]; scenario_count: number; note: string }> {
   const response = await fetch(`${getApiBase()}/api/specs/${encodeURIComponent(specId)}/publish-scenarios`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
   });
