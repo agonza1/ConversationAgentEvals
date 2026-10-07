@@ -368,8 +368,9 @@ def list_suites() -> list[BenchmarkSuite]:
     return summaries
 
 
-def get_suite(suite_id: str) -> BenchmarkSuite | None:
-    _refresh_spec_suite(suite_id)
+def get_suite(suite_id: str, *, refresh: bool = True) -> BenchmarkSuite | None:
+    if refresh:
+        _refresh_spec_suite(suite_id)
     suite = _SUITES_BY_ID.get(suite_id)
     if not suite:
         return None

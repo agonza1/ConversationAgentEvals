@@ -131,6 +131,46 @@ def test_publication_is_confirmed_idempotent_versioned_and_restart_safe(isolated
     assert 'explaining payment policy is permitted' in json.dumps(taxonomy)
 
 
+def test_suite_listing_refreshes_publications_once_and_direct_reads_stay_fresh(monkeypatch):
+    suite_ids = []
+    for index in range(3):
+        spec = design()
+        spec['id'] = f'house-options-{index}'
+        suite_ids.append(publish(save(spec)).json()['suite_id'])
+
+    # Simulate a worker that has not loaded these persisted publications yet.
+    for suite_id in suite_ids:
+        benchmark_service._SUITES_BY_ID.pop(suite_id)
+        benchmark_service._SCENARIOS_BY_ID.pop((suite_id, 'payment-pressure'))
+
+    refresh = authoring.refresh_published_catalog
+    calls = []
+
+    def counted_refresh():
+        calls.append(True)
+        refresh()
+
+    monkeypatch.setattr(authoring, 'refresh_published_catalog', counted_refresh)
+    response = client.get('/api/benchmarks/suites')
+    assert response.status_code == 200, response.text
+    assert len(calls) == 1
+    suites = {suite['id']: suite for suite in response.json()}
+    assert suites['call-center-voice-ai']['optional_scenario_count'] == 1
+    assert suites['call-center-voice-ai']['optional_scenarios'][0]['sample_transcript']
+    for suite_id in suite_ids:
+        case = suites[suite_id]['scenarios'][0]
+        assert case['target_behavior_id'] == 'payment'
+        assert case['forbidden_actions'] == ['Handle payments [payment]']
+        assert case['sample_transcript']
+
+    # Standalone reads must still discover changes from another worker.
+    calls.clear()
+    benchmark_service._SUITES_BY_ID.pop(suite_ids[0])
+    case = benchmark_service.get_suite(suite_ids[0])['scenarios'][0]
+    assert case['target_behavior_id'] == 'payment'
+    assert len(calls) == 1
+
+
 @pytest.mark.parametrize('change', [
     {'permissible_behavior': ''},
     {'scenarios': []},
