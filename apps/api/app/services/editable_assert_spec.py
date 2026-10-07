@@ -27,9 +27,9 @@ from app.integrations.assert_runtime import (
 from app.models.entities import EditableAssertSpecVersion, ProductProject, ProductWorkspaceMember
 from app.services.llm_providers import get_provider
 from app.services.ssl_util import verified_ssl_context
+from app.services.spec_generation_settings import DEFAULT_SPEC_GENERATION_MODEL, generation_settings
 
 
-DEFAULT_SPEC_GENERATION_MODEL = 'gpt-5.4-mini'
 
 
 class AssertCheck(BaseModel):
@@ -648,10 +648,10 @@ def _generation_prompt(*, title: str, role: str, objective: str) -> str:
 def _complete_generation(prompt: str) -> tuple[str, str, str]:
     provider = get_provider('openai')
     status = provider.status()
-    model_name = (
-        os.getenv('SPEC_GENERATION_MODEL')
-        or DEFAULT_SPEC_GENERATION_MODEL
-    ).strip() or DEFAULT_SPEC_GENERATION_MODEL
+    try:
+        model_name = generation_settings()['effective_model']
+    except (OSError, ValueError) as exc:
+        raise SpecGenerationFailed('Could not read draft-generation settings. Reset the model in Console Settings.') from exc
     if status.get('status') == 'connected':
         try:
             from app.services.llm_providers.openai_codex import OpenAICodexProvider, effective_codex_model_name
@@ -677,9 +677,11 @@ def _complete_with_api_key(prompt: str, *, api_key: str, model_name: str) -> str
             {'role': 'system', 'content': 'You design rigorous conversation-agent evaluations and return strict JSON only.'},
             {'role': 'user', 'content': prompt},
         ],
-        'temperature': 0.2,
         'response_format': {'type': 'json_object'},
     }
+    # Reasoning models reject a non-default temperature.
+    if not model_name.startswith(('gpt-5', 'gpt-6', 'o1', 'o3', 'o4')):
+        body['temperature'] = 0.2
     request = urllib.request.Request(
         'https://api.openai.com/v1/chat/completions',
         data=json.dumps(body).encode('utf-8'),

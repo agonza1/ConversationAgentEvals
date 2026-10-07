@@ -207,6 +207,32 @@ export async function generateEditableAssertDraft(payload: {
   return handleResponse<EditableAssertGeneratedDraft>(response);
 }
 
+export interface SpecGenerationSettings {
+  model: string | null;
+  default_model: string;
+  effective_model: string;
+  source: 'console' | 'deployment';
+  provider: string;
+  available: boolean;
+}
+
+export async function getSpecGenerationSettings(): Promise<SpecGenerationSettings> {
+  return handleResponse(await fetch(`${getApiBase()}/api/specs/generation-settings`, { cache: 'no-store' }));
+}
+
+export async function saveSpecGenerationSettings(model: string | null): Promise<SpecGenerationSettings> {
+  return handleResponse(await fetch(`${getApiBase()}/api/specs/generation-settings`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model }),
+  }));
+}
+
+export async function getDraftModelOptions(): Promise<{ ids: string[]; message: string | null }> {
+  const response = await fetch(`${getApiBase()}/api/product/providers/openai/models`, { cache: 'no-store' });
+  if (response.status === 401) return { ids: ['gpt-4.1-mini', 'gpt-4.1'], message: 'API-key suggestions. Access and compatibility depend on your account.' };
+  const result = await handleResponse<{ models: { id: string }[]; message?: string }>(response);
+  return { ids: result.models.map((model) => model.id), message: result.message || null };
+}
+
 export async function listAssertScenarioContexts(): Promise<AssertLibraryPreset[]> {
   const response = await fetch(`${getApiBase()}/api/specs/assert-library/scenarios`, { cache: 'no-store' });
   return (await handleResponse<{ scenarios: AssertLibraryPreset[] }>(response)).scenarios;
