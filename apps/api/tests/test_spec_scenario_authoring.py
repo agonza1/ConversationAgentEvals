@@ -398,6 +398,26 @@ def test_unmeasured_forbidden_scores_remain_null_in_runs_suites_replay_and_histo
     assert metrics['scored_attempt_count'] == 1
 
 
+def test_authored_starter_and_mock_simulation_use_literal_reviewed_opener():
+    spec = design()
+    # Even a collision with a built-in ID must not substitute its canned opener.
+    spec['scenarios'][0]['id'] = 'billing-address-change'
+    spec['scenarios'][0]['persona'] = 'A persona that is not the reviewed request'
+    suite_id = publish(save(spec)).json()['suite_id']
+    case = benchmark_service.get_suite(suite_id)['scenarios'][0]
+    opener = spec['scenarios'][0]['steps'][0]
+    assert case['sample_transcript'].splitlines()[0] == f'User: {opener}'
+    assert benchmark_service._simulated_user_opener(case) == _scenario_user_opener(case) == opener
+    simulation = benchmark_service.simulate_scenario({'suite_id': suite_id, 'scenario_id': case['id']})
+    assert simulation['transcript'].splitlines()[0] == f'User: {opener}'
+    from app.schemas.execution import ExecutionRunCreateRequest
+    from app.services.execution_runner import _execute_text_callable
+    mock = _execute_text_callable(suite_id, case['id'], ExecutionRunCreateRequest(
+        suite_id=suite_id, scenario_ids=[case['id']], text_callable='mock_agent', evaluate=False,
+    ))
+    assert mock['transcript'].splitlines()[0] == f'User: {opener}'
+
+
 def test_id_linked_action_evidence_survives_public_run_and_vcon_replay(tmp_path, monkeypatch):
     from app.services import assert_artifact_store
     monkeypatch.setattr(assert_artifact_store, 'ARTIFACT_ROOT', tmp_path / 'assert-runs')

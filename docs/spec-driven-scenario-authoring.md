@@ -62,6 +62,11 @@ equal labels are not conflated. The complete policy remains context, not a
 claim that this case exercises every rule in the design.
 Manual duplicate labels and slug collisions receive distinct IDs. Existing
 rule identities and definitions survive subsequent edits and reordering.
+Same-length edits to the remaining labels are treated as renames, preserving
+case references, definitions and source quotes; deleting a line does not move
+its metadata onto a surviving rule. Manual case titles also receive unique IDs.
+Starter evidence and mock runs use the exact reviewed opening utterance, even
+when a published case ID matches a built-in case or its persona differs.
 No duplicate ASSERT runtime or legacy-version implementation is introduced.
 
 ## Evaluation and boundaries

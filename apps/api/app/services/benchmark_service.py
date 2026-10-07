@@ -3079,6 +3079,9 @@ def _simulated_transcript(scenario: BenchmarkScenario, agent_profile: str, inclu
 
 
 def _simulated_user_opener(scenario: BenchmarkScenario) -> str:
+    if scenario.get('evaluation_spec_ref') and scenario.get('caller_steps'):
+        from app.services.execution_runner import _scenario_user_opener
+        return _scenario_user_opener(scenario)
     openers = {
         'billing-address-change': 'Hi, I moved recently and need to update my billing address before the next invoice.',
         'angry-outage-escalation': 'My internet has gone down twice this week, and I need this fixed.',

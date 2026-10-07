@@ -45,6 +45,43 @@ test('manual duplicate and slug-colliding labels retain distinct editable rule i
   expect(revised[2].description).toBe('Check identity before changing an account.');
 });
 
+test('manual colliding cases edit independently and rule renames preserve their targets and metadata', async ({ page }) => {
+  let savedBody: any;
+  await page.route('**/api/specs', async (route) => {
+    savedBody = route.request().postDataJSON();
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      id: 'manual-cases', version: 1, project_id: savedBody.project_id, user_id: savedBody.user_id,
+      spec: { ...savedBody.spec, id: 'manual-cases', version: 1 }, yaml: 'suite: manual-cases',
+    }) });
+  });
+  await page.goto('/specs/new');
+  await page.getByLabel('Product requirements / policy').fill('Offer options.');
+  await page.getByLabel('Success checks', { exact: true }).fill('Offer options');
+  await page.getByLabel(/^Behavior definition 1:/).fill('Ask budget and location before offering suitable options.');
+  await page.getByLabel('Source quotation for behavior 1 (optional)', { exact: true }).fill('Offer options.');
+  await page.getByLabel('Scenario examples', { exact: true }).fill('Request: First caller\nRequest: Second caller\nRequest!: Third caller');
+  for (let index = 1; index <= 3; index += 1) {
+    await page.getByLabel(`Target behavior for case ${index}`).selectOption('success-offer-options');
+    await page.getByLabel(`Caller instructions for case ${index}`).fill(`Reviewed opening ${index}`);
+  }
+  await expect(page.getByLabel('Caller instructions for case 1')).toHaveValue('Reviewed opening 1');
+  await expect(page.getByLabel('Caller instructions for case 2')).toHaveValue('Reviewed opening 2');
+  await page.getByRole('button', { name: 'Save version' }).click();
+  await expect(page.getByText(/Saved `manual-cases` version 1/)).toBeVisible();
+  const original = savedBody.spec;
+  expect(new Set(original.scenarios.map((item: any) => item.id)).size).toBe(3);
+  await page.getByRole('textbox', { name: 'Success checks', exact: true }).fill('Offer suitable housing options');
+  await expect(page.getByLabel('Target behavior for case 1')).toHaveValue('success-offer-options');
+  await page.getByRole('button', { name: 'Save version' }).click();
+  await expect.poll(() => savedBody.spec.required_behaviors[0].label).toBe('Offer suitable housing options');
+  expect(savedBody.spec.required_behaviors[0]).toMatchObject({
+    id: 'success-offer-options', description: original.required_behaviors[0].description, source_quote: 'Offer options.',
+  });
+  expect(savedBody.spec.scenarios.map((item: any) => [item.id, item.behavior_id, item.steps])).toEqual(
+    original.scenarios.map((item: any) => [item.id, item.behavior_id, item.steps]),
+  );
+});
+
 test('review, generate cases, edit, save, and publish an exact version; unsaved edits block publication', async ({ page }) => {
   let savedBody: any;
   let publishCount = 0;

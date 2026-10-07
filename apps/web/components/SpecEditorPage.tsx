@@ -65,21 +65,41 @@ function slug(prefix: string, label: string, index: number) {
   return `${prefix}-${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 42) || index + 1}`;
 }
 
-function checksFromText(value: string, existing: AssertCheck[], prefix: string, draft: boolean): AssertCheck[] {
+function textMatches<T>(labels: string[], existing: T[], labelOf: (item: T) => string): Array<T | undefined> {
   const consumed = new Set<number>();
+  const matches = labels.map((label) => {
+    const index = existing.findIndex((item, candidate) => !consumed.has(candidate) && labelOf(item) === label);
+    if (index >= 0) consumed.add(index);
+    return index;
+  });
+  // Same-length edits rename the remaining rules/cases in order. Exact matches
+  // reserve identities first, so reordering or deletion cannot steal metadata.
+  if (labels.length === existing.length) {
+    const remaining = existing.map((_, index) => index).filter((index) => !consumed.has(index));
+    for (let index = 0; index < matches.length; index += 1) {
+      if (matches[index] < 0) matches[index] = remaining.shift() ?? -1;
+    }
+  }
+  return matches.map((index) => index >= 0 ? existing[index] : undefined);
+}
+
+function allocateTextId(baseId: string, matched: boolean, reservedIds: Set<string>, usedIds: Set<string>) {
+  let id = baseId;
+  let suffix = 2;
+  while (usedIds.has(id) || (!matched && reservedIds.has(id))) id = `${baseId}-${suffix++}`;
+  usedIds.add(id);
+  return id;
+}
+
+function checksFromText(value: string, existing: AssertCheck[], prefix: string, draft: boolean): AssertCheck[] {
+  const labels = lines(value);
+  const matches = textMatches(labels, existing, (item) => item.label);
   const reservedIds = new Set(existing.map((item) => item.id));
   const usedIds = new Set<string>();
-  return lines(value).map((label, index) => {
-    const existingIndex = existing.findIndex((item, candidateIndex) => !consumed.has(candidateIndex) && item.label === label);
-    const matched = existingIndex >= 0 ? existing[existingIndex] : undefined;
-    if (existingIndex >= 0) consumed.add(existingIndex);
+  return labels.map((label, index) => {
+    const matched = matches[index];
     const baseId = matched?.id || slug(prefix, label, index);
-    let id = baseId;
-    let suffix = 2;
-    while (usedIds.has(id) || (!matched && reservedIds.has(id))) {
-      id = `${baseId}-${suffix++}`;
-    }
-    usedIds.add(id);
+    const id = allocateTextId(baseId, Boolean(matched), reservedIds, usedIds);
     return {
       ...(matched || {}),
       id,
@@ -92,19 +112,17 @@ function checksFromText(value: string, existing: AssertCheck[], prefix: string, 
 }
 
 function scenariosFromText(value: string, existing: AssertScenario[], draft: boolean): AssertScenario[] {
-  const consumed = new Set<number>();
-  return lines(value).map((line, index) => {
+  const entries = lines(value);
+  const matches = textMatches(entries.map((line) => line.split(':')[0].trim()), existing, (item) => item.title);
+  const reservedIds = new Set(existing.map((item) => item.id));
+  const usedIds = new Set<string>();
+  return entries.map((line, index) => {
     const [title, ...rest] = line.split(':');
     const description = rest.join(':').trim() || line;
-    const existingIndex = existing.findIndex((item, candidateIndex) => (
-      !consumed.has(candidateIndex)
-      && item.title === title.trim()
-    ));
-    const matched = existingIndex >= 0 ? existing[existingIndex] : undefined;
-    if (existingIndex >= 0) consumed.add(existingIndex);
+    const matched = matches[index];
     return {
       ...(matched || {}),
-      id: matched?.id || slug('scenario', title, index),
+      id: allocateTextId(matched?.id || slug('scenario', title, index), Boolean(matched), reservedIds, usedIds),
       title: title.trim(),
       persona: matched?.persona || '',
       description,
