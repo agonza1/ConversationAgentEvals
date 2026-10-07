@@ -2783,11 +2783,6 @@ select {
   line-height: 1.4;
 }
 
-.resolution-note {
-  padding-top: 2px;
-  font-size: 13px;
-}
-
 .resolution-judge {
   display: grid;
   gap: 12px;
@@ -4545,3 +4540,20 @@ select {
   cursor: not-allowed;
   opacity: 0.55;
 }
+
+
+.saved-assert-review { display: grid; gap: 14px; min-width: 0; }
+.saved-assert-review p, .saved-assert-review strong, .saved-assert-review summary, .saved-assert-review dd { overflow-wrap: anywhere; }
+.saved-assert-review details { border: 1px solid var(--border); border-radius: 8px; padding: 12px; min-width: 0; }
+.saved-assert-review summary { cursor: pointer; font-weight: 700; }
+.saved-assert-review summary:focus-visible, .saved-assert-review a:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
+.saved-assert-review dl { display: grid; gap: 12px; }
+.saved-assert-review dd { margin: 4px 0 0; }
+.assert-freshness { border-left: 3px solid var(--border); padding: 12px; background: var(--panel); }
+.assert-freshness.is-stale { border-color: var(--error-text); }
+.assert-dimension-card { padding: 12px 0; border-bottom: 1px solid var(--border); min-width: 0; }
+.saved-assert-review section { min-width: 0; }
+
+.saved-assert-review .primary-cta { justify-self: start; min-height: 44px; padding: 10px 16px; border: 0; border-radius: 8px; background: var(--accent); color: white; font-size: 15px; font-weight: 850; cursor: pointer; }
+.saved-assert-review .primary-cta:disabled { opacity: .55; cursor: not-allowed; }
+.saved-assert-review button:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }

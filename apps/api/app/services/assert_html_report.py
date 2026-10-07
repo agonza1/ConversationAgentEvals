@@ -7,8 +7,7 @@ import math
 import re
 from typing import Any
 
-from app.services.execution_run_store import deterministic_evaluation_snapshot
-from app.services.upstream_assert_judge import assert_judge_input_fingerprint
+from app.services.assert_review_status import saved_assert_review_freshness
 from app.services.vcon_evidence import redact
 
 
@@ -40,21 +39,10 @@ def validate_saved_review(run: dict[str, Any], conversation: dict[str, Any], rev
             or any(not isinstance(provenance.get(key, {}), dict) for key in (
                 'dimension_justifications', 'dimension_scales', 'dimension_applicability'))):
         raise ValueError('Saved ASSERT dimension or behavior evidence is malformed.')
-    snapshot = deterministic_evaluation_snapshot(conversation)
-    if snapshot.get('verdict') not in {'pass', 'needs_review', 'fail', 'failed'}:
-        raise ValueError('The conversation has no saved deterministic verdict.')
-    if review.get('deterministic_snapshot') != snapshot:
-        raise ValueError('The saved ASSERT review is stale: conversation evidence changed. Run a new review.')
-    model = review.get('model')
-    fingerprint = provenance.get('input_fingerprint')
-    if not isinstance(model, str) or not isinstance(fingerprint, str) or not re.fullmatch('[0-9a-f]{16}', fingerprint):
-        raise ValueError('Saved ASSERT input provenance is unavailable or malformed.')
-    # Older persisted reviews omit judge_n. ASSERT admits 1..3; compare the recorded
-    # fingerprint against those exact inputs, without guessing scores or judging.
-    if not any(assert_judge_input_fingerprint(run=run, conversation=conversation,
-                scenario_contract=scenario_contract, model=model, judge_n=n) == fingerprint
-               for n in range(1, 4)):
-        raise ValueError('The saved ASSERT review is stale: judging inputs changed. Run a new review.')
+    freshness = saved_assert_review_freshness(run, conversation, review, scenario_contract)
+    if freshness['status'] != 'current':
+        prefix = 'The saved ASSERT review is stale: ' if freshness['status'] == 'stale' else ''
+        raise ValueError(prefix + freshness['message'])
     return provenance
 
 

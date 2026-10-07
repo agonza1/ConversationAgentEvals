@@ -657,3 +657,16 @@ export async function downloadAssertHtmlReport(payload: {
   anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+export interface AssertReviewFreshness {
+  execution_run_id: string; conversation_id: string; review_id: string;
+  status: 'current' | 'stale' | 'cannot_verify'; reason_code: string; message: string;
+}
+
+export async function getAssertReviewFreshness(payload: {
+  executionRunId: string; conversationId: string; reviewId: string; userId: string;
+}): Promise<AssertReviewFreshness> {
+  return handleJson(await fetch(`${getApiBase()}/api/assert/runs/${encodeURIComponent(payload.executionRunId)}`
+    + `/conversations/${encodeURIComponent(payload.conversationId)}/reviews/${encodeURIComponent(payload.reviewId)}`
+    + `/status?user_id=${encodeURIComponent(payload.userId)}`, { cache: 'no-store' }));
+}

@@ -5,9 +5,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { ApiAwareLink } from '@/components/ApiAwareLink';
 import { LiveRunFeedback } from '@/components/LiveRunFeedback';
 import { EvidenceTimeline } from '@/components/EvidenceTimeline';
+import { SavedAssertReview } from '@/components/SavedAssertReview';
+import { sortedAssertReviews } from '@/lib/assertReview';
 import { SiteNav } from '@/components/SiteNav';
 import {
   applyLlmJudgeReview,
+  AssertReviewFreshness,
+  getAssertReviewFreshness,
   ConversationRecord,
   ConversationTurn,
   demoProjectId,
@@ -217,7 +221,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
 
             <section className="card runs-metric-detail" aria-label="Metric detail">
               <MetricDetail
-                key={`${conversation?.conversation_id || 'no-conversation'}:${run.updated_at}`}
+                key={`${run.execution_run_id}:${conversation?.conversation_id || 'no-conversation'}`}
                 metric={metric}
                 conversation={conversation}
                 run={run}
@@ -371,16 +375,19 @@ function MetricDetail({
   const [exportReviewId, setExportReviewId] = useState('');
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
-  const savedAssertReviews = (conversation?.judge_reviews || []).filter(
-    (review) => review.judge_result?.provenance?.engine === 'assert',
-  );
-  const exportChoices = [...savedAssertReviews];
-  if (judge?.review_id && judge.judge_result?.provenance?.engine === 'assert'
-      && !exportChoices.some((review) => review.review_id === judge.review_id)) {
-    exportChoices.push({ review_id: judge.review_id, status: 'pending_confirmation', created_at: '',
-      judge_result: judge.judge_result });
-  }
-  const selectedExportReviewId = exportReviewId || exportChoices.at(-1)?.review_id || '';
+  const [freshness, setFreshness] = useState<AssertReviewFreshness | null>(null);
+  const [freshnessAttempt, setFreshnessAttempt] = useState(0);
+  const persisted = Array.isArray(conversation?.judge_reviews) ? conversation.judge_reviews : [];
+  const liveReview = judge?.review_id && judge.judge_result?.provenance?.engine === 'assert'
+    && !persisted.some((review) => review.review_id === judge.review_id)
+    ? [{ review_id: judge.review_id, status: 'pending_confirmation', created_at: '', model: judge.model,
+         judge_result: judge.judge_result, evidence_citations: judge.evidence_citations }] : [];
+  const exportChoices = sortedAssertReviews([...persisted, ...liveReview]);
+  const selectedReview = exportChoices.find((review) => review.id === exportReviewId) || exportChoices[0] || null;
+  const selectedExportReviewId = selectedReview?.id || '';
+  const selectedFreshness = freshness?.review_id === selectedExportReviewId
+    && freshness?.conversation_id === conversation?.conversation_id && freshness?.execution_run_id === run.execution_run_id
+    ? freshness : null;
   const summary = conversation?.metrics_summary;
   const deterministicVerdict = summary?.verdict || conversation?.verdict;
   const conversationIsTerminal = Boolean(
@@ -393,6 +400,28 @@ function MetricDetail({
     && deterministicVerdict,
   );
 
+  useEffect(() => {
+    if (!selectedExportReviewId || !conversation?.conversation_id) { setFreshness(null); return; }
+    let active = true;
+    const conversationId = conversation.conversation_id;
+    setFreshness(null);
+    void getAssertReviewFreshness({ executionRunId: run.execution_run_id, conversationId,
+      reviewId: selectedExportReviewId, userId: run.user_id || userId }).then((response) => {
+        if (response.review_id !== selectedExportReviewId || response.conversation_id !== conversationId
+            || response.execution_run_id !== run.execution_run_id
+            || !['current', 'stale', 'cannot_verify'].includes(response.status)) {
+          throw new Error('Saved review verification returned an unexpected identity.');
+        }
+        if (active) setFreshness(response);
+      }).catch(() => {
+        if (active) setFreshness({ execution_run_id: run.execution_run_id, conversation_id: conversationId,
+          review_id: selectedExportReviewId, status: 'cannot_verify', reason_code: 'request_failed',
+          message: 'Could not verify this saved review. Check again before applying it.' });
+      });
+    return () => { active = false; };
+  }, [selectedExportReviewId, conversation?.conversation_id, run.execution_run_id, run.user_id,
+      userId, conversationIsTerminal, freshnessAttempt]);
+
   async function onJudge() {
     if (!conversation || !canJudge || isJudging) return;
     setJudgeError(null);
@@ -401,12 +430,14 @@ function MetricDetail({
     try {
       setExportReviewId('');
       setExportError(null);
-      setJudge(await requestLlmJudge({
+      const response = await requestLlmJudge({
         plan: 'free',
         user_id: run.user_id || userId,
         execution_run_id: run.execution_run_id,
         conversation_id: conversation.conversation_id,
-      }));
+      });
+      setJudge(response);
+      if (response.review_id) setExportReviewId(response.review_id);
     } catch (err) {
       setJudgeError(err instanceof Error ? err.message : 'Could not request the LLM judge.');
     } finally {
@@ -435,6 +466,7 @@ function MetricDetail({
       || !reviewToApply?.review_id
       || !reviewToApply.judge_result?.proposed_evaluation
       || isApplyingReview
+      || (reviewToApply.judge_result?.provenance?.engine === 'assert' && selectedFreshness?.status !== 'current')
     ) return;
     setApplyReviewError(null);
     setIsApplyingReview(true);
@@ -446,6 +478,7 @@ function MetricDetail({
         userId: run.user_id || userId,
       });
       setReviewToApply(null);
+      setJudge(null);
       onRunUpdated(updated);
     } catch (err) {
       setApplyReviewError(err instanceof Error ? err.message : 'Could not apply the LLM adjudication.');
@@ -471,55 +504,45 @@ function MetricDetail({
           aria-label="Resolution verification status"
         >
           <span>Resolution status</span>
-          <strong>{evidence.label}</strong>
-          <p>{evidence.description}</p>
+          <strong>{evidence.label}{evidence.verdict !== 'Not reported' ? ` · ${evidence.verdict}` : ''}</strong>
         </div>
         <dl className="resolution-facts" aria-label="Resolution evidence details">
           <div><dt>Evaluation score</dt><dd>{evidence.score}</dd></div>
-          <div><dt>Evaluator verdict</dt><dd>{evidence.verdict}</dd></div>
           <div>
             <dt>Evaluation basis</dt>
             <dd>
               <EvaluationBasisHelp conversation={conversation} adjudicated={Boolean(adjudication)} />
             </dd>
           </div>
-          <div><dt>Final state</dt><dd>{evidence.finalState}</dd></div>
-          <div><dt>Termination</dt><dd>{evidence.termination}</dd></div>
+          {evidence.finalState !== 'Not reported' ? <div><dt>Final state</dt><dd>{evidence.finalState}</dd></div> : null}
+          {evidence.termination !== 'Not reported' ? <div><dt>Termination</dt><dd>{evidence.termination}</dd></div> : null}
           <div><dt>Action evidence</dt><dd>{evidence.actionEvidence}</dd></div>
-          <div><dt>Live tool execution</dt><dd>{evidence.liveToolExecution}</dd></div>
+          {evidence.liveToolExecution !== 'Not reported' ? <div><dt>Live tool execution</dt><dd>{evidence.liveToolExecution}</dd></div> : null}
           {evidence.outcome ? <div><dt>Recorded outcome</dt><dd>{evidence.outcome}</dd></div> : null}
           {evidence.error ? <div><dt>Recorded error</dt><dd>{evidence.error}</dd></div> : null}
         </dl>
-        {evidence.gaps.length ? (
-          <div className="resolution-gaps">
-            <h3>{adjudication ? 'Remaining gaps after adjudication' : 'Why resolution is not verified'}</h3>
-            <ul>
-              {evidence.gaps.map((gap) => <li key={gap}>{gap}</li>)}
-            </ul>
-          </div>
-        ) : null}
+        <section className="resolution-gaps" aria-label="Resolution explanation">
+          <h3>Why this outcome</h3>
+          <p>{evidence.description}</p>
+          {evidence.gaps.length ? <ul>
+            {evidence.gaps.map((gap) => <li key={gap}>{gap}</li>)}
+          </ul> : null}
+        </section>
         {adjudication && appliedProposal ? (
           <AppliedAdjudication
             adjudication={adjudication}
             originalGaps={automaticResolutionGaps(conversation)}
           />
         ) : null}
-        <p className="resolution-note">
-          The verified rate counts pass verdicts only. Needs-review outcomes stay unverified; the evaluation
-          score is not a resolution percentage.
-        </p>
         <section className="resolution-judge" aria-label="LLM judge">
           <div>
             <p className="eyebrow">LLM second opinion</p>
             <h3>Review the deterministic verdict</h3>
-            <p>
-              The score above is automatic and rule-based. The LLM judge separately reviews the transcript
-              and recorded evidence, then explains whether it agrees.
-            </p>
           </div>
           <button
             type="button"
             className="secondary-link"
+            id="assert-review-action"
             disabled={isJudging || !canJudge}
             onClick={() => void onJudge()}
           >
@@ -538,10 +561,10 @@ function MetricDetail({
               <label>
                 Saved ASSERT review
                 <select aria-label="Saved ASSERT review" value={selectedExportReviewId}
-                  onChange={(event) => { setExportReviewId(event.target.value); setExportError(null); }}>
-                  {exportChoices.map((review) => (
-                    <option key={review.review_id} value={review.review_id}>
-                      {review.review_id} · {review.status.replaceAll('_', ' ')}{review.created_at ? ` · ${review.created_at}` : ''}
+                  onChange={(event) => { setExportReviewId(event.target.value); setExportError(null); setReviewToApply(null); }}>
+                  {exportChoices.map((review, index) => (
+                    <option key={review.id} value={review.id}>
+                      Review {index + 1} · {review.statusLabel} · {review.dateLabel}
                     </option>
                   ))}
                 </select>
@@ -556,8 +579,17 @@ function MetricDetail({
               : !conversationIsTerminal ? <p className="scenarios-muted">Export is available after the run completes.</p> : null}
             {exportError ? <p className="resolution-judge-error" role="alert">{exportError}</p> : null}
           </div>
+          {selectedReview ? <SavedAssertReview review={selectedReview} freshness={selectedFreshness}
+            onRetry={() => setFreshnessAttempt((attempt) => attempt + 1)}
+            onApply={() => {
+              if (selectedFreshness?.status !== 'current' || !selectedReview.proposal) return;
+              setApplyReviewError(null);
+              setReviewToApply({ status: 'ready', required_plan: 'starter', credits: 0, message: '',
+                evidence_citations: selectedReview.citations, review_id: selectedReview.id,
+                judge_result: { proposed_evaluation: selectedReview.proposal, provenance: { engine: 'assert' } } });
+            }} /> : null}
           {judgeError ? <p className="resolution-judge-error" role="alert">{judgeError}</p> : null}
-          {judge ? (
+          {judge && !selectedReview ? (
             <JudgeResult
               judge={judge}
               showPrompt={showJudgePrompt}
@@ -618,7 +650,7 @@ function MetricDetail({
                 <button
                   type="button"
                   className="primary-cta"
-                  disabled={isApplyingReview}
+                  disabled={isApplyingReview || (reviewToApply.judge_result?.provenance?.engine === 'assert' && selectedFreshness?.status !== 'current')}
                   onClick={() => void onApplyJudgeReview()}
                 >
                   {isApplyingReview ? 'Applying…' : 'Apply adjudication'}
@@ -1262,6 +1294,7 @@ function EvaluationBasisHelp({
       <span className="evaluation-basis-tooltip" id={tooltipId} role="tooltip">
         <strong>{details.heading}</strong>
         {details.lines.map((line) => <span key={line}>{line}</span>)}
+        <span>The evaluation score is not a resolution percentage. The verified rate counts pass verdicts only.</span>
       </span>
     </span>
   );

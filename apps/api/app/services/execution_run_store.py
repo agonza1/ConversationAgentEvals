@@ -325,6 +325,14 @@ def apply_judge_review(
         review = next((item for item in reviews if item.get('review_id') == review_id), None)
         if review is None:
             raise KeyError('LLM judge review not found.')
+        from app.services.assert_review_status import is_assert_review, saved_assert_review_freshness
+        if is_assert_review(review):
+            from app.services.benchmark_service import get_scenario_contract
+            contract = get_scenario_contract(str(conversation.get('suite_id') or run.get('suite_id') or ''),
+                                            str(conversation.get('scenario_id') or ''))
+            freshness = saved_assert_review_freshness(run, conversation, review, contract)
+            if freshness['status'] != 'current':
+                raise ValueError(freshness['message'])
         if review.get('status') == 'applied':
             return deepcopy(run)
         if review.get('status') != 'pending_confirmation':
