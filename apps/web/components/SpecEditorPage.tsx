@@ -67,13 +67,22 @@ function slug(prefix: string, label: string, index: number) {
 
 function checksFromText(value: string, existing: AssertCheck[], prefix: string, draft: boolean): AssertCheck[] {
   const consumed = new Set<number>();
+  const reservedIds = new Set(existing.map((item) => item.id));
+  const usedIds = new Set<string>();
   return lines(value).map((label, index) => {
     const existingIndex = existing.findIndex((item, candidateIndex) => !consumed.has(candidateIndex) && item.label === label);
     const matched = existingIndex >= 0 ? existing[existingIndex] : undefined;
     if (existingIndex >= 0) consumed.add(existingIndex);
+    const baseId = matched?.id || slug(prefix, label, index);
+    let id = baseId;
+    let suffix = 2;
+    while (usedIds.has(id) || (!matched && reservedIds.has(id))) {
+      id = `${baseId}-${suffix++}`;
+    }
+    usedIds.add(id);
     return {
       ...(matched || {}),
-      id: matched?.id || slug(prefix, label, index),
+      id,
       label,
       description: matched?.description || label,
       severity: matched?.severity || (prefix === 'failure' ? 'error' : 'warning'),

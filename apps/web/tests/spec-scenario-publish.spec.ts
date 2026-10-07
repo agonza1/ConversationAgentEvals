@@ -12,6 +12,39 @@ test.beforeEach(async ({ page }) => {
   await page.route('**/api/specs/preview', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ valid: true, errors: [], warnings: [], yaml: 'suite: housing', assert_validated: true }) }));
 });
 
+test('manual duplicate and slug-colliding labels retain distinct editable rule identities', async ({ page }) => {
+  let savedBody: any;
+  await page.route('**/api/specs', async (route) => {
+    savedBody = route.request().postDataJSON();
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      id: 'duplicate-rules', version: 1, project_id: savedBody.project_id, user_id: savedBody.user_id,
+      spec: { ...savedBody.spec, id: 'duplicate-rules', version: 1 }, yaml: 'suite: duplicate-rules',
+    }) });
+  });
+  await page.goto('/specs/new');
+  await page.getByLabel('Success checks', { exact: true }).fill('Check policy\nCheck policy\nCheck policy!\nCheck policy-2');
+  await page.getByLabel(/^Behavior definition 1:/).fill('Check the budget policy.');
+  await page.getByLabel(/^Behavior definition 2:/).fill('Check identity before changing an account.');
+  await expect(page.getByLabel(/^Behavior definition 1:/)).toHaveValue('Check the budget policy.');
+  await expect(page.getByLabel(/^Behavior definition 2:/)).toHaveValue('Check identity before changing an account.');
+  await page.getByRole('button', { name: 'Save version' }).click();
+  await expect(page.getByText(/Saved `duplicate-rules` version 1/)).toBeVisible();
+  const original = savedBody.spec.required_behaviors;
+  expect(new Set(original.map((rule: any) => rule.id)).size).toBe(4);
+  expect(original[0].description).toBe('Check the budget policy.');
+  expect(original[1].description).toBe('Check identity before changing an account.');
+
+  await page.getByRole('textbox', { name: 'Success checks', exact: true }).fill('Check policy!\nCheck policy\nCheck policy\nCheck policy-2\nCheck policy');
+  await page.getByRole('button', { name: 'Save version' }).click();
+  await expect.poll(() => savedBody.spec.required_behaviors.length).toBe(5);
+  const revised = savedBody.spec.required_behaviors;
+  expect(new Set(revised.map((rule: any) => rule.id)).size).toBe(5);
+  expect(revised[0].id).toBe(original[2].id);
+  expect(revised[1].id).toBe(original[0].id);
+  expect(revised[2].id).toBe(original[1].id);
+  expect(revised[2].description).toBe('Check identity before changing an account.');
+});
+
 test('review, generate cases, edit, save, and publish an exact version; unsaved edits block publication', async ({ page }) => {
   let savedBody: any;
   let publishCount = 0;

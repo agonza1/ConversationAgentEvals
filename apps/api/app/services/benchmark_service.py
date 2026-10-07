@@ -605,7 +605,7 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, A
     )
 
     verdict = 'pass' if assert_manifest.verdict.status == 'pass' else 'needs_review'
-    overall_score = int(assert_manifest.verdict.score or 0)
+    overall_score = int(assert_manifest.verdict.score) if assert_manifest.verdict.score is not None else None
     assert_fields = _assert_report_fields(assert_manifest, payload=payload, transcript=transcript)
     report = {
         'run_id': run_id,
@@ -857,7 +857,15 @@ def _execute_assert_contract(
             'forbidden_penalty': penalty,
         }
 
-    status = 'pass' if overall_score >= 75 and not failed_required_actions and not forbidden_observed and not final_state_missing and not workflow_order_issues and not missing_actions else 'needs_review'
+    if authored:
+        # Generic completion/order evidence does not measure the focused policy.
+        score_components = {
+            **({'required_actions': required_score} if required_score is not None else {}),
+            **({'forbidden_actions': forbidden_score} if forbidden_score is not None else {}),
+        }
+        overall_score = round(sum(score_components.values()) / len(score_components)) if score_components else None
+
+    status = 'pass' if overall_score is not None and overall_score >= 75 and not failed_required_actions and not forbidden_observed and not final_state_missing and not workflow_order_issues and not missing_actions else 'needs_review'
     if scenario.get('evaluation_spec_ref'):
         # Heuristic action matching cannot prove arbitrary natural-language policy.
         status = 'needs_review'
@@ -1296,7 +1304,8 @@ def run_suite(request: Any) -> dict[str, Any]:
             scenario_reports.append(report)
 
     passing_reports = [report for report in scenario_reports if report.get('verdict') == 'pass']
-    average_score = round(sum(int(report.get('overall_score', 0)) for report in scenario_reports) / len(scenario_reports)) if scenario_reports else 0
+    measured_scores = [report['overall_score'] for report in scenario_reports if report.get('overall_score') is not None]
+    average_score = round(sum(measured_scores) / len(measured_scores)) if measured_scores else None
     run_metadata = _run_metadata(payload)
     suite_run_id = _stable_digest(
         {
@@ -1365,7 +1374,8 @@ def simulate_suite(request: Any) -> dict[str, Any]:
     ]
     reports = [run['benchmark_report'] for run in scenario_runs]
     passing_reports = [report for report in reports if report.get('verdict') == 'pass']
-    average_score = round(sum(int(report.get('overall_score', 0)) for report in reports) / len(reports)) if reports else 0
+    measured_scores = [report['overall_score'] for report in reports if report.get('overall_score') is not None]
+    average_score = round(sum(measured_scores) / len(measured_scores)) if measured_scores else None
     run_metadata = _run_metadata(payload)
     suite_run_id = _stable_digest(
         {
@@ -1443,6 +1453,7 @@ def _suite_reliability_metrics(scenario_reports: list[dict[str, Any]]) -> dict[s
         if isinstance(voice_summary, dict):
             voice_summaries.append(voice_summary)
 
+    measured_reports = [report for report in scenario_reports if report.get('overall_score') is not None]
     total_turns = sum(_number(summary.get('turn_count')) for summary in voice_summaries)
     perturbation_coverage = _perturbation_coverage(scenario_reports)
     return {
@@ -1452,7 +1463,8 @@ def _suite_reliability_metrics(scenario_reports: list[dict[str, Any]]) -> dict[s
         'pass_at_1': _ratio(first_attempt_passes, scenario_count),
         'pass_at_k': _ratio(any_attempt_passes, scenario_count),
         'pass_all_k': _ratio(all_attempt_passes, scenario_count),
-        'accuracy_score': _ratio(sum(_number(report.get('overall_score')) for report in scenario_reports), len(scenario_reports) * 100),
+        'accuracy_score': _ratio(sum(_number(report.get('overall_score')) for report in measured_reports), len(measured_reports) * 100) if measured_reports else None,
+        'scored_attempt_count': len(measured_reports),
         'experience_signal_coverage': _ratio(len(voice_summaries), scenario_count),
         'average_turn_count': round(total_turns / len(voice_summaries), 2) if voice_summaries else 0.0,
         'interruption_signal_count': sum(_number(summary.get('interruption_signal_count')) for summary in voice_summaries),
@@ -2035,7 +2047,7 @@ def _suite_vcon_export(
     suite_run_id: str,
     suite_contract_manifest_sha256: str,
     run_metadata: dict[str, str],
-    average_score: int,
+    average_score: int | None,
     verdict: str,
     reliability_metrics: dict[str, Any],
     scenario_reports: list[dict[str, Any]],

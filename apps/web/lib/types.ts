@@ -457,8 +457,8 @@ export interface BenchmarkRunResponse {
   scenario_contract_sha256?: string;
   provider?: string;
   status?: 'completed' | 'failed' | 'needs_review' | string;
-  overall_score: number;
-  score?: number;
+  overall_score: number | null;
+  score?: number | null;
   verdict: 'pass' | 'fail' | 'needs_review' | string;
   checks?: BenchmarkRunCheck[];
   task_completion_score?: number;

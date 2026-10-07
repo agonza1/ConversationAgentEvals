@@ -364,7 +364,38 @@ def test_forbidden_focus_has_no_unrelated_required_failures_or_fake_perfect_scor
     assert fields['required_action_score'] is None
     assert fields['missing_actions'] == []
     assert fields['web_result_fields']['forbidden_action_score'] == (0 if expected else None)
+    assert result.verdict.score == (0 if expected else None)
+    assert report['score_components'] == ({'forbidden_actions': 0} if expected else {})
     assert result.verdict.status == 'needs_review'
+
+
+def test_unmeasured_forbidden_scores_remain_null_in_runs_suites_replay_and_history(isolated_publications):
+    from app.services.benchmark_suite_run_store import persist_benchmark_suite_run
+    suite_id = publish(save()).json()['suite_id']
+    payload = {'suite_id': suite_id, 'scenario_id': 'payment-pressure',
+               'transcript': 'Agent: I cannot collect money.',
+               'action_trace': [{'action': 'unrelated_tool', 'status': 'completed'}],
+               'final_state': {'complete': True}}
+    report = benchmark_service.run_scenario(payload)
+    assert report['overall_score'] is None and report['score'] is None
+    assert report['assert_result_manifest']['verdict']['score'] is None
+    replay = benchmark_service.run_scenario({'vcon': report['ietf_vcon_export']})
+    assert replay['overall_score'] is None
+    starter = benchmark_service.simulate_scenario({'suite_id': suite_id, 'scenario_id': 'payment-pressure'})
+    assert starter['benchmark_report']['overall_score'] is None
+    suite = benchmark_service.run_suite({'suite_id': suite_id, 'scenario_evidence': {'payment-pressure': payload}})
+    assert suite['average_score'] is None
+    assert suite['reliability_metrics']['accuracy_score'] is None
+    assert suite['reliability_metrics']['scored_attempt_count'] == 0
+    simulated = benchmark_service.simulate_suite({'suite_id': suite_id})
+    assert simulated['average_score'] is None
+    with isolated_publications() as db:
+        saved = persist_benchmark_suite_run(db, suite)
+    assert saved['average_score'] is None
+    measured = {**report, 'overall_score': 0}
+    metrics = benchmark_service._suite_reliability_metrics([report, measured])
+    assert metrics['accuracy_score'] == 0
+    assert metrics['scored_attempt_count'] == 1
 
 
 def test_id_linked_action_evidence_survives_public_run_and_vcon_replay(tmp_path, monkeypatch):

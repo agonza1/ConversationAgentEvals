@@ -60,6 +60,8 @@ Each case's action checklist contains only its focus behavior, with its ID,
 kind, label and definition. Displayed action names include `[behavior-id]` so
 equal labels are not conflated. The complete policy remains context, not a
 claim that this case exercises every rule in the design.
+Manual duplicate labels and slug collisions receive distinct IDs. Existing
+rule identities and definitions survive subsequent edits and reordering.
 No duplicate ASSERT runtime or legacy-version implementation is introduced.
 
 ## Evaluation and boundaries
@@ -80,6 +82,10 @@ spoken claims do not establish which authored rule was exercised. These are
 source-reported associations, not independently verified semantic judgments.
 A forbidden-focus case has required actions n/a, not missing unrelated rules.
 Absence of ID-linked forbidden evidence is also n/a, not a proved 100% pass.
+The authored-policy overall score includes only focused action measurements,
+never generic workflow/completion scores. With no focused measurement it is
+null/n/a, including in saved reports and vCon replay. Suite averages and accuracy
+exclude unmeasured attempts and remain n/a when none were scored.
 The optional upstream ASSERT semantic judge receives full definitions, boundary,
 source requirements and library context, and reports its independent judgment.
 It uses the existing provider/credential/budget configuration; a Codex login alone
