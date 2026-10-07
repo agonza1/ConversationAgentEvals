@@ -31,6 +31,7 @@ from app.services.editable_assert_spec import (
     validate_spec,
 )
 from app.services.spec_scenario_authoring import generate_case_drafts, publish_scenarios
+from app.services.spec_generation_settings import generation_settings, save_generation_settings
 
 
 router = APIRouter(prefix='/api/specs', tags=['specs'])
@@ -48,6 +49,28 @@ class SpecDraftGenerateRequest(BaseModel):
 
 class SpecEnvelope(BaseModel):
     spec: EditableAssertSpec
+
+
+class SpecGenerationSettingsRequest(BaseModel):
+    model: str | None = Field(default=None, min_length=1, max_length=160)
+
+
+@router.get('/generation-settings')
+def get_generation_settings():
+    try:
+        return generation_settings()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail='Could not read draft-generation settings.') from exc
+
+
+@router.patch('/generation-settings')
+def patch_generation_settings(payload: SpecGenerationSettingsRequest):
+    try:
+        return save_generation_settings(payload.model)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail='Could not persist draft-generation settings.') from exc
 
 
 class SpecSaveRequest(BaseModel):

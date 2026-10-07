@@ -2,6 +2,7 @@ import Link from 'next/link';
 
 import { BenchmarkRunner } from '@/components/BenchmarkRunner';
 import { SiteNav } from '@/components/SiteNav';
+import { SpecGenerationSettings } from '@/components/SpecGenerationSettings';
 
 /** Console Settings retains advanced history/report workflows. */
 export default function BenchmarksPage() {
@@ -17,6 +18,7 @@ export default function BenchmarksPage() {
           <Link href="/eval">Eval</Link>.
         </p>
       </section>
+      <SpecGenerationSettings />
       <BenchmarkRunner view="all" />
     </main>
   );
