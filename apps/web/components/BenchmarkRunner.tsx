@@ -612,6 +612,7 @@ interface BenchmarkSuiteRunRecord {
   status: string;
   scenario_count: number;
   pass_count: number;
+  failed_count?: number;
   needs_review_count: number;
   average_score: number | null;
   created_at?: string | null;
@@ -624,6 +625,7 @@ interface BenchmarkSuiteRunRecord {
     provider?: string;
     scenario_count?: number;
     pass_count?: number;
+    failed_count?: number;
     needs_review_count?: number;
     average_score?: number | null;
     verdict?: string;
@@ -649,6 +651,7 @@ interface BenchmarkSuiteSimulationResponse {
   provider?: string;
   scenario_count: number;
   pass_count: number;
+  failed_count?: number;
   needs_review_count: number;
   average_score: number | null;
   verdict: string;
@@ -2079,6 +2082,7 @@ function formatSuiteBrief(simulation: BenchmarkSuiteSimulationResponse) {
     `Average score: ${simulation.average_score}`,
     `Scenarios: ${simulation.scenario_count}`,
     `Passing: ${simulation.pass_count}`,
+    `Failed: ${simulation.failed_count ?? 0}`,
     `Needs review: ${simulation.needs_review_count}`,
     `Review scenarios: ${needsReview.length ? needsReview.join('; ') : 'None reported'}`,
     `Suite run: ${simulation.suite_run_id}`,
@@ -3403,6 +3407,7 @@ export function BenchmarkRunner({
       provider: suiteReport.provider,
       scenario_count: suiteReport.scenario_count ?? run.scenario_count,
       pass_count: suiteReport.pass_count ?? run.pass_count,
+      failed_count: suiteReport.failed_count ?? run.failed_count ?? 0,
       needs_review_count: suiteReport.needs_review_count ?? run.needs_review_count,
       average_score: suiteReport.average_score ?? run.average_score,
       verdict: suiteReport.verdict ?? run.status,
@@ -5267,6 +5272,7 @@ export function BenchmarkRunner({
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
             <ScoreTile label="Scenarios" score={suiteSimulation.scenario_count} />
             <ScoreTile label="Passing" score={suiteSimulation.pass_count} />
+            <ScoreTile label="Failed" score={suiteSimulation.failed_count ?? 0} />
             <ScoreTile label="Needs review" score={suiteSimulation.needs_review_count} />
           </div>
           <section style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 12, background: 'var(--panel-alt)' }}>
@@ -6067,6 +6073,7 @@ export function BenchmarkRunner({
                       <AuditFact label="Scenarios" value={String(run.scenario_count)} />
                       <AuditFact label="Passing" value={String(run.pass_count)} />
                       <AuditFact label="Review" value={String(run.needs_review_count)} />
+                      <AuditFact label="Failed" value={String(run.failed_count ?? 0)} />
                       <AuditFact label="Average" value={String(run.average_score ?? 'n/a')} />
                       <AuditFact label="Progress" value={formatSuiteRunProgress(run.progress)} />
                       <AuditFact label="Pass@1" value={formatMetricPercent(reliability.pass_at_1)} />

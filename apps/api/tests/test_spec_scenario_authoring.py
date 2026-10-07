@@ -447,6 +447,9 @@ def test_approved_design_enforcement_survives_public_run_export_and_replay(tmp_p
                'action_trace': [{'name': 'lookup', 'status': 'completed'}], 'final_state': {'complete': False}}
     report = benchmark_service.run_scenario(payload)
     assert report['verdict'] == 'fail'
+    assert report['run_status'] == 'failed'
+    assert report['run_lifecycle']['transitions'][-1]['to'] == 'failed'
+    assert report['run_lifecycle']['failed_at']
     assert report['overall_score'] == 0
     assert report['design_enforcement']['blocked']
     assert report['programmatic_check_results'][0]['status'] == 'fail'
@@ -458,10 +461,50 @@ def test_approved_design_enforcement_survives_public_run_export_and_replay(tmp_p
     clean = benchmark_service.run_scenario(payload)
     assert clean['design_enforcement']['blocked'] is False
     assert clean['verdict'] == 'needs_review'  # Passing literal checks cannot prove semantic policy.
+    assert clean['run_status'] == 'needs_review'
     missing = benchmark_service.run_scenario({**payload, 'action_trace': []})
     assert missing['overall_score'] is None
     assert missing['verdict'] == 'needs_review'
     assert missing['design_enforcement']['blocked']
+
+
+def test_failed_design_is_persisted_filtered_and_counted_as_failed(tmp_path, monkeypatch, isolated_publications):
+    from app.services import assert_artifact_store, benchmark_run_store, benchmark_suite_run_store
+    monkeypatch.setattr(assert_artifact_store, 'ARTIFACT_ROOT', tmp_path / 'assert-runs')
+    spec = design()
+    spec['deterministic_checks'] = [{'id': 'done', 'label': 'final_state_complete'}]
+    suite_id = publish(save(spec)).json()['suite_id']
+    evidence = {'transcript': 'Agent: No payments accepted.', 'final_state': {'complete': False}}
+    report = benchmark_service.run_scenario({'suite_id': suite_id, 'scenario_id': 'payment-pressure', **evidence})
+    suite = benchmark_service.run_suite({'suite_id': suite_id, 'scenario_evidence': {'payment-pressure': evidence}})
+    assert suite['verdict'] == 'fail'
+    assert suite['failed_count'] == 1
+    assert suite['needs_review_count'] == 0
+    assert suite['vcon_export']['analysis'][0]['body']['failed_count'] == 1
+    with isolated_publications() as db:
+        stored = benchmark_run_store.persist_benchmark_run(db, report)
+        assert stored['status'] == 'failed'
+        assert stored['completed_at']
+        assert benchmark_run_store.list_benchmark_runs(db, user_id='anonymous', status='needs_review') == []
+        assert benchmark_run_store.list_benchmark_runs(db, user_id='anonymous', status='failed')[0]['run_id'] == report['run_id']
+        stored_suite = benchmark_suite_run_store.persist_benchmark_suite_run(db, suite)
+        assert stored_suite['status'] == 'failed'
+        assert stored_suite['failed_count'] == 1
+        assert stored_suite['needs_review_count'] == 0
+
+
+def test_observed_tool_does_not_unblock_published_design(tmp_path, monkeypatch):
+    from app.services import assert_artifact_store
+    monkeypatch.setattr(assert_artifact_store, 'ARTIFACT_ROOT', tmp_path / 'assert-runs')
+    spec = design()
+    spec['deterministic_checks'] = [{'id': 'lookup', 'label': 'tool_succeeded:lookup'}]
+    suite_id = publish(save(spec)).json()['suite_id']
+    report = benchmark_service.run_scenario({'suite_id': suite_id, 'scenario_id': 'payment-pressure',
+        'transcript': 'Agent: No payments accepted.',
+        'action_trace': [{'name': 'lookup', 'event_type': 'action.observed', 'status': 'observed'}]})
+    assert report['programmatic_check_results'][0]['status'] == 'insufficient_evidence'
+    assert report['design_enforcement']['blocked'] is True
+    assert report['run_status'] == 'needs_review'
 
 
 def test_unsupported_checks_are_visible_and_block_verification(tmp_path, monkeypatch):

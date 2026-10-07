@@ -21,13 +21,17 @@ Evidence requirements accept `transcript`, `action_trace`, `final_state`, `vcon`
 and `final_state_or_action_trace`. Space-separated legacy names such as
 `conversation transcript`, `action trace`, and `final state` are aliases.
 Presence checks do not validate an entire artifact schema or prove its truth.
+Tool-success checks require an explicit successful terminal status; `observed`,
+pending, and unknown events do not establish success.
 Natural-language conditionals and arbitrary code are never inferred or executed.
 Unsupported entries are warned about during design preview and explicitly block
 verification with an insufficient-evidence result at runtime.
 
 All declared checks are mandatory gates regardless of their displayed severity.
 Explicit check failures yield fail/0. Missing evidence or unsupported checks yield
-needs-review/n/a (an explicit focused forbidden-action hit still retains score 0).
+needs-review/n/a. Failed evaluations retain a failed lifecycle in run history and
+are counted separately from needs-review outcomes in suite summaries.
+An explicit focused forbidden-action hit still retains score 0.
 Passing checks do not increase the focused policy score or automatically verify
 natural-language behaviors. A successful ID-linked tool call is not semantic proof;
 the focused behavior remains insufficient until semantic review. Other behaviors

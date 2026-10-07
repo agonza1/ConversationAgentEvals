@@ -502,12 +502,12 @@ def _run_lifecycle(
     verdict: str,
     failure_categories: list[str] | None = None,
 ) -> dict[str, Any]:
-    terminal_status = 'completed' if verdict == 'pass' else 'needs_review'
+    terminal_status = 'completed' if verdict == 'pass' else 'failed' if verdict == 'fail' else 'needs_review'
     attempt = int(lifecycle_context['attempt'])
     max_attempts = int(lifecycle_context['max_attempts'])
     retryable = terminal_status != 'completed' and attempt < max_attempts
     resumable = terminal_status != 'completed'
-    reason = 'benchmark passed' if terminal_status == 'completed' else 'benchmark requires review'
+    reason = 'benchmark passed' if terminal_status == 'completed' else 'benchmark failed' if terminal_status == 'failed' else 'benchmark requires review'
 
     transitions = [
         {'from': None, 'to': 'queued', 'at': run_started_at, 'reason': 'run accepted'},
@@ -528,6 +528,7 @@ def _run_lifecycle(
         'updated_at': evaluated_at,
         'completed_at': evaluated_at if terminal_status == 'completed' else None,
         'needs_review_at': evaluated_at if terminal_status == 'needs_review' else None,
+        'failed_at': evaluated_at if terminal_status == 'failed' else None,
         'failure_categories': failure_categories or [],
         'transitions': transitions,
     }
@@ -1330,7 +1331,7 @@ def run_suite(request: Any) -> dict[str, Any]:
         }
     )[:16]
 
-    verdict = 'pass' if scenario_reports and len(passing_reports) == len(scenario_reports) else 'needs_review'
+    verdict = 'fail' if any(report.get('verdict') == 'fail' for report in scenario_reports) else 'pass' if scenario_reports and len(passing_reports) == len(scenario_reports) else 'needs_review'
     reliability_metrics = _suite_reliability_metrics(scenario_reports)
     suite_contract_manifest = get_suite_contract_manifest(suite_id)
     suite_contract_manifest_sha256 = str(suite_contract_manifest['suite_contract_manifest_sha256']) if suite_contract_manifest else ''
@@ -1344,7 +1345,8 @@ def run_suite(request: Any) -> dict[str, Any]:
         'run_metadata': run_metadata,
         'scenario_count': len(scenario_reports),
         'pass_count': len(passing_reports),
-        'needs_review_count': len(scenario_reports) - len(passing_reports),
+        'failed_count': sum(report.get('verdict') == 'fail' for report in scenario_reports),
+        'needs_review_count': sum(report.get('verdict') not in {'pass', 'fail'} for report in scenario_reports),
         'average_score': average_score,
         'verdict': verdict,
         'reliability_metrics': reliability_metrics,
@@ -1400,7 +1402,7 @@ def simulate_suite(request: Any) -> dict[str, Any]:
         }
     )[:16]
 
-    verdict = 'pass' if reports and len(passing_reports) == len(reports) else 'needs_review'
+    verdict = 'fail' if any(report.get('verdict') == 'fail' for report in reports) else 'pass' if reports and len(passing_reports) == len(reports) else 'needs_review'
     reliability_metrics = _suite_reliability_metrics(reports)
     suite_contract_manifest = get_suite_contract_manifest(suite_id)
     suite_contract_manifest_sha256 = str(suite_contract_manifest['suite_contract_manifest_sha256']) if suite_contract_manifest else ''
@@ -1414,7 +1416,8 @@ def simulate_suite(request: Any) -> dict[str, Any]:
         'run_metadata': run_metadata,
         'scenario_count': len(reports),
         'pass_count': len(passing_reports),
-        'needs_review_count': len(reports) - len(passing_reports),
+        'failed_count': sum(report.get('verdict') == 'fail' for report in reports),
+        'needs_review_count': sum(report.get('verdict') not in {'pass', 'fail'} for report in reports),
         'average_score': average_score,
         'verdict': verdict,
         'reliability_metrics': reliability_metrics,
@@ -2080,7 +2083,8 @@ def _suite_vcon_export(
             'run_metadata': deepcopy(run_metadata),
             'scenario_count': len(scenario_reports),
             'pass_count': sum(1 for report in scenario_reports if report.get('verdict') == 'pass'),
-            'needs_review_count': sum(1 for report in scenario_reports if report.get('verdict') != 'pass'),
+            'failed_count': sum(1 for report in scenario_reports if report.get('verdict') == 'fail'),
+            'needs_review_count': sum(1 for report in scenario_reports if report.get('verdict') not in {'pass', 'fail'}),
             'average_score': average_score,
             'verdict': verdict,
             'reliability_metrics': deepcopy(reliability_metrics),

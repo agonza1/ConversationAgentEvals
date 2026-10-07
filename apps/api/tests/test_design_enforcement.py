@@ -37,10 +37,11 @@ def test_unknown_prose_is_not_executed_or_silently_ignored():
     assert result['evidence_requirement_results'][0]['supported'] is False
 
 
-@pytest.mark.parametrize('status', ['requested', 'pending', 'running', 'unknown', None])
+@pytest.mark.parametrize('status', ['requested', 'pending', 'running', 'unknown', 'observed', None])
 def test_tool_invocations_without_terminal_status_are_insufficient(status):
     result = evaluate_design(scenario(['tool_succeeded:lookup']), {'action_trace': [{'name': 'lookup', 'status': status}]}, '')
     assert result['programmatic_check_results'][0]['status'] == 'insufficient_evidence'
+    assert result['design_enforcement']['blocked'] is True
 
 
 def test_failure_has_evidence_and_retry_can_satisfy_at_least_one_success():
@@ -58,3 +59,19 @@ def test_evidence_alternatives_and_id_linked_violation():
     assert result['evidence_requirement_results'][0]['status'] == 'pass'
     assert result['behavior_results'][0]['status'] == 'fail'
     assert result['behavior_results'][0]['citations'][0]['path'] == 'events[0]'
+
+
+def test_observed_forbidden_action_is_not_confused_with_tool_success():
+    result = evaluate_design(scenario(['tool_succeeded:pay']), {
+        'action_trace': [{'name': 'pay', 'behavior_id': 'refund', 'status': 'observed'}]}, '')
+    assert result['programmatic_check_results'][0]['status'] == 'insufficient_evidence'
+    assert result['behavior_results'][0]['status'] == 'fail'
+
+
+def test_tool_retry_citations_point_to_the_success_that_satisfied_the_check():
+    trace = [{'name': 'lookup', 'status': 'observed'} for _ in range(3)]
+    trace.append({'name': 'lookup', 'status': 'completed'})
+    row = evaluate_design(scenario(['tool_succeeded:lookup']), {'action_trace': trace}, '')['programmatic_check_results'][0]
+    assert row['status'] == 'pass'
+    assert row['citations'][0]['path'] == 'events[3]'
+    assert row['citations'][0]['text'] == 'lookup: completed'
