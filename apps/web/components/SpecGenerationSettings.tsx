@@ -43,7 +43,7 @@ export function SpecGenerationSettings() {
       setSettings(next);
       setModel(next.model || '');
       setLoaded(true);
-      setMessage(`Saved. Next draft will use ${next.effective_model}.`);
+      setMessage(next.available ? `Saved. Next draft will use ${next.effective_model}.` : `Saved model selection: ${next.effective_model}. Connect Codex or configure an OpenAI API key before generating drafts.`);
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not save settings.'); }
     finally { setBusy(false); }
   }
@@ -61,7 +61,8 @@ export function SpecGenerationSettings() {
     {model && !ids.includes(model) ? <label>Custom model ID
       <input aria-label="Custom draft model ID" maxLength={160} value={model === '__custom__' ? '' : model} onChange={(event) => { setMessage(null); setModel(event.target.value || '__custom__'); }} />
     </label> : null}
-    {settings ? <p>Active: {settings.effective_model} · {settings.provider} · {settings.source === 'console' ? 'Console setting' : 'Deployment default'}{settings.model && settings.model !== settings.effective_model ? ` (mapped from ${settings.model})` : ''}</p> : null}
+    {settings ? <p>{settings.available ? 'Active' : 'Configured'}: {settings.effective_model} · {settings.provider} · {settings.source === 'console' ? 'Console setting' : 'Deployment default'}{settings.model && settings.model !== settings.effective_model ? ` (mapped from ${settings.model})` : ''}</p> : null}
+    {settings && !settings.available ? <p>No generation provider is connected. Connect Codex below or configure OPENAI_API_KEY/LLM_JUDGE_API_KEY.</p> : null}
     <p>Only OpenAI text models supported by your active provider are usable. Saving does not verify model access or make a model call.</p>
     {hint ? <p>{hint}</p> : null}
     <button type="button" className="primary-link" disabled={busy || !loaded || model === '__custom__'} onClick={() => void save()}>{busy ? 'Working…' : 'Save draft model'}</button>{' '}

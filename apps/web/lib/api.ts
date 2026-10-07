@@ -213,6 +213,7 @@ export interface SpecGenerationSettings {
   effective_model: string;
   source: 'console' | 'deployment';
   provider: string;
+  available: boolean;
 }
 
 export async function getSpecGenerationSettings(): Promise<SpecGenerationSettings> {

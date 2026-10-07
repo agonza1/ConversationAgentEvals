@@ -38,11 +38,13 @@ def generation_settings() -> dict:
     requested = selected or default
     provider = get_provider('openai')
     connected = provider.status().get('status') == 'connected'
+    api_key_configured = bool((os.getenv('LLM_JUDGE_API_KEY') or os.getenv('OPENAI_API_KEY') or '').strip())
     effective = effective_codex_model_name(requested) if connected and isinstance(provider, OpenAICodexProvider) else requested
     return {
         'model': selected, 'default_model': default, 'effective_model': effective,
         'source': 'console' if selected else 'deployment',
-        'provider': 'openai_codex' if connected else 'openai_api_key',
+        'provider': 'openai_codex' if connected else 'openai_api_key' if api_key_configured else 'unconfigured',
+        'available': connected or api_key_configured,
         'scope': 'deployment',
     }
 

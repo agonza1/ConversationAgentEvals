@@ -13,12 +13,33 @@ from app.services.llm_providers import set_provider_for_tests
 def isolated_settings(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, 'settings_path', lambda: tmp_path / 'settings.json')
     monkeypatch.setenv('SPEC_GENERATION_MODEL', 'gpt-4.1-mini')
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    monkeypatch.delenv('LLM_JUDGE_API_KEY', raising=False)
     class Provider:
         def status(self):
             return {'status': 'disconnected'}
     set_provider_for_tests('openai', Provider())
     yield
     set_provider_for_tests('openai', None)
+
+
+@pytest.mark.parametrize('auth_status', ['disconnected', 'expired'])
+def test_no_credentials_never_reports_api_key_provider(monkeypatch, auth_status):
+    class Provider:
+        def status(self): return {'status': auth_status}
+    set_provider_for_tests('openai', Provider())
+    result = TestClient(app).get('/api/specs/generation-settings').json()
+    assert result['provider'] == 'unconfigured'
+    assert result['available'] is False
+
+
+@pytest.mark.parametrize('key_variable', ['OPENAI_API_KEY', 'LLM_JUDGE_API_KEY'])
+def test_api_key_provider_requires_a_nonblank_key(monkeypatch, key_variable):
+    monkeypatch.setenv(key_variable, ' ')
+    assert settings.generation_settings()['available'] is False
+    monkeypatch.setenv(key_variable, 'test-key')
+    assert settings.generation_settings()['provider'] == 'openai_api_key'
+    assert settings.generation_settings()['available'] is True
 
 
 def test_console_selection_persists_and_reset_restores_environment():
@@ -71,6 +92,8 @@ def test_oauth_reports_and_uses_effective_model(monkeypatch):
     saved = settings.save_generation_settings('gpt-5.4-mini')
     assert saved['model'] == 'gpt-5.4-mini'
     assert saved['effective_model'] == 'gpt-6-luna'
+    assert saved['provider'] == 'openai_codex'
+    assert saved['available'] is True
     assert drafts._complete_generation('draft')[2] == 'gpt-6-luna'
     assert observed == ['gpt-6-luna']
 
