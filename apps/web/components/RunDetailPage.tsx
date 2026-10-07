@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ApiAwareLink } from '@/components/ApiAwareLink';
 import { LiveRunFeedback } from '@/components/LiveRunFeedback';
 import { EvidenceTimeline } from '@/components/EvidenceTimeline';
+import { DesignResults } from '@/components/DesignResults';
 import { SiteNav } from '@/components/SiteNav';
 import {
   applyLlmJudgeReview,
@@ -434,6 +435,9 @@ function MetricDetail({
     return (
       <div className="runs-detail-copy">
         <h2>Resolution Evidence</h2>
+        <DesignResults findings={conversation.evaluation_findings} semanticReview={adjudication ? {
+          verdict: appliedProposal?.verdict, citations: adjudication.evidence_citations,
+        } : undefined} />
         <div
           className={`resolution-status is-${evidence.state}`}
           role="status"
@@ -1236,6 +1240,17 @@ function evaluationBasisDetails(conversation: ConversationRecord, adjudicated: b
         : 'unknown';
   const score = conversation.metrics_summary?.score ?? conversation.score;
   const scoreLabel = typeof score === 'number' ? `${Math.round(score)}/100` : 'the reported score';
+
+  if (findings.design_enforcement) {
+    return {
+      heading: 'How the approved design is evaluated',
+      lines: [
+        'Only the focused behavior contributes policy evidence. Passing literal checks does not prove semantic compliance.',
+        'Mandatory programmatic failures produce fail/0. Missing evidence or unsupported checks produce needs-review/n/a; an observed forbidden-action hit retains 0.',
+        'Review the cited design results below. A semantic pass cannot override blocked mandatory gates.',
+      ],
+    };
+  }
 
   if (mode === 'agentic') {
     const preferredOrder = ['required_actions', 'forbidden_actions', 'workflow_order', 'final_state'];

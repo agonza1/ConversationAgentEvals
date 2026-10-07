@@ -49,7 +49,7 @@ const starterSpec: EditableAssertSpec = {
   scenario_seeds: [],
   scenarios: [],
   deterministic_checks: [],
-  evidence_requirements: ['conversation transcript', 'final state or tool trace when tools are used'],
+  evidence_requirements: ['transcript'],
   judges: [defaultJudge],
   runtime_overrides: {},
   extensions: {},
@@ -484,9 +484,10 @@ export function SpecEditorPage() {
             {publishedSuite ? <p role="status">Published version {saved?.version}. <Link href={{ pathname: '/scenarios', query: publishedSuite }}>View runnable scenarios</Link> · <Link href={{ pathname: '/runs', query: publishedSuite }}>Choose a target and run</Link></p> : null}
           </section>
           <div className="spec-field-row">
-            <label>Programmatic check guidance (not yet enforced)<textarea rows={5} value={deterministicChecks} onChange={(event) => setDeterministicChecks(event.target.value)} /></label>
-            <label>Evidence guidance (not yet enforced)<textarea rows={5} value={evidenceRequirements} onChange={(event) => setEvidenceRequirements(event.target.value)} /></label>
+            <label>Programmatic checks<textarea rows={5} value={deterministicChecks} onChange={(event) => setDeterministicChecks(event.target.value)} /></label>
+            <label>Required evidence<textarea rows={5} value={evidenceRequirements} onChange={(event) => setEvidenceRequirements(event.target.value)} /></label>
           </div>
+          <p>One expression per line: transcript_present, action_trace_present, final_state_present, final_state_complete, tool_succeeded:exact_tool_name, or transcript_contains:literal text. These inspect recorded evidence, not semantic meaning. Required evidence: transcript, action_trace, final_state, vcon, or final_state_or_action_trace. Unsupported entries and missing evidence block verification.</p>
           <label>Judge rubric<textarea rows={4} value={judgeRubric} onChange={(event) => setJudgeRubric(event.target.value)} /></label>
           <section className="spec-assert-options" aria-labelledby="assert-options-title">
             <div>

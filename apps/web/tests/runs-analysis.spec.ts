@@ -137,7 +137,7 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
   await expect(page.getByLabel('Word error rate summary')).toContainText('1');
   const perTurnWer = page.getByLabel('Per-turn word error rates');
   await expect(perTurnWer).toContainText('Target → tester ASR · 17%');
-  await expect(perTurnWer).toContainText('S 0 D 1 I 0');
+  await expect(perTurnWer).toContainText(/S 0\s*D 1\s*I 0/);
   await expect(perTurnWer.locator('.wer-turn-card')).toHaveCount(2);
   await expect(perTurnWer.getByText('LLM source')).toHaveCount(2);
   await expect(perTurnWer.getByText('ASR transcript')).toHaveCount(2);
@@ -145,10 +145,8 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
   await expect(page.getByLabel('Resolution verification status')).toContainText('Verified');
   await expect(page.getByLabel('Resolution evidence details')).toContainText('91/100');
   await expect(page.getByLabel('Resolution evidence details')).toContainText('Complete');
-  await expect(page.getByText('Automatic rule-based evaluation', { exact: true })).toHaveAttribute(
-    'title',
-    'Scores the captured transcript and final state against the scenario’s required and forbidden rules; no LLM judge is used.',
-  );
+  await page.locator('.evaluation-basis-help').focus();
+  await expect(page.getByRole('tooltip')).toContainText('no LLM assigns this score');
   await expect(page.getByLabel('Two-agent conversation timeline')).toBeVisible();
   await expect(page.getByLabel('Conversation turn sequence')).toContainText('I can help you with that.');
   await expect(page.getByLabel('Transcript')).toContainText('I want to cancel today.');
@@ -2306,4 +2304,25 @@ test('completed replay switches from listener-token audio to owner-scoped audio'
   ).__playedVoiceUrls);
   expect(playedUrls.every((url) => url.includes('/api/execution/runs/exec-listener-replay/'))).toBe(true);
   expect(playedUrls.some((url) => url.includes('/api/execution/listeners/'))).toBe(false);
+});
+
+test('published design results show failures, unsupported entries and exact evidence positions', async ({ page }) => {
+  const conversation = { ...runFixture.conversations[0], verdict: 'needs_review',
+    evaluation_findings: {
+      behavior_results: [{ id: 'policy', label: 'No payments', status: 'insufficient_evidence', reason: 'Semantic review required.', citations: [] }],
+      programmatic_check_results: [
+        { id: 'done', label: 'final_state_complete', status: 'fail', reason: 'Final state explicitly reports complete=false.', citations: [{ source: 'final_state', path: '$.complete', text: 'False' }] },
+        { id: 'unsupported', label: 'Verify all policy', status: 'insufficient_evidence', supported: false, reason: 'Unsupported check.', citations: [] },
+      ],
+      evidence_requirement_results: [{ id: 'evidence', label: 'transcript', status: 'pass', reason: 'Artifact supplied.', citations: [{ source: 'transcript', path: 'lines[0]', text: 'Caller: I want to cancel today.' }] }],
+    },
+  };
+  await page.route('**/api/execution/runs/exec-demo123**', (route) => route.fulfill({ json: { ...runFixture, conversations: [conversation] } }));
+  await page.goto('/runs/exec-demo123');
+  const results = page.getByRole('region', { name: 'Evaluation design results' });
+  await expect(results).toContainText('No payments');
+  await expect(results).toContainText('Insufficient evidence');
+  await expect(results).toContainText('Unsupported');
+  await expect(results).toContainText('final_state $.complete');
+  await expect(results).toContainText('transcript lines[0]');
 });

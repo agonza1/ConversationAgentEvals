@@ -76,6 +76,7 @@ ALLOWED_FIXTURE_ROOTS = (
     REPO_ROOT / 'artifacts',
 )
 EVALUATION_FINDING_KEYS = (
+    'behavior_results', 'programmatic_check_results', 'evidence_requirement_results', 'design_enforcement',
     'verdict',
     'overall_score',
     'required_action_score',

@@ -186,8 +186,8 @@ test('evaluation guidance labels distinguish suggestions from enforced runtime c
   await page.goto('/specs/new?api_base=http%3A%2F%2Fapi.example.test');
   await expect(page.getByLabel('Scenario guidance')).toBeVisible();
   await expect(page.getByLabel('Scenario examples')).toBeVisible();
-  await expect(page.getByLabel('Programmatic check guidance (not yet enforced)')).toBeVisible();
-  await expect(page.getByLabel('Evidence guidance (not yet enforced)')).toBeVisible();
+  await expect(page.getByLabel('Programmatic checks')).toBeVisible();
+  await expect(page.getByLabel('Required evidence')).toBeVisible();
   await expect(page.getByLabel('Advanced ASSERT preview and validation')).toBeVisible();
   await expect(page.getByRole('link', { name: 'Evaluation design' })).toHaveAttribute('aria-current', 'page');
 });

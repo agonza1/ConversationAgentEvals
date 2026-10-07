@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiAwareLink } from './ApiAwareLink';
 import { EvidenceTimeline } from './EvidenceTimeline';
+import { DesignResults } from './DesignResults';
 import { LiveRunFeedback, type LiveRunEvent } from './LiveRunFeedback';
 import { apiErrorMessage } from '@/lib/apiError';
 import { listProductProjects, type ProductProjectOption } from '@/lib/execution';
@@ -5638,6 +5639,7 @@ export function BenchmarkRunner({
             </section>
           ) : null}
           <EvidenceTimeline vcon={report.ietf_vcon_export} />
+          <DesignResults findings={report as unknown as Record<string, unknown>} />
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
             <ReportList title="Failure categories" items={report.failure_categories} empty="No failure categories reported." />

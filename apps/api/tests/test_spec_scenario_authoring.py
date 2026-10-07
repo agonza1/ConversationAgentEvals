@@ -270,6 +270,7 @@ def test_published_rules_do_not_claim_semantic_verification(monkeypatch):
 
 
 def execute(case, payload):
+    payload = {'transcript': 'Agent: Recorded conversation for focused trace evaluation.', **payload}
     return benchmark_service._execute_assert_contract(
         payload=payload, transcript=payload.get('transcript', ''), suite={'id': case['suite_id'], 'name': 'Housing'}, scenario=case,
         evidence_artifacts={}, scenario_contract=benchmark_service._scenario_contract(case), suite_contract_manifest_sha256='test',
@@ -432,3 +433,80 @@ def test_id_linked_action_evidence_survives_public_run_and_vcon_replay(tmp_path,
     assert replay['completed_actions'] == report['completed_actions']
     assert replay['missing_actions'] == []
     assert replay['scenario_contract']['action_checklist'][0]['id'] == 'options'
+
+
+def test_approved_design_enforcement_survives_public_run_export_and_replay(tmp_path, monkeypatch):
+    from app.services import assert_artifact_store
+    monkeypatch.setattr(assert_artifact_store, 'ARTIFACT_ROOT', tmp_path / 'assert-runs')
+    spec = design()
+    spec['deterministic_checks'] = [{'id': 'done', 'label': 'final_state_complete'},
+                                    {'id': 'lookup', 'label': 'tool_succeeded:lookup'}]
+    spec['evidence_requirements'] = ['transcript', 'action_trace', 'final_state']
+    suite_id = publish(save(spec)).json()['suite_id']
+    payload = {'suite_id': suite_id, 'scenario_id': 'payment-pressure', 'transcript': 'Agent: No payments accepted.',
+               'action_trace': [{'name': 'lookup', 'status': 'completed'}], 'final_state': {'complete': False}}
+    report = benchmark_service.run_scenario(payload)
+    assert report['verdict'] == 'fail'
+    assert report['overall_score'] == 0
+    assert report['design_enforcement']['blocked']
+    assert report['programmatic_check_results'][0]['status'] == 'fail'
+    assert report['scenario_contract']['deterministic_checks'][0]['id'] == 'done'
+    replay = benchmark_service.run_scenario({'vcon': report['ietf_vcon_export']})
+    assert replay['programmatic_check_results'] == report['programmatic_check_results']
+    assert replay['behavior_results'] == report['behavior_results']
+    payload['final_state'] = {'complete': True}
+    clean = benchmark_service.run_scenario(payload)
+    assert clean['design_enforcement']['blocked'] is False
+    assert clean['verdict'] == 'needs_review'  # Passing literal checks cannot prove semantic policy.
+    missing = benchmark_service.run_scenario({**payload, 'action_trace': []})
+    assert missing['overall_score'] is None
+    assert missing['verdict'] == 'needs_review'
+    assert missing['design_enforcement']['blocked']
+
+
+def test_unsupported_checks_are_visible_and_block_verification(tmp_path, monkeypatch):
+    from app.services import assert_artifact_store
+    monkeypatch.setattr(assert_artifact_store, 'ARTIFACT_ROOT', tmp_path / 'assert-runs')
+    spec = design(); spec['deterministic_checks'] = [{'id': 'prose', 'label': 'Make sure everything is fine'}]
+    preview = client.post('/api/specs/preview', json={'spec': spec}).json()
+    assert any('Unsupported check' in warning['message'] for warning in preview['warnings'])
+    suite_id = publish(save(spec)).json()['suite_id']
+    report = benchmark_service.run_scenario({'suite_id': suite_id, 'scenario_id': 'payment-pressure', 'transcript': 'Agent: Hello'})
+    assert report['programmatic_check_results'][0]['supported'] is False
+    assert report['design_enforcement']['blocked']
+
+
+def test_published_design_mock_execution_surfaces_cited_checks(tmp_path, monkeypatch):
+    from app.services import assert_artifact_store
+    from app.schemas.execution import ExecutionRunCreateRequest
+    from app.services.execution_runner import _execute_text_callable, _compact_evaluation_findings
+    monkeypatch.setattr(assert_artifact_store, 'ARTIFACT_ROOT', tmp_path / 'assert-runs')
+    spec = design()
+    spec['deterministic_checks'] = [{'id': 'transcript', 'label': 'transcript_present'}, {'id': 'final', 'label': 'final_state_complete'}]
+    spec['evidence_requirements'] = ['transcript', 'final_state']
+    suite_id = publish(save(spec)).json()['suite_id']
+    execution = _execute_text_callable(suite_id, 'payment-pressure', ExecutionRunCreateRequest(
+        suite_id=suite_id, scenario_ids=['payment-pressure'], text_callable='mock_agent', evaluate=True))
+    findings = _compact_evaluation_findings(execution['evaluation_report'])
+    assert findings['programmatic_check_results'][0]['status'] == 'pass'
+    assert findings['programmatic_check_results'][0]['citations'][0]['source'] == 'transcript'
+    assert execution['transcript'].startswith('User: Can I pay you a deposit')
+    assert findings['behavior_results'][0]['id'] == 'payment'
+
+
+def test_published_design_scores_recorded_voice_fixture_without_fake_semantic_pass(tmp_path, monkeypatch):
+    from app.services import assert_artifact_store
+    from app.schemas.execution import ExecutionRunCreateRequest
+    from app.services.execution_runner import _evidence_from_offline_fixture
+    monkeypatch.setattr(assert_artifact_store, 'ARTIFACT_ROOT', tmp_path / 'assert-runs')
+    # Normalize actual checked-in voice fixture evidence, then score it against this design.
+    voice = _evidence_from_offline_fixture('call-center-voice-ai', 'cancellation-rescue', ExecutionRunCreateRequest(), evaluate=False)
+    spec = design(); spec['deterministic_checks'] = [{'id': 'audio-transcript', 'label': 'transcript_present'}]
+    spec['evidence_requirements'] = ['transcript', 'action_trace', 'final_state']
+    suite_id = publish(save(spec)).json()['suite_id']
+    report = benchmark_service.run_scenario({'suite_id': suite_id, 'scenario_id': 'payment-pressure',
+        'transcript': voice['transcript'], 'action_trace': voice['action_trace'], 'final_state': voice['final_state']})
+    assert report['programmatic_check_results'][0]['status'] == 'pass'
+    assert all(row['status'] == 'pass' for row in report['evidence_requirement_results'])
+    assert report['behavior_results'][0]['status'] == 'insufficient_evidence'
+    assert report['verdict'] == 'needs_review'

@@ -165,7 +165,7 @@ def default_templates() -> list[dict[str, Any]]:
         required_behaviors=[AssertCheck(id='answer-user-request', label='Answers the user request', description='Responds to the core request with a useful next step.')],
         forbidden_behaviors=[AssertCheck(id='invent-policy', label='Does not invent policy', description='Avoids unsupported claims, guarantees, or internal-only promises.')],
         scenario_seeds=['A user asks for a policy-sensitive account change.'],
-        evidence_requirements=['conversation transcript', 'final state or tool trace when tools are used'],
+        evidence_requirements=['transcript'],
     )
     acc = EditableAssertSpec(
         title='Cancellation rescue agent',
@@ -179,7 +179,7 @@ def default_templates() -> list[dict[str, Any]]:
             AssertCheck(id='unauthorized-billing-promise', label='No unauthorized billing promises', description='Does not promise discounts, refunds, or billing changes outside policy.'),
         ],
         scenario_seeds=['Caller wants to cancel after a price increase.', 'Caller is angry about a recent claim denial.'],
-        evidence_requirements=['transcript', 'action trace', 'final state', 'vCon export when available'],
+        evidence_requirements=['transcript', 'action_trace', 'final_state'],
         extensions={
             'agentic_contact_center': {
                 'template': 'cancellation_rescue',
@@ -292,10 +292,16 @@ def validate_spec(spec: EditableAssertSpec) -> SpecValidationResult:
         errors.append(SpecValidationMessage(field='runtime_overrides.max_turns', message='max_turns must be a whole number from 1 through 100.'))
     if isinstance(normalized.extensions.get('agentic_contact_center'), dict):
         warnings.append(SpecValidationMessage(field='extensions.agentic_contact_center', message='ACC data is preserved in the CAE editor context; CAE does not require ACC to compile or validate this ASSERT config.', severity='warning'))
-    if normalized.deterministic_checks:
-        warnings.append(SpecValidationMessage(field='deterministic_checks', message='Programmatic checks are preserved as CAE design metadata but are not enforced by this foundation flow.', severity='warning'))
-    if normalized.evidence_requirements:
-        warnings.append(SpecValidationMessage(field='evidence_requirements', message='Evidence requirements are preserved as CAE design metadata but are not enforced by this foundation flow.', severity='warning'))
+    from app.services.design_enforcement import check_expression, evidence_kind
+    check_ids = [check.id for check in normalized.deterministic_checks]
+    if any(not identifier.strip() for identifier in check_ids) or len(set(check_ids)) != len(check_ids):
+        errors.append(SpecValidationMessage(field='deterministic_checks', message='Programmatic check IDs must be non-empty and unique.'))
+    for check in normalized.deterministic_checks:
+        if check_expression(check.label) is None:
+            warnings.append(SpecValidationMessage(field='deterministic_checks', message=f'Unsupported check {check.label!r}: blocks verification until replaced with a supported expression.', severity='warning'))
+    for requirement in normalized.evidence_requirements:
+        if evidence_kind(requirement) is None:
+            warnings.append(SpecValidationMessage(field='evidence_requirements', message=f'Unsupported evidence requirement {requirement!r}: blocks verification until replaced with a supported token.', severity='warning'))
     return SpecValidationResult(valid=not errors, errors=errors, warnings=warnings, normalized=normalized)
 
 
@@ -639,6 +645,7 @@ def _generation_prompt(*, title: str, role: str, objective: str) -> str:
         'scenarios is an array of objects with id, title, persona, description, steps (an array of strings), and expected_outcome.',
         'judges must contain exactly one object with id, name, kind="semantic", rubric, weight=1, provider="configured-default", and model=null.',
         'Produce concrete, auditable checks and 2-4 realistic scenarios. Do not claim any content is already approved.',
+        'Programmatic check labels must be explicit expressions: transcript_present, action_trace_present, final_state_present, final_state_complete, tool_succeeded:<exact tool name>, or transcript_contains:<literal text>. Do not output code or free-form programmatic guidance.',
         f'Title: {title}',
         f'Agent role: {role}',
         f'Objective: {objective}',

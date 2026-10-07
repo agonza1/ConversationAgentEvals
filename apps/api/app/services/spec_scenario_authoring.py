@@ -176,6 +176,7 @@ def refresh_published_catalog() -> None:
                     'caller_steps': case.steps, 'requirements': spec.requirements,
                     'permissible_behavior': spec.permissible_behavior,
                     'evidence_requirements': spec.evidence_requirements,
+                    'deterministic_checks': [item.model_dump(mode='json') for item in spec.deterministic_checks],
                     'generation_provenance': spec.generation_provenance,
                     'behavior_preset': spec.behavior_preset, 'scenario_preset': spec.scenario_preset,
                 })
