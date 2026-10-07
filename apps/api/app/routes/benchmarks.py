@@ -107,7 +107,8 @@ def sample_vcon_evidence(suite_id: str, scenario_id: str):
 @router.get('')
 @router.get('/suites')
 def list_benchmark_suites():
-    return [get_suite(suite['id']) for suite in list_suites()]
+    # list_suites refreshes the published catalog once for this request.
+    return [get_suite(suite['id'], refresh=False) for suite in list_suites()]
 
 
 @router.get('/runs')

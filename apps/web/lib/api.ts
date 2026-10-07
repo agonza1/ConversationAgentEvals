@@ -194,6 +194,10 @@ export async function generateEditableAssertDraft(payload: {
   title: string;
   role: string;
   objective: string;
+  requirements?: string;
+  permissible_behavior?: string;
+  behavior_preset?: string | null;
+  scenario_preset?: string | null;
 }): Promise<EditableAssertGeneratedDraft> {
   const response = await fetch(`${getApiBase()}/api/specs/generate`, {
     method: 'POST',
@@ -201,6 +205,35 @@ export async function generateEditableAssertDraft(payload: {
     body: JSON.stringify(payload),
   });
   return handleResponse<EditableAssertGeneratedDraft>(response);
+}
+
+export async function listAssertScenarioContexts(): Promise<AssertLibraryPreset[]> {
+  const response = await fetch(`${getApiBase()}/api/specs/assert-library/scenarios`, { cache: 'no-store' });
+  return (await handleResponse<{ scenarios: AssertLibraryPreset[] }>(response)).scenarios;
+}
+
+export async function getEditableAssertSpec(specId: string, userId: string, projectId: string, version?: number): Promise<SavedEditableAssertSpec> {
+  const query = new URLSearchParams({ user_id: userId, project_id: projectId });
+  if (version) query.set('version', String(version));
+  return handleResponse(await fetch(`${getApiBase()}/api/specs/${encodeURIComponent(specId)}?${query}`, { cache: 'no-store' }));
+}
+
+export async function generateEditableAssertCases(payload: {
+  spec: EditableAssertSpec; behavior_ids: string[]; samples_per_behavior: number;
+}): Promise<{ scenarios: EditableAssertSpec['scenarios']; provider: string; model: string; engine: string }> {
+  const response = await fetch(`${getApiBase()}/api/specs/generate-cases`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  return handleResponse(response);
+}
+
+export async function publishEditableAssertScenarios(specId: string, payload: {
+  user_id: string; project_id: string; version: number; confirm: boolean;
+}): Promise<{ suite_id: string; version: number; scenario_ids: string[]; scenario_count: number; note: string }> {
+  const response = await fetch(`${getApiBase()}/api/specs/${encodeURIComponent(specId)}/publish-scenarios`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  return handleResponse(response);
 }
 
 export async function previewEditableAssertSpec(spec: EditableAssertSpec): Promise<EditableAssertPreview> {

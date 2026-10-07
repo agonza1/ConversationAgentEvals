@@ -14,6 +14,7 @@ from app.integrations.assert_runtime import (
     behavior_presets,
     judge_preset,
     judge_presets,
+    scenario_presets,
 )
 
 from app.services.editable_assert_spec import (
@@ -29,6 +30,7 @@ from app.services.editable_assert_spec import (
     save_spec,
     validate_spec,
 )
+from app.services.spec_scenario_authoring import generate_case_drafts, publish_scenarios
 
 
 router = APIRouter(prefix='/api/specs', tags=['specs'])
@@ -38,6 +40,10 @@ class SpecDraftGenerateRequest(BaseModel):
     title: str = ''
     role: str = ''
     objective: str = ''
+    requirements: str = Field(default='', max_length=30000)
+    permissible_behavior: str = Field(default='', max_length=10000)
+    behavior_preset: str | None = None
+    scenario_preset: str | None = None
 
 
 class SpecEnvelope(BaseModel):
@@ -54,6 +60,19 @@ class SpecDuplicateRequest(BaseModel):
     user_id: str = Field(min_length=1)
     project_id: str = Field(default='default', min_length=1)
     new_id: str = Field(min_length=1)
+
+
+class SpecCaseGenerateRequest(BaseModel):
+    spec: EditableAssertSpec
+    behavior_ids: list[str] = Field(min_length=1, max_length=20)
+    samples_per_behavior: int = Field(default=3, ge=1, le=5)
+
+
+class SpecScenarioPublishRequest(BaseModel):
+    user_id: str = Field(min_length=1)
+    project_id: str = Field(min_length=1)
+    version: int = Field(ge=1)
+    confirm: bool = False
 
 
 @router.get('/templates')
@@ -97,11 +116,21 @@ def get_assert_judge_preset(name: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.get('/assert-library/scenarios')
+def list_assert_scenario_contexts():
+    try:
+        return {'assert_version': EXPECTED_ASSERT_VERSION, 'scenarios': scenario_presets()}
+    except AssertRuntimeUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.post('/generate')
 def generate_editable_spec_draft(payload: SpecDraftGenerateRequest):
     try:
-        return generate_spec_draft(title=payload.title, role=payload.role, objective=payload.objective)
+        return generate_spec_draft(**payload.model_dump())
     except SpecGenerationUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except AssertRuntimeUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except SpecGenerationFailed as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -112,6 +141,31 @@ def generate_editable_spec_draft(payload: SpecDraftGenerateRequest):
 @router.post('/validate')
 def validate_editable_spec(payload: SpecEnvelope):
     return validate_spec(payload.spec)
+
+
+@router.post('/generate-cases')
+def generate_reviewable_cases(payload: SpecCaseGenerateRequest):
+    try:
+        return generate_case_drafts(payload.spec, behavior_ids=payload.behavior_ids,
+                                    samples_per_behavior=payload.samples_per_behavior)
+    except SpecGenerationUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except AssertRuntimeUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except SpecGenerationFailed as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post('/{spec_id}/publish-scenarios')
+def publish_reviewed_scenarios(spec_id: str, payload: SpecScenarioPublishRequest, db: Session = Depends(get_db)):
+    try:
+        return publish_scenarios(db, spec_id=spec_id, **payload.model_dump())
+    except SpecProjectAmbiguous as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post('/preview')
@@ -130,9 +184,9 @@ def create_editable_spec(payload: SpecSaveRequest, db: Session = Depends(get_db)
 
 
 @router.get('/{spec_id}')
-def get_editable_spec(spec_id: str, user_id: str = Query(min_length=1), project_id: str = Query(default='default', min_length=1), db: Session = Depends(get_db)):
+def get_editable_spec(spec_id: str, user_id: str = Query(min_length=1), project_id: str = Query(default='default', min_length=1), version: int | None = Query(default=None, ge=1), db: Session = Depends(get_db)):
     try:
-        saved = get_spec(db, spec_id, user_id=user_id, project_id=project_id)
+        saved = get_spec(db, spec_id, user_id=user_id, project_id=project_id, version=version)
     except SpecProjectAmbiguous as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:

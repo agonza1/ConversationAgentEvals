@@ -139,6 +139,15 @@ class EditableAssertSpecVersion(Base):
     project = relationship('ProductProject', back_populates='editable_assert_spec_versions')
 
 
+class PublishedAssertScenarioSet(Base):
+    """A publication pointer, never a second copy of policy or test cases."""
+    __tablename__ = 'published_assert_scenario_sets'
+
+    suite_id = Column(String, primary_key=True)
+    spec_version_id = Column(String, ForeignKey('editable_assert_spec_versions.id', ondelete='CASCADE'), nullable=False, unique=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class ProductAuditEvent(Base):
     __tablename__ = 'product_audit_events'
 

@@ -16,6 +16,9 @@ There is one product and one supported evaluation contract. Users can either run
 
 ## What this repository adds
 
+For requirements → reviewed behaviors → version-linked runnable cases, see
+[spec-driven scenario authoring](docs/spec-driven-scenario-authoring.md).
+
 - Hosted projects, suites, runs, reruns, comparisons, exports, and audit views.
 - Evidence normalization for transcripts, conversations, CAE vCon-compatible records, portable IETF vCon `draft-ietf-vcon-vcon-core-04` (vCon format `0.4.0`) exports, tool/action traces, final-state snapshots, audio pointers, and voice metadata.
 - Platform-owned authentication, project lineage, retention, labels, retries, cancellation, quotas, billing hooks, and cost limits.

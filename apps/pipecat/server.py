@@ -571,6 +571,16 @@ if PIPECAT_RUNTIME_AVAILABLE:
             if type(frame) is not TextFrame:
                 await self.push_frame(frame, direction)
                 return
+            if self.turn_index == 1 and self.scenario.get('evaluation_spec_ref') and self.scenario.get('caller_steps'):
+                # The reviewed opener is literal caller speech, not another model rewrite.
+                self.text = str(self.scenario['caller_steps'][0]).strip()
+                self.ttft_ms = None
+                self.provider_ttft_ms = None
+                self.total_ms = 0.0
+                await self.push_frame(_TesterLlmStartFrame(), direction)
+                await self.push_frame(_TesterSpeechFrame(self.text), direction)
+                await self.push_frame(_TesterLlmEndFrame(), direction)
+                return
             history = '\n'.join(
                 f'{item.get("speaker")}: {item.get("text")}'
                 for item in self.history
@@ -583,6 +593,7 @@ if PIPECAT_RUNTIME_AVAILABLE:
                 f'Scenario title: {self.scenario.get("title") or self.scenario.get("id")}\n'
                 f'Caller persona: {self.scenario.get("persona") or "Not provided."}\n'
                 f'Caller goal: {self.scenario.get("goal") or "Not provided."}\n'
+                f'Caller-side case instructions (adapt naturally): {json.dumps(self.scenario.get("caller_steps") or [], ensure_ascii=False)}\n'
                 f'Required behaviors to probe: {", ".join(map(str, self.scenario.get("required_actions") or []))}\n'
                 f'Forbidden behaviors to challenge: {", ".join(map(str, self.scenario.get("forbidden_actions") or []))}\n'
                 f'Expected final state: {self.scenario.get("expected_final_state") or "Not provided."}\n'
@@ -1747,6 +1758,7 @@ async def _public_pipecat_duplex_events(
             f'Respond naturally as {persona} to move the conversation toward this caller goal: '
             f'{goal} Supply requested caller-side information when appropriate, but do not claim '
             'to perform verification, updates, bookings, or other target-agent actions.'
+            f' Caller-side case instructions: {json.dumps(payload.scenario.get("caller_steps") or [], ensure_ascii=False)}'
         )
         # History must match the transcript being evaluated. The public target's
         # RTVI ASR receipt is authoritative when it differs from tester source

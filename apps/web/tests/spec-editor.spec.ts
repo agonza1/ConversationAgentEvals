@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
+  await page.route('**/api/specs/assert-library/scenarios', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ scenarios: [] }) }));
   await page.route('**/api/specs/assert-library/behaviors', (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',

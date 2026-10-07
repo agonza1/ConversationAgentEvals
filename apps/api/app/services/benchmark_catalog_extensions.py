@@ -184,9 +184,9 @@ def register_builtin_benchmark_extensions() -> None:
             summary['total_scenario_count'] = int(summary.get('scenario_count') or 0) + 1
         return summaries
 
-    def extended_get_suite(suite_id: str) -> dict[str, Any] | None:
+    def extended_get_suite(suite_id: str, *, refresh: bool = True) -> dict[str, Any] | None:
         assert _ORIGINAL_GET_SUITE is not None
-        value = _ORIGINAL_GET_SUITE(suite_id)
+        value = _ORIGINAL_GET_SUITE(suite_id, refresh=refresh)
         if value is None or suite_id != suite['id']:
             return value
         value['optional_scenarios'] = [_optional_scenario_with_starter_evidence(scenario)]

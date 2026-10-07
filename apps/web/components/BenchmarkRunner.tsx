@@ -61,12 +61,12 @@ interface BenchmarkReport {
   scenario_title?: string;
   suite_contract_manifest_sha256?: string;
   scenario_contract_sha256?: string;
-  score?: number;
-  overall_score?: number;
+  score?: number | null;
+  overall_score?: number | null;
   scoring_mode?: 'transcript' | 'agentic' | string;
   score_components?: Record<string, number>;
   task_completion_score?: number | null;
-  required_action_score?: number;
+  required_action_score?: number | null;
   rubric_score?: number;
   forbidden_action_score?: number | null;
   evidence_citations?: Array<string | JsonRecord>;
@@ -180,7 +180,7 @@ interface RegressionDelta {
 }
 
 interface SavedRunArtifacts {
-  overall_score?: number;
+  overall_score?: number | null;
   transcript_lines?: number;
   has_transcript?: boolean;
   evidence_items?: number;
@@ -576,7 +576,7 @@ interface BenchmarkSuiteScenarioSummary {
   scenario_id?: string;
   run_id?: string;
   status?: string;
-  overall_score?: number;
+  overall_score?: number | null;
   failure_categories?: string[];
 }
 
@@ -587,7 +587,7 @@ interface SuiteReliabilityMetrics {
   pass_at_1?: number;
   pass_at_k?: number;
   pass_all_k?: number;
-  accuracy_score?: number;
+  accuracy_score?: number | null;
   experience_signal_coverage?: number;
   average_turn_count?: number;
   interruption_signal_count?: number;
@@ -612,7 +612,7 @@ interface BenchmarkSuiteRunRecord {
   scenario_count: number;
   pass_count: number;
   needs_review_count: number;
-  average_score: number;
+  average_score: number | null;
   created_at?: string | null;
   updated_at?: string | null;
   completed_at?: string | null;
@@ -624,7 +624,7 @@ interface BenchmarkSuiteRunRecord {
     scenario_count?: number;
     pass_count?: number;
     needs_review_count?: number;
-    average_score?: number;
+    average_score?: number | null;
     verdict?: string;
     run_metadata?: RunMetadata;
     reliability_metrics?: SuiteReliabilityMetrics;
@@ -649,7 +649,7 @@ interface BenchmarkSuiteSimulationResponse {
   scenario_count: number;
   pass_count: number;
   needs_review_count: number;
-  average_score: number;
+  average_score: number | null;
   verdict: string;
   run_metadata?: RunMetadata;
   reliability_metrics?: SuiteReliabilityMetrics;
@@ -1406,8 +1406,8 @@ async function listAuditEvents(userId: string, projectId: string) {
   );
 }
 
-function scoreColor(score: number | undefined) {
-  if (score === undefined) return 'var(--muted)';
+function scoreColor(score: number | null | undefined) {
+  if (score == null) return 'var(--muted)';
   if (score >= 80) return 'var(--success-text)';
   if (score >= 60) return '#b45309';
   return 'var(--danger)';
@@ -1943,7 +1943,7 @@ function mergeSuiteRunRecords(
   return mergedRuns;
 }
 
-function formatMetricPercent(value?: number) {
+function formatMetricPercent(value?: number | null) {
   if (typeof value !== 'number' || Number.isNaN(value)) return 'n/a';
   return `${Math.round(value * 100)}%`;
 }
@@ -5259,7 +5259,7 @@ export function BenchmarkRunner({
               <h2 style={{ margin: 0, fontSize: 26 }}>{suiteSimulation.suite_name ?? selectedSuite?.title ?? suiteSimulation.suite_id}</h2>
             </div>
             <div style={{ textAlign: 'right' }}>
-              <strong style={{ display: 'block', fontSize: 28, color: scoreColor(suiteSimulation.average_score) }}>{suiteSimulation.average_score}</strong>
+              <strong style={{ display: 'block', fontSize: 28, color: scoreColor(suiteSimulation.average_score) }}>{suiteSimulation.average_score ?? 'n/a'}</strong>
               <span style={{ color: 'var(--muted)', textTransform: 'capitalize' }}>{suiteSimulation.verdict}</span>
             </div>
           </div>
@@ -5370,7 +5370,7 @@ export function BenchmarkRunner({
                   }}
                 >
                   <span>{run.scenario_title ?? run.benchmark_report.scenario_title ?? scenarioId}</span>
-                  <span>{run.benchmark_report.verdict} / {run.benchmark_report.overall_score}</span>
+                  <span>{run.benchmark_report.verdict} / {run.benchmark_report.overall_score ?? 'n/a'}</span>
                 </button>
               );
             })}

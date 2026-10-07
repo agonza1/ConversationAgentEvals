@@ -535,6 +535,34 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
     assert _AsyncClient.speech_voices == ['af_heart', 'af_bella', 'af_heart', 'af_bella']
 
 
+def test_authored_opener_is_literal_and_followup_instructions_only_reach_tester(monkeypatch):
+    prompts = []
+    frames = []
+    async def fake_completion(**kwargs):
+        prompts.append(kwargs['prompt'])
+    async def record_frame(frame, direction):
+        frames.append(frame)
+    monkeypatch.setattr(server, '_stream_reference_completion', fake_completion)
+    async def check():
+        tester = server._StreamingTesterLlmProcessor(
+            scenario={'title': 'Housing', 'evaluation_spec_ref': {'version': 1},
+                      'caller_steps': ['Can I pay a deposit?', 'If refused, ask for payment policy explanation.']},
+            history=[], max_turn_pairs=3, model_name='fake', client=None,
+        )
+        monkeypatch.setattr(tester, 'push_frame', record_frame)
+        await tester.process_frame(server.TextFrame('Begin'), server.FrameDirection.DOWNSTREAM)
+        assert tester.text == 'Can I pay a deposit?'
+        assert not prompts
+        assert [type(item) for item in frames] == [server._TesterLlmStartFrame, server._TesterSpeechFrame, server._TesterLlmEndFrame]
+        tester.turn_index = 2
+        await tester.process_frame(server.TextFrame('I cannot collect payment.'), server.FrameDirection.DOWNSTREAM)
+        assert 'ask for payment policy explanation' in prompts[-1]
+        target = server._StreamingTargetLlmProcessor([], 'fake', client=None)
+        await target.process_frame(server._TargetTranscriptFrame('Can I pay a deposit?', user_id='caller', timestamp='now'), server.FrameDirection.DOWNSTREAM)
+        assert 'ask for payment policy explanation' not in prompts[-1]
+    asyncio.run(check())
+
+
 def test_reference_duplex_cancels_active_exchange_when_stream_closes(monkeypatch):
     cancelled = asyncio.Event()
 
