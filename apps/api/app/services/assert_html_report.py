@@ -106,7 +106,7 @@ def _sensitive_key(key: Any) -> bool:
             or normalized in {'authorization', 'cookie', 'cookies', 'setcookie', 'setcookies', 'cookiejar', 'passwd',
                               'session', 'sid', 'sessid', 'phpsessid', 'connectsid', 'sessionkey', 'jwt', 'csrf', 'xsrf'}
             or any(part in normalized for part in (
-                'password', 'apikey', 'privatekey', 'secretkey', 'secretaccesskey',
+                'password', 'passphrase', 'passcode', 'apikey', 'privatekey', 'secretkey', 'secretaccesskey',
                 'clientsecret', 'signingkey', 'credential',
             ))
             or normalized.endswith(('secret', 'secrets', 'token', 'tokens', 'auth', 'authorization', 'authentication', 'cookie', 'cookies', 'sessionid'))

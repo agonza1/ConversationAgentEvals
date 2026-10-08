@@ -538,6 +538,26 @@ def test_ordinary_header_record_is_preserved():
     assert _clean({'header': 'Authorization', 'Header': 'Content-Type', 'value': 'Basic SYNTHETIC-DUPLICATE'}) == {}
 
 
+@pytest.mark.parametrize('key', ['passphrase', 'ssh_passphrase', 'keyPassphrase', 'PASS-PHRASE', 'passphrases',
+                                'passcode', 'user_passcode', 'accessPassCode', 'PASS-CODE', 'passcodes'])
+def test_passphrase_and_passcode_fields_cannot_export_bare_values(saved, key):
+    _, conv, review = saved
+    secret = 'SYNTHETIC-CREDENTIAL-PHRASE'
+    evidence = {key: secret, 'serialized': json.dumps({key: secret}),
+                'attributes': [{'key': key, 'value': secret}], 'business_receipt': 'case-fixture'}
+    conv['action_trace'][0]['result'] = evidence
+    conv['final_state']['evidence'] = evidence
+    conv['turns'][0]['text'] = f'Debug {key}="{secret}"'
+    review['judge_result']['provenance']['node_judgments'][0]['evidence'] = evidence
+    resnapshot(saved)
+    original = deepcopy(saved)
+    response = download(saved)
+    assert response.status_code == 200
+    assert secret not in response.text
+    assert 'case-fixture' in response.text
+    assert saved == original
+
+
 @pytest.mark.parametrize('key', ['cookies', 'http_cookies', 'HTTPCookies', 'cookieJar', 'cookiejar'])
 def test_cookie_container_context_is_preserved_before_recursion(saved, key):
     _, conv, review = saved
