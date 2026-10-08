@@ -25,10 +25,10 @@ def validate_saved_review(run: dict[str, Any], conversation: dict[str, Any], rev
             or not isinstance(provenance, dict) or provenance.get('engine') != 'assert'
             or provenance.get('judge_status') != 'ok'):
         raise ValueError('A completed saved ASSERT review is required for export.')
-    for field in ('score_sha256',):
-        digest = provenance.get(field)
+    for field, digest in (('score_sha256', provenance.get('score_sha256')),
+                          ('output_sha256', review.get('output_sha256'))):
         if digest is not None and (not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest)):
-            raise ValueError('Saved ASSERT score provenance is malformed.')
+            raise ValueError(f'Saved ASSERT {field} provenance is malformed.')
     dimensions = provenance.get('dimensions')
     nodes = provenance.get('node_judgments')
     if (not isinstance(dimensions, dict) or not dimensions
@@ -71,8 +71,10 @@ def _sensitive_key(key: Any) -> bool:
 
 def _internal_path_key(key: Any) -> bool:
     normalized = re.sub(r'[^a-z0-9]', '', str(key).casefold())
-    return (normalized.endswith(('path', 'paths')) or normalized == 'artifacts'
-            or bool(re.search(r'(?:artifact|recording|audio|snapshot|inference).*path', normalized)))
+    return (normalized.endswith(('path', 'paths', 'dir', 'dirs', 'directory', 'directories',
+                                 'folder', 'folders', 'filename', 'filenames', 'cwd', 'pwd'))
+            or normalized in {'artifacts', 'outputroot', 'saveroot', 'workspaceroot', 'projectroot', 'reporoot', 'repositoryroot'}
+            or bool(re.search(r'(?:artifact|recording|audio|snapshot|inference).*(?:path|dir|folder|root)', normalized)))
 
 
 def _omitted_key(key: Any) -> bool:

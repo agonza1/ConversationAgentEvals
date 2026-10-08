@@ -157,6 +157,32 @@ def test_malformed_or_missing_result_rejected(saved, change):
     assert download(saved).status_code == 409
 
 
+@pytest.mark.parametrize('field', ['output_sha256', 'score_sha256'])
+@pytest.mark.parametrize('bad', ['invalid', 'a' * 63, 'a' * 65, 'A' * 64, 42, True, {}])
+def test_saved_digest_must_be_sha256_before_rendering(saved, field, bad):
+    review = saved[2]
+    source = review if field == 'output_sha256' else review['judge_result']['provenance']
+    source[field] = bad
+    response = download(saved)
+    assert response.status_code == 409
+    assert field in response.json()['detail']
+
+
+@pytest.mark.parametrize('field', ['output_sha256', 'score_sha256'])
+@pytest.mark.parametrize('missing', [False, True])
+def test_optional_digest_is_unavailable_not_fabricated(saved, field, missing):
+    review = saved[2]
+    source = review if field == 'output_sha256' else review['judge_result']['provenance']
+    if missing:
+        source.pop(field)
+    else:
+        source[field] = None
+    response = download(saved)
+    assert response.status_code == 200
+    label = 'Output SHA-256' if field == 'output_sha256' else 'Score SHA-256'
+    assert f'<dt>{label}</dt><dd>Unavailable</dd>' in response.text
+
+
 def test_selected_historical_review_and_applied_adjudication_are_distinct(saved):
     _, conv, review = saved
     review['status'] = 'superseded'
@@ -378,6 +404,28 @@ def test_path_fields_are_scrubbed_even_without_a_known_internal_root():
     from app.services.assert_html_report import _clean
     assert _clean({'outputPath': 'reports/private score.json', 'case_id': 'case-fixture'}) == {'case_id': 'case-fixture'}
     assert 'private score.json' not in _clean('output_path="reports/private score.json"')
+
+
+@pytest.mark.parametrize('key', ['artifact_dir', 'output_dir', 'save_dir', 'workdir', 'cwd', 'pwd',
+                                'working_directory', 'workspace_dirs', 'outputFolder', 'score_filename',
+                                'output_root', 'repo_root', 'artifact_dir_ref'])
+def test_directory_fields_are_omitted_without_a_known_internal_prefix(saved, key):
+    _, conv, review = saved
+    path = 'runs/private/SYNTHETIC-PRIVATE-REPORT'
+    evidence = {key: path, 'business_receipt': 'case-fixture',
+                'serialized': json.dumps({key: path, 'case_id': 'case-fixture'}),
+                'attributes': [{'key': key, 'value': path}, {'key': 'case_id', 'value': 'case-fixture'}]}
+    conv['action_trace'][0]['result'] = evidence
+    conv['final_state']['evidence'] = evidence
+    conv['turns'][0]['text'] = f'Debug {key}="{path}"'
+    review['judge_result']['provenance']['node_judgments'][0]['evidence'] = evidence
+    resnapshot(saved)
+    original = deepcopy(saved)
+    response = download(saved)
+    assert response.status_code == 200
+    assert 'SYNTHETIC-PRIVATE-REPORT' not in response.text
+    assert 'case-fixture' in response.text
+    assert saved == original
 
 
 @pytest.mark.parametrize('key', ['cookies', 'http_cookies', 'HTTPCookies', 'cookieJar', 'cookiejar'])
