@@ -485,6 +485,33 @@ def test_structured_credential_header_context_is_preserved(saved, header, shape)
     assert saved == original
 
 
+@pytest.mark.parametrize('scheme', ['postgresql', 'postgresql+asyncpg', 'redis', 'amqps', 'mongodb', 'ftp', 'https'])
+def test_connection_uri_userinfo_is_omitted_for_any_scheme(saved, scheme):
+    _, conv, review = saved
+    uri = f'{scheme}://alice:SYNTHETIC-CONNECTION-PASSWORD@db.example/app'
+    evidence = {'database_url': uri, 'business_receipt': 'case-fixture',
+                'serialized': json.dumps({'connection': uri}),
+                'attributes': [{'key': 'connection_uri', 'value': uri}]}
+    conv['action_trace'][0]['result'] = evidence
+    conv['final_state']['evidence'] = evidence
+    conv['turns'][0]['text'] = uri
+    review['judge_result']['rationale'] = uri
+    review['judge_result']['provenance']['node_judgments'][0]['evidence'] = evidence
+    resnapshot(saved)
+    original = deepcopy(saved)
+    response = download(saved)
+    assert response.status_code == 200
+    assert 'SYNTHETIC-CONNECTION-PASSWORD' not in response.text
+    assert f'{scheme}://[credential omitted]@db.example/app' in response.text
+    assert 'case-fixture' in response.text
+    assert saved == original
+
+
+def test_noncredential_uri_is_preserved():
+    from app.services.assert_html_report import _clean
+    assert _clean('postgresql://db.example/app') == 'postgresql://db.example/app'
+
+
 @pytest.mark.parametrize('key', ['cookies', 'http_cookies', 'HTTPCookies', 'cookieJar', 'cookiejar'])
 def test_cookie_container_context_is_preserved_before_recursion(saved, key):
     _, conv, review = saved

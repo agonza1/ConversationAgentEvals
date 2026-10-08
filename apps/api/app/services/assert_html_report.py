@@ -160,9 +160,9 @@ def _clean(value: Any) -> Any:
                 if cleaned != structured:
                     return json.dumps(cleaned, ensure_ascii=False, sort_keys=True)
         value = _PRIVATE_KEY_BLOCK.sub('[private key omitted]', value)
-        value = re.sub(r'(?:file://|local-artifact://)[^\s"<>]+|(?:/Users/|/home/|/private/|/tmp/|/var/|/workspace/|/app/|/opt/|/root/|/mnt/|/Volumes/|/etc/|/srv/)[^\s"<>]+|[A-Za-z]:[/\\][^\s"<>]+', '[internal path omitted]', value)
+        value = re.sub(r'(?:file://|local-artifact://)[^\s"<>]+|(?:/Users/|/home/|/private/|/tmp/|/var/|/workspace/|/app/|/opt/|/root/|/mnt/|/Volumes/|/etc/|/srv/)[^\s"<>]+|(?<![A-Za-z0-9+.-])[A-Za-z]:[/\\][^\s"<>]+', '[internal path omitted]', value)
         value = re.sub(r'''(?i)(?<![\w/\\:.-])(?:[/\\]|(?:\.{1,2}[/\\])*)(?:artifacts|storage)[/\\][^\s"'<>;,]+''', '[internal path omitted]', value)
-        value = re.sub(r'(?i)\b(https?://)[^\s/@]+(?::[^\s/@]*)?@', r'\1[credential omitted]@', value)
+        value = re.sub(r'(?i)\b([a-z][a-z0-9+.-]*://)[^\s/@]+@', r'\1[credential omitted]@', value)
         # Credential headers may contain spaces, commas and quoted parameters.
         # For an unquoted header, scrub the entire rest of its line rather than
         # just the scheme name. A quoted assignment stops at its closing quote.
