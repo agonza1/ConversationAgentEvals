@@ -11,8 +11,37 @@ permissions:
   contents: read
 
 jobs:
+  dependencies:
+    if: github.repository == 'agonza1/ConversationAgentEvals' && github.event.head_commit.message == 'Prepare isolated migration test dependencies'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Export pinned test dependencies
+        run: |
+          python -m pip download -r apps/api/requirements.txt -d /tmp/cae-wheels
+          npm ci
+          tar -czf /tmp/cae-node-modules.tar.gz node_modules apps/web/node_modules 2>/dev/null || test -f /tmp/cae-node-modules.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cae-python-wheels
+          path: /tmp/cae-wheels
+          retention-days: 1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cae-node-modules
+          path: /tmp/cae-node-modules.tar.gz
+          retention-days: 1
   prepare:
-    if: github.repository == 'agonza1/ConversationAgentEvals' && github.ref == 'refs/heads/refactor/single-assert-judge-path'
+    if: github.repository == 'agonza1/ConversationAgentEvals' && github.ref == 'refs/heads/refactor/single-assert-judge-path' && github.event.head_commit.message != 'Prepare isolated migration test dependencies'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -21,13 +50,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Package tracked PR sources
-        run: git archive --format=tar -o /tmp/cae-pr-source.tar HEAD
-      - uses: actions/upload-artifact@v4
-        with:
-          name: cae-pr-source
-          path: /tmp/cae-pr-source.tar
-          retention-days: 1
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -39,31 +61,21 @@ jobs:
         id: apply
         shell: bash
         run: |
-          if [ ! -f scripts/apply-single-judge-migration.py ]; then
-            echo 'Migration script is not present yet; no source files or refs changed.'
-            echo 'ready=false' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
           cp scripts/apply-single-judge-migration.py /tmp/apply-single-judge-migration.py
           python /tmp/apply-single-judge-migration.py --apply
-          echo 'ready=true' >> "$GITHUB_OUTPUT"
       - name: Install dependencies
-        if: steps.apply.outputs.ready == 'true'
         run: |
           npm ci
           python -m venv apps/api/.venv
           apps/api/.venv/bin/python -m pip install -r apps/api/requirements.txt
           apps/api/.venv/bin/python -m pip check
       - name: API regression suite
-        if: steps.apply.outputs.ready == 'true'
         run: PYTHONPATH=apps/api apps/api/.venv/bin/python -m pytest apps/api/tests -q
       - name: Web model tests and build
-        if: steps.apply.outputs.ready == 'true'
         run: |
           node --test apps/web/tests/evidence-timeline.test.cjs apps/web/tests/assert-review-model.test.cjs
           npm run build:web
       - name: Publish tested candidate tree (no ref writes)
-        if: steps.apply.outputs.ready == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPOSITORY: ${{ github.repository }}
