@@ -233,6 +233,8 @@ def test_real_project_membership_revocation_and_ambiguous_key_are_non_disclosing
     'aws_secret_access_key', 'AWS.Secret.Access.Key', 'secret_access_key',
     'db_password', 'password_hash', 'signing_key', 'service_api_key',
     'database_secret_value', 'serviceTokenValue',
+    'auth', 'http_auth', 'httpAuth', 'HTTPAuth', 'basic_auth',
+    'authentication', 'authentication_headers', 'HTTPAuthorization',
 ])
 def test_nested_credential_key_conventions_are_omitted_from_actual_report(saved, key):
     _, conv, review = saved
@@ -277,6 +279,11 @@ def test_credential_text_assignments_are_omitted_from_actual_report(saved, key, 
     ('Proxy-Authorization: NTLM SYNTHETIC-NTLM', ['SYNTHETIC-NTLM']),
     ('proxyAuthorization: Basic SYNTHETIC-PROXY', ['SYNTHETIC-PROXY']),
     ('Proxy.Authorization: Basic SYNTHETIC-DOTTED', ['SYNTHETIC-DOTTED']),
+    ('auth: Basic SYNTHETIC-AUTH', ['SYNTHETIC-AUTH']),
+    ('http_auth: Digest username="SYNTHETIC-HTTP-AUTH", response="SYNTHETIC-HTTP-DIGEST"',
+     ['SYNTHETIC-HTTP-AUTH', 'SYNTHETIC-HTTP-DIGEST']),
+    ('HTTPAuth: Basic SYNTHETIC-ACRONYM', ['SYNTHETIC-ACRONYM']),
+    ('HTTPAuthorization: Basic SYNTHETIC-HTTP-HEADER', ['SYNTHETIC-HTTP-HEADER']),
     ('Cookie: session=SYNTHETIC-SESSION; refresh=SYNTHETIC-REFRESH', ['SYNTHETIC-SESSION', 'SYNTHETIC-REFRESH']),
     ('Set-Cookie: session=SYNTHETIC-SET; Domain=internal.example; HttpOnly', ['SYNTHETIC-SET']),
     ('Authorization: Digest username="SYNTHETIC-USER", nonce="SYNTHETIC-NONCE", response="SYNTHETIC-RESPONSE"',

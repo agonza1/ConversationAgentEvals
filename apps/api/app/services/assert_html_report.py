@@ -57,13 +57,13 @@ def _sensitive_key(key: Any) -> bool:
     words = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', '_', str(key)).casefold()
     parts = set(re.split(r'[^a-z0-9]+', words))
     normalized = re.sub(r'[^a-z0-9]', '', words)
-    return (bool(parts & {'secret', 'password', 'passwd', 'token', 'credential', 'authorization'})
+    return (bool(parts & {'secret', 'password', 'passwd', 'token', 'credential', 'auth', 'authorization', 'authentication'})
             or normalized in {'authorization', 'cookie', 'setcookie', 'passwd'}
             or any(part in normalized for part in (
                 'password', 'apikey', 'privatekey', 'secretkey', 'secretaccesskey',
                 'clientsecret', 'signingkey', 'credential',
             ))
-            or normalized.endswith(('secret', 'token'))
+            or normalized.endswith(('secret', 'token', 'auth', 'authorization', 'authentication'))
             or normalized.startswith(('secret', 'token')))
 
 
@@ -106,7 +106,7 @@ def _clean(value: Any) -> Any:
         # Credential headers may contain spaces, commas and quoted parameters.
         # For an unquoted header, scrub the entire rest of its line rather than
         # just the scheme name. A quoted assignment stops at its closing quote.
-        credential_header = re.compile(r'''(?i)(?<![\w.-])(?P<key>["']?(?:(?:proxy[-_.]?)?authorization|(?:set[-_.]?)?cookie)["']?)[ \t]*[:=][ \t]*(?:"(?:\\[^\r\n]|[^"\\\r\n])*"|'(?:\\[^\r\n]|[^'\\\r\n])*'|[^\r\n]+)''')
+        credential_header = re.compile(r'''(?i)(?<![\w.-])(?P<key>["']?(?:(?:[a-z][a-z0-9_.-]*)?(?:auth|authorization|authentication)|(?:set[-_.]?)?cookie)["']?)[ \t]*[:=][ \t]*(?:"(?:\\[^\r\n]|[^"\\\r\n])*"|'(?:\\[^\r\n]|[^'\\\r\n])*'|[^\r\n]+)''')
         value = credential_header.sub(lambda match: f'{match.group("key")}=[credential omitted]', value)
         value = re.sub(r'(?i)\bBearer\s+[^\s"<>]+', 'Bearer [credential omitted]', value)
         assignments = re.compile(r'''(?P<key>"[^"\r\n]+"|'[^'\r\n]+'|[A-Za-z][A-Za-z0-9_.-]*)\s*[:=]\s*(?P<value>"[^"]*"|'[^']*'|[^\s,;"<>\[]+)''')
