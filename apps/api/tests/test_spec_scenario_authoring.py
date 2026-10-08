@@ -450,6 +450,9 @@ def test_approved_design_enforcement_survives_public_run_export_and_replay(tmp_p
     assert report['run_status'] == 'failed'
     assert report['run_lifecycle']['transitions'][-1]['to'] == 'failed'
     assert report['run_lifecycle']['failed_at']
+    assert assert_artifact_store.platform_metadata_index(report)['completed_at'] == report['run_lifecycle']['failed_at']
+    canonical = assert_artifact_store.load_assert_run_artifact_manifest(report['assert_canonical_artifact']['uri'])
+    assert canonical['platform_metadata_index']['completed_at'] == report['run_lifecycle']['failed_at']
     assert report['overall_score'] == 0
     assert report['design_enforcement']['blocked']
     assert report['programmatic_check_results'][0]['status'] == 'fail'
@@ -491,6 +494,9 @@ def test_failed_design_is_persisted_filtered_and_counted_as_failed(tmp_path, mon
         assert stored_suite['status'] == 'failed'
         assert stored_suite['failed_count'] == 1
         assert stored_suite['needs_review_count'] == 0
+        summary = benchmark_suite_run_store._suite_history_summary([stored_suite])
+        assert summary['total_failed'] == 1
+        assert summary['total_passes'] + summary['total_needs_review'] + summary['total_failed'] == summary['total_scenarios']
 
 
 def test_observed_tool_does_not_unblock_published_design(tmp_path, monkeypatch):

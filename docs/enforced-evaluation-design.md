@@ -39,6 +39,11 @@ are not evaluated by this case. Results include normalized action-event position
 transcript line positions, or final-state paths; missing artifacts have no invented
 citations. Applied semantic pass proposals are rejected while mandatory design
 gates are blocked. Original automatic results and review provenance stay intact.
+For an unblocked published case with no recorded focused violation, a successful
+ASSERT semantic review can propose pass when every judgment reports no violation.
+The user must confirm that proposal; it does not rewrite the automatic result.
+Built-in cases and cases with blocked/missing gates retain their existing review
+semantics. Deterministic failures cannot be promoted by this path.
 
 Validation uses isolated fixtures, not real purchases/payments. Actual local voice
 readiness still depends on ASR/TTS services and provider credentials; fixture-based

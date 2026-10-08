@@ -108,7 +108,7 @@ def platform_metadata_index(report: dict[str, Any], *, manifest_location: str | 
         'artifact_manifest_location': manifest_location or manifest_metadata.get('artifact_manifest_location'),
         'platform_version': manifest_metadata.get('platform_version'),
         'updated_at': lifecycle.get('updated_at'),
-        'completed_at': lifecycle.get('completed_at') or lifecycle.get('needs_review_at'),
+        'completed_at': lifecycle.get('completed_at') or lifecycle.get('needs_review_at') or lifecycle.get('failed_at'),
     }
 
 

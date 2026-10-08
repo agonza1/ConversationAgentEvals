@@ -481,6 +481,7 @@ interface BenchmarkSuiteRunHistoryExport {
     total_scenarios?: number;
     total_passes?: number;
     total_needs_review?: number;
+    total_failed?: number;
     pass_rate?: number | null;
     failure_category_counts?: Record<string, number>;
     top_failure_categories?: Array<{ category: string; count: number }>;
@@ -1797,6 +1798,7 @@ function suiteHistorySummaryFromRuns(runs: BenchmarkSuiteRunRecord[]): Benchmark
     total_scenarios: totalScenarios,
     total_passes: totalPasses,
     total_needs_review: runs.reduce((total, run) => total + Math.max(run.needs_review_count ?? 0, 0), 0),
+    total_failed: runs.reduce((total, run) => total + Math.max(run.failed_count ?? 0, 0), 0),
     pass_rate: totalScenarios ? Math.round((totalPasses / totalScenarios) * 10000) / 100 : null,
     failure_category_counts: failureCategoryCounts,
     top_failure_categories: topFailureCategories(failureCategoryCounts),

@@ -407,6 +407,7 @@ def _suite_history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     total_scenarios = 0
     total_passes = 0
     total_needs_review = 0
+    total_failed = 0
     active_suite_runs = 0
     terminal_suite_runs = 0
     for record in records:
@@ -419,6 +420,7 @@ def _suite_history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         total_scenarios += _non_negative_int(record.get('scenario_count'))
         total_passes += _non_negative_int(record.get('pass_count'))
         total_needs_review += _non_negative_int(record.get('needs_review_count'))
+        total_failed += _non_negative_int(record.get('failed_count'))
         for category in _suite_failure_categories(record):
             failure_category_counts[category] = failure_category_counts.get(category, 0) + 1
 
@@ -438,6 +440,7 @@ def _suite_history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         'total_scenarios': total_scenarios,
         'total_passes': total_passes,
         'total_needs_review': total_needs_review,
+        'total_failed': total_failed,
         'pass_rate': round((total_passes / total_scenarios) * 100, 2) if total_scenarios else None,
         'failure_category_counts': dict(sorted(failure_category_counts.items())),
         'top_failure_categories': _top_failure_categories(failure_category_counts),
