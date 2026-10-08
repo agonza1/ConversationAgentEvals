@@ -59,12 +59,13 @@ def _sensitive_key(key: Any) -> bool:
     normalized = re.sub(r'[^a-z0-9]', '', words)
     return (bool(parts & {'secret', 'secrets', 'password', 'passwords', 'passwd', 'token', 'tokens',
                          'credential', 'credentials', 'auth', 'authorization', 'authentication', 'cookie', 'cookies'})
-            or normalized in {'authorization', 'cookie', 'cookies', 'setcookie', 'setcookies', 'cookiejar', 'passwd'}
+            or normalized in {'authorization', 'cookie', 'cookies', 'setcookie', 'setcookies', 'cookiejar', 'passwd',
+                              'session', 'sid', 'sessid', 'phpsessid', 'connectsid', 'sessionkey', 'jwt', 'csrf', 'xsrf'}
             or any(part in normalized for part in (
                 'password', 'apikey', 'privatekey', 'secretkey', 'secretaccesskey',
                 'clientsecret', 'signingkey', 'credential',
             ))
-            or normalized.endswith(('secret', 'secrets', 'token', 'tokens', 'auth', 'authorization', 'authentication', 'cookie', 'cookies'))
+            or normalized.endswith(('secret', 'secrets', 'token', 'tokens', 'auth', 'authorization', 'authentication', 'cookie', 'cookies', 'sessionid'))
             or normalized.startswith(('secret', 'token')))
 
 

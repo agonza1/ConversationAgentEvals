@@ -48,6 +48,32 @@ def test_current_status_is_safe_exact_identity_and_read_only(saved):
     assert saved==original
 
 
+@pytest.mark.parametrize('collection', ['conversations', 'judge_reviews'])
+@pytest.mark.parametrize('bad', [None, 'invalid', 42, []])
+def test_apply_rejects_malformed_sibling_entries_without_mutation(saved, collection, bad):
+    run, conv, _ = saved
+    parent = run if collection == 'conversations' else conv
+    parent[collection].insert(0, bad)
+    original = deepcopy(saved)
+    response = apply(saved)
+    assert response.status_code == 409
+    assert 'malformed' in response.json()['detail']
+    assert saved == original
+
+
+@pytest.mark.parametrize('entity,field,bad', [(0, 'status', []), (1, 'status', {}),
+                                            (1, 'metrics_summary', 'invalid')])
+def test_malformed_snapshot_input_cannot_verify_or_apply(saved, entity, field, bad):
+    saved[entity][field] = bad
+    original = deepcopy(saved)
+    response = status(saved)
+    assert response.status_code == 200
+    assert response.json()['status'] == 'cannot_verify'
+    assert response.json()['reason_code'] == 'malformed_input'
+    assert apply(saved).status_code == 409
+    assert saved == original
+
+
 @pytest.mark.parametrize('change', ['transcript','tools','final_state','target','scenario'])
 def test_stale_inputs_share_export_and_direct_apply_enforcement(saved,monkeypatch,change):
     run,conv,review=saved

@@ -99,6 +99,34 @@ def test_missing_review_and_wrong_conversation(saved):
     assert response.status_code == 404
 
 
+@pytest.mark.parametrize('collection', ['conversations', 'judge_reviews'])
+@pytest.mark.parametrize('bad', [None, 'invalid', 42, []])
+def test_invalid_entries_do_not_hide_valid_saved_evidence(saved, collection, bad):
+    run, conv, review = saved
+    parent = run if collection == 'conversations' else conv
+    parent[collection].insert(0, bad)
+    original = deepcopy(saved)
+    assert download(saved).status_code == 200
+    response = client.get(f"/api/assert/runs/{run['execution_run_id']}/conversations/{conv['conversation_id']}"
+                          f"/reviews/{review['review_id']}/status", params={'user_id': 'demo-user'})
+    assert response.status_code == 200 and response.json()['status'] == 'current'
+    assert saved == original
+
+
+@pytest.mark.parametrize('collection,expected', [('conversations', 404), ('judge_reviews', 409)])
+@pytest.mark.parametrize('bad', [None, 'invalid', 42, {}, [None, 'invalid', 42]])
+def test_malformed_collections_return_unavailable_without_server_error(saved, collection, expected, bad):
+    run, conv, review = saved
+    parent = run if collection == 'conversations' else conv
+    parent[collection] = bad
+    original = deepcopy(saved)
+    assert download(saved).status_code == expected
+    response = client.get(f"/api/assert/runs/{run['execution_run_id']}/conversations/{conv['conversation_id']}"
+                          f"/reviews/{review['review_id']}/status", params={'user_id': 'demo-user'})
+    assert response.status_code == 404
+    assert saved == original
+
+
 @pytest.mark.parametrize('change', ['turns','action_trace','final_state','verdict','run_target','scenario_contract'])
 def test_stale_input_rejected(saved, monkeypatch, change):
     run, conv, _ = saved
@@ -237,6 +265,8 @@ def test_real_project_membership_revocation_and_ambiguous_key_are_non_disclosing
     'authentication', 'authentication_headers', 'HTTPAuthorization',
     'cookies', 'http_cookies', 'httpCookies', 'HTTPCookies', 'cookie_jar', 'cookieJar',
     'cookiejar', 'set_cookies', 'session_tokens', 'session_secrets',
+    'sessionid', 'session_id', 'SessionID', 'JSESSIONID', 'PHPSESSID', 'ASP.NET_SessionId',
+    'sid', 'session', 'connect.sid', 'session_key', 'jwt', 'csrf', 'xsrf',
 ])
 def test_nested_credential_key_conventions_are_omitted_from_actual_report(saved, key):
     _, conv, review = saved

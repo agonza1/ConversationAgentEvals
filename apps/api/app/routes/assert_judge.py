@@ -25,6 +25,11 @@ from app.services.upstream_assert_judge import (
 router = APIRouter(prefix='/api/assert', tags=['assert-judge'])
 
 
+def _saved_objects(value: object) -> list[dict]:
+    """Disk-loaded evidence may contain invalid collections or list entries."""
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
 class AssertExecutionJudgeRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
@@ -167,11 +172,11 @@ def export_assert_html_report(execution_run_id: str, conversation_id: str, revie
         raise HTTPException(status_code=404, detail='Execution run not found.')
     # Use the same saved run snapshot for evidence and selected review, avoiding
     # a second store read that could mix different revisions during an update.
-    conversation = next((item for item in run.get('conversations') or []
+    conversation = next((item for item in _saved_objects(run.get('conversations'))
                          if item.get('conversation_id') == conversation_id), None)
     if conversation is None:
         raise HTTPException(status_code=404, detail='Conversation not found.')
-    review = next((item for item in conversation.get('judge_reviews') or []
+    review = next((item for item in _saved_objects(conversation.get('judge_reviews'))
                    if item.get('review_id') == review_id), None)
     if review is None:
         raise HTTPException(status_code=409, detail='The selected saved ASSERT review is unavailable.')
@@ -202,12 +207,12 @@ def saved_review_status(execution_run_id: str, conversation_id: str, review_id: 
     if not execution_project_accessible(db=db, user_id=user_id, project_id=project_id,
                                         product_project_id=run.get('product_project_id')):
         raise HTTPException(status_code=404, detail='Execution run not found.')
-    conversation = next((item for item in run.get('conversations') or []
-                         if isinstance(item, dict) and item.get('conversation_id') == conversation_id), None)
+    conversation = next((item for item in _saved_objects(run.get('conversations'))
+                         if item.get('conversation_id') == conversation_id), None)
     if conversation is None:
         raise HTTPException(status_code=404, detail='Conversation not found.')
-    review = next((item for item in conversation.get('judge_reviews') or []
-                   if isinstance(item, dict) and item.get('review_id') == review_id), None)
+    review = next((item for item in _saved_objects(conversation.get('judge_reviews'))
+                   if item.get('review_id') == review_id), None)
     if review is None:
         raise HTTPException(status_code=404, detail='Saved review not found.')
     contract = get_scenario_contract(str(conversation.get('suite_id') or run.get('suite_id') or ''),

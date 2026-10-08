@@ -20,9 +20,12 @@ def saved_assert_review_freshness(run: dict[str, Any], conversation: dict[str, A
                                  review: dict[str, Any], scenario_contract: dict[str, Any] | None) -> dict[str, str]:
     def result(status: str, code: str, message: str) -> dict[str, str]:
         return {'status': status, 'reason_code': code, 'message': message}
-    if run.get('status') not in TERMINAL or conversation.get('status') not in TERMINAL:
-        return result('cannot_verify', 'not_terminal', 'The run and conversation must be terminal before checking this review.')
-    current_snapshot = deterministic_evaluation_snapshot(conversation)
+    try:
+        if run.get('status') not in TERMINAL or conversation.get('status') not in TERMINAL:
+            return result('cannot_verify', 'not_terminal', 'The run and conversation must be terminal before checking this review.')
+        current_snapshot = deterministic_evaluation_snapshot(conversation)
+    except (ValueError, TypeError, AttributeError, KeyError):
+        return result('cannot_verify', 'malformed_input', 'Recorded evidence cannot be verified.')
     if current_snapshot.get('verdict') not in {'pass', 'needs_review', 'fail', 'failed'}:
         return result('cannot_verify', 'missing_verdict', 'The conversation has no saved deterministic verdict.')
     snapshot = review.get('deterministic_snapshot')
