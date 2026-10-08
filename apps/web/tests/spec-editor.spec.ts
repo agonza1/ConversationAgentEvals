@@ -288,6 +288,8 @@ test('save completion does not overwrite edits made while the request is in flig
   });
 
   await page.goto('/specs/new?api_base=http%3A%2F%2Fapi.example.test');
+  // A visible server-rendered button is not proof that its handler has hydrated.
+  await expect(page.getByText('Valid preview', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Save version' }).click();
   await saveStarted;
   await page.getByRole('textbox', { name: 'Objective', exact: true }).fill('This newer objective must survive the older save response.');

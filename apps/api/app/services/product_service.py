@@ -383,6 +383,23 @@ def resolve_execution_product_project_id(
     return projects[0].id if projects else None
 
 
+def execution_project_accessible(db: Session, *, user_id: str, project_id: str,
+                                 product_project_id: str | None) -> bool:
+    """Honor stable bindings while preserving owner-only runs without product rows.
+
+    Callers must check run ownership first. Resolution permits an unbound key with
+    no product project, but rejects a revoked/missing exact binding or ambiguity.
+    """
+    if not project_id:
+        return not product_project_id
+    try:
+        resolve_execution_product_project_id(db=db, user_id=user_id, project_id=project_id,
+                                            product_project_id=product_project_id)
+    except ValueError:
+        return False
+    return True
+
+
 def update_project_settings(db: Session, project_id: str, payload: ProductProjectSettingsRequest) -> ProductProjectResponse | None:
     project = _project_for_settings_editor(db=db, project_id=project_id, user_id=payload.user_id)
     if project is None:

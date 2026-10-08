@@ -175,3 +175,15 @@ Applying the review continues to use CAE's existing confirmation flow and does n
 - OpenTelemetry/OpenInference trace import remains a separate future path. Structured CAE action and final-state evidence are mapped directly for now.
 - Automatic judgment for every run is intentionally not enabled because it incurs model cost and requires provider credentials.
 - The process-local concurrency counter does not coordinate across multiple API replicas; production deployments should add a shared queue or distributed limiter when scaling horizontally.
+
+## Portable HTML report
+
+In a completed conversation's Resolution Evidence panel, select a saved ASSERT review and choose **Export ASSERT HTML report**. The selected review is downloaded; export never starts a judge or applies its proposal. The file works offline and pairs the semantic assessment with transcript and expandable tool/state evidence. It identifies CAE as the renderer, preserves the recorded ASSERT version/model, and displays the deterministic verdict separately from applied adjudication. Audio remains in CAE and citations without reliable anchors are shown as unresolved.
+
+```text
+GET /api/assert/runs/<execution-run-id>/conversations/<conversation-id>/reviews/<review-id>/report.html?user_id=<run-owner>
+```
+
+The endpoint requires ownership and current project visibility before reading conversation evidence. Missing or malformed reviews, active executions and changed judging inputs return 409. Wrong owners and inaccessible/ambiguous projects return a non-disclosing 404. Internal artifact files are never read; known credentials/internal paths are omitted and all dynamic content is escaped.
+
+The [export spec](specs/assert-html-report-export.md) records the saved-data contract and limitations. The shared synthetic fixture lives under `apps/api/tests/fixtures/`, which is included by the API Docker image. Browser validation includes a uniquely seeded saved run, real API download through the normal web proxy, owner isolation and offline opening; it adds no product demo route. Run it against an isolated stack with `PLAYWRIGHT_REUSE_EXISTING_SERVER=0 npx playwright test apps/web/tests/assert-html-report.spec.ts --config apps/web/playwright.config.ts` from the repository root after normal setup; it saves desktop/mobile screenshots and the downloaded report under the ignored `artifacts/assert-html-report-export/` directory.

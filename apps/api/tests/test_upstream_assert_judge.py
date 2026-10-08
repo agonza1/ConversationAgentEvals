@@ -389,6 +389,16 @@ def test_authored_semantic_review_can_propose_and_apply_pass_only_when_unblocked
     }
     if case == 'missing_gates':
         conversation['evaluation_findings'].pop('design_enforcement')
+    stored_record = None
+    if case == 'unblocked':
+        # Production judging receives the persisted, schema-normalized evidence.
+        stored_record = ExecutionRunRecord(**{**run, 'status': 'needs_review',
+            'scenario_ids': [conversation['scenario_id']], 'project_id': 'test',
+            'conversations': [ConversationRecord.model_validate(conversation)],
+            'progress': ExecutionRunProgress(phase='completed', completed_conversations=1, total_conversations=1, percent=100),
+            'created_at': '2026-10-07T00:00:00Z', 'updated_at': '2026-10-07T00:00:00Z'})
+        run = stored_record.model_dump()
+        conversation = run['conversations'][0]
     taxonomy = build_assert_taxonomy(scenario_contract=contract, conversation=conversation)
 
     def writer(score_path, config):
@@ -404,16 +414,14 @@ def test_authored_semantic_review_can_propose_and_apply_pass_only_when_unblocked
     assert response['judge_result']['proposed_evaluation']['verdict'] == expected
     if case != 'unblocked':
         return
+    from app.services import benchmark_service
+    monkeypatch.setattr(benchmark_service, 'get_scenario_contract', lambda *args: contract)
     # Apply the real proposal synthesized above, not a manually manufactured pass.
     monkeypatch.setattr(store, 'RUNS_DIR', tmp_path / 'runs')
     monkeypatch.setattr(store, 'REPO_ROOT', tmp_path)
     store.reset_execution_runs_for_tests()
     try:
-        store.create_execution_run(ExecutionRunRecord(execution_run_id=run['execution_run_id'], status='needs_review',
-            mode=run['mode'], suite_id=run['suite_id'], scenario_ids=[conversation['scenario_id']],
-            user_id=run['user_id'], project_id='test', conversations=[ConversationRecord.model_validate(conversation)],
-            progress=ExecutionRunProgress(phase='completed', completed_conversations=1, total_conversations=1, percent=100),
-            created_at='2026-10-07T00:00:00Z', updated_at='2026-10-07T00:00:00Z'))
+        store.create_execution_run(stored_record)
         review = store.record_judge_review(run['execution_run_id'], conversation['conversation_id'],
                                            user_id=run['user_id'], response=response)
         result = store.apply_judge_review(run['execution_run_id'], conversation['conversation_id'],

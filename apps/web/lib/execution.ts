@@ -627,3 +627,46 @@ export function demoProjectId() {
   window.localStorage.setItem('conversation-evals-demo-project', 'call-center-demo');
   return 'call-center-demo';
 }
+
+
+export async function downloadAssertHtmlReport(payload: {
+  executionRunId: string; conversationId: string; reviewId: string; userId: string;
+}): Promise<void> {
+  const response = await fetch(
+    `${getApiBase()}/api/assert/runs/${encodeURIComponent(payload.executionRunId)}`
+    + `/conversations/${encodeURIComponent(payload.conversationId)}`
+    + `/reviews/${encodeURIComponent(payload.reviewId)}/report.html?user_id=${encodeURIComponent(payload.userId)}`,
+    { cache: 'no-store' },
+  );
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { detail?: string } | null;
+    throw new Error(body?.detail || 'Could not export the saved ASSERT report.');
+  }
+  if (!response.headers.get('content-type')?.startsWith('text/html')) {
+    throw new Error('The server did not return an HTML report.');
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  const filename = response.headers.get('content-disposition')?.match(/filename="([a-zA-Z0-9_.-]+)"/)?.[1];
+  anchor.href = url;
+  const safe = (value: string) => value.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 60) || 'unknown';
+  anchor.download = filename || `assert-${safe(payload.executionRunId)}-${safe(payload.conversationId)}-${safe(payload.reviewId)}.html`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export interface AssertReviewFreshness {
+  execution_run_id: string; conversation_id: string; review_id: string;
+  status: 'current' | 'stale' | 'cannot_verify'; reason_code: string; message: string;
+}
+
+export async function getAssertReviewFreshness(payload: {
+  executionRunId: string; conversationId: string; reviewId: string; userId: string;
+}): Promise<AssertReviewFreshness> {
+  return handleJson(await fetch(`${getApiBase()}/api/assert/runs/${encodeURIComponent(payload.executionRunId)}`
+    + `/conversations/${encodeURIComponent(payload.conversationId)}/reviews/${encodeURIComponent(payload.reviewId)}`
+    + `/status?user_id=${encodeURIComponent(payload.userId)}`, { cache: 'no-store' }));
+}

@@ -25,7 +25,7 @@ from app.schemas.execution import ExecutionRunCreateRequest
 from app.services import execution_run_store
 from app.services.execution_audio import describe_execution_audio_capabilities
 from app.services.execution_runner import execute_execution_run, start_execution_run
-from app.services.product_service import resolve_execution_product_project_id
+from app.services.product_service import resolve_execution_product_project_id, execution_project_accessible
 from app.services.reference_generalist_agent import (
     ReferenceRuntimeError,
     ReferenceRuntimeConfig,
@@ -252,7 +252,24 @@ def apply_execution_judge_review(
     conversation_id: str,
     review_id: str,
     payload: ApplyJudgeReviewRequest,
+    db: Session = Depends(get_db),
 ):
+    run = execution_run_store.get_execution_run(execution_run_id)
+    if run is None or run.get('user_id') != payload.user_id:
+        raise HTTPException(status_code=404, detail='Execution run not found.')
+    project_id = str(run.get('project_id') or '').strip()
+    if not execution_project_accessible(db=db, user_id=payload.user_id, project_id=project_id,
+                                        product_project_id=run.get('product_project_id')):
+        raise HTTPException(status_code=404, detail='Execution run not found.')
+    conversations = run.get('conversations') or []
+    if not isinstance(conversations, list) or any(not isinstance(item, dict) for item in conversations):
+        raise HTTPException(status_code=409, detail='Saved conversation evidence is malformed or unavailable.')
+    conversation = next((item for item in conversations if item.get('conversation_id') == conversation_id), {})
+    if not isinstance(run.get('status'), str) or (conversation and not isinstance(conversation.get('status'), str)):
+        raise HTTPException(status_code=409, detail='Saved evidence status is malformed or unavailable.')
+    reviews = conversation.get('judge_reviews') or []
+    if not isinstance(reviews, list) or any(not isinstance(item, dict) for item in reviews):
+        raise HTTPException(status_code=409, detail='Saved review evidence is malformed or unavailable.')
     try:
         return execution_run_store.apply_judge_review(
             execution_run_id,

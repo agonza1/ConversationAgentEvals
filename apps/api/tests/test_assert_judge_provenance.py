@@ -61,12 +61,20 @@ def test_assert_review_provenance_survives_pending_apply_and_disk_round_trip(
     ))
     execution_run_store.complete_execution_run(run_id, status='needs_review')
 
+    from app.services.benchmark_service import get_scenario_contract
+    from app.services.upstream_assert_judge import assert_judge_input_fingerprint
+    fingerprint = assert_judge_input_fingerprint(
+        run=execution_run_store.get_execution_run(run_id),
+        conversation=execution_run_store.get_conversation(run_id, conversation_id),
+        scenario_contract=get_scenario_contract('call-center-voice-ai', 'refund-policy-boundary'),
+        model='openai/gpt-4.1-mini', judge_n=1,
+    )
     provenance = {
         'engine': 'assert',
         'assert_version': '0.3.0',
         'judge_status': 'ok',
-        'input_fingerprint': 'input-fingerprint',
-        'score_sha256': 'score-sha256',
+        'input_fingerprint': fingerprint,
+        'score_sha256': 'a' * 64,
         'artifacts': {
             'scores': 'artifacts/execution-runs/exec-assert-provenance/assert/scores.jsonl',
             'taxonomy': 'artifacts/execution-runs/exec-assert-provenance/assert/taxonomy.json',

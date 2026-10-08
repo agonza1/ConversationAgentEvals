@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
@@ -9,6 +10,7 @@ from app.services import execution_run_store
 from app.services.benchmark_service import get_scenario_contract
 from app.services.product_service import (
     find_visible_project,
+    execution_project_accessible,
     record_judge_request,
     resolve_execution_product_project_id,
 )
@@ -21,6 +23,11 @@ from app.services.upstream_assert_judge import (
 )
 
 router = APIRouter(prefix='/api/assert', tags=['assert-judge'])
+
+
+def _saved_objects(value: object) -> list[dict]:
+    """Disk-loaded evidence may contain invalid collections or list entries."""
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
 
 
 class AssertExecutionJudgeRequest(BaseModel):
@@ -148,3 +155,67 @@ def judge_execution_conversation(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {**response, 'review_id': review['review_id']}
+
+
+@router.get('/runs/{execution_run_id}/conversations/{conversation_id}/reviews/{review_id}/report.html')
+def export_assert_html_report(execution_run_id: str, conversation_id: str, review_id: str,
+                              user_id: str = Query(min_length=1), db: Session = Depends(get_db)):
+    """Download the specified persisted review without invoking paid judging."""
+    from app.services.assert_html_report import validate_saved_review, render_assert_html_report, report_filename
+
+    run = execution_run_store.get_execution_run(execution_run_id)
+    if run is None or run.get('user_id') != user_id:
+        raise HTTPException(status_code=404, detail='Execution run not found.')
+    project_id = str(run.get('project_id') or '').strip()
+    if not execution_project_accessible(db=db, user_id=user_id, project_id=project_id,
+                                        product_project_id=run.get('product_project_id')):
+        raise HTTPException(status_code=404, detail='Execution run not found.')
+    # Use the same saved run snapshot for evidence and selected review, avoiding
+    # a second store read that could mix different revisions during an update.
+    conversation = next((item for item in _saved_objects(run.get('conversations'))
+                         if item.get('conversation_id') == conversation_id), None)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail='Conversation not found.')
+    review = next((item for item in _saved_objects(conversation.get('judge_reviews'))
+                   if item.get('review_id') == review_id), None)
+    if review is None:
+        raise HTTPException(status_code=409, detail='The selected saved ASSERT review is unavailable.')
+    try:
+        contract = get_scenario_contract(str(conversation.get('suite_id') or run.get('suite_id') or ''),
+                                         str(conversation.get('scenario_id') or ''))
+        provenance = validate_saved_review(run, conversation, review, contract)
+        content = render_assert_html_report(run, conversation, review, provenance)
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc) if isinstance(exc, ValueError)
+                            else 'Saved ASSERT evidence is malformed or unavailable.') from exc
+    filename = report_filename(execution_run_id, conversation_id, review_id)
+    return HTMLResponse(content, headers={
+        'Content-Disposition': f'attachment; filename="{filename}"',
+        'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
+    })
+
+
+@router.get('/runs/{execution_run_id}/conversations/{conversation_id}/reviews/{review_id}/status')
+def saved_review_status(execution_run_id: str, conversation_id: str, review_id: str,
+                        user_id: str = Query(min_length=1), db: Session = Depends(get_db)):
+    from app.services.assert_review_status import saved_assert_review_freshness
+    run = execution_run_store.get_execution_run(execution_run_id)
+    if run is None or run.get('user_id') != user_id:
+        raise HTTPException(status_code=404, detail='Execution run not found.')
+    project_id = str(run.get('project_id') or '').strip()
+    if not execution_project_accessible(db=db, user_id=user_id, project_id=project_id,
+                                        product_project_id=run.get('product_project_id')):
+        raise HTTPException(status_code=404, detail='Execution run not found.')
+    conversation = next((item for item in _saved_objects(run.get('conversations'))
+                         if item.get('conversation_id') == conversation_id), None)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail='Conversation not found.')
+    review = next((item for item in _saved_objects(conversation.get('judge_reviews'))
+                   if item.get('review_id') == review_id), None)
+    if review is None:
+        raise HTTPException(status_code=404, detail='Saved review not found.')
+    contract = get_scenario_contract(str(conversation.get('suite_id') or run.get('suite_id') or ''),
+                                    str(conversation.get('scenario_id') or ''))
+    return JSONResponse({'execution_run_id': execution_run_id, 'conversation_id': conversation_id, 'review_id': review_id,
+            **saved_assert_review_freshness(run, conversation, review, contract)}, headers={'Cache-Control': 'private, no-store'})
