@@ -379,7 +379,7 @@ def test_remote_audio_latency_waits_for_confirmed_speech(monkeypatch):
 def test_public_duplex_reuses_rtvi_text_for_next_tester_turn(monkeypatch):
     observed: dict[str, object] = {}
 
-    async def fake_graph(input_frame, _llm_processor, *, voice):
+    async def fake_graph(input_frame, _llm_processor, *, voice, speed=1.0):
         observed['tester_input_type'] = type(input_frame).__name__
         observed['tester_input_text'] = input_frame.text
         observed['voice'] = voice
@@ -422,6 +422,7 @@ def test_public_duplex_reuses_rtvi_text_for_next_tester_turn(monkeypatch):
                 'persona': 'a patient with a persistent cough',
                 'goal': 'Request a same-day visit.',
                 'required_actions': ['verify account using two identifiers'],
+                'caller_steps': ['Request a same-day visit.', 'If booking is unavailable, ask for an alternative.'],
             },
             max_turn_pairs=3,
             execution_run_id='exec-public-listener',
@@ -438,6 +439,7 @@ def test_public_duplex_reuses_rtvi_text_for_next_tester_turn(monkeypatch):
     request = observed['request']
     assert 'verify account using two identifiers' not in request.act_objective
     assert 'patient with a persistent cough' in request.act_objective
+    assert 'If booking is unavailable, ask for an alternative.' in request.act_objective
     assert request.history == [
         {'speaker': 'Caller', 'text': 'I need a Sunday visit.'},
         {

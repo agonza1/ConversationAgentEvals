@@ -84,16 +84,31 @@ def sample_vcon_evidence(suite_id: str, scenario_id: str):
     scenario = next((s for s in (suite or {}).get('scenarios', []) if s['id'] == scenario_id), None)
     if scenario is None:
         raise HTTPException(status_code=404, detail='Benchmark scenario not found')
+    # Only authored fixtures may gain synthetic links. Never infer links for
+    # arbitrary imported evidence or a custom transcript/action-trace pair.
+    from app.services.benchmark_service import _simulated_action_trace, _simulated_transcript
+    from app.services.benchmark_catalog_extensions import (
+        _cancellation_rescue_sample_action_trace, _cancellation_rescue_sample_transcript,
+    )
+    transcript = scenario.get('sample_transcript') or ''
+    actions = scenario.get('sample_action_trace') or []
+    if (transcript == _simulated_transcript(scenario, 'starter sample agent', False)
+            and actions == _simulated_action_trace(scenario, False)):
+        actions = _simulated_action_trace(scenario, False, include_dialog_links=True)
+    elif (transcript == _cancellation_rescue_sample_transcript()
+          and actions == _cancellation_rescue_sample_action_trace()):
+        actions = _cancellation_rescue_sample_action_trace(include_dialog_links=True)
     payload = {'suite_id': suite_id, 'scenario_id': scenario_id,
-               'action_trace': scenario.get('sample_action_trace') or [],
+               'action_trace': actions,
                'final_state': scenario.get('sample_final_state') or {}}
-    return build_benchmark_vcon(payload, scenario.get('sample_transcript') or '', synthetic=True)
+    return build_benchmark_vcon(payload, transcript, synthetic=True)
 
 
 @router.get('')
 @router.get('/suites')
 def list_benchmark_suites():
-    return [get_suite(suite['id']) for suite in list_suites()]
+    # list_suites refreshes the published catalog once for this request.
+    return [get_suite(suite['id'], refresh=False) for suite in list_suites()]
 
 
 @router.get('/runs')

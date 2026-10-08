@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiAwareLink } from './ApiAwareLink';
 import { EvidenceTimeline } from './EvidenceTimeline';
+import { DesignResults } from './DesignResults';
 import { LiveRunFeedback, type LiveRunEvent } from './LiveRunFeedback';
 import { apiErrorMessage } from '@/lib/apiError';
 import { listProductProjects, type ProductProjectOption } from '@/lib/execution';
@@ -61,12 +62,12 @@ interface BenchmarkReport {
   scenario_title?: string;
   suite_contract_manifest_sha256?: string;
   scenario_contract_sha256?: string;
-  score?: number;
-  overall_score?: number;
+  score?: number | null;
+  overall_score?: number | null;
   scoring_mode?: 'transcript' | 'agentic' | string;
   score_components?: Record<string, number>;
   task_completion_score?: number | null;
-  required_action_score?: number;
+  required_action_score?: number | null;
   rubric_score?: number;
   forbidden_action_score?: number | null;
   evidence_citations?: Array<string | JsonRecord>;
@@ -180,7 +181,7 @@ interface RegressionDelta {
 }
 
 interface SavedRunArtifacts {
-  overall_score?: number;
+  overall_score?: number | null;
   transcript_lines?: number;
   has_transcript?: boolean;
   evidence_items?: number;
@@ -480,6 +481,7 @@ interface BenchmarkSuiteRunHistoryExport {
     total_scenarios?: number;
     total_passes?: number;
     total_needs_review?: number;
+    total_failed?: number;
     pass_rate?: number | null;
     failure_category_counts?: Record<string, number>;
     top_failure_categories?: Array<{ category: string; count: number }>;
@@ -576,7 +578,7 @@ interface BenchmarkSuiteScenarioSummary {
   scenario_id?: string;
   run_id?: string;
   status?: string;
-  overall_score?: number;
+  overall_score?: number | null;
   failure_categories?: string[];
 }
 
@@ -587,7 +589,7 @@ interface SuiteReliabilityMetrics {
   pass_at_1?: number;
   pass_at_k?: number;
   pass_all_k?: number;
-  accuracy_score?: number;
+  accuracy_score?: number | null;
   experience_signal_coverage?: number;
   average_turn_count?: number;
   interruption_signal_count?: number;
@@ -611,8 +613,9 @@ interface BenchmarkSuiteRunRecord {
   status: string;
   scenario_count: number;
   pass_count: number;
+  failed_count?: number;
   needs_review_count: number;
-  average_score: number;
+  average_score: number | null;
   created_at?: string | null;
   updated_at?: string | null;
   completed_at?: string | null;
@@ -623,8 +626,9 @@ interface BenchmarkSuiteRunRecord {
     provider?: string;
     scenario_count?: number;
     pass_count?: number;
+    failed_count?: number;
     needs_review_count?: number;
-    average_score?: number;
+    average_score?: number | null;
     verdict?: string;
     run_metadata?: RunMetadata;
     reliability_metrics?: SuiteReliabilityMetrics;
@@ -648,8 +652,9 @@ interface BenchmarkSuiteSimulationResponse {
   provider?: string;
   scenario_count: number;
   pass_count: number;
+  failed_count?: number;
   needs_review_count: number;
-  average_score: number;
+  average_score: number | null;
   verdict: string;
   run_metadata?: RunMetadata;
   reliability_metrics?: SuiteReliabilityMetrics;
@@ -1406,8 +1411,8 @@ async function listAuditEvents(userId: string, projectId: string) {
   );
 }
 
-function scoreColor(score: number | undefined) {
-  if (score === undefined) return 'var(--muted)';
+function scoreColor(score: number | null | undefined) {
+  if (score == null) return 'var(--muted)';
   if (score >= 80) return 'var(--success-text)';
   if (score >= 60) return '#b45309';
   return 'var(--danger)';
@@ -1793,6 +1798,7 @@ function suiteHistorySummaryFromRuns(runs: BenchmarkSuiteRunRecord[]): Benchmark
     total_scenarios: totalScenarios,
     total_passes: totalPasses,
     total_needs_review: runs.reduce((total, run) => total + Math.max(run.needs_review_count ?? 0, 0), 0),
+    total_failed: runs.reduce((total, run) => total + Math.max(run.failed_count ?? 0, 0), 0),
     pass_rate: totalScenarios ? Math.round((totalPasses / totalScenarios) * 10000) / 100 : null,
     failure_category_counts: failureCategoryCounts,
     top_failure_categories: topFailureCategories(failureCategoryCounts),
@@ -1943,7 +1949,7 @@ function mergeSuiteRunRecords(
   return mergedRuns;
 }
 
-function formatMetricPercent(value?: number) {
+function formatMetricPercent(value?: number | null) {
   if (typeof value !== 'number' || Number.isNaN(value)) return 'n/a';
   return `${Math.round(value * 100)}%`;
 }
@@ -2078,6 +2084,7 @@ function formatSuiteBrief(simulation: BenchmarkSuiteSimulationResponse) {
     `Average score: ${simulation.average_score}`,
     `Scenarios: ${simulation.scenario_count}`,
     `Passing: ${simulation.pass_count}`,
+    `Failed: ${simulation.failed_count ?? 0}`,
     `Needs review: ${simulation.needs_review_count}`,
     `Review scenarios: ${needsReview.length ? needsReview.join('; ') : 'None reported'}`,
     `Suite run: ${simulation.suite_run_id}`,
@@ -3402,6 +3409,7 @@ export function BenchmarkRunner({
       provider: suiteReport.provider,
       scenario_count: suiteReport.scenario_count ?? run.scenario_count,
       pass_count: suiteReport.pass_count ?? run.pass_count,
+      failed_count: suiteReport.failed_count ?? run.failed_count ?? 0,
       needs_review_count: suiteReport.needs_review_count ?? run.needs_review_count,
       average_score: suiteReport.average_score ?? run.average_score,
       verdict: suiteReport.verdict ?? run.status,
@@ -5259,13 +5267,14 @@ export function BenchmarkRunner({
               <h2 style={{ margin: 0, fontSize: 26 }}>{suiteSimulation.suite_name ?? selectedSuite?.title ?? suiteSimulation.suite_id}</h2>
             </div>
             <div style={{ textAlign: 'right' }}>
-              <strong style={{ display: 'block', fontSize: 28, color: scoreColor(suiteSimulation.average_score) }}>{suiteSimulation.average_score}</strong>
+              <strong style={{ display: 'block', fontSize: 28, color: scoreColor(suiteSimulation.average_score) }}>{suiteSimulation.average_score ?? 'n/a'}</strong>
               <span style={{ color: 'var(--muted)', textTransform: 'capitalize' }}>{suiteSimulation.verdict}</span>
             </div>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
             <ScoreTile label="Scenarios" score={suiteSimulation.scenario_count} />
             <ScoreTile label="Passing" score={suiteSimulation.pass_count} />
+            <ScoreTile label="Failed" score={suiteSimulation.failed_count ?? 0} />
             <ScoreTile label="Needs review" score={suiteSimulation.needs_review_count} />
           </div>
           <section style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 12, background: 'var(--panel-alt)' }}>
@@ -5370,7 +5379,7 @@ export function BenchmarkRunner({
                   }}
                 >
                   <span>{run.scenario_title ?? run.benchmark_report.scenario_title ?? scenarioId}</span>
-                  <span>{run.benchmark_report.verdict} / {run.benchmark_report.overall_score}</span>
+                  <span>{run.benchmark_report.verdict} / {run.benchmark_report.overall_score ?? 'n/a'}</span>
                 </button>
               );
             })}
@@ -5638,6 +5647,7 @@ export function BenchmarkRunner({
             </section>
           ) : null}
           <EvidenceTimeline vcon={report.ietf_vcon_export} />
+          <DesignResults findings={report as unknown as Record<string, unknown>} />
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
             <ReportList title="Failure categories" items={report.failure_categories} empty="No failure categories reported." />
@@ -6065,6 +6075,7 @@ export function BenchmarkRunner({
                       <AuditFact label="Scenarios" value={String(run.scenario_count)} />
                       <AuditFact label="Passing" value={String(run.pass_count)} />
                       <AuditFact label="Review" value={String(run.needs_review_count)} />
+                      <AuditFact label="Failed" value={String(run.failed_count ?? 0)} />
                       <AuditFact label="Average" value={String(run.average_score ?? 'n/a')} />
                       <AuditFact label="Progress" value={formatSuiteRunProgress(run.progress)} />
                       <AuditFact label="Pass@1" value={formatMetricPercent(reliability.pass_at_1)} />

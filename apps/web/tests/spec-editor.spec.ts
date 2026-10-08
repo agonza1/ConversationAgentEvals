@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
+  await page.route('**/api/specs/assert-library/scenarios', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ scenarios: [] }) }));
   await page.route('**/api/specs/assert-library/behaviors', (route) => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -185,8 +186,8 @@ test('evaluation guidance labels distinguish suggestions from enforced runtime c
   await page.goto('/specs/new?api_base=http%3A%2F%2Fapi.example.test');
   await expect(page.getByLabel('Scenario guidance')).toBeVisible();
   await expect(page.getByLabel('Scenario examples')).toBeVisible();
-  await expect(page.getByLabel('Programmatic check guidance (not yet enforced)')).toBeVisible();
-  await expect(page.getByLabel('Evidence guidance (not yet enforced)')).toBeVisible();
+  await expect(page.getByLabel('Programmatic checks')).toBeVisible();
+  await expect(page.getByLabel('Required evidence')).toBeVisible();
   await expect(page.getByLabel('Advanced ASSERT preview and validation')).toBeVisible();
   await expect(page.getByRole('link', { name: 'Evaluation design' })).toHaveAttribute('aria-current', 'page');
 });
@@ -287,6 +288,8 @@ test('save completion does not overwrite edits made while the request is in flig
   });
 
   await page.goto('/specs/new?api_base=http%3A%2F%2Fapi.example.test');
+  // A visible server-rendered button is not proof that its handler has hydrated.
+  await expect(page.getByText('Valid preview', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Save version' }).click();
   await saveStarted;
   await page.getByRole('textbox', { name: 'Objective', exact: true }).fill('This newer objective must survive the older save response.');

@@ -1,12 +1,15 @@
 import { expect, test } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import runFixture from '../../api/tests/fixtures/assert-html-report-run.json';
 
 const artifactDir = path.resolve(process.cwd(), 'artifacts/assert-html-report-export');
-const report = execFileSync(path.resolve('apps/api/.venv/bin/python'), ['-c', `
+const report = process.env.CAE_TEST_ASSERT_HTML
+  ? readFileSync(process.env.CAE_TEST_ASSERT_HTML, 'utf8')
+  : execFileSync(path.resolve('apps/api/.venv/bin/python'), ['-c', `
 import json
 from pathlib import Path
 from app.services.assert_html_report import render_assert_html_report,validate_saved_review
@@ -61,7 +64,7 @@ test('saved review export downloads and renders a standalone synthetic report of
   const offline = await context.newPage();
   const remoteRequests: string[] = [];
   offline.on('request', (request) => { if (/^https?:/.test(request.url())) remoteRequests.push(request.url()); });
-  await offline.goto(`file://${file}`);
+  await offline.goto(pathToFileURL(file).href);
   await expect(offline.getByRole('heading', { name: 'ASSERT semantic report' })).toBeVisible();
   await expect(offline.getByText('Synthetic fixture · no live judging or target call')).toBeVisible();
   await expect(offline.getByText('Rendered by CAE from a saved ASSERT assessment.', { exact: false })).toBeVisible();
@@ -156,7 +159,7 @@ test('real saved API result downloads through the browser without an export mock
     const offline = await context.newPage();
     const remoteRequests: string[] = [];
     offline.on('request', (req) => { if (/^https?:/.test(req.url())) remoteRequests.push(req.url()); });
-    await offline.goto(`file://${file}`);
+    await offline.goto(pathToFileURL(file).href);
     await expect(offline.getByText(run.execution_run_id, { exact: true })).toBeVisible();
     await offline.getByText('Tool evidence 1: open_review_case', { exact: true }).click();
     await expect(offline.getByText('"refund_issued": false', { exact: false }).first()).toBeVisible();

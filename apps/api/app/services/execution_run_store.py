@@ -342,6 +342,9 @@ def apply_judge_review(
             raise ValueError('This LLM judge review did not provide an evaluation update.')
         if review.get('deterministic_snapshot') != deterministic_evaluation_snapshot(conversation):
             raise ValueError('The deterministic evaluation changed after this LLM review. Run the review again.')
+        enforcement = (conversation.get('evaluation_findings') or {}).get('design_enforcement') or {}
+        if proposed.get('verdict') == 'pass' and enforcement.get('blocked'):
+            raise ValueError('Required design checks or evidence still block verification. Supply evidence and reevaluate before applying a pass.')
 
         applied_at = _now()
         previous = conversation.get('evaluation_adjudication')

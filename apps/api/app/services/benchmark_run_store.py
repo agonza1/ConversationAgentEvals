@@ -26,7 +26,7 @@ def persist_benchmark_run(db: Session, report: dict[str, Any], transcript: str |
     user_id = _first_text(metadata.get('user_id'), metadata.get('owner_user_id'), report.get('user_id')) or DEFAULT_USER_ID
     project_key = _first_text(metadata.get('project_id'), metadata.get('project_key'), report.get('project_id')) or DEFAULT_PROJECT_ID
     retained_until = _retained_until(metadata, now)
-    completed_at = _parse_datetime(lifecycle.get('completed_at') or lifecycle.get('needs_review_at'))
+    completed_at = _parse_datetime(lifecycle.get('completed_at') or lifecycle.get('needs_review_at') or lifecycle.get('failed_at'))
 
     record = db.get(BenchmarkRunRecord, run_id)
     if record is None:

@@ -11,6 +11,7 @@ from app.config import settings
 from app.services.assert_adapter import normalize_assert_payload
 from app.services.assert_artifact_store import persist_assert_run_artifacts
 from app.services.assert_trace import FAILURE_VALUES, parse_action_trace
+from app.services.design_enforcement import evaluate_design
 from app.schemas.assert_contracts import AssertResultManifest, AssertRunCreateRequest
 from app.services.assert_boundary import ingest_assert_run_result, queue_assert_run, with_default_runtime_config
 from app.services.vcon_interop import vcon_dialog_turns
@@ -315,6 +316,8 @@ _SCENARIOS_BY_ID = {
 
 
 def list_suites() -> list[BenchmarkSuite]:
+    from app.services.spec_scenario_authoring import refresh_published_catalog
+    refresh_published_catalog()
     summaries = [
         {
             'id': suite['id'],
@@ -336,7 +339,7 @@ def list_suites() -> list[BenchmarkSuite]:
     ]
     known_ids = {summary['id'] for summary in summaries}
     # Dynamically registered suites (e.g. file-backed user-created scenarios).
-    for suite_id, suite in _SUITES_BY_ID.items():
+    for suite_id, suite in list(_SUITES_BY_ID.items()):
         if suite_id in known_ids:
             continue
         scenarios = suite.get('scenarios') or []
@@ -366,7 +369,9 @@ def list_suites() -> list[BenchmarkSuite]:
     return summaries
 
 
-def get_suite(suite_id: str) -> BenchmarkSuite | None:
+def get_suite(suite_id: str, *, refresh: bool = True) -> BenchmarkSuite | None:
+    if refresh:
+        _refresh_spec_suite(suite_id)
     suite = _SUITES_BY_ID.get(suite_id)
     if not suite:
         return None
@@ -387,6 +392,7 @@ def _scenario_with_starter_evidence(scenario: BenchmarkScenario) -> BenchmarkSce
 
 
 def get_suite_contract_manifest(suite_id: str) -> dict[str, Any] | None:
+    _refresh_spec_suite(suite_id)
     suite = _SUITES_BY_ID.get(suite_id)
     if not suite:
         return None
@@ -416,6 +422,7 @@ def get_suite_contract_manifest(suite_id: str) -> dict[str, Any] | None:
 
 
 def get_scenario_contract(suite_id: str, scenario_id: str) -> dict[str, Any] | None:
+    _refresh_spec_suite(suite_id)
     suite = _SUITES_BY_ID.get(suite_id)
     scenario = _SCENARIOS_BY_ID.get((suite_id, scenario_id))
     if not suite or not scenario:
@@ -495,12 +502,12 @@ def _run_lifecycle(
     verdict: str,
     failure_categories: list[str] | None = None,
 ) -> dict[str, Any]:
-    terminal_status = 'completed' if verdict == 'pass' else 'needs_review'
+    terminal_status = 'completed' if verdict == 'pass' else 'failed' if verdict == 'fail' else 'needs_review'
     attempt = int(lifecycle_context['attempt'])
     max_attempts = int(lifecycle_context['max_attempts'])
     retryable = terminal_status != 'completed' and attempt < max_attempts
     resumable = terminal_status != 'completed'
-    reason = 'benchmark passed' if terminal_status == 'completed' else 'benchmark requires review'
+    reason = 'benchmark passed' if terminal_status == 'completed' else 'benchmark failed' if terminal_status == 'failed' else 'benchmark requires review'
 
     transitions = [
         {'from': None, 'to': 'queued', 'at': run_started_at, 'reason': 'run accepted'},
@@ -521,6 +528,7 @@ def _run_lifecycle(
         'updated_at': evaluated_at,
         'completed_at': evaluated_at if terminal_status == 'completed' else None,
         'needs_review_at': evaluated_at if terminal_status == 'needs_review' else None,
+        'failed_at': evaluated_at if terminal_status == 'failed' else None,
         'failure_categories': failure_categories or [],
         'transitions': transitions,
     }
@@ -547,6 +555,8 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, A
     scenario_id = _first_string(payload, 'scenario_id', 'scenarioId')
     if not suite_id or not scenario_id:
         raise ValueError('suite_id and scenario_id are required')
+
+    _refresh_spec_suite(suite_id)
 
     suite = _SUITES_BY_ID.get(suite_id)
     scenario = _SCENARIOS_BY_ID.get((suite_id, scenario_id))
@@ -596,8 +606,8 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, A
         now=_parse_iso_datetime(evaluated_at),
     )
 
-    verdict = 'pass' if assert_manifest.verdict.status == 'pass' else 'needs_review'
-    overall_score = int(assert_manifest.verdict.score or 0)
+    verdict = assert_manifest.verdict.status if assert_manifest.verdict.status in {'pass', 'fail'} else 'needs_review'
+    overall_score = int(assert_manifest.verdict.score) if assert_manifest.verdict.score is not None else None
     assert_fields = _assert_report_fields(assert_manifest, payload=payload, transcript=transcript)
     report = {
         'run_id': run_id,
@@ -793,16 +803,26 @@ def _execute_assert_contract(
     suite_contract_manifest_sha256: str,
 ) -> AssertResultManifest:
     scoring_text = '\n'.join(item for item in (transcript, _action_evidence_text(payload)) if item)
-    completed_actions = _completed_actions(scoring_text, scenario['required_actions'])
-    # Explicit execution failures or unfinished invocations outrank spoken claims.
-    incomplete = _failed_required_actions(payload.get('action_trace'), scenario['required_actions'])
-    completed_actions = [action for action in completed_actions if action not in incomplete]
-    forbidden_hits = _forbidden_hits(scoring_text, scenario['forbidden_actions'])
+    authored = bool(scenario.get('evaluation_spec_ref'))
+    if authored:
+        completed_actions, incomplete, forbidden_hits = _focused_action_evidence(scenario, payload.get('action_trace'))
+    else:
+        completed_actions = _completed_actions(scoring_text, scenario['required_actions'])
+        # Explicit execution failures or unfinished invocations outrank spoken claims.
+        incomplete = _failed_required_actions(payload.get('action_trace'), scenario['required_actions'])
+        completed_actions = [action for action in completed_actions if action not in incomplete]
+        forbidden_hits = _forbidden_hits(scoring_text, scenario['forbidden_actions'])
     rubric_checks = _rubric_checks(transcript, scenario['rubric'])
-    required_score = round((len(completed_actions) / len(scenario['required_actions'])) * 100)
+    required_score = round((len(completed_actions) / len(scenario['required_actions'])) * 100) if scenario['required_actions'] else None
+    # No required checklist is n/a, not a perfect required-action score. Absence
+    # of ID-linked forbidden evidence cannot prove a natural-language prohibition.
+    forbidden_score = (0 if forbidden_hits else None) if authored else (0 if forbidden_hits else 100)
     rubric_score = sum(check['earned_weight'] for check in rubric_checks)
     penalty = min(40, len(forbidden_hits) * 20)
-    overall_score = max(0, round((required_score * 0.45) + (rubric_score * 0.55) - penalty))
+    overall_score = max(0, round(((required_score or 0) * 0.45) + (rubric_score * 0.55) - penalty))
+    if not scenario['rubric']:
+        # Authored language rules do not invent a keyword rubric.
+        overall_score = max(0, (required_score or 0) - penalty)
 
     action_trace = payload.get('action_trace')
     final_state = payload.get('final_state')
@@ -810,7 +830,7 @@ def _execute_assert_contract(
     forbidden_observed = [hit['action'] for hit in forbidden_hits]
     final_state_missing = _assert_final_state_missing(final_state, required=_artifact_present(action_trace))
     workflow_order_issues = _workflow_order_issues(action_trace, scenario['required_actions'], missing_actions) if _artifact_present(action_trace) else []
-    failed_required_actions = _failed_required_actions(action_trace, scenario['required_actions']) if _artifact_present(action_trace) else []
+    failed_required_actions = incomplete
     hard_check_failures = _hard_check_failures(
         missing_actions=missing_actions,
         forbidden_observed=forbidden_observed,
@@ -820,31 +840,55 @@ def _execute_assert_contract(
     if _has_agentic_evidence(payload):
         # Average only dimensions we can actually measure from supplied evidence.
         # Do not invent 100s for unchecked task/final/workflow slots.
-        components: list[tuple[str, int]] = [
-            ('required_actions', required_score),
-            ('forbidden_actions', 0 if forbidden_observed else 100),
-        ]
+        components: list[tuple[str, int]] = []
+        if required_score is not None:
+            components.append(('required_actions', required_score))
+        if forbidden_score is not None:
+            components.append(('forbidden_actions', forbidden_score))
         if _artifact_present(action_trace):
             components.append(('workflow_order', 0 if workflow_order_issues else 100))
         if _artifact_present(action_trace) or _artifact_present(final_state):
             components.append(('final_state', 0 if final_state_missing else 100))
-        overall_score = round(sum(score for _, score in components) / len(components))
+        overall_score = round(sum(score for _, score in components) / len(components)) if components else 0
         score_components = {name: score for name, score in components}
     else:
         # Transcript-only: required actions + rubric only. No fake agentic dimension scores.
         score_components = {
-            'required_actions': required_score,
+            **({'required_actions': required_score} if required_score is not None else {}),
             'rubric': rubric_score,
             'forbidden_penalty': penalty,
         }
 
-    status = 'pass' if overall_score >= 75 and not failed_required_actions and not forbidden_observed and not final_state_missing and not workflow_order_issues and not missing_actions else 'needs_review'
+    if authored:
+        # Generic completion/order evidence does not measure the focused policy.
+        score_components = {
+            **({'required_actions': required_score} if required_score is not None else {}),
+            **({'forbidden_actions': forbidden_score} if forbidden_score is not None else {}),
+        }
+        overall_score = round(sum(score_components.values()) / len(score_components)) if score_components else None
+
+    status = 'pass' if overall_score is not None and overall_score >= 75 and not failed_required_actions and not forbidden_observed and not final_state_missing and not workflow_order_issues and not missing_actions else 'needs_review'
+    if scenario.get('evaluation_spec_ref'):
+        # Heuristic action matching cannot prove arbitrary natural-language policy.
+        status = 'needs_review'
+        hard_check_failures.append({'category': 'semantic_review_required', 'message': 'Published design behaviors need semantic review; action matching alone does not verify this policy.'})
     failures = _assert_failures(
         missing_actions=missing_actions,
         forbidden_observed=forbidden_observed,
         final_state_missing=final_state_missing,
         workflow_order_issues=workflow_order_issues,
     )
+    design_results = evaluate_design(scenario, payload, transcript) if authored else {}
+    enforcement = design_results.get('design_enforcement', {})
+    if enforcement.get('blocked'):
+        status = 'fail' if enforcement.get('failed') else 'needs_review'
+        overall_score = 0 if enforcement.get('failed') else (0 if forbidden_hits else None)
+        for item in [*design_results['programmatic_check_results'], *design_results['evidence_requirement_results']]:
+            if item['status'] != 'pass':
+                hard_check_failures.append({'category': 'design_enforcement', 'check_id': item['id'],
+                                            'message': f'{item["label"]}: {item["reason"]}'})
+                failures.append({'code': f'design-enforcement:{item["id"]}', 'category': 'evidence',
+                                 'severity': 'error', 'summary': item['reason'], 'metadata': item})
     report_payload = {
         'suite_id': suite['id'],
         'suite_name': suite['name'],
@@ -861,6 +905,10 @@ def _execute_assert_contract(
         'hard_check_failures': hard_check_failures,
         'score_components': score_components,
         'scoring_mode': 'agentic' if _has_agentic_evidence(payload) else 'transcript',
+        'authored_policy': authored,
+        'action_checklist': deepcopy(scenario.get('action_checklist', [])),
+        'forbidden_action_score': forbidden_score,
+        **design_results,
     }
     return AssertResultManifest.model_validate(
         {
@@ -905,7 +953,7 @@ def _assert_report_fields(assert_manifest: AssertResultManifest, *, payload: dic
     result_payload = result_artifact.inline_data if result_artifact is not None and isinstance(result_artifact.inline_data, dict) else {}
     missing_actions = [str(item) for item in result_payload.get('missing_actions', [])]
     final_state_payload = payload.get('final_state')
-    if isinstance(final_state_payload, dict) and isinstance(final_state_payload.get('missing_actions'), list):
+    if not result_payload.get('authored_policy') and isinstance(final_state_payload, dict) and isinstance(final_state_payload.get('missing_actions'), list):
         missing_actions = sorted({*missing_actions, *[str(item) for item in final_state_payload['missing_actions']]})
     forbidden_hits = result_payload.get('forbidden_action_hits') if isinstance(result_payload.get('forbidden_action_hits'), list) else []
     forbidden_observed = [str(item.get('action')) for item in forbidden_hits if isinstance(item, dict) and item.get('action')]
@@ -947,7 +995,7 @@ def _assert_report_fields(assert_manifest: AssertResultManifest, *, payload: dic
         'scoring_mode': scoring_mode,
         'score_components': score_components,
         'task_completion_score': task_completion_score,
-        'forbidden_action_score': 0 if forbidden_observed else 100,
+        'forbidden_action_score': result_payload.get('forbidden_action_score', 0 if forbidden_observed else 100),
         'final_state_score': final_state_score,
         'workflow_order_score': workflow_order_score,
         'forbidden_actions_observed': forbidden_observed,
@@ -961,9 +1009,11 @@ def _assert_report_fields(assert_manifest: AssertResultManifest, *, payload: dic
         'evidence_spans': evidence_citations,
         'action_trace': payload.get('action_trace'),
         'final_state': payload.get('final_state'),
+        **{key: deepcopy(result_payload[key]) for key in ('behavior_results', 'programmatic_check_results',
+            'evidence_requirement_results', 'design_enforcement') if key in result_payload},
     }
     return {
-        'required_action_score': int(metrics.get('required_action_score', 0)),
+        'required_action_score': metrics.get('required_action_score'),
         'rubric_score': int(metrics.get('rubric_score', 0)),
         'completed_actions': [str(item) for item in result_payload.get('completed_actions', [])],
         'missing_actions': missing_actions,
@@ -1134,6 +1184,7 @@ def simulate_scenario(request: Any) -> dict[str, Any]:
     if not suite_id or not scenario_id:
         raise ValueError('suite_id and scenario_id are required')
 
+    _refresh_spec_suite(suite_id)
     suite = _SUITES_BY_ID.get(suite_id)
     scenario = _SCENARIOS_BY_ID.get((suite_id, scenario_id))
     if not suite or not scenario:
@@ -1228,6 +1279,7 @@ def run_suite(request: Any) -> dict[str, Any]:
     if not suite_id:
         raise ValueError('suite_id is required')
 
+    _refresh_spec_suite(suite_id)
     suite = _SUITES_BY_ID.get(suite_id)
     if not suite:
         raise ValueError(f'Unknown benchmark suite: {suite_id}')
@@ -1268,7 +1320,8 @@ def run_suite(request: Any) -> dict[str, Any]:
             scenario_reports.append(report)
 
     passing_reports = [report for report in scenario_reports if report.get('verdict') == 'pass']
-    average_score = round(sum(int(report.get('overall_score', 0)) for report in scenario_reports) / len(scenario_reports)) if scenario_reports else 0
+    measured_scores = [report['overall_score'] for report in scenario_reports if report.get('overall_score') is not None]
+    average_score = round(sum(measured_scores) / len(measured_scores)) if measured_scores else None
     run_metadata = _run_metadata(payload)
     suite_run_id = _stable_digest(
         {
@@ -1278,7 +1331,7 @@ def run_suite(request: Any) -> dict[str, Any]:
         }
     )[:16]
 
-    verdict = 'pass' if scenario_reports and len(passing_reports) == len(scenario_reports) else 'needs_review'
+    verdict = 'fail' if any(report.get('verdict') == 'fail' for report in scenario_reports) else 'pass' if scenario_reports and len(passing_reports) == len(scenario_reports) else 'needs_review'
     reliability_metrics = _suite_reliability_metrics(scenario_reports)
     suite_contract_manifest = get_suite_contract_manifest(suite_id)
     suite_contract_manifest_sha256 = str(suite_contract_manifest['suite_contract_manifest_sha256']) if suite_contract_manifest else ''
@@ -1292,7 +1345,8 @@ def run_suite(request: Any) -> dict[str, Any]:
         'run_metadata': run_metadata,
         'scenario_count': len(scenario_reports),
         'pass_count': len(passing_reports),
-        'needs_review_count': len(scenario_reports) - len(passing_reports),
+        'failed_count': sum(report.get('verdict') == 'fail' for report in scenario_reports),
+        'needs_review_count': sum(report.get('verdict') not in {'pass', 'fail'} for report in scenario_reports),
         'average_score': average_score,
         'verdict': verdict,
         'reliability_metrics': reliability_metrics,
@@ -1326,6 +1380,7 @@ def simulate_suite(request: Any) -> dict[str, Any]:
     if not suite_id:
         raise ValueError('suite_id is required')
 
+    _refresh_spec_suite(suite_id)
     suite = _SUITES_BY_ID.get(suite_id)
     if not suite:
         raise ValueError(f'Unknown benchmark suite: {suite_id}')
@@ -1336,7 +1391,8 @@ def simulate_suite(request: Any) -> dict[str, Any]:
     ]
     reports = [run['benchmark_report'] for run in scenario_runs]
     passing_reports = [report for report in reports if report.get('verdict') == 'pass']
-    average_score = round(sum(int(report.get('overall_score', 0)) for report in reports) / len(reports)) if reports else 0
+    measured_scores = [report['overall_score'] for report in reports if report.get('overall_score') is not None]
+    average_score = round(sum(measured_scores) / len(measured_scores)) if measured_scores else None
     run_metadata = _run_metadata(payload)
     suite_run_id = _stable_digest(
         {
@@ -1346,7 +1402,7 @@ def simulate_suite(request: Any) -> dict[str, Any]:
         }
     )[:16]
 
-    verdict = 'pass' if reports and len(passing_reports) == len(reports) else 'needs_review'
+    verdict = 'fail' if any(report.get('verdict') == 'fail' for report in reports) else 'pass' if reports and len(passing_reports) == len(reports) else 'needs_review'
     reliability_metrics = _suite_reliability_metrics(reports)
     suite_contract_manifest = get_suite_contract_manifest(suite_id)
     suite_contract_manifest_sha256 = str(suite_contract_manifest['suite_contract_manifest_sha256']) if suite_contract_manifest else ''
@@ -1360,7 +1416,8 @@ def simulate_suite(request: Any) -> dict[str, Any]:
         'run_metadata': run_metadata,
         'scenario_count': len(reports),
         'pass_count': len(passing_reports),
-        'needs_review_count': len(reports) - len(passing_reports),
+        'failed_count': sum(report.get('verdict') == 'fail' for report in reports),
+        'needs_review_count': sum(report.get('verdict') not in {'pass', 'fail'} for report in reports),
         'average_score': average_score,
         'verdict': verdict,
         'reliability_metrics': reliability_metrics,
@@ -1414,6 +1471,7 @@ def _suite_reliability_metrics(scenario_reports: list[dict[str, Any]]) -> dict[s
         if isinstance(voice_summary, dict):
             voice_summaries.append(voice_summary)
 
+    measured_reports = [report for report in scenario_reports if report.get('overall_score') is not None]
     total_turns = sum(_number(summary.get('turn_count')) for summary in voice_summaries)
     perturbation_coverage = _perturbation_coverage(scenario_reports)
     return {
@@ -1423,7 +1481,8 @@ def _suite_reliability_metrics(scenario_reports: list[dict[str, Any]]) -> dict[s
         'pass_at_1': _ratio(first_attempt_passes, scenario_count),
         'pass_at_k': _ratio(any_attempt_passes, scenario_count),
         'pass_all_k': _ratio(all_attempt_passes, scenario_count),
-        'accuracy_score': _ratio(sum(_number(report.get('overall_score')) for report in scenario_reports), len(scenario_reports) * 100),
+        'accuracy_score': _ratio(sum(_number(report.get('overall_score')) for report in measured_reports), len(measured_reports) * 100) if measured_reports else None,
+        'scored_attempt_count': len(measured_reports),
         'experience_signal_coverage': _ratio(len(voice_summaries), scenario_count),
         'average_turn_count': round(total_turns / len(voice_summaries), 2) if voice_summaries else 0.0,
         'interruption_signal_count': sum(_number(summary.get('interruption_signal_count')) for summary in voice_summaries),
@@ -1756,7 +1815,7 @@ def _first_number(mapping: dict[str, Any], *keys: str) -> int | float | None:
 
 
 def _scenario_contract(scenario: BenchmarkScenario) -> dict[str, Any]:
-    return {
+    contract = {
         'id': scenario['id'],
         'title': scenario['title'],
         'persona': scenario['persona'],
@@ -1766,6 +1825,17 @@ def _scenario_contract(scenario: BenchmarkScenario) -> dict[str, Any]:
         'expected_final_state': scenario['expected_final_state'],
         'rubric': deepcopy(scenario['rubric']),
     }
+    for key in ('evaluation_spec_ref', 'behaviors', 'action_checklist', 'target_behavior_id', 'variant', 'caller_steps',
+                'requirements', 'permissible_behavior', 'evidence_requirements', 'deterministic_checks', 'generation_provenance', 'behavior_preset', 'scenario_preset'):
+        if key in scenario:
+            contract[key] = deepcopy(scenario[key])
+    return contract
+
+
+def _refresh_spec_suite(suite_id: str) -> None:
+    if suite_id.startswith('spec-suite-'):
+        from app.services.spec_scenario_authoring import refresh_published_catalog
+        refresh_published_catalog()
 
 
 def _group_call_message_items(value: dict[str, Any]) -> list[Any]:
@@ -1975,6 +2045,7 @@ def _vcon_analysis(report: dict[str, Any]) -> dict[str, Any]:
         'voice_interaction_summary',
         'failure_categories',
         'hard_check_failures',
+        'behavior_results', 'programmatic_check_results', 'evidence_requirement_results', 'design_enforcement',
         'failure_modes',
         'evidence_citations',
         'assert_lab_report',
@@ -1995,7 +2066,7 @@ def _suite_vcon_export(
     suite_run_id: str,
     suite_contract_manifest_sha256: str,
     run_metadata: dict[str, str],
-    average_score: int,
+    average_score: int | None,
     verdict: str,
     reliability_metrics: dict[str, Any],
     scenario_reports: list[dict[str, Any]],
@@ -2012,7 +2083,8 @@ def _suite_vcon_export(
             'run_metadata': deepcopy(run_metadata),
             'scenario_count': len(scenario_reports),
             'pass_count': sum(1 for report in scenario_reports if report.get('verdict') == 'pass'),
-            'needs_review_count': sum(1 for report in scenario_reports if report.get('verdict') != 'pass'),
+            'failed_count': sum(1 for report in scenario_reports if report.get('verdict') == 'fail'),
+            'needs_review_count': sum(1 for report in scenario_reports if report.get('verdict') not in {'pass', 'fail'}),
             'average_score': average_score,
             'verdict': verdict,
             'reliability_metrics': deepcopy(reliability_metrics),
@@ -2384,6 +2456,36 @@ def _append_transcript_citation(
 def _citation_terms(value: str) -> list[str]:
     stopwords = {'a', 'an', 'and', 'for', 'in', 'of', 'on', 'or', 'the', 'to'}
     return [term for term in _normalize(value).replace('_', ' ').split() if len(term) > 2 and term not in stopwords]
+
+
+def _focused_action_evidence(scenario: BenchmarkScenario, action_trace: Any) -> tuple[list[str], list[str], list[dict[str, str]]]:
+    """Observe ID-linked actions, not fuzzy labels or spoken policy claims.
+
+    A behavior ID is a source-reported association, not semantic verification.
+    Plain labels cannot identify distinct rules that happen to share a name.
+    """
+    completed, failed, forbidden = [], [], []
+    for rule in scenario.get('action_checklist', []):
+        if rule['id'] != scenario.get('target_behavior_id'):
+            continue
+        events = []
+        for event in parse_action_trace(action_trace):
+            raw = event.raw if isinstance(event.raw, dict) else {}
+            matches = raw['behavior_id'] == rule['id'] if 'behavior_id' in raw else event.name in {rule['id'], rule['action']}
+            if matches:
+                events.append(event)
+        observed = any(_normalized_action_status(event.status) in {
+            'success', 'succeeded', 'completed', 'complete', 'ok', 'true', 'observed',
+        } for event in events)
+        if rule['kind'] == 'required':
+            if observed:
+                completed.append(rule['action'])
+            elif events:
+                failed.append(rule['action'])
+        elif observed:
+            forbidden.append({'action': rule['action'], 'behavior_id': rule['id'],
+                              'reason': 'Observed an explicitly ID-linked forbidden action; semantic interpretation requires review.'})
+    return completed, failed, forbidden
 
 
 def _failed_required_actions(action_trace: Any, required_actions: list[Any]) -> list[str]:
@@ -2997,6 +3099,9 @@ def _simulated_transcript(scenario: BenchmarkScenario, agent_profile: str, inclu
 
 
 def _simulated_user_opener(scenario: BenchmarkScenario) -> str:
+    if scenario.get('evaluation_spec_ref') and scenario.get('caller_steps'):
+        from app.services.execution_runner import _scenario_user_opener
+        return _scenario_user_opener(scenario)
     openers = {
         'billing-address-change': 'Hi, I moved recently and need to update my billing address before the next invoice.',
         'angry-outage-escalation': 'My internet has gone down twice this week, and I need this fixed.',
@@ -3155,7 +3260,7 @@ def _simulated_user_turn(action: str) -> str:
     return 'That works.'
 
 
-def _simulated_action_trace(scenario: BenchmarkScenario, include_failure: bool) -> list[dict[str, Any]]:
+def _simulated_action_trace(scenario: BenchmarkScenario, include_failure: bool, *, include_dialog_links: bool = False) -> list[dict[str, Any]]:
     actions = scenario['required_actions']
     if include_failure and actions:
         actions = actions[:-1]
@@ -3164,6 +3269,8 @@ def _simulated_action_trace(scenario: BenchmarkScenario, include_failure: bool) 
         {
             'step': index + 1,
             'type': 'agent_action',
+            **({'event_type': 'action.completed', 'dialog': index * 2 + 1, 'turn_index': index * 2 + 2}
+               if include_dialog_links else {}),  # Matches _simulated_transcript's agent line.
             'action': action,
             'status': 'completed',
         }
@@ -3175,6 +3282,8 @@ def _simulated_action_trace(scenario: BenchmarkScenario, include_failure: bool) 
             {
                 'step': len(trace) + 1,
                 'type': 'policy_violation',
+                **({'event_type': 'action.observed', 'dialog': max(1, len(actions) * 2),
+                    'turn_index': max(1, len(actions) * 2) + 1} if include_dialog_links else {}),
                 'action': scenario['forbidden_actions'][0],
                 'status': 'observed',
             }

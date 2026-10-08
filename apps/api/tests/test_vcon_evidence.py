@@ -19,6 +19,42 @@ def sample():
             'final_state': scenario['sample_final_state']}
 
 
+@pytest.mark.parametrize('suite_id,scenario_id', [
+    ('call-center-voice-ai', 'billing-address-change'),
+    ('telehealth-agent', 'medication-refill-routing'),
+])
+def test_full_sample_actions_have_explicit_synthetic_dialog_links(suite_id, scenario_id):
+    response = TestClient(app).get('/api/benchmarks/evidence/sample-vcon', params={
+        'suite_id': suite_id, 'scenario_id': scenario_id,
+    })
+    assert response.status_code == 200
+    vcon = response.json()
+    body = decode_evidence(vcon)
+    assert body['synthetic'] is True
+    assert body['tool_events']
+    for index, event in enumerate(body['tool_events']):
+        assert event['event_type'] == 'action.completed'
+        assert event['dialog'] == index * 2 + 1
+        assert event['turn_index'] == event['dialog'] + 1
+        assert vcon['parties'][vcon['dialog'][event['dialog']]['parties'][0]]['name'].startswith('Agent')
+    replay = run_scenario({'vcon': vcon}, persist_artifacts=False)
+    assert replay['task_completion_score'] == 100
+    assert replay['final_state_score'] == 100
+
+
+def test_custom_sample_transcript_does_not_gain_guessed_action_links(monkeypatch):
+    suite = deepcopy(get_suite('call-center-voice-ai'))
+    scenario = suite['scenarios'][0]
+    scenario['sample_transcript'] = 'Caller: A custom conversation.'
+    monkeypatch.setattr('app.routes.benchmarks.get_suite', lambda _: suite)
+    response = TestClient(app).get('/api/benchmarks/evidence/sample-vcon', params={
+        'suite_id': suite['id'], 'scenario_id': scenario['id'],
+    })
+    assert response.status_code == 200
+    events = decode_evidence(response.json())['tool_events']
+    assert all('dialog' not in event and 'turn_index' not in event for event in events)
+
+
 def test_vcon_only_roundtrip_reproduces_scores_and_verdict():
     payload = sample()
     original = run_scenario(payload, persist_artifacts=False)

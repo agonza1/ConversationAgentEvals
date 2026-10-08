@@ -770,7 +770,8 @@ test('benchmark report falls back when async clipboard copy is rejected', async 
   await expect(page.getByText('Copied report brief.')).toBeVisible();
 });
 
-test('benchmark runner shows suite simulation summary', async ({ page }) => {
+for (const verdict of ['needs_review', 'fail']) {
+test(`benchmark runner shows suite simulation summary (${verdict})`, async ({ page }) => {
   await page.route('**/api/benchmarks/suites/*/simulate', async (route) => {
     await route.fulfill({
       status: 200,
@@ -781,9 +782,10 @@ test('benchmark runner shows suite simulation summary', async ({ page }) => {
         suite_name: 'Call Center Voice AI',
         scenario_count: 2,
         pass_count: 1,
-        needs_review_count: 1,
+        needs_review_count: verdict === 'needs_review' ? 1 : 0,
+        failed_count: verdict === 'fail' ? 1 : 0,
         average_score: 78,
-        verdict: 'needs_review',
+        verdict,
         vcon_export: {
           source_format: 'benchmark_suite',
           appended_analysis_type: 'agentic_benchmark_suite_eval',
@@ -831,7 +833,7 @@ test('benchmark runner shows suite simulation summary', async ({ page }) => {
               suite_id: 'call-center-voice-ai',
               scenario_id: 'billing-escalation',
               scenario_title: 'Billing escalation',
-              verdict: 'needs_review',
+              verdict,
               overall_score: 68,
               evidence: ['Agent: I skipped the identity check.'],
               missing_actions: ['confirm identity'],
@@ -855,11 +857,12 @@ test('benchmark runner shows suite simulation summary', async ({ page }) => {
   await expect(suiteSummary).toBeVisible();
   await expect(suiteSummary.getByRole('heading', { name: 'Call Center Voice AI' })).toBeVisible();
   await expect(page.getByRole('button', { name: /Membership renewal save pass/ })).toBeVisible();
-  await expect(page.getByRole('button', { name: /Billing escalation needs_review/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: `Billing escalation ${verdict}`, exact: false })).toBeVisible();
 
   const suiteBrief = page.getByLabel('Suite brief');
   await expect(suiteBrief).toContainText('Suite: Call Center Voice AI');
-  await expect(suiteBrief).toContainText('Needs review: 1');
+  await expect(suiteBrief).toContainText(`Needs review: ${verdict === 'needs_review' ? 1 : 0}`);
+  await expect(suiteBrief).toContainText(`Failed: ${verdict === 'fail' ? 1 : 0}`);
   await expect(suiteBrief).toContainText('Review scenarios: Billing escalation');
 
   const downloadPromise = page.waitForEvent('download');
@@ -874,8 +877,9 @@ test('benchmark runner shows suite simulation summary', async ({ page }) => {
   await page.getByRole('button', { name: 'Save suite runs' }).click();
   await expect(page.getByText('Saved 2 suite runs to call-center-demo.')).toBeVisible();
 
-  await expect(page.getByRole('heading', { name: /pass|needs_review/i })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /^(pass|needs_review|fail)$/i })).toBeVisible();
 });
+}
 
 test('benchmark runner queues retained suite runs in the background', async ({ page }) => {
   await page.addInitScript(() => {

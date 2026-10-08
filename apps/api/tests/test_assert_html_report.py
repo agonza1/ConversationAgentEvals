@@ -77,7 +77,7 @@ def test_project_visibility_and_exact_identity(saved, monkeypatch, visible):
     def project(**kwargs):
         calls.append(kwargs)
         return object() if visible else None
-    monkeypatch.setattr(assert_judge, 'find_visible_project', project)
+    monkeypatch.setattr(assert_judge, 'execution_project_accessible', project)
     response = download(saved)
     assert response.status_code == (200 if visible else 404)
     assert calls[0]['user_id'] == 'demo-user'

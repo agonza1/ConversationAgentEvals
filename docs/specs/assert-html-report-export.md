@@ -35,6 +35,12 @@ Full viewer embedding; new comparisons; suite-level or bulk exports; new judging
 
 The download selects an exact `review_id` under an execution conversation. Pending, applied and superseded saved ASSERT reviews remain exportable when their original evidence is current; the selected assessment and currently applied adjudication are displayed separately. Project access resolves the stored `product_project_id` when available and rejects ambiguous or inaccessible project keys with a non-disclosing 404.
 
+Runs that were created without a product-project row retain owner-only access to
+export, freshness checks and explicit application. These endpoints use the same
+project-resolution semantics as execution creation: a missing/revoked stable
+binding or ambiguous visible key is denied; an unbound key with no matching row
+is supported. Run ownership is checked first in every case.
+
 Current reviews persist the semantic result/provenance and hashes, but deliberately remove raw judge output. Export uses those persisted dimensions, scales and behavior judgments and never opens artifact paths. It compares the existing deterministic evidence snapshot and recomputes the upstream judging-input fingerprint with the saved model. Historical reviews omit `judge_n`, so the recorded fingerprint must match one of ASSERT's supported counts (1–3). Missing provenance, invalid values or changed scenario/target/conversation inputs return 409.
 
 This slice shows saved citations as unresolved text because current persisted citations do not carry reliable transcript anchors. Known credential fields/text and internal paths are scrubbed by an export-local sanitizer built on the existing CAE evidence redactor. Audio stays in CAE. The HTML has embedded CSS, native disclosure controls, escaped content and a restrictive CSP; it works offline with no external requests. The web download derives a bounded filename from the three IDs when cross-origin browsers do not expose Content-Disposition.

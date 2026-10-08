@@ -10,6 +10,7 @@ from app.services import execution_run_store
 from app.services.benchmark_service import get_scenario_contract
 from app.services.product_service import (
     find_visible_project,
+    execution_project_accessible,
     record_judge_request,
     resolve_execution_product_project_id,
 )
@@ -161,8 +162,8 @@ def export_assert_html_report(execution_run_id: str, conversation_id: str, revie
     if run is None or run.get('user_id') != user_id:
         raise HTTPException(status_code=404, detail='Execution run not found.')
     project_id = str(run.get('project_id') or '').strip()
-    if project_id and find_visible_project(db=db, user_id=user_id, project_id=project_id,
-                                          product_project_id=run.get('product_project_id')) is None:
+    if not execution_project_accessible(db=db, user_id=user_id, project_id=project_id,
+                                        product_project_id=run.get('product_project_id')):
         raise HTTPException(status_code=404, detail='Execution run not found.')
     # Use the same saved run snapshot for evidence and selected review, avoiding
     # a second store read that could mix different revisions during an update.
@@ -198,8 +199,8 @@ def saved_review_status(execution_run_id: str, conversation_id: str, review_id: 
     if run is None or run.get('user_id') != user_id:
         raise HTTPException(status_code=404, detail='Execution run not found.')
     project_id = str(run.get('project_id') or '').strip()
-    if project_id and find_visible_project(db=db, user_id=user_id, project_id=project_id,
-                                          product_project_id=run.get('product_project_id')) is None:
+    if not execution_project_accessible(db=db, user_id=user_id, project_id=project_id,
+                                        product_project_id=run.get('product_project_id')):
         raise HTTPException(status_code=404, detail='Execution run not found.')
     conversation = next((item for item in run.get('conversations') or []
                          if isinstance(item, dict) and item.get('conversation_id') == conversation_id), None)

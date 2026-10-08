@@ -87,8 +87,8 @@ def test_inaccessible_exact_project_blocks_status_and_apply(saved,monkeypatch):
     from app.routes import execution
     run,_,_=saved
     run.update(project_id='project',product_project_id='inaccessible')
-    monkeypatch.setattr(assert_judge,'find_visible_project',lambda **kw: None)
-    monkeypatch.setattr(execution,'find_visible_project',lambda **kw: None)
+    monkeypatch.setattr(assert_judge,'execution_project_accessible',lambda **kw: False)
+    monkeypatch.setattr(execution,'execution_project_accessible',lambda **kw: False)
     assert status(saved).status_code==404
     assert apply(saved).status_code==404
 
@@ -105,3 +105,56 @@ def test_non_assert_review_keeps_original_apply_semantics(saved):
     review=saved[2]
     review['provider']='legacy';review['judge_result'].pop('provenance')
     assert apply(saved).status_code==200
+
+
+@pytest.mark.parametrize('case,expected', [('unbound', 200), ('visible', 200), ('ambiguous', 404),
+                                        ('revoked', 404), ('missing_stable', 404)])
+def test_real_project_resolution_matches_creation_for_export_status_and_apply(saved, tmp_path, case, expected):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from app.db.database import Base, get_db
+    from app.models.entities import ProductProject, ProductWorkspace, ProductWorkspaceMember
+    engine = create_engine(f'sqlite:///{tmp_path / "project-access.db"}', connect_args={'check_same_thread': False})
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine)
+    def local_db():
+        with factory() as db:
+            yield db
+    app.dependency_overrides[get_db] = local_db
+    run, conv, review = saved
+    run['project_id'] = 'access-case'
+    run.pop('product_project_id', None)
+    try:
+        with factory() as db:
+            if case in {'visible', 'ambiguous'}:
+                personal = ProductProject(user_id='demo-user', project_key='access-case')
+                db.add(personal)
+                db.flush()
+                if case == 'visible':
+                    run['product_project_id'] = personal.id
+            if case in {'ambiguous', 'revoked'}:
+                workspace = ProductWorkspace(owner_user_id='team-owner', workspace_key='workspace')
+                db.add(workspace)
+                db.flush()
+                shared = ProductProject(user_id='team-owner', workspace_id=workspace.id, project_key='access-case')
+                db.add(shared)
+                db.flush()
+                member = ProductWorkspaceMember(workspace_id=workspace.id, user_id='demo-user', role='viewer')
+                db.add(member)
+                db.flush()
+                if case == 'revoked':
+                    run['product_project_id'] = shared.id
+                    db.delete(member)
+            if case == 'missing_stable':
+                run['product_project_id'] = 'deleted-project'
+            db.commit()
+        before = deepcopy(saved)
+        report_url = f"/api/assert/runs/{run['execution_run_id']}/conversations/{conv['conversation_id']}/reviews/{review['review_id']}/report.html"
+        assert client.get(report_url, params={'user_id': 'demo-user'}).status_code == expected
+        assert status(saved).status_code == expected
+        assert saved == before  # Neither export nor freshness performs a mutation.
+        assert apply(saved).status_code == expected
+        assert status(saved, owner='someone-else').status_code == 404
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        engine.dispose()

@@ -76,6 +76,7 @@ ALLOWED_FIXTURE_ROOTS = (
     REPO_ROOT / 'artifacts',
 )
 EVALUATION_FINDING_KEYS = (
+    'behavior_results', 'programmatic_check_results', 'evidence_requirement_results', 'design_enforcement',
     'verdict',
     'overall_score',
     'required_action_score',
@@ -1638,6 +1639,8 @@ def _scenario_definition(suite_id: str, scenario_id: str) -> dict[str, Any]:
 
 def _scenario_user_opener(scenario: dict[str, Any]) -> str:
     """Return caller-facing speech, never the internal persona/checklist description."""
+    if scenario.get('evaluation_spec_ref') and scenario.get('caller_steps'):
+        return str(scenario['caller_steps'][0]).strip()
     sample = str(scenario.get('sample_transcript') or '')
     for line in sample.splitlines():
         stripped = line.strip()
@@ -1685,6 +1688,7 @@ def _openai_tester_prompt(
         f'Scenario: {scenario.get("title") or scenario.get("id")}\n'
         f'Caller persona: {scenario.get("persona") or "Not provided."}\n'
         f'Caller goal: {scenario.get("goal") or "Not provided."}\n'
+        f'Caller-side case instructions (adapt naturally): {json.dumps(scenario.get("caller_steps") or [], ensure_ascii=False)}\n'
         f'Behaviors to probe: {required_actions}\n'
         f'Unsafe behaviors to challenge: {forbidden_actions}\n'
         f'Expected final state: {scenario.get("expected_final_state") or "Not provided."}\n'

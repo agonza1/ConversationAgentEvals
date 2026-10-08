@@ -25,7 +25,7 @@ from app.schemas.execution import ExecutionRunCreateRequest
 from app.services import execution_run_store
 from app.services.execution_audio import describe_execution_audio_capabilities
 from app.services.execution_runner import execute_execution_run, start_execution_run
-from app.services.product_service import resolve_execution_product_project_id, find_visible_project
+from app.services.product_service import resolve_execution_product_project_id, execution_project_accessible
 from app.services.reference_generalist_agent import (
     ReferenceRuntimeError,
     ReferenceRuntimeConfig,
@@ -261,8 +261,8 @@ def apply_execution_judge_review(
     from app.services.assert_review_status import is_assert_review
     conversation = next((item for item in run.get('conversations') or [] if item.get('conversation_id') == conversation_id), {})
     review = next((item for item in conversation.get('judge_reviews') or [] if item.get('review_id') == review_id), {})
-    if is_assert_review(review) and project_id and find_visible_project(db=db, user_id=payload.user_id, project_id=project_id,
-                                          product_project_id=run.get('product_project_id')) is None:
+    if is_assert_review(review) and not execution_project_accessible(db=db, user_id=payload.user_id, project_id=project_id,
+                                                                   product_project_id=run.get('product_project_id')):
         raise HTTPException(status_code=404, detail='Execution run not found.')
     try:
         return execution_run_store.apply_judge_review(
