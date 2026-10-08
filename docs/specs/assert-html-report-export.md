@@ -52,4 +52,8 @@ line, including multi-parameter schemes such as Digest; quoted assignments stop
 at their closing quote. This is conservative export-only filtering, not a change
 to saved evidence or a guarantee that arbitrary personal information is removed.
 
+Persisted citations must be a list of strings; missing citations stay unavailable
+and malformed collections return a conflict rather than being split into characters
+or object keys. Non-null score and output digests must be lowercase SHA-256 hex.
+
 Synthetic fixture evidence is explicitly labeled and is used only for tests and local screenshots; it does not claim a live ASSERT judgment.

@@ -183,6 +183,32 @@ def test_optional_digest_is_unavailable_not_fabricated(saved, field, missing):
     assert f'<dt>{label}</dt><dd>Unavailable</dd>' in response.text
 
 
+@pytest.mark.parametrize('bad', [None, 'Authorization: Basic SYNTHETIC-CITATION-SECRET',
+                                {'Authorization': 'Basic SYNTHETIC-CITATION-SECRET'},
+                                42, True, [None], [42], [{'text': 'not a persisted string'}]])
+def test_malformed_citation_collection_cannot_render_or_split_secrets(saved, bad):
+    saved[2]['evidence_citations'] = bad
+    response = download(saved)
+    assert response.status_code == 409
+    assert 'citation' in response.json()['detail']
+    assert 'SYNTHETIC-CITATION-SECRET' not in response.text
+
+
+def test_valid_citations_keep_whole_value_context_for_redaction(saved):
+    saved[2]['evidence_citations'] = ['Authorization: Basic SYNTHETIC-CITATION-SECRET', 'case-fixture']
+    response = download(saved)
+    assert response.status_code == 200
+    assert 'SYNTHETIC-CITATION-SECRET' not in response.text
+    assert '[credential omitted]' in response.text and 'case-fixture' in response.text
+
+
+def test_missing_citations_are_unavailable_not_inferred(saved):
+    saved[2].pop('evidence_citations')
+    response = download(saved)
+    assert response.status_code == 200
+    assert '<ul><li>Unavailable</li></ul>' in response.text
+
+
 def test_selected_historical_review_and_applied_adjudication_are_distinct(saved):
     _, conv, review = saved
     review['status'] = 'superseded'

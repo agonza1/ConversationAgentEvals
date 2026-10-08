@@ -12,6 +12,11 @@ PR #152 is temporarily stacked on the open portable HTML export PR #151 (`codex/
 
 Render saved ASSERT assessments from `conversation.judge_reviews` and their `judge_result.provenance`, including after a page reload. Identify each by `review_id`; let the reviewer choose among saved assessments without changing the applied evaluation. Default to the most recently recorded ASSERT assessment using its timestamp, with a stable fallback for missing/invalid dates. Reset selection when the run or conversation changes. Keep the selected assessment separate from the deterministic evaluation and currently applied adjudication.
 
+Equal or unavailable timestamps prefer the newest appended review (the highest
+source-history index). Timestamp ordering does not establish evidence freshness.
+All review applications enforce project visibility before selecting a review,
+including nonexistent IDs and non-ASSERT proposals.
+
 Show a readable recorded timestamp, review status (pending confirmation, applied, or superseded), judge model, recorded ASSERT version, and evidence level. Never imply that a pending assessment is applied. Preserve the existing explicit apply-confirmation flow. Selecting a historical review, opening details, or checking freshness must not judge, spend credits, mutate evidence, or apply a verdict. If #151's export action is present, it must export the same selected review; avoid a second competing selector.
 
 ## Display fields

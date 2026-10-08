@@ -84,6 +84,6 @@ export function sortedAssertReviews(values: unknown): AssertReviewView[] {
   if (!Array.isArray(values)) return [];
   return values.map(normalizeAssertReview).filter((value): value is AssertReviewView => value !== null)
     .map((review, index) => ({ review, index })).sort((a, b) =>
-      (b.review.timestamp ?? -Infinity) - (a.review.timestamp ?? -Infinity) || a.index - b.index)
+      (b.review.timestamp ?? -Infinity) - (a.review.timestamp ?? -Infinity) || b.index - a.index)
     .map((entry) => entry.review);
 }

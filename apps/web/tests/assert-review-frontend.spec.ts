@@ -131,3 +131,28 @@ test('late freshness from a previous conversation cannot replace selected conver
   await expect(panel.getByLabel('Review freshness')).toContainText('Stale');
   await expect(panel.getByRole('button', { name: 'Apply proposed evaluation' })).toBeDisabled();
 });
+
+
+test('undated persisted history defaults and exports to the newest appended review', async ({ page }) => {
+  const run = runForTest();
+  const reviews = run.conversations[0].judge_reviews;
+  const older = reviews.find((review) => review.review_id === 'judge-review-native-older');
+  const newest = reviews.find((review) => review.review_id === 'judge-review-native-newest');
+  if (!older || !newest) throw new Error('Missing saved review fixtures');
+  older.created_at = 'invalid-date'; newest.created_at = 'invalid-date';
+  run.conversations[0].judge_reviews = [older, newest]; seed(run);
+  try {
+    await page.goto(`/runs/${run.execution_run_id}`);
+    await expect(page.getByLabel('Saved ASSERT review')).toHaveValue(newest.review_id);
+    const panel = page.getByLabel('Saved ASSERT assessment');
+    await expect(panel.getByLabel('Review freshness')).toContainText('Current');
+    await expect(panel).toContainText('Recorded time unavailable');
+    await page.reload();
+    await expect(page.getByLabel('Saved ASSERT review')).toHaveValue(newest.review_id);
+    const report = page.waitForResponse((response) => response.url().includes(`/reviews/${newest.review_id}/report.html`));
+    const download = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Export ASSERT HTML report' }).click();
+    expect((await report).status()).toBe(200);
+    await (await download).saveAs(path.join(artifacts, 'undated-newest.html'));
+  } finally { rmSync(runPath(run.execution_run_id), { recursive: true, force: true }); }
+});

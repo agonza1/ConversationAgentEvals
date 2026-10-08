@@ -14,12 +14,20 @@ from app.services.vcon_evidence import redact
 TERMINAL = {'completed', 'needs_review', 'failed', 'cancelled', 'canceled'}
 
 
+def _saved_citations(review: dict[str, Any]) -> list[str]:
+    citations = review.get('evidence_citations', [])
+    if not isinstance(citations, list) or any(not isinstance(item, str) for item in citations):
+        raise ValueError('Saved ASSERT citation evidence is malformed.')
+    return citations
+
+
 def validate_saved_review(run: dict[str, Any], conversation: dict[str, Any], review: dict[str, Any],
                           scenario_contract: dict[str, Any] | None) -> dict[str, Any]:
     """Reject incomplete or changed evidence before generating a portable report."""
     if run.get('status') not in TERMINAL or conversation.get('status') not in TERMINAL:
         raise ValueError('The run and conversation must be terminal before export.')
     result = review.get('judge_result')
+    _saved_citations(review)
     provenance = result.get('provenance') if isinstance(result, dict) else None
     if (review.get('status') not in {'pending_confirmation', 'applied', 'superseded'}
             or not isinstance(provenance, dict) or provenance.get('engine') != 'assert'
@@ -165,7 +173,7 @@ def render_assert_html_report(run: dict[str, Any], conversation: dict[str, Any],
                     f'<pre>{_json(action)}</pre></details>' for index, action in enumerate(conversation.get('action_trace') or [], 1)
                     if isinstance(action, dict))
     citations = ''.join(f'<li>{_text(citation)} <small>— unresolved citation; no evidence anchor recorded</small></li>'
-                       for citation in review.get('evidence_citations') or [])
+                       for citation in _saved_citations(review))
     snapshot = review['deterministic_snapshot']
     adjudication = conversation.get('evaluation_adjudication') or {}
     applied = (adjudication.get('judge_result') or {}).get('proposed_evaluation') or {}

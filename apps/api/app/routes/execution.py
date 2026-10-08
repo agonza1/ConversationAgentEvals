@@ -258,7 +258,9 @@ def apply_execution_judge_review(
     if run is None or run.get('user_id') != payload.user_id:
         raise HTTPException(status_code=404, detail='Execution run not found.')
     project_id = str(run.get('project_id') or '').strip()
-    from app.services.assert_review_status import is_assert_review
+    if not execution_project_accessible(db=db, user_id=payload.user_id, project_id=project_id,
+                                        product_project_id=run.get('product_project_id')):
+        raise HTTPException(status_code=404, detail='Execution run not found.')
     conversations = run.get('conversations') or []
     if not isinstance(conversations, list) or any(not isinstance(item, dict) for item in conversations):
         raise HTTPException(status_code=409, detail='Saved conversation evidence is malformed or unavailable.')
@@ -268,10 +270,6 @@ def apply_execution_judge_review(
     reviews = conversation.get('judge_reviews') or []
     if not isinstance(reviews, list) or any(not isinstance(item, dict) for item in reviews):
         raise HTTPException(status_code=409, detail='Saved review evidence is malformed or unavailable.')
-    review = next((item for item in reviews if item.get('review_id') == review_id), {})
-    if is_assert_review(review) and not execution_project_accessible(db=db, user_id=payload.user_id, project_id=project_id,
-                                                                   product_project_id=run.get('product_project_id')):
-        raise HTTPException(status_code=404, detail='Execution run not found.')
     try:
         return execution_run_store.apply_judge_review(
             execution_run_id,

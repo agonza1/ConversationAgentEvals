@@ -33,6 +33,13 @@ test('timestamp ordering is stable and legacy optional fields do not break detai
  const view=normalizeAssertReview(legacy);assert.equal(view.dateLabel,'Recorded time unavailable');
  assert.equal(view.statusLabel,'Status unknown');assert.equal(view.behaviors[0].outcome,'Unavailable');
 });
+test('missing/invalid dates and equal timestamps prefer newest appended review',()=>{
+ for (const dates of [[undefined, undefined], ['invalid', 'invalid'], ['2026-10-08T12:00:00Z', '2026-10-08T12:00:00Z']]) {
+   const older=structuredClone(reviews[2]);older.review_id='appended-first';older.created_at=dates[0];
+   const newest=structuredClone(reviews[1]);newest.review_id='appended-last';newest.created_at=dates[1];
+   assert.deepEqual(sortedAssertReviews([older,newest]).map(review=>review.id),['appended-last','appended-first']);
+ }
+});
 test('technical metadata allowlist never exposes paths/secret maps/raw output',()=>{
  const raw=structuredClone(reviews[1]);raw.model='/opt/private/internal-model';raw.judge_result.raw_output='NEVER-EXPOSE';raw.judge_result.provenance.artifacts={path:'/workspace/hidden'};
  const view=normalizeAssertReview(raw);assert.equal(view.model,null);assert.ok(!JSON.stringify(view.technical).includes('NEVER-EXPOSE'));

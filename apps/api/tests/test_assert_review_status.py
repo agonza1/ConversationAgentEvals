@@ -119,6 +119,27 @@ def test_inaccessible_exact_project_blocks_status_and_apply(saved,monkeypatch):
     assert apply(saved).status_code==404
 
 
+@pytest.mark.parametrize('case', ['unknown_review', 'malformed_history', 'non_assert_review'])
+def test_revoked_binding_is_non_disclosing_before_review_selection(saved, monkeypatch, case):
+    from app.routes import execution
+    run, conv, review = saved
+    run.update(project_id='project', product_project_id='inaccessible')
+    monkeypatch.setattr(execution, 'execution_project_accessible', lambda **kw: False)
+    monkeypatch.setattr(execution_run_store, 'apply_judge_review', lambda *args, **kw: pytest.fail('Before authorization'))
+    if case == 'unknown_review':
+        conv['judge_reviews'] = []
+    elif case == 'malformed_history':
+        conv['judge_reviews'] = ['invalid']
+    else:
+        review['provider'] = 'legacy'
+        review['judge_result'].pop('provenance')
+    original = deepcopy(saved)
+    response = apply(saved)
+    assert response.status_code == 404
+    assert response.json()['detail'] == 'Execution run not found.'
+    assert saved == original
+
+
 def test_apply_current_assert_review_is_explicit_and_auditable(saved):
     assert status(saved).json()['status']=='current'
     response=apply(saved)
