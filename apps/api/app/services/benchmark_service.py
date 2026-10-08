@@ -11,6 +11,7 @@ from app.config import settings
 from app.services.assert_adapter import normalize_assert_payload
 from app.services.assert_artifact_store import persist_assert_run_artifacts
 from app.services.assert_trace import FAILURE_VALUES, parse_action_trace
+from app.services.design_enforcement import evaluate_design
 from app.schemas.assert_contracts import AssertResultManifest, AssertRunCreateRequest
 from app.services.assert_boundary import ingest_assert_run_result, queue_assert_run, with_default_runtime_config
 from app.services.vcon_interop import vcon_dialog_turns
@@ -501,12 +502,12 @@ def _run_lifecycle(
     verdict: str,
     failure_categories: list[str] | None = None,
 ) -> dict[str, Any]:
-    terminal_status = 'completed' if verdict == 'pass' else 'needs_review'
+    terminal_status = 'completed' if verdict == 'pass' else 'failed' if verdict == 'fail' else 'needs_review'
     attempt = int(lifecycle_context['attempt'])
     max_attempts = int(lifecycle_context['max_attempts'])
     retryable = terminal_status != 'completed' and attempt < max_attempts
     resumable = terminal_status != 'completed'
-    reason = 'benchmark passed' if terminal_status == 'completed' else 'benchmark requires review'
+    reason = 'benchmark passed' if terminal_status == 'completed' else 'benchmark failed' if terminal_status == 'failed' else 'benchmark requires review'
 
     transitions = [
         {'from': None, 'to': 'queued', 'at': run_started_at, 'reason': 'run accepted'},
@@ -527,6 +528,7 @@ def _run_lifecycle(
         'updated_at': evaluated_at,
         'completed_at': evaluated_at if terminal_status == 'completed' else None,
         'needs_review_at': evaluated_at if terminal_status == 'needs_review' else None,
+        'failed_at': evaluated_at if terminal_status == 'failed' else None,
         'failure_categories': failure_categories or [],
         'transitions': transitions,
     }
@@ -604,7 +606,7 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, A
         now=_parse_iso_datetime(evaluated_at),
     )
 
-    verdict = 'pass' if assert_manifest.verdict.status == 'pass' else 'needs_review'
+    verdict = assert_manifest.verdict.status if assert_manifest.verdict.status in {'pass', 'fail'} else 'needs_review'
     overall_score = int(assert_manifest.verdict.score) if assert_manifest.verdict.score is not None else None
     assert_fields = _assert_report_fields(assert_manifest, payload=payload, transcript=transcript)
     report = {
@@ -876,6 +878,17 @@ def _execute_assert_contract(
         final_state_missing=final_state_missing,
         workflow_order_issues=workflow_order_issues,
     )
+    design_results = evaluate_design(scenario, payload, transcript) if authored else {}
+    enforcement = design_results.get('design_enforcement', {})
+    if enforcement.get('blocked'):
+        status = 'fail' if enforcement.get('failed') else 'needs_review'
+        overall_score = 0 if enforcement.get('failed') else (0 if forbidden_hits else None)
+        for item in [*design_results['programmatic_check_results'], *design_results['evidence_requirement_results']]:
+            if item['status'] != 'pass':
+                hard_check_failures.append({'category': 'design_enforcement', 'check_id': item['id'],
+                                            'message': f'{item["label"]}: {item["reason"]}'})
+                failures.append({'code': f'design-enforcement:{item["id"]}', 'category': 'evidence',
+                                 'severity': 'error', 'summary': item['reason'], 'metadata': item})
     report_payload = {
         'suite_id': suite['id'],
         'suite_name': suite['name'],
@@ -895,6 +908,7 @@ def _execute_assert_contract(
         'authored_policy': authored,
         'action_checklist': deepcopy(scenario.get('action_checklist', [])),
         'forbidden_action_score': forbidden_score,
+        **design_results,
     }
     return AssertResultManifest.model_validate(
         {
@@ -995,6 +1009,8 @@ def _assert_report_fields(assert_manifest: AssertResultManifest, *, payload: dic
         'evidence_spans': evidence_citations,
         'action_trace': payload.get('action_trace'),
         'final_state': payload.get('final_state'),
+        **{key: deepcopy(result_payload[key]) for key in ('behavior_results', 'programmatic_check_results',
+            'evidence_requirement_results', 'design_enforcement') if key in result_payload},
     }
     return {
         'required_action_score': metrics.get('required_action_score'),
@@ -1315,7 +1331,7 @@ def run_suite(request: Any) -> dict[str, Any]:
         }
     )[:16]
 
-    verdict = 'pass' if scenario_reports and len(passing_reports) == len(scenario_reports) else 'needs_review'
+    verdict = 'fail' if any(report.get('verdict') == 'fail' for report in scenario_reports) else 'pass' if scenario_reports and len(passing_reports) == len(scenario_reports) else 'needs_review'
     reliability_metrics = _suite_reliability_metrics(scenario_reports)
     suite_contract_manifest = get_suite_contract_manifest(suite_id)
     suite_contract_manifest_sha256 = str(suite_contract_manifest['suite_contract_manifest_sha256']) if suite_contract_manifest else ''
@@ -1329,7 +1345,8 @@ def run_suite(request: Any) -> dict[str, Any]:
         'run_metadata': run_metadata,
         'scenario_count': len(scenario_reports),
         'pass_count': len(passing_reports),
-        'needs_review_count': len(scenario_reports) - len(passing_reports),
+        'failed_count': sum(report.get('verdict') == 'fail' for report in scenario_reports),
+        'needs_review_count': sum(report.get('verdict') not in {'pass', 'fail'} for report in scenario_reports),
         'average_score': average_score,
         'verdict': verdict,
         'reliability_metrics': reliability_metrics,
@@ -1385,7 +1402,7 @@ def simulate_suite(request: Any) -> dict[str, Any]:
         }
     )[:16]
 
-    verdict = 'pass' if reports and len(passing_reports) == len(reports) else 'needs_review'
+    verdict = 'fail' if any(report.get('verdict') == 'fail' for report in reports) else 'pass' if reports and len(passing_reports) == len(reports) else 'needs_review'
     reliability_metrics = _suite_reliability_metrics(reports)
     suite_contract_manifest = get_suite_contract_manifest(suite_id)
     suite_contract_manifest_sha256 = str(suite_contract_manifest['suite_contract_manifest_sha256']) if suite_contract_manifest else ''
@@ -1399,7 +1416,8 @@ def simulate_suite(request: Any) -> dict[str, Any]:
         'run_metadata': run_metadata,
         'scenario_count': len(reports),
         'pass_count': len(passing_reports),
-        'needs_review_count': len(reports) - len(passing_reports),
+        'failed_count': sum(report.get('verdict') == 'fail' for report in reports),
+        'needs_review_count': sum(report.get('verdict') not in {'pass', 'fail'} for report in reports),
         'average_score': average_score,
         'verdict': verdict,
         'reliability_metrics': reliability_metrics,
@@ -1808,7 +1826,7 @@ def _scenario_contract(scenario: BenchmarkScenario) -> dict[str, Any]:
         'rubric': deepcopy(scenario['rubric']),
     }
     for key in ('evaluation_spec_ref', 'behaviors', 'action_checklist', 'target_behavior_id', 'variant', 'caller_steps',
-                'requirements', 'permissible_behavior', 'evidence_requirements', 'generation_provenance', 'behavior_preset', 'scenario_preset'):
+                'requirements', 'permissible_behavior', 'evidence_requirements', 'deterministic_checks', 'generation_provenance', 'behavior_preset', 'scenario_preset'):
         if key in scenario:
             contract[key] = deepcopy(scenario[key])
     return contract
@@ -2027,6 +2045,7 @@ def _vcon_analysis(report: dict[str, Any]) -> dict[str, Any]:
         'voice_interaction_summary',
         'failure_categories',
         'hard_check_failures',
+        'behavior_results', 'programmatic_check_results', 'evidence_requirement_results', 'design_enforcement',
         'failure_modes',
         'evidence_citations',
         'assert_lab_report',
@@ -2064,7 +2083,8 @@ def _suite_vcon_export(
             'run_metadata': deepcopy(run_metadata),
             'scenario_count': len(scenario_reports),
             'pass_count': sum(1 for report in scenario_reports if report.get('verdict') == 'pass'),
-            'needs_review_count': sum(1 for report in scenario_reports if report.get('verdict') != 'pass'),
+            'failed_count': sum(1 for report in scenario_reports if report.get('verdict') == 'fail'),
+            'needs_review_count': sum(1 for report in scenario_reports if report.get('verdict') not in {'pass', 'fail'}),
             'average_score': average_score,
             'verdict': verdict,
             'reliability_metrics': deepcopy(reliability_metrics),

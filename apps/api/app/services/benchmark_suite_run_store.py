@@ -85,7 +85,7 @@ def persist_benchmark_suite_run(db: Session, suite_report: dict[str, Any]) -> di
     record.project_key = project_key
     record.suite_id = _required_str(suite_report.get('suite_id'), 'suite_id')
     verdict = _required_str(suite_report.get('verdict'), 'verdict')
-    terminal_status = 'completed' if verdict == 'pass' else 'needs_review'
+    terminal_status = 'completed' if verdict == 'pass' else 'failed' if verdict == 'fail' else 'needs_review'
     record.status = terminal_status
     record.scenario_count = _non_negative_int(suite_report.get('scenario_count'))
     record.pass_count = _non_negative_int(suite_report.get('pass_count'))
@@ -263,6 +263,7 @@ def serialize_benchmark_suite_run(record: BenchmarkSuiteRunRecord) -> dict[str, 
         'scenario_count': record.scenario_count,
         'pass_count': record.pass_count,
         'needs_review_count': record.needs_review_count,
+        'failed_count': _non_negative_int(suite_report.get('failed_count')),
         'average_score': suite_report.get('average_score', record.average_score),
         'suite_contract_manifest_sha256': suite_report.get('suite_contract_manifest_sha256') or _suite_contract_manifest_sha256(record.suite_id),
         'suite_report': suite_report,
@@ -406,6 +407,7 @@ def _suite_history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     total_scenarios = 0
     total_passes = 0
     total_needs_review = 0
+    total_failed = 0
     active_suite_runs = 0
     terminal_suite_runs = 0
     for record in records:
@@ -418,6 +420,7 @@ def _suite_history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         total_scenarios += _non_negative_int(record.get('scenario_count'))
         total_passes += _non_negative_int(record.get('pass_count'))
         total_needs_review += _non_negative_int(record.get('needs_review_count'))
+        total_failed += _non_negative_int(record.get('failed_count'))
         for category in _suite_failure_categories(record):
             failure_category_counts[category] = failure_category_counts.get(category, 0) + 1
 
@@ -437,6 +440,7 @@ def _suite_history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
         'total_scenarios': total_scenarios,
         'total_passes': total_passes,
         'total_needs_review': total_needs_review,
+        'total_failed': total_failed,
         'pass_rate': round((total_passes / total_scenarios) * 100, 2) if total_scenarios else None,
         'failure_category_counts': dict(sorted(failure_category_counts.items())),
         'top_failure_categories': _top_failure_categories(failure_category_counts),

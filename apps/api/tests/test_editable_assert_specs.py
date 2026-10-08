@@ -247,7 +247,6 @@ def test_preview_compiles_canonical_assert_yaml_and_validates_with_assert():
     assert {warning['field'] for warning in payload['warnings']} == {
         'extensions.agentic_contact_center',
         'deterministic_checks',
-        'evidence_requirements',
     }
 
 

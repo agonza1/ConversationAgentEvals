@@ -365,6 +365,69 @@ def test_upstream_assert_judge_runs_existing_judge_only_command(monkeypatch, tmp
     assert _spent_credits() == 10
 
 
+@pytest.mark.parametrize('case,expected', [
+    ('unblocked', 'pass'), ('blocked', 'needs_review'), ('missing_gates', 'needs_review'),
+    ('builtin', 'needs_review'), ('violation', 'needs_review'), ('deterministic_fail', 'fail'),
+    ('observed_forbidden', 'needs_review'),
+])
+def test_authored_semantic_review_can_propose_and_apply_pass_only_when_unblocked(monkeypatch, tmp_path, case, expected):
+    from app.schemas.execution import ConversationRecord, ExecutionRunRecord, ExecutionRunProgress
+    from app.services import execution_run_store as store
+    run, conversation = _run_and_conversation()
+    _configure_assert_runtime(monkeypatch, tmp_path)
+    contract = _scenario_contract()
+    contract.update(evaluation_spec_ref={'id': 'refund-policy', 'version': 1}, target_behavior_id='review',
+                    behaviors=[{'id': 'review', 'label': 'Open review', 'kind': 'required',
+                                'description': 'Open a policy review case without claiming a completed refund.'}])
+    if case == 'builtin':
+        contract.pop('evaluation_spec_ref')
+        contract.pop('target_behavior_id')
+    conversation['verdict'] = 'fail' if case == 'deterministic_fail' else 'needs_review'
+    conversation['evaluation_findings'] = {
+        'scenario_contract': contract, 'design_enforcement': {'blocked': case == 'blocked', 'failed': False},
+        'behavior_results': [{'id': 'review', 'status': 'fail' if case == 'observed_forbidden' else 'insufficient_evidence'}],
+    }
+    if case == 'missing_gates':
+        conversation['evaluation_findings'].pop('design_enforcement')
+    taxonomy = build_assert_taxonomy(scenario_contract=contract, conversation=conversation)
+
+    def writer(score_path, config):
+        score = _valid_score(run, conversation, config['pipeline']['judge']['model']['name'])
+        score['verdict']['node_judgments'] = [
+            {'node_name': category['name'], 'violated': case == 'violation', 'confidence': 'high',
+             'reasoning': 'Reviewed recorded evidence [1].'} for category in taxonomy['behavior_categories']]
+        score_path.write_text(json.dumps(score) + '\n', encoding='utf-8')
+
+    _install_fake_assert(monkeypatch, writer)
+    response = run_upstream_assert_judge(run=run, conversation=conversation, scenario_contract=contract,
+                                        artifact_root=tmp_path / 'assert-invocation')
+    assert response['judge_result']['proposed_evaluation']['verdict'] == expected
+    if case != 'unblocked':
+        return
+    # Apply the real proposal synthesized above, not a manually manufactured pass.
+    monkeypatch.setattr(store, 'RUNS_DIR', tmp_path / 'runs')
+    monkeypatch.setattr(store, 'REPO_ROOT', tmp_path)
+    store.reset_execution_runs_for_tests()
+    try:
+        store.create_execution_run(ExecutionRunRecord(execution_run_id=run['execution_run_id'], status='needs_review',
+            mode=run['mode'], suite_id=run['suite_id'], scenario_ids=[conversation['scenario_id']],
+            user_id=run['user_id'], project_id='test', conversations=[ConversationRecord.model_validate(conversation)],
+            progress=ExecutionRunProgress(phase='completed', completed_conversations=1, total_conversations=1, percent=100),
+            created_at='2026-10-07T00:00:00Z', updated_at='2026-10-07T00:00:00Z'))
+        review = store.record_judge_review(run['execution_run_id'], conversation['conversation_id'],
+                                           user_id=run['user_id'], response=response)
+        result = store.apply_judge_review(run['execution_run_id'], conversation['conversation_id'],
+                                         user_id=run['user_id'], review_id=review['review_id'])
+        assert result['status'] == 'completed'
+        applied = result['conversations'][0]
+        assert applied['verdict'] == 'needs_review'  # Original automatic verdict stays immutable.
+        assert applied['evaluation_adjudication']['judge_result']['proposed_evaluation']['verdict'] == 'pass'
+        assert applied['evaluation_findings'] == conversation['evaluation_findings']
+        assert applied['evaluation_adjudication']['judge_result']['provenance']['engine'] == 'assert'
+    finally:
+        store.reset_execution_runs_for_tests()
+
+
 @pytest.mark.parametrize('judge_status', ['judge_failed', 'filter_skipped', 'scoring_skipped'])
 def test_upstream_assert_judge_rejects_non_ok_scores_and_refunds(
     monkeypatch,
