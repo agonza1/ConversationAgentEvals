@@ -132,8 +132,11 @@ def _omitted_key(key: Any) -> bool:
 def _clean(value: Any) -> Any:
     value = redact(value)
     if isinstance(value, dict):
-        if 'value' in value and any(isinstance(value.get(field), str) and _omitted_key(value[field])
-                                    for field in ('key', 'name')):
+        fields = [(re.sub(r'[^a-z0-9]', '', str(key).casefold()), item) for key, item in value.items()]
+        context_fields = {'key', 'name', 'header', 'headername', 'field', 'fieldname', 'attribute', 'attributename', 'label'}
+        value_fields = {'value', 'values', 'val', 'data', 'content', 'contents', 'body', 'headervalue', 'fieldvalue'}
+        if (any(field in value_fields for field, _ in fields)
+                and any(field in context_fields and isinstance(item, str) and _omitted_key(item) for field, item in fields)):
             return {}
         return {str(_clean(str(key))): _clean(item) for key, item in value.items()
                 if not _omitted_key(key)}

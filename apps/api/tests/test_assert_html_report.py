@@ -512,6 +512,32 @@ def test_noncredential_uri_is_preserved():
     assert _clean('postgresql://db.example/app') == 'postgresql://db.example/app'
 
 
+@pytest.mark.parametrize('context', ['header', 'header_name', 'headerName', 'Header-Name', 'field', 'fieldName', 'attribute', 'label'])
+@pytest.mark.parametrize('value_field', ['value', 'headerValue', 'data'])
+def test_credential_record_aliases_are_scrubbed_before_recursion(saved, context, value_field):
+    _, conv, review = saved
+    secret = 'SYNTHETIC-ALIASED-CREDENTIAL'
+    record = {context: 'Authorization', value_field: f'Basic {secret}'}
+    evidence = {'headers': [record], 'serialized': json.dumps(record), 'business_receipt': 'case-fixture'}
+    conv['action_trace'][0]['result'] = evidence
+    conv['final_state']['evidence'] = evidence
+    review['judge_result']['provenance']['node_judgments'][0]['evidence'] = evidence
+    resnapshot(saved)
+    original = deepcopy(saved)
+    response = download(saved)
+    assert response.status_code == 200
+    assert secret not in response.text
+    assert 'case-fixture' in response.text
+    assert saved == original
+
+
+def test_ordinary_header_record_is_preserved():
+    from app.services.assert_html_report import _clean
+    record = {'header': 'Content-Type', 'value': 'application/json'}
+    assert _clean(record) == record
+    assert _clean({'header': 'Authorization', 'Header': 'Content-Type', 'value': 'Basic SYNTHETIC-DUPLICATE'}) == {}
+
+
 @pytest.mark.parametrize('key', ['cookies', 'http_cookies', 'HTTPCookies', 'cookieJar', 'cookiejar'])
 def test_cookie_container_context_is_preserved_before_recursion(saved, key):
     _, conv, review = saved
