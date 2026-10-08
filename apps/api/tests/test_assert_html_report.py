@@ -465,6 +465,26 @@ def test_native_node_name_is_used_in_collapsed_behavior_heading_and_escaped(save
     assert '<summary>Behavior 1</summary>' not in response.text
 
 
+@pytest.mark.parametrize('header', ['Authorization', 'Proxy-Authorization', 'Cookie', 'Set-Cookie'])
+@pytest.mark.parametrize('shape', ['pairs', 'named', 'serialized_pairs', 'serialized_named'])
+def test_structured_credential_header_context_is_preserved(saved, header, shape):
+    _, conv, review = saved
+    secret = 'SYNTHETIC-PAIRED-CREDENTIAL'
+    headers = [[header, f'Basic {secret}']] if 'pairs' in shape else [{'name': header, 'value': f'Digest {secret}'}]
+    evidence = {'headers': headers, 'business_receipt': 'case-fixture'}
+    if shape.startswith('serialized'): evidence = json.dumps(evidence)
+    conv['action_trace'][0]['result'] = evidence
+    conv['final_state']['evidence'] = evidence
+    review['judge_result']['provenance']['node_judgments'][0]['evidence'] = evidence
+    resnapshot(saved)
+    original = deepcopy(saved)
+    response = download(saved)
+    assert response.status_code == 200
+    assert secret not in response.text
+    assert 'case-fixture' in response.text
+    assert saved == original
+
+
 @pytest.mark.parametrize('key', ['cookies', 'http_cookies', 'HTTPCookies', 'cookieJar', 'cookiejar'])
 def test_cookie_container_context_is_preserved_before_recursion(saved, key):
     _, conv, review = saved

@@ -132,11 +132,15 @@ def _omitted_key(key: Any) -> bool:
 def _clean(value: Any) -> Any:
     value = redact(value)
     if isinstance(value, dict):
-        if 'value' in value and isinstance(value.get('key'), str) and _omitted_key(value['key']):
+        if 'value' in value and any(isinstance(value.get(field), str) and _omitted_key(value[field])
+                                    for field in ('key', 'name')):
             return {}
         return {str(_clean(str(key))): _clean(item) for key, item in value.items()
                 if not _omitted_key(key)}
     if isinstance(value, list):
+        if (len(value) == 2 and isinstance(value[0], str)
+                and re.fullmatch(r'[a-zA-Z_][\w.-]{0,160}', value[0]) and _omitted_key(value[0])):
+            return ['[sensitive pair omitted]']
         # A multiline key may be split into stdout/citation entries. Without
         # trustworthy block bounds, omit that credential-bearing collection
         # rather than exposing its unlabeled body in the next element.
