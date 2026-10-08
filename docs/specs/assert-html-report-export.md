@@ -56,9 +56,10 @@ Persisted citations must be a list of strings; missing citations stay unavailabl
 and malformed collections return a conflict rather than being split into characters
 or object keys. Non-null score and output digests must be lowercase SHA-256 hex.
 
-Raw private-key blocks are omitted even when they appear without a credential
-field label. Incomplete blocks are removed through the end of their value.
-Collections containing private-key fences are conservatively omitted to avoid
-leaking body lines split across entries; other source evidence remains unchanged.
+Self-contained raw private-key blocks are omitted even without a credential field
+label. Incomplete or split block bounds return an unavailable conflict: unlabeled
+body fragments in other log records or conversation turns cannot be exported
+safely. This includes structured/stringified logs. Unselected historical reviews
+do not block a selected safe export; stored evidence remains unchanged.
 
 Synthetic fixture evidence is explicitly labeled and is used only for tests and local screenshots; it does not claim a live ASSERT judgment.

@@ -494,6 +494,12 @@ def test_standalone_private_key_blocks_are_omitted_from_actual_report(saved, lab
     resnapshot(saved)
     original = deepcopy(saved)
     response = download(saved)
+    if truncated:
+        assert response.status_code == 409
+        assert 'block bounds' in response.json()['detail']
+        assert 'SYNTHETIC-KEY-BODY-NEVER-EXPORT' not in response.text
+        assert saved == original
+        return
     assert response.status_code == 200
     assert 'SYNTHETIC-KEY-BODY-NEVER-EXPORT' not in response.text
     assert '[private key omitted]' in response.text and 'case-fixture' in response.text
@@ -512,9 +518,39 @@ def test_private_key_split_into_log_or_citation_lines_cannot_lose_context(saved,
         review['evidence_citations'] = lines
     resnapshot(saved)
     response = download(saved)
-    assert response.status_code == 200
+    assert response.status_code == 409
     assert 'SYNTHETIC-SPLIT-KEY-BODY' not in response.text
-    assert '[private key omitted]' in response.text
+    assert 'block bounds' in response.json()['detail']
+
+
+@pytest.mark.parametrize('source', ['tool', 'state', 'turns', 'serialized', 'judgment'])
+def test_structured_split_key_entries_fail_closed_without_body_leak(saved, source):
+    _, conv, review = saved
+    logs = [{'message': '-----BEGIN PRIVATE KEY-----'}, {'message': 'SYNTHETIC-DICT-KEY-BODY'},
+            {'message': '-----END PRIVATE KEY-----'}]
+    if source == 'tool': conv['action_trace'][0]['result'] = {'logs': logs}
+    elif source == 'state': conv['final_state']['logs'] = logs
+    elif source == 'serialized': conv['action_trace'][0]['result'] = json.dumps({'logs': logs})
+    elif source == 'judgment': review['judge_result']['provenance']['node_judgments'][0]['evidence'] = logs
+    else: conv['turns'] = [{'speaker': 'agent', 'text': item['message']} for item in logs]
+    resnapshot(saved)
+    original = deepcopy(saved)
+    response = download(saved)
+    assert response.status_code == 409
+    assert 'block bounds' in response.json()['detail']
+    assert 'SYNTHETIC-DICT-KEY-BODY' not in response.text
+    assert saved == original
+
+
+def test_unselected_historical_key_fragments_do_not_block_selected_safe_export(saved):
+    _, conv, review = saved
+    old = deepcopy(review)
+    old['review_id'] = 'unselected-private-key'
+    old['judge_result']['rationale'] = '-----BEGIN PRIVATE KEY-----\nSYNTHETIC-UNSELECTED-BODY'
+    conv['judge_reviews'].append(old)
+    response = download(saved)
+    assert response.status_code == 200
+    assert 'SYNTHETIC-UNSELECTED-BODY' not in response.text
 
 
 @pytest.mark.parametrize('label', ['PUBLIC KEY', 'RSA PUBLIC KEY', 'CERTIFICATE'])

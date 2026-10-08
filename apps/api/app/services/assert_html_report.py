@@ -14,6 +14,9 @@ from app.services.vcon_evidence import redact
 TERMINAL = {'completed', 'needs_review', 'failed', 'cancelled', 'canceled'}
 _PRIVATE_KEY_LABEL = r'(?:[A-Z0-9_-]+[ \t]+){0,3}(?:PRIVATE|SECRET)[ \t]+KEY(?:[ \t]+BLOCK)?'
 _PRIVATE_KEY_BEGIN = re.compile(r'-{4,5}[ \t]*BEGIN[ \t]+' + _PRIVATE_KEY_LABEL + r'[ \t]*-{4,5}', re.I)
+_PRIVATE_KEY_END = re.compile(r'-{4,5}[ \t]*END[ \t]+' + _PRIVATE_KEY_LABEL + r'[ \t]*-{4,5}', re.I)
+_PRIVATE_KEY_COMPLETE = re.compile(r'-{4,5}[ \t]*BEGIN[ \t]+(?P<label>' + _PRIVATE_KEY_LABEL
+                                   + r')[ \t]*-{4,5}.*?-{4,5}[ \t]*END[ \t]+(?P=label)[ \t]*-{4,5}', re.I | re.S)
 _PRIVATE_KEY_BLOCK = re.compile(r'-{4,5}[ \t]*BEGIN[ \t]+(?P<label>' + _PRIVATE_KEY_LABEL
                                 + r')[ \t]*-{4,5}.*?(?:-{4,5}[ \t]*END[ \t]+(?P=label)[ \t]*-{4,5}|\Z)', re.I | re.S)
 
@@ -25,6 +28,29 @@ def _saved_citations(review: dict[str, Any]) -> list[str]:
     return citations
 
 
+def _validate_private_key_bounds(value: Any) -> None:
+    """Do not export unlabeled key fragments from other entries/turns."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _validate_private_key_bounds(str(key))
+            _validate_private_key_bounds(item)
+    elif isinstance(value, list):
+        for item in value:
+            _validate_private_key_bounds(item)
+    elif isinstance(value, str):
+        if value.lstrip().startswith(('{', '[')):
+            try:
+                structured = json.loads(value)
+            except ValueError:
+                pass
+            else:
+                _validate_private_key_bounds(structured)
+                return
+        remaining = _PRIVATE_KEY_COMPLETE.sub('', value)
+        if _PRIVATE_KEY_BEGIN.search(remaining) or _PRIVATE_KEY_END.search(remaining):
+            raise ValueError('Private-key block bounds are incomplete or split across evidence entries; export is unavailable.')
+
+
 def validate_saved_review(run: dict[str, Any], conversation: dict[str, Any], review: dict[str, Any],
                           scenario_contract: dict[str, Any] | None) -> dict[str, Any]:
     """Reject incomplete or changed evidence before generating a portable report."""
@@ -32,6 +58,12 @@ def validate_saved_review(run: dict[str, Any], conversation: dict[str, Any], rev
         raise ValueError('The run and conversation must be terminal before export.')
     result = review.get('judge_result')
     _saved_citations(review)
+    # Only the selected assessment and actual conversation source are rendered;
+    # an unrelated historical review must not block this selected export.
+    _validate_private_key_bounds({
+        'conversation': {key: conversation.get(key) for key in ('turns', 'transcript', 'action_trace', 'final_state')},
+        'review': {key: review.get(key) for key in ('judge_result', 'evidence_citations')},
+    })
     provenance = result.get('provenance') if isinstance(result, dict) else None
     if (review.get('status') not in {'pending_confirmation', 'applied', 'superseded'}
             or not isinstance(provenance, dict) or provenance.get('engine') != 'assert'
