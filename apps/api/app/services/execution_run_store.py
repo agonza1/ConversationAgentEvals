@@ -293,6 +293,9 @@ def record_judge_review(
             'output_sha256': hashlib.sha256(raw_output.encode('utf-8')).hexdigest() if raw_output else None,
             'deterministic_snapshot': current_snapshot,
         }
+        if (judge_result.get('provenance') or {}).get('engine') == 'openai_decisions':
+            from app.services.openai_decisions_judge import validate_saved_decisions_inputs
+            validate_saved_decisions_inputs(run, conversation, review)
         reviews = list(conversation.get('judge_reviews') or [])
         reviews.append(review)
         conversation['judge_reviews'] = _compact_judge_review_history(reviews)
@@ -325,6 +328,9 @@ def apply_judge_review(
         review = next((item for item in reviews if item.get('review_id') == review_id), None)
         if review is None:
             raise KeyError('LLM judge review not found.')
+        if ((review.get('judge_result') or {}).get('provenance') or {}).get('engine') == 'openai_decisions':
+            from app.services.openai_decisions_judge import validate_saved_decisions_inputs
+            validate_saved_decisions_inputs(run, conversation, review)
         if review.get('status') == 'applied':
             return deepcopy(run)
         if review.get('status') != 'pending_confirmation':

@@ -138,7 +138,7 @@ def test_real_service_uses_documented_endpoint_and_preserves_inputs_and_provenan
     calls, refunded = provider
     item = conversation()
     before = deepcopy(item)
-    result = judge.run_openai_decisions_judge(run={'execution_run_id': 'run-1'}, conversation=item)
+    result = judge.run_openai_decisions_judge(run={'execution_run_id': 'run-1', 'status': 'completed'}, conversation=item)
     assert item == before
     assert calls[0][0] == 'https://api.openai.com/v1/decisions'
     assert calls[0][1]['headers'] == {'Authorization': 'Bearer test-secret'}
@@ -154,12 +154,12 @@ def test_disabled_and_missing_credentials_do_not_issue_provider_requests(provide
     calls, _ = provider
     monkeypatch.setenv('OPENAI_DECISIONS_JUDGE_ENABLED', '0')
     with pytest.raises(judge.DecisionsJudgeUnavailable):
-        judge.run_openai_decisions_judge(run={}, conversation=conversation())
+        judge.run_openai_decisions_judge(run={'status': 'completed'}, conversation=conversation())
     monkeypatch.setenv('OPENAI_DECISIONS_JUDGE_ENABLED', '1')
     monkeypatch.delenv('OPENAI_API_KEY')
     monkeypatch.delenv('LLM_JUDGE_API_KEY', raising=False)
     with pytest.raises(judge.DecisionsJudgeUnavailable):
-        judge.run_openai_decisions_judge(run={}, conversation=conversation())
+        judge.run_openai_decisions_judge(run={'status': 'completed'}, conversation=conversation())
     assert calls == []
 
 
@@ -173,7 +173,7 @@ def test_failure_refunds_credits_and_hides_provider_content(provider, monkeypatc
         return httpx.Response(200, json={'model': judge.MODEL, 'answers': []})
     monkeypatch.setattr(httpx.Client, 'post', post)
     with pytest.raises(judge.DecisionsJudgeFailed) as exc:
-        judge.run_openai_decisions_judge(run={}, conversation=conversation())
+        judge.run_openai_decisions_judge(run={'status': 'completed'}, conversation=conversation())
     assert 'test-secret' not in str(exc.value) and 'private transcript' not in str(exc.value)
     assert refunded == [10]
 
@@ -182,8 +182,8 @@ def test_budget_and_concurrency_admission_precede_network(provider, monkeypatch)
     calls, refunded = provider
     monkeypatch.setattr(judge, '_reserve_judge_credits', lambda *args, **kwargs: (False, {}))
     with pytest.raises(judge.DecisionsJudgeBudgetExceeded):
-        judge.run_openai_decisions_judge(run={}, conversation=conversation())
+        judge.run_openai_decisions_judge(run={'status': 'completed'}, conversation=conversation())
     assert calls == [] and refunded == []
     with judge._slot(), judge._slot():
         with pytest.raises(judge.DecisionsJudgeBusy):
-            judge.run_openai_decisions_judge(run={}, conversation=conversation())
+            judge.run_openai_decisions_judge(run={'status': 'completed'}, conversation=conversation())

@@ -36,7 +36,11 @@ def recorded(monkeypatch, tmp_path):
         calls.append(deepcopy(kwargs))
         decisions = [{'name': 'unsupported_operational_claim', 'status': 'no_violation', 'answer': {'type': 'choice', 'choice': 'no_violation', 'confidence': 1}}]
         review = judge._review(decisions, kwargs['conversation']['verdict'], 0.9)
-        review['provenance'] = {'engine': 'openai_decisions', 'model': judge.MODEL, 'input_fingerprint': 'fingerprint'}
+        snapshot = store.deterministic_evaluation_snapshot(kwargs['conversation'])
+        request = judge.build_decisions_request(conversation=kwargs['conversation'], scenario_contract=kwargs['scenario_contract'])
+        review['provenance'] = {'engine': 'openai_decisions', 'model': judge.MODEL, 'endpoint': judge.ENDPOINT,
+                               'policy_version': judge.POLICY_VERSION,
+                               'input_fingerprint': judge._input_fingerprint(request, snapshot, 0.9)}
         return {'status': 'ready', 'provider': 'openai', 'model': judge.MODEL, 'credits': 10,
                 'judge_output': '{"answers":[]}', 'judge_result': review}
 
@@ -74,13 +78,15 @@ def test_endpoint_rejects_owner_mismatch_and_client_injected_evidence(recorded):
     assert calls == [] and audit == []
 
 
-@pytest.mark.parametrize('kind', ['active_run', 'active_conversation', 'no_verdict'])
+@pytest.mark.parametrize('kind', ['active_run', 'active_conversation', 'no_verdict', 'unknown_run', 'unknown_conversation'])
 def test_endpoint_requires_terminal_deterministically_evaluated_calls(recorded, kind):
     calls, audit = recorded
     run = store._RUNS['decisions-run']
     if kind == 'active_run': run['status'] = 'running'
     if kind == 'active_conversation': run['conversations'][0]['status'] = 'running'
     if kind == 'no_verdict': run['conversations'][0]['verdict'] = None
+    if kind == 'unknown_run': run['status'] = 'waiting'
+    if kind == 'unknown_conversation': run['conversations'][0]['status'] = None
     assert client.post(PATH, json={'user_id': 'owner'}).status_code == 409
     assert calls == [] and audit == []
 
@@ -96,6 +102,59 @@ def test_changed_evidence_cannot_record_a_stale_review(recorded, monkeypatch):
     assert response.status_code == 409
     assert 'changed' in response.json()['detail']
     assert not store.get_conversation('decisions-run', 'call')['judge_reviews']
+
+
+def test_changed_legacy_catalog_contract_cannot_record_stale_review(recorded, monkeypatch):
+    store._RUNS['decisions-run']['conversations'][0]['evaluation_findings'] = {}
+    contract = {'required_actions': ['cancel subscription']}
+    monkeypatch.setattr(route, 'get_scenario_contract', lambda *args: deepcopy(contract))
+    monkeypatch.setattr('app.services.benchmark_service.get_scenario_contract', lambda *args: deepcopy(contract))
+    original_provider = route.run_openai_decisions_judge
+    def provider(**kwargs):
+        result = original_provider(**kwargs)
+        contract['required_actions'] = ['verify identity first']
+        return result
+    monkeypatch.setattr(route, 'run_openai_decisions_judge', provider)
+    response = client.post(PATH, json={'user_id': 'owner'})
+    assert response.status_code == 409
+    assert 'judging inputs changed' in response.json()['detail']
+    assert not store.get_conversation('decisions-run', 'call')['judge_reviews']
+
+
+@pytest.mark.parametrize('mutation', ['catalog', 'fingerprint', 'policy', 'threshold', 'model', 'not_terminal'])
+def test_confirmation_rechecks_exact_decisions_inputs_without_mutation(recorded, monkeypatch, mutation):
+    conv = store._RUNS['decisions-run']['conversations'][0]
+    conv['evaluation_findings'] = {}
+    contract = {'required_actions': ['cancel subscription']}
+    monkeypatch.setattr(route, 'get_scenario_contract', lambda *args: deepcopy(contract))
+    monkeypatch.setattr('app.services.benchmark_service.get_scenario_contract', lambda *args: deepcopy(contract))
+    response = client.post(PATH, json={'user_id': 'owner'})
+    assert response.status_code == 200, response.text
+    review = conv['judge_reviews'][0]
+    if mutation == 'catalog': contract['required_actions'] = ['verify identity first']
+    if mutation == 'fingerprint': review['judge_result']['provenance']['input_fingerprint'] = 'invalid'
+    if mutation == 'policy': review['judge_result']['policy']['version'] = 'unknown-version'
+    if mutation == 'threshold': review['judge_result']['policy']['min_confidence'] = True
+    if mutation == 'model': review['model'] = 'other-model'
+    if mutation == 'not_terminal': conv['status'] = 'waiting'
+    before = deepcopy(store._RUNS['decisions-run'])
+    response = client.post('/api/execution/runs/decisions-run/conversations/call/judge-reviews/'
+                           + review['review_id'] + '/apply', json={'user_id': 'owner', 'confirm': True})
+    assert response.status_code == 409, response.text
+    assert store._RUNS['decisions-run'] == before
+
+
+def test_recorded_contract_and_threshold_stay_authoritative_on_confirmation(recorded, monkeypatch):
+    response = client.post(PATH, json={'user_id': 'owner'})
+    assert response.status_code == 200, response.text
+    monkeypatch.setattr('app.services.benchmark_service.get_scenario_contract',
+                        lambda *args: {'required_actions': ['new catalog policy']})
+    monkeypatch.setenv('OPENAI_DECISIONS_JUDGE_MIN_CONFIDENCE', '0.99')
+    review_id = response.json()['review_id']
+    store.reset_execution_runs_for_tests()
+    store.apply_judge_review('decisions-run', 'call', user_id='owner', review_id=review_id)
+    applied = store.get_conversation('decisions-run', 'call')
+    assert applied['evaluation_adjudication']['judge_result']['policy']['min_confidence'] == 0.9
 
 
 @pytest.mark.parametrize('error,status', [(judge.DecisionsJudgeUnavailable, 503), (judge.DecisionsJudgeBusy, 429),

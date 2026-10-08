@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import time
 from contextlib import contextmanager
 from copy import deepcopy
@@ -22,6 +23,7 @@ MODEL = 'gpt-6-luna'
 POLICY_VERSION = 'cae-decisions-review-v1'
 CHOICES = ('violation', 'no_violation', 'insufficient_evidence')
 CREDITS = 10
+TERMINAL = {'completed', 'needs_review', 'failed', 'cancelled', 'canceled'}
 _SLOTS = BoundedSemaphore(2)
 
 
@@ -108,6 +110,40 @@ def _probability(value: Any) -> float:
     return float(value)
 
 
+def _input_fingerprint(request: dict[str, Any], snapshot: dict[str, Any], threshold: float) -> str:
+    return hashlib.sha256(_json({'request': request, 'policy': POLICY_VERSION, 'threshold': threshold, 'snapshot': snapshot}).encode()).hexdigest()
+
+
+def validate_saved_decisions_inputs(run: dict[str, Any], conversation: dict[str, Any], review: dict[str, Any]) -> None:
+    """Verify exact inputs under the store lock, without credentials or provider calls."""
+    from app.services.benchmark_service import get_scenario_contract
+
+    if run.get('status') not in TERMINAL or conversation.get('status') not in TERMINAL:
+        raise ValueError('Run and conversation must be terminal before Decisions review confirmation.')
+    result = review.get('judge_result')
+    if not isinstance(result, dict):
+        raise ValueError('Saved Decisions review cannot be verified. Run a new review explicitly.')
+    provenance, policy = result.get('provenance'), result.get('policy')
+    if not isinstance(provenance, dict) or not isinstance(policy, dict):
+        raise ValueError('Saved Decisions policy cannot be verified. Run a new review explicitly.')
+    threshold = policy.get('min_confidence')
+    if (provenance.get('engine') != 'openai_decisions' or provenance.get('endpoint') != ENDPOINT
+            or provenance.get('model') != MODEL or review.get('model') != MODEL
+            or provenance.get('policy_version') != POLICY_VERSION or policy.get('version') != POLICY_VERSION
+            or isinstance(threshold, bool) or not isinstance(threshold, (int, float))
+            or not math.isfinite(threshold) or not 0.5 <= threshold <= 1):
+        raise ValueError('Saved Decisions policy or model cannot be verified. Run a new review explicitly.')
+    fingerprint = provenance.get('input_fingerprint')
+    if not isinstance(fingerprint, str) or not re.fullmatch('[0-9a-f]{64}', fingerprint):
+        raise ValueError('Saved Decisions input identity is unavailable. Run a new review explicitly.')
+    contract = get_scenario_contract(str(conversation.get('suite_id') or run.get('suite_id') or ''),
+                                     str(conversation.get('scenario_id') or ''))
+    request = build_decisions_request(conversation=conversation, scenario_contract=contract)
+    snapshot = deterministic_evaluation_snapshot(conversation)
+    if review.get('deterministic_snapshot') != snapshot or _input_fingerprint(request, snapshot, threshold) != fingerprint:
+        raise ValueError('Decisions judging inputs changed after this review. Run a new review explicitly.')
+
+
 def validate_decisions_response(response: Any, request: dict[str, Any], threshold: float) -> list[dict[str, Any]]:
     if not isinstance(response, dict) or response.get('model') != MODEL:
         raise DecisionsJudgeFailed('Decisions returned an unexpected model or response.')
@@ -176,6 +212,8 @@ def _slot():
 
 
 def run_openai_decisions_judge(*, run: dict[str, Any], conversation: dict[str, Any], scenario_contract: dict[str, Any] | None = None) -> dict[str, Any]:
+    if run.get('status') not in TERMINAL or conversation.get('status') not in TERMINAL:
+        raise ValueError('Run and conversation must be terminal before Decisions judging.')
     if os.getenv('OPENAI_DECISIONS_JUDGE_ENABLED', '').lower().strip() not in {'1', 'true', 'yes', 'on'}:
         raise DecisionsJudgeUnavailable('OpenAI Decisions judging is disabled. Set OPENAI_DECISIONS_JUDGE_ENABLED=1.')
     api_key = (os.getenv('OPENAI_API_KEY') or os.getenv('LLM_JUDGE_API_KEY') or '').strip()
@@ -187,7 +225,7 @@ def run_openai_decisions_judge(*, run: dict[str, Any], conversation: dict[str, A
         raise ValueError('A deterministic verdict is required before Decisions judging.')
     threshold = _threshold()
     request = build_decisions_request(conversation=conversation, scenario_contract=scenario_contract)
-    fingerprint = hashlib.sha256(_json({'request': request, 'policy': POLICY_VERSION, 'threshold': threshold, 'snapshot': snapshot}).encode()).hexdigest()
+    fingerprint = _input_fingerprint(request, snapshot, threshold)
     with _slot():
         reserved, spend = _reserve_judge_credits(_judge_spend_control(), credits=CREDITS)
         if not reserved:

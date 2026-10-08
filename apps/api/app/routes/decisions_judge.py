@@ -11,7 +11,7 @@ from app.services.benchmark_service import get_scenario_contract
 from app.services.product_service import record_judge_request, resolve_execution_product_project_id
 from app.services.openai_decisions_judge import (
     DecisionsJudgeBudgetExceeded, DecisionsJudgeBusy, DecisionsJudgeFailed,
-    DecisionsJudgeUnavailable, run_openai_decisions_judge,
+    DecisionsJudgeUnavailable, TERMINAL, run_openai_decisions_judge,
 )
 
 router = APIRouter(prefix='/api/decisions', tags=['decisions-judge'])
@@ -33,7 +33,7 @@ def judge_execution_conversation(execution_run_id: str, conversation_id: str,
     conversation = execution_run_store.get_conversation(execution_run_id, conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail='Conversation not found.')
-    if run.get('status') in {'queued', 'running'} or conversation.get('status') in {'queued', 'running'}:
+    if run.get('status') not in TERMINAL or conversation.get('status') not in TERMINAL:
         raise HTTPException(status_code=409, detail='Run and conversation must be terminal before Decisions judging.')
     snapshot = execution_run_store.deterministic_evaluation_snapshot(conversation)
     if snapshot.get('verdict') not in {'pass', 'fail', 'failed', 'needs_review'}:
