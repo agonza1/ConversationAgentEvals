@@ -467,31 +467,20 @@ export async function requestLlmJudge(payload: {
   const conversationId = payload.conversation_id;
   const userId = payload.user_id;
 
-  if (executionRunId && conversationId && userId) {
-    // Completed execution conversations are judged by upstream ASSERT. The legacy
-    // product judge remains available only for standalone report/transcript reviews.
-    return handleJson(
-      await fetch(
-        `${getApiBase()}/api/assert/runs/${encodeURIComponent(executionRunId)}`
-        + `/conversations/${encodeURIComponent(conversationId)}/judge`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user_id: userId }),
-        },
-      ),
-    );
+  if (!executionRunId || !conversationId || !userId) {
+    throw new Error('ASSERT judging requires a completed execution conversation and user ID. Import or run a conversation before requesting review.');
   }
 
   return handleJson(
-    await fetch(`${getApiBase()}/api/product/judge`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...payload,
-        plan: payload.plan || 'free',
-      }),
-    }),
+    await fetch(
+      `${getApiBase()}/api/assert/runs/${encodeURIComponent(executionRunId)}`
+      + `/conversations/${encodeURIComponent(conversationId)}/judge`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: userId }),
+      },
+    ),
   );
 }
 
