@@ -235,6 +235,8 @@ def test_real_project_membership_revocation_and_ambiguous_key_are_non_disclosing
     'database_secret_value', 'serviceTokenValue',
     'auth', 'http_auth', 'httpAuth', 'HTTPAuth', 'basic_auth',
     'authentication', 'authentication_headers', 'HTTPAuthorization',
+    'cookies', 'http_cookies', 'httpCookies', 'HTTPCookies', 'cookie_jar', 'cookieJar',
+    'cookiejar', 'set_cookies', 'session_tokens', 'session_secrets',
 ])
 def test_nested_credential_key_conventions_are_omitted_from_actual_report(saved, key):
     _, conv, review = saved
@@ -286,6 +288,11 @@ def test_credential_text_assignments_are_omitted_from_actual_report(saved, key, 
     ('HTTPAuthorization: Basic SYNTHETIC-HTTP-HEADER', ['SYNTHETIC-HTTP-HEADER']),
     ('Cookie: session=SYNTHETIC-SESSION; refresh=SYNTHETIC-REFRESH', ['SYNTHETIC-SESSION', 'SYNTHETIC-REFRESH']),
     ('Set-Cookie: session=SYNTHETIC-SET; Domain=internal.example; HttpOnly', ['SYNTHETIC-SET']),
+    ('cookies: sessionid=SYNTHETIC-PLURAL; refresh=SYNTHETIC-PLURAL-REFRESH',
+     ['SYNTHETIC-PLURAL', 'SYNTHETIC-PLURAL-REFRESH']),
+    ('http_cookies={"sessionid":"SYNTHETIC-COOKIE-MAP","refresh":"SYNTHETIC-MAP-REFRESH"}',
+     ['SYNTHETIC-COOKIE-MAP', 'SYNTHETIC-MAP-REFRESH']),
+    ('cookieJar: sessionid=SYNTHETIC-JAR; domain=internal.example', ['SYNTHETIC-JAR']),
     ('Authorization: Digest username="SYNTHETIC-USER", nonce="SYNTHETIC-NONCE", response="SYNTHETIC-RESPONSE"',
      ['SYNTHETIC-USER', 'SYNTHETIC-NONCE', 'SYNTHETIC-RESPONSE']),
     ('"Authorization": "Basic SYNTHETIC-QUOTED"', ['SYNTHETIC-QUOTED']),
@@ -341,3 +348,24 @@ def test_path_fields_are_scrubbed_even_without_a_known_internal_root():
     from app.services.assert_html_report import _clean
     assert _clean({'outputPath': 'reports/private score.json', 'case_id': 'case-fixture'}) == {'case_id': 'case-fixture'}
     assert 'private score.json' not in _clean('output_path="reports/private score.json"')
+
+
+@pytest.mark.parametrize('key', ['cookies', 'http_cookies', 'HTTPCookies', 'cookieJar', 'cookiejar'])
+def test_cookie_container_context_is_preserved_before_recursion(saved, key):
+    _, conv, review = saved
+    credentials = {key: {'sessionid': 'SYNTHETIC-SESSION-ID', 'other': 'SYNTHETIC-COOKIE-VALUE'},
+                   'business_receipt': 'case-fixture'}
+    conv['action_trace'][0]['result'] = credentials
+    conv['final_state']['cookies_debug'] = credentials
+    conv['turns'][0]['text'] = json.dumps(credentials)
+    review['judge_result']['provenance']['node_judgments'][0]['evidence'] = {
+        'attributes': [{'key': key, 'value': credentials[key]}, {'key': 'case_id', 'value': 'case-fixture'}],
+        'serialized': json.dumps(credentials),
+    }
+    resnapshot(saved)
+    original = deepcopy(saved)
+    response = download(saved)
+    assert response.status_code == 200
+    assert 'SYNTHETIC-SESSION-ID' not in response.text and 'SYNTHETIC-COOKIE-VALUE' not in response.text
+    assert 'case-fixture' in response.text
+    assert saved == original
