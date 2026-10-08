@@ -83,11 +83,7 @@ def run_upstream_assert_judge(
     inference = build_assert_inference_row(run=run, conversation=conversation)
     judge_dimensions = _judge_dimensions()
     score_contract = judge_score_contract(judge_dimensions)
-    fingerprint = hashlib.sha256(json.dumps(
-        {'model': model, 'n': judge_n, 'taxonomy': taxonomy, 'inference': inference},
-        sort_keys=True,
-        default=str,
-    ).encode()).hexdigest()[:16]
+    fingerprint = _input_fingerprint(model, judge_n, taxonomy, inference)
 
     try:
         executable = cli_executable()
@@ -682,3 +678,18 @@ def _positive_int_env(name: str, default: int) -> int:
     except ValueError:
         return default
     return value if value > 0 else default
+
+
+def _input_fingerprint(model: str, judge_n: int, taxonomy: dict[str, Any], inference: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(
+        {'model': model, 'n': judge_n, 'taxonomy': taxonomy, 'inference': inference},
+        sort_keys=True, default=str,
+    ).encode()).hexdigest()[:16]
+
+
+def assert_judge_input_fingerprint(*, run: dict[str, Any], conversation: dict[str, Any],
+                                   scenario_contract: dict[str, Any] | None, model: str, judge_n: int) -> str:
+    """Recompute saved judging input identity without invoking a judge or loading artifacts."""
+    return _input_fingerprint(model, judge_n,
+        build_assert_taxonomy(scenario_contract=scenario_contract, conversation=conversation),
+        build_assert_inference_row(run=run, conversation=conversation))

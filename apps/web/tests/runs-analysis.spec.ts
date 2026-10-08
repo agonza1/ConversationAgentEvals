@@ -222,7 +222,7 @@ test('needs-review resolution explains score and missing proof without calling i
   await expect(page.getByLabel('Resolution verification status')).toContainText('Unverified');
   const details = page.getByLabel('Resolution evidence details');
   await expect(details).toContainText('60/100');
-  await expect(details).toContainText('Needs Review');
+  await expect(page.getByLabel('Resolution verification status')).toContainText('Needs Review');
   await expect(details).toContainText('Not complete');
   await expect(details).toContainText('Max Exchanges');
   await expect(details).toContainText('None recorded');
@@ -237,7 +237,7 @@ test('needs-review resolution explains score and missing proof without calling i
   await expect(evaluationTooltip).toContainText('50 = half credit');
   await expect(evaluationTooltip).toContainText('0 = none');
   await expect(evaluationTooltip).toContainText('Pass also requires at least 75');
-  await expect(page.getByText('Why resolution is not verified')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Why this outcome' })).toBeVisible();
   await expect(page.getByText('No action or tool evidence was recorded.')).toBeVisible();
   await expect(page.getByText('The conversation reached the configured exchange limit.')).toBeVisible();
   await expect(page.getByText('Hard-check failure: Forbidden Action — Action: Provide Medical Diagnosis.')).toBeVisible();
@@ -247,7 +247,7 @@ test('needs-review resolution explains score and missing proof without calling i
   await expect(page.getByText(
     'Hard-check failure: Final State Mismatch — Appointment Status expected "scheduled", got "pending".',
   )).toBeVisible();
-  await expect(page.getByText(/evaluation score is not a resolution percentage/)).toBeVisible();
+  await expect(evaluationTooltip.getByText(/evaluation score is not a resolution percentage/)).toBeVisible();
 });
 
 test('run detail requests the LLM judge for the selected persisted conversation', async ({ page }) => {
@@ -515,7 +515,7 @@ test('user can confirm an LLM adjudication while the automatic evaluation remain
   const applied = page.getByLabel('Applied LLM adjudication');
   await expect(applied).toContainText('Identity was collected; consent and scheduling remain unproven.');
   await expect(applied).toContainText('Patient name and date of birth were collected in the transcript.');
-  await expect(page.getByRole('heading', { name: 'Remaining gaps after adjudication' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Why this outcome' })).toBeVisible();
   await expect(page.getByText('Explicit privacy consent was not recorded.')).toBeVisible();
   await expect(page.getByText('Missing required action: Collect Patient Name And Date Of Birth.')).toBeHidden();
   await applied.getByText('Original automatic findings').click();
@@ -573,7 +573,7 @@ test('resolution evidence handles failed and not-evaluated conversations without
   await resolutionTile.click();
 
   await expect(page.getByLabel('Resolution verification status')).toContainText('Failed');
-  await expect(page.getByLabel('Resolution evidence details')).toContainText('Not reported');
+  await expect(page.getByLabel('Resolution evidence details')).toContainText('0/100');
   await expect(page.getByLabel('Resolution evidence details')).toContainText('Provider Disconnect');
   await expect(page.getByLabel('Resolution evidence details')).toContainText('simulated provider disconnect');
   await expect(page.getByText('The run recorded an execution error.')).toBeVisible();
@@ -600,7 +600,7 @@ test('resolution evidence handles failed and not-evaluated conversations without
 
   await page.getByLabel('Conversation', { exact: true }).selectOption('exec-demo123-not-evaluated-1');
   await expect(page.getByLabel('Resolution verification status')).toContainText('Not evaluated');
-  await expect(page.getByLabel('Resolution verification status')).toContainText(
+  await expect(page.getByLabel('Resolution explanation')).toContainText(
     'No resolution verdict is available for this conversation.',
   );
   await expect(page.getByLabel('Resolution evidence details')).toContainText('Target Terminal State');

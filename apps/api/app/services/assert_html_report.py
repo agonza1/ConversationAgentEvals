@@ -1,0 +1,264 @@
+"""Offline CAE presentation of a persisted ASSERT review; no upstream viewer assets."""
+from __future__ import annotations
+
+import html
+import json
+import math
+import re
+from typing import Any
+
+from app.services.assert_review_status import saved_assert_review_freshness
+from app.services.vcon_evidence import redact
+
+
+TERMINAL = {'completed', 'needs_review', 'failed', 'cancelled', 'canceled'}
+_PRIVATE_KEY_LABEL = r'(?:[A-Z0-9_-]+[ \t]+){0,3}(?:PRIVATE|SECRET)[ \t]+KEY(?:[ \t]+BLOCK)?'
+_PRIVATE_KEY_BEGIN = re.compile(r'-{4,5}[ \t]*BEGIN[ \t]+' + _PRIVATE_KEY_LABEL + r'[ \t]*-{4,5}', re.I)
+_PRIVATE_KEY_END = re.compile(r'-{4,5}[ \t]*END[ \t]+' + _PRIVATE_KEY_LABEL + r'[ \t]*-{4,5}', re.I)
+_PRIVATE_KEY_COMPLETE = re.compile(r'-{4,5}[ \t]*BEGIN[ \t]+(?P<label>' + _PRIVATE_KEY_LABEL
+                                   + r')[ \t]*-{4,5}.*?-{4,5}[ \t]*END[ \t]+(?P=label)[ \t]*-{4,5}', re.I | re.S)
+_PRIVATE_KEY_BLOCK = re.compile(r'-{4,5}[ \t]*BEGIN[ \t]+(?P<label>' + _PRIVATE_KEY_LABEL
+                                + r')[ \t]*-{4,5}.*?(?:-{4,5}[ \t]*END[ \t]+(?P=label)[ \t]*-{4,5}|\Z)', re.I | re.S)
+
+
+def _saved_citations(review: dict[str, Any]) -> list[str]:
+    citations = review.get('evidence_citations', [])
+    if not isinstance(citations, list) or any(not isinstance(item, str) for item in citations):
+        raise ValueError('Saved ASSERT citation evidence is malformed.')
+    return citations
+
+
+def _validate_private_key_bounds(value: Any) -> None:
+    """Do not export unlabeled key fragments from other entries/turns."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _validate_private_key_bounds(str(key))
+            _validate_private_key_bounds(item)
+    elif isinstance(value, list):
+        for item in value:
+            _validate_private_key_bounds(item)
+    elif isinstance(value, str):
+        if value.lstrip().startswith(('{', '[')):
+            try:
+                structured = json.loads(value)
+            except ValueError:
+                pass
+            else:
+                _validate_private_key_bounds(structured)
+                return
+        remaining = _PRIVATE_KEY_COMPLETE.sub('', value)
+        if _PRIVATE_KEY_BEGIN.search(remaining) or _PRIVATE_KEY_END.search(remaining):
+            raise ValueError('Private-key block bounds are incomplete or split across evidence entries; export is unavailable.')
+
+
+def validate_saved_review(run: dict[str, Any], conversation: dict[str, Any], review: dict[str, Any],
+                          scenario_contract: dict[str, Any] | None) -> dict[str, Any]:
+    """Reject incomplete or changed evidence before generating a portable report."""
+    if run.get('status') not in TERMINAL or conversation.get('status') not in TERMINAL:
+        raise ValueError('The run and conversation must be terminal before export.')
+    result = review.get('judge_result')
+    _saved_citations(review)
+    # Only the selected assessment and actual conversation source are rendered;
+    # an unrelated historical review must not block this selected export.
+    _validate_private_key_bounds({
+        'conversation': {key: conversation.get(key) for key in ('turns', 'transcript', 'action_trace', 'final_state')},
+        'review': {key: review.get(key) for key in ('judge_result', 'evidence_citations')},
+    })
+    provenance = result.get('provenance') if isinstance(result, dict) else None
+    if (review.get('status') not in {'pending_confirmation', 'applied', 'superseded'}
+            or not isinstance(provenance, dict) or provenance.get('engine') != 'assert'
+            or provenance.get('judge_status') != 'ok'):
+        raise ValueError('A completed saved ASSERT review is required for export.')
+    for field, digest in (('score_sha256', provenance.get('score_sha256')),
+                          ('output_sha256', review.get('output_sha256'))):
+        if digest is not None and (not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest)):
+            raise ValueError(f'Saved ASSERT {field} provenance is malformed.')
+    dimensions = provenance.get('dimensions')
+    nodes = provenance.get('node_judgments')
+    if (not isinstance(dimensions, dict) or not dimensions
+            or any(not isinstance(key, str) or not isinstance(value, (str, bool, int, float, type(None)))
+                   or (isinstance(value, float) and not math.isfinite(value))
+                   for key, value in dimensions.items())
+            or not isinstance(nodes, list) or any(not isinstance(node, dict) for node in nodes)
+            or any(not isinstance(provenance.get(key, {}), dict) for key in (
+                'dimension_justifications', 'dimension_scales', 'dimension_applicability'))):
+        raise ValueError('Saved ASSERT dimension or behavior evidence is malformed.')
+    freshness = saved_assert_review_freshness(run, conversation, review, scenario_contract)
+    if freshness['status'] != 'current':
+        prefix = 'The saved ASSERT review is stale: ' if freshness['status'] == 'stale' else ''
+        raise ValueError(prefix + freshness['message'])
+    return provenance
+
+
+def report_filename(run_id: str, conversation_id: str, review_id: str) -> str:
+    def safe(value: str) -> str:
+        return re.sub(r'[^a-zA-Z0-9_-]', '-', value)[:60] or 'unknown'
+    return f'assert-{safe(run_id)}-{safe(conversation_id)}-{safe(review_id)}.html'
+
+
+def _sensitive_key(key: Any) -> bool:
+    """Recognize credential conventions across snake, kebab, dotted and camel case."""
+    words = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', '_', str(key)).casefold()
+    parts = set(re.split(r'[^a-z0-9]+', words))
+    normalized = re.sub(r'[^a-z0-9]', '', words)
+    return (bool(parts & {'secret', 'secrets', 'password', 'passwords', 'passwd', 'token', 'tokens',
+                         'credential', 'credentials', 'auth', 'authorization', 'authentication', 'cookie', 'cookies'})
+            or normalized in {'authorization', 'cookie', 'cookies', 'setcookie', 'setcookies', 'cookiejar', 'passwd',
+                              'session', 'sid', 'sessid', 'phpsessid', 'connectsid', 'sessionkey', 'jwt', 'csrf', 'xsrf', 'sig', 'sas'}
+            or any(part in normalized for part in (
+                'password', 'passphrase', 'passcode', 'apikey', 'privatekey', 'secretkey', 'secretaccesskey',
+                'clientsecret', 'signingkey', 'credential', 'accountkey', 'accesskey', 'sharedkey', 'signature',
+            ))
+            or normalized.endswith(('secret', 'secrets', 'token', 'tokens', 'auth', 'authorization', 'authentication', 'cookie', 'cookies', 'sessionid'))
+            or normalized.startswith(('secret', 'token')))
+
+
+def _internal_path_key(key: Any) -> bool:
+    normalized = re.sub(r'[^a-z0-9]', '', str(key).casefold())
+    parts = set(re.split(r'[^a-z0-9]+', re.sub(r'(?<=[a-z0-9])(?=[A-Z])', '_', str(key)).casefold()))
+    return (normalized.endswith(('path', 'paths', 'dir', 'dirs', 'directory', 'directories',
+                                 'folder', 'folders', 'filename', 'filenames', 'cwd', 'pwd'))
+            or bool(parts & {'file', 'files'})
+            or normalized in {'artifacts', 'outputroot', 'saveroot', 'workspaceroot', 'projectroot', 'reporoot', 'repositoryroot'}
+            or bool(re.search(r'(?:artifact|recording|audio|snapshot|inference).*(?:path|dir|folder|root)', normalized)))
+
+
+def _omitted_key(key: Any) -> bool:
+    return _sensitive_key(key) or _internal_path_key(key)
+
+
+# Never link or copy local artifact paths. Keep key context while scrubbing nested
+# business evidence, including stringified JSON and OTLP KeyValue records.
+def _clean(value: Any) -> Any:
+    value = redact(value)
+    if isinstance(value, dict):
+        fields = [(re.sub(r'[^a-z0-9]', '', str(key).casefold()), item) for key, item in value.items()]
+        context_fields = {'key', 'name', 'header', 'headername', 'field', 'fieldname', 'attribute', 'attributename', 'label'}
+        value_fields = {'value', 'values', 'val', 'data', 'content', 'contents', 'body', 'headervalue', 'fieldvalue'}
+        if (any(field in value_fields for field, _ in fields)
+                and any(field in context_fields and isinstance(item, str) and _omitted_key(item) for field, item in fields)):
+            return {}
+        return {str(_clean(str(key))): _clean(item) for key, item in value.items()
+                if not _omitted_key(key)}
+    if isinstance(value, list):
+        if (len(value) == 2 and isinstance(value[0], str)
+                and re.fullmatch(r'[a-zA-Z_][\w.-]{0,160}', value[0]) and _omitted_key(value[0])):
+            return ['[sensitive pair omitted]']
+        # A multiline key may be split into stdout/citation entries. Without
+        # trustworthy block bounds, omit that credential-bearing collection
+        # rather than exposing its unlabeled body in the next element.
+        if any(isinstance(item, str) and _PRIVATE_KEY_BEGIN.search(item) for item in value):
+            return ['[private key omitted]']
+        return [_clean(item) for item in value
+                if not (isinstance(item, dict) and isinstance(item.get('key'), str)
+                        and _omitted_key(item['key']))]
+    if isinstance(value, str):
+        if value.lstrip().startswith(('{', '[')):
+            try:
+                structured = json.loads(value)
+            except ValueError:
+                pass
+            else:
+                cleaned = _clean(structured)
+                if cleaned != structured:
+                    return json.dumps(cleaned, ensure_ascii=False, sort_keys=True)
+        value = _PRIVATE_KEY_BLOCK.sub('[private key omitted]', value)
+        value = re.sub(r'(?:file://|local-artifact://)[^\s"<>]+|(?:/Users/|/home/|/private/|/tmp/|/var/|/workspace/|/app/|/opt/|/root/|/mnt/|/Volumes/|/etc/|/srv/)[^\s"<>]+|(?<![A-Za-z0-9+.-])[A-Za-z]:[/\\][^\s"<>]+', '[internal path omitted]', value)
+        value = re.sub(r'''(?i)(?<![\w/\\:.-])(?:[/\\]|(?:\.{1,2}[/\\])*)(?:artifacts|storage)[/\\][^\s"'<>;,]+''', '[internal path omitted]', value)
+        value = re.sub(r'(?i)\b([a-z][a-z0-9+.-]*://)[^\s/@]+@', r'\1[credential omitted]@', value)
+        # Scrub signed-URL query credentials before an outer URL/assignment can
+        # consume the entire string and hide these nested fields.
+        value = re.sub(r'''([?&])([A-Za-z0-9_.-]+)=([^&\s"'<>]+)''',
+                       lambda match: f'{match[1]}{match[2]}=[credential omitted]' if _sensitive_key(match[2]) else match[0], value)
+        # Credential headers may contain spaces, commas and quoted parameters.
+        # For an unquoted header, scrub the entire rest of its line rather than
+        # just the scheme name. A quoted assignment stops at its closing quote.
+        credential_header = re.compile(r'''(?i)(?<![\w.-])(?P<key>["']?(?:[a-z][a-z0-9_.-]*)?(?:auth|authorization|authentication|cookies?|cookiejar)(?:[_.-][a-z0-9]+)*["']?)[ \t]*[:=][ \t]*(?:"(?:\\[^\r\n]|[^"\\\r\n])*"|'(?:\\[^\r\n]|[^'\\\r\n])*'|[^\r\n]+)''')
+        value = credential_header.sub(lambda match: f'{match.group("key")}=[credential omitted]', value)
+        value = re.sub(r'(?i)\bBearer\s+[^\s"<>]+', 'Bearer [credential omitted]', value)
+        assignments = re.compile(r'''(?P<key>"[^"\r\n]+"|'[^'\r\n]+'|[A-Za-z][A-Za-z0-9_.-]*)\s*[:=]\s*(?P<value>"[^"]*"|'[^']*'|[^\s,;"<>\[]+)''')
+        def clean_assignment(match):
+            key = match.group('key').strip('"\'')
+            if _sensitive_key(key):
+                return f'{match.group("key")}=[credential omitted]'
+            if _internal_path_key(key):
+                return f'{match.group("key")}=[internal path omitted]'
+            return match.group(0)
+        value = assignments.sub(clean_assignment, value)
+    return value
+
+
+def _text(value: Any) -> str:
+    if value is None or value == '':
+        return 'Unavailable'
+    return html.escape(str(_clean(value)), quote=True)
+
+
+def _json(value: Any) -> str:
+    if value is None:
+        return 'Unavailable'
+    return html.escape(json.dumps(_clean(value), ensure_ascii=False, indent=2, default=str), quote=True)
+
+
+def _metadata(values: dict[str, Any]) -> str:
+    return '<dl>' + ''.join(f'<dt>{_text(key)}</dt><dd>{_text(value)}</dd>' for key, value in values.items()) + '</dl>'
+
+
+def render_assert_html_report(run: dict[str, Any], conversation: dict[str, Any], review: dict[str, Any],
+                              provenance: dict[str, Any]) -> str:
+    result = review['judge_result']
+    dimensions = provenance['dimensions']
+    rows = ''
+    for name, value in dimensions.items():
+        scale = provenance.get('dimension_scales', {}).get(name)
+        scale_html = (f'<details><summary>Recorded scale</summary><pre>{_json(scale)}</pre></details>'
+                      if scale is not None else '<p class="muted">Scale: Unavailable</p>')
+        rows += (f'<article class="dimension"><h3>{_text(name)}</h3>'
+                 f'<p><b>Recorded value:</b> <span class="pill">{_text(value)}</span> · '
+                 f'<b>Applicable:</b> {_text(provenance.get("dimension_applicability", {}).get(name))}</p>'
+                 f'<p>{_text(provenance.get("dimension_justifications", {}).get(name))}</p>{scale_html}</article>')
+    nodes = ''.join(f'<details><summary>Behavior {_text(node.get("node_name") or node.get("node_id") or node.get("behavior") or index)}</summary>'
+                    f'<pre>{_json(node)}</pre></details>' for index, node in enumerate(provenance['node_judgments'], 1))
+    turns = conversation.get('turns') or []
+    messages = ''.join(f'<article class="message"><b>{_text(turn.get("speaker"))}</b>'
+                      f'<p>{_text(turn.get("text"))}</p></article>' for turn in turns if isinstance(turn, dict))
+    if not messages:
+        messages = f'<pre>{_text(conversation.get("transcript"))}</pre>'
+    tools = ''.join(f'<details><summary>Tool evidence {index}: {_text(action.get("tool_name") or action.get("action") or action.get("name"))}</summary>'
+                    f'<pre>{_json(action)}</pre></details>' for index, action in enumerate(conversation.get('action_trace') or [], 1)
+                    if isinstance(action, dict))
+    citations = ''.join(f'<li>{_text(citation)} <small>— unresolved citation; no evidence anchor recorded</small></li>'
+                       for citation in _clean(_saved_citations(review)))
+    snapshot = review['deterministic_snapshot']
+    adjudication = conversation.get('evaluation_adjudication') or {}
+    applied = (adjudication.get('judge_result') or {}).get('proposed_evaluation') or {}
+    metadata = _metadata({
+        'Execution run': run.get('execution_run_id'), 'Conversation': conversation.get('conversation_id'),
+        'Scenario': conversation.get('scenario_title') or conversation.get('scenario_id'),
+        'Target': run.get('agent_name') or run.get('agent_id'), 'Review ID': review.get('review_id'),
+        'Review status': review.get('status'), 'Recorded at': review.get('created_at'),
+        'ASSERT version': provenance.get('assert_version'), 'Model': review.get('model'),
+        'Evidence level': provenance.get('evidence_level'), 'Input fingerprint': provenance.get('input_fingerprint'),
+        'Score SHA-256': provenance.get('score_sha256'), 'Output SHA-256': review.get('output_sha256'),
+        'Evidence source': (run.get('provenance') or {}).get('honesty_label'),
+    })
+    return f'''<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; base-uri 'none'; form-action 'none'">
+<title>ASSERT report · {_text(conversation.get('scenario_title') or conversation.get('conversation_id'))}</title>
+<style>
+*{{box-sizing:border-box}}body{{margin:0;background:#f4f6f9;color:#202936;font:16px/1.55 system-ui,sans-serif}}main{{max-width:1440px;margin:auto;padding:32px}}h1,h2,h3{{line-height:1.2}}header,.card{{background:white;border:1px solid #dce2e9;border-radius:12px;padding:24px;margin-bottom:20px}}.layout{{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:20px}}.muted,small{{color:#566275}}dl{{display:grid;grid-template-columns:160px minmax(0,1fr);gap:6px 16px}}dt{{font-weight:600}}dd{{margin:0;overflow-wrap:anywhere}}.dimension{{border-bottom:1px solid #dce2e9;padding:12px 0}}.dimension h3{{overflow-wrap:anywhere}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;background:#f4f6f9;padding:12px;border-radius:6px}}p{{white-space:pre-wrap;overflow-wrap:anywhere}}details{{border:1px solid #dce2e9;border-radius:6px;padding:12px;margin:12px 0}}summary{{cursor:pointer;font-weight:600;overflow-wrap:anywhere}}.message{{border-left:3px solid #657cea;padding:4px 16px;margin:16px 0}}.message p{{margin:4px 0}}.pill{{display:inline-block;padding:3px 10px;background:#edf1ff;border-radius:20px}}@media(max-width:950px){{.layout{{display:block}}main{{padding:16px}}dl{{grid-template-columns:1fr}}}}@media print{{body{{background:white}}main{{padding:0}}.layout{{display:block}}details{{break-inside:avoid}}}}
+</style></head><body><main>
+<header><p class="muted">Conversation Agent Evals · Portable saved review</p><h1>ASSERT semantic report</h1>
+<p>Rendered by CAE from a saved ASSERT assessment. This report was not generated by the upstream ASSERT viewer. Exporting does not run a judge or change a verdict.</p>{metadata}</header>
+<div class="layout"><section aria-label="Judgment"><div class="card"><h2>Evaluation and adjudication</h2>
+<p><b>CAE deterministic verdict:</b> <span class="pill">{_text(snapshot.get('verdict'))}</span> · Recorded score: {_text(snapshot.get('score'))}</p>
+<p><b>ASSERT agrees:</b> {_text(result.get('agrees'))}</p><p><b>Semantic rationale:</b> {_text(result.get('rationale'))}</p>
+<p><b>Selected review proposal:</b></p><pre>{_json(result.get('proposed_evaluation'))}</pre>
+<p><b>Currently applied adjudication:</b> {_text(applied.get('verdict'))} · Review: {_text(adjudication.get('review_id'))}</p>
+<p class="muted">Semantic proposals and applied adjudication are separate from the deterministic evidence.</p></div>
+<div class="card"><h2>Recorded dimensions</h2>{rows}
+<h3>Behavior judgments</h3>{nodes or '<p>Unavailable</p>'}<h3>Recorded citations</h3><ul>{citations or '<li>Unavailable</li>'}</ul></div></section>
+<section aria-label="Conversation"><div class="card"><h2>Conversation</h2>{messages}</div><div class="card"><h2>Tool and state evidence</h2>{tools or '<p>No tool evidence recorded.</p>'}
+<details><summary>Recorded final state</summary><pre>{_json(conversation.get('final_state'))}</pre></details></div>
+<div class="card"><h2>Evidence notes</h2><p>Audio is not embedded. Recording evidence, when available, remains in CAE.</p><p>Known credential fields and internal artifact paths are omitted. Missing values are unavailable; tool success and citation anchors are never inferred.</p></div></section></div></main></body></html>'''
