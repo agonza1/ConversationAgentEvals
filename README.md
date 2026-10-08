@@ -2,7 +2,7 @@
 
 Open-source QA and regression testing for voice and conversation agents, powered by [ASSERT](https://github.com/responsibleai/ASSERT).
 
-ConversationAgentEvals is an application and workflow layer around ASSERT 0.3 contracts. ASSERT defines the upstream specification, scenario, failure-taxonomy, and portable-artifact model. CAE provides target execution, deterministic evaluation, evidence ingestion, projects and runs, persistence, reports, exports, and deployment. Its semantic judge uses one centrally integrated `assert-ai==0.3.0` runtime rather than version-specific adapters.
+ConversationAgentEvals is an application and workflow layer around ASSERT 0.3 contracts. ASSERT defines the upstream specification, scenario, failure-taxonomy, and portable-artifact model. CAE provides target execution, deterministic evaluation, evidence ingestion, projects and runs, persistence, reports, exports, and deployment. Its existing semantic judge uses one centrally integrated `assert-ai==0.3.0` runtime rather than version-specific adapters. A separate, disabled-by-default [OpenAI Decisions review adapter](docs/openai-decisions-judge.md) proposes bounded semantic decisions over recorded evidence without replacing deterministic checks or the ASSERT UI workflow.
 
 **ConversationAgentEvals is independently installable, testable, and usable.** Its built-in benchmark suites, evidence APIs, ASSERT boundary, reports, exports, and saved-run workflows do not require Agentic Contact Center or another target repository. External systems are optional target adapters and examples, never runtime dependencies of the core product.
 

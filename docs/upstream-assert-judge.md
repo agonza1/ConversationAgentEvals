@@ -1,6 +1,6 @@
 # Upstream ASSERT judging for CAE execution evidence
 
-ConversationAgentEvals owns target execution and evidence capture. The sole supported semantic runtime is `assert-ai==0.3.0`; it can optionally judge that evidence without taking over SIP, PSTN, WebRTC, Pipecat, vendor SDK, or media orchestration. CAE refuses to start with another ASSERT version installed.
+ConversationAgentEvals owns target execution and evidence capture. The supported ASSERT runtime is `assert-ai==0.3.0`; it can optionally judge that evidence without taking over SIP, PSTN, WebRTC, Pipecat, vendor SDK, or media orchestration. CAE refuses to start with another ASSERT version installed. The separate, disabled-by-default [OpenAI Decisions judge proposal](openai-decisions-judge.md) uses bounded choices and leaves the existing ASSERT UI workflow intact.
 
 ## Boundary
 
