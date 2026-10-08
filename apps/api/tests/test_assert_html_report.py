@@ -181,6 +181,7 @@ def test_filename_is_bounded_and_header_safe(saved):
     ("tool debug password: 'TOP SECRET DEMO'", 'TOP SECRET DEMO'),
     ('https://demo-user:TOP_SECRET_DEMO@api.example.invalid/private', 'TOP_SECRET_DEMO'),
     ('Inference saved to /workspace/artifacts/assert/score.json', '/workspace/artifacts'),
+    ('Inference saved to C:/Projects/private/score.json', 'C:/Projects/private'),
     ({'/Users/alberto/Codex/private-secret.json':'loaded'}, '/Users/alberto'),
 ])
 def test_export_scrubs_quoted_credentials_credential_urls_and_internal_keys(value, secret):
@@ -276,12 +277,14 @@ def test_credential_text_assignments_are_omitted_from_actual_report(saved, key, 
     ('Proxy-Authorization: NTLM SYNTHETIC-NTLM', ['SYNTHETIC-NTLM']),
     ('proxyAuthorization: Basic SYNTHETIC-PROXY', ['SYNTHETIC-PROXY']),
     ('Proxy.Authorization: Basic SYNTHETIC-DOTTED', ['SYNTHETIC-DOTTED']),
+    ('Cookie: session=SYNTHETIC-SESSION; refresh=SYNTHETIC-REFRESH', ['SYNTHETIC-SESSION', 'SYNTHETIC-REFRESH']),
+    ('Set-Cookie: session=SYNTHETIC-SET; Domain=internal.example; HttpOnly', ['SYNTHETIC-SET']),
     ('Authorization: Digest username="SYNTHETIC-USER", nonce="SYNTHETIC-NONCE", response="SYNTHETIC-RESPONSE"',
      ['SYNTHETIC-USER', 'SYNTHETIC-NONCE', 'SYNTHETIC-RESPONSE']),
     ('"Authorization": "Basic SYNTHETIC-QUOTED"', ['SYNTHETIC-QUOTED']),
     ("Authorization='Basic SYNTHETIC-SINGLE-QUOTED'", ['SYNTHETIC-SINGLE-QUOTED']),
 ])
-def test_entire_authorization_scheme_is_scrubbed_from_actual_report(saved, header, secrets):
+def test_entire_credential_header_is_scrubbed_from_actual_report(saved, header, secrets):
     _, conv, review = saved
     text = f'Debug {header}\nBusiness receipt: case-fixture'
     conv['turns'][0]['text'] = text

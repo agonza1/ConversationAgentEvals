@@ -47,7 +47,7 @@ This slice shows saved citations as unresolved text because current persisted ci
 
 Export sanitization omits path-valued fields (including nested/stringified JSON
 and OTLP attributes) and relative `artifacts/` or `storage/` references. Unquoted
-Authorization/Proxy-Authorization headers are removed through the end of their
+Authorization/Proxy-Authorization and Cookie/Set-Cookie headers are removed through the end of their
 line, including multi-parameter schemes such as Digest; quoted assignments stop
 at their closing quote. This is conservative export-only filtering, not a change
 to saved evidence or a guarantee that arbitrary personal information is removed.

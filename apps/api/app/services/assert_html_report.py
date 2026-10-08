@@ -100,14 +100,14 @@ def _clean(value: Any) -> Any:
                 cleaned = _clean(structured)
                 if cleaned != structured:
                     return json.dumps(cleaned, ensure_ascii=False, sort_keys=True)
-        value = re.sub(r'(?:file://|local-artifact://)[^\s"<>]+|(?:/Users/|/home/|/private/|/tmp/|/var/|/workspace/|/app/|/opt/|/root/|/mnt/|/Volumes/|/etc/|/srv/)[^\s"<>]+|[A-Za-z]:\\[^\s"<>]+', '[internal path omitted]', value)
+        value = re.sub(r'(?:file://|local-artifact://)[^\s"<>]+|(?:/Users/|/home/|/private/|/tmp/|/var/|/workspace/|/app/|/opt/|/root/|/mnt/|/Volumes/|/etc/|/srv/)[^\s"<>]+|[A-Za-z]:[/\\][^\s"<>]+', '[internal path omitted]', value)
         value = re.sub(r'''(?i)(?<![\w/\\:.-])(?:[/\\]|(?:\.{1,2}[/\\])*)(?:artifacts|storage)[/\\][^\s"'<>;,]+''', '[internal path omitted]', value)
         value = re.sub(r'(?i)\b(https?://)[^\s/@]+(?::[^\s/@]*)?@', r'\1[credential omitted]@', value)
-        # Authorization schemes may contain spaces, commas and quoted parameters.
+        # Credential headers may contain spaces, commas and quoted parameters.
         # For an unquoted header, scrub the entire rest of its line rather than
         # just the scheme name. A quoted assignment stops at its closing quote.
-        authorization = re.compile(r'''(?i)(?<![\w.-])(?P<key>["']?(?:proxy[-_.]?)?authorization["']?)[ \t]*[:=][ \t]*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\r\n<>]+)''')
-        value = authorization.sub(lambda match: f'{match.group("key")}=[credential omitted]', value)
+        credential_header = re.compile(r'''(?i)(?<![\w.-])(?P<key>["']?(?:(?:proxy[-_.]?)?authorization|(?:set[-_.]?)?cookie)["']?)[ \t]*[:=][ \t]*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\r\n<>]+)''')
+        value = credential_header.sub(lambda match: f'{match.group("key")}=[credential omitted]', value)
         value = re.sub(r'(?i)\bBearer\s+[^\s"<>]+', 'Bearer [credential omitted]', value)
         assignments = re.compile(r'''(?P<key>"[^"\r\n]+"|'[^'\r\n]+'|[A-Za-z][A-Za-z0-9_.-]*)\s*[:=]\s*(?P<value>"[^"]*"|'[^']*'|[^\s,;"<>\[]+)''')
         def clean_assignment(match):
