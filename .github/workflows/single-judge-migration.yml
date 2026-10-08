@@ -21,6 +21,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Package tracked PR sources
+        run: git archive --format=tar -o /tmp/cae-pr-source.tar HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cae-pr-source
+          path: /tmp/cae-pr-source.tar
+          retention-days: 1
       - uses: actions/setup-node@v4
         with:
           node-version: 22
