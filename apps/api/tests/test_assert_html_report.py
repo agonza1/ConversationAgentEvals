@@ -282,6 +282,10 @@ def test_credential_text_assignments_are_omitted_from_actual_report(saved, key, 
     ('Authorization: Digest username="SYNTHETIC-USER", nonce="SYNTHETIC-NONCE", response="SYNTHETIC-RESPONSE"',
      ['SYNTHETIC-USER', 'SYNTHETIC-NONCE', 'SYNTHETIC-RESPONSE']),
     ('"Authorization": "Basic SYNTHETIC-QUOTED"', ['SYNTHETIC-QUOTED']),
+    (r'Debug "Authorization": "Digest username=\"SYNTHETIC-ESCAPED\", response=\"SYNTHETIC-DIGEST\""',
+     ['SYNTHETIC-ESCAPED', 'SYNTHETIC-DIGEST']),
+    ('Authorization: Digest uri="/example/<SYNTHETIC-URI>", response="SYNTHETIC-AFTER-URI"',
+     ['SYNTHETIC-URI', 'SYNTHETIC-AFTER-URI']),
     ("Authorization='Basic SYNTHETIC-SINGLE-QUOTED'", ['SYNTHETIC-SINGLE-QUOTED']),
 ])
 def test_entire_credential_header_is_scrubbed_from_actual_report(saved, header, secrets):

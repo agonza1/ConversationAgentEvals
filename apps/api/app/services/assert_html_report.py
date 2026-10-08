@@ -106,7 +106,7 @@ def _clean(value: Any) -> Any:
         # Credential headers may contain spaces, commas and quoted parameters.
         # For an unquoted header, scrub the entire rest of its line rather than
         # just the scheme name. A quoted assignment stops at its closing quote.
-        credential_header = re.compile(r'''(?i)(?<![\w.-])(?P<key>["']?(?:(?:proxy[-_.]?)?authorization|(?:set[-_.]?)?cookie)["']?)[ \t]*[:=][ \t]*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\r\n<>]+)''')
+        credential_header = re.compile(r'''(?i)(?<![\w.-])(?P<key>["']?(?:(?:proxy[-_.]?)?authorization|(?:set[-_.]?)?cookie)["']?)[ \t]*[:=][ \t]*(?:"(?:\\[^\r\n]|[^"\\\r\n])*"|'(?:\\[^\r\n]|[^'\\\r\n])*'|[^\r\n]+)''')
         value = credential_header.sub(lambda match: f'{match.group("key")}=[credential omitted]', value)
         value = re.sub(r'(?i)\bBearer\s+[^\s"<>]+', 'Bearer [credential omitted]', value)
         assignments = re.compile(r'''(?P<key>"[^"\r\n]+"|'[^'\r\n]+'|[A-Za-z][A-Za-z0-9_.-]*)\s*[:=]\s*(?P<value>"[^"]*"|'[^']*'|[^\s,;"<>\[]+)''')
