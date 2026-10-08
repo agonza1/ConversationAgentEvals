@@ -12,6 +12,10 @@ from app.services.vcon_evidence import redact
 
 
 TERMINAL = {'completed', 'needs_review', 'failed', 'cancelled', 'canceled'}
+_PRIVATE_KEY_LABEL = r'(?:[A-Z0-9_-]+[ \t]+){0,3}(?:PRIVATE|SECRET)[ \t]+KEY(?:[ \t]+BLOCK)?'
+_PRIVATE_KEY_BEGIN = re.compile(r'-{4,5}[ \t]*BEGIN[ \t]+' + _PRIVATE_KEY_LABEL + r'[ \t]*-{4,5}', re.I)
+_PRIVATE_KEY_BLOCK = re.compile(r'-{4,5}[ \t]*BEGIN[ \t]+(?P<label>' + _PRIVATE_KEY_LABEL
+                                + r')[ \t]*-{4,5}.*?(?:-{4,5}[ \t]*END[ \t]+(?P=label)[ \t]*-{4,5}|\Z)', re.I | re.S)
 
 
 def _saved_citations(review: dict[str, Any]) -> list[str]:
@@ -99,6 +103,11 @@ def _clean(value: Any) -> Any:
         return {str(_clean(str(key))): _clean(item) for key, item in value.items()
                 if not _omitted_key(key)}
     if isinstance(value, list):
+        # A multiline key may be split into stdout/citation entries. Without
+        # trustworthy block bounds, omit that credential-bearing collection
+        # rather than exposing its unlabeled body in the next element.
+        if any(isinstance(item, str) and _PRIVATE_KEY_BEGIN.search(item) for item in value):
+            return ['[private key omitted]']
         return [_clean(item) for item in value
                 if not (isinstance(item, dict) and isinstance(item.get('key'), str)
                         and _omitted_key(item['key']))]
@@ -112,6 +121,7 @@ def _clean(value: Any) -> Any:
                 cleaned = _clean(structured)
                 if cleaned != structured:
                     return json.dumps(cleaned, ensure_ascii=False, sort_keys=True)
+        value = _PRIVATE_KEY_BLOCK.sub('[private key omitted]', value)
         value = re.sub(r'(?:file://|local-artifact://)[^\s"<>]+|(?:/Users/|/home/|/private/|/tmp/|/var/|/workspace/|/app/|/opt/|/root/|/mnt/|/Volumes/|/etc/|/srv/)[^\s"<>]+|[A-Za-z]:[/\\][^\s"<>]+', '[internal path omitted]', value)
         value = re.sub(r'''(?i)(?<![\w/\\:.-])(?:[/\\]|(?:\.{1,2}[/\\])*)(?:artifacts|storage)[/\\][^\s"'<>;,]+''', '[internal path omitted]', value)
         value = re.sub(r'(?i)\b(https?://)[^\s/@]+(?::[^\s/@]*)?@', r'\1[credential omitted]@', value)
@@ -173,7 +183,7 @@ def render_assert_html_report(run: dict[str, Any], conversation: dict[str, Any],
                     f'<pre>{_json(action)}</pre></details>' for index, action in enumerate(conversation.get('action_trace') or [], 1)
                     if isinstance(action, dict))
     citations = ''.join(f'<li>{_text(citation)} <small>— unresolved citation; no evidence anchor recorded</small></li>'
-                       for citation in _saved_citations(review))
+                       for citation in _clean(_saved_citations(review)))
     snapshot = review['deterministic_snapshot']
     adjudication = conversation.get('evaluation_adjudication') or {}
     applied = (adjudication.get('judge_result') or {}).get('proposed_evaluation') or {}

@@ -473,3 +473,52 @@ def test_cookie_container_context_is_preserved_before_recursion(saved, key):
     assert 'SYNTHETIC-SESSION-ID' not in response.text and 'SYNTHETIC-COOKIE-VALUE' not in response.text
     assert 'case-fixture' in response.text
     assert saved == original
+
+
+@pytest.mark.parametrize('label,fence', [('PRIVATE KEY', '-----'), ('RSA PRIVATE KEY', '-----'),
+    ('EC PRIVATE KEY', '-----'), ('DSA PRIVATE KEY', '-----'), ('OPENSSH PRIVATE KEY', '-----'),
+    ('ENCRYPTED PRIVATE KEY', '-----'), ('PGP PRIVATE KEY BLOCK', '-----'),
+    ('SSH2 ENCRYPTED PRIVATE KEY', '---- ')])
+@pytest.mark.parametrize('truncated', [False, True])
+def test_standalone_private_key_blocks_are_omitted_from_actual_report(saved, label, fence, truncated):
+    _, conv, review = saved
+    text = f'Debug output\n{fence}BEGIN {label}{fence.strip()}\nSYNTHETIC-KEY-BODY-NEVER-EXPORT\n'
+    if not truncated:
+        text += f'{fence}END {label}{fence.strip()}\nBusiness receipt: case-fixture'
+    conv['turns'][0]['text'] = text
+    conv['action_trace'][0]['result'] = {'stdout': text, 'business_receipt': 'case-fixture'}
+    conv['final_state']['debug'] = text
+    review['judge_result']['rationale'] = text
+    review['judge_result']['provenance']['node_judgments'][0]['evidence'] = text
+    review['evidence_citations'] = [text]
+    resnapshot(saved)
+    original = deepcopy(saved)
+    response = download(saved)
+    assert response.status_code == 200
+    assert 'SYNTHETIC-KEY-BODY-NEVER-EXPORT' not in response.text
+    assert '[private key omitted]' in response.text and 'case-fixture' in response.text
+    assert saved == original
+
+
+@pytest.mark.parametrize('source', ['tool', 'state', 'citations'])
+def test_private_key_split_into_log_or_citation_lines_cannot_lose_context(saved, source):
+    _, conv, review = saved
+    lines = ['-----BEGIN PRIVATE KEY-----', 'SYNTHETIC-SPLIT-KEY-BODY', '-----END PRIVATE KEY-----']
+    if source == 'tool':
+        conv['action_trace'][0]['result'] = {'stdout_lines': lines, 'business_receipt': 'case-fixture'}
+    elif source == 'state':
+        conv['final_state']['stdout_lines'] = lines
+    else:
+        review['evidence_citations'] = lines
+    resnapshot(saved)
+    response = download(saved)
+    assert response.status_code == 200
+    assert 'SYNTHETIC-SPLIT-KEY-BODY' not in response.text
+    assert '[private key omitted]' in response.text
+
+
+@pytest.mark.parametrize('label', ['PUBLIC KEY', 'RSA PUBLIC KEY', 'CERTIFICATE'])
+def test_public_key_and_certificate_blocks_are_not_private_credentials(label):
+    from app.services.assert_html_report import _clean
+    text = f'-----BEGIN {label}-----\nSYNTHETIC-PUBLIC-BODY\n-----END {label}-----'
+    assert _clean(text) == text
