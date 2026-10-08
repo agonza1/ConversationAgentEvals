@@ -268,3 +268,62 @@ def test_credential_text_assignments_are_omitted_from_actual_report(saved, key, 
     assert response.status_code == 200
     assert secret not in response.text
     assert '[credential omitted]' in response.text
+
+
+@pytest.mark.parametrize('header,secrets', [
+    ('Authorization: Basic dXNlcjpwYXNz', ['dXNlcjpwYXNz']),
+    ('authorization = Negotiate SYNTHETIC-NEGOTIATE', ['SYNTHETIC-NEGOTIATE']),
+    ('Proxy-Authorization: NTLM SYNTHETIC-NTLM', ['SYNTHETIC-NTLM']),
+    ('proxyAuthorization: Basic SYNTHETIC-PROXY', ['SYNTHETIC-PROXY']),
+    ('Proxy.Authorization: Basic SYNTHETIC-DOTTED', ['SYNTHETIC-DOTTED']),
+    ('Authorization: Digest username="SYNTHETIC-USER", nonce="SYNTHETIC-NONCE", response="SYNTHETIC-RESPONSE"',
+     ['SYNTHETIC-USER', 'SYNTHETIC-NONCE', 'SYNTHETIC-RESPONSE']),
+    ('"Authorization": "Basic SYNTHETIC-QUOTED"', ['SYNTHETIC-QUOTED']),
+    ("Authorization='Basic SYNTHETIC-SINGLE-QUOTED'", ['SYNTHETIC-SINGLE-QUOTED']),
+])
+def test_entire_authorization_scheme_is_scrubbed_from_actual_report(saved, header, secrets):
+    _, conv, review = saved
+    text = f'Debug {header}\nBusiness receipt: case-fixture'
+    conv['turns'][0]['text'] = text
+    conv['action_trace'][0]['result'] = text
+    conv['final_state']['debug'] = text
+    review['judge_result']['rationale'] = text
+    review['judge_result']['provenance']['node_judgments'][0]['evidence'] = text
+    resnapshot(saved)
+    response = download(saved)
+    assert response.status_code == 200
+    assert all(secret not in response.text for secret in secrets)
+    assert 'Business receipt: case-fixture' in response.text
+    assert '[credential omitted]' in response.text
+
+
+@pytest.mark.parametrize('key', ['output_path', 'outputPath', 'score.path', 'OUTPUT-PATHS'])
+@pytest.mark.parametrize('path', ['artifacts/run/score.json', './artifacts/run/score.json',
+                                 '../storage/run/score.json', r'artifacts\run\score.json',
+                                 '/storage/run/score.json'])
+def test_relative_internal_paths_are_omitted_across_evidence_forms(saved, key, path):
+    _, conv, review = saved
+    evidence = {
+        'business_receipt': 'case-fixture', key: path,
+        'serialized': json.dumps({key: path, 'case_id': 'case-fixture'}),
+        'attributes': [{'key': key, 'value': path}, {'key': 'case_id', 'value': 'case-fixture'}],
+        'attribute': {'key': key, 'value': path},
+        'debug': f'File saved to {path}',
+    }
+    conv['action_trace'][0]['result'] = evidence
+    conv['final_state']['evidence'] = evidence
+    conv['turns'][0]['text'] = f'File saved to {path}'
+    review['judge_result']['rationale'] = f'Debug {key}="{path}"'
+    review['judge_result']['provenance']['node_judgments'][0]['evidence'] = evidence
+    resnapshot(saved)
+    response = download(saved)
+    assert response.status_code == 200
+    assert 'score.json' not in response.text
+    assert 'business_receipt' in response.text and 'case-fixture' in response.text
+    assert '[internal path omitted]' in response.text
+
+
+def test_path_fields_are_scrubbed_even_without_a_known_internal_root():
+    from app.services.assert_html_report import _clean
+    assert _clean({'outputPath': 'reports/private score.json', 'case_id': 'case-fixture'}) == {'case_id': 'case-fixture'}
+    assert 'private score.json' not in _clean('output_path="reports/private score.json"')

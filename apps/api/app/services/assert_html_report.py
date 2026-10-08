@@ -57,7 +57,7 @@ def _sensitive_key(key: Any) -> bool:
     words = re.sub(r'(?<=[a-z0-9])(?=[A-Z])', '_', str(key)).casefold()
     parts = set(re.split(r'[^a-z0-9]+', words))
     normalized = re.sub(r'[^a-z0-9]', '', words)
-    return (bool(parts & {'secret', 'password', 'passwd', 'token', 'credential'})
+    return (bool(parts & {'secret', 'password', 'passwd', 'token', 'credential', 'authorization'})
             or normalized in {'authorization', 'cookie', 'setcookie', 'passwd'}
             or any(part in normalized for part in (
                 'password', 'apikey', 'privatekey', 'secretkey', 'secretaccesskey',
@@ -67,20 +67,29 @@ def _sensitive_key(key: Any) -> bool:
             or normalized.startswith(('secret', 'token')))
 
 
+def _internal_path_key(key: Any) -> bool:
+    normalized = re.sub(r'[^a-z0-9]', '', str(key).casefold())
+    return (normalized.endswith(('path', 'paths')) or normalized == 'artifacts'
+            or bool(re.search(r'(?:artifact|recording|audio|snapshot|inference).*path', normalized)))
+
+
+def _omitted_key(key: Any) -> bool:
+    return _sensitive_key(key) or _internal_path_key(key)
+
+
 # Never link or copy local artifact paths. Keep key context while scrubbing nested
 # business evidence, including stringified JSON and OTLP KeyValue records.
 def _clean(value: Any) -> Any:
     value = redact(value)
     if isinstance(value, dict):
-        if 'value' in value and isinstance(value.get('key'), str) and _sensitive_key(value['key']):
+        if 'value' in value and isinstance(value.get('key'), str) and _omitted_key(value['key']):
             return {}
         return {str(_clean(str(key))): _clean(item) for key, item in value.items()
-                if not _sensitive_key(key)
-                and not re.search(r'(?:artifact|recording|audio|snapshot|inference).*path|^path$|^artifacts$', str(key), re.I)}
+                if not _omitted_key(key)}
     if isinstance(value, list):
         return [_clean(item) for item in value
                 if not (isinstance(item, dict) and isinstance(item.get('key'), str)
-                        and _sensitive_key(item['key']))]
+                        and _omitted_key(item['key']))]
     if isinstance(value, str):
         if value.lstrip().startswith(('{', '[')):
             try:
@@ -92,12 +101,23 @@ def _clean(value: Any) -> Any:
                 if cleaned != structured:
                     return json.dumps(cleaned, ensure_ascii=False, sort_keys=True)
         value = re.sub(r'(?:file://|local-artifact://)[^\s"<>]+|(?:/Users/|/home/|/private/|/tmp/|/var/|/workspace/|/app/|/opt/|/root/|/mnt/|/Volumes/|/etc/|/srv/)[^\s"<>]+|[A-Za-z]:\\[^\s"<>]+', '[internal path omitted]', value)
+        value = re.sub(r'''(?i)(?<![\w/\\:.-])(?:[/\\]|(?:\.{1,2}[/\\])*)(?:artifacts|storage)[/\\][^\s"'<>;,]+''', '[internal path omitted]', value)
         value = re.sub(r'(?i)\b(https?://)[^\s/@]+(?::[^\s/@]*)?@', r'\1[credential omitted]@', value)
+        # Authorization schemes may contain spaces, commas and quoted parameters.
+        # For an unquoted header, scrub the entire rest of its line rather than
+        # just the scheme name. A quoted assignment stops at its closing quote.
+        authorization = re.compile(r'''(?i)(?<![\w.-])(?P<key>["']?(?:proxy[-_.]?)?authorization["']?)[ \t]*[:=][ \t]*(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\r\n<>]+)''')
+        value = authorization.sub(lambda match: f'{match.group("key")}=[credential omitted]', value)
         value = re.sub(r'(?i)\bBearer\s+[^\s"<>]+', 'Bearer [credential omitted]', value)
         assignments = re.compile(r'''(?P<key>"[^"\r\n]+"|'[^'\r\n]+'|[A-Za-z][A-Za-z0-9_.-]*)\s*[:=]\s*(?P<value>"[^"]*"|'[^']*'|[^\s,;"<>\[]+)''')
-        value = assignments.sub(
-            lambda match: f'{match.group("key")}=[credential omitted]'
-            if _sensitive_key(match.group('key').strip('"\'')) else match.group(0), value)
+        def clean_assignment(match):
+            key = match.group('key').strip('"\'')
+            if _sensitive_key(key):
+                return f'{match.group("key")}=[credential omitted]'
+            if _internal_path_key(key):
+                return f'{match.group("key")}=[internal path omitted]'
+            return match.group(0)
+        value = assignments.sub(clean_assignment, value)
     return value
 
 

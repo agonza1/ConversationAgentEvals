@@ -45,4 +45,11 @@ Current reviews persist the semantic result/provenance and hashes, but deliberat
 
 This slice shows saved citations as unresolved text because current persisted citations do not carry reliable transcript anchors. Known credential fields/text and internal paths are scrubbed by an export-local sanitizer built on the existing CAE evidence redactor. Audio stays in CAE. The HTML has embedded CSS, native disclosure controls, escaped content and a restrictive CSP; it works offline with no external requests. The web download derives a bounded filename from the three IDs when cross-origin browsers do not expose Content-Disposition.
 
+Export sanitization omits path-valued fields (including nested/stringified JSON
+and OTLP attributes) and relative `artifacts/` or `storage/` references. Unquoted
+Authorization/Proxy-Authorization headers are removed through the end of their
+line, including multi-parameter schemes such as Digest; quoted assignments stop
+at their closing quote. This is conservative export-only filtering, not a change
+to saved evidence or a guarantee that arbitrary personal information is removed.
+
 Synthetic fixture evidence is explicitly labeled and is used only for tests and local screenshots; it does not claim a live ASSERT judgment.
