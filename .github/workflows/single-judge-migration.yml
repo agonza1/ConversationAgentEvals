@@ -1,0 +1,64 @@
+name: Single judge migration verification
+
+on:
+  push:
+    branches: [refactor/single-assert-judge-path]
+    paths:
+      - .github/workflows/single-judge-migration.yml
+      - scripts/apply-single-judge-migration.py
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    if: github.repository == 'agonza1/ConversationAgentEvals' && github.ref == 'refs/heads/refactor/single-assert-judge-path'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Apply migration candidate
+        id: apply
+        shell: bash
+        run: |
+          if [ ! -f scripts/apply-single-judge-migration.py ]; then
+            echo 'Migration script is not present yet; no source files or refs changed.'
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cp scripts/apply-single-judge-migration.py /tmp/apply-single-judge-migration.py
+          python /tmp/apply-single-judge-migration.py --apply
+          echo 'ready=true' >> "$GITHUB_OUTPUT"
+      - name: Install dependencies
+        if: steps.apply.outputs.ready == 'true'
+        run: |
+          npm ci
+          python -m venv apps/api/.venv
+          apps/api/.venv/bin/python -m pip install -r apps/api/requirements.txt
+          apps/api/.venv/bin/python -m pip check
+      - name: API regression suite
+        if: steps.apply.outputs.ready == 'true'
+        run: PYTHONPATH=apps/api apps/api/.venv/bin/python -m pytest apps/api/tests -q
+      - name: Web model tests and build
+        if: steps.apply.outputs.ready == 'true'
+        run: |
+          node --test apps/web/tests/evidence-timeline.test.cjs apps/web/tests/assert-review-model.test.cjs
+          npm run build:web
+      - name: Publish tested candidate tree (no ref writes)
+        if: steps.apply.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_SOURCE_SHA: ${{ github.sha }}
+        run: python /tmp/apply-single-judge-migration.py --publish-tree
