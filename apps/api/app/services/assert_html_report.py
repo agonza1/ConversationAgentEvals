@@ -115,8 +115,10 @@ def _sensitive_key(key: Any) -> bool:
 
 def _internal_path_key(key: Any) -> bool:
     normalized = re.sub(r'[^a-z0-9]', '', str(key).casefold())
+    parts = set(re.split(r'[^a-z0-9]+', re.sub(r'(?<=[a-z0-9])(?=[A-Z])', '_', str(key)).casefold()))
     return (normalized.endswith(('path', 'paths', 'dir', 'dirs', 'directory', 'directories',
                                  'folder', 'folders', 'filename', 'filenames', 'cwd', 'pwd'))
+            or bool(parts & {'file', 'files'})
             or normalized in {'artifacts', 'outputroot', 'saveroot', 'workspaceroot', 'projectroot', 'reporoot', 'repositoryroot'}
             or bool(re.search(r'(?:artifact|recording|audio|snapshot|inference).*(?:path|dir|folder|root)', normalized)))
 
@@ -204,7 +206,7 @@ def render_assert_html_report(run: dict[str, Any], conversation: dict[str, Any],
                  f'<p><b>Recorded value:</b> <span class="pill">{_text(value)}</span> · '
                  f'<b>Applicable:</b> {_text(provenance.get("dimension_applicability", {}).get(name))}</p>'
                  f'<p>{_text(provenance.get("dimension_justifications", {}).get(name))}</p>{scale_html}</article>')
-    nodes = ''.join(f'<details><summary>Behavior {_text(node.get("node_id") or node.get("behavior") or index)}</summary>'
+    nodes = ''.join(f'<details><summary>Behavior {_text(node.get("node_name") or node.get("node_id") or node.get("behavior") or index)}</summary>'
                     f'<pre>{_json(node)}</pre></details>' for index, node in enumerate(provenance['node_judgments'], 1))
     turns = conversation.get('turns') or []
     messages = ''.join(f'<article class="message"><b>{_text(turn.get("speaker"))}</b>'

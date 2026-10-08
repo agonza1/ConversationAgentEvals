@@ -430,11 +430,13 @@ def test_path_fields_are_scrubbed_even_without_a_known_internal_root():
     from app.services.assert_html_report import _clean
     assert _clean({'outputPath': 'reports/private score.json', 'case_id': 'case-fixture'}) == {'case_id': 'case-fixture'}
     assert 'private score.json' not in _clean('output_path="reports/private score.json"')
+    assert _clean({'profile': {'name': 'customer'}, 'files': ['runs/private/report.json']}) == {'profile': {'name': 'customer'}}
 
 
 @pytest.mark.parametrize('key', ['artifact_dir', 'output_dir', 'save_dir', 'workdir', 'cwd', 'pwd',
                                 'working_directory', 'workspace_dirs', 'outputFolder', 'score_filename',
-                                'output_root', 'repo_root', 'artifact_dir_ref'])
+                                'output_root', 'repo_root', 'artifact_dir_ref', 'file', 'files', 'source_file',
+                                'output_file', 'outputFiles', 'file_list'])
 def test_directory_fields_are_omitted_without_a_known_internal_prefix(saved, key):
     _, conv, review = saved
     path = 'runs/private/SYNTHETIC-PRIVATE-REPORT'
@@ -452,6 +454,15 @@ def test_directory_fields_are_omitted_without_a_known_internal_prefix(saved, key
     assert 'SYNTHETIC-PRIVATE-REPORT' not in response.text
     assert 'case-fixture' in response.text
     assert saved == original
+
+
+def test_native_node_name_is_used_in_collapsed_behavior_heading_and_escaped(saved):
+    _, _, review = saved
+    review['judge_result']['provenance']['node_judgments'][0]['node_name'] = 'refund <script>boundary</script>'
+    response = download(saved)
+    assert response.status_code == 200
+    assert '<summary>Behavior refund &lt;script&gt;boundary&lt;/script&gt;</summary>' in response.text
+    assert '<summary>Behavior 1</summary>' not in response.text
 
 
 @pytest.mark.parametrize('key', ['cookies', 'http_cookies', 'HTTPCookies', 'cookieJar', 'cookiejar'])
