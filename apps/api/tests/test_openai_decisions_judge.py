@@ -163,6 +163,16 @@ def test_disabled_and_missing_credentials_do_not_issue_provider_requests(provide
     assert calls == []
 
 
+@pytest.mark.parametrize('source', ['run', 'conversation'])
+def test_service_rejects_unknown_states_without_provider_calls(provider, source):
+    calls, refunded = provider
+    run, item = {'status': 'completed'}, conversation()
+    (run if source == 'run' else item)['status'] = 'waiting'
+    with pytest.raises(ValueError, match='terminal'):
+        judge.run_openai_decisions_judge(run=run, conversation=item)
+    assert calls == [] and refunded == []
+
+
 @pytest.mark.parametrize('failure', ['http', 'timeout', 'invalid_json', 'invalid_answer'])
 def test_failure_refunds_credits_and_hides_provider_content(provider, monkeypatch, failure):
     _, refunded = provider

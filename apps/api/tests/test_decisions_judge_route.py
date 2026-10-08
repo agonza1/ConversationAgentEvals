@@ -78,6 +78,26 @@ def test_endpoint_rejects_owner_mismatch_and_client_injected_evidence(recorded):
     assert calls == [] and audit == []
 
 
+@pytest.mark.parametrize('binding', ['revoked', 'ambiguous', 'missing_key'])
+def test_invalid_project_binding_is_rejected_before_paid_judging(recorded, monkeypatch, binding):
+    calls, audit = recorded
+    run = store._RUNS['decisions-run']
+    run['product_project_id'] = 'stable-project' if binding != 'ambiguous' else None
+    if binding == 'missing_key': run['project_id'] = None
+    def denied(**kwargs):
+        if binding == 'missing_key': assert kwargs['project_id'] == ''
+        raise ValueError('Project is not visible or is ambiguous.')
+    monkeypatch.setattr(route, 'resolve_execution_product_project_id', denied)
+    assert client.post(PATH, json={'user_id': 'owner'}).status_code == 409
+    assert calls == [] and audit == []
+
+
+def test_owner_unbound_run_does_not_require_a_product_project(recorded):
+    store._RUNS['decisions-run']['project_id'] = None
+    response = client.post(PATH, json={'user_id': 'owner'})
+    assert response.status_code == 200, response.text
+
+
 @pytest.mark.parametrize('kind', ['active_run', 'active_conversation', 'no_verdict', 'unknown_run', 'unknown_conversation'])
 def test_endpoint_requires_terminal_deterministically_evaluated_calls(recorded, kind):
     calls, audit = recorded

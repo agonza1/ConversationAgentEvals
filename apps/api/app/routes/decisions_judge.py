@@ -40,10 +40,10 @@ def judge_execution_conversation(execution_run_id: str, conversation_id: str,
         raise HTTPException(status_code=409, detail='A deterministic verdict is required before Decisions judging.')
     project_id = str(run.get('project_id') or '').strip() or None
     product_project_id = str(run.get('product_project_id') or '').strip() or None
-    if project_id:
+    if project_id or product_project_id:
         try:
             product_project_id = resolve_execution_product_project_id(
-                db=db, user_id=payload.user_id, project_id=project_id,
+                db=db, user_id=payload.user_id, project_id=project_id or '',
                 product_project_id=product_project_id,
             )
         except ValueError as exc:
