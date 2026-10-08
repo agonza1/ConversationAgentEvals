@@ -558,6 +558,34 @@ def test_passphrase_and_passcode_fields_cannot_export_bare_values(saved, key):
     assert saved == original
 
 
+@pytest.mark.parametrize('credential', [
+    'DefaultEndpointsProtocol=https;AccountName=business;AccountKey=SYNTHETIC-CLOUD-SECRET',
+    'SharedAccessSignature=sv=1&sig=SYNTHETIC-CLOUD-SECRET',
+    'sig=SYNTHETIC-CLOUD-SECRET',
+    'signature=SYNTHETIC-CLOUD-SECRET',
+    'connection_url=https://db.example/container?sv=1&sig=SYNTHETIC-CLOUD-SECRET',
+    'https://db.example/container?X-Amz-Signature=SYNTHETIC-CLOUD-SECRET&receipt=case-fixture',
+    {'accountKey': 'SYNTHETIC-CLOUD-SECRET'},
+    {'shared_access_signature': 'SYNTHETIC-CLOUD-SECRET'},
+    {'signature': 'SYNTHETIC-CLOUD-SECRET'},
+    {'sas': 'SYNTHETIC-CLOUD-SECRET'},
+])
+def test_cloud_connection_string_and_signed_url_credentials_are_omitted(saved, credential):
+    _, conv, review = saved
+    evidence = {'connection': credential, 'business_receipt': 'case-fixture',
+                'serialized': json.dumps({'connection': credential})}
+    conv['action_trace'][0]['result'] = evidence
+    conv['final_state']['evidence'] = evidence
+    review['judge_result']['rationale'] = json.dumps(evidence)
+    resnapshot(saved)
+    original = deepcopy(saved)
+    response = download(saved)
+    assert response.status_code == 200
+    assert 'SYNTHETIC-CLOUD-SECRET' not in response.text
+    assert 'case-fixture' in response.text
+    assert saved == original
+
+
 @pytest.mark.parametrize('key', ['cookies', 'http_cookies', 'HTTPCookies', 'cookieJar', 'cookiejar'])
 def test_cookie_container_context_is_preserved_before_recursion(saved, key):
     _, conv, review = saved

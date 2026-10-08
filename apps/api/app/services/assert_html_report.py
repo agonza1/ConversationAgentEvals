@@ -104,10 +104,10 @@ def _sensitive_key(key: Any) -> bool:
     return (bool(parts & {'secret', 'secrets', 'password', 'passwords', 'passwd', 'token', 'tokens',
                          'credential', 'credentials', 'auth', 'authorization', 'authentication', 'cookie', 'cookies'})
             or normalized in {'authorization', 'cookie', 'cookies', 'setcookie', 'setcookies', 'cookiejar', 'passwd',
-                              'session', 'sid', 'sessid', 'phpsessid', 'connectsid', 'sessionkey', 'jwt', 'csrf', 'xsrf'}
+                              'session', 'sid', 'sessid', 'phpsessid', 'connectsid', 'sessionkey', 'jwt', 'csrf', 'xsrf', 'sig', 'sas'}
             or any(part in normalized for part in (
                 'password', 'passphrase', 'passcode', 'apikey', 'privatekey', 'secretkey', 'secretaccesskey',
-                'clientsecret', 'signingkey', 'credential',
+                'clientsecret', 'signingkey', 'credential', 'accountkey', 'accesskey', 'sharedkey', 'signature',
             ))
             or normalized.endswith(('secret', 'secrets', 'token', 'tokens', 'auth', 'authorization', 'authentication', 'cookie', 'cookies', 'sessionid'))
             or normalized.startswith(('secret', 'token')))
@@ -166,6 +166,10 @@ def _clean(value: Any) -> Any:
         value = re.sub(r'(?:file://|local-artifact://)[^\s"<>]+|(?:/Users/|/home/|/private/|/tmp/|/var/|/workspace/|/app/|/opt/|/root/|/mnt/|/Volumes/|/etc/|/srv/)[^\s"<>]+|(?<![A-Za-z0-9+.-])[A-Za-z]:[/\\][^\s"<>]+', '[internal path omitted]', value)
         value = re.sub(r'''(?i)(?<![\w/\\:.-])(?:[/\\]|(?:\.{1,2}[/\\])*)(?:artifacts|storage)[/\\][^\s"'<>;,]+''', '[internal path omitted]', value)
         value = re.sub(r'(?i)\b([a-z][a-z0-9+.-]*://)[^\s/@]+@', r'\1[credential omitted]@', value)
+        # Scrub signed-URL query credentials before an outer URL/assignment can
+        # consume the entire string and hide these nested fields.
+        value = re.sub(r'''([?&])([A-Za-z0-9_.-]+)=([^&\s"'<>]+)''',
+                       lambda match: f'{match[1]}{match[2]}=[credential omitted]' if _sensitive_key(match[2]) else match[0], value)
         # Credential headers may contain spaces, commas and quoted parameters.
         # For an unquoted header, scrub the entire rest of its line rather than
         # just the scheme name. A quoted assignment stops at its closing quote.
