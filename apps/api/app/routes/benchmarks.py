@@ -310,9 +310,9 @@ def enqueue_benchmark_suite_run(
 ):
     merged_payload = payload.model_dump()
     merged_payload['suite_id'] = suite_id
-    merged_payload = _bind_benchmark_project(db, merged_payload)
-    suite_run_id = _queued_suite_run_id(suite_id=suite_id, payload=merged_payload)
     try:
+        merged_payload = _bind_benchmark_project(db, merged_payload)
+        suite_run_id = _queued_suite_run_id(suite_id=suite_id, payload=merged_payload)
         queued_record = create_benchmark_suite_run_record(
             db=db,
             suite_run_id=suite_run_id,
@@ -335,9 +335,9 @@ def enqueue_benchmark_suite_simulation(
 ):
     merged_payload = payload.model_dump()
     merged_payload['suite_id'] = suite_id
-    merged_payload = _bind_benchmark_project(db, merged_payload)
-    suite_run_id = _queued_suite_run_id(suite_id=suite_id, payload=merged_payload)
     try:
+        merged_payload = _bind_benchmark_project(db, merged_payload)
+        suite_run_id = _queued_suite_run_id(suite_id=suite_id, payload=merged_payload)
         queued_record = create_benchmark_suite_run_record(
             db=db,
             suite_run_id=suite_run_id,
