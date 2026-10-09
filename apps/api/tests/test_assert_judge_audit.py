@@ -60,6 +60,14 @@ def test_assert_judge_endpoint_records_product_audit_metadata(monkeypatch):
         'get_conversation',
         lambda run_id, conversation_id: conversation,
     )
+    # This audit-focused test uses an in-memory run stub; persistence of the
+    # binding itself is covered by the real-store regression in
+    # test_single_assert_pipeline.py.
+    monkeypatch.setattr(
+        assert_judge.execution_run_store,
+        'bind_execution_run_product_project',
+        lambda run_id, **kwargs: {**run, 'product_project_id': kwargs['product_project_id']},
+    )
     monkeypatch.setattr(
         assert_judge.execution_run_store,
         'deterministic_evaluation_snapshot',
