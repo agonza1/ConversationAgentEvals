@@ -49,12 +49,15 @@ def main() -> None:
     _assert(pass_report['verdict'] == 'needs_review', 'required semantic checks must remain pending')
     _assert(pass_report['semantic_review_required'] is True, 'expected explicit semantic coverage gap')
     _assert(pass_report['overall_score'] >= 75, 'expected passing score')
-    _assert({key: value for key, value in pass_report['run_metadata'].items() if key != 'product_project_id'} == {
+    _assert({key: value for key, value in pass_report['run_metadata'].items() if key not in {'product_project_id', 'project_id', 'user_id'}} == {
         'agent_version': 'smoke-agent-v1',
         'prompt_version': 'smoke-prompt-v1',
         'model_name': 'deterministic-local',
         'notes': 'api smoke pass path',
     }, 'expected normalized run metadata')
+    _assert(pass_report['run_metadata']['user_id'] == 'anonymous', 'expected stable default user identity')
+    _assert(pass_report['run_metadata']['project_id'] == 'default', 'expected stable default project identity')
+    _assert(bool(pass_report['run_metadata']['product_project_id']), 'expected exact bound product identity')
     _assert_audit_summary(pass_report['evidence_audit_summary'])
 
     failure_run = _json(_ok(client.post(
@@ -134,7 +137,7 @@ def _assert_audit_summary(summary: dict[str, Any]) -> None:
     _assert(summary.get('transcript_present') is True, 'expected transcript audit flag')
     _assert(summary.get('action_trace_present') is True, 'expected action trace audit flag')
     _assert(summary.get('final_state_present') is True, 'expected final state audit flag')
-    _assert(summary.get('metadata_labels') == ['agent_version', 'model_name', 'notes', 'prompt_version'], 'expected metadata audit labels')
+    _assert(summary.get('metadata_labels') == ['agent_version', 'model_name', 'notes', 'product_project_id', 'project_id', 'prompt_version', 'user_id'], 'expected metadata audit labels')
     _assert(summary.get('evaluator_version') == 'assert-boundary', 'expected ASSERT evaluator version')
     _assert(summary.get('export_readiness') == {
         'ready': True,
