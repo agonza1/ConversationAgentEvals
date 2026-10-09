@@ -329,6 +329,26 @@ def test_assert_taxonomy_compiles_required_forbidden_and_evidence_failures():
     )
 
 
+def test_taxonomy_examples_do_not_call_missing_telemetry_a_proven_violation():
+    _, conversation = _run_and_conversation()
+    taxonomy = build_assert_taxonomy(
+        scenario_contract={
+            'required_actions': ['complete an account change'],
+            'forbidden_actions': ['promise unapproved account changes'],
+        },
+        conversation=conversation,
+    )
+    categories = {item['name']: item for item in taxonomy['behavior_categories']}
+    required = categories['missing_required_complete_an_account_change']
+    claim = categories['unsupported_operational_claim']
+    assert 'Missing telemetry is an observability gap' in required['definition']
+    assert 'observable omission or failed tool result' in required['examples'][0]
+    assert 'only claims completion' not in required['examples'][0]
+    assert 'explicitly returned a failure' in claim['examples'][0]
+    assert 'no cancellation evidence' not in claim['examples'][0]
+    assert 'Missing or partial telemetry means unverified' in taxonomy['definition_of_terms'][0]['definition']
+
+
 def test_upstream_assert_judge_runs_existing_judge_only_command(monkeypatch, tmp_path):
     run, conversation = _run_and_conversation()
     _configure_assert_runtime(monkeypatch, tmp_path)
