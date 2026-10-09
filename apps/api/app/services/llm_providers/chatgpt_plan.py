@@ -340,15 +340,16 @@ class ChatGPTPlanProvider:
 
     def select_profile(self, profile_id: str) -> dict:
         self._require_local()
-        with self._mutex, self._locked():
-            value = self._load()
-            if profile_id not in value['profiles'] or not value['profiles'][profile_id].get('subject'):
-                raise ChatGPTPlanError('ChatGPT account registration not found.')
-            self._pending = None
-            self._generation += 1
-            value['active_profile_id'] = profile_id
-            self._save(value)
-        self._stop_listener()
+        with self._mutex:
+            with self._locked():
+                value = self._load()
+                if profile_id not in value['profiles'] or not value['profiles'][profile_id].get('subject'):
+                    raise ChatGPTPlanError('ChatGPT account registration not found.')
+                self._pending = None
+                self._generation += 1
+                value['active_profile_id'] = profile_id
+                self._save(value)
+            self._stop_listener()
         return self.status()
 
     def select_judge_model(self, model: str | None) -> dict:
@@ -378,28 +379,28 @@ class ChatGPTPlanProvider:
         with self._mutex:
             self._pending = None
             self._generation += 1
-        self._stop_listener()
-        with self._locked():
-            value = self._load()
-            profile = self._active(value)
-            if profile.get('refresh_token'):
-                try:
-                    discovery = self.client.get(DISCOVERY_URL)
-                    discovery.raise_for_status()
-                    endpoint = discovery.json()['revocation_endpoint']
-                    parsed = urlsplit(endpoint)
-                    if parsed.scheme != 'https' or parsed.netloc != 'auth.openai.com':
-                        raise ValueError
-                    response = self.client.post(endpoint, data={'token': profile['refresh_token'],
-                        'token_type_hint': 'refresh_token', 'client_id': profile['client_id']})
-                    confirmed = response.status_code == 200
-                except Exception:
-                    pass
-            self._clear_tokens(profile)
-            self._save(value)
-        self._last_error = ('Signed out. Remote revocation was not confirmed; disconnect this app in ChatGPT Settings.'
-                            if not confirmed else 'Signed out of ChatGPT.')
-        return self.status()
+            self._stop_listener()
+            with self._locked():
+                value = self._load()
+                profile = self._active(value)
+                if profile.get('refresh_token'):
+                    try:
+                        discovery = self.client.get(DISCOVERY_URL)
+                        discovery.raise_for_status()
+                        endpoint = discovery.json()['revocation_endpoint']
+                        parsed = urlsplit(endpoint)
+                        if parsed.scheme != 'https' or parsed.netloc != 'auth.openai.com':
+                            raise ValueError
+                        response = self.client.post(endpoint, data={'token': profile['refresh_token'],
+                            'token_type_hint': 'refresh_token', 'client_id': profile['client_id']})
+                        confirmed = response.status_code == 200
+                    except Exception:
+                        pass
+                self._clear_tokens(profile)
+                self._save(value)
+            self._last_error = ('Signed out. Remote revocation was not confirmed; disconnect this app in ChatGPT Settings.'
+                                if not confirmed else 'Signed out of ChatGPT.')
+            return self.status()
 
     @staticmethod
     def _clear_tokens(profile: dict) -> None:
@@ -439,8 +440,9 @@ class ChatGPTPlanProvider:
                     self.send_header('Cache-Control', 'no-store')
                     self.end_headers()
                     self.wfile.write(body)
-                    if provider._pending is None:
-                        provider._stop_listener()
+                    with provider._mutex:
+                        if provider._pending is None:
+                            provider._stop_listener()
 
                 def log_message(self, *args: Any) -> None:
                     pass  # Callback URLs contain authorization codes.
@@ -460,15 +462,18 @@ class ChatGPTPlanProvider:
                 return
             self._pending = None
             self._generation += 1
-        self._stop_listener()
+            self._stop_listener()
 
     def _stop_listener(self) -> None:
-        if self._timer:
-            self._timer.cancel()
-        server, self._server = self._server, None
-        if server:
-            server.shutdown()
-            server.server_close()
+        # Serialize the complete close with start_oauth(): the old socket must
+        # be released before a new listener binds, and its timer must stay intact.
+        with self._mutex:
+            if self._timer:
+                self._timer.cancel()
+            server, self._server = self._server, None
+            if server:
+                server.shutdown()
+                server.server_close()
 
 
 _provider: ChatGPTPlanProvider | None = None

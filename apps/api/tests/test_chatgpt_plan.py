@@ -267,6 +267,72 @@ def test_invalid_profile_does_not_cancel_an_existing_authorization(provider):
     assert provider.status()['pending'] is False
 
 
+@pytest.mark.parametrize('cancellation', ['select_profile', 'disconnect', 'expire'])
+def test_cancellation_shutdown_cannot_close_a_newer_oauth_listener(provider, monkeypatch, cancellation):
+    import threading
+    authorize(provider, monkeypatch)
+    profile_id = provider.status()['active_profile_id']
+    provider.start_oauth()
+    generation = provider._generation
+    shutdown_started = threading.Event()
+    allow_shutdown = threading.Event()
+    new_attempt_started = threading.Event()
+    new_attempt_done = threading.Event()
+    errors = []
+    class Timer:
+        cancelled = False
+        def cancel(self):
+            self.cancelled = True
+    class Server:
+        closed = False
+        def shutdown(self):
+            shutdown_started.set()
+            assert allow_shutdown.wait(5)
+        def server_close(self):
+            self.closed = True
+    old_server, old_timer = Server(), Timer()
+    new_server, new_timer = Server(), Timer()
+    provider._server, provider._timer = old_server, old_timer
+    def start_listener():
+        assert old_server.closed  # New bind must wait for the old socket close.
+        provider._server, provider._timer = new_server, new_timer
+    monkeypatch.setattr(provider, '_start_listener', start_listener)
+    def cancel():
+        try:
+            if cancellation == 'select_profile': provider.select_profile(profile_id)
+            elif cancellation == 'disconnect': provider.disconnect()
+            else: provider._expire(generation)
+        except Exception as exc:
+            errors.append(exc)
+    def start():
+        new_attempt_started.set()
+        try:
+            provider.start_oauth()
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            new_attempt_done.set()
+    cancel_thread = threading.Thread(target=cancel)
+    start_thread = threading.Thread(target=start)
+    cancel_thread.start()
+    try:
+        assert shutdown_started.wait(5)
+        start_thread.start()
+        assert new_attempt_started.wait(5)
+        assert not new_attempt_done.wait(0.05)
+    finally:
+        allow_shutdown.set()
+        cancel_thread.join(5)
+        if start_thread.ident is not None:
+            start_thread.join(5)
+    assert not cancel_thread.is_alive() and not start_thread.is_alive()
+    assert not errors
+    assert provider._pending is not None and provider._pending['generation'] > generation
+    assert provider._server is new_server and not new_server.closed
+    assert old_timer.cancelled and not new_timer.cancelled
+    provider._stop_listener()
+
+
 def test_refresh_retains_registration_grant_and_rotates_tokens(provider, monkeypatch):
     authorize(provider, monkeypatch)
     with provider._locked():
