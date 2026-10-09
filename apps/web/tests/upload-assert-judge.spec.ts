@@ -1,5 +1,8 @@
 import { expect, test } from '@playwright/test';
 
+// A readiness refresh can still be in flight after the last assertion.
+test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'wait' }); });
+
 for (const source of ['transcript', 'vcon'] as const) {
   test(`uploaded ${source}: Evaluate stays deterministic and LLM Judge uses ASSERT`, async ({ page, request }) => {
     const userId = `upload-assert-${source}-${Date.now()}`;

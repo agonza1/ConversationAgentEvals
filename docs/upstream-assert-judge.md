@@ -29,7 +29,7 @@ LLM_JUDGE_RESERVED_DAILY_CREDITS=0
 
 `GET /api/assert/readiness` returns the common read-only preflight used by the UI and product configuration: enabled state, pinned runtime, allowed configured model, provider credential configuration, available process slots, and application-credit budget. It neither reserves credits nor contacts a model. Ready means configured, not that a provider availability/credential probe succeeded. Non-OpenAI models use the pinned LiteLLM environment validator, including supported local providers. Configure their provider-specific environment variables explicitly.
 
-Codex OAuth connectivity is **not** judge readiness. OAuth remains available for compatible target/authoring features and is never forwarded to ASSERT. There is no automatic model/provider substitution. The old `LLM_JUDGE_MODEL` and `LLM_JUDGE_PROVIDER` settings are unused.
+Legacy Codex OAuth connectivity is **not** judge readiness. It remains available for compatible target/authoring features and is never forwarded to ASSERT. Local installations can separately authorize [ChatGPT-plan OAuth judging](chatgpt-plan-oauth.md) and explicitly choose `chatgpt_plan/<model>` in Console Settings. This registers a transport beneath the same upstream ASSERT CLI, not a second judge engine. There is no automatic model/provider substitution. The old `LLM_JUDGE_MODEL` and `LLM_JUDGE_PROVIDER` settings are unused.
 
 ## API
 

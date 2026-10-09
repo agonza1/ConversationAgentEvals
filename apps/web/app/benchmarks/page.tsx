@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { BenchmarkRunner } from '@/components/BenchmarkRunner';
 import { SiteNav } from '@/components/SiteNav';
 import { SpecGenerationSettings } from '@/components/SpecGenerationSettings';
+import { ChatGPTJudgeSettings } from '@/components/ChatGPTJudgeSettings';
 
 /** Console Settings retains advanced history/report workflows. */
 export default function BenchmarksPage() {
@@ -19,6 +20,7 @@ export default function BenchmarksPage() {
         </p>
       </section>
       <SpecGenerationSettings />
+      <ChatGPTJudgeSettings />
       <BenchmarkRunner view="all" />
     </main>
   );

@@ -31,7 +31,7 @@ function getBrowserOrigin() {
   return window.location.origin;
 }
 
-function getApiBase() {
+export function getApiBase() {
   if (typeof window === 'undefined') {
     return normalizeApiBase(process.env.API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://127.0.0.1:8025');
   }

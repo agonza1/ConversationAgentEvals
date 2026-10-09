@@ -52,6 +52,8 @@ services:
       OLLAMA_BASE_URL: ${COMPOSE_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       REFERENCE_AGENT_INTERNAL_TOKEN: ${REFERENCE_AGENT_INTERNAL_TOKEN:-}
       CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE: ${CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE:-0}
+      CHATGPT_PLAN_LOCAL_ENABLED: ${CHATGPT_PLAN_LOCAL_ENABLED:-0}
+      CHATGPT_PLAN_CALLBACK_BIND_HOST: 0.0.0.0
       LISTENER_BROWSER_TURN_URL: ${LISTENER_BROWSER_TURN_URL:-turn:127.0.0.1:3478?transport=udp}
       LISTENER_TURN_USERNAME: ${LISTENER_TURN_USERNAME:-cae}
       LISTENER_TURN_CREDENTIAL: ${LISTENER_TURN_CREDENTIAL:-cae-local-turn}
@@ -62,6 +64,8 @@ services:
       # The Codex OAuth redirect URI is registered as localhost:1455. Keep the
       # host mapping fixed so Compose cannot advertise an unusable callback URL.
       - "1455:1455"
+      # Local ChatGPT-plan consent is separate from the legacy Codex login.
+      - "127.0.0.1:1456:1456"
     volumes:
       - ./storage:/workspace/storage
       - ./.local:/workspace/.local

@@ -20,6 +20,7 @@ register_builtin_benchmark_extensions()
 ensure_user_scenarios_registered()
 
 from app.routes.assert_judge import router as assert_judge_router
+from app.routes.chatgpt_plan import router as chatgpt_plan_router
 from app.routes.agents import router as agents_router
 from app.routes.benchmarks import router as benchmarks_router
 from app.routes.bootstrap import router as bootstrap_router
@@ -119,6 +120,7 @@ app.add_middleware(
 )
 
 app.include_router(assert_judge_router)
+app.include_router(chatgpt_plan_router)
 app.include_router(decks_router)
 app.include_router(sessions_router)
 app.include_router(realtime_router)

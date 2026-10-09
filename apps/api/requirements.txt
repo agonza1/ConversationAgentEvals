@@ -13,3 +13,5 @@ PyYAML==6.0.2
 assert-ai==0.3.0
 litellm==1.102.1
 openai==2.54.0
+PyJWT[crypto]==2.10.1
+filelock==4.0.12

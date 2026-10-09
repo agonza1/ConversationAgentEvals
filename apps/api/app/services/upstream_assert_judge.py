@@ -78,7 +78,13 @@ def run_upstream_assert_judge(
         raise UpstreamAssertJudgeUnavailable(
             'Upstream ASSERT judging is disabled. Set ASSERT_UPSTREAM_JUDGE_ENABLED=1 to enable it.'
         )
-    model = _resolve_model(model_name)
+    from app.services.llm_providers.chatgpt_plan import ChatGPTPlanError, get_chatgpt_provider
+    try:
+        selection = get_chatgpt_provider().status()
+    except ChatGPTPlanError as exc:
+        raise UpstreamAssertJudgeUnavailable(str(exc)) from exc
+    configured = selection.get('judge_model') or (os.getenv('ASSERT_JUDGE_MODEL') or DEFAULT_ASSERT_JUDGE_MODEL).strip()
+    model = _resolve_model(model_name, configured_model=configured)
     max_judge_n = min(3, _positive_int_env('ASSERT_JUDGE_MAX_N', DEFAULT_ASSERT_JUDGE_MAX_N))
     if not 1 <= judge_n <= max_judge_n:
         raise ValueError(f'judge_n must be between 1 and {max_judge_n}.')
@@ -86,9 +92,11 @@ def run_upstream_assert_judge(
     taxonomy = build_assert_taxonomy(scenario_contract=scenario_contract, conversation=conversation)
     inference = build_assert_inference_row(run=run, conversation=conversation)
     configuration = judge_configuration(model, judge_n)
+    if model.startswith('chatgpt_plan/') and configuration['transport']['account_binding_sha256'] != selection.get('account_binding_sha256'):
+        raise UpstreamAssertJudgeUnavailable('ChatGPT account changed; start a new review.')
     judge_dimensions = configuration['dimensions']
     score_contract = judge_score_contract(judge_dimensions)
-    fingerprint = _input_fingerprint(model, judge_n, taxonomy, inference)
+    fingerprint = _input_fingerprint(model, judge_n, taxonomy, inference, configuration=configuration)
 
     try:
         executable = cli_executable()
@@ -98,6 +106,10 @@ def run_upstream_assert_judge(
     if model.startswith('openai/') and not environment.get('OPENAI_API_KEY') and environment.get('LLM_JUDGE_API_KEY'):
         environment['OPENAI_API_KEY'] = environment['LLM_JUDGE_API_KEY']
     _require_provider_credentials(model, environment)
+    if model.startswith('chatgpt_plan/'):
+        if environment['CAE_CHATGPT_EXPECTED_BINDING'] != configuration['transport']['account_binding_sha256']:
+            raise UpstreamAssertJudgeUnavailable('ChatGPT account changed; start a new review.')
+        environment['PYTHONPATH'] = str(REPO_ROOT / 'apps' / 'api') + os.pathsep + environment.get('PYTHONPATH', '')
 
     credits = DEFAULT_ASSERT_JUDGE_CREDITS * judge_n
     with _assert_judge_slot():
@@ -150,7 +162,7 @@ def run_upstream_assert_judge(
             command = [
                 executable,
                 '-m',
-                'assert_ai.cli',
+                'app.integrations.chatgpt_assert_cli' if model.startswith('chatgpt_plan/') else 'assert_ai.cli',
                 'run',
                 '--config', str(config_path),
                 '--force-stage', 'judge',
@@ -466,8 +478,8 @@ def _valid_dimension_value(
     return isinstance(value, expected_type) and value in allowed
 
 
-def _resolve_model(model_name: str | None) -> str:
-    configured = (os.getenv('ASSERT_JUDGE_MODEL') or DEFAULT_ASSERT_JUDGE_MODEL).strip()
+def _resolve_model(model_name: str | None, *, configured_model: str | None = None) -> str:
+    configured = configured_model if configured_model is not None else _configured_judge_model()
     model = (model_name or configured).strip()
     if not model:
         raise ValueError('ASSERT judge model cannot be empty.')
@@ -486,8 +498,31 @@ def _resolve_model(model_name: str | None) -> str:
     return model
 
 
+def _configured_judge_model() -> str:
+    from app.services.llm_providers.chatgpt_plan import ChatGPTPlanError, get_chatgpt_provider
+    try:
+        selected = get_chatgpt_provider().selected_model()
+    except ChatGPTPlanError:
+        # Unknown saved billing mode must not silently fall back to API-key usage.
+        return 'chatgpt_plan/repair-storage'
+    return selected or (os.getenv('ASSERT_JUDGE_MODEL') or DEFAULT_ASSERT_JUDGE_MODEL).strip()
+
+
 def _require_provider_credentials(model: str, environment: dict[str, str]) -> None:
     """Validate configuration locally; never make a probe or select a fallback model."""
+    if model.startswith('chatgpt_plan/'):
+        from app.services.llm_providers.chatgpt_plan import ChatGPTPlanError, get_chatgpt_provider
+        provider = get_chatgpt_provider()
+        try:
+            status = provider.status()
+        except ChatGPTPlanError as exc:
+            raise UpstreamAssertJudgeUnavailable(str(exc)) from exc
+        if model == 'chatgpt_plan/select-model':
+            raise UpstreamAssertJudgeUnavailable('Select a judge model for this ChatGPT account in Console Settings. No API-key fallback was used.')
+        if not status.get('enabled') or not status.get('sharing'):
+            raise UpstreamAssertJudgeUnavailable(status['message'])
+        environment['CAE_CHATGPT_EXPECTED_BINDING'] = provider.binding()
+        return
     if model.startswith('openai/'):
         if not environment.get('OPENAI_API_KEY', '').strip():
             raise UpstreamAssertJudgeUnavailable(
@@ -512,7 +547,7 @@ def _require_provider_credentials(model: str, environment: dict[str, str]) -> No
 def assert_judge_readiness() -> dict[str, Any]:
     """Read-only preflight; never invokes a model, OAuth, or reserves credits."""
     enabled = os.getenv('ASSERT_UPSTREAM_JUDGE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}
-    model = (os.getenv('ASSERT_JUDGE_MODEL') or DEFAULT_ASSERT_JUDGE_MODEL).strip()
+    model = _configured_judge_model()
     blockers: list[str] = []
     if not enabled:
         blockers.append('Set ASSERT_UPSTREAM_JUDGE_ENABLED=1 to enable optional semantic reviews.')
@@ -770,17 +805,25 @@ def judge_configuration(model: str, judge_n: int) -> dict[str, Any]:
             'VERTEXAI_LOCATION',
         )
     })
-    return {'fingerprint_version': FINGERPRINT_VERSION, 'assert_version': _assert_version(),
+    configuration = {'fingerprint_version': FINGERPRINT_VERSION, 'assert_version': _assert_version(),
             'adapter_version': ADAPTER_VERSION, 'aggregation_version': AGGREGATION_VERSION,
             'model': model, 'judge_n': judge_n,
             'model_settings': {'name': model, 'max_tokens': _positive_int_env('ASSERT_JUDGE_MAX_TOKENS', 8000)},
             'timeout_seconds': _positive_int_env('ASSERT_JUDGE_TIMEOUT_SECONDS', DEFAULT_ASSERT_JUDGE_TIMEOUT_SECONDS),
             'dimensions': _judge_dimensions(), 'builtin_dimensions': deepcopy(BUILT_IN_DIMENSIONS),
             'provider_endpoint_identity_sha256': provider_identity}
+    if model.startswith('chatgpt_plan/'):
+        from app.services.llm_providers.chatgpt_plan import get_chatgpt_provider, RESOURCE
+        configuration['model_settings'] = {'name': model}  # Plan API does not accept token caps.
+        configuration['transport'] = {'version': 'chatgpt-plan-responses-v1', 'endpoint': RESOURCE + '/responses',
+            'stream': True, 'store': False, 'billing': 'chatgpt_plan',
+            'account_binding_sha256': get_chatgpt_provider().binding()}
+    return configuration
 
 
-def _input_fingerprint(model: str, judge_n: int, taxonomy: dict[str, Any], inference: dict[str, Any]) -> str:
-    return content_hash({'configuration': judge_configuration(model, judge_n),
+def _input_fingerprint(model: str, judge_n: int, taxonomy: dict[str, Any], inference: dict[str, Any],
+                       *, configuration: dict[str, Any] | None = None) -> str:
+    return content_hash({'configuration': configuration if configuration is not None else judge_configuration(model, judge_n),
                          'taxonomy': taxonomy, 'inference': inference})
 
 
