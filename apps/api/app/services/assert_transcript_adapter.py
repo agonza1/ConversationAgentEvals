@@ -80,6 +80,29 @@ def build_assert_inference_row(
             raw={'cae_final_state': _jsonable(final_state)},
         ))
 
+
+    # A benchmark may retain a textual or list-shaped final state. Preserve it
+    # for semantic context, but never promote it to cae_final_state_snapshot:
+    # that marker is reserved for an actual structured state observation.
+    unstructured_state = conversation.get('unstructured_final_state_evidence')
+    if ((isinstance(unstructured_state, str) and unstructured_state.strip())
+            or (isinstance(unstructured_state, list) and unstructured_state)):
+        transcript.add_event(TranscriptEvent(
+            view=['target', 'combined'],
+            actor='tool',
+            edit=ToolCallEdit(
+                tool_name='cae_unverified_final_state_evidence',
+                tool_args={
+                    'source': 'imported_benchmark',
+                    'kind': 'reported_unstructured_evidence',
+                    'execution_verified': False,
+                },
+                tool_result=_json_text(unstructured_state),
+            ),
+            raw={'cae_unstructured_final_state_evidence': _jsonable(unstructured_state),
+                 'execution_verified': False},
+        ))
+
     error = conversation.get('error')
     if isinstance(error, str) and error.strip():
         transcript.add_event(_message_event(
