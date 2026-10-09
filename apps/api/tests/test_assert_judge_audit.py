@@ -30,6 +30,7 @@ def test_assert_judge_endpoint_records_product_audit_metadata(monkeypatch):
         'scenario_id': 'refund-policy-boundary',
         'status': 'completed',
         'verdict': 'needs_review',
+        'transcript': 'User: Review this charge.\nAgent: I can review the policy.',
     }
     response_payload = {
         'status': 'ready',
@@ -71,8 +72,8 @@ def test_assert_judge_endpoint_records_product_audit_metadata(monkeypatch):
     )
     monkeypatch.setattr(
         assert_judge,
-        'get_scenario_contract',
-        lambda suite_id, scenario_id: {'goal': 'Review safely.'},
+        'recorded_contract',
+        lambda value: {'goal': 'Review safely.'},
     )
     monkeypatch.setattr(
         assert_judge,
@@ -96,7 +97,9 @@ def test_assert_judge_endpoint_records_product_audit_metadata(monkeypatch):
     assert response.json()['review_id'] == 'judge-review-audit'
     assert recorded['user_id'] == run['user_id']
     assert recorded['project_id'] == run['project_id']
-    assert recorded['product_project_id'] is None
+    with SessionLocal() as db:
+        project = db.get(ProductProject, recorded['product_project_id'])
+        assert project.user_id == run['user_id'] and project.project_key == run['project_id']
     # The absent project defaults to the actual baseline entitlement rather than
     # ASSERT's separate feature requirement (`required_plan='starter'`).
     assert recorded['plan'] == 'free'

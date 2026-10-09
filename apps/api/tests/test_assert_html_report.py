@@ -1,3 +1,4 @@
+from assert_test_helpers import freeze, refresh_review
 """Saved-result export tests use synthetic evidence; no provider calls or credits."""
 import json
 from copy import deepcopy
@@ -21,6 +22,7 @@ def saved(monkeypatch):
     run = json.loads(FIXTURE.read_text())
     conv = run['conversations'][0]
     review = conv['judge_reviews'][0]
+    refresh_review(run, conv, review)
     monkeypatch.setattr(assert_judge.execution_run_store, 'get_execution_run', lambda run_id: deepcopy(run))
     def forbidden(**kwargs):
         pytest.fail('Export must not invoke judging, charge credits, or record judge requests.')
@@ -37,10 +39,7 @@ def download(saved, user='demo-user', review_id=None):
 
 def resnapshot(saved):
     run, conv, review = saved
-    review['deterministic_snapshot'] = deterministic_evaluation_snapshot(conv)
-    review['judge_result']['provenance']['input_fingerprint'] = assert_judge_input_fingerprint(
-        run=run, conversation=conv, scenario_contract=get_scenario_contract(run['suite_id'],conv['scenario_id']),
-        model=review['model'], judge_n=1)
+    refresh_review(run, conv, review)
 
 
 def test_valid_download_preserves_saved_values_without_mutation(saved):
@@ -63,7 +62,7 @@ def test_valid_download_preserves_saved_values_without_mutation(saved):
 
 
 def test_wrong_owner_is_non_disclosing_before_evidence(saved, monkeypatch):
-    monkeypatch.setattr(assert_judge, 'get_scenario_contract', lambda *args: pytest.fail('Evidence read before owner check'))
+    monkeypatch.setattr(assert_judge, 'recorded_contract', lambda *args: pytest.fail('Evidence read before owner check'))
     response = download(saved, user='someone-else')
     assert response.status_code == 404
     assert response.json()['detail'] == 'Execution run not found.'
@@ -133,7 +132,7 @@ def test_stale_input_rejected(saved, monkeypatch, change):
     if change == 'run_target':
         run['agent_name'] = 'Different target'
     elif change == 'scenario_contract':
-        monkeypatch.setattr(assert_judge, 'get_scenario_contract', lambda *args: {'goal':'Different behavior'})
+        freeze(conv, {'goal': 'Different retained contract'})
     elif change == 'verdict':
         conv['metrics_summary']['verdict'] = 'pass'
     else:

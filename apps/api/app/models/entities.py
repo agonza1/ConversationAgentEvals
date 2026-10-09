@@ -247,3 +247,15 @@ class ProductWorkspaceInvitation(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
     workspace = relationship('ProductWorkspace', back_populates='invitations')
+
+
+class AssertJudgeRequestRecord(Base):
+    """Durable idempotency for paid semantic reviews, scoped by actor/project/source."""
+    __tablename__ = 'assert_judge_requests'
+
+    id = Column(String, primary_key=True)
+    input_fingerprint = Column(String, nullable=False)
+    status = Column(String, nullable=False)
+    response_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)

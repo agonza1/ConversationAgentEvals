@@ -200,8 +200,11 @@ def test_interleaved_calls_are_reduced_in_terminal_sequence_order():
     assert [e['call_id'] for e in latest_tool_events(events)] == ['b', 'a']
 
 
-def test_interleaved_workflow_scores_completion_order_on_direct_and_replay():
+def test_interleaved_workflow_scores_completion_order_on_direct_and_replay(monkeypatch):
     payload = sample()
+    from app.services import benchmark_service
+    scenario = benchmark_service._SCENARIOS_BY_ID[(payload['suite_id'], payload['scenario_id'])]
+    monkeypatch.setitem(scenario, 'required_order', list(scenario['required_actions']))
     first, second, *remaining = payload['action_trace']
     payload['action_trace'] = [
         {**first, 'call_id': 'a', 'sequence': 1, 'status': 'requested'},

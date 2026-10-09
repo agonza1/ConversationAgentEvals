@@ -1,3 +1,4 @@
+from assert_test_helpers import freeze, refresh_review
 """Synthetic saved ASSERT status/apply evidence, including the actual native node shape."""
 import json
 from copy import deepcopy
@@ -19,6 +20,7 @@ def saved(monkeypatch, tmp_path):
     run = json.loads((Path(__file__).parent/'fixtures/assert-review-native-run.json').read_text())
     conversation = run['conversations'][0]
     review = conversation['judge_reviews'][1]
+    refresh_review(run, conversation, review)
     monkeypatch.setattr(execution_run_store, 'RUNS_DIR', tmp_path)
     monkeypatch.setattr(execution_run_store, '_RUNS', {run['execution_run_id']: run})
     monkeypatch.setattr(execution_run_store, '_persist_unlocked', lambda run: None)
@@ -82,8 +84,7 @@ def test_stale_inputs_share_export_and_direct_apply_enforcement(saved,monkeypatc
     elif change=='final_state': conv['final_state']={'different':True}
     elif change=='target': run['agent_name']='different target'
     else:
-        monkeypatch.setattr(benchmark_service,'get_scenario_contract',lambda *a: {'goal':'different scenario'})
-        monkeypatch.setattr(assert_judge,'get_scenario_contract',benchmark_service.get_scenario_contract)
+        freeze(conv, {'goal': 'different retained contract'})
     assert status(saved).json()['status']=='stale'
     assert apply(saved).status_code==409
     assert review['status']=='pending_confirmation'
@@ -104,7 +105,7 @@ def test_legacy_missing_input_is_unverifiable_and_cannot_apply(saved,missing):
 
 
 def test_wrong_owner_is_not_found_before_contract(saved,monkeypatch):
-    monkeypatch.setattr(assert_judge,'get_scenario_contract',lambda *a: pytest.fail('Not before access check'))
+    monkeypatch.setattr(assert_judge,'recorded_contract',lambda *a: pytest.fail('Not before access check'))
     assert status(saved,'other-user').status_code==404
     assert apply(saved,'other-user').status_code==404
 
@@ -148,10 +149,14 @@ def test_apply_current_assert_review_is_explicit_and_auditable(saved):
     assert response.json()['conversations'][0]['verdict']=='needs_review'
 
 
-def test_non_assert_review_keeps_original_apply_semantics(saved):
-    review=saved[2]
-    review['provider']='legacy';review['judge_result'].pop('provenance')
-    assert apply(saved).status_code==200
+def test_non_assert_review_is_preserved_but_read_only(saved):
+    review = saved[2]
+    review['provider'] = 'legacy'
+    review['judge_result'].pop('provenance')
+    original = deepcopy(saved)
+    response = apply(saved)
+    assert response.status_code == 409 and 'read-only' in response.text
+    assert saved == original
 
 
 @pytest.mark.parametrize('case,expected', [('unbound', 200), ('visible', 200), ('ambiguous', 404),

@@ -1,3 +1,4 @@
+from assert_test_helpers import freeze, refresh_review
 import json
 import subprocess
 from pathlib import Path
@@ -7,7 +8,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.services import product_service, upstream_assert_judge
+from app.services import judge_budget, upstream_assert_judge
 from app.services.assert_taxonomy_adapter import build_assert_taxonomy
 from app.services.assert_transcript_adapter import build_assert_inference_row
 from app.services.upstream_assert_judge import (
@@ -97,9 +98,9 @@ def _configure_assert_runtime(monkeypatch, tmp_path, *, daily_limit=200, max_n=3
     monkeypatch.delenv('OPENAI_API_KEY', raising=False)
     monkeypatch.setenv('LLM_JUDGE_DAILY_CREDIT_LIMIT', str(daily_limit))
     monkeypatch.setenv('LLM_JUDGE_RESERVED_DAILY_CREDITS', '0')
-    monkeypatch.setattr(product_service, '_judge_spend_path', lambda: tmp_path / 'judge-spend.json')
+    monkeypatch.setattr(judge_budget, '_judge_spend_path', lambda: tmp_path / 'judge-spend.json')
     monkeypatch.setattr(upstream_assert_judge, '_ASSERT_JUDGE_ACTIVE', 0)
-    product_service._reset_judge_spend_for_tests()
+    judge_budget._reset_judge_spend_for_tests()
 
 
 def _valid_score(run, conversation, judge_model, *, status='ok'):
@@ -108,8 +109,11 @@ def _valid_score(run, conversation, judge_model, *, status='ok'):
         'overrefusal': False,
         'required_behavior_failure': False,
         'unsupported_operational_claim': False,
+        'unverified_operational_outcome': False,
         'resolution_failure': False,
     }
+    from app.integrations.assert_runtime import judge_score_contract
+    dimensions = {name: dimensions[name] for name in judge_score_contract(upstream_assert_judge._judge_dimensions())['score_keys']}
     taxonomy = build_assert_taxonomy(
         scenario_contract=_scenario_contract(),
         conversation=conversation,
@@ -172,7 +176,7 @@ def _install_fake_assert(monkeypatch, writer):
 
 
 def _spent_credits():
-    return int(product_service._load_judge_spend().get('spent') or 0)
+    return int(judge_budget._load_judge_spend().get('spent') or 0)
 
 
 def test_assert_03_dimension_contract_accepts_not_applicable_and_ordinal_values():
@@ -367,7 +371,7 @@ def test_upstream_assert_judge_runs_existing_judge_only_command(monkeypatch, tmp
 
 @pytest.mark.parametrize('case,expected', [
     ('unblocked', 'pass'), ('blocked', 'needs_review'), ('missing_gates', 'needs_review'),
-    ('builtin', 'needs_review'), ('violation', 'needs_review'), ('deterministic_fail', 'fail'),
+    ('builtin', 'pass'), ('violation', 'needs_review'), ('deterministic_fail', 'fail'),
     ('observed_forbidden', 'needs_review'),
 ])
 def test_authored_semantic_review_can_propose_and_apply_pass_only_when_unblocked(monkeypatch, tmp_path, case, expected):
@@ -389,6 +393,7 @@ def test_authored_semantic_review_can_propose_and_apply_pass_only_when_unblocked
     }
     if case == 'missing_gates':
         conversation['evaluation_findings'].pop('design_enforcement')
+    contract = freeze(conversation, contract)
     stored_record = None
     if case == 'unblocked':
         # Production judging receives the persisted, schema-normalized evidence.
@@ -798,8 +803,8 @@ def test_assert_judge_endpoint_maps_control_failures(monkeypatch, exception, sta
     )
     monkeypatch.setattr(
         assert_judge,
-        'get_scenario_contract',
-        lambda suite_id, scenario_id: {'goal': 'Review safely.'},
+        'recorded_contract',
+        lambda value: {'goal': 'Review safely.'},
     )
     monkeypatch.setattr(
         assert_judge,
@@ -850,8 +855,8 @@ def test_assert_judge_endpoint_persists_pending_review(monkeypatch):
     monkeypatch.setattr(assert_judge.execution_run_store, 'record_judge_review', fake_record)
     monkeypatch.setattr(
         assert_judge,
-        'get_scenario_contract',
-        lambda suite_id, scenario_id: {'goal': 'Review safely.'},
+        'recorded_contract',
+        lambda value: {'goal': 'Review safely.'},
     )
     monkeypatch.setattr(assert_judge, 'run_upstream_assert_judge', lambda **kwargs: {
         'status': 'ready',

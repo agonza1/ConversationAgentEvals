@@ -175,7 +175,7 @@ def test_starter_sample_transcript_uses_caller_facing_language():
             final_state=scenario['sample_final_state'],
         )
     )
-    assert report['verdict'] == 'pass'
+    assert report['verdict'] == 'needs_review'
 
 
 def test_created_scenarios_persist_across_store_reload(tmp_path: Path):

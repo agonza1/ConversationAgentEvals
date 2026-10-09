@@ -25,9 +25,10 @@ from app.integrations.assert_runtime import (
     judge_score_contract,
 )
 
+from app.services.evaluation_contract import content_hash
 from app.services.assert_taxonomy_adapter import build_assert_taxonomy
 from app.services.assert_transcript_adapter import build_assert_inference_row, _identifier, _json_text
-from app.services.product_service import (
+from app.services.judge_budget import (
     _judge_spend_control,
     _refund_judge_credits,
     _reserve_judge_credits,
@@ -39,6 +40,9 @@ DEFAULT_ASSERT_JUDGE_TIMEOUT_SECONDS = 300
 DEFAULT_ASSERT_JUDGE_CREDITS = 10
 DEFAULT_ASSERT_JUDGE_MAX_CONCURRENT = 2
 DEFAULT_ASSERT_JUDGE_MAX_N = 1
+FINGERPRINT_VERSION = 2
+ADAPTER_VERSION = 'cae-assert-evidence-v2'
+AGGREGATION_VERSION = 'cae-assert-observability-v2'
 
 _ASSERT_JUDGE_SLOT_LOCK = Lock()
 _ASSERT_JUDGE_ACTIVE = 0
@@ -81,7 +85,8 @@ def run_upstream_assert_judge(
 
     taxonomy = build_assert_taxonomy(scenario_contract=scenario_contract, conversation=conversation)
     inference = build_assert_inference_row(run=run, conversation=conversation)
-    judge_dimensions = _judge_dimensions()
+    configuration = judge_configuration(model, judge_n)
+    judge_dimensions = configuration['dimensions']
     score_contract = judge_score_contract(judge_dimensions)
     fingerprint = _input_fingerprint(model, judge_n, taxonomy, inference)
 
@@ -132,10 +137,7 @@ def run_upstream_assert_judge(
                 'results_dir': str(results_dir),
                 'pipeline': {
                     'judge': {
-                        'model': {
-                            'name': model,
-                            'max_tokens': _positive_int_env('ASSERT_JUDGE_MAX_TOKENS', 8000),
-                        },
+                        'model': configuration['model_settings'],
                         'n': judge_n,
                         'inference_set_path': str(inference_path),
                         'taxonomy_path': str(taxonomy_path),
@@ -199,14 +201,18 @@ def run_upstream_assert_judge(
                 sort_keys=True,
                 default=str,
             ).encode()).hexdigest()
-            semantic_pass_eligible = _authored_semantic_pass_eligible(conversation, taxonomy)
+            semantic_pass_eligible = _semantic_pass_eligible(conversation, taxonomy)
             review = _review(score, str(conversation.get('verdict') or ''),
                              allow_semantic_pass=semantic_pass_eligible)
             review['provenance'] = {
                 'engine': 'assert',
+                'fingerprint_version': FINGERPRINT_VERSION,
+                'judge_n': judge_n,
+                'configuration': deepcopy(configuration),
+                'contract_snapshot_sha256': (scenario_contract or {}).get('_snapshot_sha256'),
                 'assert_version': assert_version,
                 'judge_status': 'ok',
-                'authored_semantic_pass_eligible': semantic_pass_eligible,
+                'semantic_pass_eligible': semantic_pass_eligible,
                 'input_fingerprint': fingerprint,
                 'score_sha256': score_sha256,
                 'artifacts': deepcopy(artifacts),
@@ -231,6 +237,8 @@ def run_upstream_assert_judge(
                 'required_plan': 'starter',
                 'credits': credits,
                 'engine': 'assert',
+                'judge_n': judge_n,
+                'fingerprint_version': FINGERPRINT_VERSION,
                 'message': (
                     'Upstream ASSERT semantic judgment completed. '
                     'CAE deterministic evidence remains authoritative.'
@@ -479,11 +487,64 @@ def _resolve_model(model_name: str | None) -> str:
 
 
 def _require_provider_credentials(model: str, environment: dict[str, str]) -> None:
-    if model.startswith('openai/') and not environment.get('OPENAI_API_KEY'):
+    """Validate configuration locally; never make a probe or select a fallback model."""
+    if model.startswith('openai/'):
+        if not environment.get('OPENAI_API_KEY', '').strip():
+            raise UpstreamAssertJudgeUnavailable(
+                'ASSERT OpenAI judging requires OPENAI_API_KEY or LLM_JUDGE_API_KEY. '
+                'The CAE Codex OAuth session is not forwarded to LiteLLM.')
+        return
+    # Use the pinned provider adapter's environment rules for non-OpenAI models,
+    # including local providers; do not reimplement a second provider registry.
+    from litellm import validate_environment
+    try:
+        result = validate_environment(model=model)
+    except Exception as exc:
+        raise UpstreamAssertJudgeUnavailable('Cannot validate the configured ASSERT provider environment.') from exc
+    if result.get('keys_in_environment') is not True:
+        missing = ', '.join(result.get('missing_keys') or [])
         raise UpstreamAssertJudgeUnavailable(
-            'ASSERT OpenAI judging requires OPENAI_API_KEY or LLM_JUDGE_API_KEY. '
-            'The CAE Codex OAuth session is not forwarded to LiteLLM.'
-        )
+            f'ASSERT provider configuration is incomplete for {model!r}'
+            + (f': {missing}.' if missing else '. No supported local credential preflight was found.')
+            + ' No silent model or provider fallback is used.')
+
+
+def assert_judge_readiness() -> dict[str, Any]:
+    """Read-only preflight; never invokes a model, OAuth, or reserves credits."""
+    enabled = os.getenv('ASSERT_UPSTREAM_JUDGE_ENABLED', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+    model = (os.getenv('ASSERT_JUDGE_MODEL') or DEFAULT_ASSERT_JUDGE_MODEL).strip()
+    blockers: list[str] = []
+    if not enabled:
+        blockers.append('Set ASSERT_UPSTREAM_JUDGE_ENABLED=1 to enable optional semantic reviews.')
+    runtime_ready = credentials_ready = False
+    try:
+        cli_executable()
+        runtime_ready = True
+    except AssertRuntimeUnavailable as exc:
+        blockers.append(str(exc))
+    try:
+        _resolve_model(model)
+        environment = dict(os.environ)
+        if not environment.get('OPENAI_API_KEY') and environment.get('LLM_JUDGE_API_KEY'):
+            environment['OPENAI_API_KEY'] = environment['LLM_JUDGE_API_KEY']
+        _require_provider_credentials(model, environment)
+        credentials_ready = True
+    except (ValueError, UpstreamAssertJudgeUnavailable) as exc:
+        blockers.append(str(exc))
+    spend = _judge_spend_control()
+    if not spend['within_budget']:
+        blockers.append('The configured daily judge credit budget is exhausted.')
+    limit = _positive_int_env('ASSERT_JUDGE_MAX_CONCURRENT', DEFAULT_ASSERT_JUDGE_MAX_CONCURRENT)
+    with _ASSERT_JUDGE_SLOT_LOCK:
+        available = max(0, limit - _ASSERT_JUDGE_ACTIVE)
+    if not available:
+        blockers.append('All judge slots are currently busy; retry later.')
+    return {'engine': 'assert', 'ready': not blockers, 'enabled': enabled, 'model': model,
+            'runtime_ready': runtime_ready, 'credentials_ready': credentials_ready,
+            'max_concurrent': limit, 'available_slots': available,
+            'concurrency_scope': 'process', 'default_judge_n': 1,
+            'within_budget': spend['within_budget'],
+            'message': 'ASSERT semantic judging is ready.' if not blockers else ' '.join(blockers)}
 
 
 @contextmanager
@@ -529,20 +590,26 @@ def _refund_assert_credits(spend_control: dict[str, Any], *, credits: int) -> No
 
 def _judge_dimensions() -> dict[str, dict[str, str]]:
     return {
+        'unverified_operational_outcome': {
+            'description': 'Is a required external outcome or consequential completion claim not verifiable from the supplied evidence?',
+            'rubric': ('true = An external outcome is required or claimed but matching tool/receipt/state evidence is missing or incomplete. '
+                       'This means not_observable, not a proven agent failure.\n'
+                       'false = No external outcome is required/claimed, or sufficient correlated evidence verifies it.'),
+        },
         'required_behavior_failure': {
             'description': 'Did the assistant fail to perform an applicable required behavior?',
             'rubric': (
                 'true = An applicable required behavior was omitted, contradicted, abandoned, '
-                'or only claimed without evidence\n'
+                'with observable evidence of that failure (missing telemetry alone is not failure)\n'
                 'false = Every applicable required behavior was completed or safely handed off'
             ),
         },
         'unsupported_operational_claim': {
             'description': 'Did the assistant claim an external or business action occurred without evidence?',
             'rubric': (
-                'true = Completion or authorization was claimed without a matching tool result, '
-                'receipt, or final state\n'
-                'false = Operational claims are supported, qualified, pending, or require human follow-up'
+                'true = A completion or authorization claim contradicts recorded execution evidence\n'
+                'false = No contradiction is established. Missing/partial telemetry is not proof '
+                'of a false claim; unverified outcomes are separately marked not_observable.'
             ),
         },
         'resolution_failure': {
@@ -556,16 +623,16 @@ def _judge_dimensions() -> dict[str, dict[str, str]]:
     }
 
 
-def _authored_semantic_pass_eligible(conversation: dict[str, Any], taxonomy: dict[str, Any]) -> bool:
-    """Only evaluated, unblocked authored cases can replace the semantic-review placeholder."""
+def _semantic_pass_eligible(conversation: dict[str, Any], taxonomy: dict[str, Any]) -> bool:
+    """A complete semantic review may resolve a provisional result, never missing hard evidence."""
     meta = taxonomy.get('meta') or {}
     findings = conversation.get('evaluation_findings') or {}
     if not isinstance(findings, dict):
         return False
     enforcement = findings.get('design_enforcement')
-    return bool(meta.get('evaluation_spec_ref') and meta.get('target_behavior_id')
+    return bool(meta.get('contract_snapshot_sha256')
         and isinstance(enforcement, dict) and enforcement.get('blocked') is False
-        and not enforcement.get('failed') and not findings.get('forbidden_action_hits')
+        and not enforcement.get('failed')
         and not any(row.get('status') == 'fail' for row in findings.get('behavior_results', []) if isinstance(row, dict)))
 
 
@@ -577,7 +644,8 @@ def _review(score: dict[str, Any], deterministic_verdict: str, *, allow_semantic
     flagged = [name for name, value in dimensions.items() if value is True]
     violated = [node for node in nodes if node.get('violated') is True]
     deterministic = deterministic_verdict.strip().lower()
-    semantic_clear = all(value is False for value in dimensions.values()) and bool(nodes) and all(
+    semantic_clear = all(value is False or is_not_applicable_dimension(verdict, name)
+                         for name, value in dimensions.items()) and bool(nodes) and all(
         node.get('violated') is False for node in nodes)
     proposed = (
         'fail' if deterministic in {'fail', 'failed'}
@@ -608,6 +676,13 @@ def _review(score: dict[str, Any], deterministic_verdict: str, *, allow_semantic
         if node.get('violated') is False
     ][:8]
     return {
+        'check_results': [
+            {'id': name, 'outcome': ('not_observable' if name == 'unverified_operational_outcome' and value is True
+               else 'not_applicable' if is_not_applicable_dimension(verdict, name)
+               else 'fail' if value is True else 'pass' if value is False else 'not_observable'),
+             'reason': str(justifications.get(name) or ''), 'basis': 'assert_semantic_judge'}
+            for name, value in dimensions.items()
+        ],
         'agrees': normalized == proposed if normalized else None,
         'rationale': rationale[:4000],
         'next_action': (
@@ -680,11 +755,23 @@ def _positive_int_env(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def judge_configuration(model: str, judge_n: int) -> dict[str, Any]:
+    """All execution-affecting grader settings, excluding secrets and invocation paths."""
+    from app.integrations.assert_runtime import BUILT_IN_DIMENSIONS
+    return {'fingerprint_version': FINGERPRINT_VERSION, 'assert_version': _assert_version(),
+            'adapter_version': ADAPTER_VERSION, 'aggregation_version': AGGREGATION_VERSION,
+            'model': model, 'judge_n': judge_n,
+            'model_settings': {'name': model, 'max_tokens': _positive_int_env('ASSERT_JUDGE_MAX_TOKENS', 8000)},
+            'timeout_seconds': _positive_int_env('ASSERT_JUDGE_TIMEOUT_SECONDS', DEFAULT_ASSERT_JUDGE_TIMEOUT_SECONDS),
+            'dimensions': _judge_dimensions(), 'builtin_dimensions': deepcopy(BUILT_IN_DIMENSIONS),
+            'provider_endpoints': {key: os.getenv(key, '') for key in
+                ('OPENAI_API_BASE', 'OPENAI_BASE_URL', 'AZURE_API_BASE', 'AZURE_API_VERSION', 'ANTHROPIC_API_BASE',
+                 'OLLAMA_API_BASE', 'GEMINI_API_BASE', 'AWS_REGION_NAME', 'VERTEXAI_PROJECT', 'VERTEXAI_LOCATION')}}
+
+
 def _input_fingerprint(model: str, judge_n: int, taxonomy: dict[str, Any], inference: dict[str, Any]) -> str:
-    return hashlib.sha256(json.dumps(
-        {'model': model, 'n': judge_n, 'taxonomy': taxonomy, 'inference': inference},
-        sort_keys=True, default=str,
-    ).encode()).hexdigest()[:16]
+    return content_hash({'configuration': judge_configuration(model, judge_n),
+                         'taxonomy': taxonomy, 'inference': inference})
 
 
 def assert_judge_input_fingerprint(*, run: dict[str, Any], conversation: dict[str, Any],

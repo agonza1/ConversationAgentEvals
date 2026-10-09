@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 from datetime import UTC, datetime
-from threading import Lock
 from typing import Any
 from urllib.parse import urlencode
 
@@ -21,13 +20,11 @@ from app.models.entities import (
     ProductWorkspaceInvitation,
     ProductWorkspaceMember,
 )
+from app.services.judge_budget import _reset_judge_spend_for_tests
 from app.services.benchmark_service import get_suite
 from app.schemas.product import (
     CheckoutResponse,
     FirebaseAuthConfig,
-    JudgeProposedEvaluation,
-    JudgeResponse,
-    JudgeStructuredResult,
     PricingPlan,
     ProductAuditEventResponse,
     ProductFailureCategorySummary,
@@ -110,7 +107,6 @@ PRICING = [
     ),
 ]
 
-_JUDGE_SPEND_LOCK = Lock()
 
 USAGE_RULES = [
     UsageRule(id='deterministic_eval', label='Deterministic browser eval', credits=1),
@@ -121,15 +117,12 @@ USAGE_RULES = [
 
 
 def product_config() -> ProductConfig:
-    openai_status = _openai_provider_status()
-    connected = openai_status.get('status') == 'connected'
-    api_key_configured = bool((os.getenv('LLM_JUDGE_API_KEY') or '').strip())
+    from app.services.upstream_assert_judge import assert_judge_readiness
+    readiness = assert_judge_readiness()
     return ProductConfig(
-        pricing=_pricing_with_stripe_ids(),
-        usage_rules=USAGE_RULES,
-        auth=_firebase_auth_config(),
-        voice_status='gated',
-        llm_judge_status='enabled' if (connected or api_key_configured) else 'gated',
+        pricing=_pricing_with_stripe_ids(), usage_rules=USAGE_RULES, auth=_firebase_auth_config(),
+        voice_status='gated', llm_judge_status='enabled' if readiness['ready'] else 'gated',
+        assert_judge=readiness,
     )
 
 
@@ -940,7 +933,11 @@ def record_judge_request(
     model: str | None = None,
     judge_output: str | None = None,
     agrees: bool | None = None,
+    request_id: str | None = None,
 ) -> None:
+    audit_id = f'judge-request-{request_id}' if request_id else None
+    if audit_id and db.get(ProductAuditEvent, audit_id) is not None:
+        return
     project = None
     if project_id:
         visible_projects = find_visible_projects(db=db, user_id=user_id, project_id=project_id)
@@ -968,10 +965,16 @@ def record_judge_request(
         user_id=user_id,
         actor_user_id=user_id,
         event_type='judge.requested',
+        event_id=audit_id,
         project=project,
         payload=payload,
     )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        if not audit_id or db.get(ProductAuditEvent, audit_id) is None:
+            raise
 
 
 def checkout_gate(
@@ -1032,126 +1035,6 @@ def _stripe_price_id(plan: str) -> str | None:
     return None
 
 
-def judge_gate(
-    plan: str,
-    report: dict[str, Any],
-    transcript: str | None,
-    *,
-    user_id: str | None = None,
-    project_id: str | None = None,
-) -> JudgeResponse:
-    del plan  # Local Codex OAuth / API-key path gates on provider + budget, not paid plan.
-    spend_control = _judge_spend_control()
-    model_name = _judge_model_name(spend_control)
-
-    if not spend_control['within_budget']:
-        citations = _judge_citations(report, transcript)
-        return JudgeResponse(
-            status='blocked',
-            required_plan='starter',
-            credits=10,
-            message='LLM judge daily credit budget is exhausted. Increase the limit or wait for the next budget window.',
-            evidence_citations=citations,
-            spend_control=spend_control,
-            provider=spend_control.get('provider'),
-            model=model_name,
-            block_reason='budget',
-        )
-
-    if not spend_control.get('provider_configured'):
-        citations = _judge_citations(report, transcript)
-        return JudgeResponse(
-            status='blocked',
-            required_plan='starter',
-            credits=10,
-            message='Connect OpenAI (Codex OAuth) to run the local LLM judge, or set LLM_JUDGE_API_KEY for API-key fallback.',
-            evidence_citations=citations,
-            spend_control=spend_control,
-            provider=spend_control.get('provider'),
-            model=model_name,
-            block_reason='provider',
-        )
-
-    report = _ground_judge_report(
-        report,
-        transcript=transcript,
-        user_id=user_id,
-        project_id=project_id,
-    )
-    citations = _judge_citations(report, transcript)
-    if report.get('require_evaluator_findings') and (
-        report.get('evaluator_findings_error')
-        or not report.get('verdict')
-        or not _has_judge_evaluator_findings(report)
-    ):
-        return JudgeResponse(
-            status='blocked',
-            required_plan='starter',
-            credits=10,
-            message=str(report.get('evaluator_findings_error') or (
-                'LLM judge requires a deterministic verdict and evaluator findings. '
-                'Re-evaluate this conversation before requesting a second opinion.'
-            )),
-            evidence_citations=citations,
-            spend_control=spend_control,
-            provider=spend_control.get('provider'),
-            model=model_name,
-            block_reason='evidence',
-        )
-    reserved, spend_control = _reserve_judge_credits(spend_control, credits=10)
-    if not reserved:
-        return JudgeResponse(
-            status='blocked',
-            required_plan='starter',
-            credits=10,
-            message='LLM judge daily credit budget is exhausted. Increase the limit or wait for the next budget window.',
-            evidence_citations=citations,
-            spend_control=spend_control,
-            provider=spend_control.get('provider'),
-            model=model_name,
-            block_reason='budget',
-        )
-
-    prompt = _build_judge_prompt(report=report, transcript=transcript, citations=citations)
-    started = datetime.now(UTC)
-    try:
-        raw_output = _execute_judge_completion(prompt)
-    except Exception as exc:  # noqa: BLE001
-        spend_control = _refund_judge_credits(spend_control, credits=10)
-        return JudgeResponse(
-            status='blocked',
-            required_plan='starter',
-            credits=10,
-            message=f'LLM judge provider call failed: {exc}',
-            evidence_citations=citations,
-            spend_control=spend_control,
-            provider=spend_control.get('provider'),
-            model=model_name,
-            prompt_preview=prompt,
-            block_reason='provider_error',
-        )
-
-    latency_ms = int((datetime.now(UTC) - started).total_seconds() * 1000)
-    structured = _parse_judge_output(raw_output)
-    agrees_label = (
-        'agrees' if structured.agrees is True else 'disagrees' if structured.agrees is False else 'reviewed'
-    )
-    return JudgeResponse(
-        status='ready',
-        required_plan='starter',
-        credits=10,
-        message=f'LLM judge {agrees_label} the deterministic verdict via {spend_control.get("provider")}.',
-        evidence_citations=citations,
-        spend_control=spend_control,
-        judge_output=raw_output,
-        judge_result=structured,
-        provider=spend_control.get('provider'),
-        model=model_name,
-        prompt_preview=prompt,
-        latency_ms=latency_ms,
-    )
-
-
 def reset_saved_runs_for_tests() -> None:
     with SessionLocal() as db:
         db.query(ProductAuditEvent).delete()
@@ -1175,551 +1058,6 @@ def _firebase_auth_config() -> FirebaseAuthConfig:
         providers=['email_link', 'google'],
         mode='configured' if configured else 'placeholder',
     )
-
-
-def _format_citation_item(item: Any) -> str:
-    if isinstance(item, str):
-        return item.strip()[:240]
-    if not isinstance(item, dict):
-        return str(item)[:240]
-    parts: list[str] = []
-    for key in ('source', 'source_key', 'kind', 'assertion', 'label', 'summary', 'text', 'span', 'path'):
-        value = item.get(key)
-        if value is None:
-            continue
-        text = str(value).strip()
-        if text:
-            parts.append(f'{key}={text[:120]}')
-    return '; '.join(parts)[:240] if parts else str(item)[:240]
-
-
-def _judge_citations(report: dict[str, Any], transcript: str | None) -> list[str]:
-    citations: list[str] = []
-    for key in ('evidence_citations', 'evidence_spans', 'evidence'):
-        evidence = report.get(key)
-        if not isinstance(evidence, list):
-            continue
-        for item in evidence:
-            formatted = _format_citation_item(item)
-            if formatted and formatted not in citations:
-                citations.append(formatted)
-            if len(citations) >= 6:
-                break
-        if len(citations) >= 6:
-            break
-    if transcript and len(citations) < 2:
-        citations.extend(line.strip()[:180] for line in transcript.splitlines() if line.strip())
-    return citations[:6]
-
-
-def _string_list(value: Any, *, limit: int = 8) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    items: list[str] = []
-    for item in value[:limit]:
-        if isinstance(item, str) and item.strip():
-            items.append(item.strip()[:160])
-        elif isinstance(item, dict):
-            formatted = _format_citation_item(item)
-            if formatted:
-                items.append(formatted)
-    return items
-
-
-_JUDGE_EVALUATOR_FINDING_KEYS = (
-    'verdict',
-    'overall_score',
-    'required_action_score',
-    'rubric_score',
-    'task_completion_score',
-    'forbidden_action_score',
-    'final_state_score',
-    'workflow_order_score',
-    'score_components',
-    'completed_actions',
-    'missing_actions',
-    'forbidden_action_hits',
-    'rubric_checks',
-    'hard_check_failures',
-    'failure_categories',
-    'failure_modes',
-    'suggested_fixes',
-    'scenario_contract',
-    'expected_final_state',
-)
-_JUDGE_DECISIVE_FINDING_KEYS = (
-    'score_components',
-    'missing_actions',
-    'rubric_checks',
-    'hard_check_failures',
-    'scenario_contract',
-    'expected_final_state',
-)
-
-
-def _has_judge_evaluator_findings(report: dict[str, Any]) -> bool:
-    return any(key in report for key in _JUDGE_DECISIVE_FINDING_KEYS)
-
-
-def _ground_judge_report(
-    report: dict[str, Any],
-    *,
-    transcript: str | None,
-    user_id: str | None,
-    project_id: str | None,
-) -> dict[str, Any]:
-    grounded = dict(report)
-    recorded_verdict = str(report.get('verdict') or '').strip().lower()
-    persisted = report.get('evaluation_findings')
-    persisted_has_findings = (
-        isinstance(persisted, dict)
-        and _has_judge_evaluator_findings(persisted)
-    )
-    execution_only_verdict = recorded_verdict in {'fail', 'failed'} or (
-        recorded_verdict == 'needs_review'
-        and bool(report.get('error'))
-        and not _has_judge_evaluator_findings(report)
-        and not persisted_has_findings
-    )
-    if report.get('require_evaluator_findings') and execution_only_verdict:
-        grounded['evaluator_findings_error'] = (
-            'Execution failure is not a deterministic evaluator verdict and cannot be reviewed.'
-        )
-        return grounded
-    if isinstance(persisted, dict):
-        for key in _JUDGE_EVALUATOR_FINDING_KEYS:
-            if key in persisted:
-                grounded[key] = persisted[key]
-        if _has_judge_evaluator_findings(grounded):
-            grounded['evaluator_findings_source'] = 'persisted_execution'
-            return grounded
-    if not report.get('require_evaluator_findings') or _has_judge_evaluator_findings(grounded):
-        return grounded
-
-    suite_id = report.get('suite_id')
-    scenario_id = report.get('scenario_id')
-    if not isinstance(suite_id, str) or not isinstance(scenario_id, str):
-        grounded['evaluator_findings_error'] = 'Suite and scenario identifiers are required.'
-        return grounded
-    try:
-        from app.schemas.benchmarks import BenchmarkRunRequest
-        from app.services.benchmark_service import run_scenario
-
-        evaluated = run_scenario(BenchmarkRunRequest(
-            suite_id=suite_id,
-            scenario_id=scenario_id,
-            transcript=transcript,
-            action_trace=report.get('action_trace') or [],
-            final_state=report.get('final_state') or {},
-            user_id=user_id,
-            project_id=project_id,
-        ), persist_artifacts=False)
-    except Exception as exc:  # noqa: BLE001 - retain the saved result and expose why grounding failed
-        grounded['evaluator_findings_error'] = str(exc)
-        return grounded
-    if not evaluated.get('verdict'):
-        grounded['evaluator_findings_error'] = 'Recomputed evaluator did not return a verdict.'
-        return grounded
-    for key in _JUDGE_EVALUATOR_FINDING_KEYS:
-        if key in evaluated:
-            grounded[key] = evaluated[key]
-    grounded['evaluator_findings_source'] = 'recomputed_current_contract'
-    return grounded
-
-
-def _judge_failure_summary(report: dict[str, Any]) -> list[str]:
-    lines: list[str] = []
-    missing = _string_list(report.get('missing_actions'))
-    if missing:
-        lines.append('Missing required actions: ' + '; '.join(missing))
-    forbidden = _string_list(report.get('forbidden_action_hits') or report.get('forbidden_actions'))
-    if forbidden:
-        lines.append('Forbidden action hits: ' + '; '.join(forbidden))
-    failures = _string_list(report.get('failure_categories'))
-    if failures:
-        lines.append('Failure categories: ' + '; '.join(failures))
-    hard_failures = _string_list(report.get('hard_check_failures'))
-    if hard_failures:
-        lines.append('Hard-check failures: ' + '; '.join(hard_failures))
-    rubric = report.get('rubric_checks')
-    if isinstance(rubric, list):
-        failed_rubric = []
-        for item in rubric[:12]:
-            if not isinstance(item, dict):
-                continue
-            passed = item.get('passed')
-            if passed is False or item.get('status') in {'fail', 'failed', 'missing'}:
-                label = item.get('id') or item.get('label') or item.get('name') or 'rubric'
-                failed_rubric.append(str(label))
-        if failed_rubric:
-            lines.append('Failed rubric checks: ' + '; '.join(failed_rubric[:8]))
-    fixes = _string_list(report.get('suggested_fixes') or report.get('recommendations'), limit=5)
-    if fixes:
-        lines.append('Suggested fixes: ' + '; '.join(fixes))
-    scenario_contract = report.get('scenario_contract')
-    if isinstance(scenario_contract, dict):
-        requirements = _string_list(scenario_contract.get('required_actions'), limit=12)
-        if requirements:
-            lines.append('Scenario required actions: ' + '; '.join(requirements))
-    expected_final_state = report.get('expected_final_state')
-    if isinstance(expected_final_state, (dict, list, str)) and expected_final_state:
-        lines.append(
-            'Expected final state: '
-            + json.dumps(expected_final_state, ensure_ascii=False, default=str)[:500]
-        )
-    findings_error = report.get('evaluator_findings_error')
-    if findings_error:
-        lines.append(f'Evaluator findings unavailable: {str(findings_error)[:300]}')
-    final_state = report.get('final_state')
-    if isinstance(final_state, dict) and final_state:
-        complete = final_state.get('complete')
-        lines.append(f'Final state complete={complete!r}; keys={", ".join(list(final_state.keys())[:8])}')
-    action_trace = report.get('action_trace')
-    if isinstance(action_trace, list) and action_trace:
-        events = []
-        for item in action_trace[:8]:
-            if isinstance(item, dict):
-                events.append(str(item.get('event') or item.get('name') or item.get('action') or item)[:80])
-            else:
-                events.append(str(item)[:80])
-        lines.append('Action trace sample: ' + '; '.join(events))
-    return lines
-
-
-def _bounded_judge_evidence_value(value: Any, *, max_chars: int) -> Any:
-    serialized = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
-    if len(serialized) <= max_chars:
-        return value
-    wrapper: dict[str, Any] = {
-        'truncated': True,
-        'original_chars': len(serialized),
-        'json_preview': '',
-    }
-    wrapper_overhead = len(json.dumps(wrapper, ensure_ascii=False, sort_keys=True))
-    wrapper['json_preview'] = serialized[:max(0, max_chars - wrapper_overhead)]
-    while len(json.dumps(wrapper, ensure_ascii=False, sort_keys=True)) > max_chars:
-        wrapper['json_preview'] = wrapper['json_preview'][:-1]
-    return wrapper
-
-
-def _judge_structured_evidence(report: dict[str, Any]) -> str:
-    structured: dict[str, Any] = {}
-    final_state = report.get('final_state')
-    if isinstance(final_state, dict) and final_state:
-        structured['final_state'] = _bounded_judge_evidence_value(final_state, max_chars=3500)
-    execution_error = report.get('error')
-    if isinstance(execution_error, str) and execution_error.strip():
-        structured['execution_error'] = execution_error.strip()[:900]
-    action_trace = report.get('action_trace')
-    if isinstance(action_trace, list) and action_trace:
-        structured['action_trace'] = _bounded_judge_evidence_value(action_trace[:12], max_chars=3000)
-    if not structured:
-        return '(none)'
-    return json.dumps(structured, ensure_ascii=False, sort_keys=True, default=str)
-
-
-def _judge_spend_path():
-    from pathlib import Path
-
-    root = Path(__file__).resolve().parents[4]
-    return root / 'artifacts' / 'llm_judge_spend.json'
-
-
-def _reset_judge_spend_for_tests() -> None:
-    with _JUDGE_SPEND_LOCK:
-        path = _judge_spend_path()
-        if path.exists():
-            path.unlink(missing_ok=True)
-
-
-def _load_judge_spend() -> dict[str, Any]:
-    path = _judge_spend_path()
-    today = datetime.now(UTC).date().isoformat()
-    if not path.exists():
-        return {'date': today, 'spent': 0}
-    try:
-        payload = json.loads(path.read_text(encoding='utf-8'))
-    except (OSError, json.JSONDecodeError):
-        return {'date': today, 'spent': 0}
-    if not isinstance(payload, dict) or payload.get('date') != today:
-        return {'date': today, 'spent': 0}
-    try:
-        spent = int(payload.get('spent') or 0)
-    except (TypeError, ValueError):
-        spent = 0
-    return {'date': today, 'spent': max(spent, 0)}
-
-
-def _save_judge_spend(payload: dict[str, Any]) -> None:
-    path = _judge_spend_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_name(f'{path.name}.tmp')
-    temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n', encoding='utf-8')
-    os.replace(temp_path, path)
-
-
-def _judge_spend_control() -> dict[str, Any]:
-    daily_limit = _int_env('LLM_JUDGE_DAILY_CREDIT_LIMIT', 200)
-    reserved_credits = _int_env('LLM_JUDGE_RESERVED_DAILY_CREDITS', 0)
-    spent_state = _load_judge_spend()
-    spent_credits = int(spent_state.get('spent') or 0)
-    configured_provider = (os.getenv('LLM_JUDGE_PROVIDER') or 'openai_codex').strip().lower()
-    api_key_configured = bool((os.getenv('LLM_JUDGE_API_KEY') or '').strip())
-    oauth_connected = False
-    if configured_provider in {'openai', 'openai_codex', 'codex'}:
-        status = _openai_provider_status()
-        oauth_connected = status.get('status') == 'connected'
-    provider_configured = oauth_connected or api_key_configured
-    provider_label = 'openai_codex' if oauth_connected else ('openai_api_key' if api_key_configured else configured_provider)
-    remaining = max(daily_limit - reserved_credits - spent_credits, 0)
-    return {
-        'estimated_credits': 10,
-        'daily_credit_limit': daily_limit,
-        'reserved_daily_credits': reserved_credits,
-        'spent_daily_credits': spent_credits,
-        'remaining_daily_credits': remaining,
-        'provider': provider_label,
-        'provider_configured': provider_configured,
-        'oauth_connected': oauth_connected,
-        'api_key_configured': api_key_configured,
-        'within_budget': remaining >= 10,
-    }
-
-
-def _with_spend_totals(spend_control: dict[str, Any], spent_credits: int, *, credits: int) -> dict[str, Any]:
-    updated = dict(spend_control)
-    updated['spent_daily_credits'] = spent_credits
-    daily_limit = int(updated.get('daily_credit_limit') or 200)
-    reserved = int(updated.get('reserved_daily_credits') or 0)
-    updated['remaining_daily_credits'] = max(daily_limit - reserved - spent_credits, 0)
-    updated['within_budget'] = updated['remaining_daily_credits'] >= credits
-    return updated
-
-
-def _reserve_judge_credits(spend_control: dict[str, Any], *, credits: int) -> tuple[bool, dict[str, Any]]:
-    with _JUDGE_SPEND_LOCK:
-        state = _load_judge_spend()
-        spent = int(state.get('spent') or 0)
-        daily_limit = int(spend_control.get('daily_credit_limit') or 200)
-        reserved = int(spend_control.get('reserved_daily_credits') or 0)
-        remaining = max(daily_limit - reserved - spent, 0)
-        if remaining < credits:
-            return False, _with_spend_totals(spend_control, spent, credits=credits)
-        next_spent = spent + credits
-        state['spent'] = next_spent
-        _save_judge_spend(state)
-        return True, _with_spend_totals(spend_control, next_spent, credits=credits)
-
-
-def _refund_judge_credits(spend_control: dict[str, Any], *, credits: int) -> dict[str, Any]:
-    with _JUDGE_SPEND_LOCK:
-        state = _load_judge_spend()
-        next_spent = max(int(state.get('spent') or 0) - credits, 0)
-        state['spent'] = next_spent
-        _save_judge_spend(state)
-        return _with_spend_totals(spend_control, next_spent, credits=credits)
-
-
-def _judge_model_name(spend_control: dict[str, Any]) -> str:
-    env_model = (os.getenv('LLM_JUDGE_MODEL') or '').strip()
-    if spend_control.get('oauth_connected'):
-        from app.services.llm_providers.openai_codex import effective_codex_model_name
-
-        return effective_codex_model_name(env_model or 'gpt-6-luna')
-    if env_model:
-        return env_model
-    return 'gpt-4.1-mini'
-
-
-def _build_judge_prompt(*, report: dict[str, Any], transcript: str | None, citations: list[str]) -> str:
-    verdict = report.get('verdict') or report.get('overall') or 'unknown'
-    score = report.get('overall_score') if report.get('overall_score') is not None else report.get('score')
-    suite_id = report.get('suite_id') or 'unknown-suite'
-    scenario_id = report.get('scenario_id') or 'unknown-scenario'
-    citation_lines = [f'- {item}' for item in citations] or ['- (none)']
-    failure_lines = [f'- {item}' for item in _judge_failure_summary(report)] or ['- (none)']
-    score_bits = []
-    for key, label in (
-        ('required_action_score', 'required_actions'),
-        ('rubric_score', 'rubric'),
-        ('task_completion_score', 'task_completion'),
-        ('forbidden_action_score', 'forbidden'),
-        ('final_state_score', 'final_state'),
-        ('workflow_order_score', 'workflow_order'),
-    ):
-        value = report.get(key)
-        if value is not None:
-            score_bits.append(f'{label}={value}')
-    lines = [
-        'You are an evidence-grounded LLM judge for ConversationAgentEvals.',
-        'Review the deterministic ASSERT-style benchmark report and transcript.',
-        'Decide whether you agree with the deterministic verdict using the evidence.',
-        'Also propose the effective evaluation a human could explicitly confirm.',
-        'Correct deterministic findings only when the supplied transcript or structured evidence directly contradicts them.',
-        'Never invent a tool call, business action, final state, or consent statement that is not in the supplied evidence.',
-        'A corrected transcript finding does not prove live tool execution or a completed final state.',
-        f'Suite: {suite_id}',
-        f'Scenario: {scenario_id}',
-        f'Deterministic verdict: {verdict}',
-        f'Deterministic score: {score}',
-        f'Score breakdown: {", ".join(score_bits) if score_bits else "(none)"}',
-        'Deterministic findings:',
-        *failure_lines,
-        'Structured execution evidence (JSON):',
-        _judge_structured_evidence(report),
-        'Evidence citations:',
-        *citation_lines,
-        'Transcript excerpt:',
-        (transcript or '(empty)')[:4000],
-        '',
-        'Respond with ONLY compact JSON (no markdown fences):',
-        (
-            '{"agrees": true|false, "rationale": "one sentence", '
-            '"next_action": "one concrete next step", "proposed_evaluation": {'
-            '"verdict": "pass|needs_review|fail", "summary": "current evidence-based conclusion", '
-            '"corrected_findings": ["automatic finding corrected by cited evidence"], '
-            '"remaining_gaps": ["gap that still prevents verification"]}}'
-        ),
-    ]
-    return '\n'.join(lines)
-
-
-def _parse_judge_output(raw_output: str) -> JudgeStructuredResult:
-    text = (raw_output or '').strip()
-    if not text:
-        return JudgeStructuredResult(raw_output=raw_output)
-    candidate = text
-    if candidate.startswith('```'):
-        candidate = candidate.strip('`')
-        if candidate.lower().startswith('json'):
-            candidate = candidate[4:].strip()
-    try:
-        start = candidate.find('{')
-        end = candidate.rfind('}')
-        if start >= 0 and end > start:
-            payload = json.loads(candidate[start : end + 1])
-            if isinstance(payload, dict):
-                agrees = payload.get('agrees')
-                if isinstance(agrees, str):
-                    agrees = agrees.strip().lower() in {'true', 'yes', 'agree', 'agrees'}
-                elif not isinstance(agrees, bool):
-                    agrees = None
-                rationale = payload.get('rationale') or payload.get('reason')
-                next_action = payload.get('next_action') or payload.get('nextAction')
-                proposed = _parse_judge_proposed_evaluation(
-                    payload.get('proposed_evaluation') or payload.get('proposedEvaluation')
-                )
-                return JudgeStructuredResult(
-                    agrees=agrees,
-                    rationale=str(rationale).strip() if rationale else None,
-                    next_action=str(next_action).strip() if next_action else None,
-                    proposed_evaluation=proposed,
-                    raw_output=raw_output,
-                )
-    except json.JSONDecodeError:
-        pass
-    lowered = text.lower()
-    agrees = None
-    if 'disagree' in lowered:
-        agrees = False
-    elif 'agree' in lowered:
-        agrees = True
-    return JudgeStructuredResult(agrees=agrees, rationale=text[:400], next_action=None, raw_output=raw_output)
-
-
-def _parse_judge_proposed_evaluation(value: Any) -> JudgeProposedEvaluation | None:
-    if not isinstance(value, dict):
-        return None
-    verdict = str(value.get('verdict') or '').strip().lower().replace(' ', '_')
-    if verdict == 'failed':
-        verdict = 'fail'
-    if verdict not in {'pass', 'needs_review', 'fail'}:
-        return None
-    summary = str(value.get('summary') or '').strip()
-    if not summary:
-        return None
-
-    def bounded_strings(raw: Any) -> list[str]:
-        if not isinstance(raw, list):
-            return []
-        return [
-            str(item).strip()[:500]
-            for item in raw
-            if isinstance(item, str) and item.strip()
-        ][:8]
-
-    remaining_gaps = bounded_strings(value.get('remaining_gaps') or value.get('remainingGaps'))
-    # A proposal cannot claim a verified pass while naming unresolved evidence
-    # gaps. Keep the recommendation fail-closed for the human confirmation step.
-    if verdict == 'pass' and remaining_gaps:
-        verdict = 'needs_review'
-    return JudgeProposedEvaluation(
-        verdict=verdict,
-        summary=summary[:1000],
-        corrected_findings=bounded_strings(
-            value.get('corrected_findings') or value.get('correctedFindings')
-        ),
-        remaining_gaps=remaining_gaps,
-    )
-
-
-def _execute_judge_completion(prompt: str) -> str:
-    from app.services.llm_providers import get_provider
-
-    api_key = (os.getenv('LLM_JUDGE_API_KEY') or '').strip()
-    openai_status = _openai_provider_status()
-    if openai_status.get('status') == 'connected':
-        return get_provider('openai').complete(prompt)
-    if api_key:
-        return _complete_with_openai_api_key(prompt, api_key=api_key)
-    raise RuntimeError('No connected OpenAI Codex OAuth session or LLM_JUDGE_API_KEY configured.')
-
-
-def _complete_with_openai_api_key(prompt: str, *, api_key: str) -> str:
-    import urllib.error
-    import urllib.request
-
-    from app.services.ssl_util import verified_ssl_context
-
-    model = (os.getenv('LLM_JUDGE_MODEL') or 'gpt-4.1-mini').strip()
-    body = {
-        'model': model,
-        'messages': [
-            {
-                'role': 'system',
-                'content': 'You are an evidence-grounded evaluation judge. Reply with compact JSON only.',
-            },
-            {'role': 'user', 'content': prompt},
-        ],
-        'temperature': 0,
-    }
-    request = urllib.request.Request(
-        'https://api.openai.com/v1/chat/completions',
-        data=json.dumps(body).encode('utf-8'),
-        headers={
-            'Authorization': f'Bearer {api_key}',
-            'Content-Type': 'application/json',
-        },
-        method='POST',
-    )
-    try:
-        with urllib.request.urlopen(  # noqa: S310
-            request,
-            timeout=60,
-            context=verified_ssl_context(),
-        ) as response:
-            payload = json.loads(response.read().decode('utf-8'))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode('utf-8', errors='replace')
-        raise RuntimeError(f'OpenAI API judge call failed ({exc.code}): {detail}') from exc
-    choices = payload.get('choices') if isinstance(payload, dict) else None
-    if not isinstance(choices, list) or not choices:
-        raise RuntimeError('OpenAI API judge call returned no choices.')
-    message = choices[0].get('message') if isinstance(choices[0], dict) else None
-    content = message.get('content') if isinstance(message, dict) else None
-    if not isinstance(content, str) or not content.strip():
-        raise RuntimeError('OpenAI API judge call returned empty content.')
-    return content.strip()
 
 
 def _int_env(name: str, default: int) -> int:
@@ -1935,7 +1273,6 @@ def _serialize_invitation(invitation: ProductWorkspaceInvitation) -> ProductWork
     )
 
 
-
 def _firestore_project_runs_path(user_id: str, project_key: str) -> str:
     return f'users/{_firestore_segment(user_id)}/projects/{_firestore_segment(project_key)}/runs'
 
@@ -1968,8 +1305,10 @@ def _record_audit_event(
     project: ProductProject | None = None,
     workspace: ProductWorkspace | None = None,
     payload: dict[str, Any] | None = None,
+    event_id: str | None = None,
 ) -> ProductAuditEvent:
     event = ProductAuditEvent(
+        id=event_id,
         user_id=user_id,
         actor_user_id=actor_user_id,
         project_id=project.id if project else None,
@@ -2182,3 +1521,18 @@ def _merge_defaults(defaults: dict[str, Any], values: dict[str, Any] | None) -> 
 
 def _default_project_name(project_id: str) -> str:
     return project_id.replace('-', ' ').replace('_', ' ').title() or 'Default Project'
+
+
+def ensure_execution_product_project_id(db: Session, user_id: str, project_id: str,
+                                        product_project_id: str | None) -> str | None:
+    """Mutation-only admission: resolve/create the project BEFORE request fingerprinting.
+
+    Read-only access/freshness checks keep using resolve_execution_product_project_id.
+    An audit event must not create a new identity halfway through a paid request.
+    """
+    binding = resolve_execution_product_project_id(db, user_id, project_id, product_project_id)
+    if binding is not None or not project_id:
+        return binding
+    project = _get_or_create_project(db=db, user_id=user_id, project_id=project_id, plan='free')
+    db.commit()
+    return project.id

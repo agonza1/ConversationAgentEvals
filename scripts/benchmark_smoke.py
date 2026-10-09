@@ -46,9 +46,10 @@ def main() -> None:
         },
     )))
     pass_report = pass_run['benchmark_report']
-    _assert(pass_report['verdict'] == 'pass', 'expected pass simulation verdict')
+    _assert(pass_report['verdict'] == 'needs_review', 'required semantic checks must remain pending')
+    _assert(pass_report['semantic_review_required'] is True, 'expected explicit semantic coverage gap')
     _assert(pass_report['overall_score'] >= 75, 'expected passing score')
-    _assert(pass_report['run_metadata'] == {
+    _assert({key: value for key, value in pass_report['run_metadata'].items() if key != 'product_project_id'} == {
         'agent_version': 'smoke-agent-v1',
         'prompt_version': 'smoke-prompt-v1',
         'model_name': 'deterministic-local',
@@ -109,7 +110,7 @@ def main() -> None:
     }, 'expected export-ready audit summary')
     _assert(exported['transcript'] == pass_run['transcript'], 'expected export transcript')
 
-    print('benchmark smoke passed: suites, pass/failure simulations, metadata audit, history, and export shape verified')
+    print('benchmark smoke passed: suites, positive/negative diagnostics, pending semantic coverage, metadata audit, history, and export shape verified')
 
 
 def _ok(response: Any) -> Any:

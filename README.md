@@ -30,6 +30,14 @@ For requirements → reviewed behaviors → version-linked runnable cases, see
 
 Evaluation artifacts that conform to the ASSERT boundary remain the canonical results. The application database stores product metadata and indexes; it does not replace the evaluation result model.
 
+## One evaluation flow, one semantic judge
+
+**Evaluate** runs local executable checks and retains the original evidence and a frozen scenario contract. **LLM Judge** is a separate, opt-in operation backed only by the pinned ASSERT runtime. Uploaded vCons/transcripts, saved benchmarks, and completed live tests use this same review service; importing evidence never launches an agent.
+
+Keyword-based scores remain diagnostics, not proof of business execution or semantic compliance. Required but unobserved evidence remains `needs_review`; recorded executable failures cannot be upgraded by a semantic proposal. Reviews are saved separately from automatic findings and require explicit confirmation before application.
+
+See [the ASSERT review pipeline](docs/upstream-assert-judge.md) for readiness, evidence states, repeat-request protection, migration and deployment limits. [Judge calibration](docs/judge-calibration.md) provides an offline harness and explicitly provisional fixtures; it does not establish production judge accuracy.
+
 ## Local development
 
 Prerequisites:
@@ -54,7 +62,7 @@ npm run dev
 
 Open the printed web URL and visit `/benchmarks`. The basic demo uses transcript, action-trace, and final-state evidence, so it does not require live microphone ASR or any external target application. Advanced environment settings are documented in [docs/environment.md](docs/environment.md). To run multiple agents and local CAE stacks safely, follow [docs/parallel-development.md](docs/parallel-development.md).
 
-Local Codex OAuth for CAE's standalone product judge and text-target auth: [docs/openai-codex-oauth.md](docs/openai-codex-oauth.md).
+Local Codex OAuth for agent execution (not semantic judging): [docs/openai-codex-oauth.md](docs/openai-codex-oauth.md).
 
 For the shortest standalone end-to-end walkthrough, see [docs/assert-flow-demo.md](docs/assert-flow-demo.md) or its [machine-readable example](docs/examples/assert-flow-demo.json).
 

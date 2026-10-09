@@ -367,7 +367,7 @@ def test_forbidden_focus_has_no_unrelated_required_failures_or_fake_perfect_scor
     assert fields['web_result_fields']['forbidden_action_score'] == (0 if expected else None)
     assert result.verdict.score == (0 if expected else None)
     assert report['score_components'] == ({'forbidden_actions': 0} if expected else {})
-    assert result.verdict.status == 'needs_review'
+    assert result.verdict.status == ('fail' if expected else 'needs_review')
 
 
 def test_unmeasured_forbidden_scores_remain_null_in_runs_suites_replay_and_history(isolated_publications):

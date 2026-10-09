@@ -1,189 +1,93 @@
-# Upstream ASSERT judging for CAE execution evidence
+# Single ASSERT semantic-review pipeline
 
-ConversationAgentEvals owns target execution and evidence capture. The sole supported semantic runtime is `assert-ai==0.3.0`; it can optionally judge that evidence without taking over SIP, PSTN, WebRTC, Pipecat, vendor SDK, or media orchestration. CAE refuses to start with another ASSERT version installed.
+CAE uses `assert-ai==0.3.0` for all LLM judging. The application retains evidence, executes deterministic checks, authorizes access, limits spend, saves reviews, and renders results. The upstream judge-only CLI remains the sole semantic engine; there is no legacy prompt/completion fallback.
 
-## Boundary
+## Upload and live-test workflows
 
-```text
-CAE tester / external voice transport
-  -> external or built-in target
-  -> CAE turns, transcript, action trace, final state, voice metadata
-  -> CAE deterministic checks
-  -> ASSERT inference_set.jsonl adapter
-  -> assert-ai judge stage
-  -> validated scores.jsonl
-  -> CAE pending review
-```
+1. Upload a vCon/transcript or run a configured agent. Imported evidence is normalized without generating tool receipts or final state from spoken claims.
+2. **Evaluate** runs CAE's local checks and persists the full normalized evidence, automatic findings, and a frozen approved scenario contract. It does not call an LLM judge.
+3. **LLM Judge** on uploaded/benchmark evidence, or **Review with LLM judge** on a completed live test, invokes the same saved-conversation ASSERT review service. Uploaded evidence is represented as an explicitly labelled evidence replay, never a live agent execution.
+4. Review the saved semantic assessment alongside unchanged automatic evidence. An explicit confirmation is required to apply its proposal. Read/export operations never invoke a judge.
 
-CAE deterministic evidence remains authoritative. The ASSERT result is a semantic review and cannot manufacture proof that an external action occurred.
+The upload button submits only the persisted benchmark ID and owner identity, not a browser-provided report or verdict. Its result links to the common run-detail page for history, confirmation and HTML export. New evaluations must retain complete evidence; an old 700-character transcript preview is not a substitute for the original.
 
-## Enable
-
-Install the API requirements, which pin `assert-ai`, and set:
+## Configuration and readiness
 
 ```bash
 ASSERT_UPSTREAM_JUDGE_ENABLED=1
 ASSERT_JUDGE_MODEL=openai/gpt-4.1-mini
-OPENAI_API_KEY=...
-```
-
-For the OpenAI API-key fallback already used by CAE, `LLM_JUDGE_API_KEY` is copied to `OPENAI_API_KEY` for the ASSERT subprocess when `OPENAI_API_KEY` is not set.
-
-The current CAE Codex OAuth session is not automatically forwarded into LiteLLM. OpenAI-backed ASSERT judging therefore requires `OPENAI_API_KEY` or `LLM_JUDGE_API_KEY`.
-
-## Cost and request controls
-
-ASSERT uses the same process-level daily judge-credit ledger as the existing CAE product judge. A successful single judgment reserves 10 credits; `judge_n` multiplies that amount. Credits are refunded when the ASSERT subprocess, score parsing, or score-contract validation fails.
-
-```bash
-LLM_JUDGE_DAILY_CREDIT_LIMIT=200
-LLM_JUDGE_RESERVED_DAILY_CREDITS=0
+ASSERT_JUDGE_ALLOWED_MODELS=openai/gpt-4.1-mini
+OPENAI_API_KEY=<operator-configured-key>
+# LLM_JUDGE_API_KEY is also accepted as an OpenAI API-key alias.
 ASSERT_JUDGE_MAX_N=1
 ASSERT_JUDGE_MAX_CONCURRENT=2
-```
-
-Direct model overrides are denied unless the model is explicitly allowed:
-
-```bash
-ASSERT_JUDGE_ALLOWED_MODELS=openai/gpt-4.1-mini,openai/gpt-4.1
-```
-
-The configured `ASSERT_JUDGE_MODEL` is always allowed. Concurrency is enforced per API process; deployment-level worker limits should still be configured when multiple API processes run in parallel.
-
-Optional execution controls:
-
-```bash
 ASSERT_JUDGE_MAX_TOKENS=8000
 ASSERT_JUDGE_TIMEOUT_SECONDS=300
+LLM_JUDGE_DAILY_CREDIT_LIMIT=200
+LLM_JUDGE_RESERVED_DAILY_CREDITS=0
 ```
 
-## Run-analysis UI integration
+`GET /api/assert/readiness` returns the common read-only preflight used by the UI and product configuration: enabled state, pinned runtime, allowed configured model, provider credential configuration, available process slots, and application-credit budget. It neither reserves credits nor contacts a model. Ready means configured, not that a provider availability/credential probe succeeded. Non-OpenAI models use the pinned LiteLLM environment validator, including supported local providers. Configure their provider-specific environment variables explicitly.
 
-The existing run-analysis **Review with LLM judge** action routes completed execution conversations through the upstream ASSERT endpoint:
+Codex OAuth connectivity is **not** judge readiness. OAuth remains available for compatible target/authoring features and is never forwarded to ASSERT. There is no automatic model/provider substitution. The old `LLM_JUDGE_MODEL` and `LLM_JUDGE_PROVIDER` settings are unused.
+
+## API
 
 ```text
+POST /api/assert/benchmarks/<persisted-benchmark-run-id>/judge
 POST /api/assert/runs/<execution-run-id>/conversations/<conversation-id>/judge
 ```
 
-The browser sends only the run owner identifier. The server reloads the persisted conversation and constructs the ASSERT transcript, taxonomy, and judge configuration from trusted run evidence.
+Both accept the same strict body:
 
-Successful ASSERT review requests also write the existing `judge.requested` product audit event, including the trusted project, provider, model, credit, status, and agreement metadata.
+```json
+{"user_id":"<owner>","model_name":"openai/gpt-4.1-mini","judge_n":1}
+```
 
-The legacy endpoint remains available for standalone report or transcript reviews that are not attached to an execution conversation:
+`model_name` and `judge_n` are optional; the default is one judge. `request_id` is optional safe text of 8–128 characters. The upload route reloads an authorized benchmark and adapts its evidence before calling the same execution-review service. Active conversations or missing deterministic verdicts are rejected. Ownership and exact personal/workspace-project visibility are checked before saved results are looked up.
+
+HTTP 429 indicates budget/concurrency admission; 503 indicates disabled/unconfigured judging or an output-retention outage; 502 indicates an evaluator/provider or score-validation failure. These are evaluator states, not evidence of agent failure. HTTP 409 covers stale/missing provenance, conflicting request identity, or an already-running identical review. Unexpected report/transcript/plan fields are rejected with 422. The retired `/api/product/judge` route returns 404.
+
+## Evidence, applicability and aggregation
+
+Programmatic results expose `outcome`: `pass`, `fail`, `not_observable`, or `not_applicable`. Existing `status` values remain for report compatibility. Explicit check inapplicability comes from the approved contract; native conditional-event checks are scoped to triggers in the recorded trace, not unseen activity.
+
+A tool explicitly returning failure is different from having no tool telemetry. Missing/partial observations block verification where the contract requires them, but do not prove an action failed or a caller-facing claim was false. `unverified_operational_outcome` represents an unverified required/claimed result; `unsupported_operational_claim` covers claims contradicted by recorded evidence. Transcript-only uploads can still be judged for communication and policy meaning.
+
+Automatic keyword/phrase scores remain labelled diagnostics (`heuristic_verdict`), not semantic proof. Required semantic behaviors keep the overall automatic verdict at `needs_review` until reviewed. An exact authored `transcript_contains` check verifies literal text only. Order is checked only when a contract explicitly declares `required_order` or a structured event-order check; a list of actions is not an implicit script.
+
+Executable hard failures and blocked required evidence cannot be upgraded to pass by a judge proposal or confirmed application. Unknowns are not averaged into perfect scores. Raw local findings and raw ASSERT scores are retained independently; a confirmed adjudication is an overlay. Judge outages never overwrite an agent's recorded result.
+
+ASSERT inputs retain caller/assistant turns, original action events, actual state snapshots, ASR receipts and available voice metadata. Explicit event anchors are honored; unanchored actions are not assigned invented timestamps. Rubrics identify transcripts/tool output as untrusted evidence, not evaluator instructions. These safeguards and fixtures are not a proof of immunity to prompt injection.
+
+A successful CLI exit is insufficient: CAE checks the matching conversation ID, `judge_status`, declared dimensions, strict booleans, allowed ordinal/N/A values, justifications, exact taxonomy-node coverage, narrative and JSON structure before retaining a successful result.
+
+## Frozen contracts and versioned identity
+
+Every new evaluation retains `evaluation_contract_snapshot`: schema version, spec identity, exact contract, resolved preset contents and a SHA-256 digest. Judging, freshness, export and confirmed apply use this snapshot, never the latest mutable catalog. A new contract produces a distinct evaluation ID; old reviews do not silently change meaning.
+
+Fingerprint v2 is a full SHA-256 over normalized inference evidence, taxonomy and target context plus the actual judge configuration: ASSERT version, adapter/aggregation versions, custom and built-in dimensions, configured model, judge count, generation settings, timeout, and provider endpoint configuration. Saved reviews explicitly store judge count and configuration; the system does not guess counts for new records. Provider model aliases can still change behind a stable name: choose dated model revisions where supported and re-calibrate when upgrading.
+
+Historical reviews lacking this provenance remain historical/read-only. They are not silently upgraded or treated as current. Re-evaluate the original complete evidence against an explicitly selected approved contract to create a new evaluation.
+
+## Idempotency, artifacts and limits
+
+The database table `assert_judge_requests` stores unique owner/project/source-scoped admission keys. A normal repeated request reuses successful results for the identical full input/configuration fingerprint. Simultaneous duplicates receive 409 rather than starting another model call. The UI uses a new `request_id` for **Run a new ASSERT review**, retaining that identity across retries of that explicit sample. Reusing an ID with changed inputs is a conflict.
+
+After a successful judge, raw output is retained before review/audit finalization. Retrying a finalization failure reuses that output, stable review ID and idempotent audit ID. Failed evaluator requests are retryable; they do not permanently poison the cache. If successful output cannot be retained, the request stays reserved rather than automatically reissuing a potentially billable call. Abandoned running requests are never automatically stolen: inspect the provider/storage state before choosing a new sample.
+
+Each actual invocation retains `judge-only.yaml`, `taxonomy.json`, `inference_set.jsonl`, and `scores.jsonl` under a fingerprint-plus-invocation directory. Review provenance includes artifact pointers, score digest, model, versions and normalized/underlying judgments. The existing SQLAlchemy initialization creates the new admission table; deployments that manage schema separately must include it before enabling judging.
+
+**Deployment limits:** database admission coordinates duplicate requests, but the existing conversation/artifact store and application-credit counter are file-backed with process-local locking. Use a single API writer with durable storage for this implementation. This is not a multi-replica queue, distributed spend limiter, or exactly-once guarantee for an external provider charge. Application credits are estimates, not token-level provider billing; a failed/timeout call may still be billable even when application credits are refunded. No new queue/Redis service or automatic multi-judge fanout is introduced. Run-level access continues to use CAE's existing identity model; localhost OAuth is not production multi-tenant API authentication.
+
+Use one judge initially, execute only the semantic checks the contract calls for, and include successful cases in audit samples. Do not call this migration an accuracy improvement without independent human calibration. See [judge calibration](judge-calibration.md).
+
+## Saved review export
 
 ```text
-POST /api/product/judge
+GET /api/assert/runs/<run>/conversations/<conversation>/reviews/<review>/status?user_id=<owner>
+GET /api/assert/runs/<run>/conversations/<conversation>/reviews/<review>/report.html?user_id=<owner>
+POST /api/execution/runs/<run>/conversations/<conversation>/judge-reviews/<review>/apply
 ```
 
-Therefore the product boundary is explicit:
-
-- execution-conversation button -> upstream ASSERT judge;
-- standalone report/transcript review -> legacy CAE product judge;
-- deterministic execution, final-state, media, and voice checks -> CAE.
-
-There is no silent fallback from ASSERT to the legacy judge for execution conversations. Missing configuration or an ASSERT failure is surfaced rather than changing judge semantics without notice.
-
-The dedicated routing test and the existing run-analysis Playwright specifications all intercept the ASSERT endpoint and verify that the browser submits only `user_id` for execution-conversation reviews.
-
-## Run against a completed conversation directly
-
-```bash
-curl -X POST \
-  http://127.0.0.1:8000/api/assert/runs/<execution-run-id>/conversations/<conversation-id>/judge \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "user_id": "<run-owner>",
-    "model_name": "openai/gpt-4.1-mini",
-    "judge_n": 1
-  }'
-```
-
-The endpoint rejects active runs and conversations, as well as conversations that do not have a deterministic verdict. It executes the existing command:
-
-```bash
-assert-ai run --config <judge-only.yaml> --force-stage judge --output json
-```
-
-Busy and exhausted-budget requests return HTTP 429. Disabled or unconfigured providers return HTTP 503. ASSERT execution or score-contract failures return HTTP 502.
-
-## Evidence mapping
-
-- CAE caller/tester turns become ASSERT `user` events.
-- CAE target/agent turns become ASSERT `assistant` events.
-- Action trace entries become ASSERT tool-call events.
-- Actions with explicit `before_turn_index`, `after_turn_index`, `turn_index`, or exchange anchors are interleaved with messages.
-- Unanchored actions are retained after the conversation messages rather than assigned an invented chronology.
-- The CAE final state becomes a `cae_final_state_snapshot` tool event.
-- Voice metadata, source text, and ASR receipts remain attached as raw event evidence.
-- Text-only external targets are supported; their evidence level is marked `black_box`.
-- Runs with action or final-state evidence are marked `partial_structured` or `gray_box`.
-
-The adapter evaluates the text actually recorded by CAE. For external voice agents, this should normally be the transcript observed at the media boundary rather than an assumed internal agent transcript.
-
-## Score acceptance boundary
-
-A zero exit code from `assert-ai` is not sufficient. CAE accepts a semantic result only when:
-
-- exactly one score row matches the requested conversation;
-- the raw and inferred `judge_status` are both `ok`;
-- every required built-in and CAE custom dimension is present;
-- boolean dimensions are strict booleans;
-- ordinal dimensions use a value declared by their configured scale;
-- `not_applicable` is accepted only for dimensions that explicitly allow it and carry an ASSERT 0.3 N/A score key;
-- all dimension justifications are present;
-- the node-judgment set covers every generated taxonomy behavior;
-- every returned node judgment references a real taxonomy behavior and has valid fields;
-- the narrative and score JSON are structurally valid.
-
-Rows marked `judge_failed`, `filter_skipped`, or `scoring_skipped` are rejected and are never persisted as successful reviews.
-
-## Artifacts and persisted provenance
-
-Each invocation writes an immutable fingerprinted directory beneath:
-
-```text
-artifacts/execution-runs/<run-id>/assert/<conversation-id>/<fingerprint>/
-```
-
-It contains:
-
-```text
-judge-only.yaml
-results/<suite>/<fingerprint>/inference_set.jsonl
-results/<suite>/taxonomy.json
-results/<suite>/<fingerprint>/scores.jsonl
-```
-
-The pending CAE review preserves ASSERT provenance inside `judge_result.provenance`, including:
-
-- ASSERT version;
-- input fingerprint;
-- score SHA-256;
-- artifact paths;
-- score keys, N/A keys, and ordinal scales;
-- validated dimensions;
-- per-dimension applicability and justifications;
-- behavior-node judgments.
-
-Applying the review continues to use CAE's existing confirmation flow and does not replace the original deterministic evidence.
-
-## Current limits
-
-- The run UI exposes the ASSERT version, evidence level, dimension outcomes, and justifications. Artifact links and complete behavior-node drill-down remain future UX work.
-- The taxonomy is compiled from the active CAE scenario contract. The evaluation-design editor discovers ASSERT 0.3 behavior and judge presets from the pinned runtime and exposes preset selection, N/A policy, built-in-dimension disabling, and ordinal-scale controls; execution binding to a separately approved spec version remains future work.
-- Editable-spec ordinal grades use non-empty string identifiers (for example `unresolved`, `partial`, and `resolved`). This is intentional because JSON object keys cannot preserve numeric key types across the web/API boundary.
-- OpenTelemetry/OpenInference trace import remains a separate future path. Structured CAE action and final-state evidence are mapped directly for now.
-- Automatic judgment for every run is intentionally not enabled because it incurs model cost and requires provider credentials.
-- The process-local concurrency counter does not coordinate across multiple API replicas; production deployments should add a shared queue or distributed limiter when scaling horizontally.
-
-## Portable HTML report
-
-In a completed conversation's Resolution Evidence panel, select a saved ASSERT review and choose **Export ASSERT HTML report**. The selected review is downloaded; export never starts a judge or applies its proposal. The file works offline and pairs the semantic assessment with transcript and expandable tool/state evidence. It identifies CAE as the renderer, preserves the recorded ASSERT version/model, and displays the deterministic verdict separately from applied adjudication. Audio remains in CAE and citations without reliable anchors are shown as unresolved.
-
-```text
-GET /api/assert/runs/<execution-run-id>/conversations/<conversation-id>/reviews/<review-id>/report.html?user_id=<run-owner>
-```
-
-The endpoint requires ownership and current project visibility before reading conversation evidence. Missing or malformed reviews, active executions and changed judging inputs return 409. Wrong owners and inaccessible/ambiguous projects return a non-disclosing 404. Internal artifact files are never read; known credentials/internal paths are omitted and all dynamic content is escaped.
-
-The [export spec](specs/assert-html-report-export.md) records the saved-data contract and limitations. The shared synthetic fixture lives under `apps/api/tests/fixtures/`, which is included by the API Docker image. Browser validation includes a uniquely seeded saved run, real API download through the normal web proxy, owner isolation and offline opening; it adds no product demo route. Run it against an isolated stack with `PLAYWRIGHT_REUSE_EXISTING_SERVER=0 npx playwright test apps/web/tests/assert-html-report.spec.ts --config apps/web/playwright.config.ts` from the repository root after normal setup; it saves desktop/mobile screenshots and the downloaded report under the ignored `artifacts/assert-html-report-export/` directory.
+Apply requires `{"user_id":"<owner>","confirm":true}`. Freshness and export fail closed on changed evidence, tampered contracts or changed grader configuration. Export uses saved data, never reads arbitrary internal artifact paths or starts a model. Offline HTML escapes dynamic content and separates the automatic verdict from adjudication; audio stays in CAE. Existing [export specifications](specs/assert-html-report-export.md) describe the rendering boundary.

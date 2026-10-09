@@ -278,13 +278,22 @@ def record_judge_review(
 
         judge_result = deepcopy(response.get('judge_result') or {})
         raw_output = str(judge_result.pop('raw_output', '') or response.get('judge_output') or '')
-        review_id = f'judge-review-{uuid.uuid4().hex[:16]}'
+        invocation_id = response.get('invocation_id')
+        review_id = f'judge-review-{invocation_id}' if invocation_id else f'judge-review-{uuid.uuid4().hex[:16]}'
+        existing = next((item for item in conversation.get('judge_reviews', [])
+                         if isinstance(item, dict) and item.get('review_id') == review_id), None)
+        if existing is not None:
+            if existing.get('deterministic_snapshot') != current_snapshot:
+                raise ValueError('The saved review no longer matches the recorded evidence.')
+            return deepcopy(existing)
         created_at = _now()
         review = {
             'review_id': review_id,
             'status': 'pending_confirmation',
             'created_at': created_at,
             'provider': response.get('provider'),
+            'judge_n': response.get('judge_n', 1),
+            'invocation_id': response.get('invocation_id'),
             'model': response.get('model'),
             'latency_ms': response.get('latency_ms'),
             'message': response.get('message'),
@@ -326,10 +335,11 @@ def apply_judge_review(
         if review is None:
             raise KeyError('LLM judge review not found.')
         from app.services.assert_review_status import is_assert_review, saved_assert_review_freshness
+        if not is_assert_review(review):
+            raise ValueError('Legacy judge reviews are read-only. Request an ASSERT review before applying an adjudication.')
         if is_assert_review(review):
-            from app.services.benchmark_service import get_scenario_contract
-            contract = get_scenario_contract(str(conversation.get('suite_id') or run.get('suite_id') or ''),
-                                            str(conversation.get('scenario_id') or ''))
+            from app.services.evaluation_contract import recorded_contract
+            contract = recorded_contract(conversation)
             freshness = saved_assert_review_freshness(run, conversation, review, contract)
             if freshness['status'] != 'current':
                 raise ValueError(freshness['message'])
@@ -343,7 +353,8 @@ def apply_judge_review(
         if review.get('deterministic_snapshot') != deterministic_evaluation_snapshot(conversation):
             raise ValueError('The deterministic evaluation changed after this LLM review. Run the review again.')
         enforcement = (conversation.get('evaluation_findings') or {}).get('design_enforcement') or {}
-        if proposed.get('verdict') == 'pass' and enforcement.get('blocked'):
+        if proposed.get('verdict') == 'pass' and (enforcement.get('blocked') or
+                conversation.get('verdict') in {'fail', 'failed'}):
             raise ValueError('Required design checks or evidence still block verification. Supply evidence and reevaluate before applying a pass.')
 
         applied_at = _now()

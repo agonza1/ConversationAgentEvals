@@ -166,6 +166,8 @@ export interface ConversationRecord {
 }
 
 export interface ExecutionRunRecord {
+  evidence_source?: string;
+  source_benchmark_run_id?: string;
   execution_run_id: string;
   status: string;
   mode: ExecutionMode;
@@ -286,6 +288,10 @@ export interface EvaluationAdjudication {
 }
 
 export interface LlmJudgeResponse {
+  execution_run_id?: string;
+  conversation_id?: string;
+  source_benchmark_run_id?: string;
+  reused?: boolean;
   status: 'blocked' | 'ready';
   required_plan: 'free' | 'starter' | 'team';
   credits: number;
@@ -454,34 +460,48 @@ export async function listProductProjects(userId: string): Promise<ProductProjec
   return Array.isArray(payload) ? payload as ProductProjectOption[] : [];
 }
 
+export interface AssertJudgeReadiness {
+  engine: 'assert';
+  ready: boolean;
+  enabled: boolean;
+  model: string;
+  message: string;
+}
+
+export async function getAssertJudgeReadiness(): Promise<AssertJudgeReadiness> {
+  return handleJson(await fetch(`${getApiBase()}/api/assert/readiness`, { cache: 'no-store' }));
+}
+
+async function requestAssertJudge(path: string, payload: { user_id: string; request_id?: string }): Promise<LlmJudgeResponse> {
+  if (!payload.user_id.trim()) throw new Error('A user identity is required for a saved ASSERT review.');
+  return handleJson(await fetch(`${getApiBase()}/api/assert/${path}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  }));
+}
+
 export async function requestLlmJudge(payload: {
-  plan?: 'free' | 'starter' | 'team';
-  report?: Record<string, unknown>;
-  transcript?: string | null;
-  user_id?: string;
-  project_id?: string;
-  execution_run_id?: string;
-  conversation_id?: string;
+  user_id: string;
+  execution_run_id: string;
+  conversation_id: string;
+  request_id?: string;
 }): Promise<LlmJudgeResponse> {
-  const executionRunId = payload.execution_run_id;
-  const conversationId = payload.conversation_id;
-  const userId = payload.user_id;
-
-  if (!executionRunId || !conversationId || !userId) {
-    throw new Error('ASSERT judging requires a completed execution conversation and user ID. Import or run a conversation before requesting review.');
+  if (!payload.execution_run_id || !payload.conversation_id) {
+    throw new Error('Select a saved conversation before requesting an ASSERT review.');
   }
-
-  return handleJson(
-    await fetch(
-      `${getApiBase()}/api/assert/runs/${encodeURIComponent(executionRunId)}`
-      + `/conversations/${encodeURIComponent(conversationId)}/judge`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id: userId }),
-      },
-    ),
+  return requestAssertJudge(
+    `runs/${encodeURIComponent(payload.execution_run_id)}/conversations/${encodeURIComponent(payload.conversation_id)}/judge`,
+    { user_id: payload.user_id, request_id: payload.request_id },
   );
+}
+
+export async function requestBenchmarkJudge(payload: {
+  user_id: string;
+  benchmark_run_id: string;
+  request_id?: string;
+}): Promise<LlmJudgeResponse> {
+  if (!payload.benchmark_run_id) throw new Error('Evaluate the uploaded evidence before requesting an ASSERT review.');
+  return requestAssertJudge(`benchmarks/${encodeURIComponent(payload.benchmark_run_id)}/judge`,
+    { user_id: payload.user_id, request_id: payload.request_id });
 }
 
 export async function applyLlmJudgeReview(payload: {

@@ -1,0 +1,73 @@
+"""Adapt persisted uploads/benchmarks to the same saved-conversation review path.
+
+This is evidence replay, NOT an agent execution. Never accept a client report,
+assert action completion from the transcript, or re-fetch a mutable contract.
+"""
+from __future__ import annotations
+
+from copy import deepcopy
+from datetime import UTC, datetime
+from threading import Lock
+
+from sqlalchemy.orm import Session
+from app.schemas.execution import ConversationRecord, ExecutionRunRecord, ExecutionRunProgress
+from app.services import execution_run_store
+from app.services.benchmark_run_store import get_benchmark_run
+from app.services.evaluation_contract import content_hash, recorded_contract
+from app.services.product_service import ensure_execution_product_project_id
+
+_IMPORT_LOCK = Lock()
+
+
+def import_benchmark_review(db: Session, *, user_id: str, benchmark_run_id: str) -> tuple[str, str]:
+    record = get_benchmark_run(db=db, user_id=user_id, run_id=benchmark_run_id)
+    if record is None:
+        raise KeyError('Benchmark run not found.')
+    report = record.get('report') or {}
+    project = str(record.get('project_id') or '')
+    binding = (report.get('run_metadata') or {}).get('product_project_id')
+    binding = ensure_execution_product_project_id(db=db, user_id=user_id, project_id=project,
+                                                  product_project_id=binding)
+    transcript = record.get('transcript') or report.get('transcript') or ''
+    # An old truncated preview is not sufficient evidence for a new semantic review.
+    if not transcript.strip() and not report.get('action_trace') and not report.get('final_state'):
+        raise ValueError('No complete retained evidence is available. Upload and evaluate the original evidence again.')
+    identity = {'user_id': user_id, 'project_id': project, 'product_project_id': binding,
+                'benchmark_run_id': benchmark_run_id, 'transcript': transcript,
+                'action_trace': report.get('action_trace'), 'final_state': report.get('final_state'),
+                'contract': report.get('evaluation_contract_snapshot'),
+                'findings': {key: report.get(key) for key in ('verdict','overall_score','design_enforcement',
+                    'programmatic_check_results','behavior_results')},
+                'target': report.get('run_metadata')}
+    run_id = 'import-' + content_hash(identity)[:32]
+    conversation_id = run_id + '-conversation'
+    from app.services.execution_runner import _compact_evaluation_findings
+    conversation = ConversationRecord(
+        conversation_id=conversation_id, execution_run_id=run_id, suite_id=record['suite_id'],
+        scenario_id=record['scenario_id'], scenario_title=report.get('scenario_title'),
+        mode='text_callable', status='completed', transcript=transcript,
+        action_trace=deepcopy(report.get('action_trace') or []), final_state=deepcopy(report.get('final_state') or {}),
+        evaluation_findings=_compact_evaluation_findings(report), verdict=report.get('verdict'),
+        score=report.get('overall_score'), ietf_vcon_export=deepcopy(report.get('ietf_vcon_export')),
+        vcon_export=deepcopy(report.get('vcon_export')), evidence_source='imported_benchmark',
+        source_benchmark_run_id=benchmark_run_id,
+    )
+    recorded_contract(conversation.model_dump())  # fail closed on missing/tampered historical provenance
+    with _IMPORT_LOCK:
+        existing = execution_run_store.get_execution_run(run_id)
+        if existing is not None:
+            if existing.get('user_id') != user_id or existing.get('source_benchmark_run_id') != benchmark_run_id:
+                raise ValueError('Imported evidence identity conflicts with an existing record.')
+            return run_id, conversation_id
+        now = datetime.now(UTC).isoformat()
+        execution_run_store.create_execution_run(ExecutionRunRecord(
+            execution_run_id=run_id, status='completed', mode='text_callable', suite_id=record['suite_id'],
+            scenario_ids=[record['scenario_id']], user_id=user_id, project_id=project,
+            product_project_id=binding, agent_name=(report.get('run_metadata') or {}).get('agent_version') or 'Imported conversation',
+            tester_id='fixture_replay', executor_id='evidence_replay',
+            source_benchmark_run_id=benchmark_run_id, evidence_source='imported_benchmark',
+            live_external_connection=False, created_at=now, updated_at=now, completed_at=now,
+            conversations=[conversation], progress=ExecutionRunProgress(
+                phase='imported', completed_conversations=1, total_conversations=1, percent=100),
+        ))
+    return run_id, conversation_id

@@ -1,3 +1,4 @@
+from assert_test_helpers import freeze, refresh_review
 import json
 
 import pytest
@@ -55,6 +56,7 @@ def test_assert_review_provenance_survives_pending_apply_and_disk_round_trip(
         mode='text_callable',
         status='completed',
         transcript='User: Refund this charge.\nAgent: I opened a refund review case.',
+        evaluation_findings={'evaluation_contract_snapshot': __import__('app.services.evaluation_contract', fromlist=['freeze_contract']).freeze_contract({'goal': 'Review a refund safely.'})},
         final_state={'complete': False},
         verdict='needs_review',
         score=60,
@@ -66,11 +68,13 @@ def test_assert_review_provenance_survives_pending_apply_and_disk_round_trip(
     fingerprint = assert_judge_input_fingerprint(
         run=execution_run_store.get_execution_run(run_id),
         conversation=execution_run_store.get_conversation(run_id, conversation_id),
-        scenario_contract=get_scenario_contract('call-center-voice-ai', 'refund-policy-boundary'),
+        scenario_contract=__import__('app.services.evaluation_contract', fromlist=['recorded_contract']).recorded_contract(execution_run_store.get_conversation(run_id, conversation_id)),
         model='openai/gpt-4.1-mini', judge_n=1,
     )
     provenance = {
         'engine': 'assert',
+        'fingerprint_version': 2, 'judge_n': 1,
+        'configuration': __import__('app.services.upstream_assert_judge', fromlist=['judge_configuration']).judge_configuration('openai/gpt-4.1-mini', 1),
         'assert_version': '0.3.0',
         'judge_status': 'ok',
         'input_fingerprint': fingerprint,

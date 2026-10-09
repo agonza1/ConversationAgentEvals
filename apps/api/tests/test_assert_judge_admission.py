@@ -1,6 +1,6 @@
 import pytest
 
-from app.services import product_service, upstream_assert_judge
+from app.services import judge_budget, upstream_assert_judge
 from app.services.upstream_assert_judge import (
     UpstreamAssertJudgeBudgetExceeded,
     UpstreamAssertJudgeBusy,
@@ -45,7 +45,7 @@ def _configure(monkeypatch, tmp_path, *, daily_limit=200, max_concurrent=1):
     monkeypatch.delenv('OPENAI_API_KEY', raising=False)
     monkeypatch.setenv('LLM_JUDGE_DAILY_CREDIT_LIMIT', str(daily_limit))
     monkeypatch.setenv('LLM_JUDGE_RESERVED_DAILY_CREDITS', '0')
-    monkeypatch.setattr(product_service, '_judge_spend_path', lambda: tmp_path / 'judge-spend.json')
+    monkeypatch.setattr(judge_budget, '_judge_spend_path', lambda: tmp_path / 'judge-spend.json')
     monkeypatch.setattr(upstream_assert_judge, 'cli_executable', lambda: '/venv/bin/python')
     monkeypatch.setattr(
         upstream_assert_judge.subprocess,
@@ -55,7 +55,7 @@ def _configure(monkeypatch, tmp_path, *, daily_limit=200, max_concurrent=1):
         ),
     )
     monkeypatch.setattr(upstream_assert_judge, '_ASSERT_JUDGE_ACTIVE', 0)
-    product_service._reset_judge_spend_for_tests()
+    judge_budget._reset_judge_spend_for_tests()
 
 
 def test_budget_rejection_creates_no_invocation_artifacts(monkeypatch, tmp_path):
@@ -75,7 +75,7 @@ def test_budget_rejection_creates_no_invocation_artifacts(monkeypatch, tmp_path)
         )
 
     assert not artifact_root.exists()
-    assert product_service._load_judge_spend()['spent'] == 0
+    assert judge_budget._load_judge_spend()['spent'] == 0
 
 
 def test_concurrency_rejection_creates_no_invocation_artifacts(monkeypatch, tmp_path):
@@ -96,4 +96,4 @@ def test_concurrency_rejection_creates_no_invocation_artifacts(monkeypatch, tmp_
         )
 
     assert not artifact_root.exists()
-    assert product_service._load_judge_spend()['spent'] == 0
+    assert judge_budget._load_judge_spend()['spent'] == 0

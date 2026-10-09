@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.services.evaluation_contract import freeze_contract, content_hash
+
 import hashlib
 import json
 import re
@@ -571,6 +573,7 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, A
     logical_run_id = _logical_run_id(suite_id, scenario_id, evidence_artifacts, run_metadata)
     run_id = _run_id(suite_id, scenario_id, evidence_artifacts, run_metadata, lifecycle_context)
     scenario_contract = _scenario_contract(scenario)
+    run_id = f'{run_id}-spec-{content_hash(scenario_contract)[:12]}'
     imported_profile = vcon_intake.get('profile')
     if imported_profile:
         from app.services.vcon_evidence import decode_evidence
@@ -622,6 +625,7 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, A
         'scenario_id': scenario_id,
         'scenario_title': scenario['title'],
         'scenario_contract': scenario_contract,
+        'evaluation_contract_snapshot': freeze_contract(scenario_contract, suite_id=suite_id, scenario_id=scenario_id),
         'scenario_contract_sha256': _stable_digest(scenario_contract),
         'provider': suite['provider'],
         'run_metadata': run_metadata,
@@ -667,6 +671,7 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, A
     report['vcon_analysis'] = _vcon_analysis(report)
     report['vcon_export'] = _vcon_export(payload, transcript, report['vcon_analysis'])
     report['ietf_vcon_export'] = build_benchmark_vcon(export_payload, transcript, report)
+    report['transcript'] = transcript
     return report
 
 
@@ -829,7 +834,7 @@ def _execute_assert_contract(
     missing_actions = [action for action in scenario['required_actions'] if action not in completed_actions]
     forbidden_observed = [hit['action'] for hit in forbidden_hits]
     final_state_missing = _assert_final_state_missing(final_state, required=_artifact_present(action_trace))
-    workflow_order_issues = _workflow_order_issues(action_trace, scenario['required_actions'], missing_actions) if _artifact_present(action_trace) else []
+    workflow_order_issues = _workflow_order_issues(action_trace, scenario.get('required_order', []), missing_actions) if _artifact_present(action_trace) and scenario.get('required_order') else []
     failed_required_actions = incomplete
     hard_check_failures = _hard_check_failures(
         missing_actions=missing_actions,
@@ -845,10 +850,10 @@ def _execute_assert_contract(
             components.append(('required_actions', required_score))
         if forbidden_score is not None:
             components.append(('forbidden_actions', forbidden_score))
-        if _artifact_present(action_trace):
+        if _artifact_present(action_trace) and scenario.get('required_order'):
             components.append(('workflow_order', 0 if workflow_order_issues else 100))
-        if _artifact_present(action_trace) or _artifact_present(final_state):
-            components.append(('final_state', 0 if final_state_missing else 100))
+        if isinstance(final_state, dict) and isinstance(final_state.get('complete'), bool):
+            components.append(('final_state', 100 if final_state['complete'] else 0))
         overall_score = round(sum(score for _, score in components) / len(components)) if components else 0
         score_components = {name: score for name, score in components}
     else:
@@ -878,7 +883,7 @@ def _execute_assert_contract(
         final_state_missing=final_state_missing,
         workflow_order_issues=workflow_order_issues,
     )
-    design_results = evaluate_design(scenario, payload, transcript) if authored else {}
+    design_results = evaluate_design(scenario, payload, transcript)
     enforcement = design_results.get('design_enforcement', {})
     if enforcement.get('blocked'):
         status = 'fail' if enforcement.get('failed') else 'needs_review'
@@ -889,7 +894,26 @@ def _execute_assert_contract(
                                             'message': f'{item["label"]}: {item["reason"]}'})
                 failures.append({'code': f'design-enforcement:{item["id"]}', 'category': 'evidence',
                                  'severity': 'error', 'summary': item['reason'], 'metadata': item})
+    heuristic_verdict = status
+    semantic_required = bool(scenario.get('behaviors') or scenario.get('required_actions')
+                             or scenario.get('forbidden_actions') or scenario.get('rubric')
+                             or scenario.get('requirements'))
+    explicit_failure = enforcement.get('failed') or any(
+        row.get('status') == 'fail' for row in design_results.get('behavior_results', []))
+    if explicit_failure:
+        status = 'fail'
+    elif semantic_required:
+        status = 'needs_review'
+    for finding in hard_check_failures:
+        finding['basis'] = 'executable_evidence_check' if finding.get('category') == 'design_enforcement' else 'heuristic_diagnostic'
     report_payload = {
+        'semantic_review_required': semantic_required,
+        'heuristic_verdict': heuristic_verdict,
+        'evidence_assessment': {
+            'workflow_order': 'not_applicable' if not scenario.get('required_order') else 'not_observable' if not action_trace else 'fail' if workflow_order_issues else 'pass',
+            'semantic_evaluation': 'not_observable' if semantic_required else 'not_applicable',
+            'external_execution': 'not_observable' if not action_trace and not final_state else 'partial_structured',
+        },
         'suite_id': suite['id'],
         'suite_name': suite['name'],
         'scenario_id': scenario['id'],
@@ -919,7 +943,7 @@ def _execute_assert_contract(
                 'metrics': {
                     'required_action_score': required_score,
                     'rubric_score': rubric_score,
-                    'workflow_order_score': 0 if workflow_order_issues else (100 if _artifact_present(action_trace) else None),
+                    'workflow_order_score': (0 if workflow_order_issues else 100) if scenario.get('required_order') and _artifact_present(action_trace) else None,
                     'failure_count': len(failures),
                     'scoring_mode': 'agentic' if _has_agentic_evidence(payload) else 'transcript',
                     'score_components': score_components,
@@ -982,10 +1006,11 @@ def _assert_report_fields(assert_manifest: AssertResultManifest, *, payload: dic
 
     # Prefer explicit null over fake 100s when a dimension was not measurable.
     if has_agentic:
-        task_completion_score = 0 if final_state_missing else (100 if (has_final_state or has_action_trace) else None)
-        final_state_score = 0 if final_state_missing else (100 if (has_final_state or has_action_trace) else None)
+        completed = final_state_payload.get('complete') if isinstance(final_state_payload, dict) else None
+        task_completion_score = (100 if completed else 0) if isinstance(completed, bool) else None
+        final_state_score = task_completion_score
         workflow_raw = metrics.get('workflow_order_score')
-        workflow_order_score = int(workflow_raw) if isinstance(workflow_raw, (int, float)) else (0 if workflow_order_issues else (100 if has_action_trace else None))
+        workflow_order_score = int(workflow_raw) if isinstance(workflow_raw, (int, float)) else None
     else:
         task_completion_score = None
         final_state_score = None
@@ -1010,7 +1035,8 @@ def _assert_report_fields(assert_manifest: AssertResultManifest, *, payload: dic
         'action_trace': payload.get('action_trace'),
         'final_state': payload.get('final_state'),
         **{key: deepcopy(result_payload[key]) for key in ('behavior_results', 'programmatic_check_results',
-            'evidence_requirement_results', 'design_enforcement') if key in result_payload},
+            'evidence_requirement_results', 'design_enforcement', 'semantic_review_required',
+            'heuristic_verdict', 'evidence_assessment') if key in result_payload},
     }
     return {
         'required_action_score': metrics.get('required_action_score'),
@@ -1634,6 +1660,7 @@ def _run_metadata(payload: dict[str, Any]) -> dict[str, str]:
         'notes': _first_string(payload, 'notes') or _string_from_metadata(metadata, 'notes'),
         'user_id': _first_string(payload, 'user_id') or _string_from_metadata(metadata, 'user_id', 'owner_user_id'),
         'project_id': _first_string(payload, 'project_id') or _string_from_metadata(metadata, 'project_id', 'project_key'),
+        'product_project_id': _first_string(payload, 'product_project_id') or _string_from_metadata(metadata, 'product_project_id'),
         'retention_days': _string_from_metadata(metadata, 'retention_days'),
     }
     return {key: value for key, value in normalized.items() if value}
@@ -1826,7 +1853,7 @@ def _scenario_contract(scenario: BenchmarkScenario) -> dict[str, Any]:
         'rubric': deepcopy(scenario['rubric']),
     }
     for key in ('evaluation_spec_ref', 'behaviors', 'action_checklist', 'target_behavior_id', 'variant', 'caller_steps',
-                'requirements', 'permissible_behavior', 'evidence_requirements', 'deterministic_checks', 'generation_provenance', 'behavior_preset', 'scenario_preset'):
+                'requirements', 'permissible_behavior', 'evidence_requirements', 'deterministic_checks', 'generation_provenance', 'behavior_preset', 'scenario_preset', 'required_order'):
         if key in scenario:
             contract[key] = deepcopy(scenario[key])
     return contract

@@ -67,7 +67,7 @@ def test_call_center_catalog_includes_refund_policy_boundary_scenario():
         }
     )
 
-    assert simulation['benchmark_report']['verdict'] == 'pass'
+    assert simulation['benchmark_report']['verdict'] == 'needs_review'
     assert simulation['simulation_validation']['ready_for_scoring'] is True
     assert simulation['final_state']['complete'] is True
 
@@ -88,7 +88,7 @@ def test_call_center_catalog_includes_interruption_correction_scenario():
         }
     )
 
-    assert simulation['benchmark_report']['verdict'] == 'pass'
+    assert simulation['benchmark_report']['verdict'] == 'needs_review'
     assert simulation['benchmark_report']['overall_score'] >= 75
     assert simulation['final_state']['complete'] is True
 
@@ -229,7 +229,7 @@ def test_run_endpoint_returns_assert_manifest_as_canonical_result():
     runtime_config = report['assert_platform_record']['runtime_config']
     assert runtime_config['execution_mode'] == 'sync'
     assert runtime_config['invocation_target']['environment'] == 'local'
-    assert manifest['verdict']['status'] == 'pass'
+    assert manifest['verdict']['status'] == 'needs_review'
     canonical = report['assert_canonical_artifact']
     assert canonical['uri'].startswith(f"local-artifact://assert/runs/{report['run_id']}/")
     assert canonical['sha256']
@@ -260,7 +260,7 @@ def test_run_endpoint_returns_assert_manifest_as_canonical_result():
     durable_manifest = saved['report']['assert_canonical_manifest']
     assert durable_manifest['manifest_location'] == canonical['uri']
     assert durable_manifest['assert_result_manifest']['manifest_metadata']['artifact_manifest_location'] == canonical['uri']
-    assert durable_manifest['assert_result_manifest']['verdict']['status'] == 'pass'
+    assert durable_manifest['assert_result_manifest']['verdict']['status'] == 'needs_review'
     assert durable_manifest['assert_platform_record']['assert_run_id'] == report['assert_run_id']
     assert durable_manifest['platform_metadata_index']['artifact_manifest_location'] == canonical['uri']
     assert 'assert_result_manifest' not in saved['report']
@@ -316,7 +316,7 @@ def test_run_endpoint_normalizes_assert_bundle_into_existing_evidence_pipeline()
     assert response.status_code == 200, response.text
     report = response.json()
 
-    assert report['verdict'] == 'pass'
+    assert report['verdict'] == 'needs_review'
     assert report['run_metadata']['agent_version'] == 'assert-adapter'
     assert report['run_metadata']['model_name'] == 'gpt-test'
     assert 'Patient: I am almost out of my medication.' in report['transcript_preview']
@@ -388,7 +388,7 @@ def test_run_endpoint_accepts_generic_artifact_bundle_and_returns_lab_report():
     assert response.status_code == 200, response.text
     report = response.json()
 
-    assert report['verdict'] == 'pass'
+    assert report['verdict'] == 'needs_review'
     assert report['run_metadata']['agent_version'] == 'generic-adapter'
     assert 'Patient: I need a refill' in report['transcript_preview']
     assert report['evidence_audit_summary']['adapter']['source_artifacts'] == [
@@ -417,7 +417,10 @@ def test_run_endpoint_accepts_generic_artifact_bundle_and_returns_lab_report():
     assert lab_report['failure_taxonomy'] == []
     assert report['vcon_analysis']['body']['assert_lab_report'] == lab_report
 
-def test_failed_assert_bundle_rerun_returns_stable_hard_check_citations():
+def test_failed_assert_bundle_rerun_returns_stable_hard_check_citations(monkeypatch):
+    from app.services import benchmark_service
+    scenario = benchmark_service._SCENARIOS_BY_ID[('telehealth-agent', 'medication-refill-routing')]
+    monkeypatch.setitem(scenario, 'required_order', list(scenario['required_actions']))
     failed_artifact = {
         'suite_id': 'telehealth-agent',
         'scenario_id': 'medication-refill-routing',
@@ -678,8 +681,8 @@ def test_runs_export_returns_owner_scoped_history_bundle_with_vcon_summary():
 
     assert first.status_code == 200, first.text
     assert second.status_code == 200, second.text
-    assert first.json()['verdict'] == 'pass'
-    assert second.json()['verdict'] == 'pass'
+    assert first.json()['verdict'] == 'needs_review'
+    assert second.json()['verdict'] == 'needs_review'
 
     export_response = client.get(
         '/api/benchmarks/runs/export',
@@ -690,7 +693,7 @@ def test_runs_export_returns_owner_scoped_history_bundle_with_vcon_summary():
     exported = export_response.json()
     assert exported['filename'] == 'convoice-qa-qa-project-call-center-voice-ai-benchmark-history.json'
     assert exported['run_count'] == 2
-    assert exported['summary']['status_counts'] == {'completed': 2}
+    assert exported['summary']['status_counts'] == {'needs_review': 2}
     assert exported['summary']['latest_run_id'] == second.json()['run_id']
     assert exported['summary']['latest_score'] == second.json()['overall_score']
     assert exported['summary']['previous_score'] == first.json()['overall_score']
@@ -813,7 +816,7 @@ def test_run_endpoint_accepts_vcon_record_evidence():
 
     assert response.status_code == 200, response.text
     run = response.json()
-    assert run['verdict'] == 'pass'
+    assert run['verdict'] == 'needs_review'
     assert run['evidence_audit_summary']['input_artifact_types'] == ['vcon']
     assert run['vcon_export']['source_format'] == 'vcon'
     assert run['vcon_export']['analysis'][-1]['type'] == 'agentic_benchmark_eval'
@@ -868,7 +871,7 @@ def test_run_endpoint_accepts_ietf_vcon_core_04_text_dialogs():
 
     assert response.status_code == 200, response.text
     run = response.json()
-    assert run['verdict'] == 'pass'
+    assert run['verdict'] == 'needs_review'
     assert run['transcript_preview'].startswith('Caller: This outage is frustrating')
     assert 'recording' not in run['transcript_preview'].lower()
     assert run['vcon_export']['vcon'] == '0.4.0'
@@ -989,8 +992,8 @@ def test_simulate_endpoint_upserts_stable_run_record():
     assert list_response.status_code == 200
     records = list_response.json()
     assert len(records) == 1
-    assert records[0]['status'] == 'completed'
-    assert records[0]['report']['run_lifecycle']['status'] == 'completed'
+    assert records[0]['status'] == 'needs_review'
+    assert records[0]['report']['run_lifecycle']['status'] == 'needs_review'
 
 
 def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports():
@@ -1020,9 +1023,9 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
     assert len(suite_records) == 1
     suite_record = suite_records[0]
     assert suite_record['suite_run_id'] == simulation['suite_run_id']
-    assert suite_record['status'] == 'completed'
+    assert suite_record['status'] == 'needs_review'
     assert suite_record['suite_report']['verdict'] == simulation['verdict']
-    assert suite_record['reliability_metrics']['pass_at_1'] == 1.0
+    assert suite_record['reliability_metrics']['pass_at_1'] == 0.0  # Required semantics have not run.
     assert suite_record['suite_report']['reliability_metrics']['framework'] == 'eva_bench_inspired_v1'
     expected_suite_manifest_sha = get_suite_contract_manifest('call-center-voice-ai')['suite_contract_manifest_sha256']
     assert suite_record['suite_contract_manifest_sha256'] == expected_suite_manifest_sha
@@ -1083,7 +1086,7 @@ def test_suite_simulate_endpoint_persists_retained_suite_run_and_child_reports()
     assert history_export['filename'] == 'convoice-qa-qa-project-call-center-voice-ai-suite-run-history.json'
     assert history_export['suite_run_count'] == 1
     assert history_export['summary']['latest_suite_run_id'] == simulation['suite_run_id']
-    assert history_export['summary']['status_counts'] == {'completed': 1}
+    assert history_export['summary']['status_counts'] == {'needs_review': 1}
     assert history_export['summary']['total_scenarios'] == simulation['scenario_count']
     assert history_export['vcon_export_summary']['available_records'] == simulation['scenario_count'] + 1
     assert history_export['suite_contract_artifact_summary'] == {
@@ -1281,14 +1284,14 @@ def test_suite_simulate_async_endpoint_tracks_queued_to_terminal_lifecycle():
     assert detail_response.status_code == 200
     completed = detail_response.json()
     assert completed['suite_run_id'] == queued['suite_run_id']
-    assert completed['status'] == 'completed'
+    assert completed['status'] == 'needs_review'
     assert completed['suite_report']['suite_run_id'] == queued['suite_run_id']
-    assert completed['run_lifecycle']['status'] == 'completed'
+    assert completed['run_lifecycle']['status'] == 'needs_review'
     assert completed['run_lifecycle']['terminal'] is True
     assert completed['progress']['phase'] == 'finished'
     assert completed['progress']['percent'] == 100
     assert completed['progress']['active'] is False
-    assert [transition['to'] for transition in completed['run_lifecycle']['transitions']] == ['queued', 'running', 'completed']
+    assert [transition['to'] for transition in completed['run_lifecycle']['transitions']] == ['queued', 'running', 'needs_review']
     assert completed['scenario_count'] == len(get_suite('call-center-voice-ai')['scenarios'])
 
 
@@ -1338,7 +1341,7 @@ def test_run_scenario_scores_matching_transcript_deterministically():
 
     assert first['run_id'] == second['run_id']
     assert first['overall_score'] == 100
-    assert first['verdict'] == 'pass'
+    assert first['verdict'] == 'needs_review'
     assert first['required_action_score'] == 100
     assert first['rubric_score'] == 100
     assert first['missing_actions'] == []
@@ -1420,7 +1423,7 @@ def test_run_scenario_run_id_includes_retained_artifact_fingerprints():
     retry = run_scenario(retry_request)
 
     assert first['run_id'] == second['run_id']
-    assert first['run_id'] == first['logical_run_id']
+    assert first['run_id'].startswith(first['logical_run_id'] + '-spec-')
     assert retry['run_id'] != first['run_id']
     assert retry['evidence_artifacts']['evidence_fingerprint'] != first['evidence_artifacts']['evidence_fingerprint']
     assert [artifact['type'] for artifact in first['evidence_artifacts']['artifacts']] == ['action_trace', 'final_state']
@@ -1470,7 +1473,10 @@ def test_resume_run_records_source_run_and_rejects_conflicting_retry_controls():
         )
 
 
-def test_run_scenario_flags_out_of_order_required_actions():
+def test_run_scenario_flags_out_of_order_required_actions(monkeypatch):
+    from app.services import benchmark_service
+    scenario = benchmark_service._SCENARIOS_BY_ID[('fintech-support-agent', 'failed-ach-transfer')]
+    monkeypatch.setitem(scenario, 'required_order', list(scenario['required_actions']))
     result = run_scenario(
         {
             'suite_id': 'fintech-support-agent',
@@ -1646,7 +1652,7 @@ def test_run_scenario_supports_vcon_payloads_and_rejects_unknown_scenarios():
 
     assert result['suite_id'] == 'call-center-voice-ai'
     assert result['scenario_id'] == 'angry-outage-escalation'
-    assert result['verdict'] == 'pass'
+    assert result['verdict'] == 'needs_review'
     assert result['transcript_preview'].startswith('This outage is frustrating')
 
     with pytest.raises(ValueError, match='Unknown benchmark scenario'):
@@ -1744,19 +1750,19 @@ def test_run_suite_scores_all_scenario_evidence_payloads():
     assert result['suite_id'] == 'telehealth-agent'
     assert result['suite_contract_manifest_sha256'] == get_suite_contract_manifest('telehealth-agent')['suite_contract_manifest_sha256']
     assert result['scenario_count'] == len(suite['scenarios'])
-    assert result['pass_count'] == len(suite['scenarios'])
-    assert result['needs_review_count'] == 0
+    assert result['pass_count'] == 0  # No semantic judge has run.
+    assert result['needs_review_count'] == result['scenario_count']
     assert result['average_score'] >= 75
-    assert result['verdict'] == 'pass'
+    assert result['verdict'] == 'needs_review'
     assert result['reliability_metrics']['framework'] == 'eva_bench_inspired_v1'
-    assert result['reliability_metrics']['pass_at_1'] == 1.0
-    assert result['reliability_metrics']['pass_at_k'] == 1.0
-    assert result['reliability_metrics']['pass_all_k'] == 1.0
+    assert result['reliability_metrics']['pass_at_1'] == 0.0
+    assert result['reliability_metrics']['pass_at_k'] == 0.0
+    assert result['reliability_metrics']['pass_all_k'] == 0.0
     assert result['reliability_metrics']['experience_signal_coverage'] == 1.0
     assert result['reliability_metrics']['perturbation_tags'] == ['accent', 'noise']
     assert result['reliability_metrics']['perturbation_coverage'] == [
-        {'tag': 'accent', 'scenario_count': 2, 'pass_count': 2, 'pass_rate': 1.0},
-        {'tag': 'noise', 'scenario_count': 2, 'pass_count': 2, 'pass_rate': 1.0},
+        {'tag': 'accent', 'scenario_count': 2, 'pass_count': 0, 'pass_rate': 0.0},
+        {'tag': 'noise', 'scenario_count': 2, 'pass_count': 0, 'pass_rate': 0.0},
     ]
     assert result['scenario_reports'][0]['perturbation_tags'] == ['noise', 'accent']
     assert result['run_metadata'] == {'agent_version': 'agent-v7'}
@@ -1769,7 +1775,7 @@ def test_run_suite_scores_all_scenario_evidence_payloads():
     assert suite_analysis['body']['suite_run_id'] == result['suite_run_id']
     assert suite_analysis['body']['suite_contract_manifest_sha256'] == result['suite_contract_manifest_sha256']
     assert suite_analysis['body']['scenario_count'] == result['scenario_count']
-    assert suite_analysis['body']['reliability_metrics']['pass_at_1'] == 1.0
+    assert suite_analysis['body']['reliability_metrics']['pass_at_1'] == 0.0
     assert suite_analysis['body']['reliability_metrics']['perturbation_tags'] == ['accent', 'noise']
     assert suite_analysis['body']['scenario_results'][0]['scenario_contract_sha256'] == result['scenario_reports'][0]['scenario_contract_sha256']
     assert suite_analysis['body']['scenario_results'][0]['perturbation_tags'] == ['noise', 'accent']
@@ -1848,10 +1854,10 @@ def test_run_suite_accepts_attempt_arrays_for_retry_level_reliability():
     assert result['reliability_metrics']['scenario_count'] == len(suite['scenarios'])
     assert result['reliability_metrics']['attempt_count'] == len(suite['scenarios']) * 2
     assert result['reliability_metrics']['pass_at_1'] == 0.0
-    assert result['reliability_metrics']['pass_at_k'] == 1.0
+    assert result['reliability_metrics']['pass_at_k'] == 0.0
     assert result['reliability_metrics']['pass_all_k'] == 0.0
     assert result['reliability_metrics']['perturbation_coverage'] == [
-        {'tag': 'noise', 'scenario_count': 4, 'pass_count': 2, 'pass_rate': 0.5},
+        {'tag': 'noise', 'scenario_count': 4, 'pass_count': 0, 'pass_rate': 0.0},
     ]
     first_attempt = result['scenario_reports'][0]
     retry_attempt = result['scenario_reports'][1]
@@ -1896,7 +1902,7 @@ def test_simulate_scenario_returns_text_trace_final_state_and_report():
     }
     assert result['benchmark_report']['simulation_validation'] == result['simulation_validation']
     assert result['benchmark_report']['vcon_analysis']['body']['simulation_validation'] == result['simulation_validation']
-    assert result['benchmark_report']['verdict'] == 'pass'
+    assert result['benchmark_report']['verdict'] == 'needs_review'
     assert result['benchmark_report']['overall_score'] >= 75
 
 
@@ -1936,7 +1942,7 @@ def test_run_scenario_scores_action_trace_and_final_state_when_provided():
         }
     )
 
-    assert result['verdict'] == 'pass'
+    assert result['verdict'] == 'needs_review'
     assert result['overall_score'] == 100
     assert result['task_completion_score'] == 100
     assert result['required_action_score'] == 100
@@ -1964,13 +1970,13 @@ def test_run_scenario_requires_final_state_with_action_trace():
     )
 
     assert result['verdict'] == 'needs_review'
-    assert result['task_completion_score'] == 0
-    assert result['final_state_score'] == 0
+    assert result['task_completion_score'] is None
+    assert result['final_state_score'] is None
     assert result['final_state_missing'] == [{'path': 'complete', 'expected': True, 'actual': None}]
     assert 'task_completion' in result['failure_categories'] or 'final_state_correctness' in result['failure_categories']
     assert 'final_state_correctness' in result['failure_categories']
     assert result['scoring_mode'] == 'agentic'
-    assert result['score_components']['final_state'] == 0
+    assert 'final_state' not in result['score_components']  # Missing evidence is not a measured zero.
 
 
 def test_transcript_only_eval_does_not_invent_perfect_agentic_scores():
@@ -2042,7 +2048,7 @@ def test_truncated_billing_transcript_does_not_pass_on_loose_keywords():
     assert result['final_state_score'] is None
 
 
-def test_all_catalog_sample_transcripts_and_simulations_still_pass():
+def test_catalog_samples_keep_high_diagnostics_but_require_semantic_review():
     from app.services.benchmark_catalog_extensions import register_builtin_benchmark_extensions
     from app.services.benchmark_service import _action_evidence_phrases, list_suites, get_suite, simulate_scenario
 
@@ -2078,7 +2084,7 @@ def test_all_catalog_sample_transcripts_and_simulations_still_pass():
                 if scenario.get('sample_final_state'):
                     payload['final_state'] = scenario['sample_final_state']
                 scored = run_scenario(payload)
-                assert scored['verdict'] == 'pass', (
+                assert scored['verdict'] == 'needs_review', (
                     suite_summary['id'],
                     scenario['id'],
                     scored['missing_actions'],
@@ -2095,7 +2101,7 @@ def test_all_catalog_sample_transcripts_and_simulations_still_pass():
                         'transcript': sample,
                     }
                 )
-                assert transcript_only['verdict'] == 'pass', (
+                assert transcript_only['verdict'] == 'needs_review', (
                     suite_summary['id'],
                     scenario['id'],
                     'transcript-only',
@@ -2111,7 +2117,7 @@ def test_all_catalog_sample_transcripts_and_simulations_still_pass():
                 }
             )
             report = simulated['benchmark_report']
-            assert report['verdict'] == 'pass', (
+            assert report['verdict'] == 'needs_review', (
                 suite_summary['id'],
                 scenario['id'],
                 report.get('missing_actions'),
@@ -2161,7 +2167,7 @@ def test_run_scenario_scores_observed_actions_as_benchmark_evidence():
 
     assert result['required_action_score'] == 100
     assert result['missing_actions'] == []
-    assert result['verdict'] == 'pass'
+    assert result['verdict'] == 'needs_review'
 
 
 def test_simulate_scenario_can_generate_failure_baseline():
@@ -2210,7 +2216,7 @@ def test_simulate_endpoint_accepts_camel_case_payload():
     payload = response.json()
     assert payload['scenario_id'] == 'language-practice-feedback'
     assert 'homepage mock agent' in payload['transcript']
-    assert payload['benchmark_report']['verdict'] == 'pass'
+    assert payload['benchmark_report']['verdict'] == 'needs_review'
 
 
 def test_path_simulate_endpoint_uses_route_scenario_ids():
@@ -2245,7 +2251,7 @@ def test_run_endpoint_accepts_vcon_without_duplicate_transcript_field():
     payload = response.json()
     assert payload['suite_id'] == 'call-center-voice-ai'
     assert payload['scenario_id'] == 'angry-outage-escalation'
-    assert payload['verdict'] == 'pass'
+    assert payload['verdict'] == 'needs_review'
     assert payload['transcript_preview'].startswith('This outage is frustrating')
 
 def test_run_endpoint_accepts_group_call_artifacts():
@@ -2271,7 +2277,7 @@ def test_run_endpoint_accepts_group_call_artifacts():
     payload = response.json()
     assert payload['suite_id'] == 'call-center-voice-ai'
     assert payload['scenario_id'] == 'angry-outage-escalation'
-    assert payload['verdict'] == 'pass'
+    assert payload['verdict'] == 'needs_review'
     assert payload['transcript_preview'].startswith('caller: This outage is frustrating')
     assert payload['evidence_audit_summary']['input_artifact_types'] == ['groupCall']
     assert payload['evidence_artifacts']['artifacts'][1]['type'] == 'groupCall'
@@ -2310,7 +2316,7 @@ def test_run_endpoint_accepts_action_trace_and_final_state_without_transcript():
 
     assert response.status_code == 200, response.text
     payload = response.json()
-    assert payload['verdict'] == 'pass'
+    assert payload['verdict'] == 'needs_review'
     assert payload['overall_score'] == 100
     assert payload['transcript_preview'] == ''
     assert payload['missing_actions'] == []
@@ -2349,10 +2355,10 @@ def test_simulate_suite_runs_every_scenario_with_stable_summary():
     assert result['suite_run_id'] == retry['suite_run_id']
     assert result['suite_id'] == 'telehealth-agent'
     assert result['scenario_count'] == len(get_suite('telehealth-agent')['scenarios'])
-    assert result['pass_count'] == result['scenario_count']
-    assert result['needs_review_count'] == 0
+    assert result['pass_count'] == 0  # No semantic judge has run.
+    assert result['needs_review_count'] == result['scenario_count']
     assert result['average_score'] >= 75
-    assert result['verdict'] == 'pass'
+    assert result['verdict'] == 'needs_review'
     assert result['run_metadata'] == {'prompt_version': 'telehealth-prompt-v1'}
     assert [run['scenario_id'] for run in result['scenario_runs']] == [
         scenario['id'] for scenario in get_suite('telehealth-agent')['scenarios']
@@ -2373,8 +2379,8 @@ def test_simulate_suite_endpoint_returns_full_suite_regression_run():
     payload = response.json()
     assert payload['suite_id'] == 'call-center-voice-ai'
     assert payload['scenario_count'] == len(get_suite('call-center-voice-ai')['scenarios'])
-    assert payload['pass_count'] == payload['scenario_count']
-    assert payload['reliability_metrics']['pass_at_1'] == 1.0
+    assert payload['pass_count'] == 0  # No semantic judge has run.
+    assert payload['reliability_metrics']['pass_at_1'] == 0.0
     assert payload['reliability_metrics']['accuracy_score'] >= 0.75
     assert payload['run_metadata'] == {'agent_version': 'agent-v1'}
     assert payload['scenario_runs'][0]['benchmark_report']['suite_id'] == 'call-center-voice-ai'
