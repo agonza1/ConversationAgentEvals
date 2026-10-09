@@ -64,7 +64,7 @@ def test_assert_review_provenance_survives_pending_apply_and_disk_round_trip(
     execution_run_store.complete_execution_run(run_id, status='needs_review')
 
     from app.services.benchmark_service import get_scenario_contract
-    from app.services.upstream_assert_judge import assert_judge_input_fingerprint
+    from app.services.upstream_assert_judge import assert_judge_input_fingerprint, FINGERPRINT_VERSION
     fingerprint = assert_judge_input_fingerprint(
         run=execution_run_store.get_execution_run(run_id),
         conversation=execution_run_store.get_conversation(run_id, conversation_id),
@@ -73,7 +73,7 @@ def test_assert_review_provenance_survives_pending_apply_and_disk_round_trip(
     )
     provenance = {
         'engine': 'assert',
-        'fingerprint_version': 2, 'judge_n': 1,
+        'fingerprint_version': FINGERPRINT_VERSION, 'judge_n': 1,
         'configuration': __import__('app.services.upstream_assert_judge', fromlist=['judge_configuration']).judge_configuration('openai/gpt-4.1-mini', 1),
         'assert_version': '0.3.0',
         'judge_status': 'ok',
