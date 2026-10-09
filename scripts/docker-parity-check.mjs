@@ -82,7 +82,8 @@ requireIncludes('seed service', seed, 'command: ["python", "-m", "app.seed"]');
 requireIncludes('seed service', seed, 'restart: "no"');
 
 const api = serviceBlock('api');
-requireIncludes('api service', api, '"${API_PORT:-8025}:8000"');
+requireIncludes('api service', api, '"127.0.0.1:${API_PORT:-8025}:8000"');
+requireIncludes('api service', api, '"127.0.0.1:1456:1456"');
 requireIncludes('api service', api, '"1455:1455"');
 requireNotIncludes('api service', api, 'OPENAI_CODEX_CALLBACK_PORT');
 requireIncludes('api service', api, 'PORT: 8000');
@@ -124,7 +125,7 @@ requireNotIncludes('pipecat service', pipecat, './apps/pipecat:/app');
 
 const web = serviceBlock('web');
 requireNotIncludes('web service', web, 'profiles:');
-requireIncludes('web service', web, '"${PORT:-3012}:3000"');
+requireIncludes('web service', web, '"127.0.0.1:${PORT:-3012}:3000"');
 requireIncludes('web service', web, 'args:');
 requireIncludes('web service', web, 'API_BASE_URL: http://api:8000');
 requireIncludes('web service', web, 'PIPECAT_SERVICE_URL: http://pipecat:8110');

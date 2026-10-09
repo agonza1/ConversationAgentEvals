@@ -23,7 +23,10 @@ Speech recognition/TTS are not covered by this ChatGPT-plan flow.
 
 ## Enable and connect
 
-- Use a local installation with API and web published only on loopback.
+- Use a local installation with API and web published only on loopback. Standard
+  Compose publishes both HTTP entry points on `127.0.0.1`; native npm dev/start
+  commands also bind loopback. The web Dockerfile explicitly overrides Next's
+  listener to `0.0.0.0` **inside** its container, behind the loopback host publishing.
 - Set `CHATGPT_PLAN_LOCAL_ENABLED=1` and `ASSERT_UPSTREAM_JUDGE_ENABLED=1`.
   It is always disabled when `APP_ENV=production`.
 - Compose publishes `127.0.0.1:1456` for the new callback. If using an override with

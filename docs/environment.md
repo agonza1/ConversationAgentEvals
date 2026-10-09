@@ -40,6 +40,12 @@ WEB_PORT=3012
 
 The default Compose demo does not require Postgres. It uses SQLite through the `COMPOSE_DATABASE_URL` default baked into `docker-compose.yml`.
 
+API and web HTTP ports in the standard local Compose stack are published on
+`127.0.0.1`, not all host interfaces. Native npm API/web development and web start
+commands also bind loopback. Keep these bindings when enabling
+[local ChatGPT-plan judging](chatgpt-plan-oauth.md); a public proxy or Compose port
+override requires a separately authenticated deployment with local OAuth disabled.
+
 Use these only for Compose customization or the `persistence` profile:
 
 ```bash

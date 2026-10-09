@@ -1,15 +1,33 @@
 import asyncio
 import json
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import jwt
 import pytest
+import yaml
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
 from app.services.llm_providers import chatgpt_plan as cp
 from app.integrations import chatgpt_assert_cli as transport
+
+
+def test_standard_local_http_entry_points_bind_loopback():
+    root = Path(__file__).resolve().parents[3]
+    compose = yaml.safe_load((root / 'docker-compose.yml').read_text(encoding='utf-8'))
+    assert '127.0.0.1:${API_PORT:-8025}:8000' in compose['services']['api']['ports']
+    assert '127.0.0.1:${PORT:-3012}:3000' in compose['services']['web']['ports']
+    assert '127.0.0.1:1456:1456' in compose['services']['api']['ports']
+    for service, target in [('api', '8000'), ('web', '3000')]:
+        assert all(port.startswith('127.0.0.1:') for port in compose['services'][service]['ports']
+                   if port.endswith(':' + target))
+    scripts = json.loads((root / 'package.json').read_text(encoding='utf-8'))['scripts']
+    assert '--host 127.0.0.1' in scripts['dev:api']
+    web_scripts = json.loads((root / 'apps/web/package.json').read_text(encoding='utf-8'))['scripts']
+    assert '--hostname 127.0.0.1' in web_scripts['dev']
+    assert '--hostname 127.0.0.1' in web_scripts['start']
 
 
 @pytest.fixture

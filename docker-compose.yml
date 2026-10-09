@@ -60,7 +60,8 @@ services:
       LISTENER_TURN_SHARED_SECRET: ${LISTENER_TURN_SHARED_SECRET:-}
       APP_ENV: ${APP_ENV:-development}
     ports:
-      - "${API_PORT:-8025}:8000"
+      # This local control plane is not authenticated for public network use.
+      - "127.0.0.1:${API_PORT:-8025}:8000"
       # The Codex OAuth redirect URI is registered as localhost:1455. Keep the
       # host mapping fixed so Compose cannot advertise an unusable callback URL.
       - "1455:1455"
@@ -194,7 +195,8 @@ services:
       NEXT_PUBLIC_API_BASE_URL: http://localhost:${API_PORT:-8025}
       NEXT_PUBLIC_PIPECAT_SERVICE_URL: http://localhost:${PIPECAT_PORT:-8110}
     ports:
-      - "${PORT:-3012}:3000"
+      # Same-origin API proxying must not expose the local controls remotely.
+      - "127.0.0.1:${PORT:-3012}:3000"
     depends_on:
       api:
         condition: service_healthy

@@ -2,10 +2,10 @@
   "name": "web",
   "private": true,
   "scripts": {
-    "dev": "NEXT_DIST_DIR=.next-dev next dev --port ${PORT:-3000}",
+    "dev": "NEXT_DIST_DIR=.next-dev next dev --hostname 127.0.0.1 --port ${PORT:-3000}",
     "dev:clean": "rm -rf .next-dev && npm run dev",
     "build": "next build",
-    "start": "next start",
+    "start": "next start --hostname 127.0.0.1",
     "lint": "eslint . --ext .js,.jsx,.ts,.tsx",
     "test:e2e": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers playwright test tests/product-request-flow.spec.ts --config playwright.config.ts",
     "test:e2e:browser": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers playwright test tests/product-flow.spec.ts --config playwright.config.ts"
