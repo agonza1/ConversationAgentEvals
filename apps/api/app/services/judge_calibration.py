@@ -83,7 +83,7 @@ def measure_calibration(dataset: list[dict[str, Any]], predictions: list[dict[st
             _count(per_check[check], expected, predicted, missing=check not in observed)
         _count(overall, _aggregate(row['labels'].values()),
                _aggregate(observed.get(check, 'not_observable') for check in row['labels']),
-               missing=case_id not in results)
+               missing=any(check not in observed for check in row['labels']))
     return {
         'schema_version': 1, 'split': split, 'case_count': len(selected),
         'labels_human_approved': all_human,
