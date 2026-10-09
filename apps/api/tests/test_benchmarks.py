@@ -1295,9 +1295,14 @@ def test_suite_simulate_async_endpoint_tracks_queued_to_terminal_lifecycle():
     assert completed['scenario_count'] == len(get_suite('call-center-voice-ai')['scenarios'])
 
 
-def test_suite_async_endpoint_retains_background_failures():
+def test_suite_async_endpoint_retains_background_failures(monkeypatch):
+    # Invalid targets now fail before admission; actual runtime failures must
+    # still finish the queued record with retained failure evidence.
+    def failing_simulation(payload):
+        raise ValueError('Synthetic background execution failure')
+    monkeypatch.setattr('app.routes.benchmarks.simulate_suite', failing_simulation)
     response = client.post(
-        '/api/benchmarks/suites/missing/simulate-async',
+        '/api/benchmarks/suites/call-center-voice-ai/simulate-async',
         json={'user_id': 'demo-user', 'project_id': 'qa-project'},
     )
 
@@ -1312,7 +1317,7 @@ def test_suite_async_endpoint_retains_background_failures():
     assert failed['completed_at'] is not None
     assert failed['progress']['phase'] == 'finished'
     assert failed['progress']['percent'] == 100
-    assert failed['suite_report']['error'] == 'Unknown benchmark suite: missing'
+    assert failed['suite_report']['error'] == 'Synthetic background execution failure'
     assert [transition['to'] for transition in failed['run_lifecycle']['transitions']] == ['queued', 'running', 'failed']
 
 

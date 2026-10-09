@@ -4,8 +4,10 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolated_judge_requests():
-    from app.db.database import SessionLocal
+    from app.db.database import SessionLocal, engine
     from app.models.entities import AssertJudgeRequestRecord
+    # Focused test runs do not necessarily collect modules that initialize DB.
+    AssertJudgeRequestRecord.__table__.create(bind=engine, checkfirst=True)
     with SessionLocal() as db:
         db.query(AssertJudgeRequestRecord).delete()
         db.commit()

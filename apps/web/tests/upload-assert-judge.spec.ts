@@ -37,7 +37,7 @@ for (const source of ['transcript', 'vcon'] as const) {
     });
     await page.goto('/eval');
     await expect(page.getByRole('heading', {name: 'Evaluate conversation evidence.'})).toBeVisible();
-    await expect(page.getByLabel('Evaluation scenario')).toBeEnabled();
+    await expect(page.getByLabel('Evaluation scenario', { exact: true })).toBeEnabled();
     let evidence: Buffer;
     if (source === 'vcon') {
       const sample = await request.get('/api/benchmarks/evidence/sample-vcon?suite_id=call-center-voice-ai&scenario_id=refund-policy-boundary');

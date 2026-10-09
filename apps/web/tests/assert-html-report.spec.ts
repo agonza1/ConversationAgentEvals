@@ -1,15 +1,15 @@
 import { expect, test } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import runFixture from '../../api/tests/fixtures/assert-html-report-run.json';
+import { fixturePython, refreshAssertFixture } from './assert-fixture-helper';
 
 const artifactDir = path.resolve(process.cwd(), 'artifacts/assert-html-report-export');
 const report = process.env.CAE_TEST_ASSERT_HTML
   ? readFileSync(process.env.CAE_TEST_ASSERT_HTML, 'utf8')
-  : execFileSync(path.resolve('apps/api/.venv/bin/python'), ['-c', `
+  : fixturePython(`
 import json
 from pathlib import Path
 from app.services.assert_html_report import render_assert_html_report,validate_saved_review
@@ -20,7 +20,7 @@ conv=run['conversations'][0]; review=conv['judge_reviews'][0]
 refresh_review(run,conv,review)
 p=validate_saved_review(run,conv,review,recorded_contract(conv))
 print(render_assert_html_report(run,conv,review,p))
-`], { encoding: 'utf8', env: { ...process.env, PYTHONPATH: [path.resolve('apps/api'),path.resolve('apps/api/tests')].join(path.delimiter) } });
+`);
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => window.localStorage.setItem('conversation-evals-demo-user', 'demo-user'));
@@ -132,16 +132,7 @@ test('real saved API result downloads through the browser without an export mock
   const seededDir = path.resolve('artifacts/execution-runs', run.execution_run_id);
   mkdirSync(seededDir, { recursive: true });
   // Materialize this synthetic fixture with the current frozen-input contract.
-  const refreshed = execFileSync(path.resolve('apps/api/.venv/bin/python'), ['-c', `
-import sys,json
-from assert_test_helpers import refresh_review
-run=json.load(sys.stdin)
-for conv in run['conversations']:
-    for review in conv.get('judge_reviews',[]): refresh_review(run,conv,review)
-print(json.dumps(run))
-`], {input: JSON.stringify(run), encoding: 'utf8', env: {...process.env,
-      PYTHONPATH: [path.resolve('apps/api'),path.resolve('apps/api/tests')].join(path.delimiter)}});
-  writeFileSync(path.join(seededDir, 'run.json'), refreshed);
+  writeFileSync(path.join(seededDir, 'run.json'), JSON.stringify(refreshAssertFixture(run)));
   const apiBase = process.env.PLAYWRIGHT_API_BASE_URL
     || `http://127.0.0.1:${process.env.PLAYWRIGHT_API_PORT || process.env.API_PORT || '8425'}`;
   const conversation = run.conversations[0];

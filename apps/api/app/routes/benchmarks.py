@@ -12,6 +12,7 @@ from app.schemas.benchmarks import BenchmarkRunRequest, BenchmarkSimulationReque
 from app.services.benchmark_service import (
     get_scenario_contract,
     _run_metadata,
+    _first_string,
     get_suite,
     get_suite_contract_manifest,
     list_suites,
@@ -19,6 +20,7 @@ from app.services.benchmark_service import (
     run_suite,
     simulate_scenario,
     simulate_suite,
+    validate_suite_evidence,
 )
 from app.services.benchmark_run_store import (
     DEFAULT_PROJECT_ID,
@@ -45,7 +47,8 @@ from app.services.benchmark_suite_run_store import (
 router = APIRouter(prefix='/api/benchmarks', tags=['benchmarks'])
 
 
-def _bind_benchmark_project(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+def _bind_benchmark_project(db: Session, payload: dict[str, Any], *,
+                            suite_run: bool = False, simulation: bool = False) -> dict[str, Any]:
     """Resolve the exact project before any evidence-derived run ID is computed.
 
     The DB-backed UUID is part of the run fingerprint and must never first
@@ -53,6 +56,29 @@ def _bind_benchmark_project(db: Session, payload: dict[str, Any]) -> dict[str, A
     for direct, simulated, suite, and queued benchmark executions.
     """
     from app.services.product_service import ensure_execution_product_project_id
+
+    validation_payload = payload
+    if not suite_run and not simulation:
+        # vCon evidence can carry its own target IDs; use the same read-only
+        # normalization as run_scenario rather than requiring explicit IDs.
+        from app.services.assert_adapter import normalize_assert_payload
+        from app.services.vcon_evidence import intake_vcon
+        validation_payload, _ = normalize_assert_payload(payload)
+        validation_payload, _ = intake_vcon(validation_payload)
+    suite_id = _first_string(validation_payload, 'suite_id', 'suiteId')
+    scenario_id = _first_string(validation_payload, 'scenario_id', 'scenarioId')
+    if not suite_id:
+        raise ValueError('suite_id is required')
+    suite = get_suite(suite_id)
+    if suite is None:
+        raise ValueError(f'Unknown benchmark suite: {suite_id}')
+    if suite_run:
+        if not simulation:
+            validate_suite_evidence(suite, payload)
+    elif not scenario_id:
+        raise ValueError('scenario_id is required')
+    elif get_scenario_contract(suite_id, scenario_id) is None:
+        raise ValueError(f'Unknown benchmark scenario: {suite_id}/{scenario_id}')
 
     metadata = _run_metadata(payload)
     user_id = metadata.get('user_id') or DEFAULT_USER_ID
@@ -311,7 +337,7 @@ def enqueue_benchmark_suite_run(
     merged_payload = payload.model_dump()
     merged_payload['suite_id'] = suite_id
     try:
-        merged_payload = _bind_benchmark_project(db, merged_payload)
+        merged_payload = _bind_benchmark_project(db, merged_payload, suite_run=True)
         suite_run_id = _queued_suite_run_id(suite_id=suite_id, payload=merged_payload)
         queued_record = create_benchmark_suite_run_record(
             db=db,
@@ -336,7 +362,7 @@ def enqueue_benchmark_suite_simulation(
     merged_payload = payload.model_dump()
     merged_payload['suite_id'] = suite_id
     try:
-        merged_payload = _bind_benchmark_project(db, merged_payload)
+        merged_payload = _bind_benchmark_project(db, merged_payload, suite_run=True, simulation=True)
         suite_run_id = _queued_suite_run_id(suite_id=suite_id, payload=merged_payload)
         queued_record = create_benchmark_suite_run_record(
             db=db,
@@ -366,7 +392,7 @@ def run_benchmark_suite(suite_id: str, payload: BenchmarkSuiteRunRequest, db: Se
     merged_payload = payload.model_dump()
     merged_payload['suite_id'] = suite_id
     try:
-        suite_report = run_suite(_bind_benchmark_project(db, merged_payload))
+        suite_report = run_suite(_bind_benchmark_project(db, merged_payload, suite_run=True))
         persist_benchmark_suite_run(db=db, suite_report=suite_report)
         for report in suite_report.get('scenario_reports', []):
             if isinstance(report, dict):
@@ -379,7 +405,7 @@ def run_benchmark_suite(suite_id: str, payload: BenchmarkSuiteRunRequest, db: Se
 @router.post('/simulate')
 def simulate_benchmark(payload: BenchmarkSimulationRequest, db: Session = Depends(get_db)):
     try:
-        simulation = simulate_scenario(_bind_benchmark_project(db, payload.model_dump()))
+        simulation = simulate_scenario(_bind_benchmark_project(db, payload.model_dump(), simulation=True))
         persist_benchmark_run(db=db, report=simulation['benchmark_report'], transcript=simulation['transcript'])
         return simulation
     except ValueError as exc:
@@ -392,7 +418,7 @@ def simulate_benchmark_suite(suite_id: str, payload: BenchmarkSimulationRequest,
     merged_payload = payload.model_dump()
     merged_payload['suite_id'] = suite_id
     try:
-        simulation = simulate_suite(_bind_benchmark_project(db, merged_payload))
+        simulation = simulate_suite(_bind_benchmark_project(db, merged_payload, suite_run=True, simulation=True))
         persist_benchmark_suite_run(db=db, suite_report=simulation)
         for scenario_run in simulation.get('scenario_runs', []):
             if isinstance(scenario_run, dict) and isinstance(scenario_run.get('benchmark_report'), dict):
@@ -425,7 +451,7 @@ def simulate_benchmark_scenario(suite_id: str, scenario_id: str, payload: Benchm
     merged_payload['suite_id'] = suite_id
     merged_payload['scenario_id'] = scenario_id
     try:
-        simulation = simulate_scenario(_bind_benchmark_project(db, merged_payload))
+        simulation = simulate_scenario(_bind_benchmark_project(db, merged_payload, simulation=True))
         persist_benchmark_run(db=db, report=simulation['benchmark_report'], transcript=simulation['transcript'])
         return simulation
     except ValueError as exc:

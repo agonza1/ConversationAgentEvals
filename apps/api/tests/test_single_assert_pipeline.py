@@ -14,6 +14,33 @@ from app.services.assert_review_status import saved_assert_review_freshness
 from app.services.design_enforcement import evaluate_design
 
 
+@pytest.mark.parametrize('endpoint,extra', [
+    ('/run', {'suite_id': 'unknown-suite', 'scenario_id': 'unknown', 'transcript': 'User: Test'}),
+    ('/run', {'suite_id': 'call-center-voice-ai', 'scenario_id': 'unknown', 'transcript': 'User: Test'}),
+    ('/simulate', {'suite_id': 'unknown-suite', 'scenario_id': 'unknown'}),
+    ('/simulate', {'suite_id': 'call-center-voice-ai', 'scenario_id': 'unknown'}),
+    ('/unknown-suite/run', {}),
+    ('/unknown-suite/run-async', {}),
+    ('/unknown-suite/simulate', {}),
+    ('/unknown-suite/simulate-async', {}),
+    ('/call-center-voice-ai/run', {}),
+    ('/call-center-voice-ai/run-async', {}),
+    ('/call-center-voice-ai/run-async', {'scenario_evidence': {'refund-policy-boundary': {}}}),
+])
+def test_invalid_benchmark_does_not_create_orphan_project(assert_pipeline, endpoint, extra):
+    from app.models.entities import ProductProject
+    p = assert_pipeline
+    user, project = 'invalid-benchmark-owner', 'invalid-benchmark-project'
+    with SessionLocal() as db:
+        assert db.query(ProductProject).filter_by(user_id=user, project_key=project).count() == 0
+    response = p.client.post('/api/benchmarks' + endpoint,
+                             json={'user_id': user, 'project_id': project, **extra})
+    assert response.status_code in {404, 422}, response.text
+    with SessionLocal() as db:
+        assert db.query(ProductProject).filter_by(user_id=user, project_key=project).count() == 0
+    assert not p.calls
+
+
 def test_first_benchmark_binding_is_stable_on_repeat_and_saved_judge(assert_pipeline):
     """Persist a new project identity before hashing any benchmark artifacts."""
     from app.models.entities import ProductProject
@@ -41,6 +68,20 @@ def test_first_benchmark_binding_is_stable_on_repeat_and_saved_judge(assert_pipe
     assert repeat_judge.json()['review_id'] == first_judge.json()['review_id']
     assert repeat_judge.json()['reused'] is True
     assert len(p.calls) == 1 and p.spent() == 10
+
+
+def test_vcon_only_target_and_whitespace_aliases_still_evaluate(assert_pipeline):
+    p = assert_pipeline
+    sample = p.client.get('/api/benchmarks/evidence/sample-vcon', params={
+        'suite_id': 'call-center-voice-ai', 'scenario_id': 'refund-policy-boundary'}).json()
+    response = p.client.post('/api/benchmarks/run', json={
+        'vcon': sample, 'user_id': 'vcon-target-owner', 'project_id': 'vcon-target-project'})
+    assert response.status_code == 200, response.text
+    aliases = p.client.post('/api/benchmarks/run', json={
+        'suiteId': ' call-center-voice-ai ', 'scenarioId': ' refund-policy-boundary ',
+        'transcript': 'User: Refund? Agent: Review is pending.',
+        'user_id': 'alias-target-owner', 'project_id': 'alias-target-project'})
+    assert aliases.status_code == 200, aliases.text
 
 
 def test_equal_project_keys_keep_distinct_bound_benchmark_identifiers(assert_pipeline):

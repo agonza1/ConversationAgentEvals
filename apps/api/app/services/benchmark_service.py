@@ -1310,19 +1310,7 @@ def run_suite(request: Any) -> dict[str, Any]:
     if not suite:
         raise ValueError(f'Unknown benchmark suite: {suite_id}')
 
-    evidence_by_scenario = (
-        payload.get('scenario_attempts')
-        or payload.get('scenarioAttempts')
-        or payload.get('scenario_evidence')
-        or payload.get('scenarioEvidence')
-        or {}
-    )
-    if not isinstance(evidence_by_scenario, dict) or not evidence_by_scenario:
-        raise ValueError('scenario_evidence is required for suite runs')
-
-    missing_scenarios = [scenario['id'] for scenario in suite['scenarios'] if scenario['id'] not in evidence_by_scenario]
-    if missing_scenarios:
-        raise ValueError(f"Missing evidence for scenarios: {', '.join(missing_scenarios)}")
+    evidence_by_scenario = validate_suite_evidence(suite, payload)
 
     scenario_reports = []
     for scenario in suite['scenarios']:
@@ -1344,6 +1332,33 @@ def run_suite(request: Any) -> dict[str, Any]:
             report = run_scenario(attempt_payload)
             retry_of_run_id = retry_of_run_id or report.get('run_id')
             scenario_reports.append(report)
+
+    return _suite_report(suite, suite_id, payload, scenario_reports)
+
+
+def validate_suite_evidence(suite: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate all supplied scenario containers before project/queue mutations."""
+    evidence_by_scenario = (
+        payload.get('scenario_attempts')
+        or payload.get('scenarioAttempts')
+        or payload.get('scenario_evidence')
+        or payload.get('scenarioEvidence')
+        or {}
+    )
+    if not isinstance(evidence_by_scenario, dict) or not evidence_by_scenario:
+        raise ValueError('scenario_evidence is required for suite runs')
+
+    missing_scenarios = [scenario['id'] for scenario in suite['scenarios'] if scenario['id'] not in evidence_by_scenario]
+    if missing_scenarios:
+        raise ValueError(f"Missing evidence for scenarios: {', '.join(missing_scenarios)}")
+
+    for scenario in suite['scenarios']:
+        _suite_scenario_attempt_payloads(evidence_by_scenario[scenario['id']], scenario['id'])
+    return evidence_by_scenario
+
+
+def _suite_report(suite: dict[str, Any], suite_id: str, payload: dict[str, Any],
+                  scenario_reports: list[dict[str, Any]]) -> dict[str, Any]:
 
     passing_reports = [report for report in scenario_reports if report.get('verdict') == 'pass']
     measured_scores = [report['overall_score'] for report in scenario_reports if report.get('overall_score') is not None]
