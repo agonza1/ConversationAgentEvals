@@ -39,6 +39,16 @@ def import_benchmark_review(db: Session, *, user_id: str, benchmark_run_id: str)
                 'findings': {key: report.get(key) for key in ('verdict','overall_score','design_enforcement',
                     'programmatic_check_results','behavior_results')},
                 'target': report.get('run_metadata')}
+    # BenchmarkRunRequest accepts dictionaries, strings and lists for final_state.
+    # Preserve opaque values as reported evidence, not as a fabricated state
+    # snapshot that could be mistaken for proof of an executed business action.
+    raw_final_state = report.get('final_state')
+    structured_final_state = deepcopy(raw_final_state) if isinstance(raw_final_state, dict) else {}
+    unstructured_final_state = (
+        deepcopy(raw_final_state)
+        if isinstance(raw_final_state, (str, list)) and bool(raw_final_state)
+        else None
+    )
     run_id = 'import-' + content_hash(identity)[:32]
     conversation_id = run_id + '-conversation'
     from app.services.execution_runner import _compact_evaluation_findings
@@ -46,7 +56,9 @@ def import_benchmark_review(db: Session, *, user_id: str, benchmark_run_id: str)
         conversation_id=conversation_id, execution_run_id=run_id, suite_id=record['suite_id'],
         scenario_id=record['scenario_id'], scenario_title=report.get('scenario_title'),
         mode='text_callable', status='completed', transcript=transcript,
-        action_trace=deepcopy(report.get('action_trace') or []), final_state=deepcopy(report.get('final_state') or {}),
+        action_trace=deepcopy(report.get('action_trace') or []), final_state=structured_final_state,
+        **({'unstructured_final_state_evidence': unstructured_final_state}
+           if unstructured_final_state is not None else {}),
         evaluation_findings=_compact_evaluation_findings(report), verdict=report.get('verdict'),
         score=report.get('overall_score'), ietf_vcon_export=deepcopy(report.get('ietf_vcon_export')),
         vcon_export=deepcopy(report.get('vcon_export')), evidence_source='imported_benchmark',
