@@ -253,3 +253,39 @@ def test_non_openai_readiness_uses_pinned_provider_adapter_without_a_model_probe
     assert judge.assert_judge_readiness()['ready'] is True
     assert validated == [{'model': 'ollama/example-local-model'}]
     assert not assert_pipeline.calls
+
+
+def test_provider_urls_are_not_persisted_in_assert_provenance(assert_pipeline, monkeypatch):
+    """The same routing identity must invalidate stale reviews without leaking gateways or credentials."""
+    from app.services import upstream_assert_judge as judge
+    import re
+
+    pipeline = assert_pipeline
+    secret = 'do-not-store-provider-credential-321'
+    hostname = 'private-provider-gateway.internal'
+    url = f'https://service-user:{secret}@{hostname}/v1?token={secret}'
+    monkeypatch.setenv('OPENAI_BASE_URL', url)
+    monkeypatch.setenv('VERTEXAI_PROJECT', 'private-cloud-project-123')
+
+    configuration = judge.judge_configuration('openai/gpt-4.1-mini', 1)
+    identity = configuration['provider_endpoint_identity_sha256']
+    assert re.fullmatch(r'[0-9a-f]{64}', identity)
+    assert configuration == judge.judge_configuration('openai/gpt-4.1-mini', 1)
+    assert 'provider_endpoints' not in configuration
+    for private_value in (secret, hostname, 'service-user', 'private-cloud-project-123'):
+        assert private_value not in json.dumps(configuration)
+
+    judged = pipeline.judge(pipeline.evaluate())
+    assert judged.status_code == 200, judged.text
+    response = judged.json()
+    run = execution_run_store.get_execution_run(response['execution_run_id'])
+    conversation = run['conversations'][0]
+    review = conversation['judge_reviews'][0]
+    assert review['judge_result']['provenance']['configuration'] == configuration
+    for private_value in (secret, hostname, 'service-user', 'private-cloud-project-123'):
+        assert private_value not in json.dumps(response)
+        assert private_value not in json.dumps(review)
+
+    monkeypatch.setenv('OPENAI_BASE_URL', 'https://a-different-provider.internal/v1')
+    assert judge.judge_configuration('openai/gpt-4.1-mini', 1)['provider_endpoint_identity_sha256'] != identity
+    assert saved_assert_review_freshness(run, conversation, review)['reason_code'] == 'grader_changed'
