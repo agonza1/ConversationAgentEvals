@@ -89,7 +89,8 @@ def collect_response(lines: Any) -> dict:
     """Never return partial text on a failed/incomplete/interrupted stream."""
     import json
     completed = None
-    deltas: list[str] = []
+    deltas: dict[tuple[int, int], str] = {}
+    done_text: dict[tuple[int, int], str] = {}
     messages: list[dict] = []
     refused = False
     for line in lines:
@@ -105,10 +106,15 @@ def collect_response(lines: Any) -> dict:
         if not isinstance(event, dict):
             raise ChatGPTPlanError('ChatGPT returned an invalid response event; no review was saved.')
         kind = event.get('type')
-        if kind == 'response.output_text.delta':
-            if not isinstance(event.get('delta'), str):
+        if kind in {'response.output_text.delta', 'response.output_text.done'}:
+            key = (event.get('output_index', 0), event.get('content_index', 0))
+            field = 'delta' if kind.endswith('.delta') else 'text'
+            if any(type(index) is not int or index < 0 for index in key) or not isinstance(event.get(field), str):
                 raise ChatGPTPlanError('ChatGPT returned invalid streamed text; no review was saved.')
-            deltas.append(event['delta'])
+            if field == 'text':
+                done_text[key] = event['text']
+            else:
+                deltas[key] = deltas.get(key, '') + event['delta']
         if kind in {'response.refusal.delta', 'response.refusal.done'}:
             refused = True
         if kind == 'response.output_item.done':
@@ -142,9 +148,10 @@ def collect_response(lines: Any) -> dict:
     if not has_text(output):
         if has_text(messages):
             completed = {**completed, 'output': [*output, *messages]}
-        elif deltas:
+        elif deltas or done_text:
+            parts = {**deltas, **done_text}
             completed = {**completed, 'output': [*output, {'type': 'message',
-                'content': [{'type': 'output_text', 'text': ''.join(deltas)}]}]}
+                'content': [{'type': 'output_text', 'text': ''.join(parts[key] for key in sorted(parts))}]}]}
     return completed
 
 

@@ -541,11 +541,15 @@ def test_partial_stream_never_produces_review(terminal):
     with pytest.raises(cp.ChatGPTPlanError): transport.collect_response(['data: ' + json.dumps(e) for e in events])
 
 
-@pytest.mark.parametrize('snapshot', ['empty', 'item_done', 'terminal'])
+@pytest.mark.parametrize('snapshot', ['empty', 'item_done', 'terminal', 'text_done', 'text_done_only'])
 def test_completed_stream_retains_text_without_duplicate_deltas(snapshot):
     message = {'type': 'message', 'content': [{'type': 'output_text', 'text': '{"ok":true}'}]}
     events = [{'type': 'response.output_text.delta', 'delta': '{"ok":'},
               {'type': 'response.output_text.delta', 'delta': 'true}'}]
+    if snapshot == 'text_done_only':
+        events = []
+    if snapshot in {'text_done', 'text_done_only'}:
+        events.append({'type': 'response.output_text.done', 'text': '{"ok":true}'})
     if snapshot == 'item_done':
         events.append({'type': 'response.output_item.done', 'item': message})
     events.append({'type': 'response.completed', 'response': {'id': 'resp-test', 'status': 'completed',
@@ -554,6 +558,17 @@ def test_completed_stream_retains_text_without_duplicate_deltas(snapshot):
     result = transport.collect_response(['data: ' + json.dumps(e) for e in events])
     assert result['output'] == [message]
     assert result['usage']['total_tokens'] == 11
+
+
+def test_done_text_replaces_only_matching_delta_part_and_preserves_order():
+    events = [
+        {'type': 'response.output_text.delta', 'output_index': 1, 'content_index': 0, 'delta': 'true}'},
+        {'type': 'response.output_text.delta', 'output_index': 0, 'content_index': 0, 'delta': '{"wrong":'},
+        {'type': 'response.output_text.done', 'output_index': 0, 'content_index': 0, 'text': '{"ok":'},
+        {'type': 'response.completed', 'response': {'status': 'completed', 'output': []}},
+    ]
+    result = transport.collect_response(['data: ' + json.dumps(e) for e in events])
+    assert result['output'][0]['content'][0]['text'] == '{"ok":true}'
 
 
 @pytest.mark.parametrize('location', ['delta', 'item_done', 'terminal'])
