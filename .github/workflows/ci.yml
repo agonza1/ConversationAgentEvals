@@ -18,6 +18,7 @@ jobs:
         with:
           python-version: "3.13"
       - run: npm ci
+      - run: npm run docker:check
       - run: python -m venv apps/api/.venv
       - run: apps/api/.venv/bin/python -m pip install -r apps/api/requirements.txt
       - run: apps/api/.venv/bin/python -m pip check

@@ -135,7 +135,7 @@ async function main() {
   });
   reservedPorts.add(webPort);
 
-  const apiBaseUrl = process.env.API_BASE_URL || `http://localhost:${apiPort}`;
+  const apiBaseUrl = process.env.API_BASE_URL || `http://127.0.0.1:${apiPort}`;
   const pipecatServiceUrl = process.env.PIPECAT_SERVICE_URL || `http://localhost:${pipecatPort}`;
 
   process.on('SIGINT', () => shutdown(0));
@@ -143,9 +143,9 @@ async function main() {
 
   console.log('\n🚀 LiveSalesAIPresenter dev stack');
   console.log(`   API      ${apiBaseUrl}`);
-  console.log(`   Web      http://localhost:${webPort}`);
+  console.log(`   Web      http://127.0.0.1:${webPort}`);
   console.log(`   Pipecat  ${pipecatServiceUrl}`);
-  console.log(`\n👉 Open the operator UI at http://localhost:${webPort}`);
+  console.log(`\n👉 Open the operator UI at http://127.0.0.1:${webPort}`);
   console.log('   Use the printed URL above if default ports were busy.\n');
 
   start('api', 'npm', ['run', 'dev:api'], root, {

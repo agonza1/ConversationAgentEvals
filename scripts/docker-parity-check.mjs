@@ -6,6 +6,8 @@ const compose = readFileSync(join(root, 'docker-compose.yml'), 'utf8');
 const envExample = readFileSync(join(root, '.env.example'), 'utf8');
 const webDockerfile = readFileSync(join(root, 'apps/web/Dockerfile'), 'utf8');
 const environmentDocs = readFileSync(join(root, 'docs/environment.md'), 'utf8');
+const rootScripts = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).scripts;
+const webScripts = JSON.parse(readFileSync(join(root, 'apps/web/package.json'), 'utf8')).scripts;
 
 const failures = [];
 
@@ -82,7 +84,8 @@ requireIncludes('seed service', seed, 'command: ["python", "-m", "app.seed"]');
 requireIncludes('seed service', seed, 'restart: "no"');
 
 const api = serviceBlock('api');
-requireIncludes('api service', api, '"${API_PORT:-8025}:8000"');
+requireIncludes('api service', api, '"127.0.0.1:${API_PORT:-8025}:8000"');
+requireIncludes('api service', api, '"127.0.0.1:1456:1456"');
 requireIncludes('api service', api, '"1455:1455"');
 requireNotIncludes('api service', api, 'OPENAI_CODEX_CALLBACK_PORT');
 requireIncludes('api service', api, 'PORT: 8000');
@@ -124,7 +127,7 @@ requireNotIncludes('pipecat service', pipecat, './apps/pipecat:/app');
 
 const web = serviceBlock('web');
 requireNotIncludes('web service', web, 'profiles:');
-requireIncludes('web service', web, '"${PORT:-3012}:3000"');
+requireIncludes('web service', web, '"127.0.0.1:${PORT:-3012}:3000"');
 requireIncludes('web service', web, 'args:');
 requireIncludes('web service', web, 'API_BASE_URL: http://api:8000');
 requireIncludes('web service', web, 'PIPECAT_SERVICE_URL: http://pipecat:8110');
@@ -174,6 +177,18 @@ requireIncludes('web Dockerfile', webDockerfile, 'npm run start -- --hostname 0.
 requireNotIncludes('web Dockerfile', webDockerfile, 'rm -rf .next && npm run build && npm run start');
 
 requireIncludes('compose volumes', compose, 'postgres_data:');
+
+requireIncludes('native API dev', rootScripts['dev:api'], '--host 127.0.0.1');
+requireIncludes('native web dev', webScripts.dev, '--hostname 127.0.0.1');
+requireIncludes('native web start', webScripts.start, '--hostname 127.0.0.1');
+for (const [name, target] of [['api', '8000'], ['web', '3000']]) {
+  for (const line of serviceBlock(name).split('\n')) {
+    if (line.trim().startsWith('- "') && line.trim().endsWith(`:${target}"`)
+        && !line.trim().startsWith('- "127.0.0.1:')) {
+      fail(`${name} HTTP publishing must bind loopback`);
+    }
+  }
+}
 
 if (failures.length > 0) {
   console.error('Docker parity check failed:');

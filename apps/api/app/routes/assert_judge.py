@@ -131,6 +131,7 @@ def judge_execution_conversation(
         response = retained if retained is not None else run_upstream_assert_judge(
             run=run, conversation=conversation, scenario_contract=scenario_contract,
             model_name=model, judge_n=payload.judge_n,
+            expected_input_fingerprint=fingerprint,
         )
         if response.get('status') != 'ready':
             raise UpstreamAssertJudgeFailed('ASSERT did not produce a completed review.')

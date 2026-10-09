@@ -12,6 +12,10 @@ OpenAI-backed ASSERT requires `OPENAI_API_KEY` or its `LLM_JUDGE_API_KEY` alias,
 
 ## Connect
 
+For API-key-free ASSERT judging, use the separate [ChatGPT-plan connection](chatgpt-plan-oauth.md)
+in Console Settings. It requires its own plan-use consent; the legacy execution
+connection documented here does not grant that permission.
+
 1. Start the app with `npm run dev`.
 2. Open the benchmark or target configuration UI.
 3. Choose **Connect OpenAI** and complete the browser sign-in.
