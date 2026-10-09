@@ -55,6 +55,60 @@ def test_uploaded_vcon_preserves_structured_evidence_and_uses_assert(assert_pipe
     assert len(p.calls) == 1 and 'assert_ai.cli' in p.calls[0]
 
 
+@pytest.mark.parametrize('final_state', [
+    'Refund review is pending approval.',
+    [{'phase': 'final', 'description': 'Pending refund review'}, 'not an execution receipt'],
+])
+def test_unstructured_final_state_is_retained_without_inventing_a_snapshot(assert_pipeline, final_state):
+    """Every accepted benchmark shape can reach ASSERT without becoming verified state."""
+    from pathlib import Path
+    import yaml
+
+    pipeline = assert_pipeline
+    report = pipeline.evaluate(final_state=final_state)
+    assert report['final_state'] == final_state
+    response = pipeline.judge(report)
+    assert response.status_code == 200, response.text
+    result = response.json()
+    conversation = execution_run_store.get_conversation(
+        result['execution_run_id'], result['conversation_id'])
+    assert conversation['final_state'] == {}
+    assert conversation['unstructured_final_state_evidence'] == final_state
+    assert len(pipeline.calls) == 1
+
+    command = pipeline.calls[0]
+    config_path = Path(command[command.index('--config') + 1])
+    config = yaml.safe_load(config_path.read_text())['pipeline']['judge']
+    inference = json.loads(Path(config['inference_set_path']).read_text())
+    events_json = json.dumps(inference, sort_keys=True)
+    assert 'cae_unverified_final_state_evidence' in events_json
+    assert 'cae_final_state_snapshot' not in events_json
+    assert '"execution_verified": false' in events_json
+    assert inference['dimensions']['evidence_level'] == 'black_box'
+
+
+def test_structured_final_state_is_still_retained_as_observed_state(assert_pipeline):
+    from pathlib import Path
+    import yaml
+
+    pipeline = assert_pipeline
+    final_state = {'complete': False, 'outcome': 'refund_pending', 'case_id': 'case-123'}
+    report = pipeline.evaluate(final_state=final_state)
+    response = pipeline.judge(report)
+    assert response.status_code == 200, response.text
+    ids = response.json()
+    conversation = execution_run_store.get_conversation(
+        ids['execution_run_id'], ids['conversation_id'])
+    assert conversation['final_state'] == final_state
+    assert 'unstructured_final_state_evidence' not in conversation
+    command = pipeline.calls[0]
+    config = yaml.safe_load(Path(command[command.index('--config') + 1]).read_text())['pipeline']['judge']
+    inference = json.loads(Path(config['inference_set_path']).read_text())
+    events_json = json.dumps(inference, sort_keys=True)
+    assert 'cae_final_state_snapshot' in events_json
+    assert 'cae_unverified_final_state_evidence' not in events_json
+
+
 def test_judge_rejects_client_supplied_report_and_other_owner_before_spending(assert_pipeline):
     p = assert_pipeline
     report = p.evaluate()
