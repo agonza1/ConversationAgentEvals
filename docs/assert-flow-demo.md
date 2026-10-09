@@ -178,7 +178,7 @@ ASSERT judges the evidence against the scenario contract and returns the result 
 
 ```json
 {
-  "verdict": "pass",
+  "verdict": "needs_review",
   "score": 100,
   "completed_actions": [
     "verify patient identity",

@@ -48,7 +48,7 @@ class FakeOpenAIProvider:
             'status': 'disconnected',
             'email': None,
             'account_id': None,
-            'message': 'Connect OpenAI (Codex OAuth) to unlock the local LLM judge.',
+            'message': 'Connect OpenAI (Codex OAuth) for agent execution. ASSERT reviews use separately configured provider credentials.',
             'last_error': None,
         }
 
@@ -117,7 +117,7 @@ def test_openai_provider_status_and_oauth_start_disconnect():
     assert connected.json()['email'] == 'judge@example.com'
 
     config = client.get('/api/product/config')
-    assert config.json()['llm_judge_status'] == 'enabled'
+    assert config.json()['llm_judge_status'] == 'gated'
 
     disconnected = client.post('/api/product/providers/openai/disconnect')
     assert disconnected.status_code == 200
@@ -138,60 +138,18 @@ def test_status_reports_api_key_execution_precedence_even_with_oauth_connected(m
     assert response.json()['execution_default_model'] == 'gpt-4.1-mini'
 
 
-def test_llm_judge_blocks_without_provider_and_runs_when_connected(tmp_path, monkeypatch):
-    from app.services import product_service
-
-    monkeypatch.setattr(product_service, '_judge_spend_path', lambda: tmp_path / 'llm_judge_spend.json')
-    set_provider_for_tests('openai', FakeOpenAIProvider(connected=False))
-    blocked = client.post('/api/product/judge', json={'plan': 'free', 'report': {'overall_score': 82}})
-    assert blocked.status_code == 200
-    blocked_payload = blocked.json()
-    assert blocked_payload['status'] == 'blocked'
-    assert blocked_payload['block_reason'] == 'provider'
-    assert 'Connect OpenAI' in blocked_payload['message']
-
-    set_provider_for_tests(
-        'openai',
-        FakeOpenAIProvider(
-            connected=True,
-            completion='{"agrees": true, "rationale": "Identity verification is present.", "next_action": "Keep the scenario."}',
-        ),
-    )
-    ready = client.post(
-        '/api/product/judge',
-        json={
-            'plan': 'free',
-            'report': {
-                'suite_id': 'call-center-voice-ai',
-                'scenario_id': 'billing-address-change',
-                'verdict': 'pass',
-                'overall_score': 91,
-                'missing_actions': [],
-                'evidence_spans': [{'source': 'transcript', 'text': 'Verified customer identity'}],
-                'evidence_citations': [{'kind': 'span', 'text': 'Created support ticket'}],
-            },
-            'transcript': 'Agent: verified customer identity.',
-        },
-    )
-    assert ready.status_code == 200
-    payload = ready.json()
-    assert payload['status'] == 'ready'
-    assert payload['provider'] == 'openai_codex'
-    assert payload['model']
-    assert payload['judge_result']['agrees'] is True
-    assert 'Identity verification' in payload['judge_result']['rationale']
-    assert payload['judge_result']['next_action'] == 'Keep the scenario.'
-    assert any('Verified customer identity' in item or 'Created support ticket' in item for item in payload['evidence_citations'])
-    assert payload['prompt_preview']
-    assert 'Deterministic findings' in payload['prompt_preview']
-    assert payload['spend_control']['spent_daily_credits'] == 10
-    assert payload['spend_control']['remaining_daily_credits'] == 190
-
-    again = client.post(
-        '/api/product/judge',
-        json={'plan': 'free', 'report': {'verdict': 'pass', 'overall_score': 91}, 'transcript': 'ok'},
-    )
-    assert again.json()['spend_control']['spent_daily_credits'] == 20
+def test_assert_judge_requires_api_credentials_even_when_oauth_connected(assert_pipeline, monkeypatch):
+    p = assert_pipeline
+    set_provider_for_tests('openai', FakeOpenAIProvider(connected=True))
+    report = p.evaluate()
+    monkeypatch.delenv('LLM_JUDGE_API_KEY')
+    assert p.judge(report).status_code == 503
+    assert p.spent() == 0
+    monkeypatch.setenv('OPENAI_API_KEY', 'synthetic-api-key')
+    result = p.judge(report)
+    assert result.status_code == 200, result.text
+    assert result.json()['provider'] == 'assert-ai'
+    assert p.spent() == 10
 
 
 def test_openai_codex_token_store_exchange_and_complete(tmp_path: Path, monkeypatch):

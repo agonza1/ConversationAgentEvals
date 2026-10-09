@@ -95,7 +95,8 @@ EVALUATION_FINDING_KEYS = (
     'failure_categories',
     'failure_modes',
     'suggested_fixes',
-    'scenario_contract',
+    'scenario_contract', 'scenario_contract_sha256', 'evaluation_contract_snapshot',
+    'evidence_assessment', 'semantic_review_required', 'heuristic_verdict',
     'expected_final_state',
 )
 

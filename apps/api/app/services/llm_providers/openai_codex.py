@@ -149,7 +149,7 @@ class OpenAICodexProvider:
                 'status': 'disconnected',
                 'email': None,
                 'account_id': None,
-                'message': 'Connect OpenAI (Codex OAuth) to unlock the local LLM judge.',
+                'message': 'Connect OpenAI (Codex OAuth) for agent execution. ASSERT reviews use separately configured provider credentials.',
                 'last_error': self._last_error,
             }
         try:

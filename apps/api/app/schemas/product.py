@@ -41,6 +41,7 @@ class ProductConfig(BaseModel):
     auth: FirebaseAuthConfig
     voice_status: Literal['planned', 'gated', 'enabled']
     llm_judge_status: Literal['planned', 'gated', 'enabled']
+    assert_judge: dict[str, Any] = Field(default_factory=dict)
 
 
 class CheckoutRequest(BaseModel):
@@ -286,23 +287,6 @@ class ProductAuditEventResponse(BaseModel):
     created_at: str
 
 
-class JudgeRequest(BaseModel):
-    plan: PlanId = 'free'
-    report: dict[str, Any] = Field(default_factory=dict)
-    transcript: str | None = None
-    user_id: str | None = None
-    project_id: str | None = None
-    execution_run_id: str | None = None
-    conversation_id: str | None = None
-
-    @model_validator(mode='after')
-    def validate_execution_review_target(self) -> 'JudgeRequest':
-        target_values = (self.execution_run_id, self.conversation_id)
-        if any(target_values) and not all(target_values):
-            raise ValueError('execution_run_id and conversation_id must be provided together')
-        if all(target_values) and not self.user_id:
-            raise ValueError('user_id is required when reviewing an execution conversation')
-        return self
 
 
 class JudgeProposedEvaluation(BaseModel):

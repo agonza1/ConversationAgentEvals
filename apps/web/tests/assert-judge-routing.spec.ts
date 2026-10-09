@@ -21,6 +21,10 @@ async function checkAssertJudgeRouting(
   evidenceLevel: string | null | undefined,
   evidenceLabel: string,
 ) {
+  await page.route('**/api/assert/readiness', route => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify({engine: 'assert', ready: true,
+      enabled: true, model: 'openai/gpt-4.1-mini', message: 'Synthetic ready fixture'})
+  }));
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
   });
@@ -145,7 +149,7 @@ async function checkAssertJudgeRouting(
           ],
           judge_result: {
             agrees: true,
-            rationale: 'The transcript contains an unsupported refund claim.',
+            rationale: 'Refund execution cannot be verified from this evidence.',
             next_action: 'Review the refund claim and preserve the deterministic evidence gap.',
             provenance: {
               engine: 'assert',
@@ -153,14 +157,16 @@ async function checkAssertJudgeRouting(
               evidence_level: evidenceLevel,
               dimensions: {
                 policy_violation: true,
-                unsupported_operational_claim: true,
+                unsupported_operational_claim: false,
+                unverified_operational_outcome: true,
               },
               dimension_applicability: {
                 policy_violation: true,
-                unsupported_operational_claim: true,
+                unsupported_operational_claim: false,
+                unverified_operational_outcome: true,
               },
               dimension_justifications: {
-                policy_violation: 'The claimed refund is unsupported.',
+                policy_violation: 'Refund execution is unverified.',
                 unsupported_operational_claim: 'No matching tool result exists.',
               },
             },
@@ -181,7 +187,8 @@ async function checkAssertJudgeRouting(
             verdict: {
               dimensions: {
                 policy_violation: true,
-                unsupported_operational_claim: true,
+                unsupported_operational_claim: false,
+                unverified_operational_outcome: true,
               },
             },
           },
@@ -222,10 +229,10 @@ async function checkAssertJudgeRouting(
   await result.getByText('Semantic rationale', { exact: true }).click();
   await result.getByText('Selected review proposal', { exact: true }).click();
   await expect(result).toContainText('openai/gpt-4.1-mini');
-  await expect(result).toContainText('The transcript contains an unsupported refund claim.');
+  await expect(result).toContainText('Refund execution cannot be verified from this evidence.');
   await expect(result).toContainText('No refund tool result or final-state receipt was recorded.');
   await expect(result).toContainText(`ASSERT 0.3.0 · ${evidenceLabel}`);
-  await expect(result).toContainText('unsupported operational claim');
+  await expect(result).toContainText('unverified operational outcome');
   await expect(result).toContainText('Flagged');
   if (evidenceLevel !== 'black_box') {
     await expect(result).not.toContainText('Transcript-only evidence');

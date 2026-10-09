@@ -7,7 +7,7 @@ import { EvidenceTimeline } from './EvidenceTimeline';
 import { DesignResults } from './DesignResults';
 import { LiveRunFeedback, type LiveRunEvent } from './LiveRunFeedback';
 import { apiErrorMessage } from '@/lib/apiError';
-import { listProductProjects, type ProductProjectOption } from '@/lib/execution';
+import { listProductProjects, requestBenchmarkJudge, type ProductProjectOption, type AssertJudgeReadiness } from '@/lib/execution';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -54,6 +54,8 @@ interface BenchmarkScenario {
 }
 
 interface BenchmarkReport {
+  semantic_review_required?: boolean;
+  heuristic_verdict?: string;
   run_id?: string;
   suite_id?: string;
   scenario_id?: string;
@@ -148,6 +150,7 @@ interface RunLifecycle {
 }
 
 interface RunMetadata {
+  product_project_id?: string;
   agent_version?: string;
   prompt_version?: string;
   model_name?: string;
@@ -256,6 +259,7 @@ interface UsageRule {
 }
 
 interface ProductConfig {
+  assert_judge?: AssertJudgeReadiness;
   pricing: PricingPlan[];
   usage_rules: UsageRule[];
   auth: {
@@ -528,6 +532,10 @@ interface JudgeStructuredResult {
 }
 
 interface JudgeGate {
+  review_id?: string | null;
+  execution_run_id?: string;
+  conversation_id?: string;
+  reused?: boolean;
   status: 'blocked' | 'ready';
   required_plan: PricingPlan['id'];
   credits: number;
@@ -539,7 +547,7 @@ interface JudgeGate {
   model?: string | null;
   prompt_preview?: string | null;
   latency_ms?: number | null;
-  block_reason?: 'provider' | 'budget' | 'provider_error' | null;
+  block_reason?: 'provider' | 'budget' | 'provider_error' | 'evidence' | null;
   spend_control?: {
     estimated_credits?: number;
     daily_credit_limit?: number;
@@ -1393,15 +1401,6 @@ async function disconnectOpenAIProvider() {
   );
 }
 
-async function requestJudge(payload: { plan: PricingPlan['id']; report: BenchmarkReport; transcript: string; user_id?: string; project_id?: string }) {
-  return handleJson<JudgeGate>(
-    await fetch(`${getApiBase()}/api/product/judge`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }),
-  );
-}
 
 async function listAuditEvents(userId: string, projectId: string) {
   const params = new URLSearchParams({ user_id: userId, project_id: projectId, limit: '8' });
@@ -1534,6 +1533,7 @@ function metadataEntries(metadata?: RunMetadata) {
     notes: 'Notes',
     user_id: 'User',
     project_id: 'Project',
+    product_project_id: 'Project identity',
   };
 
   return (Object.keys(labels) as Array<keyof RunMetadata>)
@@ -2313,6 +2313,8 @@ export function BenchmarkRunner({
   const [productProjectId, setProductProjectId] = useState('');
   const [plan, setPlan] = useState<PricingPlan['id']>('free');
   const [productConfig, setProductConfig] = useState<ProductConfig | null>(null);
+  const judgeRequestId = useRef<string | undefined>(undefined);
+  useEffect(() => { judgeRequestId.current = undefined; }, [report?.run_id]);
   const [savedRuns, setSavedRuns] = useState<SavedRun[]>([]);
   const [suiteSavedRuns, setSuiteSavedRuns] = useState<SavedRun[]>([]);
   const [auditEvents, setAuditEvents] = useState<ProductAuditEvent[]>([]);
@@ -3205,7 +3207,9 @@ export function BenchmarkRunner({
     setIsJudging(true);
     setShowJudgePrompt(false);
     try {
-      const next = await requestJudge({ plan, report, transcript, user_id: userId || undefined, project_id: userId ? projectId : undefined });
+      if (!report.run_id) throw new Error('Evaluate and retain this evidence before requesting an ASSERT review.');
+      if (judgeGate?.status === 'ready') judgeRequestId.current = crypto.randomUUID();
+      const next = await requestBenchmarkJudge({ user_id: userId, benchmark_run_id: report.run_id, request_id: judgeRequestId.current });
       setJudgeGate(next);
       if (next.status === 'ready') {
         setReport((current) =>
@@ -3214,6 +3218,7 @@ export function BenchmarkRunner({
                 ...current,
                 llm_judge: {
                   status: next.status,
+                  review_id: next.review_id, execution_run_id: next.execution_run_id, conversation_id: next.conversation_id,
                   provider: next.provider ?? null,
                   model: next.model ?? null,
                   message: next.message,
@@ -3241,6 +3246,7 @@ export function BenchmarkRunner({
       });
     } finally {
       setIsJudging(false);
+      void fetchProductConfig().then(setProductConfig).catch(() => undefined);
     }
   }
 
@@ -3566,6 +3572,7 @@ export function BenchmarkRunner({
         ].filter(Boolean).join(' · ') || undefined,
         user_id: userId || undefined,
         project_id: projectId || undefined,
+        product_project_id: productProjectId || undefined,
       });
       const useStructured = view !== 'score' || includeStructuredEvidence;
       const nextReport = await runBenchmark({
@@ -3610,6 +3617,7 @@ export function BenchmarkRunner({
         notes: runNotes,
         user_id: userId || undefined,
         project_id: projectId || undefined,
+        product_project_id: productProjectId || undefined,
       });
       const simulation = await simulateBenchmark({
         suite_id: selectedSuite.id,
@@ -3798,6 +3806,7 @@ export function BenchmarkRunner({
         notes: runNotes,
         user_id: userId || undefined,
         project_id: projectId || undefined,
+        product_project_id: productProjectId || undefined,
       });
       const simulation = await simulateBenchmarkSuite({
         suite_id: selectedSuite.id,
@@ -3978,20 +3987,20 @@ export function BenchmarkRunner({
   ];
 
   const judgeProviderReady =
-    openaiProvider?.status === 'connected' || productConfig?.llm_judge_status === 'enabled';
+    productConfig?.assert_judge?.ready === true;
 
   return (
     <section style={{ display: 'grid', gap: 20 }}>
       {(view === 'all') ? (
-        <section className="card openai-provider-panel" aria-label="OpenAI judge provider">
+        <section className="card openai-provider-panel" aria-label="OpenAI agent provider">
           <div className="openai-provider-control">
             <div>
-              <p className="eyebrow">LLM judge</p>
-              <h2 style={{ margin: '4px 0 0', fontSize: 22 }}>Connect OpenAI for the local judge</h2>
+              <p className="eyebrow">Agent execution provider</p>
+              <h2 style={{ margin: '4px 0 0', fontSize: 22 }}>Connect OpenAI for agent execution</h2>
               <p style={{ margin: '8px 0 0', color: 'var(--muted)' }}>
                 {openaiProvider?.status === 'connected'
                   ? `Connected${openaiProvider.email ? ` as ${openaiProvider.email}` : ''}${openaiProvider.plan_type ? ` (${openaiProvider.plan_type})` : ''}.`
-                  : openaiProvider?.message || `Connect Codex-style OpenAI OAuth to unlock LLM judging on scored evidence${productConfig?.llm_judge_status ? ` (${productConfig.llm_judge_status})` : ''}.`}
+                  : openaiProvider?.message || 'OpenAI OAuth is for agent execution. ASSERT semantic reviews use separately configured server credentials.'}
               </p>
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -4041,6 +4050,13 @@ export function BenchmarkRunner({
           })}
         </ol>
       </section> : null}
+
+      {report?.semantic_review_required ? (
+        <p role="status" style={{ margin: 0, color: 'var(--muted)' }}>
+          Deterministic checks are complete. Semantic policy validation is still required;
+          keyword scores are diagnostic, not proof of successful business actions.
+        </p>
+      ) : null}
 
       {/* /runs (view=run): omit suite/scenario contract panel — launch uses catalog defaults. */}
       {view !== 'run' ? (
@@ -4586,44 +4602,19 @@ export function BenchmarkRunner({
                   opacity: report && judgeProviderReady && !isJudging ? 1 : 0.65,
                 }}
               >
-                {isJudging ? 'Requesting LLM judge…' : 'Request LLM judge'}
+                {isJudging ? 'Requesting ASSERT review…' : judgeGate?.status === 'ready' ? 'Run a new ASSERT review' : 'Request LLM judge'}
               </button>
-              {openaiProvider?.status === 'connected' ? (
-                <span style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.3 }}>
-                  {openaiProvider.email || 'OpenAI Codex'}
-                  {openaiProvider.plan_type ? ` · ${openaiProvider.plan_type}` : ''}
-                  {' · '}
-                  <button
-                    type="button"
-                    onClick={() => void onDisconnectOpenAI()}
-                    style={{
-                      border: 0,
-                      padding: 0,
-                      background: 'transparent',
-                      color: 'var(--muted)',
-                      fontSize: 12,
-                      textDecoration: 'underline',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Disconnect
-                  </button>
-                </span>
-              ) : productConfig?.llm_judge_status === 'enabled' ? (
-                <span style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.3 }}>
-                  API key judge ready
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  className="secondary-link"
-                  disabled={isConnectingOpenAI}
-                  onClick={() => void onConnectOpenAI()}
-                  style={{ padding: '6px 10px', fontSize: 13, fontWeight: 600 }}
-                >
-                  {isConnectingOpenAI ? 'Connecting…' : 'Connect OpenAI'}
-                </button>
-              )}
+              <span style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.4 }}>
+                {productConfig?.assert_judge?.message || 'Checking ASSERT judge configuration…'}
+              </span>
+              <button type="button" className="secondary-link" onClick={() => {
+                void fetchProductConfig().then(setProductConfig).catch(() => setProductConfig(null));
+              }}>Refresh judge readiness</button>
+              {judgeGate?.execution_run_id && judgeGate.review_id ? (
+                <ApiAwareLink href={`/runs/${encodeURIComponent(judgeGate.execution_run_id)}`} className="secondary-link">
+                  View saved ASSERT review, apply or export
+                </ApiAwareLink>
+              ) : null}
             </div>
           ) : null}
         </div>

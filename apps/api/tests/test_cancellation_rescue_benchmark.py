@@ -87,7 +87,7 @@ def test_offline_acc_fixture_runs_through_benchmark_endpoint_logic():
 
     assert report['suite_id'] == 'call-center-voice-ai'
     assert report['scenario_id'] == 'cancellation-rescue'
-    assert report['verdict'] == 'pass'
+    assert report['verdict'] == 'needs_review'
     assert report['overall_score'] >= 75
     metrics = report['assert_result_manifest']['verdict']['metrics']
     assert metrics['deterministic_check_fail_count'] == 0
@@ -114,7 +114,7 @@ def test_offline_acc_fixture_can_be_submitted_to_benchmark_http_endpoint():
     report = response.json()
     assert report['suite_id'] == 'call-center-voice-ai'
     assert report['scenario_id'] == 'cancellation-rescue'
-    assert report['verdict'] == 'pass'
+    assert report['verdict'] == 'needs_review'
     assert report['assert_result_manifest']['verdict']['metrics']['deterministic_check_fail_count'] == 0
 
 
@@ -199,7 +199,7 @@ def test_optional_cancellation_rescue_starter_evidence_satisfies_deterministic_c
         )
     )
 
-    assert report['verdict'] == 'pass'
+    assert report['verdict'] == 'needs_review'
     assert report['assert_result_manifest']['verdict']['metrics']['deterministic_check_fail_count'] == 0
 
 

@@ -1,24 +1,26 @@
 import { expect, test } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import runFixture from '../../api/tests/fixtures/assert-html-report-run.json';
+import { fixturePython, refreshAssertFixture } from './assert-fixture-helper';
 
 const artifactDir = path.resolve(process.cwd(), 'artifacts/assert-html-report-export');
 const report = process.env.CAE_TEST_ASSERT_HTML
   ? readFileSync(process.env.CAE_TEST_ASSERT_HTML, 'utf8')
-  : execFileSync(path.resolve('apps/api/.venv/bin/python'), ['-c', `
+  : fixturePython(`
 import json
 from pathlib import Path
 from app.services.assert_html_report import render_assert_html_report,validate_saved_review
-from app.services.benchmark_service import get_scenario_contract
+from app.services.evaluation_contract import recorded_contract
+from assert_test_helpers import refresh_review
 run=json.loads(Path('apps/api/tests/fixtures/assert-html-report-run.json').read_text())
 conv=run['conversations'][0]; review=conv['judge_reviews'][0]
-p=validate_saved_review(run,conv,review,get_scenario_contract(run['suite_id'],conv['scenario_id']))
+refresh_review(run,conv,review)
+p=validate_saved_review(run,conv,review,recorded_contract(conv))
 print(render_assert_html_report(run,conv,review,p))
-`], { encoding: 'utf8', env: { ...process.env, PYTHONPATH: path.resolve('apps/api') } });
+`);
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => window.localStorage.setItem('conversation-evals-demo-user', 'demo-user'));
@@ -127,9 +129,13 @@ test('real saved API result downloads through the browser without an export mock
   const run = structuredClone(runFixture);
   run.execution_run_id = `exec-assert-api-${randomUUID()}`;
   run.conversations[0].execution_run_id = run.execution_run_id;
+  Object.assign(run.conversations[0], {
+    unstructured_final_state_evidence: 'Unverified source outcome <script>alert(1)</script> api_key=EXPORT-SECRET',
+  });
   const seededDir = path.resolve('artifacts/execution-runs', run.execution_run_id);
   mkdirSync(seededDir, { recursive: true });
-  writeFileSync(path.join(seededDir, 'run.json'), JSON.stringify(run));
+  // Materialize this synthetic fixture with the current frozen-input contract.
+  writeFileSync(path.join(seededDir, 'run.json'), JSON.stringify(refreshAssertFixture(run)));
   const apiBase = process.env.PLAYWRIGHT_API_BASE_URL
     || `http://127.0.0.1:${process.env.PLAYWRIGHT_API_PORT || process.env.API_PORT || '8425'}`;
   const conversation = run.conversations[0];
@@ -163,6 +169,10 @@ test('real saved API result downloads through the browser without an export mock
     await expect(offline.getByText(run.execution_run_id, { exact: true })).toBeVisible();
     await offline.getByText('Tool evidence 1: open_review_case', { exact: true }).click();
     await expect(offline.getByText('"refund_issued": false', { exact: false }).first()).toBeVisible();
+    await offline.getByText('Unstructured final-state evidence (unverified)', { exact: true }).click();
+    await expect(offline.getByText('Unverified source outcome', { exact: false })).toBeVisible();
+    await expect(offline.locator('script')).toHaveCount(0);
+    await expect(offline.locator('body')).not.toContainText('EXPORT-SECRET');
     await offline.screenshot({ path: path.join(artifactDir, 'real-api-offline-report.png'), fullPage: true });
     expect(remoteRequests).toEqual([]);
     expect(judgeCalls).toBe(0);

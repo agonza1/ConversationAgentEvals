@@ -30,40 +30,32 @@ test('product eval API journey works end to end', async ({ request, baseURL }) =
       suite_id: suiteId,
       scenario_id: scenarioId,
       agent_profile: 'playwright request runner',
+      user_id: userId,
+      project_id: 'call-center-demo',
     },
   });
   expect(simulationResponse.ok()).toBeTruthy();
   const simulation = await simulationResponse.json();
   expect(simulation.transcript).toContain('playwright request runner');
-  expect(simulation.benchmark_report.verdict).toBe('pass');
+  expect(simulation.benchmark_report.verdict).toBe('needs_review');
 
-  const freeJudgeResponse = await request.post('/api/product/judge', {
-    data: {
-      plan: 'free',
-      report: simulation.benchmark_report,
-      transcript: simulation.transcript,
-    },
+  const readinessResponse = await request.get('/api/assert/readiness');
+  expect(readinessResponse.ok()).toBeTruthy();
+  const readiness = await readinessResponse.json();
+  expect(readiness.engine).toBe('assert');
+  // This journey is offline. The Python integration suite mocks only the paid
+  // provider output and exercises successful persistence, audit and application.
+  expect(readiness.enabled).toBe(false);
+  const judgeResponse = await request.post(`/api/assert/benchmarks/${simulation.benchmark_report.run_id}/judge`, {
+    data: { user_id: userId },
   });
-  expect(freeJudgeResponse.ok()).toBeTruthy();
-  await expect(freeJudgeResponse.json()).resolves.toEqual(expect.objectContaining({
-    status: 'blocked',
-    required_plan: 'starter',
-    block_reason: 'provider',
-  }));
-
-  const paidJudgeResponse = await request.post('/api/product/judge', {
-    data: {
-      plan: 'starter',
-      report: simulation.benchmark_report,
-      transcript: simulation.transcript,
-    },
+  expect(judgeResponse.status()).toBe(503);
+  expect(await judgeResponse.json()).toEqual(expect.objectContaining({detail: expect.stringContaining('disabled')}));
+  const forgedResponse = await request.post(`/api/assert/benchmarks/${simulation.benchmark_report.run_id}/judge`, {
+    data: {user_id: userId, report: {verdict: 'pass'}},
   });
-  expect(paidJudgeResponse.ok()).toBeTruthy();
-  await expect(paidJudgeResponse.json()).resolves.toEqual(expect.objectContaining({
-    status: 'blocked',
-    credits: 10,
-    block_reason: 'provider',
-  }));
+  expect(forgedResponse.status()).toBe(422);
+  expect((await request.post('/api/product/judge', {data: {}})).status()).toBe(404);
 
   const saveResponse = await request.post('/api/product/runs', {
     data: {
@@ -98,7 +90,7 @@ test('product eval API journey works end to end', async ({ request, baseURL }) =
   await expect(exportResponse.json()).resolves.toEqual(expect.objectContaining({
     id: saved.id,
     filename: `convoice-qa-call-center-demo-${saved.id}.json`,
-    report: expect.objectContaining({ verdict: 'pass' }),
+    report: expect.objectContaining({ verdict: 'needs_review' }),
     artifacts: expect.objectContaining({
       vcon_export: expect.objectContaining({ available: true }),
       contract_artifacts: expect.objectContaining({ available: true }),

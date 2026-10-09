@@ -78,7 +78,7 @@
     }
   },
   "judged_results": {
-    "verdict": "pass",
+    "verdict": "needs_review",
     "score": 100,
     "completed_actions": [
       "verify patient identity",

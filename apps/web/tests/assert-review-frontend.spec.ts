@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import fixture from '../../api/tests/fixtures/assert-review-native-run.json';
+import { refreshAssertFixture } from './assert-fixture-helper';
 
 const artifacts = path.resolve('artifacts/assert-review-frontend');
 const runPath = (runId: string) => path.resolve('artifacts/execution-runs', runId);
@@ -12,7 +13,11 @@ const runForTest = () => {
   run.conversations[0].execution_run_id = run.execution_run_id;
   return run;
 };
-const seed = (run: ReturnType<typeof runForTest>) => { mkdirSync(runPath(run.execution_run_id), { recursive: true }); writeFileSync(path.join(runPath(run.execution_run_id), 'run.json'), JSON.stringify(run)); };
+const seed = (run: ReturnType<typeof runForTest>) => {
+  mkdirSync(runPath(run.execution_run_id), { recursive: true });
+  writeFileSync(path.join(runPath(run.execution_run_id), 'run.json'),
+    JSON.stringify(refreshAssertFixture(run, true)));
+};
 test.beforeEach(async ({ page }) => {
   mkdirSync(artifacts, { recursive: true });
   await page.addInitScript(() => localStorage.setItem('conversation-evals-demo-user', 'demo-user'));

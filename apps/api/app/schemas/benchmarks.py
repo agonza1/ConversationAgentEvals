@@ -71,6 +71,7 @@ class BenchmarkRunRequest(BaseModel):
     retryOfRunId: str | None = None
     user_id: str | None = None
     project_id: str | None = None
+    product_project_id: str | None = None
     resume_from_run_id: str | None = None
     resumeFromRunId: str | None = None
 
@@ -144,6 +145,7 @@ class BenchmarkSimulationRequest(BaseModel):
     retryOfRunId: str | None = None
     user_id: str | None = None
     project_id: str | None = None
+    product_project_id: str | None = None
     resume_from_run_id: str | None = None
     resumeFromRunId: str | None = None
 
@@ -167,6 +169,7 @@ class BenchmarkSuiteRunRequest(BaseModel):
     metadata: dict[str, Any] | None = None
     user_id: str | None = None
     project_id: str | None = None
+    product_project_id: str | None = None
 
 
 class BenchmarkSimulationResponse(BaseModel):

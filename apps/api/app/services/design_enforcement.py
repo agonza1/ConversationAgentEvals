@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from app.services.assert_trace import parse_action_trace
+from app.services.structured_checks import _evaluate_check, _event_type_names_from_action_trace, _normalize_event_name, structured_outcome
 
 EVIDENCE_ALIASES = {
     'transcript': 'transcript', 'conversation transcript': 'transcript',
@@ -51,7 +52,10 @@ def evaluate_design(scenario: dict, payload: dict, transcript: str) -> dict:
         return [_citation(kind, '$', f'{kind} artifact supplied')] if presence.get(kind) else []
 
     requirements = []
-    for index, label in enumerate(scenario.get('evidence_requirements', [])):
+    evidence_requirements = scenario.get('evidence_requirements', [])
+    if isinstance(evidence_requirements, dict):
+        evidence_requirements = evidence_requirements.get('required_artifacts', [])
+    for index, label in enumerate(evidence_requirements):
         kind = evidence_kind(label)
         supplied = kind is not None and presence[kind]
         requirements.append({'id': f'evidence-{index}', 'label': label, 'supported': kind is not None,
@@ -63,9 +67,27 @@ def evaluate_design(scenario: dict, payload: dict, transcript: str) -> dict:
     checks = []
     for check in scenario.get('deterministic_checks', []):
         expression = check_expression(check.get('label', ''))
-        result = {'id': check['id'], 'label': check['label'], 'severity': check.get('severity', 'error'),
+        result = {'id': check['id'], 'label': check.get('label') or check['id'], 'severity': check.get('severity', 'error'),
                   'supported': expression is not None, 'status': 'insufficient_evidence',
                   'reason': 'Unsupported check; use a documented check expression.', 'citations': []}
+        if check.get('applicable') is False:
+            result.update(status='pass', outcome='not_applicable', reason='The approved contract marks this check inapplicable.')
+            checks.append(result)
+            continue
+        if check.get('kind') in {'event_any', 'event_order', 'final_state_equals', 'final_state_in', 'conditional_event'}:
+            passed, observed = _evaluate_check(check, event_names=_event_type_names_from_action_trace(payload.get('action_trace')),
+                                                final_state=final if isinstance(final, dict) else {})
+            outcome = structured_outcome(check, passed, observed)
+            result.update(supported=True, outcome=outcome,
+                          status='pass' if outcome in {'pass', 'not_applicable'} else 'fail' if outcome == 'fail' else 'insufficient_evidence',
+                          reason=('No triggering event in the recorded trace; unrecorded activity is not evaluated.' if outcome == 'not_applicable'
+                                  else 'Recorded evidence satisfies the explicit check.' if passed
+                                  else 'Recorded evidence contradicts the explicit check.' if outcome == 'fail'
+                                  else 'The required observation is missing; execution cannot be verified.'),
+                          citations=[_citation('final_state' if str(check['kind']).startswith('final_state') else 'action_trace',
+                                                str(check.get('path') or '$'), str(observed))], basis='executable_evidence_check')
+            checks.append(result)
+            continue
         if expression:
             name, parameter = expression
             if name.endswith('_present'):
@@ -95,8 +117,17 @@ def evaluate_design(scenario: dict, payload: dict, transcript: str) -> dict:
                 result.update(status='pass' if succeeded else 'fail' if failed else 'insufficient_evidence',
                               reason='Named tool has a successful invocation.' if succeeded else 'Named tool has an explicit failure.' if failed else 'No terminal invocation of the named tool was recorded.',
                               citations=[_citation('action_trace', f'events[{i}]', f'{event.name}: {event.status}') for i, event in cited_matches[:3]])
+        result['outcome'] = 'not_observable' if result['status'] == 'insufficient_evidence' else result['status']
+        result['basis'] = 'literal_text_only' if expression and expression[0] == 'transcript_contains' else 'executable_evidence_check'
         checks.append(result)
 
+    event_names = _event_type_names_from_action_trace(payload.get('action_trace'))
+    for forbidden in scenario.get('forbidden_event_types', []):
+        if _normalize_event_name(forbidden) in event_names:
+            checks.append({'id': 'forbidden-event:' + forbidden, 'label': forbidden, 'supported': True,
+                           'status': 'fail', 'outcome': 'fail', 'basis': 'executable_evidence_check',
+                           'reason': 'An explicitly forbidden event was recorded.',
+                           'citations': [_citation('action_trace', '$', forbidden)]})
     behaviors = []
     focus = scenario.get('target_behavior_id')
     for rule in scenario.get('behaviors', []):
@@ -118,6 +149,10 @@ def evaluate_design(scenario: dict, payload: dict, transcript: str) -> dict:
                       'No conclusive ID-linked evidence; absence does not prove compliance.',
             'basis': 'structured_action_evidence_not_semantic',
             'citations': [_citation('action_trace', f'events[{i}]', f'{event.name}: {event.status}') for i, event in matching[:3]]})
+    for item in requirements:
+        item['outcome'] = 'not_observable' if item['status'] == 'insufficient_evidence' else item['status']
+    for item in behaviors:
+        item['outcome'] = 'not_observable' if item['status'] == 'insufficient_evidence' else item['status']
     blocking = [item for item in [*requirements, *checks] if item['status'] != 'pass']
     failed = any(item['status'] == 'fail' for item in checks)
     return {'behavior_results': behaviors, 'programmatic_check_results': checks,

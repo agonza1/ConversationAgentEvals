@@ -50,6 +50,34 @@ def get_execution_run(execution_run_id: str) -> dict[str, Any] | None:
         return deepcopy(loaded)
 
 
+
+def bind_execution_run_product_project(
+    execution_run_id: str, *, user_id: str, project_id: str, product_project_id: str,
+) -> dict[str, Any]:
+    """Persist an authorized project identity without changing existing run evidence.
+
+    The caller must first resolve this exact project against the SQL-backed
+    access checks. Never replace a previously recorded binding, even during
+    concurrent review attempts.
+    """
+    if not product_project_id:
+        raise ValueError('A resolved product project ID is required.')
+    with _LOCK:
+        run = _get_run_unlocked(execution_run_id)
+        if run is None or run.get('user_id') != user_id:
+            raise KeyError('Execution run not found.')
+        if run.get('project_id') != project_id:
+            raise ValueError('The saved execution project does not match the selected project.')
+        existing = str(run.get('product_project_id') or '').strip()
+        if existing and existing != product_project_id:
+            raise ValueError('The execution run is already bound to another product project.')
+        if not existing:
+            run['product_project_id'] = product_project_id
+            run['updated_at'] = _now()
+            _persist_unlocked(run)
+        return deepcopy(run)
+
+
 def get_conversation(execution_run_id: str, conversation_id: str) -> dict[str, Any] | None:
     run = get_execution_run(execution_run_id)
     if run is None:
@@ -278,13 +306,22 @@ def record_judge_review(
 
         judge_result = deepcopy(response.get('judge_result') or {})
         raw_output = str(judge_result.pop('raw_output', '') or response.get('judge_output') or '')
-        review_id = f'judge-review-{uuid.uuid4().hex[:16]}'
+        invocation_id = response.get('invocation_id')
+        review_id = f'judge-review-{invocation_id}' if invocation_id else f'judge-review-{uuid.uuid4().hex[:16]}'
+        existing = next((item for item in conversation.get('judge_reviews', [])
+                         if isinstance(item, dict) and item.get('review_id') == review_id), None)
+        if existing is not None:
+            if existing.get('deterministic_snapshot') != current_snapshot:
+                raise ValueError('The saved review no longer matches the recorded evidence.')
+            return deepcopy(existing)
         created_at = _now()
         review = {
             'review_id': review_id,
             'status': 'pending_confirmation',
             'created_at': created_at,
             'provider': response.get('provider'),
+            'judge_n': response.get('judge_n', 1),
+            'invocation_id': response.get('invocation_id'),
             'model': response.get('model'),
             'latency_ms': response.get('latency_ms'),
             'message': response.get('message'),
@@ -326,10 +363,11 @@ def apply_judge_review(
         if review is None:
             raise KeyError('LLM judge review not found.')
         from app.services.assert_review_status import is_assert_review, saved_assert_review_freshness
+        if not is_assert_review(review):
+            raise ValueError('Legacy judge reviews are read-only. Request an ASSERT review before applying an adjudication.')
         if is_assert_review(review):
-            from app.services.benchmark_service import get_scenario_contract
-            contract = get_scenario_contract(str(conversation.get('suite_id') or run.get('suite_id') or ''),
-                                            str(conversation.get('scenario_id') or ''))
+            from app.services.evaluation_contract import recorded_contract
+            contract = recorded_contract(conversation)
             freshness = saved_assert_review_freshness(run, conversation, review, contract)
             if freshness['status'] != 'current':
                 raise ValueError(freshness['message'])
@@ -343,7 +381,8 @@ def apply_judge_review(
         if review.get('deterministic_snapshot') != deterministic_evaluation_snapshot(conversation):
             raise ValueError('The deterministic evaluation changed after this LLM review. Run the review again.')
         enforcement = (conversation.get('evaluation_findings') or {}).get('design_enforcement') or {}
-        if proposed.get('verdict') == 'pass' and enforcement.get('blocked'):
+        if proposed.get('verdict') == 'pass' and (enforcement.get('blocked') or
+                conversation.get('verdict') in {'fail', 'failed'}):
             raise ValueError('Required design checks or evidence still block verification. Supply evidence and reevaluate before applying a pass.')
 
         applied_at = _now()
@@ -454,6 +493,8 @@ def deterministic_evaluation_snapshot(conversation: dict[str, Any]) -> dict[str,
         'turns': conversation.get('turns') or [],
         'error': conversation.get('error'),
     }
+    if conversation.get('unstructured_final_state_evidence') is not None:
+        evidence['unstructured_final_state_evidence'] = conversation['unstructured_final_state_evidence']
     serialized = json.dumps(evidence, ensure_ascii=False, sort_keys=True, default=str)
     return {
         'verdict': evidence['verdict'],

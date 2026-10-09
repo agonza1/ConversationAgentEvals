@@ -61,10 +61,14 @@ def validate_saved_review(run: dict[str, Any], conversation: dict[str, Any], rev
     # Only the selected assessment and actual conversation source are rendered;
     # an unrelated historical review must not block this selected export.
     _validate_private_key_bounds({
-        'conversation': {key: conversation.get(key) for key in ('turns', 'transcript', 'action_trace', 'final_state')},
+        'conversation': {key: conversation.get(key) for key in ('turns', 'transcript', 'action_trace', 'final_state',
+                                                              'unstructured_final_state_evidence')},
         'review': {key: review.get(key) for key in ('judge_result', 'evidence_citations')},
     })
     provenance = result.get('provenance') if isinstance(result, dict) else None
+    if (conversation.get('unstructured_final_state_evidence') is not None
+            and not isinstance(conversation['unstructured_final_state_evidence'], (str, list))):
+        raise ValueError('Unstructured final-state evidence is malformed.')
     if (review.get('status') not in {'pending_confirmation', 'applied', 'superseded'}
             or not isinstance(provenance, dict) or provenance.get('engine') != 'assert'
             or provenance.get('judge_status') != 'ok'):
@@ -227,6 +231,11 @@ def render_assert_html_report(run: dict[str, Any], conversation: dict[str, Any],
     tools = ''.join(f'<details><summary>Tool evidence {index}: {_text(action.get("tool_name") or action.get("action") or action.get("name"))}</summary>'
                     f'<pre>{_json(action)}</pre></details>' for index, action in enumerate(conversation.get('action_trace') or [], 1)
                     if isinstance(action, dict))
+    unstructured_state = conversation.get('unstructured_final_state_evidence')
+    unstructured_html = (f'<details><summary>Unstructured final-state evidence (unverified)</summary>'
+                        f'<p>This is source-reported evidence, not a verified state snapshot or execution receipt.</p>'
+                        f'<pre>{_json(unstructured_state)}</pre></details>'
+                        if unstructured_state is not None else '')
     citations = ''.join(f'<li>{_text(citation)} <small>— unresolved citation; no evidence anchor recorded</small></li>'
                        for citation in _clean(_saved_citations(review)))
     snapshot = review['deterministic_snapshot']
@@ -260,5 +269,5 @@ def render_assert_html_report(run: dict[str, Any], conversation: dict[str, Any],
 <div class="card"><h2>Recorded dimensions</h2>{rows}
 <h3>Behavior judgments</h3>{nodes or '<p>Unavailable</p>'}<h3>Recorded citations</h3><ul>{citations or '<li>Unavailable</li>'}</ul></div></section>
 <section aria-label="Conversation"><div class="card"><h2>Conversation</h2>{messages}</div><div class="card"><h2>Tool and state evidence</h2>{tools or '<p>No tool evidence recorded.</p>'}
-<details><summary>Recorded final state</summary><pre>{_json(conversation.get('final_state'))}</pre></details></div>
+<details><summary>Recorded final state</summary><pre>{_json(conversation.get('final_state'))}</pre></details>{unstructured_html}</div>
 <div class="card"><h2>Evidence notes</h2><p>Audio is not embedded. Recording evidence, when available, remains in CAE.</p><p>Known credential fields and internal artifact paths are omitted. Missing values are unavailable; tool success and citation anchors are never inferred.</p></div></section></div></main></body></html>'''

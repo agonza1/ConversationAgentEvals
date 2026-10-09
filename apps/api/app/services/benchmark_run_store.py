@@ -25,6 +25,11 @@ def persist_benchmark_run(db: Session, report: dict[str, Any], transcript: str |
     metadata = report.get('run_metadata') if isinstance(report.get('run_metadata'), dict) else {}
     user_id = _first_text(metadata.get('user_id'), metadata.get('owner_user_id'), report.get('user_id')) or DEFAULT_USER_ID
     project_key = _first_text(metadata.get('project_id'), metadata.get('project_key'), report.get('project_id')) or DEFAULT_PROJECT_ID
+    from app.services.product_service import ensure_execution_product_project_id
+    binding = ensure_execution_product_project_id(db=db, user_id=user_id, project_id=project_key,
+                                                   product_project_id=metadata.get('product_project_id'))
+    if binding:
+        report.setdefault('run_metadata', {})['product_project_id'] = binding
     retained_until = _retained_until(metadata, now)
     completed_at = _parse_datetime(lifecycle.get('completed_at') or lifecycle.get('needs_review_at') or lifecycle.get('failed_at'))
 
@@ -39,7 +44,7 @@ def persist_benchmark_run(db: Session, report: dict[str, Any], transcript: str |
     record.status = _required_str(report.get('run_status') or lifecycle.get('status') or report.get('verdict'), 'run_status')
     record.attempt = _positive_int(lifecycle.get('attempt'), default=1)
     record.report_json = json.dumps(_retention_envelope(report=platform_report_index(report), retained_until=retained_until, now=now))
-    record.transcript = transcript if transcript is not None else report.get('transcript_preview')
+    record.transcript = report.get('transcript') if isinstance(report.get('transcript'), str) else transcript
     record.updated_at = now
     record.completed_at = completed_at
     record.retained_until = retained_until

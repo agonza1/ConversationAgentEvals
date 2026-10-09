@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiAwareLink } from '@/components/ApiAwareLink';
 import { LiveRunFeedback } from '@/components/LiveRunFeedback';
@@ -23,6 +23,8 @@ import {
   getExecutionRun,
   LlmJudgeResponse,
   requestLlmJudge,
+  getAssertJudgeReadiness,
+  AssertJudgeReadiness,
 } from '@/lib/execution';
 
 type MetricKey = 'audio_interruption' | 'word_error_rate' | 'latency' | 'call_resolution';
@@ -303,6 +305,7 @@ function formatTargetId(value: string) {
 }
 
 function runTargetSummary(run: ExecutionRunRecord) {
+  if (run.evidence_source === 'imported_benchmark') return 'Imported conversation · saved evidence · no agent execution';
   const snapshot = run.execution_snapshot;
   const agent = snapshot && typeof snapshot.agent === 'object' && snapshot.agent
     ? snapshot.agent as Record<string, unknown>
@@ -367,6 +370,16 @@ function MetricDetail({
   onRunUpdated: (run: ExecutionRunRecord) => void;
 }) {
   const [judge, setJudge] = useState<LlmJudgeResponse | null>(null);
+  const [judgeReadiness, setJudgeReadiness] = useState<AssertJudgeReadiness | null>(null);
+  const judgeRequestId = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    let active = true;
+    judgeRequestId.current = undefined;
+    setJudge(null);
+    void getAssertJudgeReadiness().then(value => { if (active) setJudgeReadiness(value); })
+      .catch(() => { if (active) setJudgeReadiness(null); });
+    return () => { active = false; };
+  }, [run.execution_run_id, conversation?.conversation_id]);
   const [judgeError, setJudgeError] = useState<string | null>(null);
   const [isJudging, setIsJudging] = useState(false);
   const [showJudgePrompt, setShowJudgePrompt] = useState(false);
@@ -398,7 +411,8 @@ function MetricDetail({
   );
   const canJudge = Boolean(
     conversationIsTerminal
-    && deterministicVerdict,
+    && deterministicVerdict
+    && judgeReadiness?.ready,
   );
 
   useEffect(() => {
@@ -431,8 +445,10 @@ function MetricDetail({
     try {
       setExportReviewId('');
       setExportError(null);
+      if (judge) judgeRequestId.current = crypto.randomUUID();
+      setJudge(null);
       const response = await requestLlmJudge({
-        plan: 'free',
+        request_id: judgeRequestId.current,
         user_id: run.user_id || userId,
         execution_run_id: run.execution_run_id,
         conversation_id: conversation.conversation_id,
@@ -554,12 +570,16 @@ function MetricDetail({
               ? 'Reviewing evidence…'
               : !canJudge
                 ? conversationIsTerminal
-                  ? 'Unavailable without evaluator verdict'
+                  ? !deterministicVerdict ? 'Unavailable without evaluator verdict' : 'ASSERT judge unavailable'
                   : 'Available after run completes'
                 : judge
                   ? 'Run LLM review again'
                   : 'Review with LLM judge'}
           </button>
+          <span role="status">{judgeReadiness?.message || 'ASSERT readiness could not be checked.'}</span>
+          <button type="button" className="secondary-link" onClick={() => {
+            void getAssertJudgeReadiness().then(setJudgeReadiness).catch(() => setJudgeReadiness(null));
+          }}>Refresh judge readiness</button>
           <div className="assert-report-export">
             {exportChoices.length ? (
               <label>

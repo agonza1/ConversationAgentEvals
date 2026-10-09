@@ -1,11 +1,11 @@
-"""Shared, read-only saved ASSERT input freshness for review, export and apply."""
+"""One fail-closed freshness check for view, HTML export, and confirmed application."""
 from __future__ import annotations
 
 import re
 from typing import Any
-
+from app.services.evaluation_contract import recorded_contract
 from app.services.execution_run_store import deterministic_evaluation_snapshot
-from app.services.upstream_assert_judge import assert_judge_input_fingerprint
+from app.services.upstream_assert_judge import assert_judge_input_fingerprint, FINGERPRINT_VERSION, judge_configuration
 
 TERMINAL = {'completed', 'needs_review', 'failed', 'cancelled', 'canceled'}
 
@@ -17,7 +17,8 @@ def is_assert_review(review: dict[str, Any]) -> bool:
 
 
 def saved_assert_review_freshness(run: dict[str, Any], conversation: dict[str, Any],
-                                 review: dict[str, Any], scenario_contract: dict[str, Any] | None) -> dict[str, str]:
+                                 review: dict[str, Any], scenario_contract: dict[str, Any] | None = None) -> dict[str, str]:
+    # The legacy positional argument remains for callers; the recorded snapshot is authoritative.
     def result(status: str, code: str, message: str) -> dict[str, str]:
         return {'status': status, 'reason_code': code, 'message': message}
     try:
@@ -37,16 +38,20 @@ def saved_assert_review_freshness(run: dict[str, Any], conversation: dict[str, A
     provenance = judge.get('provenance') if isinstance(judge, dict) else None
     if not isinstance(provenance, dict) or provenance.get('engine') != 'assert' or provenance.get('judge_status') != 'ok':
         return result('cannot_verify', 'missing_provenance', 'Completed ASSERT input provenance is unavailable.')
-    model, fingerprint = review.get('model'), provenance.get('input_fingerprint')
-    if not isinstance(model, str) or not model or not isinstance(fingerprint, str) or not re.fullmatch('[0-9a-f]{16}', fingerprint):
-        return result('cannot_verify', 'missing_fingerprint', 'Saved ASSERT input identity is unavailable or malformed.')
+    model, fingerprint, n = review.get('model'), provenance.get('input_fingerprint'), provenance.get('judge_n')
+    if (provenance.get('fingerprint_version') != FINGERPRINT_VERSION or not isinstance(model, str) or not model
+            or not isinstance(fingerprint, str) or not re.fullmatch('[0-9a-f]{64}', fingerprint)
+            or type(n) is not int or not 1 <= n <= 3):
+        return result('cannot_verify', 'missing_fingerprint', 'A complete versioned ASSERT input identity is required. Request a new review.')
     try:
-        # Older saved reviews omit judge_n; only the admitted exact input counts are compared.
-        matches = any(assert_judge_input_fingerprint(run=run, conversation=conversation,
-                      scenario_contract=scenario_contract, model=model, judge_n=n) == fingerprint
-                      for n in range(1, 4))
-    except (ValueError, TypeError, AttributeError, KeyError):
-        return result('cannot_verify', 'malformed_input', 'Recorded evidence cannot be verified.')
-    if not matches:
-        return result('stale', 'judging_inputs_changed', 'Target or scenario judging inputs changed after this review. Run a new review explicitly.')
-    return result('current', 'inputs_match', 'Recorded conversation, target and scenario inputs match this saved review.')
+        contract = recorded_contract(conversation)
+        configuration = judge_configuration(model, n)
+        if provenance.get('configuration') != configuration:
+            return result('stale', 'grader_changed', 'The ASSERT runtime, rubric, or model settings changed. Explicitly request a new review.')
+        fingerprint_now = assert_judge_input_fingerprint(run=run, conversation=conversation,
+            scenario_contract=contract, model=model, judge_n=n)
+    except (ValueError, TypeError, AttributeError, KeyError, RuntimeError):
+        return result('cannot_verify', 'malformed_input', 'The retained contract or grading configuration cannot be verified. Explicitly re-evaluate the original evidence.')
+    if fingerprint_now != fingerprint:
+        return result('stale', 'judging_inputs_changed', 'Target or retained contract inputs changed after this review. Run a new review explicitly.')
+    return result('current', 'inputs_match', 'Recorded evidence, frozen contract, target and grader settings match this saved review.')

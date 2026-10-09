@@ -1,17 +1,14 @@
 # OpenAI Codex OAuth
 
-ConversationAgentEvals can use a local OpenAI/Codex sign-in for the `openai_codex` text target, configured local reference-agent model calls, and CAE's standalone product-judge path. Deterministic evaluation remains available without a connection.
+ConversationAgentEvals can use a local OpenAI/Codex sign-in for the `openai_codex` text target, configured local reference-agent model calls. Deterministic evaluation remains available without a connection.
 
 This integration uses the localhost Codex OAuth flow and the ChatGPT Codex backend. It is intended for local development, is not a hosted multi-user authentication mechanism, and may change independently of this project.
 
-## Important judge distinction
+## Semantic judging is separate from target authentication
 
-CAE has two LLM-review paths:
+CAE has one semantic judge: the pinned ASSERT runtime. Both the uploaded vCon/benchmark **LLM Judge** button and completed-run **Review with LLM judge** action use it. `GET /api/assert/readiness` is authoritative for judge configuration; a connected Codex OAuth session does not make ASSERT ready.
 
-- Standalone report or transcript review through `POST /api/product/judge` can use `LLM_JUDGE_PROVIDER=openai_codex` and the local Codex OAuth session.
-- Completed execution-conversation review through `POST /api/assert/runs/{execution_run_id}/conversations/{conversation_id}/judge` invokes the optional upstream `assert-ai` judge. The Codex OAuth session is not forwarded into that subprocess. OpenAI-backed upstream ASSERT judging requires `OPENAI_API_KEY` or `LLM_JUDGE_API_KEY`.
-
-The run-analysis **Review with LLM judge** action for an execution conversation uses the second path. See [upstream-assert-judge.md](upstream-assert-judge.md).
+OpenAI-backed ASSERT requires `OPENAI_API_KEY` or its `LLM_JUDGE_API_KEY` alias, plus `ASSERT_UPSTREAM_JUDGE_ENABLED=1`. OAuth tokens are never forwarded into ASSERT. The retired product-judge endpoint and its completion implementation have been removed. See [upstream-assert-judge.md](upstream-assert-judge.md).
 
 ## Connect
 
