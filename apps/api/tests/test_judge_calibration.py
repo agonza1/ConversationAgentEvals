@@ -33,6 +33,28 @@ def test_missing_predictions_count_as_coverage_gaps_not_failed_agents():
     assert result['false_failure'] == 0 and result['decisive_agreement'] is None
 
 
+def test_partial_case_predictions_count_as_missing_overall_coverage():
+    dataset = [
+        case('partial', 'pass', labels={'identity': 'pass', 'approval': 'fail'}),
+        case('explicit', 'pass', labels={'identity': 'pass', 'approval': 'not_observable'}),
+    ]
+    predictions = [
+        {'case_id': 'partial', 'outcomes': {'identity': 'pass'}},
+        {'case_id': 'explicit',
+         'outcomes': {'identity': 'pass', 'approval': 'not_observable'}},
+    ]
+    metrics = measure_calibration(dataset, predictions)
+    assert metrics['summary']['missing'] == 1
+    assert metrics['per_check']['approval']['missing'] == 1
+    assert metrics['per_check']['identity']['missing'] == 0
+    assert metrics['overall']['total'] == 2
+    assert metrics['overall']['missing'] == 1
+    assert metrics['overall']['unresolved'] == 1
+    # An explicit abstention is covered (but unresolved), not a missing field.
+    only_complete = measure_calibration(dataset[1:], predictions[1:])
+    assert only_complete['overall']['missing'] == 0
+
+
 def test_overall_does_not_average_away_critical_failure():
     dataset = [case('a', 'pass', labels={'identity': 'pass', 'authorization': 'fail'})]
     result = measure_calibration(dataset, [{'case_id': 'a', 'outcomes': {'identity': 'pass', 'authorization': 'pass'}}])
