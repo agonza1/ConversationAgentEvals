@@ -101,7 +101,7 @@ class ChatGPTPlanProvider:
     def status(self) -> dict:
         """Read only: no token refresh, network request, credential import, or inference."""
         if not local_enabled():
-            return {'enabled': False, 'status': 'disabled', 'profiles': [], 'judge_model': None,
+            return {'enabled': False, 'status': 'disabled', 'profiles': [], 'judge_model': self.selected_model(),
                     'message': 'Enable CHATGPT_PLAN_LOCAL_ENABLED=1 on a loopback-only local CAE deployment.'}
         with self._locked():
             value = self._load()
@@ -115,8 +115,7 @@ class ChatGPTPlanProvider:
                 'active_profile_id': value.get('active_profile_id'),
                 'account_binding_sha256': hashlib.sha256(json.dumps([value['host_id'], profile.get('client_id'),
                                                                      profile.get('subject')]).encode()).hexdigest(),
-                'email': profile.get('email'), 'judge_model': (profile.get('judge_model') or MODEL_PREFIX + 'select-model')
-                    if value.get('judge_mode') == 'chatgpt_plan' else None,
+                'email': profile.get('email'), 'judge_model': self._selected_model(value),
                 'profiles': [{'id': key, 'label': f"{row.get('email') or 'ChatGPT account'} · {key[:8]}"}
                              for key, row in value['profiles'].items() if row.get('subject')],
                 'message': self._last_error or ('ChatGPT plan use authorized.' if sharing else
@@ -130,22 +129,35 @@ class ChatGPTPlanProvider:
         return hashlib.sha256(json.dumps([value['host_id'], profile.get('client_id'),
                                           profile.get('subject')]).encode()).hexdigest()
 
+    @classmethod
+    def _selected_model(cls, value: dict) -> str | None:
+        if value.get('judge_mode') != 'chatgpt_plan':
+            return None
+        return cls._active(value).get('judge_model') or MODEL_PREFIX + 'select-model'
+
     def selected_model(self) -> str | None:
-        return self.status().get('judge_model') if local_enabled() else None
+        # Disabling plan execution does not authorize a change of billing mode.
+        # Avoid creating storage at all on installations without a saved choice.
+        if not self.path.exists():
+            return None
+        with self._locked():
+            value = self._load()
+        return self._selected_model(value)
 
     def start_oauth(self, profile_id: str | None = None) -> dict:
         self._require_local()
         verifier, challenge = _generate_pkce()
         with self._mutex, self._locked():
-            self._generation += 1
             value = self._load()
             profile = value['profiles'].get(profile_id, {}) if profile_id else {}
             if profile_id and not profile:
                 raise ChatGPTPlanError('Select an existing ChatGPT account or add a new account.')
+            self._generation += 1
             client_id = profile.get('client_id') or value.get('pending_client_id') or 'dynamic_agent_client'
             self._pending = {'state': secrets.token_urlsafe(32), 'nonce': secrets.token_urlsafe(32),
                              'verifier': verifier, 'expires_at': self.now() + 600,
                              'client_id': client_id, 'profile_id': profile_id,
+                             'scope': SCOPES,
                              'subject': profile.get('subject'), 'generation': self._generation}
             self._save(value)  # Persist the host ID before the browser is opened.
             try:
@@ -154,7 +166,7 @@ class ChatGPTPlanProvider:
                 self._pending = None
                 raise ChatGPTPlanError(f'ChatGPT callback port {CALLBACK_PORT} is busy.') from exc
             params = {'response_type': 'code', 'client_id': client_id, 'redirect_uri': REDIRECT_URI,
-                      'scope': SCOPES, 'resource': RESOURCE, 'state': self._pending['state'],
+                      'scope': self._pending['scope'], 'resource': RESOURCE, 'state': self._pending['state'],
                       'nonce': self._pending['nonce'], 'code_challenge': challenge,
                       'code_challenge_method': 'S256', 'ext_agent_host_id': value['host_id']}
             if client_id == 'dynamic_agent_client':
@@ -211,7 +223,7 @@ class ChatGPTPlanProvider:
             value['profiles'][profile_id] = {**previous, 'client_id': client_id, 'subject': subject,
                 'email': identity.get('email'), 'id_token': payload['id_token'],
                 'access_token': payload['access_token'], 'refresh_token': payload['refresh_token'],
-                'scopes': str(payload.get('scope') or '').split(),
+                'scopes': str(payload['scope'] if 'scope' in payload else pending['scope']).split(),
                 'expires_at': self.now() + float(payload.get('expires_in', 0))}
             value['active_profile_id'] = profile_id
             value.pop('pending_client_id', None)
@@ -262,12 +274,15 @@ class ChatGPTPlanProvider:
                 if not payload.get('access_token') or float(payload.get('expires_in', 0)) <= 0:
                     raise ChatGPTPlanError('ChatGPT session could not be renewed; reconnect.')
                 scopes = str(payload['scope']).split() if 'scope' in payload else profile['scopes']
-                if not {PLAN_SCOPE, 'resource.invoke'}.issubset(set(scopes)):
-                    raise ChatGPTPlanError('ChatGPT plan permission was revoked; reconnect.')
                 profile.update(access_token=payload['access_token'],
                                refresh_token=payload.get('refresh_token') or profile['refresh_token'],
                                scopes=scopes, expires_at=self.now() + float(payload['expires_in']))
                 self._save(value)
+                # Even a reduced grant rotates the renewable session. Retain the
+                # replacement so readiness reflects revocation and sign-out can
+                # revoke the current token rather than a spent predecessor.
+                if not {PLAN_SCOPE, 'resource.invoke'}.issubset(set(scopes)):
+                    raise ChatGPTPlanError('ChatGPT plan permission was revoked; reconnect.')
             return profile['access_token']
 
     def list_models(self) -> list[dict]:

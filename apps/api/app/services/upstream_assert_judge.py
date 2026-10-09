@@ -85,6 +85,8 @@ def run_upstream_assert_judge(
         raise UpstreamAssertJudgeUnavailable(str(exc)) from exc
     configured = selection.get('judge_model') or (os.getenv('ASSERT_JUDGE_MODEL') or DEFAULT_ASSERT_JUDGE_MODEL).strip()
     model = _resolve_model(model_name, configured_model=configured)
+    if model.startswith('chatgpt_plan/') and not selection.get('enabled'):
+        raise UpstreamAssertJudgeUnavailable(selection['message'])
     max_judge_n = min(3, _positive_int_env('ASSERT_JUDGE_MAX_N', DEFAULT_ASSERT_JUDGE_MAX_N))
     if not 1 <= judge_n <= max_judge_n:
         raise ValueError(f'judge_n must be between 1 and {max_judge_n}.')

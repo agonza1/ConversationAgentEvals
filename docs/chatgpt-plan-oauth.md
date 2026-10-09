@@ -35,6 +35,10 @@ Speech recognition/TTS are not covered by this ChatGPT-plan flow.
 - Switching accounts keeps ChatGPT as the chosen billing mode. If the new account
   has no saved judge model, judging is blocked until one is selected; it never falls
   back to a paid API-key provider. **Restore deployment judge** is the explicit opt-out.
+- Turning off the local feature or changing to production mode preserves a saved
+  ChatGPT billing choice and blocks reviews; it does not select an API-key judge.
+  Restore the deployment judge explicitly while local controls are enabled before
+  disabling them if you intend to change the judging provider.
 
 This is deployment-local single-operator configuration. The custom control header,
 loopback Host/Origin checks and disabled-by-default flag are defense in depth, **not

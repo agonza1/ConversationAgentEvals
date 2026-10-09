@@ -53,6 +53,56 @@ def test_dynamic_registration_has_required_scopes_host_pkce_and_nonce(provider, 
     assert 'id-secret' not in json.dumps(provider.status())
 
 
+def test_omitted_scope_retains_the_requested_authorization_grant(provider, monkeypatch):
+    monkeypatch.setattr(provider, '_post_token', lambda form: {
+        'id_token': 'id-secret', 'access_token': 'access-secret',
+        'refresh_token': 'refresh-secret', 'expires_in': 3600})
+    start = provider.start_oauth()
+    params = parse_qs(urlsplit(start['authorize_url']).query)
+    provider.complete_callback({'state': params['state'], 'code': ['x'], 'client_id': ['oaiapp_test']})
+    assert provider.status()['sharing'] is True
+    assert provider.access_token() == 'access-secret'
+    assert set(provider._active(provider._load())['scopes']) == set(cp.SCOPES.split())
+
+
+@pytest.mark.parametrize('scopes', ['', 'openid profile email offline_access'])
+def test_explicit_reduced_scope_is_not_replaced_with_requested_plan_grant(provider, monkeypatch, scopes):
+    authorize(provider, monkeypatch, scopes=scopes)
+    assert provider.status()['sharing'] is False
+    with pytest.raises(cp.ChatGPTPlanError, match='not authorized'):
+        provider.access_token()
+
+
+@pytest.mark.parametrize('disabled_by', ['feature', 'production'])
+def test_disabling_local_plan_preserves_billing_choice_and_blocks_paid_fallback(provider, monkeypatch, disabled_by):
+    from app.services import upstream_assert_judge as judge
+    from test_upstream_assert_judge import _run_and_conversation, _scenario_contract
+    authorize(provider, monkeypatch)
+    monkeypatch.setattr(provider, 'list_models', lambda: [{'id': 'gpt-test'}])
+    provider.select_judge_model('gpt-test')
+    if disabled_by == 'feature': monkeypatch.setenv('CHATGPT_PLAN_LOCAL_ENABLED', '0')
+    else: monkeypatch.setenv('APP_ENV', 'production')
+    monkeypatch.setenv('ASSERT_UPSTREAM_JUDGE_ENABLED', '1')
+    monkeypatch.setenv('OPENAI_API_KEY', 'paid-key-must-not-be-used')
+    monkeypatch.setenv('ASSERT_JUDGE_MODEL', 'openai/gpt-4.1-mini')
+    assert provider.status()['enabled'] is False
+    assert provider.status()['judge_model'] == 'chatgpt_plan/gpt-test'
+    assert judge._resolve_model(None) == 'chatgpt_plan/gpt-test'
+    readiness = judge.assert_judge_readiness()
+    assert readiness['ready'] is False
+    assert readiness['model'] == 'chatgpt_plan/gpt-test'
+    run, conversation = _run_and_conversation()
+    with pytest.raises(judge.UpstreamAssertJudgeUnavailable, match='Enable CHATGPT_PLAN_LOCAL_ENABLED'):
+        judge.run_upstream_assert_judge(run=run, conversation=conversation, scenario_contract=_scenario_contract())
+
+
+def test_disabled_status_without_saved_choice_creates_no_credential_storage(provider, monkeypatch):
+    monkeypatch.setenv('CHATGPT_PLAN_LOCAL_ENABLED', '0')
+    assert provider.status()['judge_model'] is None
+    assert not provider.path.exists()
+    assert not provider.path.with_name(provider.path.name + '.lock').exists()
+
+
 def test_reauthorization_retains_client_host_and_active_account_on_failure(provider, monkeypatch):
     params, _ = authorize(provider, monkeypatch)
     active = provider.status()['active_profile_id']
@@ -164,6 +214,18 @@ def test_old_expiry_timer_cannot_cancel_a_new_authorization(provider):
     assert provider.status()['pending'] is True
 
 
+def test_invalid_profile_does_not_cancel_an_existing_authorization(provider):
+    provider.start_oauth()
+    generation = provider._generation
+    pending = provider._pending.copy()
+    with pytest.raises(cp.ChatGPTPlanError, match='existing ChatGPT account'):
+        provider.start_oauth('missing-profile')
+    assert provider._generation == generation
+    assert provider._pending == pending
+    provider._expire(generation)
+    assert provider.status()['pending'] is False
+
+
 def test_refresh_retains_registration_grant_and_rotates_tokens(provider, monkeypatch):
     authorize(provider, monkeypatch)
     with provider._locked():
@@ -179,6 +241,36 @@ def test_refresh_retains_registration_grant_and_rotates_tokens(provider, monkeyp
                       'refresh_token': 'refresh-secret', 'resource': cp.RESOURCE}]
     assert provider.binding() == binding
     assert provider.status()['sharing']
+
+
+def test_reduced_refresh_grant_is_retained_and_latest_session_can_be_revoked(provider, monkeypatch):
+    from app.services import upstream_assert_judge as judge
+    authorize(provider, monkeypatch)
+    monkeypatch.setattr(provider, 'list_models', lambda: [{'id': 'gpt-test'}])
+    provider.select_judge_model('gpt-test')
+    with provider._locked():
+        value = provider._load()
+        provider._active(value)['expires_at'] = 1001
+        provider._save(value)
+    monkeypatch.setattr(provider, '_post_token', lambda form: {
+        'access_token': 'identity-access', 'refresh_token': 'rotated-refresh',
+        'expires_in': 3600, 'scope': 'openid profile email offline_access'})
+    with pytest.raises(cp.ChatGPTPlanError, match='permission was revoked'):
+        provider.access_token()
+    assert provider.status()['sharing'] is False
+    monkeypatch.setenv('ASSERT_UPSTREAM_JUDGE_ENABLED', '1')
+    assert judge.assert_judge_readiness()['ready'] is False
+    assert judge._resolve_model(None) == 'chatgpt_plan/gpt-test'
+    revoked = []
+    def handler(request):
+        if request.method == 'GET':
+            return httpx.Response(200, json={'revocation_endpoint': cp.ISSUER + '/revoke'})
+        revoked.append(parse_qs(request.content.decode()))
+        return httpx.Response(200)
+    provider.client = httpx.Client(transport=httpx.MockTransport(handler))
+    assert provider.disconnect()['status'] == 'disconnected'
+    assert revoked[0]['token'] == ['rotated-refresh']
+    assert revoked[0]['client_id'] == ['oaiapp_test']
 
 
 def test_account_switch_requires_new_model_no_paid_fallback(provider, monkeypatch):
