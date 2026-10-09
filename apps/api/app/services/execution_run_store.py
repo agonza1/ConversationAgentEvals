@@ -50,6 +50,34 @@ def get_execution_run(execution_run_id: str) -> dict[str, Any] | None:
         return deepcopy(loaded)
 
 
+
+def bind_execution_run_product_project(
+    execution_run_id: str, *, user_id: str, project_id: str, product_project_id: str,
+) -> dict[str, Any]:
+    """Persist an authorized project identity without changing existing run evidence.
+
+    The caller must first resolve this exact project against the SQL-backed
+    access checks. Never replace a previously recorded binding, even during
+    concurrent review attempts.
+    """
+    if not product_project_id:
+        raise ValueError('A resolved product project ID is required.')
+    with _LOCK:
+        run = _get_run_unlocked(execution_run_id)
+        if run is None or run.get('user_id') != user_id:
+            raise KeyError('Execution run not found.')
+        if run.get('project_id') != project_id:
+            raise ValueError('The saved execution project does not match the selected project.')
+        existing = str(run.get('product_project_id') or '').strip()
+        if existing and existing != product_project_id:
+            raise ValueError('The execution run is already bound to another product project.')
+        if not existing:
+            run['product_project_id'] = product_project_id
+            run['updated_at'] = _now()
+            _persist_unlocked(run)
+        return deepcopy(run)
+
+
 def get_conversation(execution_run_id: str, conversation_id: str) -> dict[str, Any] | None:
     run = get_execution_run(execution_run_id)
     if run is None:
