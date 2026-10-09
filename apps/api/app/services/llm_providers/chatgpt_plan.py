@@ -203,8 +203,9 @@ class ChatGPTPlanProvider:
                 params['agent_name_hint'] = 'ConVoice QA'
             elif profile.get('id_token'):
                 params['id_token_hint'] = profile['id_token']
-            # User explicitly requested connection/reconnection, including after declined plan use.
-            params['prompt'] = 'consent'
+            # Request plan consent for new/reduced grants, not ordinary returning sign-in.
+            if client_id == 'dynamic_agent_client' or not {PLAN_SCOPE, 'resource.invoke'}.issubset(set(profile.get('scopes', []))):
+                params['prompt'] = 'consent'
             self._last_error = None
             return {'authorize_url': f'{AUTHORIZE_URL}?{urlencode(params)}', 'redirect_uri': REDIRECT_URI}
 

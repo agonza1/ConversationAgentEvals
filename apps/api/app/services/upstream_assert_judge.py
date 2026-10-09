@@ -821,6 +821,7 @@ def judge_configuration(model: str, judge_n: int) -> dict[str, Any]:
         configuration['model_settings'] = {'name': model}  # Plan API does not accept token caps.
         configuration['transport'] = {'version': 'chatgpt-plan-responses-v1', 'endpoint': RESOURCE + '/responses',
             'stream': True, 'store': False, 'billing': 'chatgpt_plan',
+            'retry_policy': 'upstream-bounded-prestream-v1; accepted-stream-failure-no-retry',
             'account_binding_sha256': get_chatgpt_provider().binding()}
     return configuration
 

@@ -47,6 +47,7 @@ def test_dynamic_registration_has_required_scopes_host_pkce_and_nonce(provider, 
     assert params['ext_agent_host_id'][0].startswith('urn:uuid:')
     assert calls[0]['client_id'] == 'oaiapp_test'
     assert calls[0]['redirect_uri'] == params['redirect_uri'][0]
+    assert params['prompt'] == ['consent']
     assert provider.status()['sharing'] is True
     assert 'access-secret' not in json.dumps(provider.status())
     assert 'refresh-secret' not in json.dumps(provider.status())
@@ -112,10 +113,19 @@ def test_reauthorization_retains_client_host_and_active_account_on_failure(provi
     assert again['ext_agent_host_id'] == params['ext_agent_host_id']
     assert 'agent_name_hint' not in again
     assert again['id_token_hint'] == ['id-secret']
+    assert 'prompt' not in again
     with pytest.raises(cp.ChatGPTPlanError, match='changed the selected'):
         provider.complete_callback({'state': again['state'], 'code': ['x'], 'client_id': ['oaiapp_other']})
     assert provider.status()['active_profile_id'] == active
     assert provider.access_token() == 'access-secret'
+
+
+@pytest.mark.parametrize('scopes, expects_consent', [(cp.SCOPES, False), ('openid profile email', True), ('', True)])
+def test_returning_signin_requests_consent_only_when_plan_permission_is_missing(provider, monkeypatch, scopes, expects_consent):
+    authorize(provider, monkeypatch, scopes=scopes)
+    params = parse_qs(urlsplit(provider.start_oauth(provider.status()['active_profile_id'])['authorize_url']).query)
+    assert ('prompt' in params) is expects_consent
+    assert params['client_id'] == ['oaiapp_test']
 
 
 @pytest.mark.parametrize('failure', ['exchange', 'identity', 'missing-code'])
@@ -566,6 +576,90 @@ def test_real_litellm_and_assert_structured_transport_use_responses(provider, mo
     assert payloads[0]['input'][0]['role'] == 'developer'
     assert payloads[0]['text']['format']['type'] == 'json_schema'
     assert 'max_output_tokens' not in payloads[0] and 'temperature' not in payloads[0]
+
+
+@pytest.mark.parametrize('status, payload, advice, shape', [
+    (503, {'detail': 'secret provider detail'}, 'temporarily unavailable', 'detail'),
+    (429, {'error': {'code': 'subscription_sharing_usage_limit_exceeded', 'message': 'secret'}}, 'Pause requests', 'error_object'),
+    (401, {'error': {'code': 'subscription_sharing_invalid_user', 'message': 'secret'}}, 'Check the selected account', 'error_object'),
+    (403, {'error': {'code': 'subscription_sharing_user_not_eligible', 'message': 'secret'}}, 'do not loop through sign-in', 'error_object'),
+    (400, {'error': {'code': 'subscription_sharing_unsupported_capability', 'param': 'text.format', 'message': 'secret'}}, 'do not repeat', 'error_object'),
+    (403, {'error': {'code': 'malformed\nsecret', 'message': 'secret'}}, 'Verify the account grant', 'error_object'),
+    (500, 'non-JSON secret body', 'retry later', 'non_json'),
+    (418, ['secret body'], 'Inspect the configured model', 'json'),
+    (503, None, 'retry later', 'non_json'),
+])
+def test_pre_stream_admission_preserves_safe_status_code_and_recovery(provider, monkeypatch, status, payload, advice, shape):
+    from litellm.llms.custom_llm import CustomLLMError
+    authorize(provider, monkeypatch)
+    monkeypatch.setenv('CAE_CHATGPT_EXPECTED_BINDING', provider.binding())
+    before = provider._load()
+    class BrokenBody(httpx.SyncByteStream):
+        def __iter__(self):
+            raise httpx.ReadTimeout('secret interrupted error body')
+            yield b''
+    def handler(request):
+        headers = {'x-request-id': 'req_safe-diagnostic'}
+        if payload is None:
+            return httpx.Response(status, stream=BrokenBody(), headers=headers)
+        if isinstance(payload, str):
+            return httpx.Response(status, text=payload, headers=headers)
+        return httpx.Response(status, json=payload, headers=headers)
+    provider.client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(CustomLLMError) as error:
+        transport.ChatGPTAssertTransport().completion('gpt-test', [{'role': 'user', 'content': 'Synthetic evidence'}])
+    assert error.value.status_code == status
+    message = str(error.value)
+    assert advice in message and f'HTTP {status}' in message and f'body={shape}' in message
+    assert 'req_safe-diagnostic' in message and 'secret' not in message
+    if isinstance(payload, dict) and isinstance(payload.get('error'), dict):
+        code = payload['error']['code']
+        if '\n' not in code:
+            assert f'code={code}' in message
+        if payload['error'].get('param'):
+            assert 'param=text.format' in message
+    assert provider._load() == before
+
+
+@pytest.mark.parametrize('status, code, expected_calls', [
+    (429, 'subscription_sharing_usage_limit_exceeded', 6),
+    (503, 'subscription_sharing_usage_unavailable', 1),
+    (500, 'server_error', 1),
+    (401, 'subscription_sharing_invalid_user', 1),
+    (403, 'subscription_sharing_user_not_eligible', 1),
+    (200, 'response.incomplete', 1),
+])
+def test_upstream_assert_retry_classification_stays_bounded_without_billing_fallback(provider, monkeypatch, status, code, expected_calls):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from assert_ai.core import model_client
+    import litellm
+    authorize(provider, monkeypatch)
+    monkeypatch.setenv('CAE_CHATGPT_EXPECTED_BINDING', provider.binding())
+    monkeypatch.setenv('OPENAI_API_KEY', 'paid-key-must-not-be-used')
+    # Eliminate only wait times in the test, preserving the real upstream
+    # classification/retry loop and real LiteLLM custom-provider routing.
+    monkeypatch.setattr(model_client, '_rate_limiter', SimpleNamespace(
+        wait_if_cooled=AsyncMock(), report_rate_limit=AsyncMock(return_value=True), report_success=lambda *_: None))
+    monkeypatch.setattr(model_client.asyncio, 'sleep', AsyncMock())
+    calls = []
+    def handler(request):
+        calls.append(request)
+        assert str(request.url) == cp.RESOURCE + '/responses'
+        assert request.headers['authorization'] == 'Bearer access-secret'
+        assert json.loads(request.content)['model'] == 'gpt-test'
+        if status == 200:
+            return httpx.Response(200, text='data: ' + json.dumps({'type': code}) + '\n\n')
+        return httpx.Response(status, json={'error': {'code': code}}, headers={'x-request-id': 'req_synthetic'})
+    provider.client = httpx.Client(transport=httpx.MockTransport(handler))
+    transport.register_transport()
+    with pytest.raises((model_client.LLMAuthError, model_client.LLMInputError,
+                        model_client.LLMRateLimitError, model_client.LLMProviderError,
+                        litellm.ServiceUnavailableError, litellm.InternalServerError)):
+        asyncio.run(model_client.generate_structured('chatgpt_plan/gpt-test', [{'role': 'user', 'content': 'Synthetic evidence'}],
+            schema_name='judge', json_schema={'type': 'object', 'properties': {'ok': {'type': 'boolean'}},
+                'required': ['ok'], 'additionalProperties': False}))
+    assert len(calls) == expected_calls
 
 
 def test_local_controls_reject_cross_site_and_hosted_mode(provider, monkeypatch):

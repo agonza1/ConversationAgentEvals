@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import runpy
 from typing import Any
 
@@ -13,6 +14,49 @@ from litellm.llms.custom_llm import CustomLLMError
 from app.services.llm_providers.chatgpt_plan import (
     ChatGPTPlanError, MODEL_PREFIX, RESOURCE, get_chatgpt_provider,
 )
+
+
+class _AdmissionFailure(ChatGPTPlanError):
+    def __init__(self, response: Any) -> None:
+        self.status_code = response.status_code
+        code = None
+        param = None
+        shape = 'non_json'
+        try:
+            payload = response.read()  # Error bodies only: inference streaming has not started.
+            import json
+            payload = json.loads(payload)
+            shape = 'json'
+            if isinstance(payload, dict):
+                error = payload.get('error')
+                shape = 'error_object' if isinstance(error, dict) else 'detail' if 'detail' in payload else 'json'
+                code = error.get('code') if isinstance(error, dict) else error
+                param = error.get('param') if isinstance(error, dict) else None
+        except Exception:
+            pass
+        self.provider_code = code if isinstance(code, str) and re.fullmatch(r'[A-Za-z0-9_.-]{1,120}', code) else None
+        self.provider_param = param if isinstance(param, str) and re.fullmatch(r'[A-Za-z0-9_.\[\]-]{1,120}', param) else None
+        request_id = response.headers.get('x-request-id', '')
+        self.request_id = request_id if re.fullmatch(r'req_[A-Za-z0-9_-]{1,160}', request_id) else None
+        if self.provider_code == 'subscription_sharing_user_not_eligible':
+            advice = 'ChatGPT plan use is unavailable for this account/workspace or policy. Check eligibility; do not loop through sign-in.'
+        elif self.provider_code == 'subscription_sharing_unsupported_capability':
+            advice = 'The configured model or capability is unsupported. Inspect the integration; do not repeat the same invalid request.'
+        elif self.status_code == 429:
+            advice = 'ChatGPT plan requests are rate/usage limited. Pause requests and check ChatGPT Settings usage; no reset time is assumed.'
+        elif self.status_code >= 500:
+            advice = 'ChatGPT service or routing is temporarily unavailable. Credentials were preserved; retry later with bounded backoff.'
+        elif self.status_code == 401:
+            advice = 'ChatGPT identity or direct permission was not accepted. Check the selected account and scopes; reconnect after confirmed revocation.'
+        elif self.status_code == 403:
+            advice = 'ChatGPT admission was denied by policy, region or permission checks. Verify the account grant and integration.'
+        else:
+            advice = 'ChatGPT rejected this request. Inspect the configured model and supported fields.'
+        details = f'HTTP {self.status_code}; body={shape}'
+        if self.provider_code: details += f'; code={self.provider_code}'
+        if self.provider_param: details += f'; param={self.provider_param}'
+        if self.request_id: details += f'; request_id={self.request_id}'
+        super().__init__(f'{advice} [{details}] No API-key fallback was used.')
 
 
 def responses_request(model: str, messages: list, options: dict) -> dict:
@@ -79,7 +123,7 @@ class ChatGPTAssertTransport(CustomLLM):
                     headers={'Authorization': f'Bearer {token}'},
                     timeout=_positive_int_env('ASSERT_JUDGE_TIMEOUT_SECONDS', DEFAULT_ASSERT_JUDGE_TIMEOUT_SECONDS)) as stream:
                 if stream.status_code != 200:
-                    raise ChatGPTPlanError('ChatGPT inference was rejected. Reconnect or check account/model limits; no API-key fallback was used.')
+                    raise _AdmissionFailure(stream)
                 result = collect_response(stream.iter_lines())
             text = ''.join(part.get('text', '') for item in result.get('output', [])
                           if item.get('type') == 'message' for part in item.get('content', [])
@@ -91,8 +135,12 @@ class ChatGPTAssertTransport(CustomLLM):
                 choices=[{'index': 0, 'message': {'role': 'assistant', 'content': text}, 'finish_reason': 'stop'}],
                 usage={'prompt_tokens': usage.get('input_tokens', 0),
                        'completion_tokens': usage.get('output_tokens', 0), 'total_tokens': usage.get('total_tokens', 0)})
+        except _AdmissionFailure as exc:
+            # Preserve pre-stream status/code for upstream ASSERT classification
+            # and its bounded backoff. No inference stream was accepted here.
+            raise CustomLLMError(status_code=exc.status_code, message=str(exc)) from None
         except Exception as exc:
-            # Prevent automatic retries of ambiguous streams or plan-admission failures.
+            # Never automatically retry an ambiguous/incomplete accepted stream.
             safe = str(exc) if isinstance(exc, ChatGPTPlanError) else 'ChatGPT transport failed; no review was saved or API-key fallback used.'
             raise CustomLLMError(status_code=400, message=safe) from None
 

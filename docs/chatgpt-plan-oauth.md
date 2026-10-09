@@ -66,6 +66,7 @@ a fresh dynamic registration; the active account changes only after validation.
 Confirmed terminal refresh errors clear unusable tokens but retain the registration
 and billing choice for reconnect. Temporary network/server failures keep credentials.
 Malformed credential fields block usage with a storage-repair error, never API fallback.
+Ordinary returning sign-in does not force consent when the saved plan grant is intact.
 Disconnect clears selected-account tokens but retains registration/host identity.
 If remote revocation cannot be confirmed, the UI reports that and directs the user
 to disconnect in ChatGPT Settings.
@@ -76,8 +77,15 @@ Unsupported plan fields (including output-token caps and temperature) are omitte
 and not claimed as effective grader settings. Only `response.completed` with a
 completed response and judge text is accepted. Failed, refused, incomplete, malformed,
 or interrupted responses are evaluator errors and do not replace the recorded agent
-result. Plan-limit or ambiguous transport failures are not automatically retried or
-rerouted to another provider. ASSERT's own schema-repair calls remain upstream behavior.
+result. Ambiguous accepted-stream failures are not automatically retried or rerouted
+to another provider. ASSERT's own schema-repair calls remain upstream behavior.
+
+Pre-stream admission errors retain HTTP status, safe code/parameter, body shape and
+request ID without persisting free-form provider bodies. The pinned upstream retry
+policy applies: 429 has bounded backoff; 500/503 currently propagate for operator
+retry rather than automatic backoff. There is no API-key fallback. Account eligibility
+errors direct users to policy checks, not an OAuth loop. Accepted but failed/incomplete
+streams remain non-retryable.
 
 Provenance includes the transport version and a non-secret SHA-256 account/client/host
 binding. Token rotation does not invalidate reviews; account/workspace/model changes
