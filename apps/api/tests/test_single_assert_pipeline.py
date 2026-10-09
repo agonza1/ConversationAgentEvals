@@ -108,6 +108,33 @@ def test_mismatched_vcon_contract_cannot_create_project(assert_pipeline, endpoin
     assert not p.calls
 
 
+@pytest.mark.parametrize('problem', ['missing_evidence', 'missing_contract', 'tampered_contract', 'invalid_conversation'])
+def test_invalid_legacy_import_does_not_create_project(assert_pipeline, monkeypatch, problem):
+    from app.models.entities import ProductProject
+    from app.services import assert_benchmark_adapter
+    p = assert_pipeline
+    report = deepcopy(p.evaluate())
+    report['run_metadata'].pop('product_project_id', None)
+    if problem == 'missing_evidence':
+        report.update(transcript='', action_trace=[], final_state={})
+    elif problem == 'missing_contract':
+        report.pop('evaluation_contract_snapshot', None)
+    elif problem == 'tampered_contract':
+        report['evaluation_contract_snapshot']['sha256'] = '0' * 64
+    else:
+        report['overall_score'] = 'invalid-score'
+    user, project = 'invalid-import-owner', 'invalid-import-project'
+    legacy = {'run_id': 'legacy-import', 'suite_id': report['suite_id'],
+              'scenario_id': report['scenario_id'], 'project_id': project,
+              'transcript': report.get('transcript', ''), 'report': report}
+    monkeypatch.setattr(assert_benchmark_adapter, 'get_benchmark_run', lambda **kwargs: deepcopy(legacy))
+    response = p.client.post('/api/assert/benchmarks/legacy-import/judge', json={'user_id': user})
+    assert response.status_code == 409, response.text
+    with SessionLocal() as db:
+        assert db.query(ProductProject).filter_by(user_id=user, project_key=project).count() == 0
+    assert not p.calls
+
+
 def test_equal_project_keys_keep_distinct_bound_benchmark_identifiers(assert_pipeline):
     """Explicit personal/workspace bindings cannot collapse to one benchmark ID."""
     from app.models.entities import ProductProject, ProductWorkspace, ProductWorkspaceMember

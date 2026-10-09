@@ -68,6 +68,40 @@ def test_wrong_owner_is_non_disclosing_before_evidence(saved, monkeypatch):
     assert response.json()['detail'] == 'Execution run not found.'
 
 
+@pytest.mark.parametrize('value', [
+    'Pending review <script>alert(1)</script> api_key=EXPORT-SECRET',
+    [{'description': 'Pending review', 'api_key': 'EXPORT-SECRET', 'artifact_path': '/tmp/private/result.json'}],
+])
+def test_unstructured_final_state_is_exported_as_unverified_and_sanitized(saved, value):
+    saved[1]['final_state'] = {}
+    saved[1]['unstructured_final_state_evidence'] = value
+    resnapshot(saved)
+    response = download(saved)
+    assert response.status_code == 200, response.text
+    assert 'Unstructured final-state evidence (unverified)' in response.text
+    assert 'not a verified state snapshot or execution receipt' in response.text
+    assert 'Pending review' in response.text
+    assert 'EXPORT-SECRET' not in response.text
+    assert '/tmp/private' not in response.text
+    assert '<script' not in response.text
+    saved[1]['unstructured_final_state_evidence'] = 'Changed evidence'
+    assert download(saved).status_code == 409
+
+
+def test_unstructured_final_state_enforces_private_key_bounds(saved):
+    saved[1]['unstructured_final_state_evidence'] = ['-----BEGIN PRIVATE KEY-----', 'unlabelled material']
+    resnapshot(saved)
+    response = download(saved)
+    assert response.status_code == 409
+    assert 'Private-key block bounds' in response.json()['detail']
+
+
+def test_malformed_unstructured_final_state_is_not_exported(saved):
+    saved[1]['unstructured_final_state_evidence'] = {'not': 'an accepted shape'}
+    resnapshot(saved)
+    assert download(saved).status_code == 409
+
+
 @pytest.mark.parametrize('visible', [False, True])
 def test_project_visibility_and_exact_identity(saved, monkeypatch, visible):
     run, _, _ = saved

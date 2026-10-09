@@ -493,6 +493,8 @@ def deterministic_evaluation_snapshot(conversation: dict[str, Any]) -> dict[str,
         'turns': conversation.get('turns') or [],
         'error': conversation.get('error'),
     }
+    if conversation.get('unstructured_final_state_evidence') is not None:
+        evidence['unstructured_final_state_evidence'] = conversation['unstructured_final_state_evidence']
     serialized = json.dumps(evidence, ensure_ascii=False, sort_keys=True, default=str)
     return {
         'verdict': evidence['verdict'],

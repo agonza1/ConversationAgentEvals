@@ -129,6 +129,9 @@ test('real saved API result downloads through the browser without an export mock
   const run = structuredClone(runFixture);
   run.execution_run_id = `exec-assert-api-${randomUUID()}`;
   run.conversations[0].execution_run_id = run.execution_run_id;
+  Object.assign(run.conversations[0], {
+    unstructured_final_state_evidence: 'Unverified source outcome <script>alert(1)</script> api_key=EXPORT-SECRET',
+  });
   const seededDir = path.resolve('artifacts/execution-runs', run.execution_run_id);
   mkdirSync(seededDir, { recursive: true });
   // Materialize this synthetic fixture with the current frozen-input contract.
@@ -166,6 +169,10 @@ test('real saved API result downloads through the browser without an export mock
     await expect(offline.getByText(run.execution_run_id, { exact: true })).toBeVisible();
     await offline.getByText('Tool evidence 1: open_review_case', { exact: true }).click();
     await expect(offline.getByText('"refund_issued": false', { exact: false }).first()).toBeVisible();
+    await offline.getByText('Unstructured final-state evidence (unverified)', { exact: true }).click();
+    await expect(offline.getByText('Unverified source outcome', { exact: false })).toBeVisible();
+    await expect(offline.locator('script')).toHaveCount(0);
+    await expect(offline.locator('body')).not.toContainText('EXPORT-SECRET');
     await offline.screenshot({ path: path.join(artifactDir, 'real-api-offline-report.png'), fullPage: true });
     expect(remoteRequests).toEqual([]);
     expect(judgeCalls).toBe(0);
