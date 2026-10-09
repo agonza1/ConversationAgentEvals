@@ -574,12 +574,7 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, A
     run_id = _run_id(suite_id, scenario_id, evidence_artifacts, run_metadata, lifecycle_context)
     scenario_contract = _scenario_contract(scenario)
     run_id = f'{run_id}-spec-{content_hash(scenario_contract)[:12]}'
-    imported_profile = vcon_intake.get('profile')
-    if imported_profile:
-        from app.services.vcon_evidence import decode_evidence
-        context = (decode_evidence(payload['vcon']) or {}).get('context', {})
-        if context.get('scenario_contract_sha256') and context['scenario_contract_sha256'] != _stable_digest(scenario_contract):
-            raise ValueError('The vCon scenario contract differs from the current scenario; select matching evidence or regenerate it')
+    validate_imported_contract(payload, scenario_contract)
     suite_contract_manifest = get_suite_contract_manifest(suite_id)
     suite_contract_manifest_sha256 = str(suite_contract_manifest['suite_contract_manifest_sha256']) if suite_contract_manifest else ''
 
@@ -1336,6 +1331,16 @@ def run_suite(request: Any) -> dict[str, Any]:
     return _suite_report(suite, suite_id, payload, scenario_reports)
 
 
+def validate_imported_contract(payload: dict[str, Any], scenario_contract: dict[str, Any]) -> None:
+    """Read-only contract admission shared by HTTP preflight and evaluation."""
+    from app.services.vcon_evidence import decode_evidence
+    vcon = payload.get('vcon')
+    if isinstance(vcon, dict):
+        context = (decode_evidence(vcon) or {}).get('context', {})
+        if context.get('scenario_contract_sha256') and context['scenario_contract_sha256'] != _stable_digest(scenario_contract):
+            raise ValueError('The vCon scenario contract differs from the current scenario; select matching evidence or regenerate it')
+
+
 def validate_suite_evidence(suite: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     """Validate all supplied scenario containers before project/queue mutations."""
     evidence_by_scenario = (
@@ -1353,7 +1358,11 @@ def validate_suite_evidence(suite: dict[str, Any], payload: dict[str, Any]) -> d
         raise ValueError(f"Missing evidence for scenarios: {', '.join(missing_scenarios)}")
 
     for scenario in suite['scenarios']:
-        _suite_scenario_attempt_payloads(evidence_by_scenario[scenario['id']], scenario['id'])
+        attempts = _suite_scenario_attempt_payloads(evidence_by_scenario[scenario['id']], scenario['id'])
+        for attempt in attempts:
+            normalized, _ = normalize_assert_payload({**attempt, 'suite_id': suite['id'], 'scenario_id': scenario['id']})
+            normalized, _ = intake_vcon(normalized)
+            validate_imported_contract(normalized, _scenario_contract(scenario))
     return evidence_by_scenario
 
 

@@ -17,6 +17,7 @@ from app.services.design_enforcement import evaluate_design
 @pytest.mark.parametrize('endpoint,extra', [
     ('/run', {'suite_id': 'unknown-suite', 'scenario_id': 'unknown', 'transcript': 'User: Test'}),
     ('/run', {'suite_id': 'call-center-voice-ai', 'scenario_id': 'unknown', 'transcript': 'User: Test'}),
+    ('/run', {'suite_id': 'call-center-voice-ai', 'scenario_id': 'refund-policy-boundary', 'transcript': 'User: Test', 'attempt': 0}),
     ('/simulate', {'suite_id': 'unknown-suite', 'scenario_id': 'unknown'}),
     ('/simulate', {'suite_id': 'call-center-voice-ai', 'scenario_id': 'unknown'}),
     ('/unknown-suite/run', {}),
@@ -82,6 +83,29 @@ def test_vcon_only_target_and_whitespace_aliases_still_evaluate(assert_pipeline)
         'transcript': 'User: Refund? Agent: Review is pending.',
         'user_id': 'alias-target-owner', 'project_id': 'alias-target-project'})
     assert aliases.status_code == 200, aliases.text
+
+
+@pytest.mark.parametrize('endpoint', ['/run', '/call-center-voice-ai/run', '/call-center-voice-ai/run-async'])
+def test_mismatched_vcon_contract_cannot_create_project(assert_pipeline, endpoint):
+    from app.models.entities import ProductProject
+    p = assert_pipeline
+    vcon = p.client.get('/api/benchmarks/evidence/sample-vcon', params={
+        'suite_id': 'call-center-voice-ai', 'scenario_id': 'refund-policy-boundary'}).json()
+    vcon['attachments'][0]['body']['context']['scenario_contract_sha256'] = 'mismatched-contract'
+    user, project = 'invalid-contract-owner', 'invalid-contract-project'
+    body = {'user_id': user, 'project_id': project}
+    if endpoint == '/run':
+        body['vcon'] = vcon
+    else:
+        suite = benchmark_service.get_suite('call-center-voice-ai')
+        body['scenario_evidence'] = {s['id']: {} for s in suite['scenarios']}
+        body['scenario_evidence']['refund-policy-boundary'] = {'vcon': vcon}
+    response = p.client.post('/api/benchmarks' + endpoint, json=body)
+    assert response.status_code in {404, 422}, response.text
+    assert 'contract differs' in response.json()['detail']
+    with SessionLocal() as db:
+        assert db.query(ProductProject).filter_by(user_id=user, project_key=project).count() == 0
+    assert not p.calls
 
 
 def test_equal_project_keys_keep_distinct_bound_benchmark_identifiers(assert_pipeline):

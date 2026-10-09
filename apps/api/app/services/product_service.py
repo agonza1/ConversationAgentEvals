@@ -1524,7 +1524,7 @@ def _default_project_name(project_id: str) -> str:
 
 
 def ensure_execution_product_project_id(db: Session, user_id: str, project_id: str,
-                                        product_project_id: str | None) -> str | None:
+                                        product_project_id: str | None, *, commit: bool = True) -> str | None:
     """Mutation-only admission: resolve/create the project BEFORE request fingerprinting.
 
     Read-only access/freshness checks keep using resolve_execution_product_project_id.
@@ -1534,5 +1534,6 @@ def ensure_execution_product_project_id(db: Session, user_id: str, project_id: s
     if binding is not None or not project_id:
         return binding
     project = _get_or_create_project(db=db, user_id=user_id, project_id=project_id, plan='free')
-    db.commit()
+    if commit:
+        db.commit()
     return project.id

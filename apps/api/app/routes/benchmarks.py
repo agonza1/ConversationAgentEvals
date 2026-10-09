@@ -21,6 +21,7 @@ from app.services.benchmark_service import (
     simulate_scenario,
     simulate_suite,
     validate_suite_evidence,
+    validate_imported_contract,
 )
 from app.services.benchmark_run_store import (
     DEFAULT_PROJECT_ID,
@@ -77,8 +78,11 @@ def _bind_benchmark_project(db: Session, payload: dict[str, Any], *,
             validate_suite_evidence(suite, payload)
     elif not scenario_id:
         raise ValueError('scenario_id is required')
-    elif get_scenario_contract(suite_id, scenario_id) is None:
-        raise ValueError(f'Unknown benchmark scenario: {suite_id}/{scenario_id}')
+    else:
+        contract = get_scenario_contract(suite_id, scenario_id)
+        if contract is None:
+            raise ValueError(f'Unknown benchmark scenario: {suite_id}/{scenario_id}')
+        validate_imported_contract(validation_payload, contract['scenario_contract'])
 
     metadata = _run_metadata(payload)
     user_id = metadata.get('user_id') or DEFAULT_USER_ID
@@ -88,6 +92,9 @@ def _bind_benchmark_project(db: Session, payload: dict[str, Any], *,
         user_id=user_id,
         project_id=project_id,
         product_project_id=metadata.get('product_project_id'),
+        # Flush assigns a stable ID before hashing, but persist/queue commits
+        # it with the admitted run. Any later validation error rolls it back.
+        commit=False,
     )
     return {**payload, 'user_id': user_id, 'project_id': project_id,
             'product_project_id': product_project_id}
