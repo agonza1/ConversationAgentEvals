@@ -97,6 +97,18 @@ def judge_execution_conversation(
                 project_id=project_id,
                 product_project_id=product_project_id,
             )
+            if product_project_id:
+                # Once a project has been resolved (or created), persist the
+                # binding before judging. Later read/export/apply requests must
+                # never have to guess which workspace shares this project key.
+                run = execution_run_store.bind_execution_run_product_project(
+                    execution_run_id,
+                    user_id=payload.user_id,
+                    project_id=project_id,
+                    product_project_id=product_project_id,
+                )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
         except ValueError as exc:
             raise HTTPException(
                 status_code=409,
