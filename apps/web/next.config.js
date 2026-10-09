@@ -13,6 +13,9 @@ const nextConfig = {
   // `.next` cache can strand the dev server with missing manifests until restart.
   distDir: process.env.NEXT_DIST_DIR || '.next',
   typedRoutes: true,
+  // ASSERT's bounded judge call can take up to 300s. Keep rewrites alive long
+  // enough to deliver its result or safe error, rather than a 30s socket reset.
+  experimental: { proxyTimeout: 360_000 },
   // Local demos often open either localhost or 127.0.0.1; without this, Next 15 can
   // block cross-origin /_next assets and leave client components stuck mid-load.
   allowedDevOrigins: ['127.0.0.1', 'localhost', '192.168.86.28'],

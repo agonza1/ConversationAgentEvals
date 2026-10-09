@@ -541,11 +541,41 @@ def test_partial_stream_never_produces_review(terminal):
     with pytest.raises(cp.ChatGPTPlanError): transport.collect_response(['data: ' + json.dumps(e) for e in events])
 
 
+@pytest.mark.parametrize('snapshot', ['empty', 'item_done', 'terminal'])
+def test_completed_stream_retains_text_without_duplicate_deltas(snapshot):
+    message = {'type': 'message', 'content': [{'type': 'output_text', 'text': '{"ok":true}'}]}
+    events = [{'type': 'response.output_text.delta', 'delta': '{"ok":'},
+              {'type': 'response.output_text.delta', 'delta': 'true}'}]
+    if snapshot == 'item_done':
+        events.append({'type': 'response.output_item.done', 'item': message})
+    events.append({'type': 'response.completed', 'response': {'id': 'resp-test', 'status': 'completed',
+                   'output': [message] if snapshot == 'terminal' else [],
+                   'usage': {'total_tokens': 11}}})
+    result = transport.collect_response(['data: ' + json.dumps(e) for e in events])
+    assert result['output'] == [message]
+    assert result['usage']['total_tokens'] == 11
+
+
+@pytest.mark.parametrize('location', ['delta', 'item_done', 'terminal'])
+def test_completed_refusal_never_uses_previous_text(location):
+    refusal = {'type': 'message', 'content': [{'type': 'refusal', 'refusal': 'No'}]}
+    events = [{'type': 'response.output_text.delta', 'delta': '{"looks":"valid"}'}]
+    if location == 'delta':
+        events.append({'type': 'response.refusal.delta', 'delta': 'No'})
+    if location == 'item_done':
+        events.append({'type': 'response.output_item.done', 'item': refusal})
+    events.append({'type': 'response.completed', 'response': {'status': 'completed',
+                   'output': [refusal] if location == 'terminal' else []}})
+    with pytest.raises(cp.ChatGPTPlanError, match='refused'):
+        transport.collect_response(['data: ' + json.dumps(e) for e in events])
+
+
 @pytest.mark.parametrize('raw_timeout, expected_timeout', [
     (None, 300), ('invalid', 300), ('0', 300), ('-1', 300), ('1.5', 300),
     ('', 300), ('NaN', 300), ('inf', 300), ('45', 45),
 ])
-def test_real_litellm_and_assert_structured_transport_use_responses(provider, monkeypatch, raw_timeout, expected_timeout):
+@pytest.mark.parametrize('terminal_text', [True, False])
+def test_real_litellm_and_assert_structured_transport_use_responses(provider, monkeypatch, raw_timeout, expected_timeout, terminal_text):
     authorize(provider, monkeypatch)
     if raw_timeout is None:
         monkeypatch.delenv('ASSERT_JUDGE_TIMEOUT_SECONDS', raising=False)
@@ -559,9 +589,11 @@ def test_real_litellm_and_assert_structured_transport_use_responses(provider, mo
         assert request.extensions['timeout']['read'] == expected_timeout
         payloads.append(json.loads(request.content))
         event = {'type': 'response.completed', 'response': {'id': 'resp-test', 'status': 'completed',
-            'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': '{"ok":true}'}]}],
+            'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': '{"ok":true}'}]}] if terminal_text else [],
             'usage': {'input_tokens': 7, 'output_tokens': 4, 'total_tokens': 11}}}
-        return httpx.Response(200, text='data: ' + json.dumps(event) + '\n\n', headers={'content-type': 'text/event-stream'})
+        events = [{'type': 'response.output_text.delta', 'delta': '{"ok":true}'}, event]
+        return httpx.Response(200, text=''.join('data: ' + json.dumps(e) + '\n\n' for e in events),
+                              headers={'content-type': 'text/event-stream'})
     provider.client = httpx.Client(transport=httpx.MockTransport(handler))
     monkeypatch.setenv('CAE_CHATGPT_EXPECTED_BINDING', provider.binding())
     transport.register_transport()

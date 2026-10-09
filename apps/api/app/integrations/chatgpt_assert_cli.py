@@ -89,6 +89,9 @@ def collect_response(lines: Any) -> dict:
     """Never return partial text on a failed/incomplete/interrupted stream."""
     import json
     completed = None
+    deltas: list[str] = []
+    messages: list[dict] = []
+    refused = False
     for line in lines:
         if not line.startswith('data:'):
             continue
@@ -99,7 +102,19 @@ def collect_response(lines: Any) -> dict:
             event = json.loads(data)
         except ValueError as exc:
             raise ChatGPTPlanError('ChatGPT returned an invalid response stream; no review was saved.') from exc
+        if not isinstance(event, dict):
+            raise ChatGPTPlanError('ChatGPT returned an invalid response event; no review was saved.')
         kind = event.get('type')
+        if kind == 'response.output_text.delta':
+            if not isinstance(event.get('delta'), str):
+                raise ChatGPTPlanError('ChatGPT returned invalid streamed text; no review was saved.')
+            deltas.append(event['delta'])
+        if kind in {'response.refusal.delta', 'response.refusal.done'}:
+            refused = True
+        if kind == 'response.output_item.done':
+            item = event.get('item')
+            if isinstance(item, dict) and item.get('type') == 'message':
+                messages.append(item)
         if kind in {'error', 'response.failed', 'response.incomplete'}:
             code = (event.get('response', {}).get('error') or event.get('error') or {}).get('code')
             if code in {'subscription_sharing_usage_limit_exceeded', 'subscription_sharing_usage_unavailable'}:
@@ -109,6 +124,27 @@ def collect_response(lines: Any) -> dict:
             completed = event.get('response')
     if not isinstance(completed, dict) or completed.get('status') != 'completed':
         raise ChatGPTPlanError('ChatGPT stream ended without completed inference; no review was saved.')
+    output = completed.get('output') or []
+    for item in [*output, *messages]:
+        if isinstance(item, dict) and item.get('type') == 'message':
+            refused |= any(part.get('type') == 'refusal' for part in item.get('content') or []
+                           if isinstance(part, dict))
+    if refused:
+        raise ChatGPTPlanError('ChatGPT refused the judge input; no review was saved.')
+    # Plan-use streams may deliver the text in events without repeating it in
+    # the terminal snapshot. Only expose it AFTER completed inference, never on
+    # failure/truncation. Prefer complete snapshots to avoid duplicating deltas.
+    def has_text(items: list) -> bool:
+        return any(isinstance(item, dict) and item.get('type') == 'message'
+                   and any(isinstance(part, dict) and part.get('type') == 'output_text'
+                           and isinstance(part.get('text'), str) and part['text']
+                           for part in item.get('content') or []) for item in items)
+    if not has_text(output):
+        if has_text(messages):
+            completed = {**completed, 'output': [*output, *messages]}
+        elif deltas:
+            completed = {**completed, 'output': [*output, {'type': 'message',
+                'content': [{'type': 'output_text', 'text': ''.join(deltas)}]}]}
     return completed
 
 
