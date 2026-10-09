@@ -40,7 +40,7 @@ DEFAULT_ASSERT_JUDGE_TIMEOUT_SECONDS = 300
 DEFAULT_ASSERT_JUDGE_CREDITS = 10
 DEFAULT_ASSERT_JUDGE_MAX_CONCURRENT = 2
 DEFAULT_ASSERT_JUDGE_MAX_N = 1
-FINGERPRINT_VERSION = 2
+FINGERPRINT_VERSION = 3
 ADAPTER_VERSION = 'cae-assert-evidence-v2'
 AGGREGATION_VERSION = 'cae-assert-observability-v2'
 
@@ -758,15 +758,25 @@ def _positive_int_env(name: str, default: int) -> int:
 def judge_configuration(model: str, judge_n: int) -> dict[str, Any]:
     """All execution-affecting grader settings, excluding secrets and invocation paths."""
     from app.integrations.assert_runtime import BUILT_IN_DIMENSIONS
+    # Routing changes must invalidate a saved judge result, but provider URLs
+    # can contain basic-auth passwords, API tokens or private gateway names.
+    # Only a stable aggregate digest may cross into persisted provenance.
+    provider_identity = content_hash({
+        key: os.getenv(key, '')
+        for key in (
+            'OPENAI_API_BASE', 'OPENAI_BASE_URL', 'AZURE_API_BASE',
+            'AZURE_API_VERSION', 'ANTHROPIC_API_BASE', 'OLLAMA_API_BASE',
+            'GEMINI_API_BASE', 'AWS_REGION_NAME', 'VERTEXAI_PROJECT',
+            'VERTEXAI_LOCATION',
+        )
+    })
     return {'fingerprint_version': FINGERPRINT_VERSION, 'assert_version': _assert_version(),
             'adapter_version': ADAPTER_VERSION, 'aggregation_version': AGGREGATION_VERSION,
             'model': model, 'judge_n': judge_n,
             'model_settings': {'name': model, 'max_tokens': _positive_int_env('ASSERT_JUDGE_MAX_TOKENS', 8000)},
             'timeout_seconds': _positive_int_env('ASSERT_JUDGE_TIMEOUT_SECONDS', DEFAULT_ASSERT_JUDGE_TIMEOUT_SECONDS),
             'dimensions': _judge_dimensions(), 'builtin_dimensions': deepcopy(BUILT_IN_DIMENSIONS),
-            'provider_endpoints': {key: os.getenv(key, '') for key in
-                ('OPENAI_API_BASE', 'OPENAI_BASE_URL', 'AZURE_API_BASE', 'AZURE_API_VERSION', 'ANTHROPIC_API_BASE',
-                 'OLLAMA_API_BASE', 'GEMINI_API_BASE', 'AWS_REGION_NAME', 'VERTEXAI_PROJECT', 'VERTEXAI_LOCATION')}}
+            'provider_endpoint_identity_sha256': provider_identity}
 
 
 def _input_fingerprint(model: str, judge_n: int, taxonomy: dict[str, Any], inference: dict[str, Any]) -> str:
