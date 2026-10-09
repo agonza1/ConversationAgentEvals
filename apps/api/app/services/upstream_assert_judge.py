@@ -72,6 +72,7 @@ def run_upstream_assert_judge(
     model_name: str | None = None,
     judge_n: int = 1,
     artifact_root: Path | None = None,
+    expected_input_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     """Execute ASSERT's existing judge-only pipeline over one completed CAE conversation."""
     if os.getenv('ASSERT_UPSTREAM_JUDGE_ENABLED', '').strip().lower() not in {'1', 'true', 'yes', 'on'}:
@@ -99,6 +100,9 @@ def run_upstream_assert_judge(
     judge_dimensions = configuration['dimensions']
     score_contract = judge_score_contract(judge_dimensions)
     fingerprint = _input_fingerprint(model, judge_n, taxonomy, inference, configuration=configuration)
+    if expected_input_fingerprint is not None and fingerprint != expected_input_fingerprint:
+        raise UpstreamAssertJudgeUnavailable(
+            'Judge configuration or ChatGPT account changed after this request was claimed; start a new review.')
 
     try:
         executable = cli_executable()

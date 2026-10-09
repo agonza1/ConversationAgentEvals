@@ -400,6 +400,9 @@ class ChatGPTPlanProvider:
                     pass  # Callback URLs contain authorization codes.
 
             self._server = ThreadingHTTPServer((os.getenv('CHATGPT_PLAN_CALLBACK_BIND_HOST', '127.0.0.1'), CALLBACK_PORT), Handler)
+            # Callback handlers stop the listener after consuming the attempt.
+            # Do not join the current request thread from server_close().
+            self._server.daemon_threads = True
             threading.Thread(target=self._server.serve_forever, daemon=True).start()
         self._timer = threading.Timer(600, self._expire, args=(self._generation,))
         self._timer.daemon = True

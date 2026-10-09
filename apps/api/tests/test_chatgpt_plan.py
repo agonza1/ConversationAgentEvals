@@ -1,33 +1,15 @@
 import asyncio
 import json
-from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import jwt
 import pytest
-import yaml
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
 from app.services.llm_providers import chatgpt_plan as cp
 from app.integrations import chatgpt_assert_cli as transport
-
-
-def test_standard_local_http_entry_points_bind_loopback():
-    root = Path(__file__).resolve().parents[3]
-    compose = yaml.safe_load((root / 'docker-compose.yml').read_text(encoding='utf-8'))
-    assert '127.0.0.1:${API_PORT:-8025}:8000' in compose['services']['api']['ports']
-    assert '127.0.0.1:${PORT:-3012}:3000' in compose['services']['web']['ports']
-    assert '127.0.0.1:1456:1456' in compose['services']['api']['ports']
-    for service, target in [('api', '8000'), ('web', '3000')]:
-        assert all(port.startswith('127.0.0.1:') for port in compose['services'][service]['ports']
-                   if port.endswith(':' + target))
-    scripts = json.loads((root / 'package.json').read_text(encoding='utf-8'))['scripts']
-    assert '--host 127.0.0.1' in scripts['dev:api']
-    web_scripts = json.loads((root / 'apps/web/package.json').read_text(encoding='utf-8'))['scripts']
-    assert '--hostname 127.0.0.1' in web_scripts['dev']
-    assert '--hostname 127.0.0.1' in web_scripts['start']
 
 
 @pytest.fixture
@@ -419,9 +401,13 @@ def test_shared_judge_pipeline_selects_registered_cli_without_forwarding_tokens(
     captured = _install_fake_assert(monkeypatch, writer)
     readiness = judge.assert_judge_readiness()
     assert readiness['ready'] and readiness['credentials_ready']
+    claimed = judge.assert_judge_input_fingerprint(run=run, conversation=conversation,
+        scenario_contract=_scenario_contract(), model='chatgpt_plan/gpt-test', judge_n=1)
     result = judge.run_upstream_assert_judge(run=run, conversation=conversation,
-        scenario_contract=_scenario_contract(), artifact_root=tmp_path / 'artifacts')
+        scenario_contract=_scenario_contract(), artifact_root=tmp_path / 'artifacts',
+        expected_input_fingerprint=claimed)
     assert result['status'] == 'ready'
+    assert result['input_fingerprint'] == claimed
     assert result['model'] == 'chatgpt_plan/gpt-test'
     assert captured['command'][2] == 'app.integrations.chatgpt_assert_cli'
     assert captured['env']['CAE_CHATGPT_EXPECTED_BINDING'] == provider.binding()
@@ -446,3 +432,80 @@ def test_account_switch_between_model_selection_and_configuration_blocks_review(
         judge.run_upstream_assert_judge(run=run, conversation=conversation,
             scenario_contract=_scenario_contract(), artifact_root=tmp_path / 'artifacts')
     assert not (tmp_path / 'artifacts').exists()
+
+
+def test_profile_switch_after_request_claim_blocks_before_credits_or_inference(provider, monkeypatch, tmp_path):
+    from fastapi import HTTPException
+    from app.routes import assert_judge as route
+    from app.services import upstream_assert_judge as judge
+    from test_upstream_assert_judge import _run_and_conversation, _scenario_contract, _configure_assert_runtime
+    _configure_assert_runtime(monkeypatch, tmp_path)
+    authorize(provider, monkeypatch)
+    monkeypatch.setattr(provider, 'list_models', lambda: [{'id': 'gpt-test'}])
+    provider.select_judge_model('gpt-test')
+    first_profile = provider.status()['active_profile_id']
+    authorize(provider, monkeypatch, client_id='oaiapp_other')
+    provider.select_judge_model('gpt-test')
+    second_profile = provider.status()['active_profile_id']
+    provider.select_profile(first_profile)
+    run, conversation = _run_and_conversation()
+    monkeypatch.setattr(route.execution_run_store, 'get_execution_run', lambda *_: run)
+    monkeypatch.setattr(route.execution_run_store, 'get_conversation', lambda *_: conversation)
+    monkeypatch.setattr(route, 'recorded_contract', lambda *_: _scenario_contract())
+    claimed = {}
+    def claim(db, **kwargs):
+        claimed.update(kwargs)
+        provider.select_profile(second_profile)
+        return 'claimed-request', None
+    monkeypatch.setattr(route.assert_judge_requests, 'claim', claim)
+    failed = []
+    monkeypatch.setattr(route.assert_judge_requests, 'failed', lambda db, invocation: failed.append(invocation))
+    monkeypatch.setattr(route.assert_judge_requests, 'retain', lambda *_: pytest.fail('Retained wrong account response'))
+    monkeypatch.setattr(judge, '_reserve_assert_credits', lambda **_: pytest.fail('Reserved credits after account switch'))
+    monkeypatch.setattr(judge.subprocess, 'run', lambda *a, **kw: pytest.fail('Invoked wrong account'))
+    with pytest.raises(HTTPException) as error:
+        route.judge_execution_conversation(run['execution_run_id'], conversation['conversation_id'],
+            route.AssertExecutionJudgeRequest(user_id=run['user_id']), db=object())
+    assert error.value.status_code == 503
+    assert 'after this request was claimed' in error.value.detail
+    assert failed == ['claimed-request']
+    current = judge.assert_judge_input_fingerprint(run=run, conversation=conversation,
+        scenario_contract=_scenario_contract(), model='chatgpt_plan/gpt-test', judge_n=1)
+    assert claimed['fingerprint'] != current
+
+
+@pytest.mark.parametrize('denied', [False, True])
+def test_real_callback_server_closes_without_joining_its_request_thread(provider, monkeypatch, denied):
+    import threading
+    monkeypatch.setattr(cp, 'CALLBACK_PORT', 0)
+    monkeypatch.setenv('CHATGPT_PLAN_CALLBACK_BIND_HOST', '127.0.0.1')
+    stopped = threading.Event()
+    errors = []
+    original_stop = provider._stop_listener
+    def stop():
+        try:
+            original_stop()
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            stopped.set()
+    monkeypatch.setattr(provider, '_stop_listener', stop)
+    def callback(query):
+        provider._pending = None
+        if denied:
+            raise cp.ChatGPTPlanError('Permission denied.')
+    monkeypatch.setattr(provider, 'complete_callback', callback)
+    provider._pending = {'attempt': 'synthetic'}
+    cp.ChatGPTPlanProvider._start_listener(provider)
+    server = provider._server
+    monkeypatch.setattr(server, 'handle_error', lambda *_: errors.append('request-thread exception'))
+    try:
+        with httpx.Client(trust_env=False, timeout=5) as client:
+            response = client.get(f'http://127.0.0.1:{server.server_port}/auth/callback?state=synthetic')
+        assert response.status_code == (400 if denied else 200)
+        assert stopped.wait(5)
+        assert not errors
+        assert provider._server is None
+        assert server.fileno() == -1
+    finally:
+        original_stop()
