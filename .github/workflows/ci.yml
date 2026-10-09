@@ -29,5 +29,5 @@ jobs:
       - run: npm run test:api
       - run: npm run test:benchmark-smoke
       - run: npm run test:voice-lab-proof
-      - run: node --test apps/web/tests/evidence-timeline.test.cjs apps/web/tests/assert-review-model.test.cjs
+      - run: node --test apps/web/tests/evidence-timeline.test.cjs apps/web/tests/assert-review-model.test.cjs apps/web/tests/next-proxy-timeout.test.cjs
       - run: npm run build:web
