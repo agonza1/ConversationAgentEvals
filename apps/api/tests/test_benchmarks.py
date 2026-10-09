@@ -2382,7 +2382,14 @@ def test_simulate_suite_endpoint_returns_full_suite_regression_run():
     assert payload['pass_count'] == 0  # No semantic judge has run.
     assert payload['reliability_metrics']['pass_at_1'] == 0.0
     assert payload['reliability_metrics']['accuracy_score'] >= 0.75
-    assert payload['run_metadata'] == {'agent_version': 'agent-v1'}
+    assert payload['run_metadata']['agent_version'] == 'agent-v1'
+    assert payload['run_metadata']['user_id'] == 'anonymous'
+    assert payload['run_metadata']['project_id'] == 'default'
+    with SessionLocal() as db:
+        from app.models.entities import ProductProject
+        project = db.get(ProductProject, payload['run_metadata']['product_project_id'])
+        assert project is not None
+        assert project.user_id == 'anonymous' and project.project_key == 'default'
     assert payload['scenario_runs'][0]['benchmark_report']['suite_id'] == 'call-center-voice-ai'
     assert payload['vcon_export']['source_format'] == 'benchmark_suite'
     assert payload['vcon_export']['analysis'][0]['body']['suite_run_id'] == payload['suite_run_id']
