@@ -24,7 +24,7 @@ Predictions are a separate JSON array:
 [{"case_id":"refund-001","outcomes":{"explanation":"pass","refund_execution":"not_observable"}}]
 ```
 
-Both use stable check IDs. Label states are `pass`, `fail`, `not_observable`, and `not_applicable`; predictions additionally support `error` for evaluator failures. Missing predictions count as unresolved coverage, not agent failure. Map the saved ASSERT `judge_result.check_results` IDs to the same reviewed rubric IDs before comparison; do not infer operational success from a transcript.
+Both use stable check IDs. Label states are `pass`, `fail`, `not_observable`, and `not_applicable`; predictions additionally support `error` for evaluator failures. Missing predictions count as unresolved coverage, not agent failure. A case missing **any** labeled check also counts as missing in overall-case coverage; an explicitly predicted `not_observable` is unresolved but not missing. Map the saved ASSERT `judge_result.check_results` IDs to the same reviewed rubric IDs before comparison; do not infer operational success from a transcript.
 
 ```bash
 apps/api/.venv/bin/python scripts/calibrate-judge.py \
