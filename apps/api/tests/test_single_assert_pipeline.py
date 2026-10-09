@@ -14,6 +14,130 @@ from app.services.assert_review_status import saved_assert_review_freshness
 from app.services.design_enforcement import evaluate_design
 
 
+def test_first_benchmark_binding_is_stable_on_repeat_and_saved_judge(assert_pipeline):
+    """Persist a new project identity before hashing any benchmark artifacts."""
+    from app.models.entities import ProductProject
+    from app.services.benchmark_run_store import get_benchmark_run
+
+    p = assert_pipeline
+    user, project = 'first-binding-owner', 'first-binding-project'
+    first = p.evaluate(user_id=user, project_id=project)
+    binding = first['run_metadata']['product_project_id']
+    assert binding
+    with SessionLocal() as db:
+        records = db.query(ProductProject).filter_by(user_id=user, project_key=project).all()
+        assert len(records) == 1 and records[0].id == binding
+        assert get_benchmark_run(db=db, user_id=user, run_id=first['run_id'])['report']['run_metadata']['product_project_id'] == binding
+
+    # This second payload models a reloaded UI which now knows the project UUID.
+    second = p.evaluate(user_id=user, project_id=project, product_project_id=binding)
+    assert second['run_id'] == first['run_id']
+    assert second['logical_run_id'] == first['logical_run_id']
+    assert second['run_metadata'] == first['run_metadata']
+    first_judge = p.judge(first)
+    assert first_judge.status_code == 200, first_judge.text
+    repeat_judge = p.judge(second)
+    assert repeat_judge.status_code == 200, repeat_judge.text
+    assert repeat_judge.json()['review_id'] == first_judge.json()['review_id']
+    assert repeat_judge.json()['reused'] is True
+    assert len(p.calls) == 1 and p.spent() == 10
+
+
+def test_simulation_binds_project_before_its_report_id(assert_pipeline):
+    p = assert_pipeline
+    body = {
+        'suite_id': 'call-center-voice-ai',
+        'scenario_id': 'refund-policy-boundary',
+        'user_id': 'simulation-binding-owner',
+        'project_id': 'simulation-binding-project',
+    }
+    first = p.client.post('/api/benchmarks/simulate', json=body)
+    assert first.status_code == 200, first.text
+    first_report = first.json()['benchmark_report']
+    binding = first_report['run_metadata']['product_project_id']
+    assert binding
+    second = p.client.post('/api/benchmarks/simulate', json={**body, 'product_project_id': binding})
+    assert second.status_code == 200, second.text
+    second_report = second.json()['benchmark_report']
+    assert second_report['run_id'] == first_report['run_id']
+    assert second_report['logical_run_id'] == first_report['logical_run_id']
+
+
+def test_legacy_execution_review_persists_binding_across_reload_and_key_collision(assert_pipeline):
+    """Project created during the first judge must remain selectable forever."""
+    from app.models.entities import ProductProject, ProductWorkspace, ProductWorkspaceMember
+    from app.schemas.execution import ConversationRecord, ExecutionRunRecord, ExecutionRunProgress
+
+    p = assert_pipeline
+    user, project = 'late-project-owner', 'late-project-key'
+    run_id = 'unbound-execution-project-158'
+    conversation_id = run_id + '-conversation'
+    contract = freeze_contract({'goal': 'Explain refund review without promising completion.'})
+    conversation = ConversationRecord(
+        conversation_id=conversation_id, execution_run_id=run_id,
+        suite_id='call-center-voice-ai', scenario_id='refund-policy-boundary',
+        mode='text_callable', status='needs_review',
+        transcript='User: Is the refund complete?\\nAgent: The review is still pending.',
+        verdict='needs_review', score=50,
+        evaluation_findings={'evaluation_contract_snapshot': contract},
+    )
+    execution_run_store.create_execution_run(ExecutionRunRecord(
+        execution_run_id=run_id, status='needs_review', mode='text_callable',
+        suite_id='call-center-voice-ai', scenario_ids=['refund-policy-boundary'],
+        user_id=user, project_id=project,
+        conversations=[conversation],
+        progress=ExecutionRunProgress(phase='completed', completed_conversations=1,
+                                      total_conversations=1, percent=100),
+        created_at='2026-10-08T10:00:00+00:00',
+        updated_at='2026-10-08T10:00:00+00:00',
+        completed_at='2026-10-08T10:00:00+00:00',
+    ))
+    with SessionLocal() as db:
+        assert not db.query(ProductProject).filter_by(user_id=user, project_key=project).all()
+
+    route = f'/api/assert/runs/{run_id}/conversations/{conversation_id}'
+    response = p.client.post(route + '/judge', json={'user_id': user})
+    assert response.status_code == 200, response.text
+    review_id = response.json()['review_id']
+    with SessionLocal() as db:
+        saved_project = db.query(ProductProject).filter_by(
+            user_id=user, project_key=project).one()
+        binding = saved_project.id
+    assert execution_run_store.get_execution_run(run_id)['product_project_id'] == binding
+
+    # Simulate a process reload and the later appearance of a same-key workspace.
+    execution_run_store.reset_execution_runs_for_tests()
+    assert execution_run_store.get_execution_run(run_id)['product_project_id'] == binding
+    with SessionLocal() as db:
+        workspace = ProductWorkspace(owner_user_id='another-binding-owner',
+                                     workspace_key='binding-shared-workspace',
+                                     name='Shared project')
+        db.add(workspace)
+        db.flush()
+        db.add(ProductWorkspaceMember(workspace_id=workspace.id, user_id=user, role='viewer'))
+        db.add(ProductProject(user_id='another-binding-owner',
+                              workspace_id=workspace.id, project_key=project,
+                              name='Duplicate key', plan='team'))
+        db.commit()
+
+    assert p.client.get(route + f'/reviews/{review_id}/status',
+                        params={'user_id': user}).status_code == 200
+    assert p.client.get(route + f'/reviews/{review_id}/report.html',
+                        params={'user_id': user}).status_code == 200
+    retry = p.client.post(route + '/judge', json={'user_id': user})
+    assert retry.status_code == 200, retry.text
+    assert retry.json()['review_id'] == review_id
+    assert retry.json()['reused'] is True
+    applied = p.client.post(
+        f'/api/execution/runs/{run_id}/conversations/{conversation_id}/judge-reviews/{review_id}/apply',
+        json={'user_id': user, 'confirm': True})
+    assert applied.status_code == 200, applied.text
+    assert len(p.calls) == 1 and p.spent() == 10
+    with pytest.raises(ValueError, match='already bound'):
+        execution_run_store.bind_execution_run_product_project(
+            run_id, user_id=user, project_id=project, product_project_id='different-project-id')
+
+
 def test_uploaded_transcript_and_live_review_share_assert_and_dedupe(assert_pipeline):
     p = assert_pipeline
     report = p.evaluate(transcript='User: Refund?\nAgent: This request needs review. '+('long evidence ' * 120))
