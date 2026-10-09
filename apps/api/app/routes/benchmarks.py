@@ -11,6 +11,7 @@ from app.db.database import SessionLocal, get_db
 from app.schemas.benchmarks import BenchmarkRunRequest, BenchmarkSimulationRequest, BenchmarkSuiteRunRequest
 from app.services.benchmark_service import (
     get_scenario_contract,
+    _run_metadata,
     get_suite,
     get_suite_contract_manifest,
     list_suites,
@@ -20,6 +21,8 @@ from app.services.benchmark_service import (
     simulate_suite,
 )
 from app.services.benchmark_run_store import (
+    DEFAULT_PROJECT_ID,
+    DEFAULT_USER_ID,
     export_benchmark_run_history,
     export_benchmark_run_vcon,
     get_benchmark_run,
@@ -40,6 +43,28 @@ from app.services.benchmark_suite_run_store import (
 )
 
 router = APIRouter(prefix='/api/benchmarks', tags=['benchmarks'])
+
+
+def _bind_benchmark_project(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    """Resolve the exact project before any evidence-derived run ID is computed.
+
+    The DB-backed UUID is part of the run fingerprint and must never first
+    appear as a post-evaluation persistence side effect. Keep the same identity
+    for direct, simulated, suite, and queued benchmark executions.
+    """
+    from app.services.product_service import ensure_execution_product_project_id
+
+    metadata = _run_metadata(payload)
+    user_id = metadata.get('user_id') or DEFAULT_USER_ID
+    project_id = metadata.get('project_id') or DEFAULT_PROJECT_ID
+    product_project_id = ensure_execution_product_project_id(
+        db=db,
+        user_id=user_id,
+        project_id=project_id,
+        product_project_id=metadata.get('product_project_id'),
+    )
+    return {**payload, 'user_id': user_id, 'project_id': project_id,
+            'product_project_id': product_project_id}
 
 
 class VconIntakeRequest(BaseModel):
@@ -285,6 +310,7 @@ def enqueue_benchmark_suite_run(
 ):
     merged_payload = payload.model_dump()
     merged_payload['suite_id'] = suite_id
+    merged_payload = _bind_benchmark_project(db, merged_payload)
     suite_run_id = _queued_suite_run_id(suite_id=suite_id, payload=merged_payload)
     try:
         queued_record = create_benchmark_suite_run_record(
@@ -309,6 +335,7 @@ def enqueue_benchmark_suite_simulation(
 ):
     merged_payload = payload.model_dump()
     merged_payload['suite_id'] = suite_id
+    merged_payload = _bind_benchmark_project(db, merged_payload)
     suite_run_id = _queued_suite_run_id(suite_id=suite_id, payload=merged_payload)
     try:
         queued_record = create_benchmark_suite_run_record(
@@ -326,7 +353,7 @@ def enqueue_benchmark_suite_simulation(
 @router.post('/run')
 def run_benchmark(payload: BenchmarkRunRequest, db: Session = Depends(get_db)):
     try:
-        report = run_scenario(payload)
+        report = run_scenario(_bind_benchmark_project(db, payload.model_dump()))
         persist_benchmark_run(db=db, report=report, transcript=payload.transcript)
         return report
     except ValueError as exc:
@@ -339,7 +366,7 @@ def run_benchmark_suite(suite_id: str, payload: BenchmarkSuiteRunRequest, db: Se
     merged_payload = payload.model_dump()
     merged_payload['suite_id'] = suite_id
     try:
-        suite_report = run_suite(merged_payload)
+        suite_report = run_suite(_bind_benchmark_project(db, merged_payload))
         persist_benchmark_suite_run(db=db, suite_report=suite_report)
         for report in suite_report.get('scenario_reports', []):
             if isinstance(report, dict):
@@ -352,7 +379,7 @@ def run_benchmark_suite(suite_id: str, payload: BenchmarkSuiteRunRequest, db: Se
 @router.post('/simulate')
 def simulate_benchmark(payload: BenchmarkSimulationRequest, db: Session = Depends(get_db)):
     try:
-        simulation = simulate_scenario(payload)
+        simulation = simulate_scenario(_bind_benchmark_project(db, payload.model_dump()))
         persist_benchmark_run(db=db, report=simulation['benchmark_report'], transcript=simulation['transcript'])
         return simulation
     except ValueError as exc:
@@ -365,7 +392,7 @@ def simulate_benchmark_suite(suite_id: str, payload: BenchmarkSimulationRequest,
     merged_payload = payload.model_dump()
     merged_payload['suite_id'] = suite_id
     try:
-        simulation = simulate_suite(merged_payload)
+        simulation = simulate_suite(_bind_benchmark_project(db, merged_payload))
         persist_benchmark_suite_run(db=db, suite_report=simulation)
         for scenario_run in simulation.get('scenario_runs', []):
             if isinstance(scenario_run, dict) and isinstance(scenario_run.get('benchmark_report'), dict):
@@ -385,7 +412,7 @@ def run_benchmark_scenario(suite_id: str, scenario_id: str, payload: BenchmarkRu
     merged_payload['suite_id'] = suite_id
     merged_payload['scenario_id'] = scenario_id
     try:
-        report = run_scenario(merged_payload)
+        report = run_scenario(_bind_benchmark_project(db, merged_payload))
         persist_benchmark_run(db=db, report=report, transcript=payload.transcript)
         return report
     except ValueError as exc:
@@ -398,7 +425,7 @@ def simulate_benchmark_scenario(suite_id: str, scenario_id: str, payload: Benchm
     merged_payload['suite_id'] = suite_id
     merged_payload['scenario_id'] = scenario_id
     try:
-        simulation = simulate_scenario(merged_payload)
+        simulation = simulate_scenario(_bind_benchmark_project(db, merged_payload))
         persist_benchmark_run(db=db, report=simulation['benchmark_report'], transcript=simulation['transcript'])
         return simulation
     except ValueError as exc:
@@ -439,7 +466,7 @@ def _queued_suite_run_id(*, suite_id: str, payload: dict[str, Any]) -> str:
 def _metadata_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     metadata = payload.get('metadata') if isinstance(payload.get('metadata'), dict) else {}
     merged = dict(metadata)
-    for key in ('user_id', 'project_id'):
+    for key in ('user_id', 'project_id', 'product_project_id'):
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             merged[key] = value.strip()
