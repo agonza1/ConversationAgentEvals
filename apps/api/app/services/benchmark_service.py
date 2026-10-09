@@ -2363,7 +2363,12 @@ def _run_metadata_payload(payload: dict[str, Any]) -> dict[str, Any]:
 def _inherited_run_metadata_payload(parent_payload: dict[str, Any], child_payload: dict[str, Any]) -> dict[str, Any]:
     parent_metadata = _run_metadata(parent_payload)
     child_metadata = _run_metadata(child_payload)
-    return {'metadata': {**parent_metadata, **child_metadata}}
+    # Ownership is an admission decision, not per-scenario source metadata.
+    # Apply it at both levels: run_scenario gives top-level IDs precedence,
+    # including after ASSERT-bundle metadata normalization.
+    ownership = {key: parent_metadata[key] for key in ('user_id', 'project_id', 'product_project_id')
+                 if key in parent_metadata}
+    return {**ownership, 'metadata': {**parent_metadata, **child_metadata, **ownership}}
 
 
 def _run_lifecycle_payload(payload: dict[str, Any]) -> dict[str, Any]:

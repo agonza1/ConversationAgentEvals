@@ -172,6 +172,51 @@ def test_equal_project_keys_keep_distinct_bound_benchmark_identifiers(assert_pip
     assert shared_run['run_metadata']['product_project_id'] == shared_id
 
 
+@pytest.mark.parametrize('endpoint', ['/telehealth-agent/run', '/telehealth-agent/run-async'])
+@pytest.mark.parametrize('source', ['metadata', 'top_level', 'aliases', 'assert_bundle'])
+def test_suite_attempts_use_authorized_parent_ownership(assert_pipeline, endpoint, source):
+    from app.models.entities import ProductProject
+    from app.services.benchmark_run_store import get_benchmark_run, list_benchmark_runs
+    p = assert_pipeline
+    user, project = 'suite-binding-owner', 'suite-binding-project'
+    foreign = {'user_id': 'foreign-owner', 'project_id': 'foreign-project',
+               'product_project_id': 'foreign-binding'}
+    child = {'transcript': 'Patient: A refill please. Agent: I can route the request.',
+             'metadata': {'agent_version': 'child-agent-version'}}
+    if source == 'metadata':
+        child['metadata'].update(foreign)
+    elif source == 'top_level':
+        child.update(foreign)
+    elif source == 'aliases':
+        child['metadata'].update(owner_user_id='foreign-owner', project_key='foreign-project')
+    else:
+        child['assert_bundle'] = {'metadata': foreign}
+    suite = benchmark_service.get_suite('telehealth-agent')
+    attempts = {s['id']: [deepcopy(child), deepcopy(child)] for s in suite['scenarios']}
+    response = p.client.post('/api/benchmarks' + endpoint, json={
+        'user_id': user, 'project_id': project, 'scenario_attempts': attempts})
+    assert response.status_code == 200, response.text
+    result = response.json()
+    if endpoint.endswith('run-async'):
+        result = p.client.get('/api/benchmarks/suite-runs/' + result['suite_run_id'],
+                              params={'user_id': user}).json()['suite_report']
+    binding = result['run_metadata']['product_project_id']
+    assert len(result['scenario_reports']) == len(suite['scenarios']) * 2
+    for report in result['scenario_reports']:
+        metadata = report['run_metadata']
+        assert metadata['user_id'] == user and metadata['project_id'] == project
+        assert metadata['product_project_id'] == binding
+        assert metadata['agent_version'] == 'child-agent-version'
+        with SessionLocal() as db:
+            saved = get_benchmark_run(db=db, user_id=user, run_id=report['run_id'])
+            assert saved['project_id'] == project
+            assert saved['report']['run_metadata']['product_project_id'] == binding
+    with SessionLocal() as db:
+        assert list_benchmark_runs(db=db, user_id='foreign-owner') == []
+        assert db.query(ProductProject).filter_by(user_id='foreign-owner').count() == 0
+    assert not p.calls
+
+
 def test_simulation_binds_project_before_its_report_id(assert_pipeline):
     p = assert_pipeline
     body = {
