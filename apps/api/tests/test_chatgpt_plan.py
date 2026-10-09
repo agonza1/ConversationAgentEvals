@@ -284,6 +284,96 @@ def test_refresh_retains_registration_grant_and_rotates_tokens(provider, monkeyp
     assert provider.status()['sharing']
 
 
+@pytest.mark.parametrize('code', ['invalid_grant', 'invalid_refresh_token', 'token_expired',
+    'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused'])
+@pytest.mark.parametrize('structured', [False, True])
+def test_terminal_refresh_clears_only_unusable_tokens_and_blocks_readiness(provider, monkeypatch, code, structured):
+    from app.services import upstream_assert_judge as judge
+    authorize(provider, monkeypatch)
+    monkeypatch.setattr(provider, 'list_models', lambda: [{'id': 'gpt-test'}])
+    provider.select_judge_model('gpt-test')
+    value = provider._load()
+    active = value['active_profile_id']
+    value['profiles'][active]['expires_at'] = 999
+    provider._save(value)
+    binding = provider.binding()
+    # Exercise the real error classification rather than a mocked token helper.
+    monkeypatch.setattr(provider, '_post_token', cp.ChatGPTPlanProvider._post_token.__get__(provider))
+    provider.client = httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(400,
+        json={'error': {'code': code, 'message': 'secret diagnostic'} if structured else code})))
+    with pytest.raises(cp.ChatGPTPlanError, match='no longer valid') as error:
+        provider.access_token(binding)
+    assert 'secret' not in str(error.value)
+    stored = provider._load()['profiles'][active]
+    assert not set(stored).intersection({'access_token', 'refresh_token', 'id_token', 'expires_at', 'scopes'})
+    assert stored['client_id'] == 'oaiapp_test' and stored['subject'] == 'user-1'
+    assert provider.binding() == binding
+    assert provider.status()['sharing'] is False
+    assert provider.status()['status'] == 'disconnected'
+    monkeypatch.setenv('ASSERT_UPSTREAM_JUDGE_ENABLED', '1')
+    ready = judge.assert_judge_readiness()
+    assert ready['ready'] is False and ready['model'] == 'chatgpt_plan/gpt-test'
+    params = parse_qs(urlsplit(provider.start_oauth(active)['authorize_url']).query)
+    assert params['client_id'] == ['oaiapp_test']
+
+
+@pytest.mark.parametrize('failure', ['network', 'server', 'rate-limit', 'invalid-client', 'unknown', 'malformed'])
+def test_transient_or_unconfirmed_refresh_failure_preserves_credentials(provider, monkeypatch, failure):
+    authorize(provider, monkeypatch)
+    value = provider._load()
+    value['profiles'][value['active_profile_id']]['expires_at'] = 999
+    provider._save(value)
+    monkeypatch.setattr(provider, '_post_token', cp.ChatGPTPlanProvider._post_token.__get__(provider))
+    def handler(request):
+        if failure == 'network':
+            raise httpx.ConnectError('temporary network', request=request)
+        if failure == 'malformed':
+            return httpx.Response(400, text='not JSON')
+        status = 503 if failure == 'server' else 429 if failure == 'rate-limit' else 400
+        code = 'invalid_client' if failure == 'invalid-client' else 'unknown' if failure == 'unknown' else 'invalid_grant'
+        return httpx.Response(status, json={'error': code})
+    provider.client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(cp.ChatGPTPlanError):
+        provider.access_token()
+    assert provider._load() == value
+
+
+@pytest.mark.parametrize('field,bad', [
+    ('expires_at', 'bad'), ('expires_at', None), ('expires_at', True),
+    ('expires_at', float('nan')), ('expires_at', float('inf')), ('expires_at', 10 ** 400),
+    ('scopes', None), ('scopes', 'openid'), ('scopes', {}), ('scopes', [None]),
+    ('access_token', 42), ('refresh_token', []), ('id_token', {}), ('email', []),
+    ('client_id', None), ('subject', False), ('judge_model', 'openai/paid-model'),
+])
+def test_malformed_stored_profile_enters_safe_storage_repair(provider, monkeypatch, field, bad):
+    from app.services import upstream_assert_judge as judge
+    from app.main import app
+    authorize(provider, monkeypatch)
+    value = provider._load()
+    value['profiles'][value['active_profile_id']][field] = bad
+    provider._save(value)
+    with pytest.raises(cp.ChatGPTPlanError, match='storage is unavailable'):
+        provider.status()
+    with TestClient(app, base_url='http://127.0.0.1') as client:
+        response = client.get('/api/product/providers/chatgpt/status')
+    assert response.status_code == 409
+    assert 'secret' not in response.text and 'bad' not in response.text
+    monkeypatch.setenv('OPENAI_API_KEY', 'paid-key-must-not-be-used')
+    monkeypatch.setenv('ASSERT_UPSTREAM_JUDGE_ENABLED', '1')
+    ready = judge.assert_judge_readiness()
+    assert ready['ready'] is False and ready['model'] == 'chatgpt_plan/repair-storage'
+
+
+@pytest.mark.parametrize('field,bad', [('host_id', {}), ('active_profile_id', {}),
+    ('active_profile_id', 'unknown'), ('judge_mode', 'unknown'), ('profiles', {'bad': None})])
+def test_malformed_store_structure_is_reported_as_storage_repair(provider, field, bad):
+    value = provider._load()
+    value[field] = bad
+    provider._save(value)
+    with pytest.raises(cp.ChatGPTPlanError, match='storage is unavailable'):
+        provider.status()
+
+
 def test_reduced_refresh_grant_is_retained_and_latest_session_can_be_revoked(provider, monkeypatch):
     from app.services import upstream_assert_judge as judge
     authorize(provider, monkeypatch)

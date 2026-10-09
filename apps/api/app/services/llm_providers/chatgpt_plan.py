@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -36,6 +37,10 @@ REDIRECT_URI = f'http://127.0.0.1:{CALLBACK_PORT}/auth/callback'
 
 class ChatGPTPlanError(RuntimeError):
     """Safe, credential-free error suitable for the local UI and CLI artifacts."""
+
+
+class _UnusableRefreshSession(ChatGPTPlanError):
+    """Confirmed terminal refresh failure, unlike temporary transport failures."""
 
 
 def local_enabled() -> bool:
@@ -76,10 +81,34 @@ class ChatGPTPlanProvider:
             return {'host_id': f'urn:uuid:{uuid.uuid4()}', 'profiles': {}, 'active_profile_id': None}
         try:
             value = json.loads(self.path.read_text(encoding='utf-8'))
-            if not isinstance(value, dict) or not isinstance(value.get('profiles'), dict) or not value.get('host_id'):
+            if (not isinstance(value, dict) or not isinstance(value.get('profiles'), dict)
+                    or not isinstance(value.get('host_id'), str) or not value['host_id']):
                 raise ValueError
+            active = value.get('active_profile_id')
+            if active is not None and (not isinstance(active, str) or active not in value['profiles']):
+                raise ValueError
+            if value.get('judge_mode') not in (None, 'deployment', 'chatgpt_plan'):
+                raise ValueError
+            for profile in value['profiles'].values():
+                if not isinstance(profile, dict) or any(not isinstance(profile.get(key), str)
+                        or not profile[key] for key in ('client_id', 'subject')):
+                    raise ValueError
+                for key in ('email', 'id_token', 'access_token', 'refresh_token', 'judge_model'):
+                    if profile.get(key) is not None and not isinstance(profile[key], str):
+                        raise ValueError
+                if 'scopes' in profile and (not isinstance(profile['scopes'], list)
+                        or any(not isinstance(scope, str) for scope in profile['scopes'])):
+                    raise ValueError
+                if 'expires_at' in profile and (isinstance(profile['expires_at'], bool)
+                        or not isinstance(profile['expires_at'], (int, float))
+                        or not math.isfinite(profile['expires_at'])):
+                    raise ValueError
+                if profile.get('judge_model'):
+                    if not profile['judge_model'].startswith(MODEL_PREFIX):
+                        raise ValueError
+                    validate_model(profile['judge_model'][len(MODEL_PREFIX):])
             return value
-        except (ValueError, OSError) as exc:
+        except (ValueError, TypeError, OverflowError, OSError, ChatGPTPlanError) as exc:
             raise ChatGPTPlanError('ChatGPT connection storage is unavailable; repair it before reconnecting.') from exc
 
     def _save(self, value: dict) -> None:
@@ -243,11 +272,22 @@ class ChatGPTPlanProvider:
     def _post_token(self, form: dict) -> dict:
         try:
             response = self.client.post(TOKEN_URL, data=form)
+            if form.get('grant_type') == 'refresh_token' and response.status_code in {400, 401, 403}:
+                try:
+                    error = response.json().get('error')
+                    code = error.get('code') if isinstance(error, dict) else error
+                except (ValueError, AttributeError):
+                    code = None
+                if isinstance(code, str) and code in {'invalid_grant', 'invalid_refresh_token', 'token_expired',
+                        'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused'}:
+                    raise _UnusableRefreshSession('ChatGPT session is no longer valid; reconnect the selected account.')
             response.raise_for_status()
             payload = response.json()
             if not isinstance(payload, dict):
                 raise ValueError
             return payload
+        except _UnusableRefreshSession:
+            raise
         except Exception as exc:
             # Provider bodies may echo secrets. Never expose them or exception URLs.
             raise ChatGPTPlanError('ChatGPT session exchange failed; reconnect the selected account.') from exc
@@ -266,8 +306,13 @@ class ChatGPTPlanProvider:
             if not profile.get('access_token') or not profile.get('refresh_token'):
                 raise ChatGPTPlanError('Reconnect the selected ChatGPT account.')
             if float(profile.get('expires_at', 0)) - self.now() <= 60:
-                payload = self._post_token({'grant_type': 'refresh_token', 'client_id': profile['client_id'],
-                                           'refresh_token': profile['refresh_token'], 'resource': RESOURCE})
+                try:
+                    payload = self._post_token({'grant_type': 'refresh_token', 'client_id': profile['client_id'],
+                                               'refresh_token': profile['refresh_token'], 'resource': RESOURCE})
+                except _UnusableRefreshSession:
+                    self._clear_tokens(profile)
+                    self._save(value)
+                    raise
                 if not payload.get('access_token') or float(payload.get('expires_in', 0)) <= 0:
                     raise ChatGPTPlanError('ChatGPT session could not be renewed; reconnect.')
                 scopes = str(payload['scope']).split() if 'scope' in payload else profile['scopes']
@@ -350,12 +395,16 @@ class ChatGPTPlanProvider:
                     confirmed = response.status_code == 200
                 except Exception:
                     pass
-            for key in ('access_token', 'refresh_token', 'id_token', 'expires_at', 'scopes'):
-                profile.pop(key, None)
+            self._clear_tokens(profile)
             self._save(value)
         self._last_error = ('Signed out. Remote revocation was not confirmed; disconnect this app in ChatGPT Settings.'
                             if not confirmed else 'Signed out of ChatGPT.')
         return self.status()
+
+    @staticmethod
+    def _clear_tokens(profile: dict) -> None:
+        for key in ('access_token', 'refresh_token', 'id_token', 'expires_at', 'scopes'):
+            profile.pop(key, None)
 
     def _require_local(self) -> None:
         if not local_enabled():

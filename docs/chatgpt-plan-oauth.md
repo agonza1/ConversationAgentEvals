@@ -63,6 +63,9 @@ The OAuth client is dynamically issued for ConVoice QA; it is not the legacy Cod
 client ID. Reauthorization keeps the issued client ID and verified subject binding.
 Failed first-time registrations are not saved or reused. Add account always starts
 a fresh dynamic registration; the active account changes only after validation.
+Confirmed terminal refresh errors clear unusable tokens but retain the registration
+and billing choice for reconnect. Temporary network/server failures keep credentials.
+Malformed credential fields block usage with a storage-repair error, never API fallback.
 Disconnect clears selected-account tokens but retains registration/host identity.
 If remote revocation cannot be confirmed, the UI reports that and directs the user
 to disconnect in ChatGPT Settings.
