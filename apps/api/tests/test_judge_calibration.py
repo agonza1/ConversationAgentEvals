@@ -49,7 +49,7 @@ def test_partial_case_predictions_count_as_missing_overall_coverage():
     assert metrics['per_check']['identity']['missing'] == 0
     assert metrics['overall']['total'] == 2
     assert metrics['overall']['missing'] == 1
-    assert metrics['overall']['unresolved'] == 1
+    assert metrics['overall']['unresolved'] == 2  # Both missing evidence and explicit abstention remain unresolved.
     # An explicit abstention is covered (but unresolved), not a missing field.
     only_complete = measure_calibration(dataset[1:], predictions[1:])
     assert only_complete['overall']['missing'] == 0
