@@ -43,6 +43,43 @@ def test_first_benchmark_binding_is_stable_on_repeat_and_saved_judge(assert_pipe
     assert len(p.calls) == 1 and p.spent() == 10
 
 
+def test_equal_project_keys_keep_distinct_bound_benchmark_identifiers(assert_pipeline):
+    """Explicit personal/workspace bindings cannot collapse to one benchmark ID."""
+    from app.models.entities import ProductProject, ProductWorkspace, ProductWorkspaceMember
+
+    p = assert_pipeline
+    user, project = 'namespace-reviewer', 'same-project-key'
+    with SessionLocal() as db:
+        workspace = ProductWorkspace(owner_user_id='namespace-workspace-owner',
+                                     workspace_key='unique-namespace-workspace', name='Shared')
+        db.add(workspace)
+        db.flush()
+        personal = ProductProject(user_id=user, project_key=project,
+                                  name='Personal', plan='free')
+        shared = ProductProject(user_id='namespace-workspace-owner',
+                                workspace_id=workspace.id, project_key=project,
+                                name='Shared', plan='team')
+        db.add_all([personal, shared,
+                    ProductWorkspaceMember(workspace_id=workspace.id, user_id=user, role='viewer')])
+        db.commit()
+        personal_id, shared_id = personal.id, shared.id
+
+    data = {'suite_id': 'call-center-voice-ai', 'scenario_id': 'refund-policy-boundary',
+            'user_id': user, 'project_id': project,
+            'transcript': 'User: Refund?\\nAgent: A review is pending.'}
+    ambiguous = p.client.post('/api/benchmarks/run', json=data)
+    assert ambiguous.status_code == 422
+    assert 'ambiguous' in ambiguous.json()['detail']
+
+    personal_run = p.evaluate(user_id=user, project_id=project,
+                              product_project_id=personal_id, transcript=data['transcript'])
+    shared_run = p.evaluate(user_id=user, project_id=project,
+                            product_project_id=shared_id, transcript=data['transcript'])
+    assert personal_run['run_id'] != shared_run['run_id']
+    assert personal_run['run_metadata']['product_project_id'] == personal_id
+    assert shared_run['run_metadata']['product_project_id'] == shared_id
+
+
 def test_simulation_binds_project_before_its_report_id(assert_pipeline):
     p = assert_pipeline
     body = {
