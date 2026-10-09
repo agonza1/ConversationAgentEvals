@@ -118,6 +118,47 @@ def test_reauthorization_retains_client_host_and_active_account_on_failure(provi
     assert provider.access_token() == 'access-secret'
 
 
+@pytest.mark.parametrize('failure', ['exchange', 'identity', 'missing-code'])
+@pytest.mark.parametrize('existing_account', [False, True])
+def test_failed_dynamic_registration_can_be_abandoned_without_replacing_account(provider, monkeypatch, failure, existing_account):
+    if existing_account:
+        authorize(provider, monkeypatch)
+    before = provider._load()
+    attempt = parse_qs(urlsplit(provider.start_oauth()['authorize_url']).query)
+    def reject(*args):
+        raise cp.ChatGPTPlanError('Synthetic failure.')
+    if failure == 'exchange':
+        monkeypatch.setattr(provider, '_post_token', reject)
+    elif failure == 'identity':
+        monkeypatch.setattr(provider, '_post_token', lambda *_: {'id_token': 'bad'})
+        monkeypatch.setattr(provider, 'verify_identity', reject)
+    query = {'state': attempt['state'], 'client_id': ['oaiapp_failed_registration']}
+    if failure != 'missing-code':
+        query['code'] = ['synthetic']
+    with pytest.raises(cp.ChatGPTPlanError):
+        provider.complete_callback(query)
+    stored = provider._load()
+    assert stored['profiles'] == before['profiles']
+    assert stored['active_profile_id'] == before['active_profile_id']
+    assert 'pending_client_id' not in stored
+    new_attempt = parse_qs(urlsplit(provider.start_oauth()['authorize_url']).query)
+    assert new_attempt['client_id'] == ['dynamic_agent_client']
+    assert new_attempt['state'] != attempt['state']
+    assert new_attempt['ext_agent_host_id'] == attempt['ext_agent_host_id']
+    if existing_account:
+        reconnect = parse_qs(urlsplit(provider.start_oauth(before['active_profile_id'])['authorize_url']).query)
+        assert reconnect['client_id'] == ['oaiapp_test']
+
+
+def test_new_registration_discards_previously_saved_unvalidated_client(provider):
+    value = provider._load()
+    value['pending_client_id'] = 'oaiapp_unvalidated_old_attempt'
+    provider._save(value)
+    attempt = parse_qs(urlsplit(provider.start_oauth()['authorize_url']).query)
+    assert attempt['client_id'] == ['dynamic_agent_client']
+    assert 'pending_client_id' not in provider._load()
+
+
 @pytest.mark.parametrize('failure', ['state', 'expired', 'denied', 'missing-client', 'identity', 'subject'])
 def test_callback_security_and_one_time_consumption(provider, monkeypatch, failure):
     authorize(provider, monkeypatch)

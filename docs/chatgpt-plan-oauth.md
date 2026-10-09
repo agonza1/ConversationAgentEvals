@@ -61,6 +61,8 @@ or temporary files into images, logs, reports or shared artifacts.
 The browser callback is `http://127.0.0.1:1456/auth/callback`, not `localhost`.
 The OAuth client is dynamically issued for ConVoice QA; it is not the legacy Codex
 client ID. Reauthorization keeps the issued client ID and verified subject binding.
+Failed first-time registrations are not saved or reused. Add account always starts
+a fresh dynamic registration; the active account changes only after validation.
 Disconnect clears selected-account tokens but retains registration/host identity.
 If remote revocation cannot be confirmed, the UI reports that and directs the user
 to disconnect in ChatGPT Settings.

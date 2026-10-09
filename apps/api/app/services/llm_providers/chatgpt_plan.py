@@ -153,7 +153,8 @@ class ChatGPTPlanProvider:
             if profile_id and not profile:
                 raise ChatGPTPlanError('Select an existing ChatGPT account or add a new account.')
             self._generation += 1
-            client_id = profile.get('client_id') or value.get('pending_client_id') or 'dynamic_agent_client'
+            client_id = profile.get('client_id') or 'dynamic_agent_client'
+            value.pop('pending_client_id', None)  # Discard old unvalidated attempts, never reuse them.
             self._pending = {'state': secrets.token_urlsafe(32), 'nonce': secrets.token_urlsafe(32),
                              'verifier': verifier, 'expires_at': self.now() + 600,
                              'client_id': client_id, 'profile_id': profile_id,
@@ -194,10 +195,6 @@ class ChatGPTPlanProvider:
             if not re.fullmatch(r'[A-Za-z0-9_-]{1,160}', issued) or issued == 'dynamic_agent_client':
                 raise ChatGPTPlanError('ChatGPT registration did not return an issued client ID.')
             client_id = issued
-            with self._locked():
-                value = self._load()
-                value['pending_client_id'] = client_id
-                self._save(value)
         elif issued and issued != client_id:
             raise ChatGPTPlanError('ChatGPT callback changed the selected account registration.')
         if not code:
