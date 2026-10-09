@@ -19,6 +19,9 @@ jobs:
           python-version: "3.13"
       - run: npm ci
       - run: npm audit --audit-level=critical
+      - name: Verify Next.js ESLint parser
+        run: >-
+          node -e "require(require.resolve('eslint-config-next/parser', { paths: ['./apps/web'] }))"
       - run: npm run docker:check
       - run: python -m venv apps/api/.venv
       - run: apps/api/.venv/bin/python -m pip install -r apps/api/requirements.txt
