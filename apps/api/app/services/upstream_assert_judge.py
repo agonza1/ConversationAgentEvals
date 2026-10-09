@@ -116,6 +116,7 @@ def run_upstream_assert_judge(
         if environment['CAE_CHATGPT_EXPECTED_BINDING'] != configuration['transport']['account_binding_sha256']:
             raise UpstreamAssertJudgeUnavailable('ChatGPT account changed; start a new review.')
         environment['PYTHONPATH'] = str(REPO_ROOT / 'apps' / 'api') + os.pathsep + environment.get('PYTHONPATH', '')
+        environment['ASSERT_JUDGE_TIMEOUT_SECONDS'] = str(configuration['timeout_seconds'])
 
     credits = DEFAULT_ASSERT_JUDGE_CREDITS * judge_n
     with _assert_judge_slot():
@@ -182,10 +183,7 @@ def run_upstream_assert_judge(
                     env=environment,
                     capture_output=True,
                     text=True,
-                    timeout=_positive_int_env(
-                        'ASSERT_JUDGE_TIMEOUT_SECONDS',
-                        DEFAULT_ASSERT_JUDGE_TIMEOUT_SECONDS,
-                    ),
+                    timeout=configuration['timeout_seconds'],
                     check=False,
                 )
             except subprocess.TimeoutExpired as exc:

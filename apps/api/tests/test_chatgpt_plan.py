@@ -334,11 +334,22 @@ def test_partial_stream_never_produces_review(terminal):
     with pytest.raises(cp.ChatGPTPlanError): transport.collect_response(['data: ' + json.dumps(e) for e in events])
 
 
-def test_real_litellm_and_assert_structured_transport_use_responses(provider, monkeypatch):
+@pytest.mark.parametrize('raw_timeout, expected_timeout', [
+    (None, 300), ('invalid', 300), ('0', 300), ('-1', 300), ('1.5', 300),
+    ('', 300), ('NaN', 300), ('inf', 300), ('45', 45),
+])
+def test_real_litellm_and_assert_structured_transport_use_responses(provider, monkeypatch, raw_timeout, expected_timeout):
     authorize(provider, monkeypatch)
+    if raw_timeout is None:
+        monkeypatch.delenv('ASSERT_JUDGE_TIMEOUT_SECONDS', raising=False)
+    else:
+        monkeypatch.setenv('ASSERT_JUDGE_TIMEOUT_SECONDS', raw_timeout)
+    from app.services.upstream_assert_judge import judge_configuration
+    assert judge_configuration('chatgpt_plan/gpt-test', 1)['timeout_seconds'] == expected_timeout
     from assert_ai.core.model_client import generate_structured, GenerateOptions
     payloads = []
     def handler(request):
+        assert request.extensions['timeout']['read'] == expected_timeout
         payloads.append(json.loads(request.content))
         event = {'type': 'response.completed', 'response': {'id': 'resp-test', 'status': 'completed',
             'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': '{"ok":true}'}]}],
@@ -411,6 +422,7 @@ def test_shared_judge_pipeline_selects_registered_cli_without_forwarding_tokens(
     assert result['model'] == 'chatgpt_plan/gpt-test'
     assert captured['command'][2] == 'app.integrations.chatgpt_assert_cli'
     assert captured['env']['CAE_CHATGPT_EXPECTED_BINDING'] == provider.binding()
+    assert captured['env']['ASSERT_JUDGE_TIMEOUT_SECONDS'] == '300'
     assert 'access-secret' not in json.dumps(captured) and 'refresh-secret' not in json.dumps(result)
     assert 'account_binding_sha256' in result['judge_result']['provenance']['configuration']['transport']
 

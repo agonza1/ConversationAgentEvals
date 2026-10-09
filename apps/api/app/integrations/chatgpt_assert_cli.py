@@ -71,12 +71,13 @@ def collect_response(lines: Any) -> dict:
 class ChatGPTAssertTransport(CustomLLM):
     def completion(self, model: str, messages: list, optional_params: dict | None = None, **kwargs: Any) -> ModelResponse:
         try:
+            from app.services.upstream_assert_judge import _positive_int_env, DEFAULT_ASSERT_JUDGE_TIMEOUT_SECONDS
             provider = get_chatgpt_provider()
             token = provider.access_token(os.getenv('CAE_CHATGPT_EXPECTED_BINDING'))
             body = responses_request(model, messages, optional_params or {})
             with provider.client.stream('POST', f'{RESOURCE}/responses', json=body,
                     headers={'Authorization': f'Bearer {token}'},
-                    timeout=float(os.getenv('ASSERT_JUDGE_TIMEOUT_SECONDS', '300'))) as stream:
+                    timeout=_positive_int_env('ASSERT_JUDGE_TIMEOUT_SECONDS', DEFAULT_ASSERT_JUDGE_TIMEOUT_SECONDS)) as stream:
                 if stream.status_code != 200:
                     raise ChatGPTPlanError('ChatGPT inference was rejected. Reconnect or check account/model limits; no API-key fallback was used.')
                 result = collect_response(stream.iter_lines())
