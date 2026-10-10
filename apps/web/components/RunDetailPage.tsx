@@ -173,7 +173,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
                   : 'n/a'}
                 detail={summary.wordErrorRate
                   ? `${summary.wordErrorRate.errors} errors / ${summary.wordErrorRate.referenceWords} reference words`
-                  : 'LLM source and ASR receipt not captured'}
+                  : 'Source text and ASR receipt not captured'}
                 selected={metric === 'word_error_rate'}
                 onClick={() => setMetric('word_error_rate')}
               />
@@ -260,6 +260,14 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
                     <li key={`${turn.turn_index}-${turn.speaker}`}>
                       <strong>{turn.speaker || 'speaker'}</strong>
                       <p>{spokenTurnText(turn) || '—'}</p>
+                      {turn.frame_metadata?.transcript_source === 'rtc_asr_received_audio' ? (
+                        <>
+                          <small>Received audio transcript (rtc-asr)</small>
+                          {stringValue(turn.frame_metadata.reported_text) ? (
+                            <p>Target-reported text (RTVI): {stringValue(turn.frame_metadata.reported_text)}</p>
+                          ) : null}
+                        </>
+                      ) : null}
                     </li>
                   ))}
                 </ol>
@@ -694,7 +702,8 @@ function MetricDetail({
       <div className="runs-detail-copy">
         <h2>Word Error Rate</h2>
         <p className="latency-definition">
-          <strong>LLM source text → peer ASR receipt.</strong>{' '}
+          <strong>Source text → received ASR transcript.</strong>{' '}
+          Public-demo source text is target-reported, not independently verified ground truth.{' '}
           Lower is better. This measures the speech path&apos;s transcription fidelity, not whether the agent gave
           a semantically correct answer.
         </p>
@@ -722,11 +731,11 @@ function MetricDetail({
                   </div>
                   <div className="wer-transcript-comparison">
                     <div className="wer-transcript-block" data-source="llm">
-                      <span>LLM source</span>
+                      <span>{stringValue(turn.frame_metadata?.source_text_label) || 'LLM source'}</span>
                       <p>{reference}</p>
                     </div>
                     <div className="wer-transcript-block" data-source="asr">
-                      <span>ASR transcript</span>
+                      <span>{stringValue(turn.frame_metadata?.asr_receipt_label) || 'ASR transcript'}</span>
                       <p>{hypothesis}</p>
                     </div>
                   </div>
@@ -742,7 +751,7 @@ function MetricDetail({
           </>
         ) : (
           <p>
-            WER is unavailable because this conversation does not contain both the LLM source text and peer ASR
+            WER is unavailable because this conversation does not contain both source text and received ASR
             receipt for any voice turn.
           </p>
         )}
@@ -1807,6 +1816,7 @@ function turnLane(turn: ConversationTurn): 'caller' | 'agent' {
 
 function spokenTurnText(turn: ConversationTurn) {
   const metadata = turn.frame_metadata || {};
+  if (metadata.transcript_source === 'rtc_asr_received_audio') return stringValue(turn.text) || '';
   return stringValue(metadata.source_text)
     || stringValue(metadata.llm_output)
     || stringValue(turn.text)
