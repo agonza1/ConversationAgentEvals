@@ -144,8 +144,8 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
           <section className="metric-summary-grid" aria-label="Metric summaries">
             <MetricTile
               title="Interruption Detection"
-              value={`${summary.interruptionCount}`}
-              detail="sample count across conversations"
+              value={run.executor_id === 'waylo_livekit' ? 'unknown' : `${summary.interruptionCount}`}
+              detail={run.executor_id === 'waylo_livekit' ? 'Target interruption handling is not proven by caller barge-in' : 'sample count across conversations'}
               selected={metric === 'audio_interruption'}
               onClick={() => setMetric('audio_interruption')}
             />
@@ -243,6 +243,15 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
             <section className="card runs-transcript" aria-label="Transcript">
               <p className="eyebrow">Transcript</p>
               <h2>{conversation?.scenario_title || conversation?.scenario_id || 'Conversation'}</h2>
+              {conversation?.evidence_coverage ? (
+                <section aria-label="Waylo evidence coverage">
+                  <p>Capture only — evaluation submission is manual. Missing observations remain unknown, not a pass or a failure.</p>
+                  {conversation.configuration_check ? <p role="note">Configuration: {conversation.configuration_check.reason}</p> : null}
+                  <dl>{Object.entries(conversation.evidence_coverage).map(([area, coverage]) => (
+                    <div key={area}><dt>{area.replaceAll('_', ' ')}</dt><dd>{coverage.status} · needs review. Missing: {coverage.missing.join(', ').replaceAll('_', ' ')}</dd></div>
+                  ))}</dl>
+                </section>
+              ) : null}
               {run.mode === 'pipecat_webrtc' ? (
                 <LiveRunFeedback
                   conversations={run.conversations || []}
@@ -252,6 +261,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
                   userId={run.user_id || userId}
                   runStatus={run.status}
                   autoExpandLiveEvents
+                  httpCaptureOnly={run.executor_id === 'waylo_livekit'}
                 />
               ) : null}
               {(conversation?.turns || []).length ? (

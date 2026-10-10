@@ -152,6 +152,11 @@ def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool =
     if resolved.agent_id and agent is None:
         raise ValueError(f'Unknown agent: {resolved.agent_id}')
     target = _execution_target(resolved, agent)
+    if target == 'waylo':
+        if not agent:
+            raise ValueError('Waylo execution requires a saved target.')
+        from app.services.target_secrets import resolve_http_target_secret
+        resolve_http_target_secret(agent['connection']['secret_ref'])
     if target == 'signalwire_holy_guacamole' and not _signalwire_public_gate_enabled():
         raise ValueError(
             f'Holy Guacamole SignalWire execution requires '
@@ -410,6 +415,11 @@ def _run_one_conversation(
                 agent_snapshot=agent_snapshot,
                 event_observer=publish,
             )
+        elif payload.executor_id == 'waylo_livekit':
+            result = asyncio.run(_execute_waylo(
+                execution_run_id=execution_run_id, conversation_id=conversation_id,
+                suite_id=suite_id, scenario_id=scenario_id, payload=payload,
+                agent_snapshot=agent_snapshot, event_observer=publish))
         elif payload.mode == 'pipecat_webrtc' and payload.executor_id == 'pipecat_public_daily':
             result = _execute_public_pipecat_daily(
                 execution_run_id=execution_run_id,
@@ -455,7 +465,7 @@ def _run_one_conversation(
             else 'completed'
         )
         completed_at = datetime.now(UTC).isoformat()
-        ietf_vcon_export = build_ietf_execution_vcon(
+        ietf_vcon_export = result.get('ietf_vcon_export') or build_ietf_execution_vcon(
             conversation_id=conversation_id,
             execution_run_id=execution_run_id,
             suite_id=suite_id,
@@ -489,6 +499,8 @@ def _run_one_conversation(
             live_events=current.get('live_events') or [],
             transcript=result.get('transcript'),
             action_trace=result.get('action_trace') or [],
+            evidence_coverage=result.get('evidence_coverage'),
+            configuration_check=result.get('configuration_check'),
             final_state=result.get('final_state') or {},
             evaluation_findings=_compact_evaluation_findings(result.get('evaluation_report')),
             latency_marks=result.get('latency_marks') or [],
@@ -535,6 +547,8 @@ def _execution_target(
 ) -> str:
     if agent:
         return str(agent.get('target') or 'mock_agent')
+    if payload.executor_id == 'waylo_livekit':
+        raise ValueError('Waylo execution requires a saved target agent_id.')
     if payload.mode == 'pipecat_webrtc' and payload.executor_id == 'pipecat_public_daily':
         return 'pipecat_public_demo'
     if payload.mode == 'pipecat_webrtc' and payload.executor_id == 'signalwire_public_webrtc':
@@ -578,7 +592,7 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
     if target in {'openai_codex', 'builtin_sample_voice'}:
         model_name = effective_reference_model_name(model_name)
     tester_model_name = payload.tester_model_name
-    if not tester_model_name and target in {'pipecat_public_demo', 'signalwire_holy_guacamole'}:
+    if not tester_model_name and target in {'pipecat_public_demo', 'signalwire_holy_guacamole', 'waylo'}:
         tester_model_name = default_reference_model_name()
     if tester_model_name:
         tester_model_name = effective_reference_model_name(tester_model_name)
@@ -629,6 +643,7 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
         'model_name': model_name,
         'tester_model_name': tester_model_name,
         'max_exchanges': max_exchanges,
+        'evaluate': False if target == 'waylo' else payload.evaluate,
     })
 
 
@@ -653,6 +668,8 @@ def _execution_model_name(payload: ExecutionRunCreateRequest, *, target: str) ->
         return PUBLIC_PIPECAT_AGENT
     if target == 'signalwire_holy_guacamole':
         return SIGNALWIRE_HOLY_GUACAMOLE_MODEL
+    if target == 'waylo':
+        return 'waylo-agent-version'  # target's versioned configuration, not the caller LLM
     explicit = (payload.model_name or '').strip()
     if explicit:
         return explicit
@@ -661,6 +678,89 @@ def _execution_model_name(payload: ExecutionRunCreateRequest, *, target: str) ->
     if target == 'openai_codex':
         return default_reference_model_name()
     return DEFAULT_EXECUTION_MODEL
+
+
+async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenario_id,
+                         payload, agent_snapshot, event_observer):
+    from app.services.waylo_livekit import run_waylo_call
+    from app.services.vcon_evidence import decode_evidence, latest_tool_events
+    target = agent_snapshot or get_agent(payload.agent_id)
+    scenario = _scenario_definition(suite_id, scenario_id)
+    model = payload.tester_model_name or default_reference_model_name()
+    provider = None if scenario.get('caller_steps') or payload.audio_plan_path else resolve_reference_completion_provider(model)
+    config = ReferenceRuntimeConfig(tester_llm_model=model)
+    media = ReferenceMediaServices(config)
+    fixture_audio = []
+    if payload.audio_plan_path:
+        import hashlib
+        plan = AccAudioPlan.model_validate_json(_repo_path(payload.audio_plan_path).read_text())
+        fixtures = {fixture.fixture_id: fixture for fixture in plan.fixtures}
+        steps = []
+        for step in plan.steps:
+            fixture = fixtures[step.fixture_id]
+            text = str(fixture.metadata.get('reference_text') or '').strip()
+            if not text:
+                raise ValueError('Waylo controlled audio fixtures require metadata.reference_text.')
+            fixture_path = _repo_path(fixture.uri)
+            if fixture_path.stat().st_size > 10_000_000:
+                raise ValueError('Waylo controlled audio fixture exceeds 10 MB limit.')
+            audio = fixture_path.read_bytes()
+            if fixture.sha256 and hashlib.sha256(audio).hexdigest() != fixture.sha256:
+                raise ValueError('Waylo controlled audio fixture hash mismatch.')
+            fixture_audio.append(audio)
+            steps.append(text)
+        if not steps:
+            raise ValueError('Waylo audio plan requires caller steps.')
+        scenario = {**scenario, 'caller_steps': steps}
+
+    async def wording(turns, index):
+        # The opener/controlled fixture wording is exact, not LLM paraphrased.
+        # Subsequent free-form scenarios reuse CAE's existing adaptive tester.
+        steps = scenario.get('caller_steps') or []
+        if index <= len(steps):
+            text = str(steps[index - 1])
+        elif index == 1:
+            text = _scenario_user_opener(scenario)
+        else:
+            if provider is None:
+                return 'That is all. Please read back my notes.'
+            text = await asyncio.to_thread(provider.complete, _openai_tester_prompt(
+                scenario, turns, next_exchange=index, max_exchanges=payload.max_exchanges), model_name=model)
+        return text
+
+    async def synthesis(text, index):
+        if fixture_audio:
+            if index > len(fixture_audio):
+                raise ValueError('Waylo controlled audio plan exhausted; no synthesized substitution.')
+            return fixture_audio[index - 1]
+        condition = scenario.get('waylo_test', {}).get('audio_condition', {})
+        voice = config.kokoro_tester_voice
+        if condition.get('kind') == 'accent_voice':
+            voice = os.getenv('WAYLO_TEST_ACCENT_VOICE', '').strip()
+            if not voice:
+                raise ValueError('Accent case requires WAYLO_TEST_ACCENT_VOICE or a controlled audio plan; no call started.')
+        audio = await asyncio.to_thread(media.synthesize, text, voice=voice)
+        if condition.get('kind') == 'noise':
+            from app.services.waylo_audio_conditions import add_noise
+            audio, measurements = add_noise(audio, snr_db=condition['snr_db'], seed=condition['seed'] + index)
+            return audio, {**condition, **measurements}
+        return audio, {**condition, 'synthetic_voice': voice}
+
+    try:
+        result = await run_waylo_call(target=target, correlation_id=f'{execution_run_id}/{conversation_id}',
+            scenario=scenario, suite_id=suite_id,
+            artifact_dir=REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id / 'audio' / conversation_id,
+            max_exchanges=payload.max_exchanges, timeout_seconds=payload.duplex_timeout_seconds,
+            next_utterance=wording, synthesize=synthesis, event_observer=event_observer)
+        profile = decode_evidence(result['ietf_vcon_export'])
+        result['action_trace'] = latest_tool_events(profile['tool_events'])
+        observed_final = next((s['state'] for s in profile['state_snapshots'] if s['phase'] == 'final'), {})
+        result['final_state'] = {**observed_final, **result['final_state']}
+        # Business observations are distinct from CAE lifecycle bookkeeping.
+        result['state_snapshots'] = profile['state_snapshots']
+        return result
+    finally:
+        media.client.close()
 
 
 def _execute_public_pipecat_daily(

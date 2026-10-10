@@ -418,7 +418,7 @@ test('agent target form only offers connections compatible with its selected cha
 
   await channel.selectOption('voice');
   await expect(target).toHaveValue('pipecat_public_demo');
-  await expect(target.getByRole('option')).toHaveCount(6);
+  await expect(target.getByRole('option')).toHaveCount(7);
   await expect(target.locator('option[value="pipecat_public_demo"]')).toHaveText('Pipecat demo');
   await expect(page.getByLabel('Pipecat demo URL')).toHaveValue('https://www.pipecat.ai/');
   await expect(page.getByRole('button', { name: 'Create target' })).toBeEnabled();
@@ -450,4 +450,33 @@ test('agent target form only offers connections compatible with its selected cha
   await expect(page.getByText('Built-in generalist voice evaluation')).toBeVisible();
   await expect(page.getByText(/Transcript, score, state, timing, media, and vCon come only from this run/)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Create target' })).toBeEnabled();
+});
+
+test('Waylo target saves reusable IDs and credential reference without a key', async ({ page }) => {
+  let saved: Record<string, unknown> | null = null;
+  await mockRunnerApis(page);
+  await page.route('**/api/agents', async (route) => {
+    if (route.request().method() === 'POST') {
+      saved = route.request().postDataJSON();
+      await route.fulfill({json: {id: 'waylo-config', ...saved}});
+    } else {
+      await route.fulfill({json: {agents: []}});
+    }
+  });
+  await page.goto('/targets');
+  await page.locator('.agents-page-header').getByRole('button', {name: 'Add agent target'}).click();
+  await page.getByPlaceholder('Billing support — staging').fill('Mike notes fixture');
+  await page.getByLabel('Target channel').selectOption('voice');
+  await page.getByLabel('Target connection').selectOption('waylo');
+  await page.getByLabel('Waylo API base URL').fill('https://api.waylo.test');
+  await page.getByLabel('Waylo workspace UUID').fill('11111111-1111-4111-8111-111111111111');
+  await page.getByLabel('Waylo agent UUID').fill('22222222-2222-4222-8222-222222222222');
+  await page.getByLabel('Waylo credential reference').fill('waylo-staging');
+  await expect(page.getByText('Any Waylo agent can use this connector. Calls capture evidence only; submit it for evaluation manually.')).toBeVisible();
+  await page.getByRole('button', {name: 'Create target'}).click();
+  await expect.poll(() => saved).not.toBeNull();
+  expect(saved).toMatchObject({target: 'waylo', channel: 'voice', connection: {
+    endpoint_url: 'https://api.waylo.test', workspace_id: '11111111-1111-4111-8111-111111111111',
+    waylo_agent_id: '22222222-2222-4222-8222-222222222222', secret_ref: 'waylo-staging', auth_type: 'bearer_secret'}});
+  expect(JSON.stringify(saved)).not.toContain('participantToken');
 });

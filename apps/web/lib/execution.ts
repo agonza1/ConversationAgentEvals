@@ -2,6 +2,7 @@ import { apiErrorMessage } from './apiError';
 
 export type ExecutionMode = 'text_callable' | 'voice_fixture' | 'pipecat_webrtc';
 export type AudioTransportId =
+  | 'waylo_livekit'
   | 'none'
   | 'pipecat_small_webrtc'
   | 'pipecat_daily_webrtc'
@@ -9,6 +10,7 @@ export type AudioTransportId =
   | 'freeswitch_verto_sip';
 export type TesterId = 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
 export type ExecutorId =
+  | 'waylo_livekit'
   | 'local_async_runner'
   | 'evidence_replay'
   | 'cae_local_audio_loop'
@@ -18,6 +20,7 @@ export type ExecutorId =
   | 'acc_sip'
   | 'acc_phone';
 export type AgentTarget =
+  | 'waylo'
   | 'mock_agent'
   | 'openai_codex'
   | 'offline_acc_fixture'
@@ -46,6 +49,8 @@ export interface AgentRecord {
     sip_uri?: string | null;
     phone_number?: string | null;
     acc_base_url?: string | null;
+    workspace_id?: string | null;
+    waylo_agent_id?: string | null;
   };
   description?: string | null;
   metadata?: {
@@ -135,6 +140,8 @@ export interface ConversationLiveEvent {
 }
 
 export interface ConversationRecord {
+  evidence_coverage?: Record<string, { status: string; evaluation_status: string; missing: string[] }>;
+  configuration_check?: { status: string; reason: string; agent_version?: number };
   conversation_id: string;
   execution_run_id: string;
   suite_id: string;
@@ -396,6 +403,9 @@ export function applyAgentLaunchDefaults(
   audioTransport: AudioTransportId;
   textCallable?: AgentTarget;
 } {
+  if (agent.target === 'waylo') {
+    return { mode: 'pipecat_webrtc', testerId: 'pipecat_tester', executorId: 'waylo_livekit', audioTransport: 'waylo_livekit' };
+  }
   if (agent.target === 'builtin_sample_voice') {
     return {
       mode: 'pipecat_webrtc',

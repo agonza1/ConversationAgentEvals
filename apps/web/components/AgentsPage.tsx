@@ -8,6 +8,7 @@ import {
   AgentRecord,
   agentTryItOutHref,
   createAgent,
+  getApiBase,
   deleteAgent,
   isBuiltInAgent,
   isSeedAgent,
@@ -24,6 +25,8 @@ type AgentFormState = {
   target: FormTarget;
   environment: NonNullable<AgentRecord['environment']>;
   endpointUrl: string;
+  workspaceId: string;
+  wayloAgentId: string;
   authType: 'none' | 'bearer_secret' | 'api_key_secret';
   secretRef: string;
   apiKeyHeader: string;
@@ -41,6 +44,8 @@ const EMPTY_FORM: AgentFormState = {
   target: 'http_endpoint',
   environment: 'staging',
   endpointUrl: '',
+  workspaceId: '',
+  wayloAgentId: '',
   authType: 'none',
   secretRef: '',
   apiKeyHeader: 'x-api-key',
@@ -70,6 +75,7 @@ const TARGET_OPTIONS: Record<
     { value: 'mock_agent', label: 'Built-in sample text agent', group: 'Built-in samples' },
   ],
   voice: [
+    { value: 'waylo', label: 'Waylo agent (LiveKit)', group: 'Live connections' },
     { value: 'pipecat_public_demo', label: 'Pipecat demo', group: 'Live connections' },
     { value: 'signalwire_holy_guacamole', label: 'Holy Guacamole SignalWire', group: 'Live connections' },
     { value: 'browser_webrtc_agent', label: 'ACC browser WebRTC (coming soon)', group: 'Live connections', comingSoon: true },
@@ -88,6 +94,7 @@ function channelLabel(channel: AgentRecord['channel']) {
 }
 
 function targetLabel(target: FormTarget) {
+  if (target === 'waylo') return 'Waylo (LiveKit)';
   if (target === 'mock_agent') return 'Built-in sample text agent';
   if (target === 'openai_codex') return 'OpenAI endpoint (live)';
   if (target === 'offline_acc_fixture') return 'Saved ACC text replay';
@@ -120,6 +127,10 @@ function fixedPublicTargetUrl(target: FormTarget) {
 }
 
 function connectionFromForm(values: AgentFormState): AgentRecord['connection'] {
+  if (values.target === 'waylo') {
+    return { endpoint_url: values.endpointUrl.trim(), workspace_id: values.workspaceId.trim(),
+      waylo_agent_id: values.wayloAgentId.trim(), auth_type: 'bearer_secret', secret_ref: values.secretRef.trim() };
+  }
   const fixedUrl = fixedPublicTargetUrl(values.target);
   if (fixedUrl) {
     return { endpoint_url: values.endpointUrl.trim() || fixedUrl };
@@ -151,6 +162,8 @@ function formFromAgent(agent: AgentRecord): AgentFormState {
     target: agent.target,
     environment: agent.environment || 'local',
     endpointUrl: agent.connection?.endpoint_url || '',
+    workspaceId: agent.connection?.workspace_id || '',
+    wayloAgentId: agent.connection?.waylo_agent_id || '',
     authType: agent.connection?.auth_type || 'none',
     secretRef: agent.connection?.secret_ref || '',
     apiKeyHeader: agent.connection?.api_key_header || 'x-api-key',
@@ -197,9 +210,12 @@ function AgentConfigRows({ agent }: { agent: AgentRecord }) {
     ...(agent.connection?.sip_uri ? [{ label: 'Destination', value: agent.connection.sip_uri }] : []),
     ...(agent.connection?.phone_number ? [{ label: 'Destination', value: agent.connection.phone_number }] : []),
     ...(agent.connection?.acc_base_url ? [{ label: 'ACC', value: agent.connection.acc_base_url }] : []),
+    ...(agent.target === 'waylo' ? [{ label: 'Workspace', value: agent.connection?.workspace_id || '—' },
+      { label: 'Waylo agent', value: agent.connection?.waylo_agent_id || '—' }] : []),
     {
       label: 'Evidence',
-      value: agent.target === 'builtin_sample_voice'
+      value: agent.target === 'waylo' ? 'Native session + paginated transcript + permission-dependent execution evidence'
+        : agent.target === 'builtin_sample_voice'
         ? 'Current-run local pipeline · no saved evidence'
         : agent.target === 'pipecat_public_demo'
           ? 'Current-run direct Daily WebRTC media and transcript'
@@ -235,6 +251,41 @@ function AgentConfigRows({ agent }: { agent: AgentRecord }) {
       ))}
     </dl>
   );
+}
+
+function WayloSessionCapture({ agent }: { agent: AgentRecord }) {
+  const [session, setSession] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState('');
+  async function download() {
+    setBusy(true);
+    setStatus('');
+    try {
+      const response = await fetch(`${getApiBase()}/api/agents/${encodeURIComponent(agent.id)}/capture`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session_id: session.trim() }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Could not capture the session.');
+      const url = URL.createObjectURL(new Blob([JSON.stringify(result.vcon, null, 2)], { type: 'application/json' }));
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `waylo-${session.trim()}.vcon.json`;
+      anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setStatus('Captured existing human call. Upload the vCon in Eval when you choose to evaluate it. Missing evidence remains unknown.');
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Capture failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+  return <section className="agents-card-section" aria-label="Capture existing Waylo call">
+    <h3>Existing human call</h3>
+    <p>Read provider evidence without starting a call or submitting an evaluation.</p>
+    <label>Session UUID <input aria-label={`Session UUID for ${agent.name}`} value={session} onChange={(e) => setSession(e.target.value)} /></label>
+    <button type="button" disabled={busy || !session.trim()} onClick={() => void download()}>{busy ? 'Capturing…' : 'Download session vCon'}</button>
+    {status ? <p role="status">{status}</p> : null}
+  </section>;
 }
 
 function AgentCardMenu({
@@ -316,6 +367,8 @@ function AgentFormModal({
   const [target, setTarget] = useState(initial.target);
   const [environment, setEnvironment] = useState(initial.environment);
   const [endpointUrl, setEndpointUrl] = useState(initial.endpointUrl);
+  const [workspaceId, setWorkspaceId] = useState(initial.workspaceId);
+  const [wayloAgentId, setWayloAgentId] = useState(initial.wayloAgentId);
   const [authType, setAuthType] = useState(initial.authType);
   const [secretRef, setSecretRef] = useState(initial.secretRef);
   const [apiKeyHeader, setApiKeyHeader] = useState(initial.apiKeyHeader);
@@ -335,6 +388,8 @@ function AgentFormModal({
     setTarget(initial.target);
     setEnvironment(initial.environment);
     setEndpointUrl(initial.endpointUrl);
+    setWorkspaceId(initial.workspaceId);
+    setWayloAgentId(initial.wayloAgentId);
     setAuthType(initial.authType);
     setSecretRef(initial.secretRef);
     setApiKeyHeader(initial.apiKeyHeader);
@@ -356,6 +411,8 @@ function AgentFormModal({
       target,
       environment,
       endpointUrl,
+      workspaceId,
+      wayloAgentId,
       authType,
       secretRef,
       apiKeyHeader,
@@ -554,6 +611,17 @@ function AgentFormModal({
                 </label>
               </div>
               <small>Ask an administrator for a configured credential ID. Environment-variable names and raw credentials are never accepted or stored here.</small>
+            </fieldset>
+          ) : null}
+          {target === 'waylo' ? (
+            <fieldset className="agents-connection-fields">
+              <legend>Waylo LiveKit target</legend>
+              <p>Any Waylo agent can use this connector. Calls capture evidence only; submit it for evaluation manually.</p>
+              <label><span>API base URL</span><input required type="url" aria-label="Waylo API base URL" value={endpointUrl} onChange={(e) => setEndpointUrl(e.target.value)} placeholder="https://api.example.com" /></label>
+              <label><span>Workspace UUID</span><input required aria-label="Waylo workspace UUID" value={workspaceId} onChange={(e) => setWorkspaceId(e.target.value)} /></label>
+              <label><span>Waylo agent UUID</span><input required aria-label="Waylo agent UUID" value={wayloAgentId} onChange={(e) => setWayloAgentId(e.target.value)} /></label>
+              <label><span>Credential reference</span><input required aria-label="Waylo credential reference" value={secretRef} onChange={(e) => setSecretRef(e.target.value)} pattern="[a-z][a-z0-9-]{0,63}" /></label>
+              <small>Server-side bearer key: sessions:create, sessions:read, transcripts:read. Native events need workspace admin access; historical configuration also needs agents:read. Never paste a key here.</small>
             </fieldset>
           ) : null}
           {isAccTarget(target) ? (
@@ -823,6 +891,7 @@ export function AgentsPage() {
               <h3>Configuration</h3>
               <AgentConfigRows agent={agent} />
             </section>
+            {agent.target === 'waylo' ? <WayloSessionCapture agent={agent} /> : null}
           </article>
         ))}
       </section>

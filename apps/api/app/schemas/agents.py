@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Literal
+from uuid import UUID
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -24,12 +25,14 @@ AgentTarget = Literal[
     'phone_agent',
     'browser_webrtc_agent',
     'http_endpoint',
+    'waylo',
 ]
 
 _TEXT_AGENT_TARGETS = frozenset({'mock_agent', 'openai_codex', 'offline_acc_fixture', 'http_endpoint'})
 _VOICE_AGENT_TARGETS = frozenset(
     {
         'voice_fixture',
+        'waylo',
         'builtin_sample_voice',
         'pipecat_public_demo',
         'signalwire_holy_guacamole',
@@ -73,6 +76,8 @@ class AgentConnection(BaseModel):
     sip_uri: str | None = None
     phone_number: str | None = None
     acc_base_url: str | None = None
+    workspace_id: str | None = None
+    waylo_agent_id: str | None = None
 
     @model_validator(mode='after')
     def validate_auth_reference(self):
@@ -143,6 +148,21 @@ class AgentUpdateRequest(BaseModel):
 
 
 def validate_agent_connection(target: AgentTarget, connection: AgentConnection) -> None:
+    if target == 'waylo':
+        from app.services.waylo_target import api_url
+        api_url(connection.endpoint_url or '')
+        if connection.auth_type != 'bearer_secret' or not connection.secret_ref:
+            raise ValueError('Waylo requires a configured bearer credential reference.')
+        for value in (connection.workspace_id, connection.waylo_agent_id):
+            try:
+                UUID(str(value))
+            except ValueError:
+                raise ValueError('Waylo requires workspace_id and waylo_agent_id UUIDs.') from None
+        if connection.sip_uri or connection.phone_number or connection.acc_base_url:
+            raise ValueError('Waylo cannot include ACC destination fields.')
+        return
+    if connection.workspace_id or connection.waylo_agent_id:
+        raise ValueError('Waylo workspace/agent identifiers are only valid for Waylo targets.')
     if target in {'pipecat_public_demo', 'signalwire_holy_guacamole'}:
         endpoint = (connection.endpoint_url or '').strip()
         label = 'Pipecat demo' if target == 'pipecat_public_demo' else 'Holy Guacamole SignalWire'

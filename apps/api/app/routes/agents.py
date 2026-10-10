@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+import uuid
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, ConfigDict
 
 from app.schemas.agents import AgentCreateRequest, AgentTarget, AgentUpdateRequest
 from app.services import agent_store
@@ -14,6 +16,41 @@ from app.services.target_secrets import resolve_http_target_secret
 
 
 router = APIRouter(prefix='/api/agents', tags=['agents'])
+
+
+class WayloCaptureRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    session_id: uuid.UUID
+
+
+@router.post('/{agent_id}/capture')
+async def capture_waylo_session(agent_id: str, payload: WayloCaptureRequest):
+    """Read-only provider capture. Repeated captures refresh one stable vCon UUID.
+
+    This route deliberately has no evaluator, benchmark submission or billing hook.
+    """
+    from app.services.waylo_target import WayloClient, WayloError, project_capture
+    agent = agent_store.get_agent(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail='Agent not found.')
+    if agent['target'] != 'waylo':
+        raise HTTPException(status_code=400, detail='Session capture requires a Waylo target.')
+    client = None
+    try:
+        client = WayloClient(agent)
+        captured = await client.capture(str(payload.session_id))
+        metadata = captured['session'].get('metadata') or {}
+        cae_metadata = metadata.get('cae') if isinstance(metadata, dict) else None
+        if isinstance(cae_metadata, dict) and cae_metadata.get('origin') == 'cae_ai_tester':
+            raise HTTPException(status_code=409, detail='This is a CAE tester session. Use its run export; do not label it as an imported human call.')
+        # Do not relabel existing human calls as tester reference calls based on
+        # arbitrary customer metadata. Only the execution runner creates AI provenance.
+        return project_capture(captured)
+    except (WayloError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    finally:
+        if client:
+            await client.close()
 
 
 @router.get('')
@@ -77,6 +114,7 @@ def delete_agent(agent_id: str):
 
 
 _TARGET_OPTIONS: tuple[AgentTarget, ...] = (
+    'waylo',
     'http_endpoint',
     'openai_codex',
     'mock_agent',
@@ -89,6 +127,7 @@ _TARGET_OPTIONS: tuple[AgentTarget, ...] = (
 )
 
 _TARGET_LABELS: dict[AgentTarget, str] = {
+    'waylo': 'Waylo agent (LiveKit)',
     'http_endpoint': 'HTTP JSON chat endpoint',
     'openai_codex': 'Connected OpenAI prompt agent',
     'mock_agent': 'Built-in sample text agent',
@@ -103,6 +142,7 @@ _TARGET_LABELS: dict[AgentTarget, str] = {
 }
 
 _TARGET_CHANNELS: dict[AgentTarget, str] = {
+    'waylo': 'voice',
     'http_endpoint': 'text',
     'openai_codex': 'text',
     'mock_agent': 'text',
@@ -117,6 +157,7 @@ _TARGET_CHANNELS: dict[AgentTarget, str] = {
 }
 
 _TARGET_GROUPS: dict[AgentTarget, str] = {
+    'waylo': 'live_connection',
     'http_endpoint': 'live_connection',
     'openai_codex': 'live_connection',
     'mock_agent': 'built_in_sample',
@@ -131,6 +172,7 @@ _TARGET_GROUPS: dict[AgentTarget, str] = {
 }
 
 _CONNECTION_REQUIREMENTS: dict[AgentTarget, tuple[str, ...]] = {
+    'waylo': ('endpoint_url', 'workspace_id', 'waylo_agent_id', 'secret_ref'),
     'http_endpoint': ('endpoint_url',),
     'pipecat_public_demo': ('endpoint_url',),
     'signalwire_holy_guacamole': ('endpoint_url',),
@@ -142,6 +184,7 @@ _CONNECTION_REQUIREMENTS: dict[AgentTarget, tuple[str, ...]] = {
 _COMPATIBLE_TARGETS_BY_TESTER: dict[str, tuple[AgentTarget, ...]] = {
     'scenario_simulator': ('http_endpoint', 'openai_codex', 'mock_agent'),
     'pipecat_tester': (
+        'waylo',
         'builtin_sample_voice',
         'pipecat_public_demo',
         'signalwire_holy_guacamole',
@@ -153,6 +196,7 @@ _COMPATIBLE_TARGETS_BY_TESTER: dict[str, tuple[AgentTarget, ...]] = {
 }
 
 _COMPATIBLE_TARGETS_BY_EXECUTOR: dict[str, tuple[AgentTarget, ...]] = {
+    'waylo_livekit': ('waylo',),
     'local_async_runner': ('http_endpoint', 'openai_codex', 'mock_agent'),
     'cae_local_audio_loop': ('builtin_sample_voice',),
     'pipecat_public_daily': ('pipecat_public_demo',),
@@ -188,6 +232,8 @@ _TESTER_OPTIONS: tuple[dict[str, object], ...] = (
 )
 
 _EXECUTOR_OPTIONS: tuple[dict[str, object], ...] = (
+    {'id': 'waylo_livekit', 'label': 'Waylo LiveKit', 'channel': 'voice', 'available': True,
+     'description': 'Starts a Waylo web session, sends real caller audio and captures evidence; evaluation is manual.'},
     {
         'id': 'local_async_runner',
         'label': 'Local async runner',
@@ -350,7 +396,7 @@ def _readiness_for_agent(agent: dict) -> dict[str, object]:
     )
 
     auth_type = str(connection.get('auth_type') or 'none')
-    if target == 'http_endpoint' and auth_type != 'none':
+    if target in {'http_endpoint', 'waylo'} and auth_type != 'none':
         secret_ref = str(connection.get('secret_ref') or '').strip()
         if not secret_ref:
             add_check('credential_reference', False, 'Authenticated HTTP targets require a credential ID.')
@@ -375,6 +421,11 @@ def _readiness_for_agent(agent: dict) -> dict[str, object]:
                 else f'{SIGNALWIRE_PUBLIC_GATE_ENV}=1 is required before queueing public SignalWire execution.'
             ),
         )
+        add_check(*_signalwire_caller_tts_readiness())
+    if target == 'waylo':
+        import importlib.util
+        add_check('livekit_sdk', importlib.util.find_spec('livekit') is not None,
+                  'LiveKit SDK must be installed; permissions are verified when capturing/starting the session.')
         add_check(*_signalwire_caller_tts_readiness())
 
     executable = all(item['ok'] for item in checks)

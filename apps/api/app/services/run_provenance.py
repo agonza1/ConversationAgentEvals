@@ -27,9 +27,11 @@ TargetKind = Literal[
     'phone_agent',
     'browser_webrtc_agent',
     'unknown',
+    'waylo',
 ]
 TesterId = Literal['scenario_simulator', 'fixture_replay', 'pipecat_tester']
 ExecutorId = Literal[
+    'waylo_livekit',
     'local_async_runner',
     'evidence_replay',
     'cae_local_audio_loop',
@@ -63,6 +65,7 @@ BUILTIN_SAMPLE_TEXT_HONESTY = (
 )
 
 _COMPATIBLE_EXECUTORS: dict[str, frozenset[ExecutorId]] = {
+    'waylo': frozenset({'waylo_livekit'}),
     'mock_agent': frozenset({'local_async_runner'}),
     'openai_codex': frozenset({'local_async_runner'}),
     'http_endpoint': frozenset({'local_async_runner'}),
@@ -102,6 +105,7 @@ class ExecutionDefaults(BaseModel):
     tester_id: TesterId
     executor_id: ExecutorId
     audio_transport: Literal[
+        'waylo_livekit',
         'none',
         'pipecat_small_webrtc',
         'pipecat_daily_webrtc',
@@ -116,6 +120,9 @@ def normalize_agent_target(target: str | None) -> str:
 
 def execution_defaults_for_target(target: str | None) -> ExecutionDefaults:
     normalized = normalize_agent_target(target)
+    if normalized == 'waylo':
+        return ExecutionDefaults(mode='pipecat_webrtc', tester_id='pipecat_tester',
+                                 executor_id='waylo_livekit', audio_transport='waylo_livekit')
     if normalized == 'builtin_sample_voice':
         return ExecutionDefaults(
             mode='pipecat_webrtc',
@@ -195,6 +202,7 @@ def assert_execution_compatible(
 
 def target_kind_for_agent_target(target: str | None) -> TargetKind:
     mapping: dict[str, TargetKind] = {
+        'waylo': 'waylo',
         'mock_agent': 'builtin_sample_text',
         'openai_codex': 'openai_text',
         'http_endpoint': 'http_text_endpoint',
@@ -239,6 +247,8 @@ def target_environment_for_agent_target(
     normalized = normalize_agent_target(target)
     if normalized in {'offline_acc_fixture', 'voice_fixture'}:
         return 'saved_replay'
+    if normalized == 'waylo':
+        return 'local' if _is_local_url(((agent or {}).get('connection') or {}).get('endpoint_url')) else 'external_public'
     if normalized in {'builtin_sample_voice'}:
         return 'local'
     if normalized == 'openai_codex':
@@ -303,6 +313,7 @@ def build_run_provenance(
 ) -> ExecutionRunProvenance:
     target = normalize_agent_target(agent_target or (agent or {}).get('target') or text_callable)
     voice_targets = {
+        'waylo',
         'builtin_sample_voice',
         'pipecat_public_demo',
         'signalwire_holy_guacamole',
@@ -313,7 +324,12 @@ def build_run_provenance(
     }
     channel = str((agent or {}).get('channel') or ('voice' if target in voice_targets else 'text'))
 
-    if executor_id == 'cae_local_audio_loop':
+    if executor_id == 'waylo_livekit':
+        evidence_source: EvidenceSource = 'external_webrtc'
+        honesty_label = 'Waylo LiveKit call · CAE AI tester · manual evaluation · coverage reported separately'
+        saved_evidence = False
+        synthetic_media = True
+    elif executor_id == 'cae_local_audio_loop':
         evidence_source: EvidenceSource = 'local_audio_loop'
         honesty_label = BUILTIN_SAMPLE_VOICE_HONESTY
         saved_evidence = False
@@ -378,7 +394,7 @@ def build_run_provenance(
             synthetic_media=synthetic_media,
         ),
         live_external_connection=(
-            executor_id in {'pipecat_public_daily', 'signalwire_public_webrtc'}
+            executor_id in {'pipecat_public_daily', 'signalwire_public_webrtc', 'waylo_livekit'}
             or executor_id in _UNAVAILABLE_EXECUTORS
         ),
         saved_evidence=saved_evidence,
