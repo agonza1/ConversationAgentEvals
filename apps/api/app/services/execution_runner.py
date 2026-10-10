@@ -71,6 +71,8 @@ DEFAULT_EXECUTION_MODEL = 'gpt-4.1-mini'
 PUBLIC_PIPECAT_AGENT = '10-gradium'
 SIGNALWIRE_HOLY_GUACAMOLE_MODEL = 'signalwire-ai-agent'
 FIXTURE_BACKED_SCENARIO_IDS = frozenset({'cancellation-rescue'})
+MAX_VOICE_SUITE_CASES = 20
+MAX_VOICE_SUITE_CONVERSATIONS = 20
 ALLOWED_FIXTURE_ROOTS = (
     REPO_ROOT / 'docs' / 'examples',
     REPO_ROOT / 'artifacts',
@@ -124,6 +126,7 @@ def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool =
     if suite is None:
         raise ValueError(f'Unknown suite: {resolved.suite_id}')
 
+    _validate_voice_execution_selection(resolved)
     scenario_ids = list(resolved.scenario_ids)
     if not scenario_ids:
         scenario_ids = [item['id'] for item in suite.get('scenarios') or []]
@@ -220,6 +223,23 @@ def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool =
         updated_at=now,
     )
     return execution_run_store.create_execution_run(record)
+
+
+def _validate_voice_execution_selection(payload: ExecutionRunCreateRequest) -> None:
+    """Bound live voice work before preflight; never infer authorization to call a suite."""
+    if payload.mode != 'pipecat_webrtc':
+        return
+    if not payload.scenario_ids:
+        raise ValueError('Voice execution requires explicit scenario_ids. Select the cases to run.')
+    if len(payload.scenario_ids) > MAX_VOICE_SUITE_CASES:
+        raise ValueError(f'Voice execution supports up to {MAX_VOICE_SUITE_CASES} selected cases per run.')
+    if len(payload.scenario_ids) * payload.iterations > MAX_VOICE_SUITE_CONVERSATIONS:
+        raise ValueError(
+            f'Voice execution supports up to {MAX_VOICE_SUITE_CONVERSATIONS} total conversations '
+            '(selected cases × iterations) per run.'
+        )
+    if payload.concurrent_sessions != 1:
+        raise ValueError('Voice cases run sequentially; set concurrent_sessions=1.')
 
 
 def execute_execution_run(execution_run_id: str, payload: ExecutionRunCreateRequest) -> dict[str, Any]:
@@ -1774,18 +1794,28 @@ async def _execute_pipecat_webrtc(
         session_id,
         metadata={'scenario_id': scenario_id, 'execution_run_id': execution_run_id},
     )
-    await transport.start_recording(session_id)
-    scenario = _scenario_definition(suite_id, scenario_id)
-    tester_result = await transport.run_duplex_session(
-        session_id,
-        scenario=scenario,
-        max_turn_pairs=payload.max_exchanges,
-        total_timeout_seconds=payload.duplex_timeout_seconds,
-    )
-    await transport.disconnect(
-        session_id,
-        reason=str(tester_result.get('termination_reason') or 'tester_complete'),
-    )
+    try:
+        await transport.start_recording(session_id)
+        scenario = _scenario_definition(suite_id, scenario_id)
+        tester_result = await transport.run_duplex_session(
+            session_id,
+            scenario=scenario,
+            max_turn_pairs=payload.max_exchanges,
+            total_timeout_seconds=payload.duplex_timeout_seconds,
+        )
+    except Exception:
+        # A failed case must close its own session before the sequential queue
+        # opens the next one. Keep the original failure if cleanup also fails.
+        try:
+            await transport.disconnect(session_id, reason='runner_error')
+        except Exception:
+            pass
+        raise
+    else:
+        await transport.disconnect(
+            session_id,
+            reason=str(tester_result.get('termination_reason') or 'tester_complete'),
+        )
     session_id = str(tester_result.get('session_id') or '')
     if not session_id:
         raise RuntimeError('pipecat_webrtc execution did not produce a session id')

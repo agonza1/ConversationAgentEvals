@@ -8,28 +8,41 @@ path. The generation choice does not change the target agent or its model.
 
 ## Workflow
 
-1. Enter requirements and permissible boundaries in Evaluation design. Author
-   behaviors manually or use CAE's existing **Generate draft checks/scenarios**
-   button, then review/approve those behaviors. That first button still uses the
-   custom CAE authoring prompt; it is not ASSERT taxonomy generation.
-2. Select reviewed behavior IDs, choose **ASSERT test generation**, and click
-   **Generate runnable case drafts**. CAE compiles the frozen selected behaviors
+1. **Define the test:** enter the goal, policy, permissible boundary, and required
+   or forbidden behaviors. Optional custom rule drafting is in Advanced; it uses
+   CAE's authoring prompt, not ASSERT taxonomy generation. Review those rules
+   before explicitly approving them for case generation.
+2. **Review cases:** select behavior checkboxes and click **Generate test cases**.
+   ASSERT is the default; the alternative generator is in Advanced. The UI shows
+   the requested case count and focused coverage, distinguishing uncovered rules
+   from rules present only as policy context. CAE compiles the selected behaviors
    into `taxonomy.json`; pinned `assert-ai==0.3.0` runs its native `test_set` stage.
    The UI generates three caller prompts per selected behavior, covering fixed
-   normal/boundary/adversarial dimensions. The API also supports 1–5 cases per
+   normal/boundary/adversarial dimensions, and limits selection to six behaviors
+   under the twenty-case API cap. Generation explicitly replaces the existing
+   case drafts. The API also supports 1–5 cases per
    behavior. ASSERT assigns behavior/variant dimensions in its jobs;
    the model does not invent CAE behavior identities.
-3. Review/edit the opening requests and expected outcomes. Approve the draft,
-   **Save version**, then **Publish saved cases to Scenarios**. Existing immutable
-   versioning, workspace publication permissions and explicit review confirmation
-   remain in force. Generation operates on the unsaved editor snapshot and reads
-   no other user's saved designs; publication requires the existing owner/editor
-   access check.
-4. **Choose a target and run**. CAE's existing target runner and voice transports
-   execute the caller prompts; compatible adaptive testers produce subsequent
-   caller turns. ASSERT generation neither prewrites the target's answers nor
-   substitutes its upstream inference runner for CAE's voice execution.
-5. Inspect the recorded conversation and deterministic findings. **Review with LLM
+3. Edit the opening requests and expected outcomes, then choose **Approve test set
+   and continue**. This explicit review action approves the submitted snapshot,
+   saves an immutable version, publishes that exact returned version, and opens
+   run configuration. It does not select an agent, change a model, or launch a
+   conversation. A failed publication can retry the same saved version without
+   creating another version. Changed editor content blocks continuing with an
+   older snapshot. Save-only and separate publication remain available in Advanced.
+   Workspace permissions and explicit review remain enforced. Generation reads
+   no other user's saved designs; publication requires owner/editor access.
+4. **Run voice tests:** choose the actual target, check readiness, and set explicit
+   exchange and duration limits. Compatible voice targets can queue the entire
+   suite in one action. Cases run sequentially in separate voice sessions, with
+   at most twenty cases and twenty total conversations per queue, one concurrent
+   session, 1–10 exchanges per conversation, and a 30–300 second deadline per
+   conversation. A case failure is retained and does not discard later cases.
+   Saved replay targets do not gain suite execution. CAE executes caller prompts;
+   compatible adaptive testers produce subsequent turns. ASSERT neither prewrites
+   target answers nor substitutes its inference runner for CAE's voice execution.
+5. **Inspect results:** call completion, deterministic findings, and proposed
+   semantic verdicts remain separate. **Review with LLM
    judge** still invokes CAE's existing ASSERT judge-only integration over the
    saved evidence. Generation does not start a judge or apply a verdict.
 

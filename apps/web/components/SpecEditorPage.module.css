@@ -1,0 +1,31 @@
+.shell { width: min(1100px, calc(100% - 40px)); }
+.steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; list-style: none; padding: 0; margin: 0; }
+.steps li { border: 1px solid var(--border); border-radius: 10px; padding: 14px; color: var(--muted); font-weight: 750; }
+.steps li[aria-current="step"] { border-color: var(--success-border); background: var(--success-bg); color: var(--success-text); }
+.coverage { display: grid; gap: 10px; margin: 0; padding: 14px; border: 1px solid var(--border); border-radius: 10px; }
+.coverage legend { padding: 0 6px; font-weight: 800; }
+.coverage p { margin: 0; }
+.actions { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+.coverageList { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.coverageList li { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 10px 12px; border-radius: 8px; background: rgba(24, 36, 45, 0.04); }
+.coverageList strong { font-size: 12px; color: #9a3412; }
+.coverageList strong[data-covered="true"] { color: var(--success-text); }
+.cases { display: grid; gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.caseCard { display: grid; gap: 12px; min-width: 0; margin: 0; border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+.caseCard legend { padding: 0 5px; font-weight: 800; max-width: 100%; overflow-wrap: anywhere; }
+.variant, .count { display: inline-block; border-radius: 999px; background: rgba(24, 36, 45, 0.07); padding: 3px 8px; font-size: 12px; font-weight: 700; text-transform: capitalize; }
+.details summary, .advanced summary { cursor: pointer; font-size: 13px; font-weight: 750; color: var(--muted); }
+.detailBody { display: grid; gap: 14px; padding-top: 14px; }
+.advanced { padding: 16px; }
+.advanced > summary { font-size: 15px; color: var(--text); }
+.advanced :global(.spec-form-card) { padding: 14px 0 0; }
+.advanced :global(.spec-preview-panel) { position: static; }
+.advanced :global(.spec-yaml-preview) { min-height: 200px; }
+.continueBar { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--border); }
+.continueBar p { margin: 0; }
+.continueBar button { justify-self: start; }
+@media (max-width: 760px) {
+  .steps { grid-template-columns: repeat(2, 1fr); }
+  .cases { grid-template-columns: 1fr; }
+  .coverageList li { align-items: start; flex-direction: column; gap: 5px; }
+}

@@ -1,4 +1,201 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+
+async function mockReviewedVoiceSuite(page: Page, options: { caseCount?: number; ready?: boolean; resultCases?: boolean; active?: boolean } = {}) {
+  const scenarios = Array.from({ length: options.caseCount ?? 3 }, (_, index) => ({
+    id: `assert-case-${index + 1}`, title: `Address correction ${index + 1}`,
+    user_goal: 'Read back the corrected address without claiming an account update.',
+  }));
+  const posts: Record<string, unknown>[] = [];
+  const conversations = options.resultCases ? scenarios.map((scenario, index) => ({
+    conversation_id: `exec-reviewed-${scenario.id}-1`, execution_run_id: 'exec-reviewed',
+    suite_id: 'reviewed-assert-suite', scenario_id: scenario.id, scenario_title: scenario.title,
+    mode: 'pipecat_webrtc', iteration: 1, turns: [],
+    status: index === 0 ? 'needs_review' : 'failed',
+    completed_at: '2026-10-10T00:02:00Z',
+    audio_session: { tester_status: index === 1 ? 'failed' : 'completed' },
+    verdict: index === 2 ? 'fail' : 'needs_review',
+    evaluation_findings: index === 1 ? {} : { verdict: index === 2 ? 'fail' : 'needs_review' },
+    error: index === 1 ? 'ASR timed out; partial recording preserved.' : null,
+    judge_reviews: index === 0 ? [{ review_id: 'assert-review-1', provider: 'assert-ai',
+      status: 'pending_confirmation', created_at: '2026-10-10T00:03:00Z',
+      judge_result: { provenance: { engine: 'assert' }, proposed_evaluation: {
+        verdict: 'pass', summary: 'Corrected address retained.', corrected_findings: [], remaining_gaps: [],
+      } } }] : [],
+  })) : [];
+  const run = {
+    execution_run_id: 'exec-reviewed', status: options.active ? 'running' : options.resultCases ? 'failed' : 'completed',
+    mode: 'pipecat_webrtc', suite_id: 'reviewed-assert-suite', scenario_ids: scenarios.map((scenario) => scenario.id),
+    user_id: 'voice-suite-tester', project_id: 'call-center-demo', agent_id: 'voice-custom',
+    conversations, progress: { phase: options.active ? 'executing' : 'completed',
+      completed_conversations: options.active ? 0 : scenarios.length,
+      total_conversations: scenarios.length, percent: options.active ? 0 : 100 },
+    created_at: '2026-10-10T00:00:00Z', updated_at: '2026-10-10T00:02:00Z',
+  };
+  await page.addInitScript(() => {
+    window.localStorage.setItem('conversation-evals-demo-user', 'voice-suite-tester');
+    window.localStorage.setItem('conversation-evals-demo-project', 'call-center-demo');
+  });
+  await page.route('**/api/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/api/benchmarks/suites') return route.fulfill({ json: [
+      { id: 'call-center-voice-ai', title: 'Unrelated default suite', scenarios: [{ id: 'wrong-default-case', title: 'Default scenario' }] },
+      { id: 'reviewed-assert-suite', title: 'Reviewed ASSERT address cases', scenarios },
+    ] });
+    if (path.endsWith('/contract-manifest')) return route.fulfill({ json: {} });
+    if (path === '/api/agents') return route.fulfill({ json: { agents: [
+      { id: 'voice-custom', name: 'Chosen voice agent', channel: 'voice', target: 'builtin_sample_voice', metadata: { model_name: 'do-not-use-seed-model' } },
+      { id: 'public-pipecat', name: 'Public Pipecat', channel: 'voice', target: 'pipecat_public_demo' },
+      { id: 'public-signalwire', name: 'Public SignalWire', channel: 'voice', target: 'signalwire_holy_guacamole' },
+      { id: 'saved-voice', name: 'Saved replay', channel: 'voice', target: 'voice_fixture' },
+      { id: 'acc-browser', name: 'ACC browser destination', channel: 'voice', target: 'browser_webrtc_agent' },
+    ] } });
+    if (path === '/api/product/providers/openai/status') return route.fulfill({ json: {
+      status: 'connected', execution_provider: 'openai', execution_default_model: 'gpt-6-luna',
+    } });
+    if (path === '/api/product/providers/openai/models') return route.fulfill({ json: {
+      models: [{ id: 'gpt-6-luna' }, { id: 'gpt-5.6-luna' }], default_model: 'gpt-6-luna',
+    } });
+    if (path === '/api/product/config') return route.fulfill({ json: {
+      pricing: [], usage_rules: [], auth: { enabled: false, mode: 'placeholder', providers: [], api_key_configured: false },
+      voice_status: 'enabled', llm_judge_status: 'gated',
+    } });
+    if (path === '/api/execution/health') return route.fulfill({ json: { reference_voice: {
+      ready: options.ready ?? true, llm_mode: 'real', dependencies: [{ id: 'rtc_asr', label: 'ASR', ready: options.ready ?? true, detail: 'ASR must be reachable.' }],
+    } } });
+    if (path === '/api/execution/runs' && route.request().method() === 'POST') {
+      posts.push(route.request().postDataJSON());
+      return route.fulfill({ json: run });
+    }
+    if (path === '/api/execution/runs/exec-reviewed') return route.fulfill({ json: run });
+    return route.fulfill({ json: [] });
+  });
+  return posts;
+}
+
+test('reviewed ASSERT voice set queues exactly the selected cases with explicit target and caps', async ({ page }) => {
+  const posts = await mockReviewedVoiceSuite(page);
+  await page.goto('/runs?suite_id=reviewed-assert-suite&run_scope=suite&agent_id=voice-custom');
+  const launch = page.getByRole('region', { name: 'Launch agent run' });
+  await expect(launch.getByLabel('Selected run scope')).toContainText('Reviewed ASSERT address cases');
+  await expect(launch.getByRole('button', { name: /Entire suite/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(launch.getByLabel('Execution agent target')).toHaveValue('voice-custom');
+  await expect(launch.getByLabel('Execution model')).toHaveValue('gpt-6-luna');
+  await launch.getByLabel('Execution model').selectOption('gpt-5.6-luna');
+  await launch.getByLabel('Maximum exchanges').fill('2');
+  await launch.getByLabel('Duplex session timeout').fill('90');
+  await expect(launch.getByLabel('Voice queue bounds')).toContainText('One call at a time');
+  await expect(launch.getByLabel('Voice queue bounds')).toContainText('up to 5 min of call time');
+  await launch.getByRole('button', { name: 'Run 3 voice tests' }).click();
+  await expect.poll(() => posts.length).toBe(1);
+  expect(posts[0]).toMatchObject({ suite_id: 'reviewed-assert-suite',
+    scenario_ids: ['assert-case-1', 'assert-case-2', 'assert-case-3'],
+    agent_id: 'voice-custom', model_name: 'gpt-5.6-luna', mode: 'pipecat_webrtc',
+    iterations: 1, concurrent_sessions: 1, max_exchanges: 2, duplex_timeout_seconds: 90,
+    tester_id: 'pipecat_tester', executor_id: 'cae_local_audio_loop', audio_transport: 'pipecat_small_webrtc',
+  });
+});
+
+test('a published test-set link waits for agent selection and never falls back from saved replay', async ({ page }) => {
+  const posts = await mockReviewedVoiceSuite(page);
+  for (const targetQuery of ['', '&agent_id=saved-voice']) {
+    await page.goto(`/runs?suite_id=reviewed-assert-suite&run_scope=suite${targetQuery}`);
+    const launch = page.getByRole('region', { name: 'Launch agent run' });
+    await expect(launch.getByLabel('Execution agent target')).toHaveValue('');
+    await expect(launch.getByLabel('Selected run scope')).toContainText('3 scenarios');
+    await expect(launch.getByLabel('Execution agent target').locator('option[value="saved-voice"]')).toHaveCount(0);
+    await expect(launch.getByRole('button', { name: 'Run evaluation' })).toBeDisabled();
+    expect(posts).toEqual([]);
+  }
+  await page.goto('/runs?suite_id=reviewed-assert-suite&run_scope=suite&agent_id=acc-browser');
+  const launch = page.getByRole('region', { name: 'Launch agent run' });
+  await expect(launch.getByLabel('Execution agent target')).toHaveValue('acc-browser');
+  await expect(launch.getByRole('button', { name: /Entire suite/ })).toHaveCount(0);
+  await expect(launch.getByRole('button', { name: 'Run evaluation' })).toBeDisabled();
+  expect(posts).toEqual([]);
+});
+
+for (const [agentId, executor, transport] of [
+  ['public-pipecat', 'pipecat_public_daily', 'pipecat_daily_webrtc'],
+  ['public-signalwire', 'signalwire_public_webrtc', 'signalwire_webrtc'],
+]) {
+  test(`${agentId} queues reviewed voice cases without replacing the remote target model`, async ({ page }) => {
+    const posts = await mockReviewedVoiceSuite(page);
+    await page.goto(`/runs?suite_id=reviewed-assert-suite&run_scope=suite&agent_id=${agentId}`);
+    const launch = page.getByRole('region', { name: 'Launch agent run' });
+    await expect(launch.getByLabel('Execution agent target')).toHaveValue(agentId);
+    await expect(launch.getByLabel('Execution model')).toHaveCount(0);
+    await launch.getByLabel('Maximum exchanges').fill('2');
+    await launch.getByRole('button', { name: 'Run 3 voice tests' }).click();
+    await expect.poll(() => posts.length).toBe(1);
+    expect(posts[0]).toMatchObject({
+      scenario_ids: ['assert-case-1', 'assert-case-2', 'assert-case-3'], agent_id: agentId,
+      executor_id: executor, audio_transport: transport, concurrent_sessions: 1, max_exchanges: 2,
+    });
+    if (agentId === 'public-pipecat') expect(posts[0]).not.toHaveProperty('model_name');
+    else expect(posts[0]).toMatchObject({ model_name: 'signalwire-ai-agent' });
+  });
+}
+
+test('voice test-set launch requires readiness, an exchange cap, and bounded total conversations', async ({ page }) => {
+  const posts = await mockReviewedVoiceSuite(page);
+  await page.goto('/runs?suite_id=reviewed-assert-suite&run_scope=suite&agent_id=voice-custom');
+  const launch = page.getByRole('region', { name: 'Launch agent run' });
+  await expect(launch.getByRole('button', { name: 'Run 3 voice tests' })).toBeEnabled();
+  await launch.getByLabel('Maximum exchanges').fill('');
+  await expect(launch.getByRole('button', { name: 'Run 3 voice tests' })).toBeDisabled();
+  await launch.getByLabel('Maximum exchanges').fill('2');
+  await launch.getByLabel('Execution iterations').fill('7');
+  await expect(launch.getByRole('button', { name: 'Run 21 voice tests' })).toBeDisabled();
+  await expect(launch.getByLabel('Voice queue bounds')).toContainText('at most 20 cases and 20 total voice tests');
+  expect(posts).toEqual([]);
+});
+
+test('voice suite readiness blocks every queued case before launch', async ({ page }) => {
+  const posts = await mockReviewedVoiceSuite(page, { ready: false });
+  await page.goto('/runs?suite_id=reviewed-assert-suite&run_scope=suite&agent_id=voice-custom');
+  const launch = page.getByRole('region', { name: 'Launch agent run' });
+  await expect(launch.getByLabel('Run Agent voice preflight blocked')).toContainText('ASR must be reachable');
+  await expect(launch.getByRole('button', { name: 'Run 3 voice tests' })).toBeDisabled();
+  expect(posts).toEqual([]);
+});
+
+test('an oversized voice test set cannot bypass the queue limit', async ({ page }) => {
+  const posts = await mockReviewedVoiceSuite(page, { caseCount: 21 });
+  await page.goto('/runs?suite_id=reviewed-assert-suite&run_scope=suite&agent_id=voice-custom');
+  const launch = page.getByRole('region', { name: 'Launch agent run' });
+  await expect(launch.getByRole('button', { name: 'Run 21 voice tests' })).toBeDisabled();
+  expect(posts).toEqual([]);
+});
+
+test('voice results distinguish call completion, failed capture, checks, and unapplied ASSERT proposals', async ({ page }) => {
+  await mockReviewedVoiceSuite(page, { resultCases: true });
+  await page.goto('/runs?suite_id=reviewed-assert-suite&run_scope=suite&agent_id=voice-custom');
+  const launch = page.getByRole('region', { name: 'Launch agent run' });
+  await launch.getByRole('button', { name: 'Run 3 voice tests' }).click();
+  const rows = launch.getByLabel('Execution conversations');
+  const completed = rows.locator('article').filter({ hasText: 'Address correction 1' });
+  await expect(completed).toContainText('Call: completed');
+  await expect(completed).toContainText('Automatic checks');
+  await expect(completed).toContainText('needs review');
+  await expect(completed).toContainText('pass proposed · not applied · freshness unverified; inspect in analysis');
+  const failed = rows.locator('article').filter({ hasText: 'Address correction 2' });
+  await expect(failed).toContainText('Call: incomplete');
+  await expect(failed).toContainText('ASR timed out; partial recording preserved.');
+  const policyFailure = rows.locator('article').filter({ hasText: 'Address correction 3' });
+  await expect(policyFailure).toContainText('Call: completed');
+  await expect(policyFailure.getByLabel('Voice test result')).toContainText('fail');
+  await expect(policyFailure).toContainText('semantic result unresolved');
+  await expect(launch).not.toContainText('All tests passed');
+});
+
+test('an active voice queue cannot be launched twice from the same page', async ({ page }) => {
+  const posts = await mockReviewedVoiceSuite(page, { active: true });
+  await page.goto('/runs?suite_id=reviewed-assert-suite&run_scope=suite&agent_id=voice-custom');
+  const launch = page.getByRole('region', { name: 'Launch agent run' });
+  await launch.getByRole('button', { name: 'Run 3 voice tests' }).click();
+  await expect(launch.getByRole('button', { name: 'Evaluation running...' })).toBeDisabled();
+  expect(posts).toHaveLength(1);
+});
 
 for (const executionProvider of ['openai', 'openai_codex']) {
   test(`connected ${executionProvider} execution uses the deployment model default`, async ({ page }) => {
@@ -651,7 +848,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await launch.getByLabel('Maximum exchanges').fill('5');
   await launch.getByLabel('Duplex session timeout').fill('180');
   await expect(launch).toContainText('up to 5 exchanges each');
-  await launch.getByRole('button', { name: 'Run evaluation' }).click();
+  await launch.getByRole('button', { name: 'Run 1 voice test' }).click();
   await expect.poll(() => voicePosted).not.toBeNull();
   expect(voicePosted).toMatchObject({
     mode: 'pipecat_webrtc',
@@ -670,8 +867,8 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await launch.getByRole('button', { name: 'Create live listener link' }).click();
   await expect(launch.getByLabel('Run listener link')).toContainText('exec-ui-voice-1-token');
   await expect.poll(() => firstListenerPollStarted).toBe(true);
-  await expect(launch.getByRole('button', { name: 'Run evaluation' })).toBeEnabled();
-  await launch.getByRole('button', { name: 'Run evaluation' }).click();
+  await expect(launch.getByRole('button', { name: 'Run 1 voice test' })).toBeEnabled();
+  await launch.getByRole('button', { name: 'Run 1 voice test' }).click();
   await expect.poll(() => voiceRunCount).toBe(2);
   await expect(launch.getByLabel('Run listener link')).toContainText('Available only while this run is active.');
   const staleListenerResponse = page.waitForResponse((response) => (
@@ -692,7 +889,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
 
   await launch.getByLabel('Execution agent target').selectOption('pipecat-public-demo');
   await expect(launch.getByLabel('Execution model')).toHaveCount(0);
-  await launch.getByRole('button', { name: 'Run evaluation' }).click();
+  await launch.getByRole('button', { name: 'Run 1 voice test' }).click();
   await expect.poll(() => publicPipecatPosted).not.toBeNull();
   expect(publicPipecatPosted).toMatchObject({
     mode: 'pipecat_webrtc',
@@ -710,10 +907,10 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect(launch.getByLabel('Maximum exchanges')).toHaveAttribute('max', '2');
   await launch.getByLabel('Maximum exchanges').fill('');
   await expect(launch).toContainText('enter an exchange cap');
-  await expect(launch.getByRole('button', { name: 'Run evaluation' })).toBeDisabled();
+  await expect(launch.getByRole('button', { name: 'Run 1 voice test' })).toBeDisabled();
   await launch.getByLabel('Maximum exchanges').fill('2');
   await expect(launch).toContainText('SignalWire supports up to two in the same WebRTC call');
-  await launch.getByRole('button', { name: 'Run evaluation' }).click();
+  await launch.getByRole('button', { name: 'Run 1 voice test' }).click();
   await expect.poll(() => signalwirePosted).not.toBeNull();
   expect(signalwirePosted).toMatchObject({
     mode: 'pipecat_webrtc',
@@ -732,7 +929,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   const blockedLaunch = page.getByRole('region', { name: 'Launch agent run' });
   await blockedLaunch.getByLabel('Execution agent target').selectOption('generalist-voice-agent');
   await expect(blockedLaunch.getByLabel('Run Agent voice preflight blocked')).toContainText('Set OPENAI_API_KEY');
-  await expect(blockedLaunch.getByRole('button', { name: 'Run evaluation' })).toBeDisabled();
+  await expect(blockedLaunch.getByRole('button', { name: 'Run 1 voice test' })).toBeDisabled();
 
   oauthConnected = false;
   await page.reload();
