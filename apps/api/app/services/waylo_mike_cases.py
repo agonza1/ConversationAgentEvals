@@ -85,5 +85,12 @@ for case in WAYLO_MIKE_SUITE['scenarios']:
     case['waylo_test']['expected_entities_by_turn'] = [deepcopy(expected)]
     if case['id'] == 'mike-correction':
         case['waylo_test']['expected_entities_by_turn'] = [[{'product_name': 'White Potatoes', 'quantity': 5, 'unit': 'bags'}], [{'quantity': 3, 'unit': 'boxes'}]]
+    elif case['id'] == 'mike-interrupted-list':
+        case['waylo_test']['expected_entities_by_turn'] = [
+            [{'product_name': 'White Potatoes', 'quantity': 5, 'unit': 'bags'},
+             {'product_name': 'Carrots', 'quantity': 2, 'unit': 'boxes'}],
+            [{'product_name': 'Carrots', 'quantity': 3, 'unit': 'boxes'}],
+            [],
+        ]
     elif case['id'] == 'mike-ambiguous':
         case['waylo_test']['expected_entities_by_turn'] = [[{'product_name': 'potatoes', 'quantity': 5, 'unit': 'bags'}], [{'product_name': 'White Potatoes'}]]

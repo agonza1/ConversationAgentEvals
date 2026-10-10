@@ -338,6 +338,31 @@ def test_entity_diagnostics_separate_recognition_and_local_send_clipping():
     assert assess_speech(source, refs)['status'] == 'unknown'
 
 
+def test_interrupted_list_checks_initial_quantity_and_later_correction_separately():
+    from app.services.waylo_assessment import assess_speech
+    from app.services.waylo_mike_cases import WAYLO_MIKE_SUITE
+    case = next(case for case in WAYLO_MIKE_SUITE['scenarios'] if case['id'] == 'mike-interrupted-list')
+    expected = case['waylo_test']['expected_entities_by_turn']
+    assert expected[0][1]['quantity'] == 2
+    assert expected[1][0]['quantity'] == 3
+    assert expected[2] == []
+    assert case['waylo_test']['expected_requests'][1]['quantity'] == 3
+    refs = [{'event_type': 'tester.audio.sent', 'turn_id': f'caller-{index}',
+             'reference_text': text, 'intended_samples': 100, 'accepted_samples': 100}
+            for index, text in enumerate(case['caller_steps'], 1)]
+    source = captured(transcripts=[transcript(index, text=text)
+                                  for index, text in enumerate(case['caller_steps'], 1)])
+    comparisons = assess_speech(source, refs, expected)['comparisons']
+    for comparison in comparisons[:2]:
+        assert all(entity['recognition'] == {'product': True, 'quantity': True, 'unit': True}
+                   for entity in comparison['critical_entities'])
+    assert comparisons[2]['critical_entities'] == []
+    source['transcripts'][1] = transcript(2, text='Wait, make the carrots two boxes.')
+    correction = assess_speech(source, refs, expected)['comparisons'][1]
+    assert correction['critical_entities'][0]['recognition']['quantity'] is False
+    assert correction['scoreable'] is False
+
+
 @pytest.mark.parametrize('scripted_exchanges', [1, 2])
 def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp_path, scripted_exchanges):
     class Client:
