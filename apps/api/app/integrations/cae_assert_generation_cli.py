@@ -15,7 +15,7 @@ from litellm import CustomLLM, ModelResponse
 from litellm.llms.custom_llm import CustomLLMError
 from pydantic import BaseModel, ConfigDict, StrictStr
 
-from app.integrations.assert_runtime import ensure_expected_version
+from app.integrations.assert_runtime import native_test_set_runtime
 from app.services.editable_assert_spec import _complete_generation
 from app.services.spec_generation_settings import generation_settings
 
@@ -79,9 +79,7 @@ class CAEGenerationTransport(CustomLLM):
 
 
 async def run(request_path: Path):
-    ensure_expected_version()
-    from assert_ai.core.io import normalize_test_case_rows, write_jsonl
-    from assert_ai.stages.test_set import run_test_set
+    runtime = native_test_set_runtime()
     from litellm.utils import custom_llm_setup
 
     request = json.loads(request_path.read_text(encoding='utf-8'))
@@ -98,7 +96,7 @@ async def run(request_path: Path):
         taxonomy_path = root / f'{category["name"]}-taxonomy.json'
         taxonomy_path.write_text(json.dumps(taxonomy, ensure_ascii=False, indent=2), encoding='utf-8')
         output_path = root / f'{category["name"]}-test_set.jsonl'
-        result = await run_test_set(taxonomy_path=str(taxonomy_path), save_path=str(output_path),
+        result = await runtime.run_test_set(taxonomy_path=str(taxonomy_path), save_path=str(output_path),
             context=request['context'], prompt={'model': 'cae_generation/' + configuration['model'],
                 'sample_size': configuration['samples_per_behavior'], 'temperature': None,
                 # Cancelling a to_thread call cannot stop its provider request. The
@@ -110,8 +108,8 @@ async def run(request_path: Path):
         errors += result['errored_count']
         records.extend(json.loads(line) for line in output_path.read_text(encoding='utf-8').splitlines() if line.strip())
     # Each per-behavior stage starts IDs at one. Renormalize once over the whole import.
-    records = normalize_test_case_rows(records)
-    write_jsonl(root / 'test_set.jsonl', records)
+    records = runtime.normalize_test_case_rows(records)
+    runtime.write_jsonl(root / 'test_set.jsonl', records)
     (root / 'summary.json').write_text(json.dumps({'saved_count': len(records), 'errored_count': errors,
         'model_calls': transport.calls}), encoding='utf-8')
 

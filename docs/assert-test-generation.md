@@ -85,4 +85,52 @@ Tests exercise the actual pinned ASSERT generation stage and strict artifact
 adapter using fake model responses, including 1–5 samples, equal/slug-colliding
 behavior labels, partial output and provider changes. No paid live generation or
 voice calls are made by those tests. A small manually reviewed live case set is
-still required to calibrate prompt quality with the deployment's chosen model.
+needed to calibrate prompt quality with each deployment's chosen model.
+
+## Bounded live validation
+
+The local validation generated three caller cases through ASSERT's native
+`test_set` stage using `gpt-6-luna`, reviewed and edited them, approved and saved
+version 1, then published that version to Scenarios. CAE's built-in reference
+voice target completed all three cases with real STT, LLM and TTS, with two
+caller/target exchanges per case and 15 valid WAV recordings across the runs.
+Failed attempts remain preserved alongside the completed runs.
+
+One caller turn illustrates an evidence limit: its saved pre-TTS source text
+contains `482`, while the ASR receipt contains `40082`. Neither observation alone
+verifies what the caller audio actually said. Semantic judge proposals remain
+unapplied; completed voice execution is not a claim that every judge passed or
+every forbidden rule was covered. This check does not qualify Agentic Contact
+Center integration, authoritative business-backend actions, browser/WebRTC or SIP
+transport, interruptions, or real-time latency.
+
+## Local voice testing
+
+The Pipecat service can tune its rtc-asr Local STT v1 start message using deployment
+environment settings. Both conversation participants use these settings. Defaults
+preserve the existing streaming behavior; malformed or out-of-range values fail
+when the ASR processor is constructed.
+
+| Setting | Default | Accepted values |
+| --- | --- | --- |
+| `RTC_ASR_INTERIM_RESULTS` | `true` | `true` or `false` |
+| `RTC_ASR_PARTIAL_INTERVAL_MS` | `100` | Integer, 100–5000 milliseconds |
+| `RTC_ASR_PARTIAL_WINDOW_SECONDS` | `2.0` | Number, 0.5–20 seconds |
+| `RTC_ASR_FINAL_TIMEOUT_SECONDS` | `20` | Number, 5–120 seconds |
+
+For a local CPU ASR run focused on semantic evaluation, set
+`RTC_ASR_INTERIM_RESULTS=false`, `RTC_ASR_PARTIAL_INTERVAL_MS=1000` and
+`RTC_ASR_PARTIAL_WINDOW_SECONDS=5`. The conversation agent reacts to final
+transcription frames, so interim text can be disabled without replacing the
+streamed PCM, VAD boundaries or final transcript receipts. When interim results
+are enabled, a slower cadence reduces repeated partial decoding; the longer
+window provides more partial context and can increase each decode's work.
+
+The final-transcript deadline remains 20 seconds by default. A local CPU backend
+that needs more decoding time can set `RTC_ASR_FINAL_TIMEOUT_SECONDS=60` after
+confirming decoder latency is the cause. This extends only the bounded wait for a
+final result; the audio buffer stays 20 seconds and the overall voice session
+remains bounded to at most 300 seconds. Such a run can validate conversation semantics, but
+should not be presented as a real-time latency benchmark. Tune and validate the
+rtc-asr backend separately; a partial cadence setting does not guarantee CPU
+decoding meets the final deadline.

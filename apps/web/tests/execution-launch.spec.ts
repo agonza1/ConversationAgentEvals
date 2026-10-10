@@ -1,5 +1,53 @@
 import { expect, test } from '@playwright/test';
 
+for (const executionProvider of ['openai', 'openai_codex']) {
+  test(`connected ${executionProvider} execution uses the deployment model default`, async ({ page }) => {
+    let catalogRequests = 0;
+    let judgeControlRequests = 0;
+    await page.route('**/api/**', async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.includes('/providers/chatgpt/')) judgeControlRequests += 1;
+      if (path === '/api/product/providers/openai/status') {
+        return route.fulfill({ json: { status: 'connected', provider: 'openai_codex',
+          execution_provider: executionProvider, execution_default_model: 'gpt-5.6-luna' } });
+      }
+      if (path === '/api/product/providers/openai/models') {
+        catalogRequests += 1;
+        return route.fulfill({ json: { models: [{ id: 'gpt-6-luna' }, { id: 'gpt-6-sol' }],
+          default_model: 'gpt-6-luna' } });
+      }
+      if (path === '/api/product/config') {
+        if (executionProvider === 'openai') return route.fulfill({ status: 503, json: { detail: 'Temporary config outage' } });
+        return route.fulfill({ json: { pricing: [], usage_rules: [], voice_status: 'gated', llm_judge_status: 'gated',
+          auth: { enabled: false, mode: 'placeholder', providers: [], api_key_configured: false } } });
+      }
+      if (path === '/api/agents') {
+        return route.fulfill({ json: { agents: [{ id: 'generalist-text-agent', name: 'Generalist text',
+          channel: 'text', target: 'openai_codex' }] } });
+      }
+      if (path === '/api/benchmarks/suites') {
+        return route.fulfill({ json: [{ id: 'call-center-voice-ai', title: 'Voice checks', scenarios: [{
+          id: 'billing-address-change', title: 'Address change', sample_transcript: 'Caller: hi',
+          sample_action_trace: [], sample_final_state: {},
+        }] }] });
+      }
+      if (path.endsWith('/scenarios')) return route.fulfill({ json: { scenarios: [] } });
+      if (path === '/api/execution/health') return route.fulfill({ json: { ok: true,
+        reference_voice: { ready: false, llm_mode: 'real', dependencies: [] } } });
+      return route.fulfill({ json: [] });
+    });
+    await page.goto('/runs?agent_id=generalist-text-agent');
+    const model = page.getByLabel('Execution model');
+    await expect(model).toHaveValue('gpt-5.6-luna');
+    await expect(model.locator('option')).toContainText(['gpt-5.6-luna', 'gpt-6-luna', 'ollama/gemma2:2b']);
+    await expect(model.locator('option[value="gpt-6-sol"]')).toHaveCount(0);
+    await model.selectOption('gpt-6-luna');
+    await expect(model).toHaveValue('gpt-6-luna');
+    expect(catalogRequests).toBeGreaterThan(0);
+    expect(judgeControlRequests).toBe(0);
+  });
+}
+
 test('launch evaluation streams conversations into the live list', async ({ page }) => {
   let polled = 0;
   let voicePreflightReady = true;
@@ -80,7 +128,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
         body: JSON.stringify({
           status: oauthConnected ? 'connected' : 'disconnected',
           provider: 'openai_codex',
-          execution_provider: apiKeyPreferred || !oauthConnected ? 'openai_compatible' : 'openai_codex',
+          execution_provider: apiKeyPreferred || !oauthConnected ? 'openai_compatible' : 'openai',
           execution_default_model: apiKeyPreferred || !oauthConnected ? 'gpt-4.1-mini' : 'gpt-6-luna',
         }),
       });

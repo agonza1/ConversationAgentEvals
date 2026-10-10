@@ -1546,7 +1546,10 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                                 'model': payload.stt_model,
                                 'protocol': 'local-stt.v1',
                                 'streaming': True,
-                                'interim_results': True,
+                                'interim_results': result.tester_asr.interim_results,
+                                'partial_interval_ms': result.tester_asr.partial_interval_ms,
+                                'partial_window_seconds': result.tester_asr.partial_window_seconds,
+                                'final_timeout_seconds': result.tester_asr.final_timeout_seconds,
                             },
                             {
                                 'name': 'llm',
@@ -1574,7 +1577,10 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                                 'model': payload.stt_model,
                                 'protocol': 'local-stt.v1',
                                 'streaming': True,
-                                'interim_results': True,
+                                'interim_results': result.target_asr.interim_results,
+                                'partial_interval_ms': result.target_asr.partial_interval_ms,
+                                'partial_window_seconds': result.target_asr.partial_window_seconds,
+                                'final_timeout_seconds': result.target_asr.final_timeout_seconds,
                             },
                             {
                                 'name': 'llm',

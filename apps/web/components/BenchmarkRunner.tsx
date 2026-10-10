@@ -309,7 +309,18 @@ function apiKeyModelOrDefault(current: string): string {
     : DEFAULT_EXECUTION_MODEL;
 }
 
-async function fetchOpenAIModels(): Promise<{ models: string[]; message: string | null }> {
+function usesCodexExecution(provider: OpenAIProviderStatus | null): boolean {
+  // The deployment registry calls Codex "openai"; older status responses used
+  // "openai_codex". API-key execution is explicitly "openai_compatible".
+  return provider?.status === 'connected'
+    && (provider.execution_provider === 'openai' || provider.execution_provider === 'openai_codex');
+}
+
+function codexExecutionDefault(provider: OpenAIProviderStatus): string {
+  return provider.execution_default_model?.trim() || DEFAULT_CODEX_EXECUTION_MODEL;
+}
+
+async function fetchOpenAIModels(defaultModel = DEFAULT_CODEX_EXECUTION_MODEL): Promise<{ models: string[]; message: string | null }> {
   const response = await fetch(`${getApiBase()}/api/product/providers/openai/models`, { cache: 'no-store' });
   if (response.status === 401) {
     return { models: [...API_KEY_EXECUTION_MODELS, ...LOCAL_EXECUTION_MODELS], message: 'Connect OpenAI to load GPT models; local Ollama models stay available.' };
@@ -330,10 +341,10 @@ async function fetchOpenAIModels(): Promise<{ models: string[]; message: string 
   const ids = (payload.models ?? [])
     .map((item) => (typeof item === 'string' ? item : item.id))
     .filter((id): id is string => Boolean(id && id.trim() && !id.trim().split('-').includes('sol')));
-  const merged = Array.from(new Set([DEFAULT_CODEX_EXECUTION_MODEL, ...LOCAL_EXECUTION_MODELS, ...ids]));
+  const merged = Array.from(new Set([defaultModel, ...LOCAL_EXECUTION_MODELS, ...ids]));
   merged.sort((a, b) => {
-    if (a === DEFAULT_CODEX_EXECUTION_MODEL) return -1;
-    if (b === DEFAULT_CODEX_EXECUTION_MODEL) return 1;
+    if (a === defaultModel) return -1;
+    if (b === defaultModel) return 1;
     return a.localeCompare(b);
   });
   return {
@@ -2602,10 +2613,12 @@ export function BenchmarkRunner({
 
       if (suiteLoadRequestRef.current !== requestId) return;
       try {
-        const nextConfig = await fetchProductConfig();
-        const nextOpenAI = await fetchOpenAIProviderStatus().catch(() => null);
+        const [nextConfig, nextOpenAI] = await Promise.all([
+          fetchProductConfig().catch(() => null),
+          fetchOpenAIProviderStatus().catch(() => null),
+        ]);
         if (suiteLoadRequestRef.current !== requestId) return;
-        setProductConfig(nextConfig);
+        if (nextConfig) setProductConfig(nextConfig);
         if (nextOpenAI) setOpenaiProvider(nextOpenAI);
       } catch {
         // Suites can still run without product config / OpenAI status.
@@ -2626,30 +2639,31 @@ export function BenchmarkRunner({
   useEffect(() => {
     let active = true;
     async function loadExecutionModels() {
-      if (openaiProvider?.status !== 'connected' || openaiProvider?.execution_provider !== 'openai_codex') {
+      if (!usesCodexExecution(openaiProvider)) {
         setExecutionModelOptions([...API_KEY_EXECUTION_MODELS, ...LOCAL_EXECUTION_MODELS]);
         setExecutionModelsMessage('Connect OpenAI to load GPT models; local Ollama models stay available.');
         setExecutionModelName(apiKeyModelOrDefault);
         return;
       }
+      const defaultModel = codexExecutionDefault(openaiProvider!);
       try {
-        const { models, message } = await fetchOpenAIModels();
+        const { models, message } = await fetchOpenAIModels(defaultModel);
         if (!active) return;
         setExecutionModelOptions(models);
         setExecutionModelsMessage(message);
-        setExecutionModelName((current) => (current !== DEFAULT_EXECUTION_MODEL && models.includes(current) ? current : DEFAULT_CODEX_EXECUTION_MODEL));
+        setExecutionModelName((current) => (current !== DEFAULT_EXECUTION_MODEL && models.includes(current) ? current : defaultModel));
       } catch {
         if (!active) return;
         setExecutionModelOptions(FALLBACK_EXECUTION_MODELS);
         setExecutionModelsMessage('Using built-in model list. Re-connect OpenAI to refresh.');
-        setExecutionModelName((current) => (current !== DEFAULT_EXECUTION_MODEL && FALLBACK_EXECUTION_MODELS.includes(current) ? current : DEFAULT_CODEX_EXECUTION_MODEL));
+        setExecutionModelName((current) => (current !== DEFAULT_EXECUTION_MODEL && FALLBACK_EXECUTION_MODELS.includes(current) ? current : defaultModel));
       }
     }
     void loadExecutionModels();
     return () => {
       active = false;
     };
-  }, [openaiProvider?.status, openaiProvider?.execution_provider]);
+  }, [openaiProvider]);
 
   useEffect(() => {
     let active = true;
@@ -3163,19 +3177,20 @@ export function BenchmarkRunner({
           setOpenaiProviderMessage(`Connected as ${status.email || status.account_id || 'OpenAI account'}.`);
           const nextConfig = await fetchProductConfig().catch(() => null);
           if (nextConfig) setProductConfig(nextConfig);
-          if (status.execution_provider !== 'openai_codex') {
+          if (!usesCodexExecution(status)) {
             setExecutionModelOptions([...API_KEY_EXECUTION_MODELS, ...LOCAL_EXECUTION_MODELS]);
             setExecutionModelsMessage('API key is the active execution provider.');
             setExecutionModelName(apiKeyModelOrDefault);
             break;
           }
-          const { models, message } = await fetchOpenAIModels().catch(() => ({
+          const defaultModel = codexExecutionDefault(status);
+          const { models, message } = await fetchOpenAIModels(defaultModel).catch(() => ({
             models: FALLBACK_EXECUTION_MODELS,
             message: 'Using built-in model list. Re-connect OpenAI to refresh.',
           }));
           setExecutionModelOptions(models);
           setExecutionModelsMessage(message);
-          setExecutionModelName((current) => (current !== DEFAULT_EXECUTION_MODEL && models.includes(current) ? current : DEFAULT_CODEX_EXECUTION_MODEL));
+          setExecutionModelName((current) => (current !== DEFAULT_EXECUTION_MODEL && models.includes(current) ? current : defaultModel));
           break;
         }
       }
