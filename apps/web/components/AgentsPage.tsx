@@ -3,6 +3,9 @@
 import { FormEvent, useEffect, useId, useRef, useState } from 'react';
 
 import { SiteNav } from '@/components/SiteNav';
+import { ApiAwareLink } from '@/components/ApiAwareLink';
+import { WayloConnection, useWayloConnection } from '@/components/WayloConnection';
+import { WAYLO_MIKE_AGENT_ID, WAYLO_SESSION_ENDPOINT, wayloRequestHeaders } from '@/lib/wayloConnection';
 import {
   AccConnectionStatus,
   AgentRecord,
@@ -27,6 +30,7 @@ type AgentFormState = {
   endpointUrl: string;
   workspaceId: string;
   wayloAgentId: string;
+  wayloAuthType: 'waylo_browser_session' | 'bearer_secret';
   authType: 'none' | 'bearer_secret' | 'api_key_secret';
   secretRef: string;
   apiKeyHeader: string;
@@ -46,6 +50,7 @@ const EMPTY_FORM: AgentFormState = {
   endpointUrl: '',
   workspaceId: '',
   wayloAgentId: '',
+  wayloAuthType: 'waylo_browser_session',
   authType: 'none',
   secretRef: '',
   apiKeyHeader: 'x-api-key',
@@ -129,7 +134,8 @@ function fixedPublicTargetUrl(target: FormTarget) {
 function connectionFromForm(values: AgentFormState): AgentRecord['connection'] {
   if (values.target === 'waylo') {
     return { endpoint_url: values.endpointUrl.trim(), workspace_id: values.workspaceId.trim(),
-      waylo_agent_id: values.wayloAgentId.trim(), auth_type: 'bearer_secret', secret_ref: values.secretRef.trim() };
+      waylo_agent_id: values.wayloAgentId.trim(), auth_type: values.wayloAuthType,
+      secret_ref: values.wayloAuthType === 'waylo_browser_session' ? null : values.secretRef.trim() };
   }
   const fixedUrl = fixedPublicTargetUrl(values.target);
   if (fixedUrl) {
@@ -164,7 +170,8 @@ function formFromAgent(agent: AgentRecord): AgentFormState {
     endpointUrl: agent.connection?.endpoint_url || '',
     workspaceId: agent.connection?.workspace_id || '',
     wayloAgentId: agent.connection?.waylo_agent_id || '',
-    authType: agent.connection?.auth_type || 'none',
+    wayloAuthType: agent.connection?.auth_type === 'waylo_browser_session' ? 'waylo_browser_session' : 'bearer_secret',
+    authType: agent.connection?.auth_type === 'waylo_browser_session' ? 'none' : agent.connection?.auth_type || 'none',
     secretRef: agent.connection?.secret_ref || '',
     apiKeyHeader: agent.connection?.api_key_header || 'x-api-key',
     responsePath: agent.connection?.response_path || 'response',
@@ -211,7 +218,8 @@ function AgentConfigRows({ agent }: { agent: AgentRecord }) {
     ...(agent.connection?.phone_number ? [{ label: 'Destination', value: agent.connection.phone_number }] : []),
     ...(agent.connection?.acc_base_url ? [{ label: 'ACC', value: agent.connection.acc_base_url }] : []),
     ...(agent.target === 'waylo' ? [{ label: 'Workspace', value: agent.connection?.workspace_id || '—' },
-      { label: 'Waylo agent', value: agent.connection?.waylo_agent_id || '—' }] : []),
+      { label: 'Waylo agent', value: agent.connection?.waylo_agent_id || '—' },
+      { label: 'Authorization', value: agent.connection?.auth_type === 'waylo_browser_session' ? 'Temporary local connection · reconnect after reload' : 'Provisioned server credential' }] : []),
     {
       label: 'Evidence',
       value: agent.target === 'waylo' ? 'Native session + paginated transcript + permission-dependent execution evidence'
@@ -254,6 +262,8 @@ function AgentConfigRows({ agent }: { agent: AgentRecord }) {
 }
 
 function WayloSessionCapture({ agent }: { agent: AgentRecord }) {
+  const connection = useWayloConnection(agent.connection);
+  const needsConnection = agent.connection?.auth_type === 'waylo_browser_session' && !connection;
   const [session, setSession] = useState('');
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
@@ -261,8 +271,9 @@ function WayloSessionCapture({ agent }: { agent: AgentRecord }) {
     setBusy(true);
     setStatus('');
     try {
-      const response = await fetch(`${getApiBase()}/api/agents/${encodeURIComponent(agent.id)}/capture`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ session_id: session.trim() }),
+      const endpoint = `${getApiBase()}/api/agents/${encodeURIComponent(agent.id)}/capture`;
+      const response = await fetch(endpoint, {
+        method: 'POST', headers: { 'content-type': 'application/json', ...wayloRequestHeaders(agent.connection, endpoint) }, body: JSON.stringify({ session_id: session.trim() }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Could not capture the session.');
@@ -283,7 +294,8 @@ function WayloSessionCapture({ agent }: { agent: AgentRecord }) {
     <h3>Existing human call</h3>
     <p>Read provider evidence without starting a call or submitting an evaluation.</p>
     <label>Session UUID <input aria-label={`Session UUID for ${agent.name}`} value={session} onChange={(e) => setSession(e.target.value)} /></label>
-    <button type="button" disabled={busy || !session.trim()} onClick={() => void download()}>{busy ? 'Capturing…' : 'Download session vCon'}</button>
+    <button type="button" disabled={busy || !session.trim() || needsConnection} onClick={() => void download()}>{busy ? 'Capturing…' : 'Download session vCon'}</button>
+    {needsConnection ? <p>Connect Waylo above before reading a session.</p> : null}
     {status ? <p role="status">{status}</p> : null}
   </section>;
 }
@@ -369,6 +381,8 @@ function AgentFormModal({
   const [endpointUrl, setEndpointUrl] = useState(initial.endpointUrl);
   const [workspaceId, setWorkspaceId] = useState(initial.workspaceId);
   const [wayloAgentId, setWayloAgentId] = useState(initial.wayloAgentId);
+  const [wayloAuthType, setWayloAuthType] = useState(initial.wayloAuthType);
+  const activeWaylo = useWayloConnection({ endpoint_url: endpointUrl, workspace_id: workspaceId, waylo_agent_id: wayloAgentId, auth_type: wayloAuthType });
   const [authType, setAuthType] = useState(initial.authType);
   const [secretRef, setSecretRef] = useState(initial.secretRef);
   const [apiKeyHeader, setApiKeyHeader] = useState(initial.apiKeyHeader);
@@ -390,6 +404,7 @@ function AgentFormModal({
     setEndpointUrl(initial.endpointUrl);
     setWorkspaceId(initial.workspaceId);
     setWayloAgentId(initial.wayloAgentId);
+    setWayloAuthType(initial.wayloAuthType);
     setAuthType(initial.authType);
     setSecretRef(initial.secretRef);
     setApiKeyHeader(initial.apiKeyHeader);
@@ -405,6 +420,7 @@ function AgentFormModal({
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
     if (comingSoon) return;
+    if (target === 'waylo' && wayloAuthType === 'waylo_browser_session' && !activeWaylo) return;
     await onSubmit({
       name,
       channel,
@@ -413,6 +429,7 @@ function AgentFormModal({
       endpointUrl,
       workspaceId,
       wayloAgentId,
+      wayloAuthType,
       authType,
       secretRef,
       apiKeyHeader,
@@ -443,6 +460,7 @@ function AgentFormModal({
   function onTargetChange(nextTarget: FormTarget) {
     const nextFixedUrl = fixedPublicTargetUrl(nextTarget);
     setTarget(nextTarget);
+    if (nextTarget === 'waylo' && wayloAuthType === 'waylo_browser_session') setEndpointUrl(WAYLO_SESSION_ENDPOINT);
     if (nextFixedUrl) {
       setEndpointUrl(nextFixedUrl);
       setEnvironment('production');
@@ -617,11 +635,22 @@ function AgentFormModal({
             <fieldset className="agents-connection-fields">
               <legend>Waylo LiveKit target</legend>
               <p>Any Waylo agent can use this connector. Calls capture evidence only; submit it for evaluation manually.</p>
-              <label><span>API base URL</span><input required type="url" aria-label="Waylo API base URL" value={endpointUrl} onChange={(e) => setEndpointUrl(e.target.value)} placeholder="https://api.example.com" /></label>
-              <label><span>Workspace UUID</span><input required aria-label="Waylo workspace UUID" value={workspaceId} onChange={(e) => setWorkspaceId(e.target.value)} /></label>
-              <label><span>Waylo agent UUID</span><input required aria-label="Waylo agent UUID" value={wayloAgentId} onChange={(e) => setWayloAgentId(e.target.value)} /></label>
-              <label><span>Credential reference</span><input required aria-label="Waylo credential reference" value={secretRef} onChange={(e) => setSecretRef(e.target.value)} pattern="[a-z][a-z0-9-]{0,63}" /></label>
-              <small>Server-side bearer key: sessions:create, sessions:read, transcripts:read. Native events need workspace admin access; historical configuration also needs agents:read. Never paste a key here.</small>
+              <label><span>Waylo authorization</span><select aria-label="Waylo authorization" value={wayloAuthType} onChange={(event) => {
+                const mode = event.target.value as AgentFormState['wayloAuthType'];
+                setWayloAuthType(mode);
+                if (mode === 'waylo_browser_session') { setEndpointUrl(WAYLO_SESSION_ENDPOINT); setSecretRef(''); }
+              }}><option value="waylo_browser_session">Temporary local sign-in</option><option value="bearer_secret">Provisioned server credential</option></select></label>
+              {wayloAuthType === 'waylo_browser_session' ? <WayloConnection
+                agentId={wayloAgentId || undefined}
+                connection={{ endpoint_url: endpointUrl, workspace_id: workspaceId, waylo_agent_id: wayloAgentId, auth_type: wayloAuthType }}
+                onEndpoint={(endpoint) => { if (!workspaceId) setEndpointUrl(endpoint); }}
+                onConnected={(info) => { setEndpointUrl(info.endpoint_url); setWorkspaceId(info.workspace_id); setWayloAgentId(info.waylo_agent_id); if (!name.trim()) setName(info.agent_name); }}
+              /> : null}
+              <label><span>API base URL</span><input required type="url" aria-label="Waylo API base URL" value={endpointUrl} readOnly={wayloAuthType === 'waylo_browser_session'} onChange={(e) => setEndpointUrl(e.target.value)} placeholder="https://api.example.com" /></label>
+              <label><span>Workspace UUID</span><input required aria-label="Waylo workspace UUID" value={workspaceId} readOnly={wayloAuthType === 'waylo_browser_session'} onChange={(e) => setWorkspaceId(e.target.value)} /></label>
+              <label><span>Waylo agent UUID</span><input required aria-label="Waylo agent UUID" value={wayloAgentId} readOnly={wayloAuthType === 'waylo_browser_session'} onChange={(e) => setWayloAgentId(e.target.value)} /></label>
+              {wayloAuthType === 'bearer_secret' ? <><label><span>Credential reference</span><input required aria-label="Waylo credential reference" value={secretRef} onChange={(e) => setSecretRef(e.target.value)} pattern="[a-z][a-z0-9-]{0,63}" /></label>
+                <small>Server-side bearer key: sessions:create, sessions:read, transcripts:read. Native events need workspace admin access; historical configuration also needs agents:read. Never paste a key here.</small></> : null}
             </fieldset>
           ) : null}
           {isAccTarget(target) ? (
@@ -712,7 +741,7 @@ function AgentFormModal({
             <button type="button" className="secondary-link" onClick={onClose}>
               Cancel
             </button>
-            <button type="submit" className="primary-link" disabled={saving || comingSoon} title={comingSoon ? 'CAE ↔ ACC live adapter coming soon' : undefined}>
+            <button type="submit" className="primary-link" disabled={saving || comingSoon || (target === 'waylo' && wayloAuthType === 'waylo_browser_session' && !activeWaylo)} title={comingSoon ? 'CAE ↔ ACC live adapter coming soon' : undefined}>
               {saving ? 'Saving…' : comingSoon ? 'Coming soon' : submitLabel}
             </button>
           </div>
@@ -729,7 +758,6 @@ export function AgentsPage() {
   const [saving, setSaving] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [editingAgent, setEditingAgent] = useState<AgentRecord | null>(null);
-  const [apiBaseOverride, setApiBaseOverride] = useState<string | null>(null);
   const visibleAgents = agents.filter((agent) => !isSavedReplayTarget(agent.target));
 
   async function reload() {
@@ -749,10 +777,6 @@ export function AgentsPage() {
     return () => {
       active = false;
     };
-  }, []);
-
-  useEffect(() => {
-    setApiBaseOverride(new URLSearchParams(window.location.search).get('api_base'));
   }, []);
 
   async function onCreate(values: AgentFormState) {
@@ -873,12 +897,12 @@ export function AgentsPage() {
               )}
             </div>
 
-            <a className="agents-try-button" href={agentTryItOutHref(agent.id, apiBaseOverride)}>
+            <ApiAwareLink className="agents-try-button" href={agentTryItOutHref(agent.id)}>
               <span className="agents-try-icon" aria-hidden="true">
                 {agent.channel === 'voice' ? '☎' : '✎'}
               </span>
               Try it Out
-            </a>
+            </ApiAwareLink>
 
             <section className="agents-card-section">
               <h3>Description</h3>
@@ -891,7 +915,11 @@ export function AgentsPage() {
               <h3>Configuration</h3>
               <AgentConfigRows agent={agent} />
             </section>
-            {agent.target === 'waylo' ? <WayloSessionCapture agent={agent} /> : null}
+            {agent.target === 'waylo' ? <>
+              {agent.connection?.auth_type === 'waylo_browser_session' ? <WayloConnection connection={agent.connection} /> : null}
+              {agent.connection?.waylo_agent_id === WAYLO_MIKE_AGENT_ID ? <ApiAwareLink className="secondary-link" href={`/runs?${new URLSearchParams({ agent_id: agent.id, suite_id: 'waylo-mike-notes', scenario_id: 'mike-five-bags' }).toString()}`}>Test Mike’s five-bags case</ApiAwareLink> : null}
+              <WayloSessionCapture agent={agent} />
+            </> : null}
           </article>
         ))}
       </section>

@@ -111,7 +111,7 @@ def _compact_evaluation_findings(report: Any) -> dict[str, Any]:
     }
 
 
-def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool = False) -> dict[str, Any]:
+def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool = False, waylo_lease=None) -> dict[str, Any]:
     register_builtin_benchmark_extensions()
     resolved = _resolve_agent_payload(payload)
     if (
@@ -152,11 +152,21 @@ def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool =
     if resolved.agent_id and agent is None:
         raise ValueError(f'Unknown agent: {resolved.agent_id}')
     target = _execution_target(resolved, agent)
+    if waylo_lease is not None and (target != 'waylo' or not agent
+                                   or agent['connection'].get('auth_type') != 'waylo_browser_session'):
+        raise ValueError('Waylo target authentication changed; reconnect before starting a run.')
     if target == 'waylo':
         if not agent:
             raise ValueError('Waylo execution requires a saved target.')
-        from app.services.target_secrets import resolve_http_target_secret
-        resolve_http_target_secret(agent['connection']['secret_ref'])
+        if agent['connection'].get('auth_type') == 'waylo_browser_session':
+            if waylo_lease is None:
+                raise ValueError('Connect Waylo in this browser before starting this temporary target.')
+            from app.services.waylo_connection import authorize_lease_target
+            authorize_lease_target(waylo_lease, agent)
+            # Reserve bounded RTC, cleanup and paginated capture time for every call.
+            waylo_lease.check(required_seconds=(resolved.duplex_timeout_seconds + 120) * len(scenario_ids) * resolved.iterations)
+        else:
+            resolve_http_target_secret(agent['connection']['secret_ref'])
     if target == 'signalwire_holy_guacamole' and not _signalwire_public_gate_enabled():
         raise ValueError(
             f'Holy Guacamole SignalWire execution requires '
@@ -292,6 +302,9 @@ def execute_execution_run(execution_run_id: str, payload: ExecutionRunCreateRequ
             'status': 'failed',
             'error': str(exc),
         }
+    finally:
+        from app.services.waylo_connection import release_run
+        release_run(execution_run_id)
 
 
 def _live_event_publisher(
@@ -683,8 +696,11 @@ def _execution_model_name(payload: ExecutionRunCreateRequest, *, target: str) ->
 async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenario_id,
                          payload, agent_snapshot, event_observer):
     from app.services.waylo_livekit import run_waylo_call
+    from app.services.waylo_target import WayloClient
+    from app.services.waylo_connection import run_lease
     from app.services.vcon_evidence import decode_evidence, latest_tool_events
     target = agent_snapshot or get_agent(payload.agent_id)
+    lease = run_lease(execution_run_id, target) if target['connection'].get('auth_type') == 'waylo_browser_session' else None
     scenario = _scenario_definition(suite_id, scenario_id)
     model = payload.tester_model_name or default_reference_model_name()
     provider = None if scenario.get('caller_steps') or payload.audio_plan_path else resolve_reference_completion_provider(model)
@@ -751,7 +767,8 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
             scenario=scenario, suite_id=suite_id,
             artifact_dir=REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id / 'audio' / conversation_id,
             max_exchanges=payload.max_exchanges, timeout_seconds=payload.duplex_timeout_seconds,
-            next_utterance=wording, synthesize=synthesis, event_observer=event_observer)
+            next_utterance=wording, synthesize=synthesis, event_observer=event_observer,
+            client=WayloClient(target, credential_lease=lease), credential_lease=lease)
         profile = decode_evidence(result['ietf_vcon_export'])
         result['action_trace'] = latest_tool_events(profile['tool_events'])
         observed_final = next((s['state'] for s in profile['state_snapshots'] if s['phase'] == 'final'), {})

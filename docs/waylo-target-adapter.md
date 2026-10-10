@@ -13,6 +13,38 @@ Add a voice target, select **Waylo agent (LiveKit)**, and provide:
 - Opaque credential reference, e.g. `waylo-staging`. Administrators provision the
   bearer key in `CAE_HTTP_TARGET_SECRET_WAYLO_STAGING`; do not paste keys into forms.
 
+Alternatively select **Temporary local sign-in** and **Connect Waylo** in Targets.
+CAE displays the operator-approved Waylo API origin before asking for consent.
+The password is forwarded once to Waylo's `/auth/login`, never saved, and cleared
+from the form. CAE verifies `/auth/me` and the selected agent, then fills its workspace
+UUID automatically. A platform administrator must explicitly supply the owning
+tenant UUID; its target uses Waylo's `/admin/tenants/{tenantId}` API mount.
+
+The Waylo access JWT stays only in one API process's memory, until its actual expiry
+or 15 minutes, whichever comes first. No refresh cookie is retained or replayed.
+The browser holds an opaque control proof only in JavaScript memory: never in a
+cookie, localStorage, sessionStorage, a URL, or a saved target. A full reload requires
+reconnecting. Saved targets contain only public identifiers and
+`auth_type=waylo_browser_session`, not a credential reference. There is no silent
+fallback to an environment key. Imported capture, readiness and run queueing require
+the originating browser's proof and local same-origin control headers. Credentials
+are rechecked on HTTP retries and during RTC; disconnect, expiry and successful
+reconnect cancel active calls. Queueing reserves call/cleanup/capture time for each
+selected scenario and rejects runs longer than the available token lifetime. Start
+with one controlled Mike case, not the entire suite.
+
+Temporary sign-in is a **local, single-API-worker preview**, not general-purpose
+multi-user OAuth. `CAE_WAYLO_API_BASE_URL` must match an operator-provisioned
+`CAE_WAYLO_ALLOWED_API_ORIGINS` HTTPS origin. UI origins must be explicitly ported
+loopback URLs in `CAE_WAYLO_ALLOWED_ORIGINS`. Open CAE through its same-origin API
+proxy, not an external `api_base` override. A restart loses all connections; a tab
+crash/reload loses its proof, while an already-started call remains bounded by its
+timeout and server token expiry. Use **Disconnect Waylo** before leaving to revoke
+an active call immediately. A sign-in does not launch a call or submit evaluation.
+Dashboard authority is revalidated by Waylo on each operation: being able to read
+an agent does not prove permission to start calls or read native events. Missing
+permissions/evidence remain explicit errors or unknown coverage.
+
 Use `sessions:create` for web calls, `sessions:read` and `transcripts:read` for capture,
 with access to the session's workspace. Native `/events` requires workspace admin
 access. Historical `/agents/{id}/versions/{version}` additionally needs `agents:read`.

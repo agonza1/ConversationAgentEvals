@@ -1,4 +1,5 @@
 import { apiErrorMessage } from './apiError';
+import { wayloRequestHeaders, type WayloTargetConnection } from './wayloConnection';
 
 export type ExecutionMode = 'text_callable' | 'voice_fixture' | 'pipecat_webrtc';
 export type AudioTransportId =
@@ -41,7 +42,7 @@ export interface AgentRecord {
   environment?: 'local' | 'staging' | 'production';
   connection?: {
     endpoint_url?: string | null;
-    auth_type?: 'none' | 'bearer_secret' | 'api_key_secret';
+    auth_type?: 'none' | 'bearer_secret' | 'api_key_secret' | 'waylo_browser_session';
     secret_ref?: string | null;
     api_key_header?: string;
     response_path?: string;
@@ -542,10 +543,11 @@ export async function createAgent(payload: {
   connection?: AgentRecord['connection'];
   description?: string | null;
 }): Promise<AgentRecord> {
+  const endpoint = `${getApiBase()}/api/agents`;
   return handleJson(
-    await fetch(`${getApiBase()}/api/agents`, {
+    await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(payload.target === 'waylo' ? wayloRequestHeaders(payload.connection, endpoint) : {}) },
       body: JSON.stringify(payload),
     }),
   );
@@ -555,10 +557,11 @@ export async function updateAgent(
   agentId: string,
   payload: Partial<Pick<AgentRecord, 'name' | 'channel' | 'target' | 'environment' | 'connection' | 'description'>>,
 ): Promise<AgentRecord> {
+  const endpoint = `${getApiBase()}/api/agents/${encodeURIComponent(agentId)}`;
   return handleJson(
-    await fetch(`${getApiBase()}/api/agents/${encodeURIComponent(agentId)}`, {
+    await fetch(endpoint, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(payload.connection?.auth_type === 'waylo_browser_session' ? wayloRequestHeaders(payload.connection, endpoint) : {}) },
       body: JSON.stringify(payload),
     }),
   );
@@ -620,11 +623,12 @@ export async function createExecutionRun(payload: {
   executor_id?: ExecutorId;
   evaluate?: boolean;
   audio_transport?: AudioTransportId;
-}): Promise<ExecutionRunRecord> {
+}, connection?: WayloTargetConnection): Promise<ExecutionRunRecord> {
+  const endpoint = `${getApiBase()}/api/execution/runs`;
   return handleJson(
-    await fetch(`${getApiBase()}/api/execution/runs`, {
+    await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(payload.executor_id === 'waylo_livekit' ? wayloRequestHeaders(connection, endpoint) : {}) },
       body: JSON.stringify(payload),
     }),
   );

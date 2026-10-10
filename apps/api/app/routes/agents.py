@@ -5,7 +5,7 @@ import uuid
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request as WebRequest
 from pydantic import BaseModel, ConfigDict
 
 from app.schemas.agents import AgentCreateRequest, AgentTarget, AgentUpdateRequest
@@ -24,7 +24,7 @@ class WayloCaptureRequest(BaseModel):
 
 
 @router.post('/{agent_id}/capture')
-async def capture_waylo_session(agent_id: str, payload: WayloCaptureRequest):
+async def capture_waylo_session(agent_id: str, payload: WayloCaptureRequest, request: WebRequest):
     """Read-only provider capture. Repeated captures refresh one stable vCon UUID.
 
     This route deliberately has no evaluator, benchmark submission or billing hook.
@@ -37,7 +37,8 @@ async def capture_waylo_session(agent_id: str, payload: WayloCaptureRequest):
         raise HTTPException(status_code=400, detail='Session capture requires a Waylo target.')
     client = None
     try:
-        client = WayloClient(agent)
+        lease = _browser_waylo_lease(request, agent)
+        client = WayloClient(agent, credential_lease=lease)
         captured = await client.capture(str(payload.session_id))
         metadata = captured['session'].get('metadata') or {}
         cae_metadata = metadata.get('cae') if isinstance(metadata, dict) else None
@@ -76,11 +77,24 @@ def list_agent_options():
 
 
 @router.get('/{agent_id}/readiness')
-def get_agent_readiness(agent_id: str):
+def get_agent_readiness(agent_id: str, request: WebRequest):
     agent = agent_store.get_agent(agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail='Agent not found.')
-    return _readiness_for_agent(agent)
+    lease = _browser_waylo_lease(request, agent)
+    return _readiness_for_agent(agent, browser_connected=lease is not None)
+
+
+def _browser_waylo_lease(request: WebRequest, agent: dict):
+    if agent.get('target') != 'waylo' or agent.get('connection', {}).get('auth_type') != 'waylo_browser_session':
+        return None
+    from app.routes.waylo_connection import local_control
+    from app.services.waylo_connection import authorize, WayloConnectionError
+    local_control(request)
+    try:
+        return authorize(request.headers.get('x-cae-waylo-session', ''), agent)
+    except WayloConnectionError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from None
 
 
 @router.get('/{agent_id}')
@@ -172,7 +186,7 @@ _TARGET_GROUPS: dict[AgentTarget, str] = {
 }
 
 _CONNECTION_REQUIREMENTS: dict[AgentTarget, tuple[str, ...]] = {
-    'waylo': ('endpoint_url', 'workspace_id', 'waylo_agent_id', 'secret_ref'),
+    'waylo': ('endpoint_url', 'workspace_id', 'waylo_agent_id'),
     'http_endpoint': ('endpoint_url',),
     'pipecat_public_demo': ('endpoint_url',),
     'signalwire_holy_guacamole': ('endpoint_url',),
@@ -345,6 +359,10 @@ def _target_option(target: AgentTarget) -> dict[str, object]:
             else None
         ),
         'requires_connection': list(_CONNECTION_REQUIREMENTS.get(target, ())),
+        **({'authentication_options': [
+            {'auth_type': 'waylo_browser_session', 'requires_connection': [], 'local_only': True},
+            {'auth_type': 'bearer_secret', 'requires_connection': ['secret_ref']},
+        ]} if target == 'waylo' else {}),
         'defaults': defaults.model_dump(mode='json'),
     }
 
@@ -369,7 +387,7 @@ def _executor_options() -> list[dict[str, object]]:
     ]
 
 
-def _readiness_for_agent(agent: dict) -> dict[str, object]:
+def _readiness_for_agent(agent: dict, *, browser_connected: bool = False) -> dict[str, object]:
     target = str(agent.get('target') or '')
     connection = agent.get('connection') if isinstance(agent.get('connection'), dict) else {}
     option = _target_option(target) if target in _TARGET_OPTIONS else None
@@ -396,7 +414,11 @@ def _readiness_for_agent(agent: dict) -> dict[str, object]:
     )
 
     auth_type = str(connection.get('auth_type') or 'none')
-    if target in {'http_endpoint', 'waylo'} and auth_type != 'none':
+    if target == 'waylo' and auth_type == 'waylo_browser_session':
+        add_check('temporary_connection', browser_connected,
+                  'Temporary Waylo connection is active in this browser.' if browser_connected
+                  else 'Connect Waylo in this browser; temporary credentials are never saved.')
+    elif target in {'http_endpoint', 'waylo'} and auth_type != 'none':
         secret_ref = str(connection.get('secret_ref') or '').strip()
         if not secret_ref:
             add_check('credential_reference', False, 'Authenticated HTTP targets require a credential ID.')

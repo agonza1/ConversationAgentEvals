@@ -524,6 +524,7 @@ test('Waylo target saves reusable IDs and credential reference without a key', a
   await page.getByPlaceholder('Billing support — staging').fill('Mike notes fixture');
   await page.getByLabel('Target channel').selectOption('voice');
   await page.getByLabel('Target connection').selectOption('waylo');
+  await page.getByLabel('Waylo authorization').selectOption('bearer_secret');
   await page.getByLabel('Waylo API base URL').fill('https://api.waylo.test');
   await page.getByLabel('Waylo workspace UUID').fill('11111111-1111-4111-8111-111111111111');
   await page.getByLabel('Waylo agent UUID').fill('22222222-2222-4222-8222-222222222222');

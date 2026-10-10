@@ -367,6 +367,7 @@ def test_interrupted_list_checks_initial_quantity_and_later_correction_separatel
 def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp_path, scripted_exchanges):
     class Client:
         _secret = 'provider-secret'
+        redaction_values = ('provider-secret',)
         agent = A
         calls = []
         async def bootstrap(self, correlation_id):
@@ -398,7 +399,7 @@ def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp
         async def wait_response(self, previous, timeout=25):
             self.speech_count += 1
             self.remote_pcm.extend(b'\x00\x10' * 480)
-            self.segments[('remote', 'agent-text')] = 'I have noted five bags of White Potatoes.'
+            self.segments[('remote', 'agent-text')] = 'I have noted five bags of White Potatoes. provider-secret private turn-credential turn-username'
         async def send(self, audio, *, turn_id, reference, artifact_dir):
             event = {'event_id': f'{turn_id}/sent', 'event_type': 'tester.audio.sent', 'source': 'livekit.AudioSource',
                      'turn_id': turn_id, 'reference_text': reference, 'duration_ms': 20,
@@ -421,6 +422,9 @@ def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp
     assert result['verdict'] == 'needs_review' and result['score'] is None and result['evaluation_report'] == {}
     assert [e['speaker'] for e in observer_events] == ['Agent'] + ['Caller', 'Agent'] * scripted_exchanges
     assert all(isinstance(e['audio'], bytes) for e in observer_events)
+    assert 'provider-secret' not in repr(observer_events)
+    assert 'private' not in repr(observer_events)
+    assert 'turn-credential' not in repr(observer_events) and 'turn-username' not in repr(observer_events)
     profile = decode_evidence(result['ietf_vcon_export'])
     assert profile['context']['source_call_kind'] == 'cae_ai_tester'
     assert profile['context']['evaluation_submission'] == 'manual'

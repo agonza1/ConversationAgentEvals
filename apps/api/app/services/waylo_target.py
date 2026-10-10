@@ -67,26 +67,45 @@ Opaque secret values are removed even when placed under an innocuous key.
 
 
 class WayloClient:
-    def __init__(self, target: dict, *, client: httpx.AsyncClient | None = None):
+    def __init__(self, target: dict, *, client: httpx.AsyncClient | None = None, credential_lease=None):
         self.target = target
         connection = target['connection']
         self.base = api_url(connection['endpoint_url'])
         self.workspace = str(uuid.UUID(connection['workspace_id']))
         self.agent = str(uuid.UUID(connection['waylo_agent_id']))
-        self._secret = resolve_http_target_secret(connection['secret_ref'])
+        self.credential_lease = credential_lease
+        if connection.get('auth_type') == 'waylo_browser_session':
+            if credential_lease is None:
+                raise WayloError('Connect Waylo in this browser before using this temporary target.')
+            from app.services.waylo_connection import authorize_lease_target
+            authorize_lease_target(credential_lease, target)
+            credential_lease.check()
+            self._secret = None  # Never cache an access token outside its revocable memory grant.
+        else:
+            if credential_lease is not None:
+                raise WayloError('Temporary credentials cannot replace a server credential reference.')
+            self._secret = resolve_http_target_secret(connection['secret_ref'])
         self.client = client or httpx.AsyncClient(timeout=connection.get('timeout_ms', 15000) / 1000,
-                                                 follow_redirects=False)
+                                                 follow_redirects=False, trust_env=credential_lease is None)
         self._owns_client = client is None
+
+    @property
+    def redaction_values(self) -> tuple[str, ...]:
+        return (self.credential_lease.token(),) if self.credential_lease else (self._secret,)
 
     async def close(self):
         if self._owns_client:
             await self.client.aclose()
 
     async def request(self, method: str, path: str, **kwargs):
-        headers = {'Authorization': f'Bearer {self._secret}', 'Accept': 'application/json',
-                   **kwargs.pop('headers', {})}
+        extra_headers = kwargs.pop('headers', {})
         # The ONLY retried write has a provider-supported idempotency key.
         for attempt in range(3):
+            # Resolve again for retries; disconnect/expiry must not reuse a cached token.
+            secret = self.credential_lease.token() if self.credential_lease else self._secret
+            headers = {**extra_headers, 'Authorization': f'Bearer {secret}', 'Accept': 'application/json'}
+            if self.credential_lease:
+                self.client.cookies.clear()
             try:
                 response = await self.client.request(method, f'{self.base}/{path}', headers=headers, **kwargs)
             except httpx.TransportError:
@@ -94,6 +113,14 @@ class WayloClient:
                     await asyncio.sleep(.2 * (attempt + 1))
                     continue
                 raise WayloError('Waylo API transport failed; no response body or credential was retained.') from None
+            finally:
+                if self.credential_lease:
+                    self.client.cookies.clear()
+            if self.credential_lease:
+                self.credential_lease.check()
+                if response.status_code == 401:
+                    self.credential_lease.revoke()
+                    raise WayloError('Waylo connection expired or was revoked. Connect again.', 401)
             if response.status_code in {429, 502, 503, 504} and attempt < 2 and (method == 'GET' or 'Idempotency-Key' in headers):
                 await asyncio.sleep(.2 * (attempt + 1))
                 continue
@@ -169,7 +196,7 @@ class WayloClient:
         session = {k: v for k, v in session.items() if k != 'transcript'}
         captured = {'target_id': self.target['id'], 'origin': origin, 'session': session,
                     'transcripts': transcripts, **optional, 'unavailable': unavailable}
-        return clean_native(captured, (self._secret,))
+        return clean_native(captured, self.redaction_values)
 
 
 def project_capture(capture: dict, *, voice_events: list[dict] | None = None,

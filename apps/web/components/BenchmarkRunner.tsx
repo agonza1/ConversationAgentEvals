@@ -8,6 +8,8 @@ import { DesignResults } from './DesignResults';
 import { LiveRunFeedback, type LiveRunEvent } from './LiveRunFeedback';
 import { apiErrorMessage } from '@/lib/apiError';
 import { listProductProjects, requestBenchmarkJudge, type ProductProjectOption, type AssertJudgeReadiness } from '@/lib/execution';
+import { WayloConnection, useWayloConnection } from './WayloConnection';
+import { wayloRequestHeaders, type WayloTargetConnection } from '@/lib/wayloConnection';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -1057,11 +1059,12 @@ async function createExecutionRun(payload: {
   tester_model_name?: string;
   executor_id?: 'waylo_livekit' | 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'signalwire_public_webrtc' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
   audio_transport?: 'waylo_livekit' | 'none' | 'pipecat_small_webrtc' | 'pipecat_daily_webrtc' | 'signalwire_webrtc' | 'freeswitch_verto_sip';
-}) {
+}, connection?: WayloTargetConnection) {
+  const endpoint = `${getApiBase()}/api/execution/runs`;
   return handleJson<ExecutionRunRecord>(
-    await fetch(`${getApiBase()}/api/execution/runs`, {
+    await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(payload.executor_id === 'waylo_livekit' ? wayloRequestHeaders(connection, endpoint) : {}) },
       body: JSON.stringify(payload),
     }),
   );
@@ -1079,6 +1082,9 @@ type ScoreAgentOption = {
     sip_uri?: string | null;
     phone_number?: string | null;
     acc_base_url?: string | null;
+    workspace_id?: string | null;
+    waylo_agent_id?: string | null;
+    auth_type?: string;
   };
   metadata?: {
     model_name?: string | null;
@@ -2363,6 +2369,9 @@ export function BenchmarkRunner({
     () => agents.find((agent) => agent.id === selectedAgentId) ?? null,
     [agents, selectedAgentId],
   );
+  const wayloConnection = useWayloConnection(selectedScoreAgent?.connection);
+  const needsWayloConnection = selectedScoreAgent?.target === 'waylo'
+    && selectedScoreAgent.connection?.auth_type === 'waylo_browser_session' && !wayloConnection;
   const [showSimulateEvidenceOptions, setShowSimulateEvidenceOptions] = useState(false);
   const [includeStructuredEvidence, setIncludeStructuredEvidence] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
@@ -3656,6 +3665,10 @@ export function BenchmarkRunner({
       setExecutionMessage('Select an agent target before launching.');
       return null;
     }
+    if (needsWayloConnection) {
+      setExecutionMessage('Connect Waylo for this tab before starting a call.');
+      return null;
+    }
     const supportsConfigurableExchanges =
       selectedScoreAgent.target === 'openai_codex'
       || selectedScoreAgent.target === 'builtin_sample_voice'
@@ -3770,7 +3783,7 @@ export function BenchmarkRunner({
           : runMode === 'pipecat_webrtc'
             ? 'pipecat_small_webrtc'
             : 'none',
-      });
+      }, wayloAgent ? selectedScoreAgent.connection : undefined);
       const queuedWithLaunchContext = {
         ...queued,
         agent_id: selectedAgentId || queued.agent_id || undefined,
@@ -4740,6 +4753,9 @@ export function BenchmarkRunner({
           </div>
         </div>
 
+        {selectedScoreAgent?.target === 'waylo' && selectedScoreAgent.connection?.auth_type === 'waylo_browser_session'
+          ? <WayloConnection connection={selectedScoreAgent.connection} /> : null}
+
         {view === 'run' && loadError ? (
           <div style={{ border: '1px solid var(--error-border)', background: 'var(--error-bg)', color: 'var(--error-text)', borderRadius: 8, padding: 12, display: 'grid', gap: 8 }}>
             <span>{loadError}</span>
@@ -5094,6 +5110,7 @@ export function BenchmarkRunner({
               || isSimulating
               || !selectedSuite
               || !selectedScoreAgent
+              || needsWayloConnection
               || (matchingProductProjects.length > 1 && !productProjectId)
               || ((selectedScoreAgent?.target === 'openai_codex'
                 || selectedScoreAgent?.target === 'builtin_sample_voice'

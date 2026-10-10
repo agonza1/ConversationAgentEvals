@@ -227,8 +227,47 @@ async def run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, s
                          artifact_dir: Path, max_exchanges: int, timeout_seconds: int,
                          next_utterance: Callable, synthesize: Callable,
                          event_observer: Callable | None = None,
-                         peer: LiveKitVoicePeer | None = None, client: WayloClient | None = None):
-    client = client or WayloClient(target)
+                         peer: LiveKitVoicePeer | None = None, client: WayloClient | None = None,
+                         credential_lease=None):
+    client = client or WayloClient(target, credential_lease=credential_lease)
+    call = None
+    guard = None
+    try:
+        if credential_lease is None:
+            return await _run_waylo_call(target=target, correlation_id=correlation_id, scenario=scenario,
+                suite_id=suite_id, artifact_dir=artifact_dir, max_exchanges=max_exchanges,
+                timeout_seconds=timeout_seconds, next_utterance=next_utterance, synthesize=synthesize,
+                event_observer=event_observer, peer=peer, client=client)
+
+        async def monitor_authorization():
+            while True:
+                credential_lease.check()
+                await asyncio.sleep(.1)
+
+        call = asyncio.create_task(_run_waylo_call(target=target, correlation_id=correlation_id,
+            scenario=scenario, suite_id=suite_id, artifact_dir=artifact_dir, max_exchanges=max_exchanges,
+            timeout_seconds=timeout_seconds, next_utterance=next_utterance, synthesize=synthesize,
+            event_observer=event_observer, peer=peer, client=client))
+        guard = asyncio.create_task(monitor_authorization())
+        await asyncio.wait((call, guard), return_when=asyncio.FIRST_COMPLETED)
+        if guard.done():
+            await guard  # Safe expiration/revocation error; RTC is cancelled below.
+        credential_lease.check()
+        return await call
+    finally:
+        for task in (call, guard):
+            if task and not task.done():
+                task.cancel()
+        await asyncio.gather(*(task for task in (call, guard) if task), return_exceptions=True)
+        # Cancellation can skip the capture block's finally; close here as well.
+        await client.close()
+
+
+async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, suite_id: str,
+                          artifact_dir: Path, max_exchanges: int, timeout_seconds: int,
+                          next_utterance: Callable, synthesize: Callable,
+                          event_observer: Callable | None,
+                          peer: LiveKitVoicePeer | None, client: WayloClient):
     peer = peer or LiveKitVoicePeer()
     bootstrap, before, capture, media_dialogs, turns = None, None, None, [], []
     error = None
@@ -236,6 +275,13 @@ async def run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, s
     after_items = []
     prepared = {}
     steps = scenario.get('caller_steps')
+
+    def safe_text(text):
+        turn_auth = bootstrap.get('turn') or {} if bootstrap else {}
+        values = (*client.redaction_values, bootstrap.get('participantToken', '') if bootstrap else '',
+                  turn_auth.get('credential', ''), turn_auth.get('username', ''))
+        return clean_native(text, values)
+
     if steps:
         max_exchanges = min(max_exchanges, len(steps))
     try:
@@ -267,7 +313,7 @@ async def run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, s
                 greeting = pcm_wav(bytes(peer.remote_pcm))
                 artifact_dir.mkdir(parents=True, exist_ok=True)
                 (artifact_dir / 'agent-greeting-received.wav').write_bytes(greeting)
-                greeting_text = '\n'.join(text for key, text in peer.segments.items() if key[0] == 'remote' and text)
+                greeting_text = safe_text('\n'.join(text for key, text in peer.segments.items() if key[0] == 'remote' and text))
                 if event_observer:
                     event_observer({'speaker': 'Agent', 'text': greeting_text or '[Greeting audio; transcript pending]',
                         'audio': greeting, 'direction': 'target_to_tester'})
@@ -287,11 +333,12 @@ async def run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, s
                 observation, sent_wav = await peer.send(audio_bytes, turn_id=turn_id, reference=utterance,
                                                         artifact_dir=artifact_dir)
                 observation['audio_condition'] = audio_condition
+                safe_utterance = safe_text(utterance)
                 if event_observer:
-                    event_observer({'speaker': 'Caller', 'text': utterance, 'audio': sent_wav,
-                                    'direction': 'tester_to_target', 'llm_output': utterance})
-                turns.append({'speaker': 'Caller', 'text': utterance, 'turn_index': len(turns) + 1,
-                              'direction': 'tester_to_target', 'frame_metadata': {'source_text': utterance,
+                    event_observer({'speaker': 'Caller', 'text': safe_utterance, 'audio': sent_wav,
+                                    'direction': 'tester_to_target', 'llm_output': safe_utterance})
+                turns.append({'speaker': 'Caller', 'text': safe_utterance, 'turn_index': len(turns) + 1,
+                              'direction': 'tester_to_target', 'frame_metadata': {'source_text': safe_utterance,
                               'duration_ms': observation['duration_ms'], 'audio_sha256': observation['audio_sha256']}})
                 sent_media_bytes += len(sent_wav)
                 if sent_media_bytes <= 600_000:
@@ -313,8 +360,8 @@ async def run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, s
                     await peer.wait_response(previous)
                 target_audio = pcm_wav(bytes(peer.remote_pcm[offset:]))
                 (artifact_dir / f'agent-{index}-received.wav').write_bytes(target_audio)
-                response = '\n'.join(text for key, text in peer.segments.items()
-                                     if key[0] == 'remote' and text and text != previous_segments.get(key))
+                response = safe_text('\n'.join(text for key, text in peer.segments.items()
+                                     if key[0] == 'remote' and text and text != previous_segments.get(key)))
                 peer.events.append({'event_id': f'agent-{index}/received', 'event_type': 'target.audio.received',
                     'source': 'livekit.AudioStream', 'turn_id': f'agent-{index}',
                     'audio_sha256': hashlib.sha256(target_audio).hexdigest(), 'sample_rate_hz': 24000,
@@ -378,7 +425,7 @@ async def run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, s
             previous_digest = digest
             await asyncio.sleep(.5)
         turn_credentials = bootstrap.get('turn') or {}
-        secret_values = (bootstrap['participantToken'], client._secret,
+        secret_values = (bootstrap['participantToken'], *client.redaction_values,
                          turn_credentials.get('credential', ''), turn_credentials.get('username', ''))
         # Scrub every evidence channel, including opaque strings in backend
         # before/after snapshots and native source, not only RTC events.
@@ -396,7 +443,7 @@ async def run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, s
                                for line in capture['transcripts'])
         artifact_dir.mkdir(parents=True, exist_ok=True)
         (artifact_dir / 'agent-received.wav').write_bytes(pcm_wav(bytes(peer.remote_pcm)))
-        return {'turns': turns, 'transcript': transcript, 'ietf_vcon_export': exported['vcon'],
+        return {'turns': clean_native(turns, secret_values), 'transcript': transcript, 'ietf_vcon_export': exported['vcon'],
                 'evidence_coverage': exported['coverage'], 'waylo_capture': capture,
                 'configuration_check': exported['configuration_check'], 'action_trace': [],
                 'final_state': {'evidence_scope': 'waylo_capture', 'tester_error': error} if error else {},

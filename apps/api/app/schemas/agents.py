@@ -68,7 +68,7 @@ class AgentConnection(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     endpoint_url: str | None = None
-    auth_type: Literal['none', 'bearer_secret', 'api_key_secret'] = 'none'
+    auth_type: Literal['none', 'bearer_secret', 'api_key_secret', 'waylo_browser_session'] = 'none'
     secret_ref: str | None = Field(default=None, pattern=HTTP_TARGET_SECRET_ID_PATTERN)
     api_key_header: str = Field(default='x-api-key', min_length=1, max_length=80)
     response_path: str = Field(default='response', min_length=1, max_length=160)
@@ -81,8 +81,10 @@ class AgentConnection(BaseModel):
 
     @model_validator(mode='after')
     def validate_auth_reference(self):
-        if self.auth_type != 'none' and not self.secret_ref:
+        if self.auth_type in {'bearer_secret', 'api_key_secret'} and not self.secret_ref:
             raise ValueError('Authenticated connections require a configured credential ID.')
+        if self.auth_type == 'waylo_browser_session' and self.secret_ref:
+            raise ValueError('Temporary Waylo connections cannot store a credential reference.')
         return self
 
 
@@ -151,8 +153,8 @@ def validate_agent_connection(target: AgentTarget, connection: AgentConnection) 
     if target == 'waylo':
         from app.services.waylo_target import api_url
         api_url(connection.endpoint_url or '')
-        if connection.auth_type != 'bearer_secret' or not connection.secret_ref:
-            raise ValueError('Waylo requires a configured bearer credential reference.')
+        if connection.auth_type not in {'bearer_secret', 'waylo_browser_session'}:
+            raise ValueError('Waylo requires a bearer credential reference or a temporary browser connection.')
         for value in (connection.workspace_id, connection.waylo_agent_id):
             try:
                 UUID(str(value))
@@ -161,6 +163,8 @@ def validate_agent_connection(target: AgentTarget, connection: AgentConnection) 
         if connection.sip_uri or connection.phone_number or connection.acc_base_url:
             raise ValueError('Waylo cannot include ACC destination fields.')
         return
+    if connection.auth_type == 'waylo_browser_session':
+        raise ValueError('Temporary Waylo authentication is only valid for Waylo targets.')
     if connection.workspace_id or connection.waylo_agent_id:
         raise ValueError('Waylo workspace/agent identifiers are only valid for Waylo targets.')
     if target in {'pipecat_public_demo', 'signalwire_holy_guacamole'}:
