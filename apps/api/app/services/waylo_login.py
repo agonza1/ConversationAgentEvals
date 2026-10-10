@@ -11,6 +11,14 @@ import httpx
 
 DEFAULT_WAYLO_API_BASE = 'https://api.poc.app.waylovoice.ai'
 MAX_RESPONSE_BYTES = 128 * 1024
+_AUTH_REFUSALS = {
+    ('password_sign_in', 401): 'Waylo refused password sign-in (HTTP 401). Check your sign-in details and that your account and organization access are active.',
+    ('password_sign_in', 403): 'Waylo refused password sign-in (HTTP 403). Check this deployment\'s sign-in access policy.',
+    ('session_verification', 401): 'Waylo password sign-in succeeded, but session verification was refused (HTTP 401). Reconnect; if it persists, check Waylo\'s session/deployment configuration.',
+    ('session_verification', 403): 'Waylo password sign-in succeeded, but session verification was refused (HTTP 403). Check this deployment\'s authenticated-session access policy.',
+    ('selected_agent', 401): 'Waylo verified the session, but selected-agent access was refused (HTTP 401). Reconnect; session authority may have expired or changed.',
+    ('selected_agent', 403): 'Waylo verified the session, but selected-agent access was refused (HTTP 403). Check the selected organization and workspace permissions.',
+}
 
 
 class WayloLoginError(ValueError):
@@ -65,7 +73,7 @@ async def login_waylo(email: str, password: str, waylo_agent_id: str,
     owns_client = client is None
     client = client or httpx.AsyncClient(timeout=15, follow_redirects=False, trust_env=False)
 
-    async def read_json(method: str, path: str, **kwargs) -> dict:
+    async def read_json(method: str, path: str, *, phase: str, **kwargs) -> dict:
         try:
             response = await client.request(method, f'{base}/{path}', follow_redirects=False, **kwargs)
         except httpx.HTTPError:
@@ -73,7 +81,11 @@ async def login_waylo(email: str, password: str, waylo_agent_id: str,
         finally:
             client.cookies.clear()
         if response.status_code in {401, 403}:
-            raise WayloLoginError('Waylo sign-in or access was refused. Check your account and workspace access.')
+            # A static phase/status pair is actionable without returning the
+            # upstream URL, account identifier, response body or credentials.
+            # A login401 is deliberately NOT evidence of a wrong password:
+            # Waylo also uses it for disabled/revoked account or tenant access.
+            raise WayloLoginError(_AUTH_REFUSALS[(phase, response.status_code)])
         if response.status_code == 429:
             raise WayloLoginError('Waylo sign-in is temporarily rate limited. Please try later.')
         if not 200 <= response.status_code < 300 or len(response.content) > MAX_RESPONSE_BYTES:
@@ -88,12 +100,13 @@ async def login_waylo(email: str, password: str, waylo_agent_id: str,
 
     try:
         client.cookies.clear()
-        signed_in = await read_json('POST', 'auth/login', json={'email': email, 'password': password})
+        signed_in = await read_json('POST', 'auth/login', phase='password_sign_in',
+                                    json={'email': email, 'password': password})
         token = signed_in.get('token')
         if not isinstance(token, str) or not 32 <= len(token) <= 16384:
             raise WayloLoginError('Waylo returned an unsupported access token.')
         headers = {'Authorization': f'Bearer {token}', 'Accept': 'application/json'}
-        principal = await read_json('GET', 'auth/me', headers=headers)
+        principal = await read_json('GET', 'auth/me', phase='session_verification', headers=headers)
         if type(principal.get('isPlatformAdmin')) is not bool:
             raise WayloLoginError('Waylo did not confirm active account authority.')
         if principal.get('isPlatformAdmin') is True:
@@ -111,7 +124,7 @@ async def login_waylo(email: str, password: str, waylo_agent_id: str,
                 raise WayloLoginError('Waylo did not confirm active tenant authority.')
             endpoint = base
             agent_path = f'agents/{_uuid(waylo_agent_id)}'
-        agent = await read_json('GET', agent_path, headers=headers)
+        agent = await read_json('GET', agent_path, phase='selected_agent', headers=headers)
         agent_id = _uuid(agent.get('id'))
         workspace_id = _uuid(agent.get('workspaceId'))
         if agent_id != _uuid(waylo_agent_id):

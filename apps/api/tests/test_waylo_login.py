@@ -129,6 +129,43 @@ def test_upstream_refusals_and_redirects_do_not_leak_or_follow_credentials(statu
     asyncio.run(client.aclose())
 
 
+@pytest.mark.parametrize('failure_step,expected_phase', [
+    (1, 'password sign-in'), (2, 'session verification'), (3, 'selected-agent access'),
+])
+@pytest.mark.parametrize('status', [401, 403])
+def test_phase_specific_refusal_is_safe_stops_and_discards_cookies(route_client, monkeypatch,
+                                                                 failure_step, expected_phase, status):
+    calls = []
+    successful_handler, access = provider_handler([])
+    def handler(request):
+        calls.append(request)
+        assert 'cookie' not in request.headers
+        if len(calls) == failure_step:
+            return httpx.Response(status, json={'error': {
+                'password': PASSWORD, 'token': access, 'email': 'caller@example.test',
+                'path': str(request.url), 'agent': AGENT, 'workspace': WORKSPACE, 'tenant': TENANT,
+            }}, headers={'Set-Cookie': 'rt=refused-refresh-secret; Path=/; Secure; HttpOnly'})
+        return successful_handler(request)
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    async def with_mock_provider(email, password, agent, tenant_id=None, **kwargs):
+        return await login_waylo(email, password, agent, tenant_id, client=client, **kwargs)
+    monkeypatch.setattr(routes, 'login_waylo', with_mock_provider)
+    try:
+        response = route_client.post('/api/waylo/connection/connect', json=body(), headers=HEADERS)
+        # Existing local API/frontend contract is unchanged; only safe detail improves.
+        assert response.status_code == 400
+        detail = response.json()['detail']
+        assert expected_phase in detail and f'HTTP {status}' in detail
+        assert 'wrong password' not in detail.lower()
+        assert 'no-store' in response.headers['cache-control'] and 'set-cookie' not in response.headers
+        assert len(calls) == failure_step and not client.cookies
+        for private in (PASSWORD, access, 'caller@example.test', AGENT, WORKSPACE, TENANT,
+                        '/auth/login', '/auth/me', '/agents/', 'refused-refresh-secret'):
+            assert private not in response.text
+    finally:
+        asyncio.run(client.aclose())
+
+
 def test_transport_failure_never_exposes_password_or_provider_url():
     def handler(request):
         raise httpx.ConnectError(f'failure {PASSWORD}', request=request)
