@@ -3515,6 +3515,35 @@ select {
   line-height: 1;
 }
 
+.agents-card:not(.agents-card-expanded) .agents-card-description p {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.agents-details-toggle {
+  justify-self: start;
+  padding: 8px 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent, #2563eb);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+}
+
+.agents-details-toggle:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+}
+
+.agents-card-details:not([hidden]) {
+  display: grid;
+  min-width: 0;
+  gap: 16px;
+}
+
 .agents-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));

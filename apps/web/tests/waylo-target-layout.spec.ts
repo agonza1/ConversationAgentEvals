@@ -9,7 +9,7 @@ async function mockTargets(page: Page) {
     const body = path.endsWith('/config') ? { endpoint_url: 'https://api.poc.app.waylovoice.ai' }
       : path === '/api/agents' ? { agents: [
         { id: 'store-voice-fixture', name: 'Store voice fixture', channel: 'voice', target: 'waylo',
-          environment: 'staging', description: 'A reusable store support voice agent.',
+          environment: 'staging', description: 'A reusable store support voice agent. '.repeat(30),
           connection: { endpoint_url: `https://api.poc.app.waylovoice.ai/admin/tenants/${uuid}`,
             workspace_id: uuid, waylo_agent_id: '22222222-2222-4222-8222-222222222222', auth_type: 'waylo_browser_session', secret_ref: null }, metadata: {} },
         { id: 'generalist-text-agent', name: 'Generalist text fixture', channel: 'text', target: 'openai_codex', description: 'A generalist test target.', metadata: { model_name: 'fixture-model', prompt_version: 'seed' } },
@@ -45,9 +45,22 @@ for (const width of [1280, 390, 320]) {
       expect(card.buttonHeight).toBeLessThanOrEqual(48);
       expect(card.overflow).toBeLessThanOrEqual(1);
     }
-    if (width === 1280) expect(measures.cards[1].height).toBeLessThan(measures.cards[0].height - 80);
+    for (const card of measures.cards) expect(card.height).toBeLessThan(520);
 
     const waylo = page.getByRole('article').filter({ hasText: 'Store voice fixture' });
+    const description = waylo.locator('.agents-card-description p');
+    const collapsedHeight = (await description.boundingBox())!.height;
+    expect(collapsedHeight).toBeLessThan(70);
+    await expect(waylo.getByRole('button', { name: /Show details/ })).toHaveAttribute('aria-expanded', 'false');
+    await expect(waylo.getByRole('heading', { name: 'Configuration', exact: true })).not.toBeVisible();
+    await waylo.getByRole('button', { name: /Show details/ }).click();
+    await expect(waylo.getByRole('heading', { name: 'Configuration', exact: true })).toBeVisible();
+    expect((await description.boundingBox())!.height).toBeGreaterThan(collapsedHeight + 100);
+    if (width === 1280) {
+      const neighbor = page.getByRole('article').filter({ hasText: 'Generalist text fixture' });
+      expect(Math.round((await neighbor.boundingBox())!.height)).toBe(measures.cards[1].height);
+    }
+    await expect(page.getByRole('article').filter({ hasText: 'Generalist text fixture' }).getByRole('button', { name: /Show details/ })).toHaveAttribute('aria-expanded', 'false');
     await expect(waylo.getByLabel('Waylo email')).not.toBeVisible();
     await waylo.locator('summary').filter({ hasText: /^Connect Waylo$/ }).click();
     await expect(waylo.getByLabel('Waylo email')).toBeVisible();
@@ -73,5 +86,11 @@ for (const width of [1280, 390, 320]) {
     await expect(waylo.getByLabel('Confirm temporary Waylo sign-in')).not.toBeChecked();
     await waylo.locator('summary').filter({ hasText: /^Import existing human call$/ }).click();
     await expect(waylo.getByLabel('Session UUID for Store voice fixture')).toBeVisible();
+    await waylo.getByLabel('Waylo password').fill('synthetic-collapse-fixture');
+    await waylo.getByRole('button', { name: /Hide details/ }).click();
+    await expect(waylo.getByLabel('Waylo password')).toHaveCount(0);
+    await waylo.getByRole('button', { name: /Show details/ }).click();
+    await waylo.locator('summary').filter({ hasText: /^Connect Waylo$/ }).click();
+    await expect(waylo.getByLabel('Waylo password')).toHaveValue('');
   });
 }

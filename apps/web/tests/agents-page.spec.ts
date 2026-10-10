@@ -222,6 +222,7 @@ test('targets page shows agent target cards and try-it-out deep links', async ({
   const voiceCard = page.getByRole('article').filter({ hasText: 'Built-in generalist voice agent' });
   await expect(voiceCard.locator('.agents-badge-channel').first()).toHaveText('Voice');
   await expect(voiceCard.getByText('Built-in testing target')).toBeVisible();
+  await voiceCard.getByRole('button', { name: /Show details/ }).click();
   await expect(voiceCard).toContainText('Current-run local pipeline · no saved evidence');
   await expect(voiceCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
     'href',
@@ -229,6 +230,7 @@ test('targets page shows agent target cards and try-it-out deep links', async ({
   );
   const publicPipecatCard = page.getByRole('article').filter({ hasText: 'Pipecat public demo' });
   await expect(publicPipecatCard.getByText('Public external target')).toBeVisible();
+  await publicPipecatCard.getByRole('button', { name: /Show details/ }).click();
   await expect(publicPipecatCard).toContainText('https://www.pipecat.ai');
   await expect(publicPipecatCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
     'href',
@@ -236,6 +238,7 @@ test('targets page shows agent target cards and try-it-out deep links', async ({
   );
   const signalwireCard = page.getByRole('article').filter({ hasText: 'Holy Guacamole SignalWire drive-thru' });
   await expect(signalwireCard.getByText('Public external target')).toBeVisible();
+  await signalwireCard.getByRole('button', { name: /Show details/ }).click();
   await expect(signalwireCard).toContainText('https://holyguacamole.signalwire.me');
   await expect(signalwireCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
     'href',
@@ -359,6 +362,7 @@ test('HTTP agent try-it-out uses its configured adapter and explicit tester', as
   });
   await page.goto('/targets');
   const card = page.getByRole('article').filter({ hasText: 'Staging HTTP agent' });
+  await card.getByRole('button', { name: /Show details/ }).click();
   await expect(card).toContainText('HTTP JSON endpoint (live)');
   await expect(card).toContainText('Black-box response');
   await card.getByRole('link', { name: 'Try it Out' }).click();

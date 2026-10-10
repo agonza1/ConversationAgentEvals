@@ -762,6 +762,8 @@ export function AgentsPage() {
   const [saving, setSaving] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [editingAgent, setEditingAgent] = useState<AgentRecord | null>(null);
+  const [expandedTargets, setExpandedTargets] = useState<Record<string, boolean>>({});
+  const detailsPrefix = useId();
   const visibleAgents = agents.filter((agent) => !isSavedReplayTarget(agent.target));
 
   async function reload() {
@@ -874,7 +876,7 @@ export function AgentsPage() {
 
       <section className="agents-grid" aria-label="Agent targets">
         {visibleAgents.map((agent) => (
-          <article key={agent.id} className="agents-card">
+          <article key={agent.id} className={`agents-card${expandedTargets[agent.id] ? ' agents-card-expanded' : ''}`}>
             <div className="agents-card-top">
               <div className="agents-card-identity">
                 <AgentAvatar agent={agent} />
@@ -908,11 +910,25 @@ export function AgentsPage() {
               Try it Out
             </ApiAwareLink>
 
-            <section className="agents-card-section">
+            <section className="agents-card-section agents-card-description">
               <h3>Description</h3>
               <p>{agent.description?.trim() || 'No description provided.'}</p>
             </section>
 
+            <button
+              type="button"
+              className="agents-details-toggle"
+              aria-expanded={Boolean(expandedTargets[agent.id])}
+              aria-controls={`${detailsPrefix}-${agent.id}`}
+              onClick={() => setExpandedTargets((current) => ({ ...current, [agent.id]: !current[agent.id] }))}
+            >
+              {expandedTargets[agent.id] ? 'Hide details' : 'Show details'}
+              <span className="sr-only"> for {agent.name}</span>
+              <span aria-hidden="true">{expandedTargets[agent.id] ? ' −' : ' +'}</span>
+            </button>
+
+            <div id={`${detailsPrefix}-${agent.id}`} className="agents-card-details" hidden={!expandedTargets[agent.id]}>
+            {expandedTargets[agent.id] ? <>
             <hr className="agents-card-divider" />
 
             <section className="agents-card-section">
@@ -924,6 +940,8 @@ export function AgentsPage() {
               {agent.connection?.waylo_agent_id === WAYLO_MIKE_AGENT_ID ? <ApiAwareLink className="secondary-link" href={`/runs?${new URLSearchParams({ agent_id: agent.id, suite_id: 'waylo-mike-notes', scenario_id: 'mike-five-bags' }).toString()}`}>Test Mike’s five-bags case</ApiAwareLink> : null}
               <WayloSessionCapture agent={agent} />
             </> : null}
+            </> : null}
+            </div>
           </article>
         ))}
       </section>
