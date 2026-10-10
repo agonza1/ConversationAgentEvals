@@ -5154,6 +5154,7 @@ export function BenchmarkRunner({
               executionRunId={executionRun.execution_run_id}
               userId={userId}
               runStatus={executionRun.status}
+              httpCaptureOnly={executionRun.executor_id === 'waylo_livekit'}
             />
 
             <div aria-label="Execution conversations" style={{ display: 'grid', gap: 8, maxHeight: 420, overflow: 'auto' }}>

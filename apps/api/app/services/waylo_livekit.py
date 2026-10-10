@@ -374,7 +374,15 @@ async def run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, s
                 break
             previous_digest = digest
             await asyncio.sleep(.5)
-        media_events = clean_native(peer.events, (bootstrap['participantToken'], client._secret))
+        turn_credentials = bootstrap.get('turn') or {}
+        secret_values = (bootstrap['participantToken'], client._secret,
+                         turn_credentials.get('credential', ''), turn_credentials.get('username', ''))
+        # Scrub every evidence channel, including opaque strings in backend
+        # before/after snapshots and native source, not only RTC events.
+        capture = clean_native(capture, secret_values)
+        before = clean_native(before, secret_values)
+        after_items = clean_native(after_items, secret_values)
+        media_events = clean_native(peer.events, secret_values)
         for event in media_events:
             event.update(target_id=target['id'], session_id=bootstrap['sessionId'])
         exported = project_capture(capture, voice_events=media_events, before_items=before,

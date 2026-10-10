@@ -343,13 +343,14 @@ def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp
         calls = []
         async def bootstrap(self, correlation_id):
             self.calls.append('bootstrap')
-            return {'sessionId': S, 'participantToken': 'private', 'roomName': 'room'}
+            return {'sessionId': S, 'participantToken': 'private', 'roomName': 'room',
+                    'turn': {'credential': 'turn-credential', 'username': 'turn-username'}}
         async def request(self, method, path):
             self.calls.append(path)
-            return []
+            return [{'rawText': 'opaque provider-secret private turn-credential turn-username', 'quantity': 1}]
         async def capture(self, session_id, origin):
             self.calls.append('capture')
-            return captured(origin=origin)
+            return captured(origin=origin, opaque='private turn-credential')
         async def close(self):
             self.calls.append('close')
     class Peer:
@@ -394,6 +395,8 @@ def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp
     assert profile['context']['source_call_kind'] == 'cae_ai_tester'
     assert profile['context']['evaluation_submission'] == 'manual'
     assert 'private' not in json.dumps(result)
+    assert 'provider-secret' not in json.dumps(result)
+    assert 'turn-credential' not in json.dumps(result) and 'turn-username' not in json.dumps(result)
     assert (tmp_path / 'agent-received.wav').exists()
     assert validate_ietf_vcon(result['ietf_vcon_export'])['valid']
     assert client.calls.count('bootstrap') == 1
