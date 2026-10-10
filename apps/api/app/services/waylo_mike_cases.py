@@ -76,6 +76,7 @@ for suffix, title, condition in (
     case = deepcopy(WAYLO_MIKE_SUITE['scenarios'][-1] if suffix == 'noise' else WAYLO_MIKE_SUITE['scenarios'][-2])
     case.update(id=f'mike-confusable-{suffix}', title=title)
     case['waylo_test']['audio_condition'] = condition
+    case['waylo_test']['condition'] = condition['kind']
     WAYLO_MIKE_SUITE['scenarios'].append(case)
 
 for case in WAYLO_MIKE_SUITE['scenarios']:

@@ -226,6 +226,8 @@ def test_mike_cases_are_transcript_only_not_fake_tool_evidence():
     first = WAYLO_MIKE_SUITE['scenarios'][0]
     assert first['waylo_test']['expected_requests'][0]['quantity'] == 5
     assert first['waylo_test']['expected_requests'][0]['unit'] == 'bags'
+    for case in WAYLO_MIKE_SUITE['scenarios'][-2:]:
+        assert case['waylo_test']['condition'] == case['waylo_test']['audio_condition']['kind']
 
 
 def test_waylo_execution_cannot_enable_automatic_evaluation(tmp_path, monkeypatch):

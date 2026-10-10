@@ -15,8 +15,8 @@ def entities(text: str, expected: dict) -> dict:
     unit = str(expected.get('unit', '')).lower().rstrip('s')
     return {
         'product': any(words[i:i + len(product)] == product for i in range(len(words))) if product else None,
-        'quantity': str(quantity) in words or _NUMBERS.get(quantity) in words,
-        'unit': bool(unit) and any(w.rstrip('s') == unit for w in words),
+        'quantity': (str(quantity) in words or _NUMBERS.get(quantity) in words) if quantity is not None else None,
+        'unit': any(w.rstrip('s') == unit for w in words) if unit else None,
     }
 
 
