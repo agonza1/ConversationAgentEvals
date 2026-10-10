@@ -213,7 +213,7 @@ test('targets page shows agent target cards and try-it-out deep links', async ({
   await expect(mockCard.getByText('Built-in testing target')).toBeVisible();
   await expect(mockCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
     'href',
-    '/runs?launch=demo&agent_id=mock-text-agent',
+    '/runs?agent_id=mock-text-agent',
   );
 
   const voiceCard = page.getByRole('article').filter({ hasText: 'Built-in generalist voice agent' });
@@ -222,21 +222,21 @@ test('targets page shows agent target cards and try-it-out deep links', async ({
   await expect(voiceCard).toContainText('Current-run local pipeline · no saved evidence');
   await expect(voiceCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
     'href',
-    '/runs?launch=demo&agent_id=acc-voice-fixture-agent',
+    '/runs?agent_id=acc-voice-fixture-agent',
   );
   const publicPipecatCard = page.getByRole('article').filter({ hasText: 'Pipecat public demo' });
   await expect(publicPipecatCard.getByText('Public external target')).toBeVisible();
   await expect(publicPipecatCard).toContainText('https://www.pipecat.ai');
   await expect(publicPipecatCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
     'href',
-    '/runs?launch=demo&agent_id=pipecat-public-demo',
+    '/runs?agent_id=pipecat-public-demo',
   );
   const signalwireCard = page.getByRole('article').filter({ hasText: 'Holy Guacamole SignalWire drive-thru' });
   await expect(signalwireCard.getByText('Public external target')).toBeVisible();
   await expect(signalwireCard).toContainText('https://holyguacamole.signalwire.me');
   await expect(signalwireCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
     'href',
-    '/runs?launch=demo&agent_id=holyguacamole-signalwire-agent',
+    '/runs?agent_id=holyguacamole-signalwire-agent',
   );
   await expect(signalwireCard.getByRole('button', { name: 'Actions for Holy Guacamole SignalWire drive-thru' })).toHaveCount(0);
   await expect(page.getByRole('article').filter({ hasText: 'Saved voice evidence' })).toHaveCount(0);
@@ -254,7 +254,7 @@ test('targets try-it-out links preserve the api base override', async ({ page })
   const mockCard = page.getByRole('article').filter({ hasText: 'Mock text agent' });
   await expect(mockCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
     'href',
-    '/runs?launch=demo&agent_id=mock-text-agent&api_base=https%3A%2F%2Fapi.example.test',
+    '/runs?agent_id=mock-text-agent&api_base=https%3A%2F%2Fapi.example.test',
   );
 });
 
@@ -265,7 +265,7 @@ test('legacy agents redirect preserves the api base override', async ({ page }) 
   await expect(page).toHaveURL(/\/targets\?api_base=https%3A%2F%2Fapi\.example\.test$/);
 });
 
-test('targets try-it-out auto-launches and opens run analysis', async ({ page }) => {
+test('targets try-it-out opens a preselected form before launching', async ({ page }) => {
   const launches: Record<string, unknown>[] = [];
   await mockRunnerApis(page, {
     voicePreflightDelayMs: 300,
@@ -273,13 +273,44 @@ test('targets try-it-out auto-launches and opens run analysis', async ({ page })
   });
   await page.goto('/targets');
   await page.getByRole('article').filter({ hasText: 'Built-in generalist voice agent' }).getByRole('link', { name: 'Try it Out' }).click();
-  await expect(page).toHaveURL(/\/runs\/exec-try-it-out/, { timeout: 20000 });
+  await expect(page).toHaveURL(/\/runs\?agent_id=acc-voice-fixture-agent/);
+  await expect(page.getByLabel('Execution agent target')).toHaveValue('acc-voice-fixture-agent');
+  const runButton = page.getByRole('button', { name: 'Run evaluation' });
+  await expect(runButton).toBeEnabled();
+  expect(launches).toHaveLength(0);
+  await runButton.click();
+  await expect.poll(() => launches.length).toBe(1);
   expect(launches).toHaveLength(1);
   expect(launches[0]?.agent_id).toBe('acc-voice-fixture-agent');
   expect(launches[0]?.mode).toBe('pipecat_webrtc');
   expect(launches[0]?.tester_id).toBe('pipecat_tester');
   expect(launches[0]?.executor_id).toBe('cae_local_audio_loop');
   expect(launches[0]?.audio_transport).toBe('pipecat_small_webrtc');
+});
+
+test('public Pipecat target needs an explicit click even from an old demo link', async ({ page }) => {
+  const launches: Record<string, unknown>[] = [];
+  await mockRunnerApis(page, { onExecutionLaunch: (request) => launches.push(request) });
+
+  await page.goto('/runs?launch=demo&agent_id=pipecat-public-demo');
+  await expect(page.getByLabel('Execution agent target')).toHaveValue('pipecat-public-demo');
+  const runButton = page.getByRole('button', { name: 'Run evaluation' });
+  await expect(runButton).toBeEnabled();
+  await page.reload();
+  await expect(page.getByLabel('Execution agent target')).toHaveValue('pipecat-public-demo');
+  await expect(runButton).toBeEnabled();
+  await page.waitForTimeout(300);
+  expect(launches).toHaveLength(0);
+
+  await runButton.click();
+  await expect.poll(() => launches.length).toBe(1);
+  expect(launches[0]).toMatchObject({
+    agent_id: 'pipecat-public-demo',
+    mode: 'pipecat_webrtc',
+    tester_id: 'pipecat_tester',
+    executor_id: 'pipecat_public_daily',
+    audio_transport: 'pipecat_daily_webrtc',
+  });
 });
 
 test('OpenAI agent try-it-out launches its configured live target', async ({ page }) => {
@@ -289,7 +320,11 @@ test('OpenAI agent try-it-out launches its configured live target', async ({ pag
   });
   await page.goto('/targets');
   await page.getByRole('article').filter({ hasText: 'Live OpenAI agent' }).getByRole('link', { name: 'Try it Out' }).click();
-  await expect(page).toHaveURL(/\/runs\/exec-try-it-out/, { timeout: 20000 });
+  await expect(page).toHaveURL(/\/runs\?agent_id=live-openai-agent/);
+  await expect(page.getByLabel('Execution agent target')).toHaveValue('live-openai-agent');
+  expect(launches).toHaveLength(0);
+  await page.getByRole('button', { name: 'Run evaluation' }).click();
+  await expect.poll(() => launches.length).toBe(1);
   expect(launches).toHaveLength(1);
   expect(launches[0]).toMatchObject({
     agent_id: 'live-openai-agent',
@@ -310,7 +345,11 @@ test('HTTP agent try-it-out uses its configured adapter and explicit tester', as
   await expect(card).toContainText('HTTP JSON endpoint (live)');
   await expect(card).toContainText('Black-box response');
   await card.getByRole('link', { name: 'Try it Out' }).click();
-  await expect(page).toHaveURL(/\/runs\/exec-try-it-out/, { timeout: 20000 });
+  await expect(page).toHaveURL(/\/runs\?agent_id=staging-http-agent/);
+  await expect(page.getByLabel('Execution agent target')).toHaveValue('staging-http-agent');
+  expect(launches).toHaveLength(0);
+  await page.getByRole('button', { name: 'Run evaluation' }).click();
+  await expect.poll(() => launches.length).toBe(1);
   expect(launches).toHaveLength(1);
   expect(launches[0]).toMatchObject({
     agent_id: 'staging-http-agent',
