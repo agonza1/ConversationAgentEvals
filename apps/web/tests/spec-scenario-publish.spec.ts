@@ -158,6 +158,81 @@ test('late generated cases cannot overwrite edits made while the model is respon
   await expect(page.getByRole('textbox', { name: 'Objective', exact: true })).toHaveValue('My newer objective should survive a late model response.');
 });
 
+test('ASSERT caller drafts preserve multiline openings, colon titles and per-case source through review and publication', async ({ page }) => {
+  let savedBody: any;
+  const opener = 'Please update my address.\nMy new street is 40 Pine.';
+  await page.route('**/api/specs/generate-cases', async (route) => {
+    expect(route.request().postDataJSON().engine).toBe('assert');
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      provider: 'openai_api_key', model: 'fixture-model', engine: 'assert',
+      provenance: { engine: 'assert', assert_version: '0.3.0', test_set_sha256: 'fixture-source' },
+      scenarios: ['normal', 'boundary', 'adversarial'].map((variant, index) => ({
+        id: `native-${index}`, title: `Address: ${variant}`, description: opener, steps: [opener],
+        expected_outcome: 'Verify identity before updating.', behavior_id: 'success-verify-identity', variant, draft: true,
+        generation_provenance: { engine: 'assert', assert_version: '0.3.0', upstream_test_case_id: `test_case_${index}`, test_set_sha256: 'fixture-source' },
+      })),
+    }) });
+  });
+  await page.route('**/api/specs', async (route) => {
+    savedBody = route.request().postDataJSON();
+    expect(savedBody.spec.scenarios).toHaveLength(4);
+    expect(savedBody.spec.scenarios[0]).toMatchObject({ id: 'native-0', title: 'Address: reviewed',
+      steps: [`${opener}\nPlease keep my renewal unchanged.`, 'If asked, provide the test verification code.'],
+      behavior_id: 'success-verify-identity', generation_provenance: { engine: 'assert', upstream_test_case_id: 'test_case_0' } });
+    expect(savedBody.spec.scenarios[3].generation_provenance).toEqual({ engine: 'manual' });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      id: 'native-address', version: 1, project_id: savedBody.project_id, user_id: savedBody.user_id,
+      spec: { ...savedBody.spec, id: 'native-address', version: 1 }, yaml: 'suite: native-address',
+    }) });
+  });
+  await page.route('**/api/specs/native-address/publish-scenarios', async (route) => {
+    expect(route.request().postDataJSON()).toMatchObject({ version: 1, confirm: true });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      suite_id: 'spec-suite-native', scenario_ids: ['native-0', 'native-1', 'native-2', 'manual'], scenario_count: 4,
+    }) });
+  });
+  await page.goto('/specs/new');
+  await expect(page.getByLabel('Case generator')).toHaveValue('assert');
+  await page.getByLabel('Success checks', { exact: true }).fill('Verify identity');
+  await page.getByLabel('Permissible behavior boundary').fill('Update only after verification.');
+  await page.getByLabel('Behaviors to cover').selectOption('success-verify-identity');
+  await page.getByRole('button', { name: 'Generate runnable case drafts' }).click();
+  await expect(page.getByLabel('Opening caller message for case 1')).toHaveValue(opener);
+  await expect(page.getByRole('textbox', { name: 'Scenario examples', exact: true })).toHaveAttribute('readonly', '');
+  await page.getByLabel('Case title 1', { exact: true }).fill('Address: reviewed');
+  await page.getByLabel('Opening caller message for case 1').fill(`${opener}\nPlease keep my renewal unchanged.`);
+  await page.getByLabel('Follow-up caller instructions for case 1').fill('If asked, provide the test verification code.');
+  await page.getByRole('button', { name: 'Add manual case' }).click();
+  await page.getByLabel('Target behavior for case 4').selectOption('success-verify-identity');
+  await page.getByLabel('Caller instructions for case 4').fill('Could you explain how verification works?');
+  await page.getByLabel('Expected outcome for case 4').fill('Explain verification and preserve account state.');
+  await page.getByRole('button', { name: 'Add manual case' }).click();
+  await page.getByRole('button', { name: 'Remove case 5', exact: true }).click();
+  await expect(page.getByLabel('Opening caller message for case 1')).toHaveValue(`${opener}\nPlease keep my renewal unchanged.`);
+  await page.getByRole('button', { name: 'Approve generated draft' }).click();
+  await page.getByRole('button', { name: 'Save version' }).click();
+  await expect(page.getByText(/Saved `native-address` version 1/)).toBeVisible();
+  await page.getByRole('checkbox', { name: /I reviewed the saved rules/ }).check();
+  await page.getByRole('button', { name: 'Publish saved cases to Scenarios' }).click();
+  await expect(page.getByRole('link', { name: 'Choose a target and run' })).toHaveAttribute('href', /suite_id=spec-suite-native/);
+});
+
+test('CAE custom case generation remains an explicit alternative', async ({ page }) => {
+  await page.route('**/api/specs/generate-cases', async (route) => {
+    expect(route.request().postDataJSON().engine).toBe('cae_configured_llm');
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      scenarios: [], engine: 'cae_configured_llm', provider: 'fixture', model: 'fixture',
+    }) });
+  });
+  await page.goto('/specs/new');
+  await page.getByLabel('Case generator').selectOption('cae_configured_llm');
+  await page.getByLabel('Success checks', { exact: true }).fill('Verify identity');
+  await page.getByLabel('Permissible behavior boundary').fill('Verify before updating.');
+  await page.getByLabel('Behaviors to cover').selectOption('success-verify-identity');
+  await page.getByRole('button', { name: 'Generate runnable case drafts' }).click();
+  await expect(page.getByRole('button', { name: 'Approve generated draft' })).toBeEnabled();
+});
+
 test('manual design publishes through the real API and appears with rules in the scenario catalog', async ({ page }) => {
   await page.goto('/specs/new');
   const title = `Housing boundary ${Date.now()}`;

@@ -122,6 +122,7 @@ function scenariosFromText(value: string, existing: AssertScenario[], draft: boo
     const matched = matches[index];
     return {
       ...(matched || {}),
+      generation_provenance: matched?.generation_provenance || { engine: 'manual' },
       id: allocateTextId(matched?.id || slug('scenario', title, index), Boolean(matched), reservedIds, usedIds),
       title: title.trim(),
       persona: matched?.persona || '',
@@ -171,6 +172,7 @@ function editableFingerprint(spec: EditableAssertSpec) {
 export function SpecEditorPage() {
   const identity = useMemo(() => ({ userId: demoUserId(), projectId: (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('project_id') : null) || demoProjectId() }), []);
   const [spec, setSpec] = useState<EditableAssertSpec>(starterSpec);
+  const [caseGenerator, setCaseGenerator] = useState<'assert' | 'cae_configured_llm'>('assert');
   const [templates, setTemplates] = useState<EditableAssertTemplate[]>([]);
   const [behaviorPresets, setBehaviorPresets] = useState<AssertLibraryPreset[]>([]);
   const [judgePresets, setJudgePresets] = useState<AssertLibraryPreset[]>([]);
@@ -179,6 +181,7 @@ export function SpecEditorPage() {
   const [failureChecks, setFailureChecks] = useState('');
   const [scenarioSeeds, setScenarioSeeds] = useState('');
   const [scenarios, setScenarios] = useState('');
+  const [scenarioExamplesEdited, setScenarioExamplesEdited] = useState(false);
   const [deterministicChecks, setDeterministicChecks] = useState('');
   const [evidenceRequirements, setEvidenceRequirements] = useState(starterSpec.evidence_requirements?.join('\n') || '');
   const [judgeRubric, setJudgeRubric] = useState(defaultJudge.rubric);
@@ -222,12 +225,14 @@ export function SpecEditorPage() {
       required_behaviors: checksFromText(successChecks, spec.required_behaviors || [], 'success', draft),
       forbidden_behaviors: checksFromText(failureChecks, spec.forbidden_behaviors || [], 'failure', draft),
       scenario_seeds: lines(scenarioSeeds),
-      scenarios: scenariosFromText(scenarios, spec.scenarios || [], draft),
+      scenarios: scenarioExamplesEdited && !spec.scenarios.some((item) => item.generation_provenance?.engine === 'assert')
+        ? scenariosFromText(scenarios, spec.scenarios || [], draft)
+        : (spec.scenarios || []).map((caseDraft) => ({ ...caseDraft, draft: draft || Boolean(caseDraft.draft) })),
       deterministic_checks: checksFromText(deterministicChecks, spec.deterministic_checks || [], 'deterministic', draft),
       evidence_requirements: lines(evidenceRequirements),
       judges: [nextJudge],
     };
-  }, [deterministicChecks, disabledBuiltinDimensions, evidenceRequirements, failureChecks, generatedApproved, judgeAllowsNotApplicable, judgeOrdinalScale, judgeRubric, scenarioSeeds, scenarios, selectedJudgePresets, spec, successChecks]);
+  }, [deterministicChecks, disabledBuiltinDimensions, evidenceRequirements, failureChecks, generatedApproved, judgeAllowsNotApplicable, judgeOrdinalScale, judgeRubric, scenarioSeeds, scenarios, scenarioExamplesEdited, selectedJudgePresets, spec, successChecks]);
   const latestWorkingSpec = useRef(workingSpec);
   useEffect(() => {
     latestWorkingSpec.current = workingSpec;
@@ -303,6 +308,7 @@ export function SpecEditorPage() {
     setFailureChecks(textFromChecks(nextSpec.forbidden_behaviors || []));
     setScenarioSeeds((nextSpec.scenario_seeds || []).join('\n'));
     setScenarios(textFromScenarios(nextSpec.scenarios || []));
+    setScenarioExamplesEdited(false);
     setDeterministicChecks(textFromChecks(nextSpec.deterministic_checks || []));
     setEvidenceRequirements((nextSpec.evidence_requirements || []).join('\n'));
     const nextJudge = nextSpec.judges?.[0] || defaultJudge;
@@ -376,16 +382,32 @@ export function SpecEditorPage() {
     const submitted = workingSpec;
     setBusy('cases'); setError(null);
     try {
-      const result = await generateEditableAssertCases({ spec: submitted, behavior_ids: selectedBehaviors, samples_per_behavior: 3 });
+      const result = await generateEditableAssertCases({ spec: submitted, behavior_ids: selectedBehaviors, samples_per_behavior: 3, engine: caseGenerator });
       if (latestWorkingSpec.current !== submitted) throw new Error('Design changed during generation. Case drafts discarded; try again.');
       applySpec({ ...submitted, scenarios: result.scenarios, generated_content_status: 'draft',
-        generation_provenance: { engine: result.engine, provider: result.provider, model: result.model } });
+        generation_provenance: { ...result.provenance, engine: result.engine, provider: result.provider, model: result.model } });
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not generate cases'); }
     finally { setBusy(null); }
   }
 
   function updateCase(caseId: string, update: Partial<AssertScenario>) {
-    setSpec({ ...workingSpec, scenarios: workingSpec.scenarios.map((item) => item.id === caseId ? { ...item, ...update } : item) });
+    const next = { ...workingSpec, scenarios: workingSpec.scenarios.map((item) => item.id === caseId ? { ...item, ...update } : item) };
+    setSpec(next);
+    if (!scenarioExamplesEdited) setScenarios(textFromScenarios(next.scenarios));
+  }
+
+  function addManualCase() {
+    const next = { ...workingSpec, scenarios: [...workingSpec.scenarios, {
+      id: `manual-${crypto.randomUUID()}`, title: `Manual case ${workingSpec.scenarios.length + 1}`,
+      description: '', steps: [''], expected_outcome: '', behavior_id: null,
+      variant: 'normal' as const, generation_provenance: { engine: 'manual' },
+    }] };
+    setSpec(next); setScenarios(textFromScenarios(next.scenarios)); setScenarioExamplesEdited(false);
+  }
+
+  function removeCase(caseId: string) {
+    const next = { ...workingSpec, scenarios: workingSpec.scenarios.filter((item) => item.id !== caseId) };
+    setSpec(next); setScenarios(textFromScenarios(next.scenarios)); setScenarioExamplesEdited(false);
   }
 
   function updateBehavior(checkId: string, update: Partial<AssertCheck>) {
@@ -455,29 +477,43 @@ export function SpecEditorPage() {
           </div>)}
           <div className="spec-field-row">
             <label>Scenario guidance<textarea rows={6} value={scenarioSeeds} onChange={(event) => setScenarioSeeds(event.target.value)} /></label>
-            <label>Scenario examples<textarea rows={6} value={scenarios} onChange={(event) => setScenarios(event.target.value)} /></label>
+            <label>Scenario examples<textarea rows={6} value={scenarios} readOnly={spec.scenarios.some((item) => item.generation_provenance?.engine === 'assert')} onChange={(event) => { setScenarios(event.target.value); setScenarioExamplesEdited(true); }} /></label>
           </div>
+          {spec.scenarios.some((item) => item.generation_provenance?.engine === 'assert') ? <small>Generated cases are summarized above. Edit each case or add a manual case below to preserve its identity and source.</small> : null}
           <section aria-label="Runnable case authoring">
             <h2>Reviewed runnable cases</h2>
-            <p>Select behaviors to generate three drafts each: normal, boundary, and adversarial. Generation replaces the current cases. Edit and approve before saving.</p>
+            <p>Select reviewed behaviors to generate three caller drafts each: normal, boundary, and adversarial. Generation replaces the current cases. Edit and approve before saving.</p>
+            <label>Case generator<select value={caseGenerator} onChange={(event) => setCaseGenerator(event.target.value as typeof caseGenerator)} disabled={mutationBusy}>
+              <option value="assert">ASSERT test generation</option><option value="cae_configured_llm">CAE custom generation</option>
+            </select></label>
             <ul>{checks.map((check) => <li key={check.id}>{check.label}: {workingSpec.scenarios.filter((item) => item.behavior_id === check.id).length} cases · {Array.from(new Set(workingSpec.scenarios.filter((item) => item.behavior_id === check.id).map((item) => item.variant || 'normal'))).join(', ') || 'not covered'}</li>)}</ul>
             <label>Behaviors to cover<select multiple size={Math.min(6, Math.max(2, checks.length))} value={selectedBehaviors} onChange={(event) => setSelectedBehaviors(Array.from(event.currentTarget.selectedOptions, (option) => option.value))}>
               {checks.map((check) => <option key={check.id} value={check.id}>{check.label}</option>)}
             </select></label>
             <button type="button" className="secondary-link" onClick={generateCases} disabled={mutationBusy || needsApproval || !selectedBehaviors.length || !spec.permissible_behavior?.trim()}>{busy === 'cases' ? 'Generating cases…' : 'Generate runnable case drafts'}</button>
+            <button type="button" className="secondary-link" onClick={addManualCase} disabled={mutationBusy}>Add manual case</button>
             {workingSpec.scenarios.map((item, index) => <fieldset key={item.id}>
               <legend>{item.title || `Case ${index + 1}`}</legend>
+              {item.generation_provenance?.engine === 'assert' ? <small>ASSERT {item.generation_provenance.assert_version} · caller prompt · expected outcome from reviewed policy</small> : null}
+              <label>Case title {index + 1}<input value={item.title} onChange={(event) => updateCase(item.id, { title: event.target.value })} /></label>
+              <button type="button" className="secondary-link" onClick={() => removeCase(item.id)} disabled={mutationBusy} aria-label={`Remove case ${index + 1}`}>Remove case</button>
               <label>Target behavior for case {index + 1}<select value={item.behavior_id || ''} onChange={(event) => updateCase(item.id, { behavior_id: event.target.value || null })}>
                 <option value="">Choose one behavior…</option>{checks.map((check) => <option key={check.id} value={check.id}>{check.label}</option>)}
               </select></label>
               <label>Variant for case {index + 1}<select value={item.variant || 'normal'} onChange={(event) => updateCase(item.id, { variant: event.target.value as AssertScenario['variant'] })}>
                 <option value="normal">Normal</option><option value="boundary">Boundary</option><option value="adversarial">Adversarial</option>
               </select></label>
-              <label>Caller instructions for case {index + 1}<textarea rows={3} value={(item.steps || []).join('\n')} onChange={(event) => updateCase(item.id, { steps: event.target.value.split('\n') })} /></label>
-              <small>First line is the opening caller utterance. Remaining lines guide the adaptive tester, not the target agent.</small>
+              {item.generation_provenance?.engine === 'assert' ? <>
+                <label>Opening caller message for case {index + 1}<textarea rows={3} value={item.steps?.[0] || ''} onChange={(event) => updateCase(item.id, { steps: [event.target.value, ...(item.steps || []).slice(1)] })} /></label>
+                <label>Follow-up caller instructions for case {index + 1}<textarea rows={2} value={(item.steps || []).slice(1).join('\n')} onChange={(event) => updateCase(item.id, { steps: [item.steps?.[0] || '', ...lines(event.target.value)] })} /></label>
+                <small>The whole opening message is one caller utterance. Follow-up instructions guide compatible adaptive testers.</small>
+              </> : <>
+                <label>Caller instructions for case {index + 1}<textarea rows={3} value={(item.steps || []).join('\n')} onChange={(event) => updateCase(item.id, { steps: event.target.value.split('\n') })} /></label>
+                <small>First line is the opening caller utterance. Remaining lines guide the adaptive tester, not the target agent.</small>
+              </>}
               <label>Expected outcome for case {index + 1}<textarea rows={2} value={item.expected_outcome || ''} onChange={(event) => updateCase(item.id, { expected_outcome: event.target.value })} /></label>
             </fieldset>)}
-            <p>Generation uses CAE’s configured LLM; it does not run ASSERT’s inference pipeline. Rule-only evaluation stays Needs review for authored policies; optional ASSERT semantic judgment is separate.</p>
+            <p>{caseGenerator === 'assert' ? 'ASSERT generates caller prompts from your reviewed behaviors using the draft-generation model in Console Settings. Expected outcomes come from those reviewed rules. It does not prewrite agent responses.' : 'CAE custom generation uses its own prompt template and the configured draft-generation model.'} Review and save a version, publish to Scenarios, then choose a voice target. CAE runs the conversation; optional ASSERT judgment evaluates the saved evidence.</p>
             <label className="spec-check-option"><input type="checkbox" checked={publishConfirmed} onChange={(event) => setPublishConfirmed(event.target.checked)} />I reviewed the saved rules and cases; publish this version to the shared local catalog.</label>
             <button className="primary-link" type="button" onClick={publishCases} disabled={mutationBusy || needsApproval || unsavedChanges || !publishConfirmed}>{busy === 'publish' ? 'Publishing…' : 'Publish saved cases to Scenarios'}</button>
             {unsavedChanges ? <p>Save the current design before publishing.</p> : null}

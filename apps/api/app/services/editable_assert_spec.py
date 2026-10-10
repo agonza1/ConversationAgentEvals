@@ -51,6 +51,7 @@ class AssertScenario(BaseModel):
     draft: bool = False
     behavior_id: str | None = None
     variant: Literal['normal', 'boundary', 'adversarial'] = 'normal'
+    generation_provenance: dict[str, str] = Field(default_factory=dict)
 
 
 class AssertJudge(BaseModel):
@@ -652,13 +653,20 @@ def _generation_prompt(*, title: str, role: str, objective: str) -> str:
     ])
 
 
-def _complete_generation(prompt: str) -> tuple[str, str, str]:
+def _complete_generation(prompt: str, *, expected_provider: str | None = None,
+                         expected_model: str | None = None) -> tuple[str, str, str]:
     provider = get_provider('openai')
     status = provider.status()
     try:
-        model_name = generation_settings()['effective_model']
+        settings = generation_settings()
+        model_name = settings['effective_model']
     except (OSError, ValueError) as exc:
         raise SpecGenerationFailed('Could not read draft-generation settings. Reset the model in Console Settings.') from exc
+    actual_provider = 'openai_codex' if status.get('status') == 'connected' else 'openai_api_key'
+    if expected_provider is not None and (actual_provider != expected_provider or settings['provider'] != expected_provider):
+        raise SpecGenerationUnavailable('The selected generation provider changed; start a new generation request. No fallback was used.')
+    if expected_model is not None and model_name != expected_model:
+        raise SpecGenerationUnavailable('The selected generation model changed; start a new generation request.')
     if status.get('status') == 'connected':
         try:
             from app.services.llm_providers.openai_codex import OpenAICodexProvider, effective_codex_model_name

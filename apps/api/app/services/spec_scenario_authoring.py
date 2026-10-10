@@ -26,7 +26,7 @@ class CaseDraftContent(BaseModel):
     scenarios: list[AssertScenario] = Field(min_length=1, max_length=20)
 
 
-def generate_case_drafts(spec: EditableAssertSpec, *, behavior_ids: list[str], samples_per_behavior: int) -> dict:
+def generate_case_drafts(spec: EditableAssertSpec, *, behavior_ids: list[str], samples_per_behavior: int, engine: str = 'cae_configured_llm') -> dict:
     """Reuse CAE's configured provider/OAuth path; never claim ASSERT ran inference."""
     checks = {item.id: item for item in [*spec.required_behaviors, *spec.forbidden_behaviors]}
     if len(checks) != len(spec.required_behaviors) + len(spec.forbidden_behaviors) or any(not item.strip() for item in checks):
@@ -40,6 +40,11 @@ def generate_case_drafts(spec: EditableAssertSpec, *, behavior_ids: list[str], s
         raise ValueError('Describe the permissible boundary before generating cases.')
     if not 1 <= samples_per_behavior <= 5 or len(selected) * samples_per_behavior > 20:
         raise ValueError('Generate 1–5 cases per behavior, at most 20 cases in one request.')
+    if engine == 'assert':
+        from app.services.upstream_assert_generation import generate_assert_case_drafts
+        return generate_assert_case_drafts(spec, selected=selected, samples_per_behavior=samples_per_behavior)
+    if engine != 'cae_configured_llm':
+        raise ValueError('Choose ASSERT or the CAE custom generator.')
     context = {
         'role': spec.role, 'objective': spec.objective, 'requirements': spec.requirements,
         'permissible_behavior': spec.permissible_behavior, 'behavior_preset': spec.behavior_preset,
@@ -83,7 +88,8 @@ def generate_case_drafts(spec: EditableAssertSpec, *, behavior_ids: list[str], s
             raise SpecGenerationFailed('Generated cases are missing a requested coverage variant.')
     if any(not case.title.strip() or not case.expected_outcome.strip() or not case.steps or not case.steps[0].strip() for case in content.scenarios):
         raise SpecGenerationFailed('Each generated case needs a title, opening request, and expected outcome.')
-    return {'scenarios': [case.model_copy(update={'draft': True}).model_dump(mode='json') for case in content.scenarios],
+    provenance = {'engine': 'cae_configured_llm', 'provider': provider, 'model': model}
+    return {'scenarios': [case.model_copy(update={'draft': True, 'generation_provenance': provenance}).model_dump(mode='json') for case in content.scenarios],
             'provider': provider, 'model': model, 'engine': 'cae_configured_llm',
             'requires_user_approval': True, 'status': 'draft'}
 
@@ -177,7 +183,8 @@ def refresh_published_catalog() -> None:
                     'permissible_behavior': spec.permissible_behavior,
                     'evidence_requirements': spec.evidence_requirements,
                     'deterministic_checks': [item.model_dump(mode='json') for item in spec.deterministic_checks],
-                    'generation_provenance': spec.generation_provenance,
+                    'generation_provenance': (case.generation_provenance or
+                        ({'engine': 'manual'} if spec.generation_provenance.get('engine') == 'assert' else spec.generation_provenance)),
                     'behavior_preset': spec.behavior_preset, 'scenario_preset': spec.scenario_preset,
                 })
             derived[publication.suite_id] = {'id': publication.suite_id, 'name': f'{spec.title} · v{row.version}',
