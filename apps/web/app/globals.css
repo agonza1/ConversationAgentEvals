@@ -3517,18 +3517,34 @@ select {
 
 .agents-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  align-items: start;
   gap: 20px;
 }
 
 .agents-card {
   display: grid;
+  align-content: start;
+  min-width: 0;
   gap: 16px;
   border: 1px solid var(--border);
   border-radius: 16px;
   background: var(--panel);
   padding: 22px;
   box-shadow: 0 16px 44px rgba(24, 36, 45, 0.08);
+}
+
+.agents-card > *,
+.agents-config-row,
+.agents-config-row dd {
+  min-width: 0;
+}
+
+.agents-card-title-block h2,
+.agents-card-section p,
+.agents-config-row dd,
+.agents-card .secondary-link {
+  overflow-wrap: anywhere;
 }
 
 .agents-card-top {
@@ -3997,6 +4013,99 @@ select {
   font-weight: 800;
 }
 
+/* Waylo controls also appear on target cards and run pages, outside the modal. */
+.waylo-connection,
+.waylo-capture,
+.waylo-control-content,
+.waylo-connection-fields {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+}
+
+.waylo-connection h3 {
+  margin-bottom: 0;
+}
+
+.waylo-control-details,
+.waylo-privacy-details {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--panel-alt);
+}
+
+.waylo-control-details > summary,
+.waylo-privacy-details > summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 760;
+  overflow-wrap: anywhere;
+}
+
+.waylo-control-details[open] > summary,
+.waylo-privacy-details[open] > summary {
+  margin-bottom: 12px;
+}
+
+.waylo-control-details > summary:focus-visible,
+.waylo-privacy-details > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+.waylo-connection-fields label,
+.waylo-capture label {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 760;
+  overflow-wrap: anywhere;
+}
+
+.waylo-connection-fields input:not([type="checkbox"]),
+.waylo-capture input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: white;
+  padding: 10px 12px;
+}
+
+.waylo-connection-fields label.waylo-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.waylo-consent input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: auto;
+  margin-top: 3px;
+}
+
+.waylo-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.waylo-bound-target {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.waylo-bound-target dt { font-weight: 760; }
+.waylo-bound-target dd { margin: 4px 0 0; }
+
 .agents-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4056,6 +4165,10 @@ select {
 }
 
 @media (max-width: 640px) {
+  .agents-page-header {
+    flex-direction: column;
+  }
+
   .agents-modal-backdrop {
     padding: 10px;
   }

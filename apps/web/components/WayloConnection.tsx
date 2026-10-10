@@ -13,11 +13,12 @@ export function useWayloConnection(connection?: WayloTargetConnection) {
   return getWayloConnection(connection);
 }
 
-export function WayloConnection({ connection, agentId, onConnected, onEndpoint }: {
+export function WayloConnection({ connection, agentId, onConnected, onEndpoint, compact = false }: {
   connection?: WayloTargetConnection;
   agentId?: string;
   onConnected?: (info: WayloConnectionInfo) => void;
   onEndpoint?: (endpoint: string) => void;
+  compact?: boolean;
 }) {
   const active = useWayloConnection(connection);
   const [local, setLocal] = useState(false);
@@ -95,23 +96,44 @@ export function WayloConnection({ connection, agentId, onConnected, onEndpoint }
     finally { setBusy(false); }
   }
 
-  return <section className="agents-card-section" aria-label="Temporary Waylo connection">
-    <h3>Connect Waylo</h3>
-    <p>Local, temporary connection to {endpoint || 'the configured Waylo API (loading)'}. Your password is sent once through CAE’s local API to Waylo for sign-in, then immediately cleared from this form. CAE keeps the access token only in server memory until provider expiry, capped at 15 minutes. No refresh cookie, token or control proof is stored in browser storage or saved with the target.</p>
-    <p>The private control proof remains in this tab’s JavaScript memory. A full page reload requires reconnecting; calls and evaluation are never started by sign-in.</p>
+  const content = <>
+    <p>Sign-in sends your credentials once to <span>{endpoint || 'the configured Waylo API (loading)'}</span> through local CAE. The temporary connection lasts at most 15 minutes. Reload requires reconnecting; sign-in never starts a call.</p>
+    <details className="waylo-privacy-details">
+      <summary>Credential handling details</summary>
+      <p>Your password is immediately cleared from the form. CAE keeps the provider token only in server memory until expiry. The private control proof stays in this tab’s JavaScript memory. Neither is saved with the target or in browser storage; no refresh cookie is retained.</p>
+    </details>
     {!local ? <p>Open local CAE on localhost or 127.0.0.1 to connect.</p> : active ? <>
-      <p role="status">Connected to {active.agent_name} · expires {new Date(active.expires_at).toLocaleTimeString()}.</p>
-      <p>Workspace: {active.workspace_id} · Agent: {active.waylo_agent_id}</p>
-      <button type="button" disabled={busy} onClick={() => void disconnect()}>Disconnect Waylo</button>{' '}
-      <button type="button" disabled={busy} onClick={() => void refreshWayloConnection(connection).catch(() => setMessage('Could not check the connection.'))}>Refresh Waylo connection</button>
-    </> : <div className="agents-connection-fields">
+      <dl className="waylo-bound-target">
+        <div><dt>Workspace</dt><dd>{active.workspace_id}</dd></div>
+        <div><dt>Waylo agent</dt><dd>{active.waylo_agent_id}</dd></div>
+      </dl>
+      <div className="waylo-action-row">
+        <button type="button" className="secondary-link" disabled={busy} onClick={() => void disconnect()}>Disconnect Waylo</button>
+        <button type="button" className="secondary-link" disabled={busy} onClick={() => void refreshWayloConnection(connection).catch(() => setMessage('Could not check the connection.'))}>Refresh Waylo connection</button>
+      </div>
+    </> : <div className="waylo-connection-fields">
       <label><span>Waylo email</span><input type="email" aria-label="Waylo email" autoComplete="off" value={email} onChange={(event) => setEmail(event.target.value)} disabled={busy} /></label>
       <label><span>Waylo password</span><input type="password" aria-label="Waylo password" autoComplete="off" ref={passwordRef} onChange={(event) => setHasPassword(Boolean(event.target.value))} disabled={busy || !endpoint} /></label>
       <label><span>Agent UUID to connect</span><input aria-label="Waylo sign-in agent UUID" value={requestedAgent} disabled={busy || Boolean(connection?.workspace_id)} onChange={(event) => setRequestedAgent(event.target.value)} /></label>
       <label><span>Owning tenant UUID (platform administrators only, optional)</span><input aria-label="Waylo sign-in tenant UUID" value={tenant} onChange={(event) => setTenant(event.target.value)} disabled={busy} /></label>
-      <label><input type="checkbox" aria-label="Confirm temporary Waylo sign-in" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} disabled={busy} /> I agree to send my sign-in credentials once to Waylo through local CAE and retain a temporary connection in memory.</label>
-      <button type="button" disabled={busy || !endpoint || !confirmed || !hasPassword || !email.trim() || !requestedAgent.trim()} onClick={() => void connect()}>{busy ? 'Connecting…' : 'Connect Waylo'}</button>
+      <label className="waylo-consent"><input type="checkbox" aria-label="Confirm temporary Waylo sign-in" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} disabled={busy} /><span>I agree to send my sign-in credentials once to Waylo through local CAE and retain a temporary connection in memory.</span></label>
+      <button type="button" className="primary-link" disabled={busy || !endpoint || !confirmed || !hasPassword || !email.trim() || !requestedAgent.trim()} onClick={() => void connect()}>{busy ? 'Connecting…' : 'Connect Waylo'}</button>
     </div>}
+  </>;
+
+  return <section className="agents-card-section waylo-connection" aria-label="Temporary Waylo connection">
+    <h3>{compact ? 'Waylo connection' : 'Connect Waylo'}</h3>
+    {active ? <p className="waylo-connection-status" role="status">Connected to {active.agent_name} · expires {new Date(active.expires_at).toLocaleTimeString()}.</p>
+      : compact ? <p className="waylo-connection-status">Not connected in this tab. Connect before starting a call.</p> : null}
+    {compact ? <details className="waylo-control-details" onToggle={(event) => {
+      if (!event.currentTarget.open) {
+        if (passwordInput.current) passwordInput.current.value = '';
+        setHasPassword(false); setConfirmed(false);
+      }
+    }}>
+      <summary>{active ? 'Manage connection' : 'Connect Waylo'}</summary>
+      <div className="waylo-control-content">{content}</div>
+    </details> : <div className="waylo-control-content">{content}</div>}
     {message ? <p role="status">{message}</p> : null}
   </section>;
 }

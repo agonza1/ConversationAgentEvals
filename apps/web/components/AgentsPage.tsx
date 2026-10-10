@@ -290,13 +290,17 @@ function WayloSessionCapture({ agent }: { agent: AgentRecord }) {
       setBusy(false);
     }
   }
-  return <section className="agents-card-section" aria-label="Capture existing Waylo call">
-    <h3>Existing human call</h3>
-    <p>Read provider evidence without starting a call or submitting an evaluation.</p>
-    <label>Session UUID <input aria-label={`Session UUID for ${agent.name}`} value={session} onChange={(e) => setSession(e.target.value)} /></label>
-    <button type="button" disabled={busy || !session.trim() || needsConnection} onClick={() => void download()}>{busy ? 'Capturing…' : 'Download session vCon'}</button>
-    {needsConnection ? <p>Connect Waylo above before reading a session.</p> : null}
-    {status ? <p role="status">{status}</p> : null}
+  return <section className="agents-card-section waylo-capture" aria-label="Capture existing Waylo call">
+    <details className="waylo-control-details">
+      <summary>Import existing human call</summary>
+      <div className="waylo-control-content">
+        <p>Read provider evidence without starting a call or submitting an evaluation.</p>
+        <label><span>Session UUID</span><input aria-label={`Session UUID for ${agent.name}`} value={session} onChange={(e) => setSession(e.target.value)} /></label>
+        <button type="button" className="secondary-link" disabled={busy || !session.trim() || needsConnection} onClick={() => void download()}>{busy ? 'Capturing…' : 'Download session vCon'}</button>
+        {needsConnection ? <p>Connect Waylo above before reading a session.</p> : null}
+        {status ? <p role="status">{status}</p> : null}
+      </div>
+    </details>
   </section>;
 }
 
@@ -916,7 +920,7 @@ export function AgentsPage() {
               <AgentConfigRows agent={agent} />
             </section>
             {agent.target === 'waylo' ? <>
-              {agent.connection?.auth_type === 'waylo_browser_session' ? <WayloConnection connection={agent.connection} /> : null}
+              {agent.connection?.auth_type === 'waylo_browser_session' ? <WayloConnection compact connection={agent.connection} /> : null}
               {agent.connection?.waylo_agent_id === WAYLO_MIKE_AGENT_ID ? <ApiAwareLink className="secondary-link" href={`/runs?${new URLSearchParams({ agent_id: agent.id, suite_id: 'waylo-mike-notes', scenario_id: 'mike-five-bags' }).toString()}`}>Test Mike’s five-bags case</ApiAwareLink> : null}
               <WayloSessionCapture agent={agent} />
             </> : null}

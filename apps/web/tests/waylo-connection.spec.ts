@@ -74,6 +74,7 @@ test('temporary connection clears password, saves IDs only, and preserves proof 
   expect(saved?.headers['x-cae-waylo-session']).toBe(proof);
   const stored = await page.evaluate(() => ({ local: JSON.stringify({ ...localStorage }), session: JSON.stringify({ ...sessionStorage }), cookies: document.cookie }));
   expect(JSON.stringify(stored)).not.toMatch(/fixture-private-proof|synthetic-password|fixture@example.test/);
+  await card.locator('summary').filter({ hasText: /^Import existing human call$/ }).click();
   await card.getByLabel('Session UUID for Mike fixture').fill(workspaceId);
   await card.getByRole('button', { name: 'Download session vCon' }).click();
   await expect.poll(() => fixture.requests.some((request) => request.path.endsWith('/capture'))).toBeTruthy();
