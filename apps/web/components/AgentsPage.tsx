@@ -75,8 +75,8 @@ const TARGET_OPTIONS: Record<
     { value: 'mock_agent', label: 'Built-in sample text agent', group: 'Built-in samples' },
   ],
   voice: [
-    { value: 'waylo', label: 'Waylo agent (LiveKit)', group: 'Live connections' },
     { value: 'pipecat_public_demo', label: 'Pipecat demo', group: 'Live connections' },
+    { value: 'waylo', label: 'Waylo agent (LiveKit)', group: 'Live connections' },
     { value: 'signalwire_holy_guacamole', label: 'Holy Guacamole SignalWire', group: 'Live connections' },
     { value: 'browser_webrtc_agent', label: 'ACC browser WebRTC (coming soon)', group: 'Live connections', comingSoon: true },
     { value: 'sip_agent', label: 'ACC SIP URI (coming soon)', group: 'Live connections', comingSoon: true },

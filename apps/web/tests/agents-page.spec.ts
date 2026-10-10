@@ -49,6 +49,9 @@ async function mockRunnerApis(page: import('@playwright/test').Page, options: Mo
       contentType: 'application/json',
       body: JSON.stringify({
         agents: [
+          {id: 'waylo-notes', name: 'Waylo notes fixture', channel: 'voice', target: 'waylo',
+            connection: {endpoint_url: 'https://api.waylo.test', workspace_id: '11111111-1111-4111-8111-111111111111',
+              waylo_agent_id: '22222222-2222-4222-8222-222222222222', secret_ref: 'waylo-staging'}, metadata: {}},
           {
             id: 'mock-text-agent',
             name: 'Mock text agent',
@@ -311,6 +314,20 @@ test('public Pipecat target needs an explicit click even from an old demo link',
     executor_id: 'pipecat_public_daily',
     audio_transport: 'pipecat_daily_webrtc',
   });
+});
+
+test('Waylo launch is explicit and captures without automatic evaluation', async ({page}) => {
+  const launches: Record<string, unknown>[] = [];
+  await mockRunnerApis(page, {onExecutionLaunch: request => launches.push(request)});
+  await page.goto('/runs?agent_id=waylo-notes');
+  await expect(page.getByLabel('Execution agent target')).toHaveValue('waylo-notes');
+  const run = page.getByRole('button', {name: 'Run evaluation'});
+  await expect(run).toBeEnabled();
+  expect(launches).toHaveLength(0);
+  await run.click();
+  await expect.poll(() => launches.length).toBe(1);
+  expect(launches[0]).toMatchObject({agent_id: 'waylo-notes', mode: 'pipecat_webrtc',
+    tester_id: 'pipecat_tester', executor_id: 'waylo_livekit', audio_transport: 'waylo_livekit', evaluate: false});
 });
 
 test('OpenAI agent try-it-out launches its configured live target', async ({ page }) => {
