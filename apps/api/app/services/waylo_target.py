@@ -294,7 +294,8 @@ def project_capture(capture: dict, *, voice_events: list[dict] | None = None,
     body = evidence_body(state_snapshots=snapshots, voice_events=voice, context=context)
     body['tool_events'] = tools
     vcon = attach_evidence(vcon, body)
-    vcon['attachments'].append({'type': 'ancillary', 'purpose': 'Waylo native source evidence', 'party': 2,
+    exporter_party = next(i for i, party in enumerate(vcon['parties']) if party.get('name') == 'ConVoice QA')
+    vcon['attachments'].append({'type': 'ancillary', 'purpose': 'Waylo native source evidence', 'party': exporter_party,
                                 'start': vcon['updated_at'],
                                 'mediatype': 'application/json', 'encoding': 'json', 'body': capture})
     # Revision describes native + mapped evidence, never wall-clock export time.

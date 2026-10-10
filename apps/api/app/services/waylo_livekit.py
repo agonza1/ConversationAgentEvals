@@ -235,6 +235,9 @@ async def run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, s
     sent_media_bytes = 0
     after_items = []
     prepared = {}
+    steps = scenario.get('caller_steps')
+    if steps:
+        max_exchanges = min(max_exchanges, len(steps))
     try:
         async with asyncio.timeout(timeout_seconds):
             # Resolve tester media before creating a billable remote session.

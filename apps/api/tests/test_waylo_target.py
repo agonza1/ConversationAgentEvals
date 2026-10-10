@@ -336,7 +336,8 @@ def test_entity_diagnostics_separate_recognition_and_local_send_clipping():
     assert assess_speech(source, refs)['status'] == 'unknown'
 
 
-def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp_path):
+@pytest.mark.parametrize('scripted_exchanges', [1, 2])
+def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp_path, scripted_exchanges):
     class Client:
         _secret = 'provider-secret'
         agent = A
@@ -372,7 +373,7 @@ def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp
             self.remote_pcm.extend(b'\x00\x10' * 480)
             self.segments[('remote', 'agent-text')] = 'I have noted five bags of White Potatoes.'
         async def send(self, audio, *, turn_id, reference, artifact_dir):
-            event = {'event_id': 'caller-1/sent', 'event_type': 'tester.audio.sent', 'source': 'livekit.AudioSource',
+            event = {'event_id': f'{turn_id}/sent', 'event_type': 'tester.audio.sent', 'source': 'livekit.AudioSource',
                      'turn_id': turn_id, 'reference_text': reference, 'duration_ms': 20,
                      'intended_samples': 480, 'accepted_samples': 480, 'audio_sha256': 'digest',
                      'ended_at_ms': 100, 'overlap_with_observed_target_speech': False}
@@ -380,16 +381,18 @@ def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp
             artifact_dir.mkdir(parents=True, exist_ok=True)
             return event, audio
     async def wording(turns, index):
+        assert index <= scripted_exchanges, 'Never add an undeclared scripted turn.'
         return 'five bags of white potatoes'
     async def synthesize(text, index):
         return pcm_wav(b'\x00\x10' * 480)
     observer_events = []
     client = Client()
-    result = asyncio.run(run_waylo_call(target=TARGET, correlation_id='run/conversation', scenario={'id': 'case'},
-        suite_id='waylo-mike-notes', artifact_dir=tmp_path, max_exchanges=1, timeout_seconds=30,
+    result = asyncio.run(run_waylo_call(target=TARGET, correlation_id='run/conversation',
+        scenario={'id': 'case', 'caller_steps': ['five bags of white potatoes'] * scripted_exchanges},
+        suite_id='waylo-mike-notes', artifact_dir=tmp_path, max_exchanges=3, timeout_seconds=30,
         next_utterance=wording, synthesize=synthesize, client=client, peer=Peer(), event_observer=observer_events.append))
     assert result['verdict'] == 'needs_review' and result['score'] is None and result['evaluation_report'] == {}
-    assert [e['speaker'] for e in observer_events] == ['Agent', 'Caller', 'Agent']
+    assert [e['speaker'] for e in observer_events] == ['Agent'] + ['Caller', 'Agent'] * scripted_exchanges
     assert all(isinstance(e['audio'], bytes) for e in observer_events)
     profile = decode_evidence(result['ietf_vcon_export'])
     assert profile['context']['source_call_kind'] == 'cae_ai_tester'
@@ -400,6 +403,20 @@ def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp
     assert (tmp_path / 'agent-received.wav').exists()
     assert validate_ietf_vcon(result['ietf_vcon_export'])['valid']
     assert client.calls.count('bootstrap') == 1
+
+
+def test_native_attachment_references_actual_exporter_party(monkeypatch):
+    from app.services import waylo_target
+    builder = waylo_target.build_ietf_execution_vcon
+    def with_observer(**kwargs):
+        value = builder(**kwargs)
+        value['parties'].append({'name': 'Independent observer', 'type': 'bot', 'validation': 'none'})
+        return value
+    monkeypatch.setattr(waylo_target, 'build_ietf_execution_vcon', with_observer)
+    exported = project_capture(captured())['vcon']
+    native = next(a for a in exported['attachments'] if a['purpose'] == 'Waylo native source evidence')
+    assert native['party'] < len(exported['parties'])
+    assert exported['parties'][native['party']]['name'] == 'ConVoice QA'
 
 
 @pytest.mark.parametrize('preset', ['item_capture_assistant', 'catalog_order_assistant'])

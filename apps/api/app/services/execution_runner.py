@@ -723,7 +723,7 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
             text = _scenario_user_opener(scenario)
         else:
             if provider is None:
-                return 'That is all. Please read back my notes.'
+                raise ValueError('Controlled caller steps exhausted; no invented substitution.')
             text = await asyncio.to_thread(provider.complete, _openai_tester_prompt(
                 scenario, turns, next_exchange=index, max_exchanges=payload.max_exchanges), model_name=model)
         return text
