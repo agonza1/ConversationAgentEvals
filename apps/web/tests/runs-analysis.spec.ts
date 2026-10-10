@@ -154,6 +154,54 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
   await expect(page.getByLabel('Transcript')).not.toContainText('I can help with that.');
 });
 
+test('public demo distinguishes received audio from reported text in analysis and listener captions', async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem('conversation-evals-demo-user', 'demo-user'));
+  const metadata = {
+    source_text: 'I booked your appointment.',
+    reported_text: 'I booked your appointment.',
+    asr_receipt: 'I cannot book appointments.',
+    transcript_source: 'rtc_asr_received_audio',
+    source_text_label: 'Target-reported text (RTVI)',
+    asr_receipt_label: 'Received audio transcript (rtc-asr)',
+  };
+  const conversation = {
+    ...runFixture.conversations[0],
+    turns: [
+      runFixture.conversations[0].turns[0],
+      { turn_index: 2, speaker: 'agent', text: metadata.asr_receipt, frame_metadata: metadata },
+    ],
+    live_events: [{
+      sequence: 1, kind: 'audio', speaker: 'Agent', direction: 'target_to_tester',
+      text: metadata.asr_receipt, llm_output: metadata.source_text, asr_receipt: metadata.asr_receipt,
+      frame_metadata: metadata,
+    }],
+  };
+  await page.route('**/api/execution/runs/exec-demo123**', (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({ ...runFixture, conversations: [conversation] }),
+  }));
+  await page.goto('/runs/exec-demo123');
+  const transcript = page.getByLabel('Transcript', { exact: true });
+  await expect(transcript).toContainText('Received audio transcript (rtc-asr)');
+  await expect(transcript).toContainText('Target-reported text (RTVI): I booked your appointment.');
+  await expect(page.getByLabel('Conversation turn sequence')).toContainText('I cannot book appointments.');
+  await expect(page.getByLabel('Conversation turn sequence')).not.toContainText('I booked your appointment.');
+  await page.getByRole('button', { name: /Word Error Rate/ }).first().click();
+  const wer = page.getByLabel('Per-turn word error rates');
+  await expect(wer).toContainText('Target-reported text (RTVI)');
+  await expect(wer).toContainText('Received audio transcript (rtc-asr)');
+
+  await page.route('**/api/execution/listeners/demo-asr-token', (route) => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify({
+      listener: { run_status: 'completed', read_only: true, can_inject_audio: false, requires_microphone: false },
+      conversations: [conversation],
+    }),
+  }));
+  await page.goto('/listeners/demo-asr-token');
+  await expect(page.getByText('Target-reported text (RTVI): I booked your appointment.', { exact: true })).toBeVisible();
+  await expect(page.getByText('Received audio transcript (rtc-asr): I cannot book appointments.', { exact: true })).toBeVisible();
+});
+
 test('needs-review resolution explains score and missing proof without calling it a failed call', async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');

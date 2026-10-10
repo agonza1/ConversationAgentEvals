@@ -44,12 +44,20 @@ def test_public_target_client_persists_current_run_media_without_room_credential
     caller_wav = _wav(1)
     target_wav = _wav(2)
     observed: dict[str, object] = {}
+    target_metadata = {
+        'source_text': 'Pipecat books appointments.',
+        'reported_text': 'Pipecat books appointments.',
+        'asr_receipt': 'Pipecat is a voice AI framework.',
+        'transcript_source': 'rtc_asr_received_audio',
+        'source_text_label': 'Target-reported text (RTVI)',
+        'asr_receipt_label': 'Received audio transcript (rtc-asr)',
+    }
     result_payload = {
         'status': 'pass',
         'target': {'selected_agent': '10-gradium', 'transport': 'pipecat_daily_webrtc'},
         'turns': [
             {'speaker': 'caller', 'text': 'What is Pipecat?'},
-            {'speaker': 'agent', 'text': 'Pipecat is a voice AI framework.'},
+            {'speaker': 'agent', 'text': 'Pipecat is a voice AI framework.', 'frame_metadata': target_metadata},
         ],
         'connection': {'connected': True, 'response_complete': True},
         'latency_metrics': {
@@ -97,6 +105,7 @@ def test_public_target_client_persists_current_run_media_without_room_credential
                     'direction': 'target_to_tester',
                     'text': 'Pipecat is a voice AI framework.',
                     'media_event': 'rtvi_transcript_progress',
+                    'frame_metadata': target_metadata,
                 },
                 {'type': 'complete', 'result': result_payload},
             ])
@@ -136,6 +145,11 @@ def test_public_target_client_persists_current_run_media_without_room_credential
     assert live_events[2]['text'] == 'Pipecat is a voice AI framework.'
     assert 'audio' not in live_events[2]
     assert live_events[2]['update_live_audio_key'] == '1:target_to_tester'
+    assert live_events[2]['llm_output'] == 'Pipecat books appointments.'
+    assert live_events[2]['asr_receipt'] == 'Pipecat is a voice AI framework.'
+    assert live_events[2]['frame_metadata']['source_text_label'] == 'Target-reported text (RTVI)'
+    assert result['transcription_turns'][1].frame_metadata == target_metadata
+    assert result['transcription_turns'][1].source == 'rtc_asr_received_audio'
     assert [turn.text for turn in result['transcription_turns']] == [
         'What is Pipecat?',
         'Pipecat is a voice AI framework.',

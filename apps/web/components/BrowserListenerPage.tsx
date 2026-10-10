@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { SiteNav } from '@/components/SiteNav';
+import { evidenceTextLabel, evidenceAsrLabel } from '@/components/LiveRunFeedback';
 import { getApiBase } from '@/lib/execution';
 
 interface ListenerEvent {
@@ -14,6 +15,7 @@ interface ListenerEvent {
   direction?: 'tester_to_target' | 'target_to_tester' | null;
   llm_output?: string | null;
   asr_receipt?: string | null;
+  frame_metadata?: Record<string, unknown> | null;
 }
 
 function directionLabel(direction?: ListenerEvent['direction']) {
@@ -236,11 +238,11 @@ export function BrowserListenerPage({ token }: { token: string }) {
               {event.speaker}{directionLabel(event.direction) ? ` · ${directionLabel(event.direction)}` : ''}
             </strong>
             <span style={{ whiteSpace: 'pre-wrap' }}>
-              {event.llm_output ? 'Spoken (LLM output): ' : ''}{event.llm_output || event.text}
+              {evidenceTextLabel(event)}{event.llm_output || event.text}
             </span>
             {event.asr_receipt ? (
               <span style={{ color: 'var(--muted)', fontSize: 12 }}>
-                Peer ASR receipt: {event.asr_receipt}
+                {evidenceAsrLabel(event)}: {event.asr_receipt}
               </span>
             ) : null}
             {event.kind === 'audio' ? (

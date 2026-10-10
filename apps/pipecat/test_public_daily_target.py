@@ -376,7 +376,7 @@ def test_remote_audio_latency_waits_for_confirmed_speech(monkeypatch):
     asyncio.run(collect())
 
 
-def test_public_duplex_reuses_rtvi_text_for_next_tester_turn(monkeypatch):
+def test_public_duplex_reuses_received_audio_text_for_next_tester_turn(monkeypatch):
     observed: dict[str, object] = {}
 
     async def fake_graph(input_frame, _llm_processor, *, voice, speed=1.0):
@@ -465,7 +465,7 @@ def test_public_duplex_reuses_rtvi_text_for_next_tester_turn(monkeypatch):
     assert broadcast.active is False
 
 
-def test_public_duplex_does_not_require_unused_rtc_asr(monkeypatch):
+def test_public_duplex_requires_received_audio_rtc_asr(monkeypatch):
     async def fake_duplex(_request, **_kwargs):
         return {'status': 'pass'}
 
@@ -485,11 +485,8 @@ def test_public_duplex_does_not_require_unused_rtc_asr(monkeypatch):
         },
     )
 
-    assert response.status_code == 200, response.text
-    assert json.loads(response.text.strip()) == {
-        'type': 'complete',
-        'result': {'status': 'pass'},
-    }
+    assert response.status_code == 503, response.text
+    assert 'RTC_ASR_BASE_URL' in response.json()['detail']
 
 
 def test_public_target_reports_tester_audio_synthesis_stage(monkeypatch):
@@ -508,3 +505,76 @@ def test_public_target_reports_tester_audio_synthesis_stage(monkeypatch):
             kokoro_model='kokoro',
             kokoro_voice='af_heart',
         ))
+
+
+@pytest.mark.parametrize('reported', ['I booked your appointment.', ''])
+def test_received_audio_asr_is_authoritative_and_matches_recording(monkeypatch, reported):
+    import hashlib
+    import httpx
+
+    run = outbound_voice.OutboundVoiceRunContext(
+        outbound_voice.OutboundVoiceTargetDescriptor(
+            adapter_id='public_pipecat_daily', target_kind='pipecat_public_demo',
+            transport='pipecat_daily_webrtc', selected_target='demo',
+        ),
+    )
+    run.begin_turn(1)
+    run.evidence.target_output_segments.append(reported)
+    pcm = bytes([2, 0]) * 320
+    run.evidence.target_audio.extend(pcm)
+    run.evidence.target_audio_frames = 1
+    expected_wav = outbound_voice.pcm_to_wav(pcm, 16_000, 1)
+    uploaded = []
+
+    async def handle(request):
+        assert str(request.url) == 'http://rtc-asr.test/api/transcribe/file'
+        uploaded.append(await request.aread())
+        return httpx.Response(200, json={'transcription': {'text': 'I cannot book appointments.'}})
+
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(public_daily_target.httpx, 'AsyncClient',
+                        lambda **kwargs: original_client(transport=httpx.MockTransport(handle), **kwargs))
+    exchange, target_wav = asyncio.run(public_daily_target._complete_received_exchange(
+        run, rtc_asr_base_url='http://rtc-asr.test/', turn_pair=1,
+        caller_source='Please book a visit.', caller_text='Please book a visit.',
+        caller_wav=expected_wav, caller_audio_frames=1,
+    ))
+    assert expected_wav in uploaded[0]
+    assert target_wav == expected_wav == run.target_wavs[0]
+    assert exchange['target']['text'] == run.turns[1]['text'] == 'I cannot book appointments.'
+    metadata = run.turns[1]['frame_metadata']
+    assert metadata['reported_text'] == reported
+    assert metadata['asr_receipt'] == 'I cannot book appointments.'
+    assert metadata['received_audio_sha256'] == hashlib.sha256(expected_wav).hexdigest()
+    events = []
+
+    async def publish(event):
+        events.append(event)
+
+    run.event_callback = publish
+    asyncio.run(run.publish_exchange(exchange, target_wav))
+    assert events[0]['frame_metadata']['asr_receipt_label'] == 'Target ASR receipt'
+    assert events[1]['frame_metadata'] == metadata
+
+
+@pytest.mark.parametrize('payload,status', [({'text': ''}, 200), ({'text': 'Reported text'}, 503)])
+def test_received_audio_asr_fails_without_reported_text_fallback(monkeypatch, payload, status):
+    import httpx
+
+    run = outbound_voice.OutboundVoiceRunContext(
+        outbound_voice.OutboundVoiceTargetDescriptor(
+            adapter_id='demo', target_kind='demo', transport='daily', selected_target='demo',
+        ),
+    )
+    run.evidence.target_output_segments.append('Do not silently use me.')
+    run.evidence.target_audio.extend(bytes([2, 0]) * 320)
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(public_daily_target.httpx, 'AsyncClient', lambda **kwargs: original_client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(status, json=payload)), **kwargs,
+    ))
+    with pytest.raises(PublicDailyTargetError, match='rtc-asr|rtc-asr returned no transcript'):
+        asyncio.run(public_daily_target._complete_received_exchange(
+            run, rtc_asr_base_url='http://rtc-asr.test', turn_pair=1,
+            caller_source='Hello', caller_text='Hello', caller_wav=b'wav', caller_audio_frames=1,
+        ))
+    assert not run.turns

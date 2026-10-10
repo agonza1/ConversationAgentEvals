@@ -16,6 +16,16 @@ export interface LiveRunEvent {
   created_at?: string | null;
 }
 
+export function evidenceTextLabel(event: Pick<LiveRunEvent, 'llm_output' | 'frame_metadata'>) {
+  const value = event.frame_metadata?.[event.llm_output ? 'source_text_label' : 'text_source_label'];
+  return typeof value === 'string' && value ? `${value}: ` : event.llm_output ? 'Spoken (LLM output): ' : '';
+}
+
+export function evidenceAsrLabel(event: Pick<LiveRunEvent, 'frame_metadata'>) {
+  const value = event.frame_metadata?.asr_receipt_label;
+  return typeof value === 'string' && value ? value : 'Peer ASR receipt';
+}
+
 function directionLabel(direction?: LiveRunEvent['direction']) {
   if (direction === 'tester_to_target') return 'tester → target';
   if (direction === 'target_to_tester') return 'target → tester';
@@ -914,11 +924,11 @@ export function LiveRunFeedback({
                   : `${event.speaker}${directionLabel(event.direction) ? ` · ${directionLabel(event.direction)}` : ''}`}
               </strong>
               <span style={{ whiteSpace: 'pre-wrap' }}>
-                {event.llm_output ? 'Spoken (LLM output): ' : ''}{event.llm_output || event.text}
+                {evidenceTextLabel(event)}{event.llm_output || event.text}
               </span>
               {event.asr_receipt ? (
                 <span style={{ color: 'var(--muted)', fontSize: 12 }}>
-                  Peer ASR receipt: {event.asr_receipt}
+                  {evidenceAsrLabel(event)}: {event.asr_receipt}
                 </span>
               ) : null}
             </div>

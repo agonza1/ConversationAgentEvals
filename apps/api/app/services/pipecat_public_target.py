@@ -104,11 +104,16 @@ def run_public_pipecat_call(
                 turn_pair = int(event.get('turn_pair') or 0)
                 direction = str(event.get('direction') or '')
                 live_key = f'{turn_pair}:{direction}'
+                metadata = event.get('frame_metadata')
+                metadata = metadata if isinstance(metadata, dict) else {}
                 observed_event = {
                     'speaker': str(event.get('speaker') or ''),
                     'text': str(event.get('text') or ''),
                     'direction': direction,
+                    'llm_output': str(metadata.get('source_text') or '') or None,
+                    'asr_receipt': str(metadata.get('asr_receipt') or '') or None,
                     'frame_metadata': {
+                        **metadata,
                         'transport': 'pipecat_daily_webrtc',
                         'current_run': True,
                         'turn_pair': turn_pair,
@@ -138,17 +143,21 @@ def run_public_pipecat_call(
         text = str(item.get('text') or '').strip()
         if speaker not in {'caller', 'agent'} or not text:
             continue
+        metadata = item.get('frame_metadata')
+        metadata = metadata if isinstance(metadata, dict) else {}
+        received_asr = metadata.get('transcript_source') == 'rtc_asr_received_audio'
         turns.append(TranscriptionTurn(
             turn_index=index,
             speaker=speaker.title(),
             text=text,
-            source='pipecat_public_daily',
+            source='rtc_asr_received_audio' if received_asr else 'pipecat_public_daily',
             event_types=[
                 'daily_audio_sent' if speaker == 'caller' else 'daily_audio_received',
-                'rtvi_transcript_observed',
+                'rtc_asr_transcript_observed' if received_asr else 'rtvi_transcript_observed',
             ],
             direction='tester_to_target' if speaker == 'caller' else 'target_to_tester',
             evidence_role='tester' if speaker == 'caller' else 'target',
+            frame_metadata=metadata,
         ))
     if len(turns) < 2 or turns[0].speaker != 'Caller' or turns[-1].speaker != 'Agent':
         raise RuntimeError('Public Pipecat direct call returned incomplete caller/agent transcript evidence.')

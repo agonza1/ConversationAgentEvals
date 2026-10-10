@@ -1665,8 +1665,8 @@ async def public_pipecat_run(
 ):
     """Join the public demo's Daily room directly as a Pipecat tester participant."""
     _require_reference_token(x_cae_reference_token)
-    if not KOKORO_BASE_URL:
-        raise HTTPException(status_code=503, detail='Public Pipecat execution requires KOKORO_BASE_URL.')
+    if not KOKORO_BASE_URL or not RTC_ASR_BASE_URL:
+        raise HTTPException(status_code=503, detail='Public Pipecat execution requires Kokoro and RTC_ASR_BASE_URL.')
     try:
         from public_daily_target import (
             PublicDailyTargetError,
@@ -1684,6 +1684,7 @@ async def public_pipecat_run(
             kokoro_base_url=KOKORO_BASE_URL,
             kokoro_model=KOKORO_MODEL,
             kokoro_voice=KOKORO_TESTER_VOICE,
+            rtc_asr_base_url=RTC_ASR_BASE_URL,
         )
     except HTTPException:
         raise
@@ -1760,9 +1761,8 @@ async def _public_pipecat_duplex_events(
             'to perform verification, updates, bookings, or other target-agent actions.'
             f' Caller-side case instructions: {json.dumps(payload.scenario.get("caller_steps") or [], ensure_ascii=False)}'
         )
-        # History must match the transcript being evaluated. The public target's
-        # RTVI ASR receipt is authoritative when it differs from tester source
-        # text, including for the opening utterance.
+        # Match evaluated evidence: target ASR for the caller and independent
+        # rtc-asr of received Daily audio for the target (not its reported text).
         conversation_history.extend([
             {'speaker': 'Caller', 'text': recognized_caller_text},
             {'speaker': 'Agent', 'text': target_text},
@@ -1780,9 +1780,8 @@ async def _public_pipecat_duplex_events(
             model_name=payload.tester_model_name,
         )
         try:
-            # The public target already supplies an authoritative RTVI
-            # transcript. Feed it through the existing tester LLM -> Kokoro
-            # graph instead of lossy re-transcription of the same Daily audio.
+            # Audio was independently transcribed before this callback. Reuse
+            # that received-audio transcript without a second ASR request.
             _asr, collector = await _run_reference_graph(
                 TextFrame(target_text),
                 _ReferenceTesterLlmProcessor(request),
@@ -1815,6 +1814,7 @@ async def _public_pipecat_duplex_events(
                 kokoro_base_url=KOKORO_BASE_URL,
                 kokoro_model=KOKORO_MODEL,
                 kokoro_voice=KOKORO_TESTER_VOICE,
+                rtc_asr_base_url=RTC_ASR_BASE_URL,
                 next_turn=next_turn,
                 event_callback=publish,
                 audio_frame_callback=publish_audio_frame,
@@ -1858,10 +1858,10 @@ async def public_pipecat_duplex(
 ):
     """Stream a multi-turn CAE tester session through one public Daily room."""
     _require_reference_token(x_cae_reference_token)
-    if not PIPECAT_RUNTIME_AVAILABLE or not KOKORO_BASE_URL:
+    if not PIPECAT_RUNTIME_AVAILABLE or not KOKORO_BASE_URL or not RTC_ASR_BASE_URL:
         raise HTTPException(
             status_code=503,
-            detail='Public Pipecat duplex requires Pipecat and Kokoro.',
+            detail='Public Pipecat duplex requires Pipecat, Kokoro, and RTC_ASR_BASE_URL.',
         )
     return StreamingResponse(
         _public_pipecat_duplex_events(payload),

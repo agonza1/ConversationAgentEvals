@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import time
 import uuid
 from typing import Any
@@ -25,6 +26,7 @@ from outbound_voice import (
     OutboundVoiceRunContext,
     OutboundVoiceTargetDescriptor,
     pace_pcm,
+    pcm_to_wav,
     wav_to_pcm,
 )
 
@@ -232,6 +234,60 @@ async def _synthesize_caller(text: str, *, kokoro_base_url: str, model: str, voi
     return response.content
 
 
+async def _complete_received_exchange(
+    run: OutboundVoiceRunContext, *, rtc_asr_base_url: str,
+    turn_pair: int, caller_source: str, caller_text: str,
+    caller_wav: bytes, caller_audio_frames: int,
+) -> tuple[dict[str, Any], bytes]:
+    """Transcribe the identical captured WAV that is persisted and replayed."""
+    if not rtc_asr_base_url:
+        raise PublicDailyTargetError('Public Pipecat requires RTC_ASR_BASE_URL for received audio.')
+    evidence = run.evidence
+    reported_text = _current_target_text(evidence)
+    target_wav = pcm_to_wav(
+        bytes(evidence.target_audio), evidence.target_audio_sample_rate,
+        evidence.target_audio_channels,
+    )
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(
+                f'{rtc_asr_base_url.rstrip("/")}/api/transcribe/file',
+                files={'file': ('target-response.wav', target_wav, 'audio/wav')},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        transcription = payload.get('transcription')
+        transcription = transcription if isinstance(transcription, dict) else {}
+        text = payload.get('text') or transcription.get('text') or payload.get('transcript')
+        heard_text = text.strip() if isinstance(text, str) else ''
+    except Exception as exc:
+        raise PublicDailyTargetError(
+            'Public Pipecat received-audio transcription failed; verify rtc-asr is reachable.'
+        ) from exc
+    if not heard_text:
+        raise PublicDailyTargetError('rtc-asr returned no transcript for Public Pipecat received audio.')
+    return run.complete_exchange(
+        turn_pair=turn_pair, caller_text=caller_text, target_text=heard_text,
+        caller_wav=caller_wav, caller_audio_frames=caller_audio_frames,
+        target_wav=target_wav,
+        caller_metadata={
+            'source_text': caller_source, 'asr_receipt': caller_text,
+            'source_text_label': 'Caller source text',
+            'asr_receipt_label': 'Target ASR receipt', 'asr_source': 'target_rtvi',
+        },
+        target_metadata={
+            'source_text': reported_text, 'reported_text': reported_text,
+            'source_text_label': 'Target-reported text (RTVI)',
+            'asr_receipt': heard_text,
+            'asr_receipt_label': 'Received audio transcript (rtc-asr)',
+            'text_source_label': 'Received audio transcript (rtc-asr)',
+            'transcript_source': 'rtc_asr_received_audio',
+            'asr_source': 'rtc_asr_received_audio',
+            'received_audio_sha256': hashlib.sha256(target_wav).hexdigest(),
+        },
+    )
+
+
 async def _play_caller_turn(
     run: OutboundVoiceRunContext,
     task: PipelineTask,
@@ -316,12 +372,14 @@ async def run_public_daily_target(
     kokoro_base_url: str,
     kokoro_model: str,
     kokoro_voice: str,
+    rtc_asr_base_url: str = '',
 ) -> dict[str, Any]:
     return await run_public_daily_duplex(
         PublicDailyDuplexRequest(**request.model_dump(), max_turn_pairs=1),
         kokoro_base_url=kokoro_base_url,
         kokoro_model=kokoro_model,
         kokoro_voice=kokoro_voice,
+        rtc_asr_base_url=rtc_asr_base_url,
     )
 
 
@@ -331,6 +389,7 @@ async def run_public_daily_duplex(
     kokoro_base_url: str,
     kokoro_model: str,
     kokoro_voice: str,
+    rtc_asr_base_url: str = '',
     next_turn: NextTurnCallback | None = None,
     event_callback: EventCallback | None = None,
     audio_frame_callback: AudioFrameCallback | None = None,
@@ -462,6 +521,7 @@ async def run_public_daily_duplex(
                     event_callback is not None
                     and evidence.current_turn_pair > 0
                     and evidence.caller_audio_sent_at is not None
+                    and evidence.capture_response_audio
                 ):
                     live_text = ' '.join(
                         evidence.target_transcripts[evidence.initial_target_transcript_count:]
@@ -479,6 +539,9 @@ async def run_public_daily_duplex(
                             'direction': 'target_to_tester',
                             'text': live_text,
                             'media_event': 'rtvi_transcript_progress',
+                            'frame_metadata': {
+                                'text_source_label': 'Target-reported text (RTVI; awaiting audio ASR)',
+                            },
                         })
         elif message_type == 'bot-started-speaking':
             if evidence.caller_audio_sent_at is None:
@@ -616,22 +679,23 @@ async def run_public_daily_duplex(
                 raise PublicDailyTargetError(
                     f'Public Pipecat bot did not transcribe tester turn {turn_pair}.'
                 )
-            target_text = _current_target_text(evidence)
-            if not target_text:
-                raise PublicDailyTargetError(
-                    f'Public Pipecat bot returned audio but no completed RTVI text for response {turn_pair}.'
-                )
             if not evidence.target_audio:
                 raise PublicDailyTargetError(
                     f'Public Pipecat bot completed response {turn_pair}, but Daily returned no audio.'
                 )
-            exchange, target_wav = run.complete_exchange(
-                turn_pair=turn_pair,
-                caller_text=caller_transcript,
-                target_text=target_text,
-                caller_wav=current_wav,
-                caller_audio_frames=sent,
+            # Freeze response capture before the ASR request so delayed/new audio
+            # cannot change the WAV after it has been transcribed.
+            evidence.capture_response_audio = False
+            exchange, target_wav = await _await_before_run_timeout(
+                _complete_received_exchange(
+                    run, rtc_asr_base_url=rtc_asr_base_url, turn_pair=turn_pair,
+                    caller_source=current_text, caller_text=caller_transcript,
+                    caller_wav=current_wav, caller_audio_frames=sent,
+                ),
+                session_deadline=session_deadline,
+                timeout_message='Public Pipecat received-audio ASR exceeded the run timeout.',
             )
+            target_text = exchange['target']['text']
             await run.publish_exchange(exchange, target_wav)
 
             if turn_pair >= request.max_turn_pairs:
@@ -680,6 +744,8 @@ async def run_public_daily_duplex(
                 'fixture_backed': False,
                 'tester_media': 'current_run_kokoro',
                 'target_media': 'current_run_daily_webrtc',
+                'target_transcript': 'rtc_asr_received_audio',
+                'target_reported_text': 'rtvi',
             },
         )
     except RuntimeError as exc:
