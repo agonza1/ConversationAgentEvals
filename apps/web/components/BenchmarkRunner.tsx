@@ -2776,10 +2776,11 @@ export function BenchmarkRunner({
     ) return;
 
     const params = new URLSearchParams(window.location.search);
-    if (params.get('launch') !== 'demo') return;
+    // Target-specific links must open the configured form, including old bookmarks
+    // that still contain launch=demo. Only the untargeted homepage demo auto-runs.
+    if (params.get('launch') !== 'demo' || params.has('agent_id')) return;
 
-    const wantedAgentId = params.get('agent_id');
-    if (!selectedAgentId || (wantedAgentId && selectedAgentId !== wantedAgentId)) return;
+    if (!selectedAgentId) return;
 
     if (executionMode === 'text_callable' && !selectedScenario) return;
 
