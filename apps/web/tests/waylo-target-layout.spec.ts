@@ -48,6 +48,8 @@ for (const width of [1280, 390, 320]) {
     for (const card of measures.cards) expect(card.height).toBeLessThan(520);
 
     const waylo = page.getByRole('article').filter({ hasText: 'Store voice fixture' });
+    await expect(waylo.getByRole('status', { name: 'Waylo connection status' })).toContainText('Not connected');
+    await expect(waylo.locator('.waylo-card-status')).toHaveClass(/is-disconnected/);
     const description = waylo.locator('.agents-card-description p');
     const collapsedHeight = (await description.boundingBox())!.height;
     expect(collapsedHeight).toBeLessThan(70);

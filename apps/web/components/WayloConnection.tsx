@@ -13,6 +13,17 @@ export function useWayloConnection(connection?: WayloTargetConnection) {
   return getWayloConnection(connection);
 }
 
+/** Shows only the tab-bound grant, never infers connectivity from saved target IDs. */
+export function WayloConnectionStatus({ connection }: { connection: WayloTargetConnection }) {
+  const active = useWayloConnection(connection);
+  return <div className={`waylo-card-status ${active ? 'is-connected' : 'is-disconnected'}`} role="status" aria-label="Waylo connection status">
+    <p><span aria-hidden="true">● </span><strong>{active ? 'Connected in this tab' : 'Not connected'}</strong></p>
+    <p>{active
+      ? `Temporary access · expires ${new Date(active.expires_at).toLocaleTimeString()}.`
+      : 'Show details to connect. Reloading this page requires sign-in again.'}</p>
+  </div>;
+}
+
 export function WayloConnection({ connection, agentId, onConnected, onEndpoint, compact = false }: {
   connection?: WayloTargetConnection;
   agentId?: string;

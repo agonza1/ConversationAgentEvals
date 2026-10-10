@@ -65,6 +65,8 @@ test('temporary connection clears password, saves IDs only, and preserves proof 
   await page.getByRole('button', { name: 'Create target' }).click();
   const card = page.getByRole('article').filter({ hasText: 'Mike fixture' });
   await expect(card).toBeVisible();
+  await expect(card.getByRole('status', { name: 'Waylo connection status' })).toContainText('Connected in this tab');
+  await expect(card.locator('.waylo-card-status')).toHaveClass(/is-connected/);
   const saved = fixture.requests.find((request) => request.path === '/api/agents' && request.method === 'POST');
   expect(saved?.body).toMatchObject({ target: 'waylo', connection: {
     auth_type: 'waylo_browser_session', secret_ref: null, endpoint_url: endpoint,
@@ -77,6 +79,7 @@ test('temporary connection clears password, saves IDs only, and preserves proof 
   await card.getByRole('button', { name: /Show details/ }).click();
   await expect(card.getByText(/Connected to Mike fixture/)).toBeVisible();
   await card.getByRole('button', { name: /Hide details/ }).click();
+  await expect(card.getByRole('status', { name: 'Waylo connection status' })).toBeVisible();
   await card.getByRole('button', { name: /Show details/ }).click();
   await expect(card.getByText(/Connected to Mike fixture/)).toBeVisible();
   await card.locator('summary').filter({ hasText: /^Import existing human call$/ }).click();
@@ -98,6 +101,9 @@ test('temporary connection clears password, saves IDs only, and preserves proof 
   await expect(page.getByRole('button', { name: 'Connect Waylo', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Run evaluation', exact: true })).toBeDisabled();
   await expect(page.getByLabel('Waylo password')).toHaveValue('');
+  await page.goto('/targets');
+  await expect(page.getByRole('status', { name: 'Waylo connection status' })).toContainText('Not connected');
+  await expect(page.locator('.waylo-card-status')).toHaveClass(/is-disconnected/);
 });
 
 test('explicit platform-admin tenant connection retains its safe mount and disconnects without persisting proof', async ({ page }) => {

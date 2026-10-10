@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useId, useRef, useState } from 'react';
 
 import { SiteNav } from '@/components/SiteNav';
 import { ApiAwareLink } from '@/components/ApiAwareLink';
-import { WayloConnection, useWayloConnection } from '@/components/WayloConnection';
+import { WayloConnection, WayloConnectionStatus, useWayloConnection } from '@/components/WayloConnection';
 import { WAYLO_MIKE_AGENT_ID, WAYLO_SESSION_ENDPOINT, wayloRequestHeaders } from '@/lib/wayloConnection';
 import {
   AccConnectionStatus,
@@ -909,6 +909,9 @@ export function AgentsPage() {
               </span>
               Try it Out
             </ApiAwareLink>
+
+            {agent.target === 'waylo' && agent.connection?.auth_type === 'waylo_browser_session'
+              ? <WayloConnectionStatus connection={agent.connection} /> : null}
 
             <section className="agents-card-section agents-card-description">
               <h3>Description</h3>
