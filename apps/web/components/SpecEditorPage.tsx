@@ -9,6 +9,7 @@ import { SiteNav } from '@/components/SiteNav';
 import {
   generateEditableAssertDraft,
   generateEditableAssertCases,
+  getApiBase,
   listAssertScenarioContexts,
   getEditableAssertSpec,
   publishEditableAssertScenarios,
@@ -169,6 +170,11 @@ function editableFingerprint(spec: EditableAssertSpec) {
     return value;
   }
   return JSON.stringify(ordered(content));
+}
+
+function withCurrentApiBase(query: Record<string, string>) {
+  const apiBase = getApiBase();
+  return apiBase ? { ...query, api_base: apiBase } : query;
 }
 
 export function SpecEditorPage() {
@@ -440,7 +446,7 @@ export function SpecEditorPage() {
       if (editableFingerprint(latestWorkingSpec.current) !== versionFingerprint) {
         throw new Error('The saved version was published, but newer edits were not included. Review the current test set before continuing.');
       }
-      const query = new URLSearchParams({ suite_id: result.suite_id, scenario_id: scenarioId, run_scope: 'suite' });
+      const query = new URLSearchParams(withCurrentApiBase({ suite_id: result.suite_id, scenario_id: scenarioId, run_scope: 'suite' }));
       router.push(`/runs?${query}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not prepare test set. Retry to publish the saved version.');
@@ -576,7 +582,7 @@ export function SpecEditorPage() {
           </button>
           {!runnableCases && workingSpec.scenarios.length ? <small>Each case needs a caller opening, an expected outcome, and one target behavior.</small> : null}
         </div>
-        {publishedSuite ? <p role="status">Published version {saved?.version}. <Link href={{ pathname: '/scenarios', query: publishedSuite }}>View runnable scenarios</Link> · <Link href={{ pathname: '/runs', query: { ...publishedSuite, run_scope: 'suite' } }}>Choose a target and run</Link></p> : null}
+        {publishedSuite ? <p role="status">Published version {saved?.version}. <Link href={{ pathname: '/scenarios', query: withCurrentApiBase(publishedSuite) }}>View runnable scenarios</Link> · <Link href={{ pathname: '/runs', query: withCurrentApiBase({ ...publishedSuite, run_scope: 'suite' }) }}>Choose a target and run</Link></p> : null}
       </section>
 
       <details className={`card ${styles.advanced}`}>

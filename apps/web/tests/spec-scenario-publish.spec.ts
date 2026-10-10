@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
-async function createReviewedManualCase(page: import('@playwright/test').Page) {
-  await page.goto('/specs/new');
+async function createReviewedManualCase(page: import('@playwright/test').Page, url = '/specs/new') {
+  await page.goto(url);
   await page.getByLabel('Success checks', { exact: true }).fill('Read back the corrected address');
   await page.getByLabel('Failure / forbidden checks', { exact: true }).fill('Claim an update without evidence');
   await page.getByLabel('Permissible behavior boundary').fill('Read back the address; do not change account state.');
@@ -340,6 +340,52 @@ test('approve and continue saves and publishes one reviewed snapshot; publicatio
   expect(saves).toBe(1);
   expect(publishes).toBe(2);
   expect(executionRequests).toBe(0);
+});
+
+test('published links and approve-and-continue preserve the normalized alternate CAE API', async ({ page }) => {
+  const apiBase = 'http://alternate-cae.example.test';
+  let saves = 0;
+  let publishes = 0;
+  await page.route('**/api/specs', async (route) => {
+    saves += 1;
+    expect(new URL(route.request().url()).origin).toBe(apiBase);
+    const body = route.request().postDataJSON();
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      id: 'alternate-api-review', version: 4, user_id: body.user_id, project_id: body.project_id,
+      spec: { ...body.spec, id: 'alternate-api-review', version: 4 }, yaml: 'suite: alternate-api-review',
+    }) });
+  });
+  await page.route('**/api/specs/alternate-api-review/publish-scenarios', async (route) => {
+    publishes += 1;
+    expect(new URL(route.request().url()).origin).toBe(apiBase);
+    expect(route.request().postDataJSON()).toMatchObject({ version: 4, confirm: true });
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+      suite_id: 'spec-suite-alternate-api', version: 4, scenario_ids: ['reviewed-case'], scenario_count: 1,
+    }) });
+  });
+  await createReviewedManualCase(page, `/specs/new?api_base=${encodeURIComponent(`${apiBase}/api/`)}`);
+  await page.getByText('Advanced · templates, custom generation, scoring and YAML', { exact: true }).click();
+  await page.getByRole('button', { name: 'Save version', exact: true }).click();
+  await expect(page.getByText(/Saved `alternate-api-review` version 4/)).toBeVisible();
+  await page.getByText('Saved-version publication controls', { exact: true }).click();
+  await page.getByRole('checkbox', { name: /I reviewed the saved rules/ }).check();
+  await page.getByRole('button', { name: 'Publish saved cases to Scenarios', exact: true }).click();
+  for (const name of ['View runnable scenarios', 'Choose a target and run']) {
+    const href = await page.getByRole('link', { name, exact: true }).getAttribute('href');
+    expect(href).not.toBeNull();
+    const query = new URL(href!, 'http://localhost').searchParams;
+    expect(query.get('api_base')).toBe(apiBase);
+    expect(query.get('suite_id')).toBe('spec-suite-alternate-api');
+    expect(query.get('scenario_id')).toBe('reviewed-case');
+  }
+  await page.getByRole('button', { name: 'Approve test set and continue', exact: true }).click();
+  await expect(page).toHaveURL(/\/runs\?/);
+  const query = new URL(page.url()).searchParams;
+  expect(query.get('api_base')).toBe(apiBase);
+  expect(query.get('suite_id')).toBe('spec-suite-alternate-api');
+  expect(query.get('run_scope')).toBe('suite');
+  expect(saves).toBe(1);
+  expect(publishes).toBe(2);
 });
 
 test('approve and continue does not publish or overwrite edits made during saving', async ({ page }) => {
