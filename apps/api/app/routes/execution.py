@@ -15,7 +15,7 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
@@ -195,8 +195,15 @@ def execution_reference_stream(
 def create_execution_run(
     payload: ExecutionRunCreateRequest,
     background_tasks: BackgroundTasks,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    from app.services.agent_store import get_agent
+    from app.routes.agents import _browser_waylo_lease
+    from app.services.waylo_connection import bind_run, WayloConnectionError
+    agent = get_agent(payload.agent_id) if payload.agent_id else None
+    lease = _browser_waylo_lease(request, agent) if agent else None
+    queued = None
     try:
         payload = payload.model_copy(update={
             'product_project_id': resolve_execution_product_project_id(
@@ -207,8 +214,12 @@ def create_execution_run(
             ),
         })
         payload = prepare_execution_reference_models(payload)
-        queued = start_execution_run(payload, preflight=True)
-    except (ValueError, ReferenceRuntimeError) as exc:
+        queued = start_execution_run(payload, preflight=True, **({'waylo_lease': lease} if lease else {}))
+        if lease:
+            bind_run(queued['execution_run_id'], lease)
+    except (ValueError, ReferenceRuntimeError, WayloConnectionError) as exc:
+        if queued:
+            execution_run_store.mark_execution_run_failed(queued['execution_run_id'], str(exc))
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     background_tasks.add_task(execute_execution_run, queued['execution_run_id'], payload)
     return queued

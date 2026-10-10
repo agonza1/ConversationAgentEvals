@@ -9,6 +9,7 @@ from app.services.run_provenance import ExecutionRunProvenance, ExecutorId, Test
 
 ExecutionMode = Literal['text_callable', 'voice_fixture', 'pipecat_webrtc']
 AudioTransportId = Literal[
+    'waylo_livekit',
     'none',
     'pipecat_small_webrtc',
     'pipecat_daily_webrtc',
@@ -59,12 +60,18 @@ class ExecutionRunCreateRequest(BaseModel):
                 'cae_local_audio_loop',
                 'pipecat_public_daily',
                 'signalwire_public_webrtc',
+                'waylo_livekit',
             }:
                 raise ValueError(
                     'pipecat_webrtc mode requires executor_id=cae_local_audio_loop, '
                     'pipecat_public_daily, or signalwire_public_webrtc'
                 )
-            if self.executor_id == 'pipecat_public_daily':
+            if self.executor_id == 'waylo_livekit':
+                if self.audio_transport not in {'none', 'waylo_livekit'}:
+                    raise ValueError('Waylo requires audio_transport=waylo_livekit')
+                self.audio_transport = 'waylo_livekit'
+                self.evaluate = False
+            elif self.executor_id == 'pipecat_public_daily':
                 if self.audio_transport in {'none', 'pipecat_daily_webrtc'}:
                     self.audio_transport = 'pipecat_daily_webrtc'
                 else:

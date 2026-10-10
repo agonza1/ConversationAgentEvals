@@ -49,6 +49,9 @@ async function mockRunnerApis(page: import('@playwright/test').Page, options: Mo
       contentType: 'application/json',
       body: JSON.stringify({
         agents: [
+          {id: 'waylo-notes', name: 'Waylo notes fixture', channel: 'voice', target: 'waylo',
+            connection: {endpoint_url: 'https://api.waylo.test', workspace_id: '11111111-1111-4111-8111-111111111111',
+              waylo_agent_id: '22222222-2222-4222-8222-222222222222', secret_ref: 'waylo-staging'}, metadata: {}},
           {
             id: 'mock-text-agent',
             name: 'Mock text agent',
@@ -219,6 +222,7 @@ test('targets page shows agent target cards and try-it-out deep links', async ({
   const voiceCard = page.getByRole('article').filter({ hasText: 'Built-in generalist voice agent' });
   await expect(voiceCard.locator('.agents-badge-channel').first()).toHaveText('Voice');
   await expect(voiceCard.getByText('Built-in testing target')).toBeVisible();
+  await voiceCard.getByRole('button', { name: /Show details/ }).click();
   await expect(voiceCard).toContainText('Current-run local pipeline · no saved evidence');
   await expect(voiceCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
     'href',
@@ -226,6 +230,7 @@ test('targets page shows agent target cards and try-it-out deep links', async ({
   );
   const publicPipecatCard = page.getByRole('article').filter({ hasText: 'Pipecat public demo' });
   await expect(publicPipecatCard.getByText('Public external target')).toBeVisible();
+  await publicPipecatCard.getByRole('button', { name: /Show details/ }).click();
   await expect(publicPipecatCard).toContainText('https://www.pipecat.ai');
   await expect(publicPipecatCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
     'href',
@@ -233,6 +238,7 @@ test('targets page shows agent target cards and try-it-out deep links', async ({
   );
   const signalwireCard = page.getByRole('article').filter({ hasText: 'Holy Guacamole SignalWire drive-thru' });
   await expect(signalwireCard.getByText('Public external target')).toBeVisible();
+  await signalwireCard.getByRole('button', { name: /Show details/ }).click();
   await expect(signalwireCard).toContainText('https://holyguacamole.signalwire.me');
   await expect(signalwireCard.getByRole('link', { name: 'Try it Out' })).toHaveAttribute(
     'href',
@@ -313,6 +319,20 @@ test('public Pipecat target needs an explicit click even from an old demo link',
   });
 });
 
+test('Waylo launch is explicit and captures without automatic evaluation', async ({page}) => {
+  const launches: Record<string, unknown>[] = [];
+  await mockRunnerApis(page, {onExecutionLaunch: request => launches.push(request)});
+  await page.goto('/runs?agent_id=waylo-notes');
+  await expect(page.getByLabel('Execution agent target')).toHaveValue('waylo-notes');
+  const run = page.getByRole('button', {name: 'Run evaluation'});
+  await expect(run).toBeEnabled();
+  expect(launches).toHaveLength(0);
+  await run.click();
+  await expect.poll(() => launches.length).toBe(1);
+  expect(launches[0]).toMatchObject({agent_id: 'waylo-notes', mode: 'pipecat_webrtc',
+    tester_id: 'pipecat_tester', executor_id: 'waylo_livekit', audio_transport: 'waylo_livekit', evaluate: false});
+});
+
 test('OpenAI agent try-it-out launches its configured live target', async ({ page }) => {
   const launches: Record<string, unknown>[] = [];
   await mockRunnerApis(page, {
@@ -342,6 +362,7 @@ test('HTTP agent try-it-out uses its configured adapter and explicit tester', as
   });
   await page.goto('/targets');
   const card = page.getByRole('article').filter({ hasText: 'Staging HTTP agent' });
+  await card.getByRole('button', { name: /Show details/ }).click();
   await expect(card).toContainText('HTTP JSON endpoint (live)');
   await expect(card).toContainText('Black-box response');
   await card.getByRole('link', { name: 'Try it Out' }).click();
@@ -457,7 +478,7 @@ test('agent target form only offers connections compatible with its selected cha
 
   await channel.selectOption('voice');
   await expect(target).toHaveValue('pipecat_public_demo');
-  await expect(target.getByRole('option')).toHaveCount(6);
+  await expect(target.getByRole('option')).toHaveCount(7);
   await expect(target.locator('option[value="pipecat_public_demo"]')).toHaveText('Pipecat demo');
   await expect(page.getByLabel('Pipecat demo URL')).toHaveValue('https://www.pipecat.ai/');
   await expect(page.getByRole('button', { name: 'Create target' })).toBeEnabled();
@@ -489,4 +510,34 @@ test('agent target form only offers connections compatible with its selected cha
   await expect(page.getByText('Built-in generalist voice evaluation')).toBeVisible();
   await expect(page.getByText(/Transcript, score, state, timing, media, and vCon come only from this run/)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Create target' })).toBeEnabled();
+});
+
+test('Waylo target saves reusable IDs and credential reference without a key', async ({ page }) => {
+  let saved: Record<string, unknown> | null = null;
+  await mockRunnerApis(page);
+  await page.route('**/api/agents', async (route) => {
+    if (route.request().method() === 'POST') {
+      saved = route.request().postDataJSON();
+      await route.fulfill({json: {id: 'waylo-config', ...saved}});
+    } else {
+      await route.fulfill({json: {agents: []}});
+    }
+  });
+  await page.goto('/targets');
+  await page.locator('.agents-page-header').getByRole('button', {name: 'Add agent target'}).click();
+  await page.getByPlaceholder('Billing support — staging').fill('Mike notes fixture');
+  await page.getByLabel('Target channel').selectOption('voice');
+  await page.getByLabel('Target connection').selectOption('waylo');
+  await page.getByLabel('Waylo authorization').selectOption('bearer_secret');
+  await page.getByLabel('Waylo API base URL').fill('https://api.waylo.test');
+  await page.getByLabel('Waylo workspace UUID').fill('11111111-1111-4111-8111-111111111111');
+  await page.getByLabel('Waylo agent UUID').fill('22222222-2222-4222-8222-222222222222');
+  await page.getByLabel('Waylo credential reference').fill('waylo-staging');
+  await expect(page.getByText('Any Waylo agent can use this connector. Calls capture evidence only; submit it for evaluation manually.')).toBeVisible();
+  await page.getByRole('button', {name: 'Create target'}).click();
+  await expect.poll(() => saved).not.toBeNull();
+  expect(saved).toMatchObject({target: 'waylo', channel: 'voice', connection: {
+    endpoint_url: 'https://api.waylo.test', workspace_id: '11111111-1111-4111-8111-111111111111',
+    waylo_agent_id: '22222222-2222-4222-8222-222222222222', secret_ref: 'waylo-staging', auth_type: 'bearer_secret'}});
+  expect(JSON.stringify(saved)).not.toContain('participantToken');
 });

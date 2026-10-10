@@ -8,6 +8,8 @@ import { DesignResults } from './DesignResults';
 import { LiveRunFeedback, type LiveRunEvent } from './LiveRunFeedback';
 import { apiErrorMessage } from '@/lib/apiError';
 import { listProductProjects, requestBenchmarkJudge, type ProductProjectOption, type AssertJudgeReadiness } from '@/lib/execution';
+import { WayloConnection, useWayloConnection } from './WayloConnection';
+import { wayloRequestHeaders, type WayloTargetConnection } from '@/lib/wayloConnection';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -1018,14 +1020,14 @@ interface ExecutionRunRecord {
   duplex_timeout_seconds?: number;
   tester_id?: 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
   tester_model_name?: string | null;
-  executor_id?: 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'signalwire_public_webrtc' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
+  executor_id?: 'waylo_livekit' | 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'signalwire_public_webrtc' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
   provenance?: {
     target_id?: string | null;
     target_kind: string;
     target_channel: 'text' | 'voice';
     target_environment?: string;
     tester_id: 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
-    executor_id: 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'signalwire_public_webrtc' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
+    executor_id: 'waylo_livekit' | 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'signalwire_public_webrtc' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
     evidence_source: string;
     evidence_capabilities?: string[];
     live_external_connection: boolean;
@@ -1055,13 +1057,14 @@ async function createExecutionRun(payload: {
   model_name?: string;
   tester_id?: 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
   tester_model_name?: string;
-  executor_id?: 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'signalwire_public_webrtc' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
-  audio_transport?: 'none' | 'pipecat_small_webrtc' | 'pipecat_daily_webrtc' | 'signalwire_webrtc' | 'freeswitch_verto_sip';
-}) {
+  executor_id?: 'waylo_livekit' | 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'signalwire_public_webrtc' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
+  audio_transport?: 'waylo_livekit' | 'none' | 'pipecat_small_webrtc' | 'pipecat_daily_webrtc' | 'signalwire_webrtc' | 'freeswitch_verto_sip';
+}, connection?: WayloTargetConnection) {
+  const endpoint = `${getApiBase()}/api/execution/runs`;
   return handleJson<ExecutionRunRecord>(
-    await fetch(`${getApiBase()}/api/execution/runs`, {
+    await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(payload.executor_id === 'waylo_livekit' ? wayloRequestHeaders(connection, endpoint) : {}) },
       body: JSON.stringify(payload),
     }),
   );
@@ -1079,6 +1082,9 @@ type ScoreAgentOption = {
     sip_uri?: string | null;
     phone_number?: string | null;
     acc_base_url?: string | null;
+    workspace_id?: string | null;
+    waylo_agent_id?: string | null;
+    auth_type?: string;
   };
   metadata?: {
     model_name?: string | null;
@@ -2363,6 +2369,9 @@ export function BenchmarkRunner({
     () => agents.find((agent) => agent.id === selectedAgentId) ?? null,
     [agents, selectedAgentId],
   );
+  const wayloConnection = useWayloConnection(selectedScoreAgent?.connection);
+  const needsWayloConnection = selectedScoreAgent?.target === 'waylo'
+    && selectedScoreAgent.connection?.auth_type === 'waylo_browser_session' && !wayloConnection;
   const [showSimulateEvidenceOptions, setShowSimulateEvidenceOptions] = useState(false);
   const [includeStructuredEvidence, setIncludeStructuredEvidence] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
@@ -2677,7 +2686,11 @@ export function BenchmarkRunner({
           applyAgentProfileDefaults(selected, { setAgentProfile, setModelName, setPromptVersion });
         }
         if (matched) {
-          if (matched.target === 'builtin_sample_voice') {
+          if (matched.target === 'waylo') {
+            setExecutionMode('pipecat_webrtc');
+            setExecutionTesterId('pipecat_tester');
+            setExecutionExecutorId('waylo_livekit');
+          } else if (matched.target === 'builtin_sample_voice') {
             setExecutionMode('pipecat_webrtc');
             setExecutionTesterId('pipecat_tester');
             setExecutionExecutorId('cae_local_audio_loop');
@@ -3652,11 +3665,16 @@ export function BenchmarkRunner({
       setExecutionMessage('Select an agent target before launching.');
       return null;
     }
+    if (needsWayloConnection) {
+      setExecutionMessage('Connect Waylo for this tab before starting a call.');
+      return null;
+    }
     const supportsConfigurableExchanges =
       selectedScoreAgent.target === 'openai_codex'
       || selectedScoreAgent.target === 'builtin_sample_voice'
       || selectedScoreAgent.target === 'pipecat_public_demo'
-      || selectedScoreAgent.target === 'signalwire_holy_guacamole';
+      || selectedScoreAgent.target === 'signalwire_holy_guacamole'
+      || selectedScoreAgent.target === 'waylo';
     if (supportsConfigurableExchanges && executionMaxExchanges === '') {
       const exchangeLimit = selectedScoreAgent.target === 'signalwire_holy_guacamole' ? 2 : 10;
       setExecutionMessage(`Enter a maximum exchange count from 1 to ${exchangeLimit} before launching.`);
@@ -3689,8 +3707,9 @@ export function BenchmarkRunner({
     const legacyVoiceReplay = selectedScoreAgent.target === 'voice_fixture';
     const publicPipecatAgent = selectedScoreAgent.target === 'pipecat_public_demo';
     const signalwireAgent = selectedScoreAgent.target === 'signalwire_holy_guacamole';
+    const wayloAgent = selectedScoreAgent.target === 'waylo';
     const maxExchangesForRun = signalwireAgent ? Math.min(2, maxExchanges) : maxExchanges;
-    const runMode = sampleVoiceAgent || publicPipecatAgent || signalwireAgent
+    const runMode = sampleVoiceAgent || publicPipecatAgent || signalwireAgent || wayloAgent
       ? 'pipecat_webrtc'
       : legacyVoiceReplay
         ? 'voice_fixture'
@@ -3748,23 +3767,23 @@ export function BenchmarkRunner({
         text_callable: runMode === 'text_callable' ? runTextCallable : undefined,
         iterations: executionIterations,
         max_exchanges: maxExchangesForRun,
-        duplex_timeout_seconds: sampleVoiceAgent || publicPipecatAgent || signalwireAgent ? executionDuplexTimeoutSeconds : undefined,
+        duplex_timeout_seconds: sampleVoiceAgent || publicPipecatAgent || signalwireAgent || wayloAgent ? executionDuplexTimeoutSeconds : undefined,
         user_id: identity.userId,
         project_id: identity.projectId,
         product_project_id: productProjectId || undefined,
-        evaluate: true,
+        evaluate: !wayloAgent,
         agent_id: selectedAgentId || undefined,
         model_name: modelNameForExecutionRun,
         tester_id: runTesterId,
         executor_id: runExecutorId,
-        audio_transport: publicPipecatAgent
+        audio_transport: wayloAgent ? 'waylo_livekit' : publicPipecatAgent
           ? 'pipecat_daily_webrtc'
           : signalwireAgent
             ? 'signalwire_webrtc'
           : runMode === 'pipecat_webrtc'
             ? 'pipecat_small_webrtc'
             : 'none',
-      });
+      }, wayloAgent ? selectedScoreAgent.connection : undefined);
       const queuedWithLaunchContext = {
         ...queued,
         agent_id: selectedAgentId || queued.agent_id || undefined,
@@ -4734,6 +4753,9 @@ export function BenchmarkRunner({
           </div>
         </div>
 
+        {selectedScoreAgent?.target === 'waylo' && selectedScoreAgent.connection?.auth_type === 'waylo_browser_session'
+          ? <WayloConnection connection={selectedScoreAgent.connection} /> : null}
+
         {view === 'run' && loadError ? (
           <div style={{ border: '1px solid var(--error-border)', background: 'var(--error-bg)', color: 'var(--error-text)', borderRadius: 8, padding: 12, display: 'grid', gap: 8 }}>
             <span>{loadError}</span>
@@ -4846,7 +4868,11 @@ export function BenchmarkRunner({
                 setSelectedAgentId(agentId);
                 const agent = agents.find((item) => item.id === agentId);
                 if (!agent) return;
-                if (agent.target === 'builtin_sample_voice') {
+                if (agent.target === 'waylo') {
+                  setExecutionMode('pipecat_webrtc');
+                  setExecutionTesterId('pipecat_tester');
+                  setExecutionExecutorId('waylo_livekit');
+                } else if (agent.target === 'builtin_sample_voice') {
                   setExecutionMode('pipecat_webrtc');
                   setExecutionTesterId('pipecat_tester');
                   setExecutionExecutorId('cae_local_audio_loop');
@@ -4924,6 +4950,7 @@ export function BenchmarkRunner({
                      && selectedScoreAgent.target !== 'builtin_sample_voice'
                      && selectedScoreAgent.target !== 'pipecat_public_demo'
                      && selectedScoreAgent.target !== 'signalwire_holy_guacamole'
+                     && selectedScoreAgent.target !== 'waylo'
                   )}
                   onChange={(event) => {
                     const nextValue = event.target.value;
@@ -4943,7 +4970,8 @@ export function BenchmarkRunner({
               </label>
               {selectedScoreAgent?.target === 'builtin_sample_voice'
               || selectedScoreAgent?.target === 'pipecat_public_demo'
-              || selectedScoreAgent?.target === 'signalwire_holy_guacamole' ? (
+              || selectedScoreAgent?.target === 'signalwire_holy_guacamole'
+              || selectedScoreAgent?.target === 'waylo' ? (
                 <label>
                   <span>Session timeout (seconds)</span>
                   <input
@@ -4964,6 +4992,7 @@ export function BenchmarkRunner({
               {selectedScoreAgent?.target === 'openai_codex'
               || selectedScoreAgent?.target === 'builtin_sample_voice'
               || selectedScoreAgent?.target === 'pipecat_public_demo'
+              || selectedScoreAgent?.target === 'waylo'
                 ? ' One exchange is one tester message plus one agent response.'
                 : selectedScoreAgent?.target === 'signalwire_holy_guacamole'
                   ? ' One exchange is one tester message plus one remote target response; SignalWire supports up to two in the same WebRTC call.'
@@ -5081,6 +5110,7 @@ export function BenchmarkRunner({
               || isSimulating
               || !selectedSuite
               || !selectedScoreAgent
+              || needsWayloConnection
               || (matchingProductProjects.length > 1 && !productProjectId)
               || ((selectedScoreAgent?.target === 'openai_codex'
                 || selectedScoreAgent?.target === 'builtin_sample_voice'
@@ -5141,6 +5171,7 @@ export function BenchmarkRunner({
               executionRunId={executionRun.execution_run_id}
               userId={userId}
               runStatus={executionRun.status}
+              httpCaptureOnly={executionRun.executor_id === 'waylo_livekit'}
             />
 
             <div aria-label="Execution conversations" style={{ display: 'grid', gap: 8, maxHeight: 420, overflow: 'auto' }}>

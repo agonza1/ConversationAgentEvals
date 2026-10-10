@@ -52,6 +52,7 @@ interface LiveRunFeedbackProps {
   userId?: string;
   runStatus?: string;
   autoExpandLiveEvents?: boolean;
+  httpCaptureOnly?: boolean;
 }
 
 function mediaUrl(apiBase: string, value: string) {
@@ -114,6 +115,7 @@ export function LiveRunFeedback({
   userId,
   runStatus,
   autoExpandLiveEvents = false,
+  httpCaptureOnly = false,
 }: LiveRunFeedbackProps) {
   const [expanded, setExpanded] = useState(false);
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>('idle');
@@ -547,6 +549,11 @@ export function LiveRunFeedback({
     // Mark audio that existed before the click as heard. If WebRTC cannot
     // connect, the fallback starts with the next captured turn.
     markAudioEventsHeard(audioEvents, generation);
+    if (httpCaptureOnly) {
+      liveSegmentFallbackRef.current = true;
+      setPlaybackMessage('Playing newly captured Waylo audio turns over HTTP. The tester call itself uses LiveKit; this is not continuous live monitoring.');
+      return;
+    }
     const preListenMediaKeys = new Set(
       events.map(listenerMediaKey).filter((value): value is string => Boolean(value)),
     );
@@ -761,11 +768,11 @@ export function LiveRunFeedback({
   }, [listenerToken, refreshListener]);
 
   const audioButtonLabel = playbackMode === 'live'
-    ? 'Stop live WebRTC'
+    ? (httpCaptureOnly ? 'Stop listening to captured turns' : 'Stop live WebRTC')
     : playbackMode === 'replay'
       ? (replayPaused ? 'Resume playback' : 'Pause playback')
       : listenerActive
-        ? 'Listen to live WebRTC'
+        ? (httpCaptureOnly ? 'Listen to new captured turns' : 'Listen to live WebRTC')
         : audioEvents.length
           ? 'Play recorded conversation'
           : 'No recorded audio';
@@ -829,7 +836,7 @@ export function LiveRunFeedback({
                 Retry missed live audio
               </button>
             ) : null}
-            {listenerActive ? (
+            {listenerActive && !httpCaptureOnly ? (
               <button
                 type="button"
                 onClick={() => void createListener()}
@@ -854,7 +861,7 @@ export function LiveRunFeedback({
           >
             {playbackMessage || defaultPlaybackMessage}
           </span>
-          {listenerActive ? (
+          {listenerActive && !httpCaptureOnly ? (
             <span
               aria-label="WebRTC listener status"
               data-transport-status={webrtcStatus}

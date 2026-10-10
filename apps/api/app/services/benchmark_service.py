@@ -311,6 +311,9 @@ _SUITES: tuple[BenchmarkSuite, ...] = (
     },
 )
 
+from app.services.waylo_mike_cases import WAYLO_MIKE_SUITE
+
+_SUITES = (*_SUITES, WAYLO_MIKE_SUITE)
 _SUITES_BY_ID = {suite['id']: suite for suite in _SUITES}
 _SCENARIOS_BY_ID = {
     (suite['id'], scenario['id']): scenario for suite in _SUITES for scenario in suite['scenarios']
@@ -1877,7 +1880,7 @@ def _scenario_contract(scenario: BenchmarkScenario) -> dict[str, Any]:
         'rubric': deepcopy(scenario['rubric']),
     }
     for key in ('evaluation_spec_ref', 'behaviors', 'action_checklist', 'target_behavior_id', 'variant', 'caller_steps',
-                'requirements', 'permissible_behavior', 'evidence_requirements', 'deterministic_checks', 'generation_provenance', 'behavior_preset', 'scenario_preset', 'required_order'):
+                'requirements', 'permissible_behavior', 'evidence_requirements', 'deterministic_checks', 'generation_provenance', 'behavior_preset', 'scenario_preset', 'required_order', 'waylo_test'):
         if key in scenario:
             contract[key] = deepcopy(scenario[key])
     return contract
