@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { SiteNav } from '@/components/SiteNav';
-import { evidenceTextLabel, evidenceAsrLabel } from '@/components/LiveRunFeedback';
+import { evidenceTextLabel, evidenceAsrLabel, showAsrReceipt } from '@/components/LiveRunFeedback';
 import { getApiBase } from '@/lib/execution';
 
 interface ListenerEvent {
@@ -240,7 +240,7 @@ export function BrowserListenerPage({ token }: { token: string }) {
             <span style={{ whiteSpace: 'pre-wrap' }}>
               {evidenceTextLabel(event)}{event.llm_output || event.text}
             </span>
-            {event.asr_receipt ? (
+            {showAsrReceipt(event) ? (
               <span style={{ color: 'var(--muted)', fontSize: 12 }}>
                 {evidenceAsrLabel(event)}: {event.asr_receipt}
               </span>

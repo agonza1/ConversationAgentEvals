@@ -166,6 +166,7 @@ test('public demo distinguishes received audio from reported text in analysis an
   };
   const conversation = {
     ...runFixture.conversations[0],
+    mode: 'pipecat_webrtc',
     turns: [
       runFixture.conversations[0].turns[0],
       { turn_index: 2, speaker: 'agent', text: metadata.asr_receipt, frame_metadata: metadata },
@@ -178,10 +179,14 @@ test('public demo distinguishes received audio from reported text in analysis an
   };
   await page.route('**/api/execution/runs/exec-demo123**', (route) => route.fulfill({
     status: 200, contentType: 'application/json',
-    body: JSON.stringify({ ...runFixture, conversations: [conversation] }),
+    body: JSON.stringify({ ...runFixture, mode: 'pipecat_webrtc', conversations: [conversation] }),
   }));
   await page.goto('/runs/exec-demo123');
   const transcript = page.getByLabel('Transcript', { exact: true });
+  await page.getByRole('button', { name: 'Show conversation evidence', exact: true }).click();
+  const live = page.getByLabel('Observed live exchange');
+  await expect(live).toContainText('Target-reported text (RTVI): I booked your appointment.');
+  await expect(live).toContainText('Received audio transcript (rtc-asr): I cannot book appointments.');
   await expect(transcript).toContainText('Received audio transcript (rtc-asr)');
   await expect(transcript).toContainText('Target-reported text (RTVI): I booked your appointment.');
   await expect(page.getByLabel('Conversation turn sequence')).toContainText('I cannot book appointments.');
@@ -200,6 +205,44 @@ test('public demo distinguishes received audio from reported text in analysis an
   await page.goto('/listeners/demo-asr-token');
   await expect(page.getByText('Target-reported text (RTVI): I booked your appointment.', { exact: true })).toBeVisible();
   await expect(page.getByText('Received audio transcript (rtc-asr): I cannot book appointments.', { exact: true })).toBeVisible();
+});
+
+test('public demo ASR-only captions appear once in live feedback and listener', async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem('conversation-evals-demo-user', 'demo-user'));
+  const received = 'I cannot book appointments.';
+  const caption = `Received audio transcript (rtc-asr): ${received}`;
+  const conversation = {
+    ...runFixture.conversations[0],
+    mode: 'pipecat_webrtc',
+    live_events: [{
+      sequence: 1, kind: 'audio', speaker: 'Agent', direction: 'target_to_tester',
+      text: received, llm_output: null, asr_receipt: received,
+      frame_metadata: {
+        text_source_label: 'Received audio transcript (rtc-asr)',
+        asr_receipt_label: 'Received audio transcript (rtc-asr)',
+        transcript_source: 'rtc_asr_received_audio',
+      },
+    }],
+  };
+  await page.route('**/api/execution/runs/exec-demo123**', (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({ ...runFixture, mode: 'pipecat_webrtc', conversations: [conversation] }),
+  }));
+  await page.goto('/runs/exec-demo123');
+  await page.getByRole('button', { name: 'Show conversation evidence', exact: true }).click();
+  const live = page.getByLabel('Observed live exchange');
+  await expect(live.getByText(caption, { exact: true })).toHaveCount(1);
+  await expect(live.getByText(caption, { exact: true })).toBeVisible();
+
+  await page.route('**/api/execution/listeners/asr-only-token', (route) => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify({
+      listener: { run_status: 'completed', read_only: true, can_inject_audio: false, requires_microphone: false },
+      conversations: [conversation],
+    }),
+  }));
+  await page.goto('/listeners/asr-only-token');
+  await expect(page.getByText(caption, { exact: true })).toHaveCount(1);
+  await expect(page.getByText(caption, { exact: true })).toBeVisible();
 });
 
 test('needs-review resolution explains score and missing proof without calling it a failed call', async ({ page }) => {

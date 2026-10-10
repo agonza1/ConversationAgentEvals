@@ -26,6 +26,11 @@ export function evidenceAsrLabel(event: Pick<LiveRunEvent, 'frame_metadata'>) {
   return typeof value === 'string' && value ? value : 'Peer ASR receipt';
 }
 
+export function showAsrReceipt(event: Pick<LiveRunEvent, 'text' | 'llm_output' | 'asr_receipt'>) {
+  const receipt = event.asr_receipt?.trim();
+  return Boolean(receipt && (event.llm_output || receipt !== event.text.trim()));
+}
+
 function directionLabel(direction?: LiveRunEvent['direction']) {
   if (direction === 'tester_to_target') return 'tester → target';
   if (direction === 'target_to_tester') return 'target → tester';
@@ -926,7 +931,7 @@ export function LiveRunFeedback({
               <span style={{ whiteSpace: 'pre-wrap' }}>
                 {evidenceTextLabel(event)}{event.llm_output || event.text}
               </span>
-              {event.asr_receipt ? (
+              {showAsrReceipt(event) ? (
                 <span style={{ color: 'var(--muted)', fontSize: 12 }}>
                   {evidenceAsrLabel(event)}: {event.asr_receipt}
                 </span>

@@ -243,7 +243,6 @@ async def _complete_received_exchange(
     if not rtc_asr_base_url:
         raise PublicDailyTargetError('Public Pipecat requires RTC_ASR_BASE_URL for received audio.')
     evidence = run.evidence
-    reported_text = _current_target_text(evidence)
     target_wav = pcm_to_wav(
         bytes(evidence.target_audio), evidence.target_audio_sample_rate,
         evidence.target_audio_channels,
@@ -266,6 +265,9 @@ async def _complete_received_exchange(
         ) from exc
     if not heard_text:
         raise PublicDailyTargetError('rtc-asr returned no transcript for Public Pipecat received audio.')
+    # Final RTVI text may arrive while the independent ASR request is pending.
+    # Snapshot it only now, before another exchange can reset the turn boundary.
+    reported_text = _current_target_text(evidence)
     return run.complete_exchange(
         turn_pair=turn_pair, caller_text=caller_text, target_text=heard_text,
         caller_wav=caller_wav, caller_audio_frames=caller_audio_frames,

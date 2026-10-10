@@ -507,8 +507,13 @@ def test_public_target_reports_tester_audio_synthesis_stage(monkeypatch):
         ))
 
 
-@pytest.mark.parametrize('reported', ['I booked your appointment.', ''])
-def test_received_audio_asr_is_authoritative_and_matches_recording(monkeypatch, reported):
+@pytest.mark.parametrize('reported,late_reported', [
+    ('I booked your appointment.', None),
+    ('', None),
+    ('', 'Late completed reported text.'),
+    ('Partial reported text.', 'Late completed reported text.'),
+], ids=['reported', 'asr-only', 'late-rtvi', 'partial-then-completed-rtvi'])
+def test_received_audio_asr_is_authoritative_and_matches_recording(monkeypatch, reported, late_reported):
     import hashlib
     import httpx
 
@@ -519,7 +524,10 @@ def test_received_audio_asr_is_authoritative_and_matches_recording(monkeypatch, 
         ),
     )
     run.begin_turn(1)
-    run.evidence.target_output_segments.append(reported)
+    if late_reported:
+        run.evidence.target_transcripts.append(reported)
+    else:
+        run.evidence.target_output_segments.append(reported)
     pcm = bytes([2, 0]) * 320
     run.evidence.target_audio.extend(pcm)
     run.evidence.target_audio_frames = 1
@@ -529,6 +537,9 @@ def test_received_audio_asr_is_authoritative_and_matches_recording(monkeypatch, 
     async def handle(request):
         assert str(request.url) == 'http://rtc-asr.test/api/transcribe/file'
         uploaded.append(await request.aread())
+        if late_reported:
+            # Emulate the Daily event handler delivering final RTVI text during ASR.
+            run.evidence.target_output_segments.append(late_reported)
         return httpx.Response(200, json={'transcription': {'text': 'I cannot book appointments.'}})
 
     original_client = httpx.AsyncClient
@@ -543,7 +554,7 @@ def test_received_audio_asr_is_authoritative_and_matches_recording(monkeypatch, 
     assert target_wav == expected_wav == run.target_wavs[0]
     assert exchange['target']['text'] == run.turns[1]['text'] == 'I cannot book appointments.'
     metadata = run.turns[1]['frame_metadata']
-    assert metadata['reported_text'] == reported
+    assert metadata['reported_text'] == (late_reported or reported)
     assert metadata['asr_receipt'] == 'I cannot book appointments.'
     assert metadata['received_audio_sha256'] == hashlib.sha256(expected_wav).hexdigest()
     events = []
