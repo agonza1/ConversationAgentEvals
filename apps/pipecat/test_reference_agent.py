@@ -379,7 +379,8 @@ def test_reference_tester_turn_runs_real_pipecat_pipeline(monkeypatch):
     assert _AsyncClient.speech_speeds == [1.2]
 
 
-def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
+@pytest.mark.parametrize('receiver_protocol', ['local-stt.v1', 'deepgram-listen-v1', 'cartesia-stt-websocket'])
+def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch, receiver_protocol):
     _AsyncClient.completion_prompts.clear()
     _AsyncClient.speech_voices.clear()
     monkeypatch.setattr(server, 'RTC_ASR_BASE_URL', 'http://rtc-asr.test')
@@ -429,12 +430,14 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
                 f'{payload.session_id}:{turn_index}:target_to_tester'
             ),
         })
-        return _streaming_result(
+        result = _streaming_result(
             caller_text='Of course.',
             target_receipt='Please help me.',
             target_text='Of course.',
             tester_receipt='Please help me.',
         )
+        result.target_asr.protocol = result.tester_asr.protocol = receiver_protocol
+        return result
 
     monkeypatch.setattr(server, '_run_streaming_exchange', fake_exchange)
     client = TestClient(server.app)
@@ -511,6 +514,7 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
         'target_to_tester',
     ]
     assert all(frame['transport'] == 'in_process_pipecat_frame_bus' for frame in completed['frames'])
+    assert all(frame['asr_protocol'] == receiver_protocol for frame in completed['frames'])
     assert all(frame['duration_ms'] > 0 for frame in completed['frames'])
     assert completed['graphs']['tester']['processors'][1]['model'] == 'tester-model'
     assert completed['graphs']['target']['processors'][1]['model'] == 'target-model'

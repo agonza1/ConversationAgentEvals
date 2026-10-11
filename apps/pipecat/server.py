@@ -1414,7 +1414,7 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                     'media_mode': 'streaming_pcm',
                     'frame_duration_ms': 20,
                     'vad': 'silero',
-                    'asr_protocol': 'local-stt.v1',
+                    'asr_protocol': getattr(result.target_asr, 'protocol', 'local-stt.v1'),
                     'asr_interim_count': len(result.target_asr.interims),
                     'asr_timing': result.target_asr.server_timing,
                 })
@@ -1448,7 +1448,7 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                     'media_mode': 'streaming_pcm',
                     'frame_duration_ms': 20,
                     'vad': 'silero',
-                    'asr_protocol': 'local-stt.v1',
+                    'asr_protocol': getattr(result.tester_asr, 'protocol', 'local-stt.v1'),
                     'response_metric': 'tester_speech_end_to_first_target_audio_received',
                     'response_latency_ms': result.target_first_audio_latency_ms,
                     'response_started_at': result.tester_speech_ended_at,
