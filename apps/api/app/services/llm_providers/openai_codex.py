@@ -815,6 +815,7 @@ def _http_json_post_stream(
         ) as response:
             saw_delta = False
             completed_texts: list[str] = []
+            completed_response: dict[str, Any] | None = None
             for raw_line in response:
                 line = raw_line.decode('utf-8', errors='replace')
                 if not line.startswith('data:'):
@@ -823,6 +824,10 @@ def _http_json_post_stream(
                 if not data or data == '[DONE]':
                     continue
                 event = json.loads(data)
+                if not isinstance(event, dict):
+                    raise RuntimeError('Codex Responses stream returned an invalid event.')
+                if _validate_responses_stream_event(event):
+                    completed_response = event['response']
                 event_type = str(event.get('type') or '')
                 delta = event.get('delta')
                 if (
@@ -840,8 +845,16 @@ def _http_json_post_stream(
                     and text
                 ):
                     completed_texts.append(text)
+            if completed_response is None:
+                raise RuntimeError('Codex Responses stream ended before response.completed.')
             if not saw_delta:
-                yield from completed_texts
+                if completed_texts:
+                    yield from completed_texts
+                else:
+                    text = _completed_assistant_text(completed_response)
+                    if not text:
+                        raise RuntimeError('Codex Responses returned an empty completion.')
+                    yield text
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode('utf-8', errors='replace')
         raise CodexResponseError(exc.code, detail, label='Codex Responses request') from exc
@@ -880,6 +893,60 @@ def _http_json_get(url: str, *, headers: dict[str, str]) -> dict[str, Any]:
         raise CodexResponseError(exc.code, detail, label='OpenAI models request') from exc
 
 
+def _assistant_response_parts(response: dict[str, Any]) -> Iterator[dict[str, Any]]:
+    output = response.get('output')
+    for item in output if isinstance(output, list) else []:
+        if not isinstance(item, dict) or item.get('type') != 'message' or item.get('role') not in {None, 'assistant'}:
+            continue
+        content = item.get('content')
+        for part in content if isinstance(content, list) else []:
+            if isinstance(part, dict):
+                yield part
+
+
+def _completed_assistant_text(response: dict[str, Any]) -> str:
+    # Reasoning, refusal and tool output are not assistant speech.
+    return '\n'.join(part['text'] for part in _assistant_response_parts(response)
+        if part.get('type') == 'output_text' and isinstance(part.get('text'), str) and part['text'].strip())
+
+
+def _validate_responses_stream_event(event: dict[str, Any]) -> bool:
+    """Reject unsuccessful terminal events without exposing provider payloads."""
+    event_type = event.get('type')
+    response = event.get('response')
+    response = response if isinstance(response, dict) else {}
+    status = response.get('status')
+    if event_type in {'response.refusal.delta', 'response.refusal.done'} or any(
+        part.get('type') == 'refusal' for part in _assistant_response_parts(response)
+    ):
+        raise RuntimeError('Codex Responses refused to provide a completion.')
+    outcome = None
+    reason = None
+    if event_type == 'response.failed' or status == 'failed':
+        outcome = 'failed'
+        error = response.get('error')
+        reason = error.get('code') if isinstance(error, dict) else None
+    elif event_type == 'response.incomplete' or status == 'incomplete':
+        outcome = 'incomplete'
+        details = response.get('incomplete_details')
+        reason = details.get('reason') if isinstance(details, dict) else None
+    elif event_type in {'error', 'response.error'}:
+        outcome = 'reported an error'
+        reason = event.get('code')
+    if outcome:
+        # Only documented diagnostic codes are safe to include. Messages, IDs
+        # and unknown code values can contain caller input or account details.
+        safe_codes = {'server_error', 'rate_limit_exceeded', 'max_output_tokens', 'content_filter',
+            'subscription_sharing_usage_limit_exceeded', 'subscription_sharing_usage_unavailable'}
+        suffix = f' ({reason})' if isinstance(reason, str) and reason in safe_codes else ''
+        raise RuntimeError(f'Codex Responses stream {outcome}{suffix}.')
+    if event_type == 'response.completed':
+        if not isinstance(event.get('response'), dict) or status not in {None, 'completed'}:
+            raise RuntimeError('Codex Responses stream had an invalid completed response.')
+        return True
+    return False
+
+
 def _parse_responses_sse(raw: str) -> dict[str, Any]:
     """Collect a Codex Responses SSE stream into the existing response shape."""
     deltas: list[str] = []
@@ -898,12 +965,11 @@ def _parse_responses_sse(raw: str) -> dict[str, Any]:
         if not isinstance(event, dict):
             continue
         event_type = str(event.get('type') or '')
-        response = event.get('response')
         # A stream begins with response.created, whose output is intentionally
         # empty.  Only retain an actual completed response; otherwise its empty
         # initial envelope would mask text sent in later events.
-        if event_type == 'response.completed' and isinstance(response, dict):
-            completed_response = response
+        if _validate_responses_stream_event(event):
+            completed_response = event['response']
         delta = event.get('delta')
         if event_type == 'response.output_text.delta' and isinstance(delta, str):
             deltas.append(delta)
@@ -917,13 +983,16 @@ def _parse_responses_sse(raw: str) -> dict[str, Any]:
         ):
             completed_texts.append(text)
 
+    if completed_response is None:
+        raise RuntimeError('Codex Responses stream ended before response.completed.')
     if completed_texts:
         return {'output_text': ''.join(completed_texts)}
     if deltas:
         return {'output_text': ''.join(deltas)}
-    if completed_response is not None:
-        return completed_response
-    raise RuntimeError('Codex Responses stream did not include a completion payload.')
+    text = _completed_assistant_text(completed_response)
+    if text:
+        return {'output_text': text}
+    raise RuntimeError('Codex Responses returned an empty completion.')
 
 
 def _is_chat_model_id(model_id: str) -> bool:

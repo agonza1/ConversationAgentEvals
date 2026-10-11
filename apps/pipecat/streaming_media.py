@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import struct
 import time
@@ -37,6 +38,31 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
 AudioCallback = Callable[[bytes, int, int], Awaitable[None]]
+
+
+def _rtc_asr_settings() -> tuple[bool, int, float, float]:
+    interim = os.getenv("RTC_ASR_INTERIM_RESULTS", "true").strip().lower()
+    if interim not in {"true", "false"}:
+        raise ValueError("RTC_ASR_INTERIM_RESULTS must be true or false.")
+    try:
+        interval = int(os.getenv("RTC_ASR_PARTIAL_INTERVAL_MS", "100"))
+    except ValueError as exc:
+        raise ValueError("RTC_ASR_PARTIAL_INTERVAL_MS must be an integer from 100 to 5000.") from exc
+    if not 100 <= interval <= 5000:
+        raise ValueError("RTC_ASR_PARTIAL_INTERVAL_MS must be an integer from 100 to 5000.")
+    try:
+        window = float(os.getenv("RTC_ASR_PARTIAL_WINDOW_SECONDS", "2.0"))
+    except ValueError as exc:
+        raise ValueError("RTC_ASR_PARTIAL_WINDOW_SECONDS must be a number from 0.5 to 20.") from exc
+    if not 0.5 <= window <= 20:
+        raise ValueError("RTC_ASR_PARTIAL_WINDOW_SECONDS must be a number from 0.5 to 20.")
+    try:
+        final_timeout = float(os.getenv("RTC_ASR_FINAL_TIMEOUT_SECONDS", "20"))
+    except ValueError as exc:
+        raise ValueError("RTC_ASR_FINAL_TIMEOUT_SECONDS must be a number from 5 to 120.") from exc
+    if not 5 <= final_timeout <= 120:
+        raise ValueError("RTC_ASR_FINAL_TIMEOUT_SECONDS must be a number from 5 to 120.")
+    return interim == "true", interval, window, final_timeout
 
 
 def rtc_asr_stream_url(base_url: str, stream_path: str = "/v1/stt/stream") -> str:
@@ -238,9 +264,9 @@ class StreamingKokoroProcessor(FrameProcessor):
                 max_words=self.first_chunk_max_words,
                 final=final,
             )
+            self._pending_text = remainder
             if not chunk:
                 return
-            self._pending_text = remainder
             await self._synthesize_chunk(chunk, direction)
             self._first_chunk_emitted = True
 
@@ -337,9 +363,18 @@ def _next_tts_chunk(
     # low-latency word-cap chunk. Kokoro returns a valid empty WAV for inputs
     # such as "?"; discard that remainder instead of treating it as a failed
     # synthesis request.
-    if final and not any(character.isalnum() for character in value):
+    if not any(character.isalnum() for character in value):
         return "", ""
     sentence_match = re.search(r"[.!?](?:[\"')\]]+)?(?:\s+|$)", value)
+    # A later delta may contain both punctuation closing the previous chunk
+    # and a new sentence. Skip only that empty sentence, retaining its words.
+    while sentence_match and not any(
+        character.isalnum() for character in value[: sentence_match.end()]
+    ):
+        value = value[sentence_match.end() :].lstrip()
+        if not value:
+            return "", ""
+        sentence_match = re.search(r"[.!?](?:[\"')\]]+)?(?:\s+|$)", value)
     if not first_chunk:
         if sentence_match:
             end = sentence_match.end()
@@ -538,6 +573,8 @@ class StreamingRtcAsrProcessor(FrameProcessor):
         vad_params: VADParams | None = None,
     ) -> None:
         super().__init__(name=f"{participant}_rtc_asr")
+        (self.interim_results, self.partial_interval_ms,
+         self.partial_window_seconds, self.final_timeout_seconds) = _rtc_asr_settings()
         self.url = rtc_asr_stream_url(base_url, stream_path)
         self.participant = participant
         self.final_frame_type = final_frame_type
@@ -688,9 +725,9 @@ class StreamingRtcAsrProcessor(FrameProcessor):
                         "frame_ms": 20,
                         "bytes_per_frame": 640,
                     },
-                    "interim_results": True,
-                    "partial_interval_ms": 100,
-                    "partial_window_seconds": 2.0,
+                    "interim_results": self.interim_results,
+                    "partial_interval_ms": self.partial_interval_ms,
+                    "partial_window_seconds": self.partial_window_seconds,
                     "max_buffer_seconds": 20.0,
                     "client_stream_id": self.current_stream_id,
                     "metadata": {"participant": self.participant},
@@ -732,10 +769,10 @@ class StreamingRtcAsrProcessor(FrameProcessor):
 
     async def _wait_for_final(self) -> None:
         try:
-            await asyncio.wait_for(self.final_received.wait(), timeout=20)
+            await asyncio.wait_for(self.final_received.wait(), timeout=self.final_timeout_seconds)
         except TimeoutError as exc:
             raise RuntimeError(
-                f"{self.participant} rtc-asr did not return a final transcript within 20 seconds."
+                f"{self.participant} rtc-asr did not return a final transcript within {self.final_timeout_seconds:g} seconds."
             ) from exc
         self._raise_protocol_error()
 

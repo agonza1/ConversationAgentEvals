@@ -22,6 +22,13 @@ def test_assert_cli_uses_the_same_interpreter_as_the_validated_package():
     assert assert_runtime.cli_executable() == sys.executable
 
 
+def test_native_test_set_runtime_rejects_an_unpinned_package(monkeypatch):
+    monkeypatch.setattr(assert_runtime.importlib.metadata, 'version', lambda package: '0.2.0')
+
+    with pytest.raises(assert_runtime.AssertRuntimeUnavailable, match='requires assert-ai==0.3.0'):
+        assert_runtime.native_test_set_runtime()
+
+
 def test_judge_score_contract_is_derived_from_the_configured_dimensions():
     contract = assert_runtime.judge_score_contract({
         'resolution_quality': {

@@ -273,6 +273,7 @@ export interface AssertScenario {
   draft?: boolean;
   behavior_id?: string | null;
   variant?: 'normal' | 'boundary' | 'adversarial';
+  generation_provenance?: Record<string, string>;
 }
 
 export interface AssertJudge {
