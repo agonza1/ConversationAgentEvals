@@ -8,9 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import sys
 import time
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
@@ -18,12 +16,7 @@ import websockets
 from pipecat.frames.frames import InterimTranscriptionFrame, VADUserStartedSpeakingFrame, VADUserStoppedSpeakingFrame
 from pipecat.processors.frame_processor import FrameDirection
 
-try:
-    from speech_settings import SpeechSelection, deployment_speech_selection, selection_issues, selection_requirements
-except ModuleNotFoundError:
-    # Local source checkout; Docker copies the same canonical API contract.
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'api'))
-    from app.services.speech_settings import SpeechSelection, deployment_speech_selection, selection_issues, selection_requirements
+from speech_configuration import SpeechSelection, deployment_speech_selection, selection_issues, selection_requirements
 
 from streaming_media import StreamingKokoroProcessor, StreamingRtcAsrProcessor
 

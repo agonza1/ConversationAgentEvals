@@ -361,7 +361,7 @@ class ReferenceDuplexRunRequest(BaseModel):
 
     @model_validator(mode='after')
     def validate_distinct_voices(self) -> 'ReferenceDuplexRunRequest':
-        from speech_providers import SpeechSelection, deployment_speech_selection
+        from speech_configuration import SpeechSelection, deployment_speech_selection
         if self.speech is None:
             defaults = deployment_speech_selection()
             if defaults.stt_provider != 'rtc-asr' or defaults.tts_provider != 'kokoro':
@@ -1555,7 +1555,7 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                     'exchange_elapsed_ms': round((time.perf_counter() - turn_started) * 1000, 3),
                     'metrics': target_frame['stage_metrics'],
                 })
-            from speech_providers import SpeechSelection, deployment_speech_selection
+            from speech_configuration import SpeechSelection, deployment_speech_selection
             speech = SpeechSelection.model_validate(payload.speech) if payload.speech else deployment_speech_selection()
             terminal_event = {
                 'type': 'complete',
@@ -2008,7 +2008,7 @@ async def reference_duplex_run(
     _require_reference_token(x_cae_reference_token)
     if not PIPECAT_RUNTIME_AVAILABLE:
         raise HTTPException(status_code=503, detail='Pipecat runtime is unavailable.')
-    from speech_providers import SpeechSelection, deployment_speech_selection, selection_issues
+    from speech_configuration import SpeechSelection, deployment_speech_selection, selection_issues
     selected = SpeechSelection.model_validate(payload.speech) if payload.speech else deployment_speech_selection()
     missing = selection_issues(selected, rtc_asr_url=RTC_ASR_BASE_URL, kokoro_url=KOKORO_BASE_URL)
     if missing:
@@ -2024,7 +2024,7 @@ async def reference_duplex_run(
 async def speech_readiness(payload: dict[str, Any], x_cae_reference_token: str | None = Header(default=None)):
     """Check the requested selection in the worker where credentials live."""
     _require_reference_token(x_cae_reference_token)
-    from speech_providers import SpeechSelection, selection_issues, selection_requirements
+    from speech_configuration import SpeechSelection, selection_issues, selection_requirements
     try:
         selected = SpeechSelection.model_validate(payload)
     except ValueError:
