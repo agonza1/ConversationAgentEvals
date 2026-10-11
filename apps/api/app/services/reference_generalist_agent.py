@@ -27,6 +27,7 @@ from app.services.execution_audio import AudioRecordingHandle, TranscriptionTurn
 from app.services.llm_providers import get_provider
 from app.services.llm_providers.openai_codex import OpenAICodexProvider, effective_codex_model_name
 from app.services.word_error_rate import calculate_word_error_rate
+from app.services.speech_settings import SpeechSelection, speech_selection
 from app.services.two_agent_pipecat_duplex import (
     InMemoryDuplexFrameTransport,
     TwoPipecatDuplexHarness,
@@ -66,6 +67,7 @@ def _default_target_voice() -> str:
 
 @dataclass(frozen=True, slots=True)
 class ReferenceRuntimeConfig:
+    speech: SpeechSelection | None = None
     pipecat_service_url: str = field(
         default_factory=lambda: os.getenv('PIPECAT_SERVICE_URL', 'http://localhost:8110').rstrip('/')
     )
@@ -107,6 +109,16 @@ class ReferenceRuntimeConfig:
     )
 
     def __post_init__(self) -> None:
+        from app.services.speech_settings import settings_path as speech_settings_path
+        selected = self.speech or speech_selection()
+        if selected.tts_provider == 'kokoro' and self.speech is None and not speech_settings_path().exists():
+            # Preserve constructor overrides used by existing callers/tests.
+            selected = selected.model_copy(update={
+                'tts_model': self.kokoro_model,
+                'tester_voice': self.kokoro_tester_voice,
+                'target_voice': self.kokoro_target_voice,
+            })
+        object.__setattr__(self, 'speech', selected)
         for field_name in ('llm_model', 'tester_llm_model'):
             selected = getattr(self, field_name)
             object.__setattr__(self, field_name, effective_reference_model_name(selected))
@@ -378,6 +390,28 @@ class ReferenceMediaServices:
         self.client = client or httpx.Client(timeout=config.timeout_seconds)
 
     def readiness(self) -> dict[str, Any]:
+        selected = self.config.speech
+        if selected.stt_provider != 'rtc-asr' or selected.tts_provider != 'kokoro':
+            response = self.client.post(
+                f'{self.config.pipecat_service_url}/reference-agent/speech-readiness',
+                headers={'x-cae-reference-token': self.config.internal_token},
+                json=selected.model_dump(),
+            )
+            response.raise_for_status()
+            status = response.json()
+            if not status.get('ready'):
+                raise ReferenceRuntimeError(' '.join(status.get('issues') or ['Speech runtime unavailable.']))
+            stt = {'provider': selected.stt_provider, 'backend': selected.stt_provider, 'model': selected.stt_model, 'status': 'configured', 'selection': 'console_or_deployment'}
+            if selected.stt_provider == 'rtc-asr':
+                local = self.client.get(f'{self.config.rtc_asr_base_url}{self.config.rtc_asr_health_path}')
+                local.raise_for_status()
+                stt = discover_rtc_asr_runtime(local.json())
+            if selected.tts_provider == 'kokoro':
+                local = self.client.get(f'{self.config.kokoro_base_url}/health')
+                local.raise_for_status()
+            return {'stt': stt, 'tts': {'provider': selected.tts_provider, 'model': selected.tts_model,
+                'tester_voice': selected.tester_voice, 'target_voice': selected.target_voice,
+                'voices_distinct': True, 'status': 'configured'}}
         if not self.config.rtc_asr_base_url:
             raise ReferenceRuntimeError(
                 'Built-in voice target requires rtc-asr. Set RTC_ASR_BASE_URL (for example http://localhost:8080).'
@@ -386,7 +420,7 @@ class ReferenceMediaServices:
             raise ReferenceRuntimeError(
                 'Built-in voice target requires Kokoro. Set KOKORO_BASE_URL (for example http://localhost:8880).'
             )
-        if self.config.kokoro_tester_voice == self.config.kokoro_target_voice:
+        if selected.tester_voice == selected.target_voice:
             raise ReferenceRuntimeError(
                 'Built-in voice evaluation requires distinct tester and target voices. '
                 'Set KOKORO_TESTER_VOICE and KOKORO_TARGET_VOICE to different Kokoro voice IDs.'
@@ -411,9 +445,9 @@ class ReferenceMediaServices:
             'stt': stt_runtime,
             'tts': {
                 'provider': 'kokoro',
-                'model': self.config.kokoro_model,
-                'tester_voice': self.config.kokoro_tester_voice,
-                'target_voice': self.config.kokoro_target_voice,
+                'model': selected.tts_model,
+                'tester_voice': selected.tester_voice,
+                'target_voice': selected.target_voice,
                 'voices_distinct': True,
                 'status': str(kokoro_payload.get('status') or 'ready'),
             },
@@ -617,9 +651,11 @@ class ReferencePipecatAgentTransport:
             target_llm_provider=str(llm_status.get('provider') or completion.provider_id),
             target_llm_model=config.llm_model,
             stt_model=str(stt_runtime.get('model') or 'service-selected'),
-            tts_model=config.kokoro_model,
-            tester_tts_voice=config.kokoro_tester_voice,
-            target_tts_voice=config.kokoro_target_voice,
+            stt_provider=config.speech.stt_provider,
+            tts_provider=config.speech.tts_provider,
+            tts_model=config.speech.tts_model,
+            tester_tts_voice=config.speech.tester_voice,
+            target_tts_voice=config.speech.target_voice,
             llm_mode='real',
         )
         self._tester_graph = tester_graph
@@ -635,6 +671,9 @@ class ReferencePipecatAgentTransport:
             )
             pipecat_health.raise_for_status()
             pipecat_payload = pipecat_health.json()
+            if config.speech.stt_provider != 'rtc-asr' or config.speech.tts_provider != 'kokoro':
+                # The selection-specific check above replaces local-only readiness.
+                pipecat_payload['ready'] = bool(pipecat_payload.get('pipeline_runtime'))
             if not pipecat_payload.get('ready'):
                 missing = [
                     name for name, key in (
@@ -709,8 +748,9 @@ class ReferencePipecatAgentTransport:
             'stt_model': str(self.runtime['stt']['model']),
             'max_turn_pairs': max_turn_pairs,
             'total_timeout_seconds': total_timeout_seconds,
-            'tester_voice': self.config.kokoro_tester_voice,
-            'target_voice': self.config.kokoro_target_voice,
+            'tester_voice': self.config.speech.tester_voice,
+            'target_voice': self.config.speech.target_voice,
+            'speech': self.config.speech.model_dump(),
         }
         exchanges: list[dict[str, Any]] = []
         completed: dict[str, Any] | None = None
@@ -893,13 +933,13 @@ class ReferencePipecatAgentTransport:
                 turn_index=caller_index,
                 speaker='Caller',
                 text=target_receipt,
-                source='rtc-asr.current_run',
-                event_types=['tester_llm_output', 'tester_audio_received', 'rtc_asr_transcript'],
+                source=f'{self.config.speech.stt_provider}.current_run',
+                event_types=['tester_llm_output', 'tester_audio_received', 'rtc_asr_transcript' if self.config.speech.stt_provider == 'rtc-asr' else 'cloud_asr_transcript'],
                 direction='tester_to_target',
                 evidence_role='target_asr_receipt',
                 frame_metadata={
                     **tester_frame,
-                    'source': 'tester_kokoro_audio',
+                    'source': f'tester_{self.config.speech.tts_provider}_audio',
                     'source_text': tester_text,
                     'asr_receipt': target_receipt,
                     'word_error_rate': tester_wer.as_dict() if tester_wer else None,
@@ -909,13 +949,13 @@ class ReferencePipecatAgentTransport:
                 turn_index=caller_index + 1,
                 speaker='Agent',
                 text=tester_receipt,
-                source='rtc-asr.current_run',
-                event_types=['target_llm_output', 'kokoro_audio_synthesized', 'rtc_asr_transcript'],
+                source=f'{self.config.speech.stt_provider}.current_run',
+                event_types=['target_llm_output', f'{self.config.speech.tts_provider}_audio_synthesized', 'rtc_asr_transcript' if self.config.speech.stt_provider == 'rtc-asr' else 'cloud_asr_transcript'],
                 direction='target_to_tester',
                 evidence_role='tester_asr_receipt',
                 frame_metadata={
                     **target_frame,
-                    'source': 'target_kokoro_audio',
+                    'source': f'target_{self.config.speech.tts_provider}_audio',
                     'source_text': target_text,
                     'asr_receipt': tester_receipt,
                     'word_error_rate': target_wer.as_dict() if target_wer else None,

@@ -32,6 +32,7 @@ from app.services.reference_generalist_agent import (
     discover_rtc_asr_runtime,
     resolve_reference_completion_provider,
 )
+from app.services.speech_settings import SpeechSelection, speech_selection, save_speech_selection
 from app.services.reference_model_preflight import (
     augment_reference_voice_preflight,
     prepare_execution_reference_models,
@@ -673,6 +674,7 @@ def _reference_voice_preflight() -> dict[str, Any]:
     })
 
     pipecat_ready = False
+    speech_status: dict[str, Any] = {}
     if token_ready:
         try:
             response = httpx.get(
@@ -682,6 +684,15 @@ def _reference_voice_preflight() -> dict[str, Any]:
             )
             response.raise_for_status()
             payload = response.json()
+            if config.speech.stt_provider != 'rtc-asr' or config.speech.tts_provider != 'kokoro':
+                speech_response = httpx.post(
+                    f'{config.pipecat_service_url}/reference-agent/speech-readiness',
+                    headers={'x-cae-reference-token': config.internal_token},
+                    json=config.speech.model_dump(), timeout=2,
+                )
+                speech_response.raise_for_status()
+                speech_status = speech_response.json()
+                payload['ready'] = bool(payload.get('pipeline_runtime'))
             pipecat_ready = bool(
                 payload.get('ready')
                 and payload.get('duplex_route_ready')
@@ -702,6 +713,15 @@ def _reference_voice_preflight() -> dict[str, Any]:
         ('rtc_asr', 'rtc-asr', config.rtc_asr_base_url, config.rtc_asr_health_path, 'Set RTC_ASR_BASE_URL.'),
         ('kokoro', 'Kokoro TTS', config.kokoro_base_url, '/health', 'Set KOKORO_BASE_URL.'),
     ):
+        provider = config.speech.stt_provider if dependency_id == 'rtc_asr' else config.speech.tts_provider
+        if provider not in {'rtc-asr', 'kokoro'}:
+            stage = (speech_status.get('stages') or {}).get('stt' if dependency_id == 'rtc_asr' else 'tts') or speech_status
+            ready = bool(stage.get('ready'))
+            detail = ('Server configuration present; vendor authentication is checked during the run.'
+                      if ready else ' '.join(stage.get('issues') or ['Check the Pipecat speech configuration.']))
+            dependencies.append({'id': dependency_id, 'label': f'{provider.title()} {"STT" if dependency_id == "rtc_asr" else "TTS"}',
+                'ready': ready, 'detail': detail})
+            continue
         ready = False
         if not base_url:
             detail = missing
@@ -727,12 +747,32 @@ def _reference_voice_preflight() -> dict[str, Any]:
 
     for dependency in dependencies:
         dependency['setup_url'] = _REFERENCE_DEPENDENCY_SETUP_URLS[dependency['id']]
+        if dependency['id'] in {'rtc_asr', 'kokoro'}:
+            provider = config.speech.stt_provider if dependency['id'] == 'rtc_asr' else config.speech.tts_provider
+            if provider in {'deepgram', 'cartesia'}:
+                dependency['setup_url'] = 'https://github.com/agonza1/ConversationAgentEvals/blob/main/docs/speech-providers.md'
 
     return {
         'ready': all(item['ready'] for item in dependencies),
         'llm_mode': 'real',
         'dependencies': dependencies,
     }
+
+
+@router.get('/speech-settings')
+def execution_speech_settings():
+    return {'selection': speech_selection().model_dump(), 'scope': 'builtin_sample_voice',
+            'credentials': 'server_environment', 'defaults': {
+                'deepgram': {'stt_model': 'nova-3', 'tts_model': 'aura-2', 'tester_voice': 'aura-2-asteria-en', 'target_voice': 'aura-2-orion-en'},
+                'cartesia': {'stt_model': 'ink-2', 'tts_model': 'sonic-3.6', 'tester_voice': '', 'target_voice': ''},
+                'local': {'stt_model': 'service-selected', 'tts_model': 'kokoro', 'tester_voice': 'af_heart', 'target_voice': 'af_bella'},
+            }}
+
+
+@router.put('/speech-settings')
+def execution_save_speech_settings(payload: SpeechSelection):
+    save_speech_selection(payload)
+    return execution_speech_settings()
 
 
 @router.get('/audio/capabilities')

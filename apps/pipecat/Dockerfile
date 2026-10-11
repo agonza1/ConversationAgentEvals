@@ -10,5 +10,6 @@ COPY apps/pipecat/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY apps/pipecat /app
+COPY apps/api/app/services/speech_settings.py /app/speech_settings.py
 
 CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8110"]

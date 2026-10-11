@@ -6,6 +6,7 @@ import { ApiAwareLink } from './ApiAwareLink';
 import { EvidenceTimeline } from './EvidenceTimeline';
 import { DesignResults } from './DesignResults';
 import { LiveRunFeedback, type LiveRunEvent } from './LiveRunFeedback';
+import { SpeechProviderSettings } from './SpeechProviderSettings';
 import { apiErrorMessage } from '@/lib/apiError';
 import { sortedAssertReviews } from '@/lib/assertReview';
 import { listProductProjects, requestBenchmarkJudge, type ProductProjectOption, type AssertJudgeReadiness, type ConversationRecord } from '@/lib/execution';
@@ -2394,6 +2395,7 @@ export function BenchmarkRunner({
   const [referenceVoicePreflight, setReferenceVoicePreflight] = useState<ReferenceVoicePreflight | null>(null);
   const [referenceVoicePreflightError, setReferenceVoicePreflightError] = useState<string | null>(null);
   const [referenceVoicePreflightLoaded, setReferenceVoicePreflightLoaded] = useState(false);
+  const [speechSettingsRevision, setSpeechSettingsRevision] = useState(0);
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const selectedScoreAgent = useMemo(
     () => agents.find((agent) => agent.id === selectedAgentId) ?? null,
@@ -2804,7 +2806,7 @@ export function BenchmarkRunner({
     return () => {
       active = false;
     };
-  }, [view]);
+  }, [view, speechSettingsRevision]);
 
   useEffect(() => {
     if (view !== 'run' || typeof window === 'undefined') return;
@@ -5082,6 +5084,10 @@ export function BenchmarkRunner({
           </label>
         ) : null}
 
+        {selectedScoreAgent?.target === 'builtin_sample_voice' ? (
+          <SpeechProviderSettings onSaved={() => setSpeechSettingsRevision((value) => value + 1)} />
+        ) : null}
+
         {selectedScoreAgent ? (
           <div className={`run-provenance-notice ${isFixtureTargetId(selectedScoreAgent.target) || isSavedReplayTargetId(selectedScoreAgent.target) ? 'is-fixture' : 'is-live'}`} role="note">
             <strong>
@@ -5101,7 +5107,7 @@ export function BenchmarkRunner({
               {selectedScoreAgent.target === 'http_endpoint'
                 ? `POSTs to ${selectedScoreAgent.connection?.endpoint_url || 'the configured endpoint'}; black-box response evidence only.`
                 : selectedScoreAgent.target === 'builtin_sample_voice'
-                  ? 'Runs a separate Pipecat target through rtc-asr, the configured LLM, and Kokoro. Evaluation uses current-run local evidence; it is not a browser, SIP, or phone call.'
+                  ? 'Runs a separate Pipecat target through the configured STT, LLM, and TTS providers. Evaluation uses current-run audio and transcripts.'
                   : selectedScoreAgent.target === 'pipecat_public_demo'
                     ? 'Runs the selected scenario through direct Daily WebRTC and captures current-run audio, transcript, latency, evaluation, and vCon evidence without a browser.'
                    : selectedScoreAgent.target === 'signalwire_holy_guacamole'
