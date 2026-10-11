@@ -87,7 +87,7 @@ export default function HomePage() {
         </div>
         <div className="home-flow-visual">
           <Image
-            src="/images/convoice-qa-evaluation-pipeline.png"
+            src="/images/voiceai-qa-evaluation-pipeline.png"
             alt="Run an agent or import transcript or vCon evidence, then evaluate and report"
             width={1774}
             height={887}

@@ -200,7 +200,7 @@ class ChatGPTPlanProvider:
                       'nonce': self._pending['nonce'], 'code_challenge': challenge,
                       'code_challenge_method': 'S256', 'ext_agent_host_id': value['host_id']}
             if client_id == 'dynamic_agent_client':
-                params['agent_name_hint'] = 'ConVoice QA'
+                params['agent_name_hint'] = 'VoiceAI QA'
             elif profile.get('id_token'):
                 params['id_token_hint'] = profile['id_token']
             # Request plan consent for new/reduced grants, not ordinary returning sign-in.
@@ -430,7 +430,7 @@ class ChatGPTPlanProvider:
                         return
                     try:
                         provider.complete_callback(query)
-                        text, code = 'ChatGPT connection saved. Return to ConVoice QA Console Settings.', 200
+                        text, code = 'ChatGPT connection saved. Return to VoiceAI QA Console Settings.', 200
                     except Exception as exc:
                         text, code = str(exc) if isinstance(exc, ChatGPTPlanError) else 'ChatGPT sign-in failed.', 400
                         provider._last_error = text

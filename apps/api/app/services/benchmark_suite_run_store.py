@@ -334,15 +334,15 @@ def _suite_vcon_records(suite_report: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _suite_vcon_bundle_filename(record: dict[str, Any]) -> str:
-    parts = ['convoice-qa', record.get('suite_id'), record.get('suite_run_id'), 'vcon-bundle']
+    parts = ['voiceai-qa', record.get('suite_id'), record.get('suite_run_id'), 'vcon-bundle']
     slug = '-'.join(part for part in (_slug_part(part) for part in parts) if part)
-    return f'{slug or "convoice-qa-suite-vcon-bundle"}.json'
+    return f'{slug or "voiceai-qa-suite-vcon-bundle"}.json'
 
 
 def _suite_audit_artifacts_filename(record: dict[str, Any]) -> str:
-    parts = ['convoice-qa', record.get('suite_id'), record.get('suite_run_id'), 'suite-audit-artifacts']
+    parts = ['voiceai-qa', record.get('suite_id'), record.get('suite_run_id'), 'suite-audit-artifacts']
     slug = '-'.join(part for part in (_slug_part(part) for part in parts) if part)
-    return f'{slug or "convoice-qa-suite-audit-artifacts"}.json'
+    return f'{slug or "voiceai-qa-suite-audit-artifacts"}.json'
 
 
 def _suite_scenario_audit_artifacts(suite_report: dict[str, Any]) -> list[dict[str, Any]]:
@@ -391,16 +391,18 @@ def _suite_history_export_id(*, user_id: str, project_id: str | None, suite_id: 
 
 
 def _suite_history_export_filename(*, project_id: str | None, suite_id: str | None, status: str | None) -> str:
-    parts = ['convoice-qa', project_id, suite_id, status, 'suite-run-history']
+    parts = ['voiceai-qa', project_id, suite_id, status, 'suite-run-history']
     slug = '-'.join(part for part in (_slug_part(part) for part in parts) if part)
-    return f'{slug or "convoice-qa-suite-run-history"}.json'
+    return f'{slug or "voiceai-qa-suite-run-history"}.json'
 
 
 def _suite_history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     scores = [_suite_score_from_record(record) for record in records]
     numeric_scores = [score for score in scores if score is not None]
     latest_score = scores[0] if scores else None
-    previous_score = next((score for score in scores[1:] if score is not None), None)
+    latest_suite_id = records[0].get('suite_id') if records else None
+    previous_score = next((score for record, score in zip(records[1:], scores[1:])
+                           if latest_suite_id and record.get('suite_id') == latest_suite_id and score is not None), None)
     latest_delta = latest_score - previous_score if latest_score is not None and previous_score is not None else None
     status_counts: dict[str, int] = {}
     failure_category_counts: dict[str, int] = {}

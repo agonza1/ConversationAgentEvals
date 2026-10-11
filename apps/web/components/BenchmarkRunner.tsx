@@ -8,6 +8,7 @@ import { DesignResults } from './DesignResults';
 import { OpenAIConnectionPanel } from './OpenAIConnectionSettings';
 import { useOpenAIConnection, type OpenAIProviderStatus } from './useOpenAIConnection';
 import { LiveRunFeedback, type LiveRunEvent } from './LiveRunFeedback';
+import { SpeechProviderSettings } from './SpeechProviderSettings';
 import { apiErrorMessage } from '@/lib/apiError';
 import { sortedAssertReviews } from '@/lib/assertReview';
 import { getApiBase, listProductProjects, requestBenchmarkJudge, type ProductProjectOption, type AssertJudgeReadiness, type ConversationRecord } from '@/lib/execution';
@@ -1321,7 +1322,7 @@ function buildSavedRunAuditArtifactExport(userId: string, run: SavedRun): Benchm
   const artifacts = Array.isArray(evidenceArtifacts.artifacts) ? evidenceArtifacts.artifacts : [];
   const exportReadiness = report.evidence_audit_summary?.export_readiness;
   const runId = report.run_id ?? run.id;
-  const filenameParts = ['convoice-qa', report.suite_id, report.scenario_id, runId, 'audit-artifacts']
+  const filenameParts = ['voiceai-qa', report.suite_id, report.scenario_id, runId, 'audit-artifacts']
     .filter(Boolean)
     .map(slugFilenamePart);
 
@@ -1334,7 +1335,7 @@ function buildSavedRunAuditArtifactExport(userId: string, run: SavedRun): Benchm
     user_id: userId,
     project_id: run.project_id,
     status: report.run_status ?? report.verdict ?? report.overall,
-    filename: `${filenameParts.join('-') || 'convoice-qa-run-audit-artifacts'}.json`,
+    filename: `${filenameParts.join('-') || 'voiceai-qa-run-audit-artifacts'}.json`,
     operator_summary: {
       verdict: report.verdict ?? report.overall,
       overall_score: report.overall_score ?? report.score,
@@ -1550,8 +1551,8 @@ function currentReportRegressionDelta(report: BenchmarkReport | null, savedRuns:
   const priorRun = [...savedRuns]
     .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime())
     .find((run) => {
-      if (report.scenario_id && run.report.scenario_id !== report.scenario_id) return false;
-      if (report.suite_id && run.report.suite_id !== report.suite_id) return false;
+      if (!report.scenario_id || run.report.scenario_id !== report.scenario_id) return false;
+      if (!report.suite_id || run.report.suite_id !== report.suite_id) return false;
       return run.report.run_id !== report.run_id;
     });
   const previousScore = reportScore(priorRun?.report);
@@ -1753,7 +1754,8 @@ function suiteRunFailureCategorySummary(scenarios: BenchmarkSuiteScenarioSummary
 function suiteHistorySummaryFromRuns(runs: BenchmarkSuiteRunRecord[]): BenchmarkSuiteRunHistoryExport['summary'] | null {
   if (!runs.length) return null;
   const latest = runs[0];
-  const previous = runs.slice(1).find((run) => typeof run.average_score === 'number');
+  const previous = runs.slice(1).find((run) => Boolean(latest.suite_id)
+    && run.suite_id === latest.suite_id && typeof run.average_score === 'number');
   const latestScore = typeof latest.average_score === 'number' ? latest.average_score : null;
   const previousScore = typeof previous?.average_score === 'number' ? previous.average_score : null;
   const totalScenarios = runs.reduce((total, run) => total + Math.max(run.scenario_count ?? 0, 0), 0);
@@ -2325,6 +2327,7 @@ export function BenchmarkRunner({
   const [referenceVoicePreflight, setReferenceVoicePreflight] = useState<ReferenceVoicePreflight | null>(null);
   const [referenceVoicePreflightError, setReferenceVoicePreflightError] = useState<string | null>(null);
   const [referenceVoicePreflightLoaded, setReferenceVoicePreflightLoaded] = useState(false);
+  const [speechSettingsRevision, setSpeechSettingsRevision] = useState(0);
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const selectedScoreAgent = useMemo(
     () => agents.find((agent) => agent.id === selectedAgentId) ?? null,
@@ -2337,12 +2340,13 @@ export function BenchmarkRunner({
   const suiteLoadRequestRef = useRef(0);
 
   const selectedSuite = useMemo(
-    () => suites.find((suite) => suite.id === selectedSuiteId) ?? suites[0] ?? null,
-    [selectedSuiteId, suites],
+    () => suites.find((suite) => suite.id === selectedSuiteId) ?? (view === 'history' ? null : suites[0] ?? null),
+    [selectedSuiteId, suites, view],
   );
   const selectedScenario = useMemo(
-    () => selectedSuite?.scenarios.find((scenario) => scenario.id === selectedScenarioId) ?? selectedSuite?.scenarios[0] ?? null,
-    [selectedScenarioId, selectedSuite],
+    () => selectedSuite?.scenarios.find((scenario) => scenario.id === selectedScenarioId)
+      ?? (view === 'history' ? null : selectedSuite?.scenarios[0] ?? null),
+    [selectedScenarioId, selectedSuite, view],
   );
   const supportsSuiteExecutionScope = Boolean(
     selectedScoreAgent
@@ -2733,7 +2737,7 @@ export function BenchmarkRunner({
     return () => {
       active = false;
     };
-  }, [view]);
+  }, [view, speechSettingsRevision]);
 
   useEffect(() => {
     if (view !== 'run' || typeof window === 'undefined') return;
@@ -2847,11 +2851,11 @@ export function BenchmarkRunner({
   }, [projectId, selectedScenario?.id, selectedSuite?.id, suiteRunStatusFilter, userId, view]);
 
   useEffect(() => {
-    if (!selectedSuite) return;
+    if (!selectedSuite || view === 'history') return;
     setSelectedScenarioId((current) => (
       selectedSuite.scenarios.some((scenario) => scenario.id === current) ? current : selectedSuite.scenarios[0]?.id ?? ''
     ));
-  }, [selectedSuite]);
+  }, [selectedSuite, view]);
 
   useEffect(() => {
     if (!selectedSuite?.id) {
@@ -3217,8 +3221,8 @@ export function BenchmarkRunner({
       || (run.report.scenario_id && run.report.scenario_id !== selectedScenarioId),
     );
     loadingSavedRunRef.current = willSwitchSelection;
-    if (run.report.suite_id) setSelectedSuiteId(run.report.suite_id);
-    if (run.report.scenario_id) setSelectedScenarioId(run.report.scenario_id);
+    setSelectedSuiteId(run.report.suite_id ?? '');
+    setSelectedScenarioId(run.report.scenario_id ?? '');
     setTranscript(run.transcript ?? run.report.transcript ?? '');
     setActionTrace(stringifyEditable(run.report.action_trace, '[]'));
     setFinalState(stringifyEditable(run.report.final_state, '{}'));
@@ -3234,12 +3238,17 @@ export function BenchmarkRunner({
     setSaveMessage(`Loaded saved run ${run.id} for review.`);
   }
 
+  function canRetrySavedRun(run: SavedRun) {
+    return Boolean(suites.find((suite) => suite.id === run.report.suite_id)
+      ?.scenarios.some((scenario) => scenario.id === run.report.scenario_id));
+  }
+
   async function onRetrySavedRun(run: SavedRun) {
     const sourceReport = run.report;
-    const suiteId = sourceReport.suite_id || selectedSuiteId;
-    const scenarioId = sourceReport.scenario_id || selectedScenarioId;
-    if (!suiteId || !scenarioId) {
-      setRunError('Saved run is missing suite or scenario metadata.');
+    const suiteId = sourceReport.suite_id;
+    const scenarioId = sourceReport.scenario_id;
+    if (!suiteId || !scenarioId || !canRetrySavedRun(run)) {
+      setRunError('Retry unavailable: this saved run’s suite or scenario is not in the current catalog. Its evidence can still be reviewed and exported.');
       return;
     }
 
@@ -3333,7 +3342,7 @@ export function BenchmarkRunner({
     if (!userId) return;
 
     try {
-      const exported = await exportBenchmarkSuiteRunHistory(userId, projectId, selectedSuite?.id, suiteRunStatusFilter);
+      const exported = await exportBenchmarkSuiteRunHistory(userId, projectId, view === 'history' ? undefined : selectedSuite?.id, suiteRunStatusFilter);
       downloadJson(exported.filename, exported);
       setExportMessage(`Exported ${exported.suite_run_count} suite runs to ${exported.filename}. ${suiteHistoryExportSummary(exported.summary)} ${scenarioCoverageExportSummary(exported.scenario_coverage_summary)} ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.suite_contract_artifact_summary)}`);
     } catch (err) {
@@ -3400,20 +3409,20 @@ export function BenchmarkRunner({
 
   function onExportCurrentVcon() {
     if (!report?.vcon_export) return;
-    const filenameParts = ['convoice-qa', report.suite_id, report.scenario_id, report.run_id, 'vcon']
+    const filenameParts = ['voiceai-qa', report.suite_id, report.scenario_id, report.run_id, 'vcon']
       .filter(Boolean)
       .map(slugFilenamePart);
-    downloadJson(`${filenameParts.join('-') || 'convoice-qa-vcon'}.vcon`, report.ietf_vcon_export || report.vcon_export);
+    downloadJson(`${filenameParts.join('-') || 'voiceai-qa-vcon'}.vcon`, report.ietf_vcon_export || report.vcon_export);
     setExportMessage('Exported vCon with conversation, available tool events and observed state.');
   }
 
   function onExportCurrentReport() {
     if (!report) return;
-    const filenameParts = ['convoice-qa', report.suite_id, report.scenario_id, report.run_id, 'report']
+    const filenameParts = ['voiceai-qa', report.suite_id, report.scenario_id, report.run_id, 'report']
       .filter(Boolean)
       .map(slugFilenamePart);
 
-    downloadJson(`${filenameParts.join('-') || 'convoice-qa-report'}.json`, {
+    downloadJson(`${filenameParts.join('-') || 'voiceai-qa-report'}.json`, {
       report,
       transcript: report.transcript ?? transcript,
       action_trace: report.action_trace ?? parseMaybeJson(actionTrace),
@@ -3433,10 +3442,10 @@ export function BenchmarkRunner({
       return;
     }
 
-    const filenameParts = ['convoice-qa', suiteSimulation.suite_id, suiteSimulation.suite_run_id, 'vcon-bundle']
+    const filenameParts = ['voiceai-qa', suiteSimulation.suite_id, suiteSimulation.suite_run_id, 'vcon-bundle']
       .filter(Boolean)
       .map((part) => String(part).replace(/[^a-z0-9-]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase());
-    downloadJson(`${filenameParts.join('-') || 'convoice-qa-suite-vcon-bundle'}.json`, {
+    downloadJson(`${filenameParts.join('-') || 'voiceai-qa-suite-vcon-bundle'}.json`, {
       suite_run_id: suiteSimulation.suite_run_id,
       suite_id: suiteSimulation.suite_id,
       suite_name: suiteSimulation.suite_name,
@@ -3808,8 +3817,9 @@ export function BenchmarkRunner({
     : null;
   const reportSuiteManifestFingerprint = report?.suite_contract_manifest_sha256
     ? report.suite_contract_manifest_sha256.slice(0, 12)
-    : suiteManifestFingerprint ?? 'Not captured';
-  const scenarioContractFingerprint = report?.scenario_contract_sha256 ? report.scenario_contract_sha256.slice(0, 12) : selectedScenarioManifestFingerprint ?? 'Not captured';
+    : (view === 'history' ? null : suiteManifestFingerprint) ?? 'Not captured';
+  const scenarioContractFingerprint = report?.scenario_contract_sha256 ? report.scenario_contract_sha256.slice(0, 12)
+    : (view === 'history' ? null : selectedScenarioManifestFingerprint) ?? 'Not captured';
   const hasTranscriptEvidence = Boolean(transcript.trim());
   const hasStructuredEvidence = Boolean(
     !isBlankJsonField(actionTrace)
@@ -3828,8 +3838,8 @@ export function BenchmarkRunner({
   );
   const currentRegressionDelta = useMemo(() => currentReportRegressionDelta(report, savedRuns), [report, savedRuns]);
   const suiteScenarioCoverage = useMemo(
-    () => scenarioCoverageFromRuns(selectedSuite, suiteSavedRuns, report),
-    [selectedSuite, suiteSavedRuns, report],
+    () => scenarioCoverageFromRuns(view === 'history' && !selectedScenario ? null : selectedSuite, suiteSavedRuns, report),
+    [selectedSuite, selectedScenario, suiteSavedRuns, report, view],
   );
   const actionPlan = report ? reportActionPlan(report, currentRegressionDelta, suiteScenarioCoverage) : null;
   const reportBrief = report
@@ -4103,7 +4113,7 @@ export function BenchmarkRunner({
               )}
             </div>
           </div>
-        ) : selectedSuite && !isLoading ? (
+        ) : selectedSuite && !selectedSuite.scenarios.length && !isLoading ? (
           <div
             aria-label="Suite setup guidance"
             style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, background: 'var(--panel-alt)', display: 'grid', gap: 8 }}
@@ -4890,6 +4900,10 @@ export function BenchmarkRunner({
           </label>
         ) : null}
 
+        {selectedScoreAgent?.target === 'builtin_sample_voice' ? (
+          <SpeechProviderSettings onSaved={() => setSpeechSettingsRevision((value) => value + 1)} />
+        ) : null}
+
         {selectedScoreAgent ? (
           <div className={`run-provenance-notice ${isFixtureTargetId(selectedScoreAgent.target) || isSavedReplayTargetId(selectedScoreAgent.target) ? 'is-fixture' : 'is-live'}`} role="note">
             <strong>
@@ -4909,7 +4923,7 @@ export function BenchmarkRunner({
               {selectedScoreAgent.target === 'http_endpoint'
                 ? `POSTs to ${selectedScoreAgent.connection?.endpoint_url || 'the configured endpoint'}; black-box response evidence only.`
                 : selectedScoreAgent.target === 'builtin_sample_voice'
-                  ? 'Runs a separate Pipecat target through rtc-asr, the configured LLM, and Kokoro. Evaluation uses current-run local evidence; it is not a browser, SIP, or phone call.'
+                  ? 'Runs a separate Pipecat target through the configured STT, LLM, and TTS providers. Evaluation uses current-run audio and transcripts.'
                   : selectedScoreAgent.target === 'pipecat_public_demo'
                     ? 'Runs the selected scenario through direct Daily WebRTC and captures current-run audio, transcript, latency, evaluation, and vCon evidence without a browser.'
                    : selectedScoreAgent.target === 'signalwire_holy_guacamole'
@@ -5371,7 +5385,7 @@ export function BenchmarkRunner({
             </p>
           ) : null}
 
-          {(report.completed_actions?.length || report.missing_actions?.length || selectedScenario?.required_actions?.length) ? (
+          {(report.completed_actions?.length || report.missing_actions?.length || (view !== 'history' && selectedScenario?.required_actions?.length)) ? (
             <section
               aria-label="Required action checklist"
               style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 10, background: 'white' }}
@@ -5385,7 +5399,7 @@ export function BenchmarkRunner({
                 </p>
               </div>
               <ul style={{ margin: 0, paddingLeft: 0, listStyle: 'none', display: 'grid', gap: 6 }}>
-                {(selectedScenario?.required_actions?.length
+                {(view !== 'history' && selectedScenario?.required_actions?.length
                   ? toStringList(selectedScenario.required_actions)
                   : [...(report.completed_actions ?? []), ...(report.missing_actions ?? [])]
                 ).map((action) => {
@@ -5527,7 +5541,7 @@ export function BenchmarkRunner({
 
           <RunMetadataPanel metadata={report.run_metadata} />
           <EvidenceAuditPanel summary={report.evidence_audit_summary} />
-          <section style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 12, background: 'var(--panel-alt)' }}>
+          <section aria-label="Contract evidence" style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 12, background: 'var(--panel-alt)' }}>
             <div>
               <h3 style={{ margin: 0 }}>Contract evidence</h3>
               <p style={{ margin: '4px 0 0', color: 'var(--muted)' }}>Immutable suite and scenario fingerprints attached to this result.</p>
@@ -5535,8 +5549,8 @@ export function BenchmarkRunner({
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
               <AuditFact label="Suite manifest" value={reportSuiteManifestFingerprint} />
               <AuditFact label="Scenario contract" value={scenarioContractFingerprint} />
-              <AuditFact label="Required artifacts" value={(contractManifest?.evidence_requirements?.required_artifacts ?? []).join(', ') || 'Not declared'} />
-              <AuditFact label="Optional artifacts" value={(contractManifest?.evidence_requirements?.optional_artifacts ?? []).join(', ') || 'None'} />
+              <AuditFact label="Required artifacts" value={view === 'history' ? 'Not captured in this report' : (contractManifest?.evidence_requirements?.required_artifacts ?? []).join(', ') || 'Not declared'} />
+              <AuditFact label="Optional artifacts" value={view === 'history' ? 'Not captured in this report' : (contractManifest?.evidence_requirements?.optional_artifacts ?? []).join(', ') || 'None'} />
             </div>
           </section>
           <SimulationValidationPanel validation={report.simulation_validation} onRegenerate={onSimulate} isRegenerating={isSimulating} />
@@ -5842,7 +5856,8 @@ export function BenchmarkRunner({
                     <button
                       type="button"
                       onClick={() => void onRetrySavedRun(run)}
-                      disabled={isRunning}
+                      disabled={isRunning || !canRetrySavedRun(run)}
+                      title={canRetrySavedRun(run) ? undefined : 'Suite or scenario unavailable in the current catalog. Review or export the retained evidence instead.'}
                       style={{
                         border: '1px solid var(--border)',
                         borderRadius: 8,
@@ -5854,6 +5869,7 @@ export function BenchmarkRunner({
                     >
                       Retry run
                     </button>
+                    {!canRetrySavedRun(run) ? <span style={{ fontSize: 12, color: 'var(--muted)', alignSelf: 'center' }}>Retry unavailable · suite or scenario not in the current catalog</span> : null}
                     <button
                       type="button"
                       onClick={() => void onExportRun(run.id)}

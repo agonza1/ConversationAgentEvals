@@ -357,9 +357,22 @@ class ReferenceDuplexRunRequest(BaseModel):
     total_timeout_seconds: float = Field(default=120, ge=5, le=300)
     tester_voice: str = KOKORO_TESTER_VOICE
     target_voice: str = KOKORO_TARGET_VOICE
+    speech: dict[str, Any] | None = None
 
     @model_validator(mode='after')
     def validate_distinct_voices(self) -> 'ReferenceDuplexRunRequest':
+        from speech_configuration import SpeechSelection, deployment_speech_selection
+        if self.speech is None:
+            defaults = deployment_speech_selection()
+            if defaults.stt_provider != 'rtc-asr' or defaults.tts_provider != 'kokoro':
+                self.speech = defaults.model_dump()
+        if self.speech is not None:
+            selected = SpeechSelection.model_validate(self.speech)
+            self.tester_voice = selected.tester_voice
+            self.target_voice = selected.target_voice
+            if selected.stt_provider != 'rtc-asr':
+                self.stt_model = selected.stt_model
+                self.stt_backend = selected.stt_provider
         if self.tester_voice == self.target_voice:
             raise ValueError('tester_voice and target_voice must be different')
         return self
@@ -1026,6 +1039,10 @@ class _StreamingDuplexSession:
         self.bus = bus
         self.history = history
         self.event_callback = event_callback
+        from speech_providers import SpeechSelection, deployment_speech_selection, build_asr, build_tts
+        self.speech = SpeechSelection.model_validate(payload.speech) if payload.speech else deployment_speech_selection()
+        if payload.speech is None:
+            self.speech = self.speech.model_copy(update={'tester_voice': payload.tester_voice, 'target_voice': payload.target_voice})
         limits = httpx.Limits(max_connections=8, max_keepalive_connections=4)
         self.llm_client = httpx.AsyncClient(timeout=90, limits=limits)
         self.kokoro_client = httpx.AsyncClient(timeout=90, limits=limits)
@@ -1073,9 +1090,8 @@ class _StreamingDuplexSession:
             model_name=payload.tester_model_name or REFERENCE_LLM_MODEL,
             client=self.llm_client,
         )
-        self.caller_tts = StreamingKokoroProcessor(
+        self.caller_tts = build_tts(self.speech,
             base_url=KOKORO_BASE_URL,
-            model=KOKORO_MODEL,
             voice=payload.tester_voice,
             input_type=_TesterSpeechFrame,
             start_type=_TesterLlmStartFrame,
@@ -1091,7 +1107,7 @@ class _StreamingDuplexSession:
             first_audio_callback=announce_caller,
             end_type=_TesterSpeechEndFrame,
         )
-        self.target_asr = StreamingRtcAsrProcessor(
+        self.target_asr = build_asr(self.speech,
             base_url=RTC_ASR_BASE_URL,
             stream_path=RTC_ASR_STREAM_PATH,
             participant='target',
@@ -1104,9 +1120,8 @@ class _StreamingDuplexSession:
             payload.target_model_name or REFERENCE_LLM_MODEL,
             client=self.llm_client,
         )
-        self.target_tts = StreamingKokoroProcessor(
+        self.target_tts = build_tts(self.speech,
             base_url=KOKORO_BASE_URL,
-            model=KOKORO_MODEL,
             voice=payload.target_voice,
             input_type=_TargetSpeechFrame,
             start_type=_TargetLlmStartFrame,
@@ -1122,7 +1137,7 @@ class _StreamingDuplexSession:
             first_audio_callback=announce_target,
             end_type=_TargetSpeechEndFrame,
         )
-        self.tester_asr = StreamingRtcAsrProcessor(
+        self.tester_asr = build_asr(self.speech,
             base_url=RTC_ASR_BASE_URL,
             stream_path=RTC_ASR_STREAM_PATH,
             participant='tester',
@@ -1350,6 +1365,7 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
     live_events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     exchange_task: asyncio.Task[_StreamingExchangeResult] | None = None
     session_holder: dict[str, Any] = {}
+    terminal_event: dict[str, Any] | None = None
 
     async def record_event(event: dict[str, Any]) -> None:
         await live_events.put(event)
@@ -1439,12 +1455,21 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                     'speech_ended_at': result.tester_speech_ended_at,
                     'tester_speech_ended_at': result.tester_speech_ended_at,
                     'target_endpoint_speech_ended_at': result.target_asr.speech_ended_at,
+                    'target_asr_final_received_at': result.target_asr.final_at,
                     'first_audible_byte_at': result.target_audio_received_at,
                     'target_audio_received_at': result.target_audio_received_at,
                     'response_complete_latency_ms': result.target_response_complete_latency_ms,
                     'asr_interim_count': len(result.tester_asr.interims),
                     'asr_timing': result.tester_asr.server_timing,
                     'stage_metrics': {
+                        'caller_end_to_asr_final_ms': (
+                            round((result.target_asr.final_at - result.tester_speech_ended_at) * 1000, 3)
+                            if result.target_asr.final_at is not None else None
+                        ),
+                        'asr_final_to_first_audio_ms': (
+                            round((result.target_audio_received_at - result.target_asr.final_at) * 1000, 3)
+                            if result.target_asr.final_at is not None else None
+                        ),
                         'asr_finalize_ms': (
                             round(
                                 (result.target_asr.final_at - result.target_asr.speech_ended_at) * 1000,
@@ -1530,7 +1555,9 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                     'exchange_elapsed_ms': round((time.perf_counter() - turn_started) * 1000, 3),
                     'metrics': target_frame['stage_metrics'],
                 })
-            yield _duplex_event({
+            from speech_configuration import SpeechSelection, deployment_speech_selection
+            speech = SpeechSelection.model_validate(payload.speech) if payload.speech else deployment_speech_selection()
+            terminal_event = {
                 'type': 'complete',
                 'session_id': payload.session_id,
                 'status': 'completed',
@@ -1538,22 +1565,26 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                 'turn_pairs': payload.max_turn_pairs,
                 'frames': frame_evidence,
                 'metrics': metric_evidence,
-                'architecture': 'persistent_streaming_pipecat_duplex_local_stt_v1',
+                'architecture': ('persistent_streaming_pipecat_duplex_local_stt_v1' if speech.stt_provider == 'rtc-asr'
+                                 else 'persistent_streaming_pipecat_duplex_cloud_stt'),
+                'speech': speech.model_dump(),
                 'graphs': {
                     'tester': {
                         'participant_id': 'pipecat_tester',
                         'processors': [
                             {
-                                'name': 'rtc-asr',
-                                'provider': 'rtc-asr',
+                                'name': speech.stt_provider,
+                                'provider': speech.stt_provider,
                                 'backend': payload.stt_backend,
                                 'model': payload.stt_model,
-                                'protocol': 'local-stt.v1',
+                                'protocol': 'local-stt.v1' if speech.stt_provider == 'rtc-asr' else 'vendor-websocket',
                                 'streaming': True,
                                 'interim_results': result.tester_asr.interim_results,
                                 'partial_interval_ms': result.tester_asr.partial_interval_ms,
                                 'partial_window_seconds': result.tester_asr.partial_window_seconds,
                                 'final_timeout_seconds': result.tester_asr.final_timeout_seconds,
+                                'requested_max_buffer_seconds': getattr(result.tester_asr, 'max_buffer_seconds', None),
+                                'negotiated_max_buffer_bytes': getattr(result.tester_asr, 'negotiated_max_buffer_bytes', None),
                             },
                             {
                                 'name': 'llm',
@@ -1561,9 +1592,9 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                                 'model': payload.tester_model_name or REFERENCE_LLM_MODEL,
                             },
                             {
-                                'name': 'kokoro',
-                                'provider': 'kokoro',
-                                'model': KOKORO_MODEL,
+                                'name': speech.tts_provider,
+                                'provider': speech.tts_provider,
+                                'model': speech.tts_model,
                                 'voice': payload.tester_voice,
                                 'streaming_pcm': True,
                             },
@@ -1575,16 +1606,18 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                         'participant_id': 'pipecat_target',
                         'processors': [
                             {
-                                'name': 'rtc-asr',
-                                'provider': 'rtc-asr',
+                                'name': speech.stt_provider,
+                                'provider': speech.stt_provider,
                                 'backend': payload.stt_backend,
                                 'model': payload.stt_model,
-                                'protocol': 'local-stt.v1',
+                                'protocol': 'local-stt.v1' if speech.stt_provider == 'rtc-asr' else 'vendor-websocket',
                                 'streaming': True,
                                 'interim_results': result.target_asr.interim_results,
                                 'partial_interval_ms': result.target_asr.partial_interval_ms,
                                 'partial_window_seconds': result.target_asr.partial_window_seconds,
                                 'final_timeout_seconds': result.target_asr.final_timeout_seconds,
+                                'requested_max_buffer_seconds': getattr(result.target_asr, 'max_buffer_seconds', None),
+                                'negotiated_max_buffer_bytes': getattr(result.target_asr, 'negotiated_max_buffer_bytes', None),
                             },
                             {
                                 'name': 'llm',
@@ -1592,9 +1625,9 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                                 'model': payload.target_model_name or REFERENCE_LLM_MODEL,
                             },
                             {
-                                'name': 'kokoro',
-                                'provider': 'kokoro',
-                                'model': KOKORO_MODEL,
+                                'name': speech.tts_provider,
+                                'provider': speech.tts_provider,
+                                'model': speech.tts_model,
                                 'voice': payload.target_voice,
                                 'streaming_pcm': True,
                             },
@@ -1603,25 +1636,40 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                         'llm_mode': payload.llm_mode,
                     },
                 },
-            })
+            }
     except TimeoutError:
-        yield _duplex_event({
+        terminal_event = {
             'type': 'error',
             'code': 'duplex_total_timeout',
             'detail': f'Duplex session exceeded {payload.total_timeout_seconds} seconds.',
-        })
+        }
     except Exception as exc:
-        yield _duplex_event({'type': 'error', 'code': 'duplex_runtime_error', 'detail': str(exc)})
+        terminal_event = {'type': 'error', 'code': 'duplex_runtime_error', 'detail': str(exc)}
     finally:
-        if exchange_task is not None:
-            if not exchange_task.done():
-                exchange_task.cancel()
-            await asyncio.gather(exchange_task, return_exceptions=True)
-        session = session_holder.get('session')
-        if session is not None:
-            await session.close()
-        broadcast.active = False
-        asyncio.create_task(_retire_reference_broadcast(broadcast))
+        try:
+            if exchange_task is not None:
+                if not exchange_task.done():
+                    exchange_task.cancel()
+                await asyncio.gather(exchange_task, return_exceptions=True)
+            session = session_holder.get('session')
+            if session is not None:
+                await session.close()
+        except Exception as exc:
+            if terminal_event is None:
+                raise
+            if terminal_event['type'] == 'complete':
+                terminal_event = {
+                    'type': 'error', 'code': 'duplex_cleanup_error', 'detail': str(exc),
+                }
+            else:
+                terminal_event['cleanup_error'] = str(exc)
+        finally:
+            broadcast.active = False
+            asyncio.create_task(_retire_reference_broadcast(broadcast))
+    # The client starts the next suite case as soon as it sees a terminal event.
+    # Release the current pipeline and run lease before sending that event.
+    if terminal_event is not None:
+        yield _duplex_event(terminal_event)
 
 
 async def _retire_reference_broadcast(broadcast: _ReferenceDuplexBroadcast) -> None:
@@ -1960,11 +2008,9 @@ async def reference_duplex_run(
     _require_reference_token(x_cae_reference_token)
     if not PIPECAT_RUNTIME_AVAILABLE:
         raise HTTPException(status_code=503, detail='Pipecat runtime is unavailable.')
-    missing = []
-    if not RTC_ASR_BASE_URL:
-        missing.append('RTC_ASR_BASE_URL')
-    if not KOKORO_BASE_URL:
-        missing.append('KOKORO_BASE_URL')
+    from speech_configuration import SpeechSelection, deployment_speech_selection, selection_issues
+    selected = SpeechSelection.model_validate(payload.speech) if payload.speech else deployment_speech_selection()
+    missing = selection_issues(selected, rtc_asr_url=RTC_ASR_BASE_URL, kokoro_url=KOKORO_BASE_URL)
     if missing:
         raise HTTPException(status_code=503, detail=f'Reference duplex missing configuration: {", ".join(missing)}')
     return StreamingResponse(
@@ -1972,6 +2018,26 @@ async def reference_duplex_run(
         media_type='application/x-ndjson',
         headers={'Cache-Control': 'no-store'},
     )
+
+
+@app.post('/reference-agent/speech-readiness')
+async def speech_readiness(payload: dict[str, Any], x_cae_reference_token: str | None = Header(default=None)):
+    """Check the requested selection in the worker where credentials live."""
+    _require_reference_token(x_cae_reference_token)
+    from speech_configuration import SpeechSelection, selection_issues, selection_requirements
+    try:
+        selected = SpeechSelection.model_validate(payload)
+    except ValueError:
+        raise HTTPException(status_code=422, detail='Invalid speech provider selection.') from None
+    issues = selection_issues(selected, rtc_asr_url=RTC_ASR_BASE_URL, kokoro_url=KOKORO_BASE_URL)
+    return {
+        'ready': PIPECAT_RUNTIME_AVAILABLE and not issues,
+        'issues': issues,
+        'selection': selected.model_dump(),
+        'credential_check': 'presence_only',
+        'stages': selection_requirements(selected, rtc_asr_url=RTC_ASR_BASE_URL, kokoro_url=KOKORO_BASE_URL),
+        'route': '/reference-duplex/run',
+    }
 
 
 @app.post('/outbound-voice/broadcast/open')

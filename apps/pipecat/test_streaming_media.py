@@ -55,11 +55,12 @@ def test_rtc_asr_stream_url_uses_local_stt_v1() -> None:
     ({'RTC_ASR_INTERIM_RESULTS': 'false', 'RTC_ASR_PARTIAL_INTERVAL_MS': '1000', 'RTC_ASR_PARTIAL_WINDOW_SECONDS': '5'}, (False, 1000, 5.0)),
     ({'RTC_ASR_PARTIAL_INTERVAL_MS': '100', 'RTC_ASR_PARTIAL_WINDOW_SECONDS': '0.5'}, (True, 100, 0.5)),
     ({'RTC_ASR_PARTIAL_INTERVAL_MS': '5000', 'RTC_ASR_PARTIAL_WINDOW_SECONDS': '20'}, (True, 5000, 20.0)),
+    ({'RTC_ASR_MAX_BUFFER_SECONDS': '30'}, (True, 100, 2.0)),
 ])
 def test_rtc_asr_start_message_uses_validated_deployment_settings(
     monkeypatch: pytest.MonkeyPatch, settings: dict[str, str], expected: tuple[bool, int, float],
 ) -> None:
-    for name in ('RTC_ASR_INTERIM_RESULTS', 'RTC_ASR_PARTIAL_INTERVAL_MS', 'RTC_ASR_PARTIAL_WINDOW_SECONDS', 'RTC_ASR_FINAL_TIMEOUT_SECONDS'):
+    for name in ('RTC_ASR_INTERIM_RESULTS', 'RTC_ASR_PARTIAL_INTERVAL_MS', 'RTC_ASR_PARTIAL_WINDOW_SECONDS', 'RTC_ASR_FINAL_TIMEOUT_SECONDS', 'RTC_ASR_MAX_BUFFER_SECONDS'):
         monkeypatch.delenv(name, raising=False)
     for name, value in settings.items():
         monkeypatch.setenv(name, value)
@@ -88,7 +89,7 @@ def test_rtc_asr_start_message_uses_validated_deployment_settings(
         assert start['version'] == 'local-stt.v1'
         assert (start['interim_results'], start['partial_interval_ms'], start['partial_window_seconds']) == expected
         assert type(start['partial_interval_ms']) is int
-        assert start['max_buffer_seconds'] == 20.0
+        assert start['max_buffer_seconds'] == float(settings.get('RTC_ASR_MAX_BUFFER_SECONDS', '60'))
         assert start['audio']['format'] == 'pcm_s16le'
         await processor.vad.cleanup()
 
@@ -106,17 +107,39 @@ def test_rtc_asr_start_message_uses_validated_deployment_settings(
     ('RTC_ASR_FINAL_TIMEOUT_SECONDS', '4.99'), ('RTC_ASR_FINAL_TIMEOUT_SECONDS', '120.1'),
     ('RTC_ASR_FINAL_TIMEOUT_SECONDS', 'nan'), ('RTC_ASR_FINAL_TIMEOUT_SECONDS', 'inf'),
     ('RTC_ASR_FINAL_TIMEOUT_SECONDS', ''), ('RTC_ASR_FINAL_TIMEOUT_SECONDS', 'slow'),
+    ('RTC_ASR_MAX_BUFFER_SECONDS', '0'), ('RTC_ASR_MAX_BUFFER_SECONDS', '301'),
+    ('RTC_ASR_MAX_BUFFER_SECONDS', 'nan'), ('RTC_ASR_MAX_BUFFER_SECONDS', 'invalid'),
 ])
 def test_rtc_asr_rejects_invalid_deployment_settings(
     monkeypatch: pytest.MonkeyPatch, name: str, value: str,
 ) -> None:
-    for setting in ('RTC_ASR_INTERIM_RESULTS', 'RTC_ASR_PARTIAL_INTERVAL_MS', 'RTC_ASR_PARTIAL_WINDOW_SECONDS', 'RTC_ASR_FINAL_TIMEOUT_SECONDS'):
+    for setting in ('RTC_ASR_INTERIM_RESULTS', 'RTC_ASR_PARTIAL_INTERVAL_MS', 'RTC_ASR_PARTIAL_WINDOW_SECONDS', 'RTC_ASR_FINAL_TIMEOUT_SECONDS', 'RTC_ASR_MAX_BUFFER_SECONDS'):
         monkeypatch.delenv(setting, raising=False)
     monkeypatch.setenv(name, value)
     with pytest.raises(ValueError, match=name):
         StreamingRtcAsrProcessor(
             base_url='http://rtc-asr.test', participant='target', final_frame_type=FinalFrame,
         )
+
+
+@pytest.mark.parametrize('server_limit', [640000, 1048576, True])
+def test_rtc_asr_records_the_servers_lower_negotiated_byte_cap(server_limit):
+    async def run():
+        processor = StreamingRtcAsrProcessor(
+            base_url='http://rtc-asr.test', participant='target', final_frame_type=FinalFrame,
+        )
+
+        class ReadySocket:
+            async def __aiter__(self):
+                yield json.dumps({'type': 'ready', 'metadata': {'max_buffer_bytes': server_limit}})
+
+        processor.websocket = ReadySocket()
+        processor.closing = True
+        await processor._receive()
+        assert processor.negotiated_max_buffer_bytes == (server_limit if type(server_limit) is int else None)
+        await processor.vad.cleanup()
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize(('configured', 'expected'), [(None, 20.0), ('60', 60.0), ('5', 5.0), ('120', 120.0), ('60.5', 60.5)])
