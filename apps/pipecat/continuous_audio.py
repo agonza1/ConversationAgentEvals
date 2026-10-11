@@ -26,6 +26,7 @@ class ContinuousDuplexAudio:
         self.rendered = 0
         self.queues: dict[str, deque[tuple[int, np.ndarray]]] = {}
         self.cursors: dict[str, int] = {}
+        self.resample_grids: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]] = {}
         self.pcm = bytearray()
 
     def add(self, direction: str, audio: bytes, *, sample_rate: int, channels: int) -> None:
@@ -38,13 +39,25 @@ class ContinuousDuplexAudio:
         now = self.clock()
         if self.origin is None:
             self.origin = now
-        samples = np.frombuffer(audio, dtype='<i2').reshape(-1, channels)
-        mono = samples.astype(np.float64).mean(axis=1)
+        # Most transport frames are already mono PCM16. Keep their immutable
+        # input buffer rather than allocating float64 and int32 copies per frame.
+        samples = np.frombuffer(audio, dtype='<i2')
+        if channels > 1:
+            samples = samples.reshape(-1, channels).mean(axis=1)
         if sample_rate != self.sample_rate:
-            count = round(len(mono) * self.sample_rate / sample_rate)
-            mono = np.interp(np.arange(count) * sample_rate / self.sample_rate,
-                             np.arange(len(mono)), mono)
-        samples = mono.astype(np.int32)
+            key = (sample_rate, len(samples))
+            grids = self.resample_grids.get(key)
+            if grids is None:
+                count = max(1, round(len(samples) * self.sample_rate / sample_rate))
+                grids = (np.arange(count) * sample_rate / self.sample_rate, np.arange(len(samples)))
+                # Cache common short packet shapes, not whole utterance grids.
+                if len(samples) <= sample_rate // 10:
+                    if len(self.resample_grids) >= 8:
+                        self.resample_grids.pop(next(iter(self.resample_grids)))
+                    self.resample_grids[key] = grids
+            samples = np.interp(*grids, samples).astype('<i2')
+        elif channels > 1:
+            samples = samples.astype('<i2')
         observed = round((now - self.origin) * self.sample_rate)
         previous = self.cursors.get(direction)
         # Keep contiguous packets contiguous despite modest scheduling jitter;
@@ -77,7 +90,8 @@ class ContinuousDuplexAudio:
                 lo, hi = max(offset, self.rendered), min(offset + len(samples), end)
                 if hi > lo:
                     mix[lo - self.rendered:hi - self.rendered] += samples[lo - offset:hi - offset]
-        payload = np.clip(mix, -32768, 32767).astype('<i2').tobytes()
+        np.clip(mix, -32768, 32767, out=mix)
+        payload = mix.astype('<i2').tobytes()
         self.pcm.extend(payload)
         self.rendered = end
         return payload

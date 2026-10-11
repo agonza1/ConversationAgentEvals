@@ -1710,7 +1710,11 @@ async def _public_pipecat_duplex_events(
     marked_listener_audio: set[str] = set()
     conversation_history: list[dict[str, str]] = []
     from continuous_audio import ContinuousDuplexAudio
-    recording = ContinuousDuplexAudio(max_seconds=payload.timeout_seconds + 840)
+    # Capture starts with transport audio, after TTS/room creation. Allow the
+    # bounded connect/join/readiness/greeting and shutdown stages, not the much
+    # larger HTTP allowance that includes audio-free setup. At the maximum
+    # 300-second session this caps raw PCM at 20.16 MB per conversation.
+    recording = ContinuousDuplexAudio(max_seconds=payload.timeout_seconds + 120)
 
     def publish_mix(audio: bytes) -> None:
         if bus is not None and audio:
@@ -1720,12 +1724,18 @@ async def _public_pipecat_duplex_events(
         # The short shared playout buffer permits duplex mixing before either
         # monitoring or recording commits a sample. Never enqueue whole turns
         # into the listener's single FIFO (that serializes overlapping speech).
-        step = recording.sample_rate // 100
+        step = recording.sample_rate // 50
         while True:
             ready = recording.ready_sample()
+            batches = 0
             while recording.rendered + step <= ready:
                 publish_mix(recording.render(recording.rendered + step))
-            await asyncio.sleep(.01)
+                batches += 1
+                if batches % 5 == 0:
+                    # Yield after 100 ms of catch-up media so CPU stalls do not
+                    # starve transport/ASR callbacks behind a long render loop.
+                    await asyncio.sleep(0)
+            await asyncio.sleep(.02)
 
     async def finish_recording(*, partial: bool) -> dict[str, Any]:
         pump.cancel()
@@ -1754,7 +1764,9 @@ async def _public_pipecat_duplex_events(
             'audio_wav_base64': wav, 'media_event': 'continuous_recording',
             'frame_metadata': metadata,
         })
-        return {'conversation_audio_wav_base64': wav, 'recording_metadata': metadata}
+        # The recording event already carries the WAV. Do not encode/transmit
+        # that entire call again in the terminal result on small local devices.
+        return {'recording_metadata': metadata}
 
     if payload.execution_run_id:
         session_id = payload.session_id or f'{payload.execution_run_id}:public-pipecat'

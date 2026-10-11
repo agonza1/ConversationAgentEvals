@@ -62,3 +62,38 @@ def test_recording_limits_and_invalid_formats():
         audio.add('target_to_tester', bytes(40), sample_rate=1000, channels=1)
     with pytest.raises(ValueError, match='format'):
         audio.add('target_to_tester', b'1', sample_rate=1000, channels=1)
+
+
+def test_mono_packets_reuse_input_and_resample_grid_cache_is_bounded():
+    audio = ContinuousDuplexAudio(sample_rate=1000)
+    pcm = np.full(20, 123, dtype='<i2').tobytes()
+    audio.add('target_to_tester', pcm, sample_rate=1000, channels=1)
+    stored = audio.queues['target_to_tester'][0][1]
+    assert stored.dtype == np.dtype('<i2')
+    assert np.shares_memory(stored, np.frombuffer(pcm, dtype='<i2'))
+    for count in range(1, 20):
+        audio.add('target_to_tester', bytes(count * 2), sample_rate=500, channels=1)
+    assert len(audio.resample_grids) == 8
+    audio.add('tester_to_target', bytes(500), sample_rate=500, channels=1)
+    assert (500, 250) not in audio.resample_grids
+    assert len(audio.resample_grids) == 8
+
+
+def test_twenty_ms_batches_produce_identical_audio_to_ten_ms_batches():
+    outputs = []
+    for step in (10, 20):
+        now = [0.0]
+        audio = ContinuousDuplexAudio(clock=lambda: now[0], sample_rate=1000)
+        for tick in range(100):
+            now[0] = tick * .02
+            audio.add('target_to_tester', np.full(10, 200, dtype='<i2').tobytes(),
+                      sample_rate=500, channels=1)
+            if tick % 20 == 0:
+                audio.add('tester_to_target', np.full(200, 100, dtype='<i2').tobytes(),
+                          sample_rate=1000, channels=1)
+            ready = audio.ready_sample()
+            while audio.rendered + step <= ready:
+                audio.render(audio.rendered + step)
+        audio.render(2000)
+        outputs.append(audio.wav())
+    assert outputs[0] == outputs[1]

@@ -245,6 +245,23 @@ when a call fails), with pause/resume on that timeline. Legacy runs without one
 still play their saved turn clips. Per-turn WAVs and ASR evidence remain separate
 for scoring; vCon's main recording uses the full duplex mix for new runs.
 
+The mixer does not load another ASR or TTS model. It uses 20 ms batches, reuses
+mono input buffers and a bounded cache of short resampling grids, and transmits
+the full WAV only once. Capture is capped at the session timeout plus 120 seconds
+for transport setup/shutdown (20.16 MB of raw PCM at the maximum 300-second
+session). PCM costs 2.88 MB per minute; full-call WAV/base64/JSON finalization
+temporarily needs additional memory.
+
+Run `python apps/pipecat/benchmark_continuous_audio.py --seconds 120` for an
+offline mixer-only benchmark. On the development laptop, the optimized two-minute
+simulation used about 0.38% of one CPU core, 5.7 MiB peak during capture and
+34.9 MiB peak through serialization. It halved full-recording wire bytes compared
+with the original duplicate payload, with an identical PCM hash. These numbers
+exclude the voice models, network timing and browser, and are not a guarantee
+under memory pressure. On constrained devices, use one voice evaluation at a
+time and avoid concurrent container builds/model-heavy workloads; recording
+optimization cannot compensate for an overloaded host.
+
 ### Local target authentication through Codex OAuth
 
 The **Connect OpenAI** control authenticates compatible agent-execution and authoring features, not the judge. OAuth tokens are stored in the gitignored `.local/openai-codex-oauth.json` file; `OPENAI_CODEX_OAUTH_PATH` changes that store. An existing `~/.codex/auth.json` can be imported unless `OPENAI_CODEX_IMPORT_HOME=0`.

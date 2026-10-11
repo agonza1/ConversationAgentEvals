@@ -423,6 +423,8 @@ def test_continuous_public_recording_matches_live_mix_even_on_failure(monkeypatc
         assert b'\x01\x00' in pcm  # greeting
         assert b'\x06\x00' in pcm  # overlap, not a serialized FIFO
         assert events[-1]['type'] == ('error' if failed else 'complete')
+        if not failed:
+            assert 'conversation_audio_wav_base64' not in events[-1]['result']['media']
     finally:
         server.REFERENCE_DUPLEX_RUNS.pop('continuous-run', None)
 

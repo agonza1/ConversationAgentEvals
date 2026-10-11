@@ -40,7 +40,8 @@ class _StreamResponse:
             yield json.dumps(event)
 
 
-def test_public_target_client_persists_current_run_media_without_room_credentials(tmp_path):
+@pytest.mark.parametrize('recording_source', ['media', 'stream', 'legacy'])
+def test_public_target_client_persists_current_run_media_without_room_credentials(tmp_path, recording_source):
     caller_wav = _wav(1)
     target_wav = _wav(2)
     conversation_wav = _wav(3)
@@ -83,6 +84,10 @@ def test_public_target_client_persists_current_run_media_without_room_credential
         },
         'provenance': {'daily_room_credentials_persisted': False},
     }
+    if recording_source != 'media':
+        result_payload['media'].pop('conversation_audio_wav_base64')
+    if recording_source == 'legacy':
+        result_payload['media'].pop('recording_metadata')
 
     class FakeClient:
         def stream(self, method, url, *, headers, json):
@@ -110,6 +115,12 @@ def test_public_target_client_persists_current_run_media_without_room_credential
                     'media_event': 'rtvi_transcript_progress',
                     'frame_metadata': target_metadata,
                 },
+                *([{
+                    'type': 'live_audio', 'speaker': 'Conversation',
+                    'text': 'Continuous call recording.', 'media_event': 'continuous_recording',
+                    'audio_wav_base64': base64.b64encode(conversation_wav).decode(),
+                    'frame_metadata': {'scope': 'continuous_duplex'},
+                }] if recording_source == 'stream' else []),
                 {'type': 'complete', 'result': result_payload},
             ])
 
@@ -160,13 +171,46 @@ def test_public_target_client_persists_current_run_media_without_room_credential
     assert (tmp_path / 'conversation-1-caller.wav').read_bytes() == caller_wav
     assert (tmp_path / 'conversation-1-target.wav').read_bytes() == target_wav
     assert result['recording_handle'].transport == 'pipecat_daily_webrtc'
-    assert (tmp_path / 'conversation-1-conversation.wav').read_bytes() == conversation_wav
-    assert result['recording_handle'].uri == str(tmp_path / 'conversation-1-conversation.wav')
-    assert result['recording_handle'].metadata['scope'] == 'continuous_duplex'
-    assert result['recording_handle'].metadata['live_mix_shared'] is True
-    assert result['recording_handle'].duration_ms == 20
+    if recording_source != 'legacy':
+        assert (tmp_path / 'conversation-1-conversation.wav').read_bytes() == conversation_wav
+        assert result['recording_handle'].uri == str(tmp_path / 'conversation-1-conversation.wav')
+        assert result['recording_handle'].metadata['scope'] == 'continuous_duplex'
+        assert result['recording_handle'].metadata['live_mix_shared'] is True
+        assert result['recording_handle'].duration_ms == 20
+    else:
+        assert result['recording_handle'].uri == str(tmp_path / 'conversation-1-target.wav')
+        assert result['recording_handle'].metadata['scope'] == 'target_response_only'
     assert 'dailyRoom' not in str(result)
     assert 'dailyToken' not in str(result)
+    if recording_source == 'stream':
+        without_observer = run_public_pipecat_call(
+            caller_text='What is Pipecat?', artifact_dir=tmp_path / 'no-observer',
+            conversation_id='conversation-1', timeout_seconds=60,
+            config=ReferenceRuntimeConfig(pipecat_service_url='http://pipecat.test', internal_token='test'),
+            client=FakeClient(),  # type: ignore[arg-type]
+        )
+        assert without_observer['recording_handle'].metadata['scope'] == 'continuous_duplex'
+        assert (tmp_path / 'no-observer' / 'conversation-1-conversation.wav').read_bytes() == conversation_wav
+
+
+def test_public_target_refuses_a_claimed_continuous_recording_without_audio(tmp_path):
+    class FakeClient:
+        def stream(self, *_args, **_kwargs):
+            return _StreamResponse([{'type': 'complete', 'result': {
+                'status': 'pass',
+                'turns': [{'speaker': 'caller', 'text': 'Hi'}, {'speaker': 'agent', 'text': 'Hello'}],
+                'media': {
+                    'caller_audio_wav_base64': base64.b64encode(_wav(1)).decode(),
+                    'target_audio_wav_base64': base64.b64encode(_wav(2)).decode(),
+                    'recording_metadata': {'scope': 'continuous_duplex'},
+                },
+            }}])
+    with pytest.raises(RuntimeError, match='no continuous recording audio'):
+        run_public_pipecat_call(
+            caller_text='Hi', artifact_dir=tmp_path, conversation_id='missing', timeout_seconds=60,
+            config=ReferenceRuntimeConfig(pipecat_service_url='http://pipecat.test', internal_token='test'),
+            client=FakeClient(),  # type: ignore[arg-type]
+        )
 
 
 def test_public_target_client_surfaces_safe_pipecat_failure_detail(tmp_path):
