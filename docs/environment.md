@@ -247,7 +247,8 @@ for scoring; vCon's main recording uses the full duplex mix for new runs.
 
 The mixer does not load another ASR or TTS model. It uses 20 ms batches, reuses
 mono input buffers and a bounded cache of short resampling grids, and transmits
-the full WAV only once. Capture is capped at the session timeout plus 120 seconds
+the full WAV only once. Closed-call capture buffers are released before encoding
+that WAV. Capture is capped at the session timeout plus 120 seconds
 for transport setup/shutdown (20.16 MB of raw PCM at the maximum 300-second
 session). PCM costs 2.88 MB per minute; full-call WAV/base64/JSON finalization
 temporarily needs additional memory.
@@ -255,7 +256,7 @@ temporarily needs additional memory.
 Run `python apps/pipecat/benchmark_continuous_audio.py --seconds 120` for an
 offline mixer-only benchmark. On the development laptop, the optimized two-minute
 simulation used about 0.38% of one CPU core, 5.7 MiB peak during capture and
-34.9 MiB peak through serialization. It halved full-recording wire bytes compared
+29.3 MiB peak through serialization (down from 42.3 MiB). It halved full-recording wire bytes compared
 with the original duplicate payload, with an identical PCM hash. These numbers
 exclude the voice models, network timing and browser, and are not a guarantee
 under memory pressure. On constrained devices, use one voice evaluation at a

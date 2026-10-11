@@ -105,6 +105,15 @@ class ContinuousDuplexAudio:
             target.writeframes(self.pcm)
         return output.getvalue()
 
+    def finish_wav(self) -> bytes:
+        """Snapshot a closed call and release its buffers before serialization."""
+        payload = self.wav()
+        self.pcm.clear()
+        self.queues.clear()
+        self.cursors.clear()
+        self.resample_grids.clear()
+        return payload
+
     def metadata(self, *, partial: bool) -> dict:
         return {
             'scope': 'continuous_duplex', 'recording_clock': 'local_monotonic_media',

@@ -97,3 +97,14 @@ def test_twenty_ms_batches_produce_identical_audio_to_ten_ms_batches():
         audio.render(2000)
         outputs.append(audio.wav())
     assert outputs[0] == outputs[1]
+
+
+def test_final_snapshot_releases_buffers_without_changing_wav_or_metadata():
+    audio = ContinuousDuplexAudio(sample_rate=1000)
+    audio.add('target_to_tester', bytes([1, 0]) * 100, sample_rate=500, channels=1)
+    audio.render(200)
+    expected_wav = audio.wav()
+    expected_metadata = audio.metadata(partial=False)
+    assert audio.finish_wav() == expected_wav
+    assert audio.metadata(partial=False) == expected_metadata
+    assert not audio.pcm and not audio.queues and not audio.resample_grids

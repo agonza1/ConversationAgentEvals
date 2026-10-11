@@ -1715,6 +1715,7 @@ async def _public_pipecat_duplex_events(
     # larger HTTP allowance that includes audio-free setup. At the maximum
     # 300-second session this caps raw PCM at 20.16 MB per conversation.
     recording = ContinuousDuplexAudio(max_seconds=payload.timeout_seconds + 120)
+    finished_recording: dict[str, Any] | None = None
 
     def publish_mix(audio: bytes) -> None:
         if bus is not None and audio:
@@ -1738,6 +1739,9 @@ async def _public_pipecat_duplex_events(
             await asyncio.sleep(.02)
 
     async def finish_recording(*, partial: bool) -> dict[str, Any]:
+        nonlocal finished_recording
+        if finished_recording is not None:
+            return finished_recording
         pump.cancel()
         await asyncio.gather(pump, return_exceptions=True)
         if recording.origin is None:
@@ -1750,10 +1754,11 @@ async def _public_pipecat_duplex_events(
         end = ((end + step - 1) // step) * step
         while recording.rendered < end:
             publish_mix(recording.render(min(end, recording.rendered + step)))
-        wav_bytes = recording.wav()
+        wav_bytes = recording.finish_wav()
         wav = base64.b64encode(wav_bytes).decode('ascii')
         metadata = recording.metadata(partial=partial)
         metadata['sha256'] = hashlib.sha256(wav_bytes).hexdigest()
+        finished_recording = {'recording_metadata': metadata}
         if bus is not None and broadcast is not None and broadcast.listeners:
             # Allow the final shared playout buffer to leave the listener track
             # before clients receive the terminal event and close WebRTC.
@@ -1766,7 +1771,7 @@ async def _public_pipecat_duplex_events(
         })
         # The recording event already carries the WAV. Do not encode/transmit
         # that entire call again in the terminal result on small local devices.
-        return {'recording_metadata': metadata}
+        return finished_recording
 
     if payload.execution_run_id:
         session_id = payload.session_id or f'{payload.execution_run_id}:public-pipecat'

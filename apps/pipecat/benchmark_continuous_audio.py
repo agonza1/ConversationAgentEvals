@@ -54,7 +54,8 @@ def main(args=None):
     tracemalloc.start()
     audio = simulate(options.seconds, options.quantum_ms)
     current, capture_peak = tracemalloc.get_traced_memory()
-    wav = audio.wav()
+    pcm_sha256 = hashlib.sha256(audio.pcm).hexdigest()
+    wav = audio.wav() if options.duplicate_terminal_wav else audio.finish_wav()
     encoded = base64.b64encode(wav).decode('ascii')
     event = json.dumps({'type': 'live_audio', 'audio_wav_base64': encoded})
     media = {'recording_metadata': audio.metadata(partial=False)}
@@ -72,7 +73,7 @@ def main(args=None):
         'capture_peak_mib': round(capture_peak / 1024 ** 2, 2),
         'finish_peak_mib': round(finish_peak / 1024 ** 2, 2),
         'recording_wire_bytes': len(event) + len(terminal),
-        'pcm_sha256': hashlib.sha256(audio.pcm).hexdigest(),
+        'pcm_sha256': pcm_sha256,
     }))
 
 
