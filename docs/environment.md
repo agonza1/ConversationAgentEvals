@@ -157,6 +157,21 @@ REFERENCE_AGENT_INTERNAL_TOKEN=replace-with-a-random-local-token \
 docker compose --profile voice up --build
 ```
 
+Use the **same** `RTC_ASR_BASE_URL` in API and Pipecat. If rtc-asr is published
+on host port 8081 (for example, another app occupies 8080), use
+`http://host.docker.internal:8081` for both containers; its internal port can
+remain 8080. Recreate both services after changing the URL. A healthy API alone
+does not prove that Pipecat can reach its separately configured ASR endpoint.
+
+Public Pipecat demo runs require rtc-asr. After each response, CAE transcribes
+the captured Daily audio using `/api/transcribe/file`. The resulting **Received
+audio transcript (rtc-asr)** drives evaluation and tester follow-ups. **Target-reported
+text (RTVI)** is retained separately for comparison, not substituted when ASR
+fails. Live WebRTC and recorded playback use captured audio, not reconstructed
+speech from either text source. ASR captions arrive after each response; measured
+target audio latency excludes transcription time. WER comparisons against RTVI
+text are diagnostic, not a human-verified transcription accuracy benchmark.
+
 When `RTC_ASR_BASE_URL` is empty or unhealthy, live session startup records ASR as `not_configured` or `unavailable` and logs a `rtc_asr_skipped` event. The `/sessions/{id}/ask` transcript loop remains non-production demo support, not the ASR provider contract.
 
 For Codex OAuth with a ChatGPT account, CAE defaults to `gpt-6-luna`: it is the
