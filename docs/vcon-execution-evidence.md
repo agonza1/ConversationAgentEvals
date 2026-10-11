@@ -1,10 +1,10 @@
 # Portable execution evidence
 
-ConVoice QA uses the unsigned [vCon core draft-04](https://datatracker.ietf.org/doc/html/draft-ietf-vcon-vcon-core-04) format, version `0.4.0`. This is a draft, not a finalized RFC. Conversation text/audio stays in `dialog`; raw action and state observations are ancillary JSON in standard `attachments`; computed scores are separate `analysis` reports. No custom top-level vCon fields or registered vCon extension are required.
+VoiceAI QA uses the unsigned [vCon core draft-04](https://datatracker.ietf.org/doc/html/draft-ietf-vcon-vcon-core-04) format, version `0.4.0`. This is a draft, not a finalized RFC. Conversation text/audio stays in `dialog`; raw action and state observations are ancillary JSON in standard `attachments`; computed scores are separate `analysis` reports. No custom top-level vCon fields or registered vCon extension are required.
 
 ## Profile v1
 
-The attachment has purpose `CAE execution evidence`, media type `application/json`, encoding `json`, and a body with schema `cae-execution-evidence-v1`. Its distributing party is ConVoice QA, not the caller. Its optional dialog anchor identifies the conversation; individual events can carry finer dialog/turn references. See [the profile schema](schemas/cae-execution-evidence-v1.json). It is an application profile inside a standard container, not an IETF-defined tool-call schema.
+The attachment has purpose `CAE execution evidence`, media type `application/json`, encoding `json`, and a body with schema `cae-execution-evidence-v1`. Its distributing party is VoiceAI QA, not the caller. Its optional dialog anchor identifies the conversation; individual events can carry finer dialog/turn references. See [the profile schema](schemas/cae-execution-evidence-v1.json). It is an application profile inside a standard container, not an IETF-defined tool-call schema.
 
 | Body field | Meaning |
 | --- | --- |
