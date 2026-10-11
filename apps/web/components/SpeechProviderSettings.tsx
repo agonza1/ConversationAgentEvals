@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { getApiBase } from '@/lib/api';
+import styles from './SpeechProviderSettings.module.css';
 
 type Selection = {
   stt_provider: 'rtc-asr' | 'deepgram' | 'cartesia';
@@ -54,7 +55,7 @@ export function SpeechProviderSettings({ onSaved }: { onSaved: () => void }) {
     <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Speech providers · STT / TTS</summary>
     <p style={{ color: 'var(--muted)' }}>Configure the built-in caller and reference voice agent. New runs use these deployment-wide settings.</p>
     {selection ? <>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+      <div className={styles.fields}>
         <label>Speech recognition (STT)<select aria-label="STT provider" value={selection.stt_provider}
           onChange={(event) => {
             const provider = event.target.value as Selection['stt_provider'];
@@ -77,7 +78,7 @@ export function SpeechProviderSettings({ onSaved }: { onSaved: () => void }) {
         <label>Language<input aria-label="Speech language" value={selection.language} onChange={(e) => patch({ language: e.target.value })} /></label>
       </div>
       {(selection.stt_provider === 'deepgram' || selection.tts_provider === 'deepgram') ? <p>Set <code>DEEPGRAM_API_KEY</code> in the Pipecat server environment.</p> : null}
-      {(selection.stt_provider === 'cartesia' || selection.tts_provider === 'cartesia') ? <p>Set <code>CARTESIA_API_KEY</code> in the Pipecat server environment. Use voice IDs from your Cartesia voice library.</p> : null}
+      {(selection.stt_provider === 'cartesia' || selection.tts_provider === 'cartesia') ? <p>Set <code>CARTESIA_API_KEY</code> in the Pipecat server environment.{selection.tts_provider === 'cartesia' ? ' Use voice IDs from your Cartesia voice library.' : ''}</p> : null}
       <button type="button" className="secondary-link" disabled={saving || !dirty} onClick={() => void save()}>{saving ? 'Saving…' : 'Apply speech settings'}</button>
     </> : null}
     {message ? <p role="status">{message}</p> : null}
