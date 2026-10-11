@@ -13,6 +13,12 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+test.afterEach(async ({ page }) => {
+  // A loaded retained record can trigger another catalog request. Drain fixture
+  // callbacks before Playwright closes the page rather than aborting route.fetch.
+  await page.unrouteAll({ behavior: 'wait' });
+});
+
 test('benchmark report includes a share-ready brief', async ({ page }) => {
   await page.goto('/benchmarks');
 
