@@ -1,9 +1,12 @@
 import { expect, test } from '@playwright/test';
 
 test('primary destinations and the two evaluation inputs are consistent on desktop and mobile', async ({ page }) => {
-  for (const width of [1280, 390]) {
+  for (const width of [1280, 641, 390]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto('/?api_base=http%3A%2F%2Fapi.example.test');
+    // Compact fonts can otherwise keep the action on the links' row, moving
+    // a left-anchored dropdown beyond the mobile viewport on Linux.
+    if (width <= 641) await page.addStyleTag({ content: '.top-nav { font-family: Arial, sans-serif; }' });
     const nav = page.getByRole('navigation', { name: 'Primary' });
     await expect(nav.getByRole('link')).toHaveText(['ConVoice QA', 'Overview', 'Tests', 'Agents', 'Results', 'Settings']);
     await nav.getByText('New evaluation', { exact: true }).click();

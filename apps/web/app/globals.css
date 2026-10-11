@@ -68,6 +68,7 @@ select {
 }
 
 .top-nav {
+  position: relative;
   min-height: 48px;
   display: flex;
   align-items: center;
@@ -98,7 +99,7 @@ select {
 }
 
 .top-nav > div { flex-wrap: wrap; }
-.new-evaluation-menu { position: relative; }
+.new-evaluation-menu { position: static; }
 .new-evaluation-menu > summary {
   cursor: pointer;
   padding: 10px 14px;
@@ -1759,7 +1760,8 @@ select {
 }
 
 @media (max-width: 640px) {
-  .new-evaluation-menu > summary { padding: 8px 12px; font-size: 12px; }
+  .new-evaluation-menu { flex-basis: 100%; }
+  .new-evaluation-menu > summary { width: fit-content; padding: 8px 12px; font-size: 12px; }
   .top-nav .new-evaluation-options { left: 0; right: auto; }
   .top-nav .new-evaluation-options a { display: grid; padding: 12px; }
   .top-nav a:not(.brand) {
