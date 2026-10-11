@@ -50,7 +50,7 @@ export function SpecGenerationSettings() {
 
   return <section className="card" aria-label="Draft generation settings">
     <h2>Draft-generation model</h2>
-    <p>Used by both draft buttons in Evaluation design. Applies to this CAE deployment, not voice agents or evaluation judges.</p>
+    <p>Used when creating test sets. Applies to this CAE deployment, not voice agents or evaluation judges.</p>
     <label>Model
       <select aria-label="Draft model choices" value={model && !ids.includes(model) ? '__custom__' : model} disabled={busy} onChange={(event) => { setMessage(null); setModel(event.target.value === '__custom__' ? '__custom__' : event.target.value); }}>
         <option value="">Use deployment default{settings ? ` (${settings.default_model})` : ''}</option>

@@ -1,6 +1,8 @@
 'use client';
 
 import Link from 'next/link';
+import { ApiAwareLink } from '@/components/ApiAwareLink';
+import { getApiBase } from '@/lib/execution';
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 type JsonRecord = Record<string, unknown>;
@@ -32,23 +34,6 @@ interface ScenarioSuite {
   scenarios: ScenarioRecord[];
 }
 
-function getApiBase() {
-  if (typeof window === 'undefined') {
-    return (process.env.API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://127.0.0.1:8025')
-      .replace(/\/$/, '')
-      .replace(/\/api$/, '');
-  }
-
-  const fromQuery = new URLSearchParams(window.location.search).get('api_base');
-  if (fromQuery) {
-    try {
-      return new URL(fromQuery, window.location.origin).toString().replace(/\/$/, '').replace(/\/api$/, '');
-    } catch {
-      // Ignore malformed overrides.
-    }
-  }
-  return '';
-}
 
 async function handleJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -369,11 +354,11 @@ export function ScenariosPage() {
           <div className="scenarios-sidebar-header">
             <div>
               <p className="eyebrow">Evaluation suites</p>
-              <h2>Scenario catalog</h2>
-              <Link href="/specs/new">Create from requirements →</Link>
+              <h2>Test library</h2>
+              <ApiAwareLink className="primary-link" href="/specs/new">Create test set</ApiAwareLink>
             </div>
             <button type="button" className="primary-link" onClick={() => { setMode('create'); setError(null); setSaveMessage(null); }}>
-              Create scenario
+              Add quick case
             </button>
           </div>
 
@@ -429,8 +414,8 @@ export function ScenariosPage() {
             <form className="card scenarios-create-form" onSubmit={(event) => void onCreate(event)}>
               <div>
                 <p className="eyebrow">User Scenarios</p>
-                <h2>Create a scenario</h2>
-                <p className="scenarios-muted">Enter explicit rules below. Expected outcome text is not automatically converted into rules. For reviewed AI drafts and version-linked cases, use <Link href="/specs/new">Evaluation design</Link>.</p>
+                <h2>Add a quick case</h2>
+                <p className="scenarios-muted">A one-off case with explicit rules. Expected outcome text is not automatically converted into rules. For reviewed cases and versioned policies, <Link href="/specs/new">create a test set</Link>.</p>
               </div>
               {error ? <div className="scenarios-error" role="alert">{error}</div> : null}
               <label htmlFor="scenario-title"><span>Title (optional)</span><input id="scenario-title" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Account lockout handoff" /></label>
@@ -456,8 +441,8 @@ export function ScenariosPage() {
                   <p className="scenarios-muted">{selected.suite.description}</p>
                 </div>
                 <div className="scenarios-actions">
-                  <Link className="primary-link" href={scenarioHref('/runs', selected.scenario)}>Run agent</Link>
-                  <Link className="secondary-link" href={scenarioHref('/eval', selected.scenario)}>Eval evidence</Link>
+                  <Link className="primary-link" href={scenarioHref('/runs', selected.scenario)}>Test an agent</Link>
+                  <Link className="secondary-link" href={scenarioHref('/eval', selected.scenario)}>Analyze a conversation</Link>
                   {selected.scenario.suite_id === 'user-scenarios' ? (
                     <button
                       type="button"

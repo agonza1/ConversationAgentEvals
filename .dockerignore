@@ -16,4 +16,5 @@ apps/**/__pycache__
 playwright-report
 test-results
 .playwright-browsers
+**/.playwright-browsers
 apps/web/test-results

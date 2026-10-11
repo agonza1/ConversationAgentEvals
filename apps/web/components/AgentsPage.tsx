@@ -761,7 +761,7 @@ export function AgentsPage() {
       <header className="agents-page-header">
         <div>
           <p className="eyebrow">Agent targets</p>
-          <h1 id="agents-title">Targets</h1>
+          <h1 id="agents-title">Agents</h1>
           <p className="agents-page-lede">
             Connections to systems under test. Built-in entries are testing targets for text and voice;
             add your own to point personas and runs at an existing endpoint.

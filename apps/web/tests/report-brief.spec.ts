@@ -1,9 +1,22 @@
 import { expect, test } from '@playwright/test';
 
+// Coverage fixtures below describe four reviewed cases, independent of optional
+// cases subsequently added to the built-in catalog.
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/benchmarks/suites', async (route) => {
+    const response = await route.fetch();
+    const suites = await response.json();
+    const reviewedCases = new Set(['billing-address-change', 'angry-outage-escalation', 'interruption-correction-handling', 'refund-policy-boundary']);
+    await route.fulfill({ response, json: suites.map((suite: { id: string; scenarios: Array<{ id: string }> }) => (
+      suite.id === 'call-center-voice-ai' ? { ...suite, optional_scenarios: [], scenarios: suite.scenarios.filter((scenario) => reviewedCases.has(scenario.id)) } : suite
+    )) });
+  });
+});
+
 test('benchmark report includes a share-ready brief', async ({ page }) => {
   await page.goto('/benchmarks');
 
-  await expect(page.getByRole('heading', { name: 'Benchmark history and reports.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Benchmark console' })).toBeVisible();
   await expect(page.getByLabel('Suite contract manifest')).toContainText('Required evidence: transcript, action_trace, final_state');
   await expect(page.getByLabel(/Scenario contract: [a-f0-9]{12}/)).toBeVisible();
   await expect(page.getByLabel(/Suite manifest: [a-f0-9]{12}/)).toBeVisible();
@@ -515,10 +528,10 @@ test('empty suites show setup guidance before users try to run evidence checks',
     'Add at least one scenario to run evidence checks, queue suite runs, and track coverage for this suite.',
   );
   await expect(page.getByLabel('First run checklist')).toContainText(
-    'Empty Suite has no scenarios yet.',
+    'Empty Suite needs at least one scenario before you can run evidence checks.',
   );
   await expect(page.getByRole('button', { name: 'Simulate scenario' })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Queue suite run' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Queue simulated suite' })).toBeDisabled();
 });
 
 test('current benchmark report previews regression delta before saving', async ({ page }) => {
@@ -649,6 +662,7 @@ test('benchmark runner submits structured voice call evidence', async ({ page })
   await page.goto('/benchmarks');
   await page.getByText('Evidence payload').click();
   await page.getByLabel('Transcript').fill('Caller: I need a human. Agent: I escalated to a representative.');
+  await page.getByText('Structured and channel evidence (optional)', { exact: true }).click();
   await page.getByLabel('Voice call evidence').fill(JSON.stringify({
     turns: [
       { speaker: 'Caller', body: 'I need a human.' },
@@ -657,7 +671,7 @@ test('benchmark runner submits structured voice call evidence', async ({ page })
     metrics: { durationMs: 92000 },
     media: { recordingUrl: 'https://storage.example.test/calls/demo.wav', mimeType: 'audio/wav' },
   }));
-  await page.getByRole('button', { name: 'Run benchmark' }).click();
+  await page.getByRole('button', { name: 'Evaluate evidence' }).click();
 
   await expect(page.getByText('Voice interaction evidence')).toBeVisible();
   await expect(page.getByLabel('Duration: 92000 ms')).toBeVisible();
@@ -924,7 +938,9 @@ test('benchmark runner queues retained suite runs in the background', async ({ p
   });
 
   await page.goto('/benchmarks');
-  await page.getByRole('button', { name: 'Queue suite run' }).click();
+  await expect(page.getByLabel('Agent profile', { exact: true })).toHaveValue('Built-in sample text agent');
+  await page.getByLabel('Agent profile', { exact: true }).fill('mock text agent');
+  await page.getByRole('button', { name: 'Queue simulated suite' }).click();
 
   await expect(page.getByText('Queued suite run suite-queued-1 for qa-project.')).toBeVisible();
   const suiteHistory = page.getByLabel('Suite run history');

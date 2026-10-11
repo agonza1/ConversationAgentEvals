@@ -7,11 +7,10 @@ export default function ScenariosRoutePage() {
       <SiteNav current="scenarios" />
 
       <section className="minimal-hero" aria-labelledby="scenarios-title">
-        <p className="eyebrow">Scenario library</p>
+        <p className="eyebrow">Tests · rules and cases</p>
         <h1 id="scenarios-title">Choose what your agent must prove.</h1>
         <p>
-          Browse scenarios by evaluation suite, inspect their requirements, then run an agent or evaluate sample
-          evidence. You can also add scenarios for your own workflows.
+          Browse saved test sets, define rules and review cases, then test an agent or analyze an existing conversation.
         </p>
       </section>
 

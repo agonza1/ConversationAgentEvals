@@ -104,14 +104,14 @@ test('a published test-set link waits for agent selection and never falls back f
     await expect(launch.getByLabel('Execution agent target')).toHaveValue('');
     await expect(launch.getByLabel('Selected run scope')).toContainText('3 scenarios');
     await expect(launch.getByLabel('Execution agent target').locator('option[value="saved-voice"]')).toHaveCount(0);
-    await expect(launch.getByRole('button', { name: 'Run evaluation' })).toBeDisabled();
+    await expect(launch.getByRole('button', { name: /^Run evaluation$|^Run \d+ voice tests?$/ })).toBeDisabled();
     expect(posts).toEqual([]);
   }
   await page.goto('/runs?suite_id=reviewed-assert-suite&run_scope=suite&agent_id=acc-browser');
   const launch = page.getByRole('region', { name: 'Launch agent run' });
   await expect(launch.getByLabel('Execution agent target')).toHaveValue('acc-browser');
   await expect(launch.getByRole('button', { name: /Entire suite/ })).toHaveCount(0);
-  await expect(launch.getByRole('button', { name: 'Run evaluation' })).toBeDisabled();
+  await expect(launch.getByRole('button', { name: /^Run evaluation$|^Run \d+ voice tests?$/ })).toBeDisabled();
   expect(posts).toEqual([]);
 });
 
@@ -566,7 +566,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
       contentType: 'application/json',
       body: JSON.stringify(posted ? [{
         execution_run_id: 'exec-ui-demo',
-        status: 'queued',
+        status: polled >= 2 ? 'completed' : 'queued',
         mode: 'text_callable',
         suite_id: 'call-center-voice-ai',
         scenario_ids: ['cancellation-rescue'],
@@ -751,7 +751,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
 
   await page.goto('/runs?api_base=http%3A%2F%2Fapi.example.test&suite_id=call-center-voice-ai&scenario_id=billing-address-change');
   await expect(page.getByLabel('Launch agent run')).toBeVisible();
-  await expect(page.getByLabel('Launch agent run').getByRole('button', { name: 'Run evaluation' })).toBeEnabled({
+  await expect(page.getByLabel('Launch agent run').getByRole('button', { name: /^Run evaluation$|^Run \d+ voice tests?$/ })).toBeEnabled({
     timeout: 30_000,
   });
 
@@ -782,7 +782,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   const runScope = launch.getByRole('group', { name: 'Run scope' });
   await expect(runScope.getByRole('button', { name: /Single scenario/ })).toHaveAttribute('aria-pressed', 'true');
   await expect(runScope.getByRole('button', { name: /Entire suite/ })).toHaveAttribute('aria-pressed', 'false');
-  await launch.getByRole('button', { name: 'Run evaluation' }).click();
+  await launch.getByRole('button', { name: /^Run evaluation$|^Run \d+ voice tests?$/ }).click();
   await expect(launch).toContainText('tester_id: Extra inputs are not permitted; executor_id: Extra inputs are not permitted');
   await expect(launch).not.toContainText('[object Object]');
   expect(textPostAttempts[0]).toMatchObject({ scenario_ids: ['billing-address-change'] });
@@ -791,7 +791,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect(launch.getByLabel('Selected run scope')).toContainText('Call Center Voice AI');
   await expect(launch.getByLabel('Selected run scope')).toContainText('2 scenarios');
   await expect(launch).toContainText('2 scenarios × 1 iteration · 2 conversations');
-  await launch.getByRole('button', { name: 'Run evaluation' }).click();
+  await launch.getByRole('button', { name: /^Run evaluation$|^Run \d+ voice tests?$/ }).click();
   await expect(launch.getByText('exec-ui-demo', { exact: true })).toBeVisible();
   await launch.getByRole('button', { name: 'Show live exchange' }).click();
   await expect(launch.getByLabel('Observed live exchange')).toContainText('Please update my address.', { timeout: 8000 });
@@ -818,13 +818,13 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await launch.getByLabel('Maximum exchanges').fill('');
   await expect(launch.getByLabel('Maximum exchanges')).toHaveValue('');
   await expect(launch).toContainText('enter an exchange cap');
-  await expect(launch.getByRole('button', { name: 'Run evaluation' })).toBeDisabled();
+  await expect(launch.getByRole('button', { name: /^Run evaluation$|^Run \d+ voice tests?$/ })).toBeDisabled();
   await launch.getByLabel('Maximum exchanges').pressSequentially('5');
   await expect(launch.getByLabel('Maximum exchanges')).toHaveValue('5');
   await expect(launch).toContainText('up to 5 exchanges each');
-  await expect(launch.getByRole('button', { name: 'Run evaluation' })).toBeEnabled();
+  await expect(launch.getByRole('button', { name: /^Run evaluation$|^Run \d+ voice tests?$/ })).toBeEnabled();
   await launch.getByLabel('Maximum exchanges').fill('4');
-  await launch.getByRole('button', { name: 'Run evaluation' }).click();
+  await launch.getByRole('button', { name: /^Run evaluation$|^Run \d+ voice tests?$/ }).click();
   await expect.poll(() => textPostAttempts.length).toBe(3);
   expect(textPostAttempts.at(-1)).toMatchObject({
     mode: 'text_callable',
@@ -834,6 +834,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   });
   await expect(launch.getByLabel('Execution conversations')).toContainText('Billing Address Change');
   await expect(launch.getByLabel('Execution conversations')).toContainText(/pass/i, { timeout: 8000 });
+  await page.goto('/results?api_base=http%3A%2F%2Fapi.example.test');
   const recentRun = page
     .getByRole('region', { name: 'Recent runs' })
     .locator('a[href="/runs/exec-ui-demo?api_base=http%3A%2F%2Fapi.example.test"]');
@@ -885,8 +886,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await launch.getByRole('button', { name: 'Create live listener link' }).click();
   await expect(launch.getByLabel('Run listener link')).toContainText('exec-ui-voice-2-token');
   expect(listenerRunIds).toEqual(['exec-ui-voice-1', 'exec-ui-voice-2']);
-  await expect(page.getByRole('heading', { name: 'Recent runs' })).toBeVisible();
-  await expect(page.getByRole('link', { name: /Mock text agent/ })).toContainText('queued');
+  await expect(page.getByRole('link', { name: 'View results and history →' })).toBeVisible();
 
   await launch.getByLabel('Execution agent target').selectOption('pipecat-public-demo');
   await expect(launch.getByLabel('Execution model')).toHaveCount(0);
@@ -936,14 +936,14 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await page.reload();
   await launch.getByLabel('Execution agent target').selectOption('generalist-text-agent');
   await expect(launch.getByLabel('Execution model')).toHaveValue('gpt-4.1-mini');
-  await launch.getByRole('button', { name: 'Run evaluation' }).click();
+  await launch.getByRole('button', { name: /^Run evaluation$|^Run \d+ voice tests?$/ }).click();
   await expect.poll(() => textPostAttempts.length).toBe(4);
   expect(textPostAttempts.at(-1)).toMatchObject({
     agent_id: 'generalist-text-agent',
     model_name: 'gpt-4.1-mini',
   });
   await launch.getByLabel('Execution model').selectOption('gpt-4.1');
-  await launch.getByRole('button', { name: 'Run evaluation' }).click();
+  await launch.getByRole('button', { name: /^Run evaluation$|^Run \d+ voice tests?$/ }).click();
   await expect.poll(() => textPostAttempts.length).toBe(5);
   expect(textPostAttempts.at(-1)).toMatchObject({ model_name: 'gpt-4.1' });
 
@@ -952,7 +952,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await page.reload();
   await launch.getByLabel('Execution agent target').selectOption('generalist-text-agent');
   await expect(launch.getByLabel('Execution model')).toHaveValue('gpt-4.1-mini');
-  await launch.getByRole('button', { name: 'Run evaluation' }).click();
+  await launch.getByRole('button', { name: /^Run evaluation$|^Run \d+ voice tests?$/ }).click();
   await expect.poll(() => textPostAttempts.length).toBe(6);
   expect(textPostAttempts.at(-1)).toMatchObject({
     agent_id: 'generalist-text-agent',
@@ -1106,7 +1106,7 @@ test('saved ACC evidence is not offered as a Run Agent target', async ({ page })
   await expect(launch.getByLabel('Execution agent target')).toHaveValue('');
   await expect(launch.getByLabel('Execution agent target').locator('option')).toHaveCount(1);
   await expect(launch.getByLabel('Execution agent target').locator('option')).toHaveText('No targets');
-  await expect(launch.getByRole('button', { name: 'Run evaluation' })).toBeDisabled();
+  await expect(launch.getByRole('button', { name: /^Run evaluation$|^Run \d+ voice tests?$/ })).toBeDisabled();
   expect(posted).toBeNull();
   expect(pageErrors).toEqual([]);
 });

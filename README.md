@@ -8,6 +8,10 @@ ConversationAgentEvals is an application and workflow layer around ASSERT 0.3 co
 
 There is one product and one supported evaluation contract. Users can either run a configured agent to produce current-run evidence or submit existing evidence from an outside system; both paths converge on the same normalization, evaluation, artifact, and reporting workflow.
 
+The workspace has five destinations: **Overview**, **Tests** (cases and reviewed test-set design), **Agents**, **Results** (agent executions and saved evidence evaluations), and **Settings** (connections and models). **New evaluation** offers two inputs: test an agent or analyze an existing conversation. Voice is an agent channel, not a separate evaluation workflow.
+
+Existing URLs remain supported: `/scenarios` shares the `/tests` catalog, `/specs/new` designs test sets, `/runs` configures an execution, `/runs/exec-*` opens its analysis, and `/eval` or `/score` analyzes existing evidence. `/voice` redirects to the shared launcher with voice defaults while preserving caller-supplied query parameters. Opening a launcher, including an old `launch=demo` bookmark, never starts a call automatically. `/benchmarks` retains simulations, historical exports and advanced operator tools outside the primary navigation; it is not the Settings page. Evaluation and evidence APIs are unchanged.
+
 ![ConversationAgentEvals user flow](docs/assets/cae-user-flows.svg)
 
 ## Acknowledgment
@@ -24,7 +28,7 @@ For requirements → reviewed behaviors → version-linked runnable cases, see
 - Platform-owned authentication, project lineage, retention, labels, retries, cancellation, quotas, billing hooks, and cost limits.
 - Durable ASSERT artifact manifests with searchable platform metadata indexes.
 - Operator-facing QA reports, saved-run history, regression comparisons, and export workflows.
-- A focused benchmark runner at `/benchmarks`, including an Execute **Launch evaluation** panel that streams configured text, replay, and voice conversations into an `inference_set.jsonl` live list.
+- A shared launcher at `/runs` that streams configured text, replay, and voice conversations into an `inference_set.jsonl` live list, with history in `/results` and advanced benchmark tools at `/benchmarks`.
 - An opt-in `openai_codex` text target that uses connected local Codex OAuth to record a real model response. It does not invent tool events or completed-task state, so reports honestly show missing live-tool evidence.
 - A built-in streaming voice reference target: Pipecat tester → streaming Kokoro PCM → Silero VAD + rtc-asr Local STT v1 → configured OpenAI-compatible/Codex or local Ollama LLM → streaming Kokoro reply → current-run metrics, evaluation, CAE evidence, and a portable IETF vCon `draft-ietf-vcon-vcon-core-04` (vCon format `0.4.0`) export. This local synthetic-media proof is not browser, SIP, or PSTN validation.
 
@@ -60,7 +64,7 @@ Start the API, web app, and Pipecat service:
 npm run dev
 ```
 
-Open the printed web URL and visit `/benchmarks`. The basic demo uses transcript, action-trace, and final-state evidence, so it does not require live microphone ASR or any external target application. Advanced environment settings are documented in [docs/environment.md](docs/environment.md). To run multiple agents and local CAE stacks safely, follow [docs/parallel-development.md](docs/parallel-development.md).
+Open the printed web URL. Use **New evaluation** to test an agent or analyze a conversation; sample evidence is an explicit option on the analysis form. The basic evidence demo does not require live microphone ASR or any external target application. Advanced environment settings are documented in [docs/environment.md](docs/environment.md). To run multiple agents and local CAE stacks safely, follow [docs/parallel-development.md](docs/parallel-development.md).
 
 Local Codex OAuth for agent execution (not semantic judging): [docs/openai-codex-oauth.md](docs/openai-codex-oauth.md).
 

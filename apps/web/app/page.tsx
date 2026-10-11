@@ -1,6 +1,7 @@
 import Image from 'next/image';
 
 import { ApiAwareLink } from '@/components/ApiAwareLink';
+import { SiteNav } from '@/components/SiteNav';
 
 const domains = [
   {
@@ -77,41 +78,31 @@ const proofRows = [
 const workspacePaths = [
   {
     eyebrow: 'Define the test',
-    title: 'Scenarios',
+    title: 'Tests',
     copy: 'Browse evaluation suites, inspect scenario requirements, and choose what an agent must prove.',
-    href: '/scenarios?suite_id=call-center-voice-ai&scenario_id=billing-address-change',
-    cta: 'Browse scenarios',
+    href: '/tests?suite_id=call-center-voice-ai&scenario_id=billing-address-change',
+    cta: 'Browse test sets',
   },
   {
     eyebrow: 'Evaluate artifacts',
-    title: 'Eval',
+    title: 'Analyze a conversation',
     copy: 'Evaluate transcripts, action traces, final state, calls, and vCon records against a scenario contract.',
-    href: '/eval?demo=sample-evidence',
-    cta: 'Eval evidence',
+    href: '/eval',
+    cta: 'Analyze existing evidence',
   },
   {
     eyebrow: 'Exercise targets',
-    title: 'Run agent',
+    title: 'Test an agent',
     copy: 'Launch a configured agent target, watch conversations complete, then inspect the run analysis.',
     href: '/runs',
-    cta: 'Launch agent run',
+    cta: 'Start an agent test',
   },
 ] as const;
 
 export default function HomePage() {
   return (
     <main className="saas-shell">
-      <nav className="top-nav" aria-label="Primary">
-        <ApiAwareLink className="brand" href="/">ConVoice QA</ApiAwareLink>
-        <div>
-          <a href="#product">Product</a>
-          <ApiAwareLink href="/scenarios">Scenarios</ApiAwareLink>
-          <ApiAwareLink href="/targets">Targets</ApiAwareLink>
-          <ApiAwareLink href="/runs">Run agent</ApiAwareLink>
-          <ApiAwareLink href="/eval">Eval</ApiAwareLink>
-          <ApiAwareLink href="/voice">Voice eval</ApiAwareLink>
-        </div>
-      </nav>
+      <SiteNav current="home" />
 
       <section className="saas-hero" aria-labelledby="hero-title">
         <div className="saas-hero-copy">
@@ -122,8 +113,9 @@ export default function HomePage() {
             regression platform before agents reach production.
           </p>
           <div className="hero-cta">
-            <ApiAwareLink className="primary-link" href="/scenarios">Browse evaluation scenarios</ApiAwareLink>
-            <a className="secondary-link" href="#product">See how it works</a>
+            <ApiAwareLink className="primary-link" href="/runs">Test an agent</ApiAwareLink>
+            <ApiAwareLink className="secondary-link" href="/eval">Analyze a conversation</ApiAwareLink>
+            <ApiAwareLink href="/tests">Browse test sets</ApiAwareLink>
           </div>
         </div>
 
@@ -206,7 +198,7 @@ export default function HomePage() {
           <p className="eyebrow">Workspace</p>
           <h2 id="homepage-runner-title">Choose the workflow that fits your evidence.</h2>
           <p>
-            Start with a clickable demo, then continue in a dedicated workspace without carrying unrelated controls.
+            Test an agent or analyze an existing conversation. Both use reviewed criteria and produce inspectable evidence.
           </p>
         </div>
         <div className="surface-grid">
