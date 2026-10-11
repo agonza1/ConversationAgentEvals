@@ -174,9 +174,19 @@ export function LiveRunFeedback({
     [displayedConversations],
   );
   const audioEvents = useMemo(
-    () => events.filter((event) => event.kind === 'audio' && event.media_url),
+    () => events.filter((event) => event.kind === 'audio' && event.media_url
+      && event.frame_metadata?.media_event !== 'continuous_recording'),
     [events],
   );
+  const replayEvents = useMemo(() => displayedConversations.flatMap((conversation) => {
+    const recorded = events.filter((event) => event.conversationId === conversation.conversation_id
+      && event.kind === 'audio' && event.media_url
+      && event.frame_metadata?.media_event === 'continuous_recording');
+    return recorded.length ? recorded : audioEvents.filter((event) =>
+      event.conversationId === conversation.conversation_id);
+  }), [audioEvents, displayedConversations, events]);
+  const partialRecording = replayEvents.some((event) => event.frame_metadata?.partial === true);
+  const transcriptEvents = events.filter((event) => event.frame_metadata?.media_event !== 'continuous_recording');
   const audioEventsRef = useRef(audioEvents);
   audioEventsRef.current = audioEvents;
 
@@ -680,7 +690,7 @@ export function LiveRunFeedback({
 
   function startReplay() {
     stopPlayback();
-    if (!audioEvents.length) {
+    if (!replayEvents.length) {
       setPlaybackMessage('No recorded conversation audio is available.');
       return;
     }
@@ -689,7 +699,7 @@ export function LiveRunFeedback({
     setPlaybackMode('replay');
     setExpanded(true);
     setPlaybackMessage('Playing the recorded conversation from the beginning.');
-    void queueAudioEvents(audioEvents, generation).then(() => {
+    void queueAudioEvents(replayEvents, generation).then(() => {
       if (
         playbackGenerationRef.current === generation
         && playbackModeRef.current === 'replay'
@@ -788,13 +798,15 @@ export function LiveRunFeedback({
       ? (replayPaused ? 'Resume playback' : 'Pause playback')
       : listenerActive
         ? (httpCaptureOnly ? 'Listen to new captured turns' : 'Listen to live WebRTC')
-        : audioEvents.length
+        : replayEvents.length
           ? 'Play recorded conversation'
           : 'No recorded audio';
   const defaultPlaybackMessage = listenerActive
     ? 'Hear audio as each agent produces it. Starting live listening never replays earlier turns.'
-    : audioEvents.length
-      ? 'Recorded playback starts at the beginning and includes the complete captured conversation.'
+    : replayEvents.length
+      ? (partialRecording
+        ? 'Partial call recording is available. Audio capture ended when the run failed.'
+        : 'Recorded playback starts at the beginning and includes the complete captured conversation.')
       : 'No captured conversation audio is available for playback.';
 
   return (
@@ -810,7 +822,7 @@ export function LiveRunFeedback({
             <button
               type="button"
               aria-pressed={playbackMode !== 'idle'}
-              disabled={!listenerActive && !audioEvents.length}
+              disabled={!listenerActive && !replayEvents.length}
               onClick={() => {
                 if (playbackMode === 'live') {
                   stopPlayback(
@@ -928,7 +940,7 @@ export function LiveRunFeedback({
           aria-live="polite"
           style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12, display: 'grid', gap: 8 }}
         >
-          {events.length ? events.map((event) => (
+          {transcriptEvents.length ? transcriptEvents.map((event) => (
             <div key={`${event.conversationId}-${event.sequence}`} style={{ display: 'grid', gap: 2 }}>
               <strong style={{ fontSize: 13 }}>
                 {connectionPhaseLabel(event)

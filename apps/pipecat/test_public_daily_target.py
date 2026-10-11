@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import time
 from types import SimpleNamespace
@@ -376,6 +377,58 @@ def test_remote_audio_latency_waits_for_confirmed_speech(monkeypatch):
     asyncio.run(collect())
 
 
+@pytest.mark.parametrize('failed', [False, True])
+def test_continuous_public_recording_matches_live_mix_even_on_failure(monkeypatch, failed):
+    class Track:
+        _sample_rate = 24000
+        def __init__(self):
+            self.audio = []
+        def add_audio_bytes(self, payload):
+            self.audio.append(payload)
+
+    track = Track()
+    broadcast = server._ReferenceDuplexBroadcast('continuous-run', 'continuous-session')
+    broadcast.listeners['listener'] = server._ReferenceListener('listener', None, track)
+    server.REFERENCE_DUPLEX_RUNS['continuous-run'] = broadcast
+
+    async def fake_duplex(_request, **kwargs):
+        callback = kwargs['audio_frame_callback']
+        # Target greeting (pair 0), then prebuffered caller speech, followed by
+        # received audio between ASR turn windows. Capture does not depend on
+        # complete_exchange or its response-only WAV.
+        await callback('target_to_tester', bytes([1, 0]) * 480, 24000, 1, 0)
+        await asyncio.sleep(.1)
+        await callback('tester_to_target', bytes([2, 0]) * 2400, 24000, 1, 1)
+        await asyncio.sleep(.03)
+        await callback('target_to_tester', bytes([4, 0]) * 480, 24000, 1, 1)
+        await asyncio.sleep(.15)
+        if failed:
+            raise public_daily_target.PublicDailyTargetError('Public Pipecat test failure.')
+        return {'status': 'pass', 'media': {}}
+
+    monkeypatch.setattr(public_daily_target, 'run_public_daily_duplex', fake_duplex)
+    async def run():
+        return [json.loads(item) async for item in server._public_pipecat_duplex_events(
+            server.PublicPipecatDuplexRequest(caller_text='Test', scenario={'id': 'capture-test'},
+                execution_run_id='continuous-run', session_id='continuous-session'))]
+    try:
+        events = asyncio.run(run())
+        captured = events[-2]
+        assert captured['media_event'] == 'continuous_recording'
+        assert captured['frame_metadata']['partial'] is failed
+        pcm, sample_rate, channels = outbound_voice.wav_to_pcm(
+            base64.b64decode(captured['audio_wav_base64']))
+        assert (sample_rate, channels) == (24000, 1)
+        assert pcm == b''.join(track.audio)
+        assert b'\x01\x00' in pcm  # greeting
+        assert b'\x06\x00' in pcm  # overlap, not a serialized FIFO
+        assert events[-1]['type'] == ('error' if failed else 'complete')
+        if not failed:
+            assert 'conversation_audio_wav_base64' not in events[-1]['result']['media']
+    finally:
+        server.REFERENCE_DUPLEX_RUNS.pop('continuous-run', None)
+
+
 def test_public_duplex_reuses_received_audio_text_for_next_tester_turn(monkeypatch):
     observed: dict[str, object] = {}
 
@@ -409,7 +462,7 @@ def test_public_duplex_reuses_received_audio_text_for_next_tester_turn(monkeypat
             'What symptoms are you experiencing?',
             outbound_voice.pcm_to_wav(bytes([4, 0]) * 320, 16_000, 1),
         )
-        return {'status': 'pass'}
+        return {'status': 'pass', 'media': {}}
 
     monkeypatch.setattr(server, '_run_reference_graph', fake_graph)
     monkeypatch.setattr(public_daily_target, 'run_public_daily_duplex', fake_duplex)
@@ -456,7 +509,11 @@ def test_public_duplex_reuses_received_audio_text_for_next_tester_turn(monkeypat
         }
         for item in request.history
     )
-    assert events == [{'type': 'complete', 'result': {'status': 'pass'}}]
+    assert events[-1]['type'] == 'complete'
+    assert events[-1]['result']['status'] == 'pass'
+    assert events[-1]['result']['media']['recording_metadata']['scope'] == 'continuous_duplex'
+    assert events[-2]['media_event'] == 'continuous_recording'
+    assert events[-2]['frame_metadata']['partial'] is False
     broadcast = server.REFERENCE_DUPLEX_RUNS.pop('exec-public-listener')
     assert broadcast.audio_publish_sequence == 1
     assert broadcast.started_listener_media_keys == {

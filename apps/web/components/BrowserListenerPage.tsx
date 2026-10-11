@@ -207,7 +207,7 @@ export function BrowserListenerPage({ token }: { token: string }) {
   const events = useMemo(
     () => (state?.conversations ?? []).flatMap((conversation) =>
       (conversation.live_events ?? []).map((event) => ({ ...event, conversationId: conversation.conversation_id })),
-    ),
+    ).filter((event) => event.frame_metadata?.media_event !== 'continuous_recording'),
     [state],
   );
 
