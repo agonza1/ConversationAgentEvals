@@ -1703,6 +1703,52 @@ async def _public_pipecat_duplex_events(
     bus: _LocalDuplexFrameBus | None = None
     marked_listener_audio: set[str] = set()
     conversation_history: list[dict[str, str]] = []
+    from continuous_audio import ContinuousDuplexAudio
+    recording = ContinuousDuplexAudio(max_seconds=payload.timeout_seconds + 840)
+
+    def publish_mix(audio: bytes) -> None:
+        if bus is not None and audio:
+            bus.publish_chunk(audio, sample_rate=recording.sample_rate, channels=1)
+
+    async def pump_recording() -> None:
+        # The short shared playout buffer permits duplex mixing before either
+        # monitoring or recording commits a sample. Never enqueue whole turns
+        # into the listener's single FIFO (that serializes overlapping speech).
+        step = recording.sample_rate // 100
+        while True:
+            ready = recording.ready_sample()
+            while recording.rendered + step <= ready:
+                publish_mix(recording.render(recording.rendered + step))
+            await asyncio.sleep(.01)
+
+    async def finish_recording(*, partial: bool) -> dict[str, Any]:
+        pump.cancel()
+        await asyncio.gather(pump, return_exceptions=True)
+        if recording.origin is None:
+            return {}
+        # Do not play a prebuffered caller tail that was never sent if the call
+        # failed during pacing. Preserve captured media and the elapsed gaps.
+        end = max(recording.ready_sample(delay_seconds=0),
+                  recording.cursors.get('target_to_tester', 0))
+        step = recording.sample_rate // 100
+        end = ((end + step - 1) // step) * step
+        while recording.rendered < end:
+            publish_mix(recording.render(min(end, recording.rendered + step)))
+        wav_bytes = recording.wav()
+        wav = base64.b64encode(wav_bytes).decode('ascii')
+        metadata = recording.metadata(partial=partial)
+        metadata['sha256'] = hashlib.sha256(wav_bytes).hexdigest()
+        if bus is not None and broadcast is not None and broadcast.listeners:
+            # Allow the final shared playout buffer to leave the listener track
+            # before clients receive the terminal event and close WebRTC.
+            await asyncio.sleep(.08)
+        await publish({
+            'type': 'live_audio', 'speaker': 'Conversation',
+            'text': 'Continuous call recording (partial).' if partial else 'Continuous call recording.',
+            'audio_wav_base64': wav, 'media_event': 'continuous_recording',
+            'frame_metadata': metadata,
+        })
+        return {'conversation_audio_wav_base64': wav, 'recording_metadata': metadata}
 
     if payload.execution_run_id:
         session_id = payload.session_id or f'{payload.execution_run_id}:public-pipecat'
@@ -1739,13 +1785,15 @@ async def _public_pipecat_duplex_events(
         channels: int,
         turn_pair: int,
     ) -> None:
-        if bus is None or not audio:
+        if not audio:
+            return
+        recording.add(direction, audio, sample_rate=sample_rate, channels=channels)
+        if bus is None:
             return
         listener_media_key = f'{bus.session_id}:{turn_pair}:{direction}'
         if listener_media_key not in marked_listener_audio:
             bus.mark_audio_started(turn_pair=turn_pair, direction=direction)
             marked_listener_audio.add(listener_media_key)
-        bus.publish_chunk(audio, sample_rate=sample_rate, channels=channels)
 
     async def next_turn(
         turn_pair: int,
@@ -1819,13 +1867,16 @@ async def _public_pipecat_duplex_events(
                 event_callback=publish,
                 audio_frame_callback=publish_audio_frame,
             )
+            result['media'].update(await finish_recording(partial=False))
             await publish({'type': 'complete', 'result': result})
         except (ImportError, ModuleNotFoundError):
+            await finish_recording(partial=True)
             await publish({
                 'type': 'error',
                 'detail': 'Install the Pipecat daily transport extra to run the public target directly.',
             })
         except Exception as exc:
+            await finish_recording(partial=True)
             detail = (
                 str(exc)
                 if exc.__class__.__name__ == 'PublicDailyTargetError'
@@ -1833,6 +1884,7 @@ async def _public_pipecat_duplex_events(
             )
             await publish({'type': 'error', 'detail': detail})
 
+    pump = asyncio.create_task(pump_recording())
     task = asyncio.create_task(execute())
     try:
         while True:
@@ -1844,6 +1896,8 @@ async def _public_pipecat_duplex_events(
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+        pump.cancel()
+        await asyncio.gather(pump, return_exceptions=True)
         if broadcast is not None:
             broadcast.active_publishers = max(0, broadcast.active_publishers - 1)
             if broadcast.active_publishers == 0:

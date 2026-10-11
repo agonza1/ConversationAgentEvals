@@ -231,6 +231,20 @@ REALTIME_REQUEST_TIMEOUT_MS=5000
 
 `SPEC_GENERATION_MODEL` retains its provider-aware defaults for scenario authoring. Semantic judging uses the explicit `ASSERT_JUDGE_MODEL` setting and `ASSERT_JUDGE_ALLOWED_MODELS`; there is no silent fallback to the target model, OAuth, or another judge. `LLM_JUDGE_PROVIDER` and `LLM_JUDGE_MODEL` are retired. `LLM_JUDGE_API_KEY` remains an alias for the OpenAI API key passed only to the ASSERT subprocess.
 
+### Continuous public Pipecat call recordings
+
+New public Daily runs record a continuous mono PCM mix on the local transport
+clock, from the first transport audio through call close. Greetings, received
+audio outside ASR/turn windows, pauses and overlapping caller/target speech are
+retained. Live WebRTC monitoring and recording share that same timed mix; browser
+network jitter, speaker volume and late listener attachment are not recorded.
+The live HTTP fallback remains turn-based and is explicitly labeled as such.
+
+Recorded playback prefers the continuous recording (including a partial recording
+when a call fails), with pause/resume on that timeline. Legacy runs without one
+still play their saved turn clips. Per-turn WAVs and ASR evidence remain separate
+for scoring; vCon's main recording uses the full duplex mix for new runs.
+
 ### Local target authentication through Codex OAuth
 
 The **Connect OpenAI** control authenticates compatible agent-execution and authoring features, not the judge. OAuth tokens are stored in the gitignored `.local/openai-codex-oauth.json` file; `OPENAI_CODEX_OAUTH_PATH` changes that store. An existing `~/.codex/auth.json` can be imported unless `OPENAI_CODEX_IMPORT_HOME=0`.

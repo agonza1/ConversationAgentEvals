@@ -43,6 +43,7 @@ class _StreamResponse:
 def test_public_target_client_persists_current_run_media_without_room_credentials(tmp_path):
     caller_wav = _wav(1)
     target_wav = _wav(2)
+    conversation_wav = _wav(3)
     observed: dict[str, object] = {}
     target_metadata = {
         'source_text': 'Pipecat books appointments.',
@@ -77,6 +78,8 @@ def test_public_target_client_persists_current_run_media_without_room_credential
         'media': {
             'caller_audio_wav_base64': base64.b64encode(caller_wav).decode(),
             'target_audio_wav_base64': base64.b64encode(target_wav).decode(),
+            'conversation_audio_wav_base64': base64.b64encode(conversation_wav).decode(),
+            'recording_metadata': {'scope': 'continuous_duplex', 'live_mix_shared': True, 'duration_ms': 20},
         },
         'provenance': {'daily_room_credentials_persisted': False},
     }
@@ -157,6 +160,11 @@ def test_public_target_client_persists_current_run_media_without_room_credential
     assert (tmp_path / 'conversation-1-caller.wav').read_bytes() == caller_wav
     assert (tmp_path / 'conversation-1-target.wav').read_bytes() == target_wav
     assert result['recording_handle'].transport == 'pipecat_daily_webrtc'
+    assert (tmp_path / 'conversation-1-conversation.wav').read_bytes() == conversation_wav
+    assert result['recording_handle'].uri == str(tmp_path / 'conversation-1-conversation.wav')
+    assert result['recording_handle'].metadata['scope'] == 'continuous_duplex'
+    assert result['recording_handle'].metadata['live_mix_shared'] is True
+    assert result['recording_handle'].duration_ms == 20
     assert 'dailyRoom' not in str(result)
     assert 'dailyToken' not in str(result)
 
@@ -165,10 +173,17 @@ def test_public_target_client_surfaces_safe_pipecat_failure_detail(tmp_path):
     class FakeClient:
         def stream(self, *_args, **_kwargs):
             return _StreamResponse([{
+                'type': 'live_audio', 'speaker': 'Conversation',
+                'text': 'Continuous call recording (partial).',
+                'media_event': 'continuous_recording',
+                'audio_wav_base64': base64.b64encode(_wav(4)).decode(),
+                'frame_metadata': {'scope': 'continuous_duplex', 'partial': True},
+            }, {
                 'type': 'error',
                 'detail': 'Public Pipecat bot joined Daily but did not become ready.',
             }])
 
+    observed = []
     with pytest.raises(
         RuntimeError,
         match='Public Pipecat bot joined Daily but did not become ready',
@@ -178,12 +193,17 @@ def test_public_target_client_surfaces_safe_pipecat_failure_detail(tmp_path):
             artifact_dir=tmp_path,
             conversation_id='conversation-error',
             timeout_seconds=60,
+            event_observer=observed.append,
             config=ReferenceRuntimeConfig(
                 pipecat_service_url='http://pipecat.test',
                 internal_token='internal-only',
             ),
             client=FakeClient(),  # type: ignore[arg-type]
         )
+    assert observed[0]['audio'] == _wav(4)
+    assert observed[0]['direction'] is None
+    assert observed[0]['live_audio_key'] == 'continuous_recording'
+    assert observed[0]['frame_metadata']['partial'] is True
 
 
 def test_public_target_client_timeout_includes_service_setup_and_playback(monkeypatch, tmp_path):

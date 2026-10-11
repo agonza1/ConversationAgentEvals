@@ -103,13 +103,13 @@ def run_public_pipecat_call(
                     continue
                 turn_pair = int(event.get('turn_pair') or 0)
                 direction = str(event.get('direction') or '')
-                live_key = f'{turn_pair}:{direction}'
+                live_key = 'continuous_recording' if event.get('media_event') == 'continuous_recording' else f'{turn_pair}:{direction}'
                 metadata = event.get('frame_metadata')
                 metadata = metadata if isinstance(metadata, dict) else {}
                 observed_event = {
                     'speaker': str(event.get('speaker') or ''),
                     'text': str(event.get('text') or ''),
-                    'direction': direction,
+                    'direction': direction or None,
                     'llm_output': str(metadata.get('source_text') or '') or None,
                     'asr_receipt': str(metadata.get('asr_receipt') or '') or None,
                     'frame_metadata': {
@@ -170,20 +170,32 @@ def run_public_pipecat_call(
     target_path = artifact_dir / f'{conversation_id}-target.wav'
     caller_path.write_bytes(caller_wav)
     target_path.write_bytes(target_wav)
-    target_sha = hashlib.sha256(target_wav).hexdigest()
-    target_sha512 = base64.urlsafe_b64encode(
-        hashlib.sha512(target_wav).digest()
+    continuous_audio = media.get('conversation_audio_wav_base64')
+    recording_wav = _decode_audio(continuous_audio, label='conversation') if continuous_audio else target_wav
+    recording_path = artifact_dir / f'{conversation_id}-conversation.wav' if continuous_audio else target_path
+    if continuous_audio:
+        recording_path.write_bytes(recording_wav)
+    recording_metadata = media.get('recording_metadata')
+    recording_metadata = recording_metadata if isinstance(recording_metadata, dict) else {}
+    recording_sha = hashlib.sha256(recording_wav).hexdigest()
+    recording_sha512 = base64.urlsafe_b64encode(
+        hashlib.sha512(recording_wav).digest()
     ).decode('ascii').rstrip('=')
     recording = AudioRecordingHandle(
-        uri=str(target_path),
+        uri=str(recording_path),
         mime_type='audio/wav',
-        sha256=target_sha,
-        sha512=target_sha512,
-        bytes_captured=len(target_wav),
+        sha256=recording_sha,
+        sha512=recording_sha512,
+        duration_ms=(round(recording_metadata['duration_ms'])
+                     if isinstance(recording_metadata.get('duration_ms'), (int, float)) else None),
+        bytes_captured=len(recording_wav),
         transport='pipecat_daily_webrtc',
         metadata={
             'transport': 'pipecat_daily_webrtc',
-            'scope': 'target_response_only',
+            **recording_metadata,
+            'scope': 'continuous_duplex' if continuous_audio else 'target_response_only',
+            'target_audio_uri': str(target_path),
+            'target_audio_sha256': hashlib.sha256(target_wav).hexdigest(),
             'caller_audio_uri': str(caller_path),
             'caller_audio_sha256': hashlib.sha256(caller_wav).hexdigest(),
             'current_run': True,
