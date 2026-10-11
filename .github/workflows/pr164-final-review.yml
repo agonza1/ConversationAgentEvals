@@ -1,0 +1,114 @@
+name: PR 164 final verification
+on:
+  push:
+    branches: [codex/pr164-final-review-20261010]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      OPENAI_CODEX_IMPORT_HOME: '0'
+      NEXT_TELEMETRY_DISABLED: '1'
+      PLAYWRIGHT_BROWSERS_PATH: /tmp/pr164-playwright
+      PLAYWRIGHT_REUSE_EXISTING_SERVER: '0'
+      PYTHONPATH: apps/api
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: npm ci
+      - run: python -m venv apps/api/.venv
+      - run: apps/api/.venv/bin/python -m pip install -r apps/api/requirements.txt
+      - name: Add regressions without applying fixes
+        run: python .github/pr164-final-fixes.py tests
+      - name: Prove the new regressions fail on the original implementation
+        shell: bash
+        run: |
+          mkdir -p /tmp/pr164-verification
+          set +e
+          apps/api/.venv/bin/python -m pytest apps/api/tests/test_upstream_assert_generation.py -k failed_generation_refunds --tb=short -q > /tmp/pr164-verification/backend-before.txt 2>&1
+          backend=$?
+          node --test apps/web/tests/voice-call-status.test.cjs > /tmp/pr164-verification/web-before.txt 2>&1
+          frontend=$?
+          set -e
+          cat /tmp/pr164-verification/backend-before.txt
+          cat /tmp/pr164-verification/web-before.txt
+          test "$backend" -eq 1
+          test "$frontend" -eq 1
+      - name: Apply production fixes
+        run: python .github/pr164-final-fixes.py code
+      - run: apps/api/.venv/bin/python -m pip check
+      - run: npm audit --audit-level=critical
+      - run: npm run docker:check
+      - name: Full API regression suite
+        run: npm run test:api
+      - run: npm run test:benchmark-smoke
+      - run: npm run test:voice-lab-proof
+      - name: Web model regressions
+        run: node --test apps/web/tests/evidence-timeline.test.cjs apps/web/tests/assert-review-model.test.cjs apps/web/tests/next-proxy-timeout.test.cjs apps/web/tests/voice-call-status.test.cjs
+      - run: npm run build:web
+      - run: npx playwright install --with-deps chromium
+      - name: Production-browser authoring and execution regressions
+        run: npx playwright test --config apps/web/playwright.config.ts spec-editor.spec.ts spec-scenario-publish.spec.ts execution-launch.spec.ts --workers=2 --reporter=line
+      - name: Prepare exact verified candidate; exclude temporary automation
+        shell: bash
+        run: |
+          git rm .github/pr164-final-fixes.py .github/workflows/pr164-final-review.yml
+          git add .github/workflows/ci.yml apps/api/app/services/upstream_assert_generation.py apps/api/tests/test_upstream_assert_generation.py apps/web/components/BenchmarkRunner.tsx apps/web/tests/execution-launch.spec.ts apps/web/tests/voice-call-status.test.cjs docs/assert-test-generation.md
+          git diff --exit-code
+          git diff --check 7b58f2b4dc17b58bb3568d9d3c58283db0370e67
+          python - <<'PY'
+          import subprocess
+          expected = {'.github/workflows/ci.yml', 'apps/api/app/services/upstream_assert_generation.py', 'apps/api/tests/test_upstream_assert_generation.py', 'apps/web/components/BenchmarkRunner.tsx', 'apps/web/tests/execution-launch.spec.ts', 'apps/web/tests/voice-call-status.test.cjs', 'docs/assert-test-generation.md'}
+          actual = set(subprocess.check_output(['git', 'diff', '--cached', '--name-only', '7b58f2b4dc17b58bb3568d9d3c58283db0370e67'], text=True).splitlines())
+          assert actual == expected, (actual, expected)
+          PY
+          git diff --binary 7b58f2b4dc17b58bb3568d9d3c58283db0370e67 > /tmp/pr164-verification/candidate.patch
+          git write-tree > /tmp/pr164-verification/tree.txt
+          echo 7b58f2b4dc17b58bb3568d9d3c58283db0370e67 > /tmp/pr164-verification/base.txt
+          git diff --stat 7b58f2b4dc17b58bb3568d9d3c58283db0370e67
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr164-verification
+          path: /tmp/pr164-verification
+          retention-days: 7
+  publish-candidate:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 7b58f2b4dc17b58bb3568d9d3c58283db0370e67
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: pr164-verification
+          path: /tmp/pr164-verification
+      - name: Push only the exact verified candidate to an isolated branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$(cat /tmp/pr164-verification/base.txt)"
+          git apply --index /tmp/pr164-verification/candidate.patch
+          test "$(git write-tree)" = "$(cat /tmp/pr164-verification/tree.txt)"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Fix generation credit refunds and separate media completion from verdicts'
+          gh auth setup-git
+          git push origin HEAD:refs/heads/codex/pr164-validated-20261010
+          echo "Verified candidate: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          echo "Verified tree: $(git write-tree)" >> "$GITHUB_STEP_SUMMARY"
