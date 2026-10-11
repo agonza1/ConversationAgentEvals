@@ -42,3 +42,16 @@ test('completed suite offers one recorded session and discloses omitted waits', 
   assert.match(html, /only the selected session/);
   assert.match(html, /without the original response waits/);
 });
+
+test('continuous-only recordings remain playable and disclose preserved pauses', () => {
+  const html = renderToStaticMarkup(React.createElement(LiveRunFeedback, {
+    conversations: [{ conversation_id: 'case-one', live_events: [{
+      sequence: 1, kind: 'audio', speaker: 'Conversation', text: '', media_url: '/continuous.wav',
+      frame_metadata: { media_event: 'continuous_recording' },
+    }] }], apiBase: '', voice: true, runStatus: 'completed',
+  }));
+  assert.match(html, /Play recorded conversation/);
+  assert.doesNotMatch(html, /disabled=""/);
+  assert.match(html, /Continuous recording preserves captured pauses and overlaps/);
+  assert.doesNotMatch(html, /without the original response waits/);
+});

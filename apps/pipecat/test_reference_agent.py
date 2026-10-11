@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+import pytest
 
 import server
 
@@ -920,7 +921,14 @@ def test_reference_duplex_history_uses_peer_asr_receipts_for_later_prompts(monke
     assert 'claimed agent wording one' not in target_prompts[1]
 
 
-def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(monkeypatch):
+@pytest.mark.parametrize('attach_audio, attach_channels, missed_audio', [
+    (b'\x00\x00' * 240, 1, False),
+    (b'\x01\x00' * 240, 1, True),
+    (struct.pack('<2h', 1000, -1000) * 240, 2, False),
+])
+def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(
+    monkeypatch, attach_audio, attach_channels, missed_audio,
+):
     class _Track:
         _sample_rate = 24000
 
@@ -944,7 +952,8 @@ def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(m
             assert sdp == 'receive-only-offer'
             assert type == 'offer'
             broadcast.mark_audio_started('active-session:1:tester_to_target')
-            broadcast.publish(b'\x00\x00' * 240, sample_rate=24000)
+            broadcast.publish(attach_audio, sample_rate=24000,
+                              channels=attach_channels)
 
         def get_answer(self):
             return {'sdp': 'send-only-answer', 'type': 'answer', 'pc_id': 'listener-pc'}
@@ -968,6 +977,8 @@ def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(m
         execution_run_id='active-run',
         session_id='active-session',
     )
+    # Existing content before negotiation does not count as setup loss.
+    broadcast.publish(b'\x01\x00' * 240, sample_rate=24000)
     server.REFERENCE_DUPLEX_RUNS['active-run'] = broadcast
     client = TestClient(server.app)
 
@@ -986,7 +997,7 @@ def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(m
     assert joined.status_code == 200, joined.text
     assert joined.json()['read_only'] is True
     assert joined.json()['requires_microphone'] is False
-    assert joined.json()['audio_published_during_attach'] is True
+    assert joined.json()['audio_published_during_attach'] is missed_audio
     assert joined.json()['pre_attach_listener_media_keys'] == [
         'active-session:1:tester_to_target',
     ]
@@ -1004,6 +1015,12 @@ def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(m
 
     broadcast.publish(b'\x01\x00' * 240, sample_rate=24000)
     assert _Connection.last._presenter_answer_audio_track.audio
+
+    sequence = broadcast.audio_publish_sequence
+    silence = bytes(480)
+    broadcast.publish(silence, sample_rate=24000)
+    assert broadcast.audio_publish_sequence == sequence
+    assert _Connection.last._presenter_answer_audio_track.audio[-1] == silence
 
     _Connection.last._presenter_answer_audio_track.audio.clear()
     broadcast.publish(b'\x02\x00' * 160, sample_rate=16000)

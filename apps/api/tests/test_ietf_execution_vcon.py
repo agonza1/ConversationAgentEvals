@@ -145,6 +145,24 @@ def test_ietf_execution_vcon_marks_a_target_only_recording_with_the_target_party
     assert exported['dialog'][-1]['parties'] == [1]
 
 
+def test_ietf_execution_vcon_continuous_duplex_recording_has_both_parties():
+    exported = build_ietf_execution_vcon(
+        conversation_id='continuous-call', execution_run_id='exec-continuous',
+        suite_id='voice', scenario_id='appointment', scenario_title=None,
+        mode='pipecat_webrtc',
+        turns=[{'turn_index': 1, 'speaker': 'agent', 'text': 'I can help.'}],
+        recording={
+            'recording_url': 'https://evidence.example.test/continuous-call.wav',
+            'recording_sha512': SHA512_BASE64URL,
+            'metadata': {'scope': 'continuous_duplex', 'live_mix_shared': True},
+        },
+        created_at='2026-10-10T10:00:00Z', updated_at='2026-10-10T10:00:03Z',
+    )
+    assert exported['dialog'][-1]['type'] == 'recording'
+    assert exported['dialog'][-1]['parties'] == [0, 1]
+    assert ietf_vcon_summary(exported)['valid'] is True
+
+
 def test_ietf_execution_vcon_omits_recording_with_an_invalid_content_hash():
     exported = build_ietf_execution_vcon(
         conversation_id='conversation-4',

@@ -175,8 +175,10 @@ turn. Changing the selected case stops its current audio and queued turns. The
 suite listener follows sequential sessions while execution is active; its
 evidence explicitly labels session boundaries.
 
-Turn replay joins captured speech segments without the original response waits.
-It cannot be used to time the live response. Suite tiles aggregate all captured
+Replay prefers the selected session's continuous recording, which retains its
+captured pauses and overlaps. Historical turn-only replay joins speech segments
+without the original response waits and cannot be used to time the live response.
+The player distinguishes the two recording types. Suite tiles aggregate all captured
 responses; the selected conversation's detail uses only its own marks.
 
 Built-in response delay is measured from the final caller PCM playback frame's

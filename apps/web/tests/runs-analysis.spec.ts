@@ -2161,6 +2161,74 @@ test('owner live WebRTC uses a different token from the shared listener link', a
   await expect(feedback.getByRole('button', { name: 'Stop live WebRTC' })).toBeVisible();
 });
 
+for (const status of ['completed', 'failed']) {
+  test(`continuous ${status} call playback prefers the timeline and resumes without replaying turn clips`, async ({ page }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
+      const runtime = window as Window & {
+        __timelineCalls: Array<{ url: string; position: number }>;
+        __timelineAudio?: EventTarget & { currentTime: number };
+      };
+      runtime.__timelineCalls = [];
+      class TestAudio extends EventTarget {
+        currentTime = 0;
+        constructor(private readonly url: string) { super(); }
+        play() {
+          runtime.__timelineAudio = this;
+          runtime.__timelineCalls.push({ url: this.url, position: this.currentTime });
+          return Promise.resolve();
+        }
+        pause() {}
+      }
+      Object.defineProperty(window, 'Audio', { value: TestAudio });
+    });
+    await page.route('**/api/execution/runs/exec-continuous**', async (route) => {
+      await route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({
+          ...runFixture, execution_run_id: 'exec-continuous', status, mode: 'pipecat_webrtc',
+          conversations: [{
+            ...runFixture.conversations[0], conversation_id: 'continuous-1',
+            execution_run_id: 'exec-continuous', status, mode: 'pipecat_webrtc',
+            live_events: [1, 2, 99].map((sequence) => ({
+              sequence, kind: 'audio', speaker: sequence === 99 ? 'Conversation' : 'Caller',
+              text: sequence === 99 ? 'Continuous call recording.' : 'Saved turn clip.',
+              media_url: `/api/execution/runs/exec-continuous/conversations/continuous-1/audio/${sequence}?user_id=demo-user`,
+              frame_metadata: sequence === 99 ? { media_event: 'continuous_recording', partial: status === 'failed' } : {},
+            })),
+          }],
+        }),
+      });
+    });
+    await page.goto('/runs/exec-continuous');
+    const feedback = page.getByLabel('Live run feedback');
+    await feedback.getByRole('button', { name: 'Play recorded conversation' }).click();
+    await expect.poll(() => page.evaluate(() => (window as Window & {
+      __timelineCalls: unknown[];
+    }).__timelineCalls.length)).toBe(1);
+    await page.evaluate(() => {
+      const audio = (window as Window & { __timelineAudio?: { currentTime: number } }).__timelineAudio;
+      if (audio) audio.currentTime = 3.5;
+    });
+    await feedback.getByRole('button', { name: 'Pause playback' }).click();
+    await feedback.getByRole('button', { name: 'Resume playback' }).click();
+    await expect.poll(() => page.evaluate(() => (window as Window & {
+      __timelineCalls: unknown[];
+    }).__timelineCalls.length)).toBe(2);
+    expect(await page.evaluate(() => (window as Window & {
+      __timelineCalls: Array<{ url: string; position: number }>;
+    }).__timelineCalls)).toEqual([
+      expect.objectContaining({ url: expect.stringContaining('/audio/99?'), position: 0 }),
+      expect.objectContaining({ url: expect.stringContaining('/audio/99?'), position: 3.5 }),
+    ]);
+    await page.evaluate(() => (window as Window & {
+      __timelineAudio?: EventTarget;
+    }).__timelineAudio?.dispatchEvent(new Event('ended')));
+    await expect(feedback.getByRole('button', { name: 'Play recorded conversation' })).toBeVisible();
+    await expect(feedback.getByText('Continuous call recording.')).toHaveCount(0);
+  });
+}
+
 test('recorded conversation playback pauses and resumes from the current position', async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
