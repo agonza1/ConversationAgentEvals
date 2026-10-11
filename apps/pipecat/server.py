@@ -426,8 +426,12 @@ class _ReferenceDuplexBroadcast:
         self.started_listener_media_keys.add(listener_media_key)
 
     def publish(self, audio: bytes, *, sample_rate: int, channels: int = 1) -> None:
-        self.audio_publish_sequence += 1
         mono_audio = pcm16_to_mono(audio, channels)
+        # Clocked silence must reach live tracks to preserve the recording
+        # timeline, but is not missed content during listener negotiation.
+        # bytes.count scans in C without another array/buffer allocation.
+        if mono_audio.count(0) != len(mono_audio):
+            self.audio_publish_sequence += 1
         for listener in tuple(self.listeners.values()):
             track = listener.track
             track_rate = int(getattr(track, '_sample_rate', sample_rate))
