@@ -227,6 +227,7 @@ def test_codex_responses_sse_parser_collects_text_deltas():
         'event: response.output_text.delta\n'
         'data: {"type":"response.output_text.delta","delta":" world"}\n\n'
         'event: response.completed\n'
+        'data: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n'
         'data: [DONE]\n'
     )
     assert payload == {'output_text': 'Hello world'}
@@ -259,6 +260,7 @@ def test_codex_response_stream_records_actual_first_text_delta(monkeypatch):
                 b'data: {"type":"response.reasoning_summary_text.delta","delta":"Internal reasoning"}\n',
                 b'event: response.output_text.delta\n',
                 b'data: {"type":"response.output_text.delta","delta":"Hello"}\n',
+                b'data: {"type":"response.completed","response":{"status":"completed"}}\n',
                 b'data: [DONE]\n',
             ])
 
@@ -301,6 +303,7 @@ def test_codex_response_stream_yields_text_deltas_without_buffering(monkeypatch)
                 b'data: {"type":"response.output_text.delta","delta":"Hello"}\n',
                 b'data: {"type":"response.output_text.delta","delta":" world"}\n',
                 b'data: {"type":"response.reasoning_summary_text.done","text":"Internal reasoning"}\n',
+                b'data: {"type":"response.completed","response":{"status":"completed"}}\n',
                 b'data: [DONE]\n',
             ])
 
@@ -503,6 +506,7 @@ def test_http_helpers_use_certifi_ssl_context(monkeypatch):
     _FakeResponse.body = (
         b'event: response.output_text.delta\n'
         b'data: {"type":"response.output_text.delta","delta":"streamed"}\n\n'
+        b'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
         b'data: [DONE]\n'
     )
     assert mod._http_json_post(

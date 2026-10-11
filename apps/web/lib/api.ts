@@ -245,8 +245,8 @@ export async function getEditableAssertSpec(specId: string, userId: string, proj
 }
 
 export async function generateEditableAssertCases(payload: {
-  spec: EditableAssertSpec; behavior_ids: string[]; samples_per_behavior: number;
-}): Promise<{ scenarios: EditableAssertSpec['scenarios']; provider: string; model: string; engine: string }> {
+  spec: EditableAssertSpec; behavior_ids: string[]; samples_per_behavior: number; engine?: 'assert' | 'cae_configured_llm';
+}): Promise<{ scenarios: EditableAssertSpec['scenarios']; provider: string; model: string; engine: string; provenance?: Record<string, string> }> {
   const response = await fetch(`${getApiBase()}/api/specs/generate-cases`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
   });

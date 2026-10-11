@@ -153,6 +153,7 @@ test('spec editor generates draft checks, requires approval, previews YAML, and 
   });
 
   await page.goto('/specs/new?api_base=http%3A%2F%2Fapi.example.test');
+  await page.getByText('Advanced · templates, custom generation, scoring and YAML', { exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Create an evaluation design' })).toBeVisible();
   await expect(page.getByText('Evaluation design · Experimental')).toBeVisible();
   await expect(page.getByLabel('Title')).toHaveValue('Conversation agent quality gate');
@@ -184,6 +185,7 @@ test('evaluation guidance labels distinguish suggestions from enforced runtime c
   });
 
   await page.goto('/specs/new?api_base=http%3A%2F%2Fapi.example.test');
+  await page.getByText('Advanced · templates, custom generation, scoring and YAML', { exact: true }).click();
   await expect(page.getByLabel('Scenario guidance')).toBeVisible();
   await expect(page.getByLabel('Scenario examples')).toBeVisible();
   await expect(page.getByLabel('Programmatic checks')).toBeVisible();
@@ -224,6 +226,7 @@ test('loading and previewing a rich template preserves structured fields', async
   });
 
   await page.goto('/specs/new?api_base=http%3A%2F%2Fapi.example.test');
+  await page.getByText('Advanced · templates, custom generation, scoring and YAML', { exact: true }).click();
   await page.getByLabel('Template').selectOption('rich');
   await expect.poll(() => previewed).not.toBeNull();
   await expect.poll(() => JSON.stringify(previewed)).toBe(JSON.stringify(richSpec));
@@ -264,6 +267,7 @@ test('deleting a check does not transfer removed metadata to the surviving check
   });
 
   await page.goto('/specs/new?api_base=http%3A%2F%2Fapi.example.test');
+  await page.getByText('Advanced · templates, custom generation, scoring and YAML', { exact: true }).click();
   await page.getByLabel('Template').selectOption('metadata');
   await page.getByLabel('Success checks').fill('Keep me');
   await expect.poll(() => previewed?.required_behaviors).toEqual([
@@ -288,6 +292,7 @@ test('save completion does not overwrite edits made while the request is in flig
   });
 
   await page.goto('/specs/new?api_base=http%3A%2F%2Fapi.example.test');
+  await page.getByText('Advanced · templates, custom generation, scoring and YAML', { exact: true }).click();
   // A visible server-rendered button is not proof that its handler has hydrated.
   await expect(page.getByText('Valid preview', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Save version' }).click();
