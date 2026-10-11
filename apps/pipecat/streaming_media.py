@@ -65,6 +65,16 @@ def _rtc_asr_settings() -> tuple[bool, int, float, float]:
     return interim == "true", interval, window, final_timeout
 
 
+def _rtc_asr_max_buffer_seconds() -> float:
+    try:
+        value = float(os.getenv("RTC_ASR_MAX_BUFFER_SECONDS", "60"))
+    except ValueError as exc:
+        raise ValueError("RTC_ASR_MAX_BUFFER_SECONDS must be a number from 1 to 300.") from exc
+    if not 1 <= value <= 300:
+        raise ValueError("RTC_ASR_MAX_BUFFER_SECONDS must be a number from 1 to 300.")
+    return value
+
+
 def rtc_asr_stream_url(base_url: str, stream_path: str = "/v1/stt/stream") -> str:
     """Return the configured Local STT websocket URL."""
     base = base_url.rstrip("/")
@@ -575,6 +585,8 @@ class StreamingRtcAsrProcessor(FrameProcessor):
         super().__init__(name=f"{participant}_rtc_asr")
         (self.interim_results, self.partial_interval_ms,
          self.partial_window_seconds, self.final_timeout_seconds) = _rtc_asr_settings()
+        self.max_buffer_seconds = _rtc_asr_max_buffer_seconds()
+        self.negotiated_max_buffer_bytes: int | None = None
         self.url = rtc_asr_stream_url(base_url, stream_path)
         self.participant = participant
         self.final_frame_type = final_frame_type
@@ -728,7 +740,7 @@ class StreamingRtcAsrProcessor(FrameProcessor):
                     "interim_results": self.interim_results,
                     "partial_interval_ms": self.partial_interval_ms,
                     "partial_window_seconds": self.partial_window_seconds,
-                    "max_buffer_seconds": 20.0,
+                    "max_buffer_seconds": self.max_buffer_seconds,
                     "client_stream_id": self.current_stream_id,
                     "metadata": {"participant": self.participant},
                 }
@@ -791,6 +803,9 @@ class StreamingRtcAsrProcessor(FrameProcessor):
                 payload = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
                 event_type = payload.get("type")
                 if event_type == "ready":
+                    metadata = payload.get("metadata")
+                    limit = metadata.get("max_buffer_bytes") if isinstance(metadata, dict) else None
+                    self.negotiated_max_buffer_bytes = limit if type(limit) is int and limit > 0 else None
                     self.ready.set()
                     continue
                 if event_type == "ping":

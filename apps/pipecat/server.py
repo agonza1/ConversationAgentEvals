@@ -1350,6 +1350,7 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
     live_events: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     exchange_task: asyncio.Task[_StreamingExchangeResult] | None = None
     session_holder: dict[str, Any] = {}
+    terminal_event: dict[str, Any] | None = None
 
     async def record_event(event: dict[str, Any]) -> None:
         await live_events.put(event)
@@ -1439,12 +1440,21 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                     'speech_ended_at': result.tester_speech_ended_at,
                     'tester_speech_ended_at': result.tester_speech_ended_at,
                     'target_endpoint_speech_ended_at': result.target_asr.speech_ended_at,
+                    'target_asr_final_received_at': result.target_asr.final_at,
                     'first_audible_byte_at': result.target_audio_received_at,
                     'target_audio_received_at': result.target_audio_received_at,
                     'response_complete_latency_ms': result.target_response_complete_latency_ms,
                     'asr_interim_count': len(result.tester_asr.interims),
                     'asr_timing': result.tester_asr.server_timing,
                     'stage_metrics': {
+                        'caller_end_to_asr_final_ms': (
+                            round((result.target_asr.final_at - result.tester_speech_ended_at) * 1000, 3)
+                            if result.target_asr.final_at is not None else None
+                        ),
+                        'asr_final_to_first_audio_ms': (
+                            round((result.target_audio_received_at - result.target_asr.final_at) * 1000, 3)
+                            if result.target_asr.final_at is not None else None
+                        ),
                         'asr_finalize_ms': (
                             round(
                                 (result.target_asr.final_at - result.target_asr.speech_ended_at) * 1000,
@@ -1530,7 +1540,7 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                     'exchange_elapsed_ms': round((time.perf_counter() - turn_started) * 1000, 3),
                     'metrics': target_frame['stage_metrics'],
                 })
-            yield _duplex_event({
+            terminal_event = {
                 'type': 'complete',
                 'session_id': payload.session_id,
                 'status': 'completed',
@@ -1554,6 +1564,8 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                                 'partial_interval_ms': result.tester_asr.partial_interval_ms,
                                 'partial_window_seconds': result.tester_asr.partial_window_seconds,
                                 'final_timeout_seconds': result.tester_asr.final_timeout_seconds,
+                                'requested_max_buffer_seconds': getattr(result.tester_asr, 'max_buffer_seconds', None),
+                                'negotiated_max_buffer_bytes': getattr(result.tester_asr, 'negotiated_max_buffer_bytes', None),
                             },
                             {
                                 'name': 'llm',
@@ -1585,6 +1597,8 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                                 'partial_interval_ms': result.target_asr.partial_interval_ms,
                                 'partial_window_seconds': result.target_asr.partial_window_seconds,
                                 'final_timeout_seconds': result.target_asr.final_timeout_seconds,
+                                'requested_max_buffer_seconds': getattr(result.target_asr, 'max_buffer_seconds', None),
+                                'negotiated_max_buffer_bytes': getattr(result.target_asr, 'negotiated_max_buffer_bytes', None),
                             },
                             {
                                 'name': 'llm',
@@ -1603,25 +1617,40 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                         'llm_mode': payload.llm_mode,
                     },
                 },
-            })
+            }
     except TimeoutError:
-        yield _duplex_event({
+        terminal_event = {
             'type': 'error',
             'code': 'duplex_total_timeout',
             'detail': f'Duplex session exceeded {payload.total_timeout_seconds} seconds.',
-        })
+        }
     except Exception as exc:
-        yield _duplex_event({'type': 'error', 'code': 'duplex_runtime_error', 'detail': str(exc)})
+        terminal_event = {'type': 'error', 'code': 'duplex_runtime_error', 'detail': str(exc)}
     finally:
-        if exchange_task is not None:
-            if not exchange_task.done():
-                exchange_task.cancel()
-            await asyncio.gather(exchange_task, return_exceptions=True)
-        session = session_holder.get('session')
-        if session is not None:
-            await session.close()
-        broadcast.active = False
-        asyncio.create_task(_retire_reference_broadcast(broadcast))
+        try:
+            if exchange_task is not None:
+                if not exchange_task.done():
+                    exchange_task.cancel()
+                await asyncio.gather(exchange_task, return_exceptions=True)
+            session = session_holder.get('session')
+            if session is not None:
+                await session.close()
+        except Exception as exc:
+            if terminal_event is None:
+                raise
+            if terminal_event['type'] == 'complete':
+                terminal_event = {
+                    'type': 'error', 'code': 'duplex_cleanup_error', 'detail': str(exc),
+                }
+            else:
+                terminal_event['cleanup_error'] = str(exc)
+        finally:
+            broadcast.active = False
+            asyncio.create_task(_retire_reference_broadcast(broadcast))
+    # The client starts the next suite case as soon as it sees a terminal event.
+    # Release the current pipeline and run lease before sending that event.
+    if terminal_event is not None:
+        yield _duplex_event(terminal_event)
 
 
 async def _retire_reference_broadcast(broadcast: _ReferenceDuplexBroadcast) -> None:

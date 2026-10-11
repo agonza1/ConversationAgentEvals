@@ -1098,7 +1098,7 @@ test('voice analysis reports end-to-end target latency and scopes target diagnos
   await expect(page.getByLabel('Per-mark latency bars')).toContainText('End-to-end target response');
   await expect(page.getByLabel('Per-mark latency bars')).toContainText('Built-in target diagnostics');
   await expect(page.getByLabel('Per-mark latency bars')).toContainText(
-    'Target endpointing + ASR finalization 120ms',
+    'ASR endpoint → final 120ms',
   );
   await expect(page.getByLabel('Per-mark latency bars')).toContainText('LLM TTFT 180ms');
   await expect(page.getByLabel('Per-mark latency bars')).not.toContainText('LLM TTLT');
