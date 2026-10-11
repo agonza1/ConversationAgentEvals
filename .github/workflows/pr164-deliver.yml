@@ -1,0 +1,44 @@
+name: Deliver verified PR 164 candidate
+on:
+  push:
+    branches: [codex/pr164-deliver-20261010]
+permissions:
+  contents: write
+  actions: read
+jobs:
+  deliver:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 7b58f2b4dc17b58bb3568d9d3c58283db0370e67
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: pr164-verification
+          path: /tmp/pr164-verification
+          run-id: 38097562305
+          github-token: ${{ github.token }}
+      - name: Check the tested tree and publish application files only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$(cat /tmp/pr164-verification/base.txt)"
+          git apply --index /tmp/pr164-verification/candidate.patch
+          test "$(git write-tree)" = "$(cat /tmp/pr164-verification/tree.txt)"
+          test "$(git write-tree)" = c371c54022e5f8818f84cc9b8a3982423baa9080
+          # The runner has no workflow-edit permission. Leave CI unchanged here;
+          # the authorized connection will add that tested file separately and
+          # verify the complete tree hash before updating the pull request.
+          git restore --source=HEAD --staged --worktree .github/workflows/ci.yml
+          git diff --check --cached
+          test "$(git diff --cached --name-only | wc -l)" -eq 6
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Fix generation credit refunds and separate media completion from verdicts'
+          gh auth setup-git
+          git push origin HEAD:refs/heads/codex/pr164-validated-20261010
+          echo "APPLICATION_COMMIT=$(git rev-parse HEAD)"
+          echo "APPLICATION_TREE=$(git write-tree)"
+          echo 'VERIFIED_COMPLETE_TREE=c371c54022e5f8818f84cc9b8a3982423baa9080'
