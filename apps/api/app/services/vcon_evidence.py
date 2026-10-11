@@ -177,10 +177,10 @@ def attach_evidence(vcon: dict[str, Any], body: dict[str, Any]) -> dict[str, Any
     body = _redacted_evidence_body(body)
     attachments = exported.setdefault('attachments', [])
     parties = exported.setdefault('parties', [])
-    exporter_party = next((i for i, p in enumerate(parties) if p.get('name') == 'ConVoice QA'), None)
+    exporter_party = next((i for i, p in enumerate(parties) if p.get('name') == 'VoiceAI QA'), None)
     if exporter_party is None:
         exporter_party = len(parties)
-        parties.append({'name': 'ConVoice QA', 'type': 'bot', 'validation': 'none'})
+        parties.append({'name': 'VoiceAI QA', 'type': 'bot', 'validation': 'none'})
     # Replace only our profile. Preserve unrelated attachments/analysis and indices.
     item = {'purpose': PURPOSE, 'start': exported.get('updated_at') or exported['created_at'], 'party': exporter_party,
             'mediatype': 'application/json', 'encoding': 'json', 'body': body}
@@ -397,7 +397,7 @@ def build_benchmark_vcon(payload: dict[str, Any], transcript: str, report: dict[
     exported = attach_evidence(exported, body)
     if report:
         exported.setdefault('analysis', []).append({
-            'type': 'report', 'vendor': 'ConversationAgentEvals', 'product': 'ConVoice QA',
+            'type': 'report', 'vendor': 'ConversationAgentEvals', 'product': 'VoiceAI QA',
             'schema': 'cae-deterministic-evaluation-v1', 'mediatype': 'application/json', 'encoding': 'json',
             'dialog': list(range(len(exported['dialog']))),
             'attachment': next(i for i, a in enumerate(exported['attachments']) if a.get('purpose') == PURPOSE),

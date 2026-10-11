@@ -7,7 +7,7 @@ export function SiteNav({
 }) {
   return (
     <nav className="top-nav compact-nav" aria-label="Primary">
-      <ApiAwareLink className="brand" href="/">ConVoice QA</ApiAwareLink>
+      <ApiAwareLink className="brand" href="/">VoiceAI QA</ApiAwareLink>
       <div>
         <ApiAwareLink href="/" aria-current={current === 'home' ? 'page' : undefined}>Homepage</ApiAwareLink>
         <ApiAwareLink href="/scenarios" aria-current={current === 'scenarios' ? 'page' : undefined}>Scenarios</ApiAwareLink>

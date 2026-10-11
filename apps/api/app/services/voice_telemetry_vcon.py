@@ -230,7 +230,7 @@ def build_telemetry_vcon(*, format: str, data: dict[str, Any], transcript: str =
         removed.append('/source_telemetry/audio_recording_path')
     body['redactions'].extend(removed)
     exported = attach_evidence(exported, body)
-    owner = next(i for i, party in enumerate(exported['parties']) if party['name'] == 'ConVoice QA')
+    owner = next(i for i, party in enumerate(exported['parties']) if party['name'] == 'VoiceAI QA')
     exported['attachments'].append({'purpose': f'Source telemetry ({format})', 'start': exported['created_at'],
                                     'party': owner, 'mediatype': 'application/json', 'encoding': 'json', 'body': native})
     return exported
@@ -252,6 +252,6 @@ def attach_source_telemetry(vcon: dict[str, Any], telemetry: dict[str, Any]) -> 
     body['context']['source_format'] = telemetry['format']
     exported = attach_evidence(vcon, body)
     attachment = native['attachments'][-1]
-    attachment['party'] = next(i for i, party in enumerate(exported['parties']) if party['name'] == 'ConVoice QA')
+    attachment['party'] = next(i for i, party in enumerate(exported['parties']) if party['name'] == 'VoiceAI QA')
     exported['attachments'].append(attachment)
     return exported
