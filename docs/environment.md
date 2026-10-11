@@ -231,6 +231,38 @@ REALTIME_REQUEST_TIMEOUT_MS=5000
 
 `SPEC_GENERATION_MODEL` retains its provider-aware defaults for scenario authoring. Semantic judging uses the explicit `ASSERT_JUDGE_MODEL` setting and `ASSERT_JUDGE_ALLOWED_MODELS`; there is no silent fallback to the target model, OAuth, or another judge. `LLM_JUDGE_PROVIDER` and `LLM_JUDGE_MODEL` are retired. `LLM_JUDGE_API_KEY` remains an alias for the OpenAI API key passed only to the ASSERT subprocess.
 
+### Continuous public Pipecat call recordings
+
+New public Daily runs record a continuous mono PCM mix on the local transport
+clock, from the first transport audio through call close. Greetings, received
+audio outside ASR/turn windows, pauses and overlapping caller/target speech are
+retained. Live WebRTC monitoring and recording share that same timed mix; browser
+network jitter, speaker volume and late listener attachment are not recorded.
+The live HTTP fallback remains turn-based and is explicitly labeled as such.
+
+Recorded playback prefers the continuous recording (including a partial recording
+when a call fails), with pause/resume on that timeline. Legacy runs without one
+still play their saved turn clips. Per-turn WAVs and ASR evidence remain separate
+for scoring; vCon's main recording uses the full duplex mix for new runs.
+
+The mixer does not load another ASR or TTS model. It uses 20 ms batches, reuses
+mono input buffers and a bounded cache of short resampling grids, and transmits
+the full WAV only once. Closed-call capture buffers are released before encoding
+that WAV. Capture is capped at the session timeout plus 120 seconds
+for transport setup/shutdown (20.16 MB of raw PCM at the maximum 300-second
+session). PCM costs 2.88 MB per minute; full-call WAV/base64/JSON finalization
+temporarily needs additional memory.
+
+Run `python apps/pipecat/benchmark_continuous_audio.py --seconds 120` for an
+offline mixer-only benchmark. On the development laptop, the optimized two-minute
+simulation used about 0.38% of one CPU core, 5.7 MiB peak during capture and
+29.3 MiB peak through serialization (down from 42.3 MiB). It halved full-recording wire bytes compared
+with the original duplicate payload, with an identical PCM hash. These numbers
+exclude the voice models, network timing and browser, and are not a guarantee
+under memory pressure. On constrained devices, use one voice evaluation at a
+time and avoid concurrent container builds/model-heavy workloads; recording
+optimization cannot compensate for an overloaded host.
+
 ### Local target authentication through Codex OAuth
 
 The **Connect OpenAI** control authenticates compatible agent-execution and authoring features, not the judge. OAuth tokens are stored in the gitignored `.local/openai-codex-oauth.json` file; `OPENAI_CODEX_OAUTH_PATH` changes that store. An existing `~/.codex/auth.json` can be imported unless `OPENAI_CODEX_IMPORT_HOME=0`.
