@@ -281,7 +281,7 @@ test('targets try-it-out opens a preselected form before launching', async ({ pa
   await page.getByRole('article').filter({ hasText: 'Built-in generalist voice agent' }).getByRole('link', { name: 'Try it Out' }).click();
   await expect(page).toHaveURL(/\/runs\?agent_id=acc-voice-fixture-agent/);
   await expect(page.getByLabel('Execution agent target')).toHaveValue('acc-voice-fixture-agent');
-  const runButton = page.getByRole('button', { name: 'Run evaluation' });
+  const runButton = page.getByRole('button', { name: 'Run 1 voice test', exact: true });
   await expect(runButton).toBeEnabled();
   expect(launches).toHaveLength(0);
   await runButton.click();
@@ -300,7 +300,7 @@ test('public Pipecat target needs an explicit click even from an old demo link',
 
   await page.goto('/runs?launch=demo&agent_id=pipecat-public-demo');
   await expect(page.getByLabel('Execution agent target')).toHaveValue('pipecat-public-demo');
-  const runButton = page.getByRole('button', { name: 'Run evaluation' });
+  const runButton = page.getByRole('button', { name: 'Run 1 voice test', exact: true });
   await expect(runButton).toBeEnabled();
   await page.reload();
   await expect(page.getByLabel('Execution agent target')).toHaveValue('pipecat-public-demo');
