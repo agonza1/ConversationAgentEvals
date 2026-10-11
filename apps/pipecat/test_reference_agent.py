@@ -10,6 +10,7 @@ import time
 import wave
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 import server
@@ -586,6 +587,8 @@ def test_reference_duplex_graph_records_each_asr_processors_effective_settings(m
         asr = complete['graphs'][participant]['processors'][0]
         assert tuple(asr[key] for key in ('interim_results', 'partial_interval_ms',
             'partial_window_seconds', 'final_timeout_seconds')) == expected
+        assert asr['requested_max_buffer_seconds'] == 60.0
+        assert asr['negotiated_max_buffer_bytes'] is None
     asyncio.run(target_asr.vad.cleanup())
     asyncio.run(tester_asr.vad.cleanup())
 
@@ -649,6 +652,98 @@ def test_reference_duplex_cancels_active_exchange_when_stream_closes(monkeypatch
     monkeypatch.setattr(server, '_run_streaming_exchange', blocking_exchange)
     monkeypatch.setattr(server, '_retire_reference_broadcast', retire_immediately)
 
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('cleanup_fails', [False, True])
+def test_duplex_error_releases_session_before_terminal_event_and_next_case(monkeypatch, cleanup_fails):
+    closed = []
+
+    class FailedSession:
+        async def close(self):
+            closed.append(True)
+            if cleanup_fails:
+                raise RuntimeError('cleanup failed')
+
+    async def failed_exchange(**kwargs):
+        kwargs['session_holder']['session'] = FailedSession()
+        raise RuntimeError('speech stream failed')
+
+    async def retire_immediately(_broadcast):
+        return None
+
+    async def run():
+        run_id = f'failed-suite-{cleanup_fails}'
+        for case in range(2):
+            stream = server._reference_duplex_events(server.ReferenceDuplexRunRequest(
+                session_id=f'{run_id}-case-{case}', execution_run_id=run_id,
+                scenario={'id': f'case-{case}', 'title': 'Synthetic voice failure'},
+                llm_mode='mock', max_turn_pairs=1, total_timeout_seconds=20,
+            ))
+            try:
+                event = server.json.loads((await anext(stream)).decode())
+                assert event['type'] == 'error'
+                assert event['code'] == 'duplex_runtime_error'
+                assert event['detail'] == 'speech stream failed'
+                assert len(closed) == case + 1
+                assert server.REFERENCE_DUPLEX_RUNS[run_id].active is False
+                if cleanup_fails:
+                    assert event['cleanup_error'] == 'cleanup failed'
+            finally:
+                try:
+                    await stream.aclose()
+                except RuntimeError:
+                    if not cleanup_fails:
+                        raise
+        server.REFERENCE_DUPLEX_RUNS.pop(run_id, None)
+
+    monkeypatch.setattr(server, '_run_streaming_exchange', failed_exchange)
+    monkeypatch.setattr(server, '_retire_reference_broadcast', retire_immediately)
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('cleanup_fails', [False, True])
+def test_duplex_completion_waits_for_cleanup_and_reports_cleanup_failure(monkeypatch, cleanup_fails):
+    closed = []
+    run_id = f'completion-cleanup-{cleanup_fails}'
+
+    class Session:
+        async def close(self):
+            closed.append(True)
+            if cleanup_fails:
+                raise RuntimeError('cleanup failed after exchange')
+
+    async def completed_exchange(**kwargs):
+        kwargs['session_holder']['session'] = Session()
+        return _streaming_result(caller_text='Hello.', target_receipt='Hello.',
+            target_text='How can I help?', tester_receipt='How can I help?')
+
+    async def retire_immediately(_broadcast):
+        return None
+
+    async def run():
+        stream = server._reference_duplex_events(server.ReferenceDuplexRunRequest(
+            session_id=f'{run_id}-session', execution_run_id=run_id,
+            scenario={'id': 'case', 'title': 'Synthetic successful exchange'},
+            llm_mode='mock', max_turn_pairs=1, total_timeout_seconds=20,
+        ))
+        try:
+            async for raw in stream:
+                event = server.json.loads(raw.decode())
+                if event['type'] in {'complete', 'error'}:
+                    assert closed == [True]
+                    assert server.REFERENCE_DUPLEX_RUNS[run_id].active is False
+                    assert event['type'] == ('error' if cleanup_fails else 'complete')
+                    if cleanup_fails:
+                        assert event['code'] == 'duplex_cleanup_error'
+                    return
+            raise AssertionError('No terminal event received')
+        finally:
+            await stream.aclose()
+            server.REFERENCE_DUPLEX_RUNS.pop(run_id, None)
+
+    monkeypatch.setattr(server, '_run_streaming_exchange', completed_exchange)
+    monkeypatch.setattr(server, '_retire_reference_broadcast', retire_immediately)
     asyncio.run(run())
 
 

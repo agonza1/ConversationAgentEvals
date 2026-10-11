@@ -142,7 +142,11 @@ window provides more partial context and can increase each decode's work.
 The final-transcript deadline remains 20 seconds by default. A local CPU backend
 that needs more decoding time can set `RTC_ASR_FINAL_TIMEOUT_SECONDS=60` after
 confirming decoder latency is the cause. This extends only the bounded wait for a
-final result; the audio buffer stays 20 seconds and the overall voice session
+final result. `RTC_ASR_MAX_BUFFER_SECONDS` separately bounds the requested utterance
+buffer (default 60 seconds; configurable from 1 to 300). The ASR service can impose
+a lower byte cap, so this setting does not guarantee 60 seconds of accepted audio.
+The requested seconds and negotiated byte cap are saved in the processor graph.
+There is no automatic rollover for an utterance exceeding that cap. The overall voice session
 remains bounded to at most 300 seconds. Such a run can validate conversation semantics, but
 should not be presented as a real-time latency benchmark. Tune and validate the
 rtc-asr backend separately; a partial cadence setting does not guarantee CPU
@@ -157,3 +161,8 @@ A generation reservation is retained only when a complete, validated set of draf
 ### Call completion versus evaluation
 
 The voice results view derives call completion from local tester completion or closed, proven public media capture, never from the policy verdict. A completed call can fail automatic checks or require semantic review. Missing media proof remains completion-unverified, and capture errors remain incomplete. Saved ASSERT proposals are still separate from confirmation and application.
+
+The voice service closes the current pipeline and releases its run lease before
+sending a terminal event. Failed cleanup always releases the lease, preserves a
+primary execution error, and turns an otherwise successful exchange into an error.
+The next suite case can therefore start without racing the previous case's cleanup.
