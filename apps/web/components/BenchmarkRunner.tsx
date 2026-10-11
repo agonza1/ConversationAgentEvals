@@ -3838,8 +3838,13 @@ export function BenchmarkRunner({
   );
   const currentRegressionDelta = useMemo(() => currentReportRegressionDelta(report, savedRuns), [report, savedRuns]);
   const suiteScenarioCoverage = useMemo(
-    () => scenarioCoverageFromRuns(view === 'history' && !selectedScenario ? null : selectedSuite, suiteSavedRuns, report),
-    [selectedSuite, selectedScenario, suiteSavedRuns, report, view],
+    () => scenarioCoverageFromRuns(
+      view === 'history' && (!selectedScenario || report?.suite_id !== selectedSuite?.id
+        || report?.scenario_id !== selectedScenario.id) ? null : selectedSuite,
+      view === 'history' ? savedRuns.filter((run) => run.report.suite_id === selectedSuite?.id) : suiteSavedRuns,
+      report,
+    ),
+    [selectedSuite, selectedScenario, suiteSavedRuns, savedRuns, report, view],
   );
   const actionPlan = report ? reportActionPlan(report, currentRegressionDelta, suiteScenarioCoverage) : null;
   const reportBrief = report

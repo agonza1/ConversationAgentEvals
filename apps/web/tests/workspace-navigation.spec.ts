@@ -141,11 +141,13 @@ test('Results shows project-wide saved evaluations and exports all displayed his
 test('project suite history exports the visible scope and compares only the same suite', async ({ page }) => {
   const exports: URLSearchParams[] = [];
   const retries: Record<string, unknown>[] = [];
+  let includeMatchingCoverage = false;
   const validReport = { run_id: 'valid-report', suite_id: 'a', scenario_id: 'active-case', scenario_title: 'Active case',
     overall_score: 80, verdict: 'needs_review', completed_actions: ['frozen_required_action'], missing_actions: [] };
   const saved = [
     { id: 'valid', transcript: 'Retained valid transcript', report: validReport },
     { id: 'missing-ids', transcript: 'Old transcript', report: { run_id: 'old', scenario_title: 'Metadata unavailable', overall_score: 50, verdict: 'needs_review', missing_actions: ['old_required_action'] } },
+    { id: 'foreign-case', transcript: 'Other suite transcript', report: { ...validReport, run_id: 'foreign', suite_id: 'b', scenario_id: 'second-case' } },
   ];
   await page.addInitScript(() => {
     localStorage.setItem('conversation-evals-demo-user', 'workspace-user');
@@ -172,8 +174,13 @@ test('project suite history exports the visible scope and compares only the same
       retries.push(route.request().postDataJSON());
       return route.fulfill({ json: { ...validReport, run_id: 'retry-result' } });
     }
-    if (url.pathname === '/api/product/runs') return route.fulfill({ json: saved });
-    if (url.pathname === '/api/benchmarks/suites') return route.fulfill({ json: [{ id: 'a', title: 'Suite A', scenarios: [{ id: 'active-case', title: 'Active case', required_actions: ['UNRELATED_CURRENT_ACTION'] }] }] });
+    if (url.pathname === '/api/product/runs') return route.fulfill({ json: includeMatchingCoverage
+      ? [...saved, { id: 'matching-case', transcript: 'Same suite transcript', report: { ...validReport, run_id: 'matching', scenario_id: 'second-case' } }]
+      : saved });
+    if (url.pathname === '/api/benchmarks/suites') return route.fulfill({ json: [{ id: 'a', title: 'Suite A', scenarios: [
+      { id: 'active-case', title: 'Active case', required_actions: ['UNRELATED_CURRENT_ACTION'] },
+      { id: 'second-case', title: 'Other case' },
+    ] }] });
     if (url.pathname === '/api/product/config') return route.fulfill({ json: { pricing: [], usage_rules: [], auth: {} } });
     if (url.pathname.endsWith('/contract-manifest')) return route.fulfill({ json: { suite_contract_manifest_sha256: 'current-catalog-fingerprint',
       evidence_requirements: { required_artifacts: ['UNRELATED_CATALOG_ARTIFACT'], optional_artifacts: ['UNRELATED_OPTIONAL_ARTIFACT'] },
@@ -197,13 +204,21 @@ test('project suite history exports the visible scope and compares only the same
   await expect(page.getByLabel('Contract evidence')).not.toContainText('UNRELATED_CATALOG_ARTIFACT');
   await expect(page.getByLabel('Contract evidence')).not.toContainText('UNRELATED_OPTIONAL_ARTIFACT');
   await expect(page.getByLabel('Contract evidence')).not.toContainText('current-catal');
+  await expect(page.getByLabel('Report brief')).toContainText('Suite coverage: 1/2');
+  // A same-named scenario in another suite cannot count as coverage.
+  includeMatchingCoverage = true;
+  await page.reload();
+  await page.getByRole('button', { name: 'Saved evaluations', exact: true }).click();
+  await page.getByRole('button', { name: 'Load run', exact: true }).first().click();
+  await expect(page.getByLabel('Report brief')).toContainText('Suite coverage: 2/2');
+  await expect(page.getByLabel('Report brief')).not.toContainText('Next uncovered');
   const retry = page.getByRole('button', { name: 'Retry run', exact: true });
   await expect(retry.first()).toBeEnabled();
-  await expect(retry.last()).toBeDisabled();
+  await expect(retry.nth(1)).toBeDisabled();
   await retry.first().click();
   await expect.poll(() => retries.length).toBe(1);
   expect(retries[0]).toMatchObject({ suite_id: 'a', scenario_id: 'active-case', transcript: 'Retained valid transcript' });
-  await page.getByRole('button', { name: 'Load run', exact: true }).last().click();
+  await page.getByRole('button', { name: 'Load run', exact: true }).nth(1).click();
   await expect(page.getByLabel('Required action checklist')).toContainText('old_required_action');
   await expect(page.getByLabel('Report brief')).toContainText('Metadata unavailable');
   await expect(page.getByLabel('Report brief')).not.toContainText('Active case');
