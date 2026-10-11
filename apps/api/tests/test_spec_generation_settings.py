@@ -96,6 +96,18 @@ def test_oauth_reports_and_uses_effective_model(monkeypatch):
     assert saved['available'] is True
     assert drafts._complete_generation('draft')[2] == 'gpt-6-luna'
     assert observed == ['gpt-6-luna']
+    assert drafts._complete_generation('draft', expected_provider='openai_codex', expected_model='gpt-6-luna')[2] == 'gpt-6-luna'
+
+
+def test_assert_provider_pin_prevents_api_key_fallback(monkeypatch):
+    monkeypatch.setenv('OPENAI_API_KEY', 'test-key')
+    calls = []
+    monkeypatch.setattr(drafts, '_complete_with_api_key', lambda *args, **kwargs: calls.append(True) or '{}')
+    with pytest.raises(drafts.SpecGenerationUnavailable, match='No fallback was used'):
+        drafts._complete_generation('draft', expected_provider='openai_codex', expected_model='gpt-4.1-mini')
+    with pytest.raises(drafts.SpecGenerationUnavailable, match='model changed'):
+        drafts._complete_generation('draft', expected_provider='openai_api_key', expected_model='different-model')
+    assert calls == []
 
 
 @pytest.mark.parametrize('model,has_temperature', [('gpt-4.1-mini', True), ('gpt-6-luna', False), ('o3', False)])

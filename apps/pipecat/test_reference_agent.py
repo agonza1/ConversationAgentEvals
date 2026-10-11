@@ -173,6 +173,10 @@ def _streaming_result(
             channels=1,
         ),
         target_asr=SimpleNamespace(
+            interim_results=True,
+            partial_interval_ms=100,
+            partial_window_seconds=2.0,
+            final_timeout_seconds=20.0,
             transcript=target_receipt,
             interims=['partial caller'],
             server_timing={'revision': 2},
@@ -192,6 +196,10 @@ def _streaming_result(
             total_ms=4.0,
         ),
         tester_asr=SimpleNamespace(
+            interim_results=True,
+            partial_interval_ms=100,
+            partial_window_seconds=2.0,
+            final_timeout_seconds=20.0,
             transcript=tester_receipt,
             interims=['partial target'],
             server_timing={'revision': 2},
@@ -533,6 +541,53 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
     assert all('Billing Address Change' in prompt for prompt in tester_prompts)
     assert all('update the billing address' in prompt for prompt in tester_prompts)
     assert _AsyncClient.speech_voices == ['af_heart', 'af_bella', 'af_heart', 'af_bella']
+
+
+def test_reference_duplex_graph_records_each_asr_processors_effective_settings(monkeypatch):
+    monkeypatch.setattr(server, 'RTC_ASR_BASE_URL', 'http://rtc-asr.test')
+    monkeypatch.setattr(server, 'KOKORO_BASE_URL', 'http://kokoro.test')
+    monkeypatch.setattr(server, 'REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
+    monkeypatch.setenv('RTC_ASR_INTERIM_RESULTS', 'false')
+    monkeypatch.setenv('RTC_ASR_PARTIAL_INTERVAL_MS', '1000')
+    monkeypatch.setenv('RTC_ASR_PARTIAL_WINDOW_SECONDS', '5')
+    monkeypatch.setenv('RTC_ASR_FINAL_TIMEOUT_SECONDS', '60')
+    target_asr = server.StreamingRtcAsrProcessor(
+        base_url='http://rtc-asr.test', participant='target', final_frame_type=server._TargetTranscriptFrame,
+    )
+    monkeypatch.setenv('RTC_ASR_INTERIM_RESULTS', 'true')
+    monkeypatch.setenv('RTC_ASR_PARTIAL_INTERVAL_MS', '200')
+    monkeypatch.setenv('RTC_ASR_PARTIAL_WINDOW_SECONDS', '0.5')
+    monkeypatch.setenv('RTC_ASR_FINAL_TIMEOUT_SECONDS', '5')
+    tester_asr = server.StreamingRtcAsrProcessor(
+        base_url='http://rtc-asr.test', participant='tester', final_frame_type=server._TesterReceiptFrame,
+    )
+
+    async def fake_exchange(**kwargs):
+        result = _streaming_result(caller_text='Help me.', target_receipt='Help me.',
+            target_text='I can help.', tester_receipt='I can help.')
+        target_asr.transcript = result.target_asr.transcript
+        target_asr.speech_ended_at = result.target_asr.speech_ended_at
+        target_asr.final_at = result.target_asr.final_at
+        tester_asr.transcript = result.tester_asr.transcript
+        result.target_asr, result.tester_asr = target_asr, tester_asr
+        return result
+
+    monkeypatch.setattr(server, '_run_streaming_exchange', fake_exchange)
+    response = TestClient(server.app).post('/reference-duplex/run',
+        headers={'x-cae-reference-token': 'test-token'}, json={
+            'session_id': 'asr-settings-proof', 'execution_run_id': 'asr-settings-run',
+            'scenario': {'id': 'billing-address-change', 'title': 'Address change'},
+            'llm_mode': 'mock', 'max_turn_pairs': 1, 'total_timeout_seconds': 20,
+        })
+    assert response.status_code == 200, response.text
+    complete = server.json.loads(response.text.splitlines()[-1])
+    assert complete['type'] == 'complete'
+    for participant, expected in [('target', (False, 1000, 5.0, 60.0)), ('tester', (True, 200, 0.5, 5.0))]:
+        asr = complete['graphs'][participant]['processors'][0]
+        assert tuple(asr[key] for key in ('interim_results', 'partial_interval_ms',
+            'partial_window_seconds', 'final_timeout_seconds')) == expected
+    asyncio.run(target_asr.vad.cleanup())
+    asyncio.run(tester_asr.vad.cleanup())
 
 
 def test_authored_opener_is_literal_and_followup_instructions_only_reach_tester(monkeypatch):

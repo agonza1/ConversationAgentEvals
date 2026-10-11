@@ -89,6 +89,7 @@ class SpecCaseGenerateRequest(BaseModel):
     spec: EditableAssertSpec
     behavior_ids: list[str] = Field(min_length=1, max_length=20)
     samples_per_behavior: int = Field(default=3, ge=1, le=5)
+    engine: Literal['assert', 'cae_configured_llm'] = 'cae_configured_llm'
 
 
 class SpecScenarioPublishRequest(BaseModel):
@@ -170,7 +171,7 @@ def validate_editable_spec(payload: SpecEnvelope):
 def generate_reviewable_cases(payload: SpecCaseGenerateRequest):
     try:
         return generate_case_drafts(payload.spec, behavior_ids=payload.behavior_ids,
-                                    samples_per_behavior=payload.samples_per_behavior)
+                                    samples_per_behavior=payload.samples_per_behavior, engine=payload.engine)
     except SpecGenerationUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except AssertRuntimeUnavailable as exc:

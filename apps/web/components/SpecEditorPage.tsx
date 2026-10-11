@@ -2,11 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import styles from './SpecEditorPage.module.css';
 
 import { SiteNav } from '@/components/SiteNav';
 import {
   generateEditableAssertDraft,
   generateEditableAssertCases,
+  getApiBase,
   listAssertScenarioContexts,
   getEditableAssertSpec,
   publishEditableAssertScenarios,
@@ -122,6 +125,7 @@ function scenariosFromText(value: string, existing: AssertScenario[], draft: boo
     const matched = matches[index];
     return {
       ...(matched || {}),
+      generation_provenance: matched?.generation_provenance || { engine: 'manual' },
       id: allocateTextId(matched?.id || slug('scenario', title, index), Boolean(matched), reservedIds, usedIds),
       title: title.trim(),
       persona: matched?.persona || '',
@@ -168,9 +172,16 @@ function editableFingerprint(spec: EditableAssertSpec) {
   return JSON.stringify(ordered(content));
 }
 
+function withCurrentApiBase(query: Record<string, string>) {
+  const apiBase = getApiBase();
+  return apiBase ? { ...query, api_base: apiBase } : query;
+}
+
 export function SpecEditorPage() {
+  const router = useRouter();
   const identity = useMemo(() => ({ userId: demoUserId(), projectId: (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('project_id') : null) || demoProjectId() }), []);
   const [spec, setSpec] = useState<EditableAssertSpec>(starterSpec);
+  const [caseGenerator, setCaseGenerator] = useState<'assert' | 'cae_configured_llm'>('assert');
   const [templates, setTemplates] = useState<EditableAssertTemplate[]>([]);
   const [behaviorPresets, setBehaviorPresets] = useState<AssertLibraryPreset[]>([]);
   const [judgePresets, setJudgePresets] = useState<AssertLibraryPreset[]>([]);
@@ -179,6 +190,7 @@ export function SpecEditorPage() {
   const [failureChecks, setFailureChecks] = useState('');
   const [scenarioSeeds, setScenarioSeeds] = useState('');
   const [scenarios, setScenarios] = useState('');
+  const [scenarioExamplesEdited, setScenarioExamplesEdited] = useState(false);
   const [deterministicChecks, setDeterministicChecks] = useState('');
   const [evidenceRequirements, setEvidenceRequirements] = useState(starterSpec.evidence_requirements?.join('\n') || '');
   const [judgeRubric, setJudgeRubric] = useState(defaultJudge.rubric);
@@ -194,6 +206,7 @@ export function SpecEditorPage() {
   const [publishedSuite, setPublishedSuite] = useState<{ suite_id: string; scenario_id: string } | null>(null);
   const [publishConfirmed, setPublishConfirmed] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const continueInFlight = useRef(false);
   const [busy, setBusy] = useState<'templates' | 'generate' | 'cases' | 'publish' | 'preview' | 'save' | null>(null);
 
   const workingSpec = useMemo<EditableAssertSpec>(() => {
@@ -222,12 +235,14 @@ export function SpecEditorPage() {
       required_behaviors: checksFromText(successChecks, spec.required_behaviors || [], 'success', draft),
       forbidden_behaviors: checksFromText(failureChecks, spec.forbidden_behaviors || [], 'failure', draft),
       scenario_seeds: lines(scenarioSeeds),
-      scenarios: scenariosFromText(scenarios, spec.scenarios || [], draft),
+      scenarios: scenarioExamplesEdited && !spec.scenarios.some((item) => item.generation_provenance?.engine === 'assert')
+        ? scenariosFromText(scenarios, spec.scenarios || [], draft)
+        : (spec.scenarios || []).map((caseDraft) => ({ ...caseDraft, draft: draft || Boolean(caseDraft.draft) })),
       deterministic_checks: checksFromText(deterministicChecks, spec.deterministic_checks || [], 'deterministic', draft),
       evidence_requirements: lines(evidenceRequirements),
       judges: [nextJudge],
     };
-  }, [deterministicChecks, disabledBuiltinDimensions, evidenceRequirements, failureChecks, generatedApproved, judgeAllowsNotApplicable, judgeOrdinalScale, judgeRubric, scenarioSeeds, scenarios, selectedJudgePresets, spec, successChecks]);
+  }, [deterministicChecks, disabledBuiltinDimensions, evidenceRequirements, failureChecks, generatedApproved, judgeAllowsNotApplicable, judgeOrdinalScale, judgeRubric, scenarioSeeds, scenarios, scenarioExamplesEdited, selectedJudgePresets, spec, successChecks]);
   const latestWorkingSpec = useRef(workingSpec);
   useEffect(() => {
     latestWorkingSpec.current = workingSpec;
@@ -235,6 +250,11 @@ export function SpecEditorPage() {
   const needsApproval = workingSpec.generated_content_status === 'draft' && !generatedApproved;
   const unsavedChanges = !saved || savedFingerprint !== editableFingerprint(workingSpec);
   const checks = [...workingSpec.required_behaviors, ...workingSpec.forbidden_behaviors];
+  const validSelectedBehaviors = selectedBehaviors.filter((id) => checks.some((check) => check.id === id));
+  const coveredRules = checks.filter((check) => workingSpec.scenarios.some((item) => item.behavior_id === check.id));
+  const hasAssertCases = workingSpec.scenarios.some((item) => item.generation_provenance?.engine === 'assert');
+  const runnableCases = workingSpec.scenarios.length > 0 && workingSpec.scenarios.every((item) =>
+    item.steps?.[0]?.trim() && item.expected_outcome?.trim() && checks.some((check) => check.id === item.behavior_id));
   const mutationBusy = busy !== null && busy !== 'preview';
 
   useEffect(() => {
@@ -303,6 +323,7 @@ export function SpecEditorPage() {
     setFailureChecks(textFromChecks(nextSpec.forbidden_behaviors || []));
     setScenarioSeeds((nextSpec.scenario_seeds || []).join('\n'));
     setScenarios(textFromScenarios(nextSpec.scenarios || []));
+    setScenarioExamplesEdited(false);
     setDeterministicChecks(textFromChecks(nextSpec.deterministic_checks || []));
     setEvidenceRequirements((nextSpec.evidence_requirements || []).join('\n'));
     const nextJudge = nextSpec.judges?.[0] || defaultJudge;
@@ -374,18 +395,82 @@ export function SpecEditorPage() {
 
   async function generateCases() {
     const submitted = workingSpec;
+    if (!validSelectedBehaviors.length || validSelectedBehaviors.length > 6) return;
     setBusy('cases'); setError(null);
     try {
-      const result = await generateEditableAssertCases({ spec: submitted, behavior_ids: selectedBehaviors, samples_per_behavior: 3 });
+      const result = await generateEditableAssertCases({ spec: approvedSnapshot(submitted), behavior_ids: validSelectedBehaviors, samples_per_behavior: 3, engine: caseGenerator });
       if (latestWorkingSpec.current !== submitted) throw new Error('Design changed during generation. Case drafts discarded; try again.');
       applySpec({ ...submitted, scenarios: result.scenarios, generated_content_status: 'draft',
-        generation_provenance: { engine: result.engine, provider: result.provider, model: result.model } });
+        generation_provenance: { ...result.provenance, engine: result.engine, provider: result.provider, model: result.model } });
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not generate cases'); }
     finally { setBusy(null); }
   }
 
+  function approvedSnapshot(snapshot: EditableAssertSpec): EditableAssertSpec {
+    return { ...snapshot, generated_content_status: 'approved',
+      required_behaviors: snapshot.required_behaviors.map((item) => ({ ...item, draft: false })),
+      forbidden_behaviors: snapshot.forbidden_behaviors.map((item) => ({ ...item, draft: false })),
+      deterministic_checks: (snapshot.deterministic_checks || []).map((item) => ({ ...item, draft: false })),
+      scenarios: snapshot.scenarios.map((item) => ({ ...item, draft: false })),
+    };
+  }
+
+  async function approveAndContinue() {
+    if (continueInFlight.current || mutationBusy || !runnableCases) return;
+    continueInFlight.current = true;
+    const submitted = workingSpec;
+    const submittedFingerprint = editableFingerprint(submitted);
+    setError(null); setBusy('save');
+    try {
+      let version = saved && !unsavedChanges && !needsApproval ? saved : null;
+      if (!version) {
+        version = await saveEditableAssertSpec({ user_id: identity.userId, project_id: identity.projectId,
+          spec: approvedSnapshot(submitted) });
+        setSaved(version);
+        if (editableFingerprint(latestWorkingSpec.current) !== submittedFingerprint) {
+          setSavedFingerprint(null);
+          throw new Error('The submitted test set was saved, but you made newer edits. Review those edits before continuing; nothing was published.');
+        }
+        applySpec(version.spec);
+        latestWorkingSpec.current = version.spec;
+        setSaved(version); setSavedFingerprint(editableFingerprint(version.spec));
+      }
+      const versionFingerprint = editableFingerprint(version.spec);
+      setBusy('publish');
+      const result = await publishEditableAssertScenarios(version.id, {
+        user_id: identity.userId, project_id: version.project_id, version: version.version, confirm: true,
+      });
+      const scenarioId = result.scenario_ids[0];
+      if (!scenarioId) throw new Error('The published suite returned no runnable scenarios.');
+      setPublishedSuite({ suite_id: result.suite_id, scenario_id: scenarioId });
+      if (editableFingerprint(latestWorkingSpec.current) !== versionFingerprint) {
+        throw new Error('The saved version was published, but newer edits were not included. Review the current test set before continuing.');
+      }
+      const query = new URLSearchParams(withCurrentApiBase({ suite_id: result.suite_id, scenario_id: scenarioId, run_scope: 'suite' }));
+      router.push(`/runs?${query}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not prepare test set. Retry to publish the saved version.');
+    } finally { continueInFlight.current = false; setBusy(null); }
+  }
+
   function updateCase(caseId: string, update: Partial<AssertScenario>) {
-    setSpec({ ...workingSpec, scenarios: workingSpec.scenarios.map((item) => item.id === caseId ? { ...item, ...update } : item) });
+    const next = { ...workingSpec, scenarios: workingSpec.scenarios.map((item) => item.id === caseId ? { ...item, ...update } : item) };
+    setSpec(next);
+    if (!scenarioExamplesEdited) setScenarios(textFromScenarios(next.scenarios));
+  }
+
+  function addManualCase() {
+    const next = { ...workingSpec, scenarios: [...workingSpec.scenarios, {
+      id: `manual-${crypto.randomUUID()}`, title: `Manual case ${workingSpec.scenarios.length + 1}`,
+      description: '', steps: [''], expected_outcome: '', behavior_id: null,
+      variant: 'normal' as const, generation_provenance: { engine: 'manual' },
+    }] };
+    setSpec(next); setScenarios(textFromScenarios(next.scenarios)); setScenarioExamplesEdited(false);
+  }
+
+  function removeCase(caseId: string) {
+    const next = { ...workingSpec, scenarios: workingSpec.scenarios.filter((item) => item.id !== caseId) };
+    setSpec(next); setScenarios(textFromScenarios(next.scenarios)); setScenarioExamplesEdited(false);
   }
 
   function updateBehavior(checkId: string, update: Partial<AssertCheck>) {
@@ -411,78 +496,117 @@ export function SpecEditorPage() {
   }
 
   return (
-    <main className="page-shell spec-editor-shell">
+    <main className={`page-shell spec-editor-shell ${styles.shell}`}>
       <SiteNav current="specs" />
       <section className="minimal-hero spec-hero" aria-labelledby="spec-title">
         <p className="eyebrow">Evaluation design · Experimental</p>
         <h1 id="spec-title">Create an evaluation design</h1>
-        <p>Requirements → reviewed behaviors → runnable cases. Save a version, then publish its cases into Scenarios without starting a run.</p>
+        <p>Define the rules, review caller cases, then choose a voice agent and run the test set.</p>
       </section>
-
-      <section className="spec-editor-toolbar card" aria-label="Spec editor controls">
-        <label>
-          Template
-          <select value="" onChange={(event) => loadTemplate(event.target.value)} disabled={busy === 'templates'}>
-            <option value="">Choose a starter template…</option>
-            {templates.map((template) => <option key={template.id} value={template.id}>{template.label}</option>)}
-          </select>
-        </label>
-        <button className="secondary-link" type="button" onClick={generateDraft} disabled={mutationBusy}>{busy === 'generate' ? 'Generating…' : 'Generate draft checks/scenarios'}</button>
-        <button className="primary-link" type="button" onClick={() => setGeneratedApproved(true)} disabled={!needsApproval}>Approve generated draft</button>
-        <button className="primary-link" type="button" onClick={saveVersion} disabled={mutationBusy || needsApproval}>{busy === 'save' ? 'Saving…' : 'Save version'}</button>
-        <span className="spec-workspace-context">Workspace: {identity.projectId}</span>
-      </section>
-
+      <ol className={styles.steps} aria-label="Evaluation workflow">
+        <li aria-current={workingSpec.scenarios.length ? undefined : 'step'}>1 · Define test</li>
+        <li aria-current={workingSpec.scenarios.length ? 'step' : undefined}>2 · Review cases</li>
+        <li>3 · Run voice tests</li><li>4 · Inspect results</li>
+      </ol>
       {error ? <div className="scenarios-error" role="alert">{error}</div> : null}
-      {saved ? <div className="spec-save-banner" role="status">Saved `{saved.id}` version {saved.version}. YAML is ready to export or hand to ASSERT.</div> : null}
+      {saved ? <div className="spec-save-banner" role="status">Saved `{saved.id}` version {saved.version}.{unsavedChanges ? ' Current edits are not saved.' : ' Ready to publish; retrying will reuse this version.'}</div> : null}
 
-      <div className="spec-editor-grid">
-        <section className="card spec-form-card" aria-label="Editable evaluation design fields">
-          <div className="spec-field-row">
-            <label>Title<input value={spec.title} onChange={(event) => setSpec({ ...spec, title: event.target.value })} /></label>
-            <label>Agent role<input value={spec.role} onChange={(event) => setSpec({ ...spec, role: event.target.value })} /></label>
-          </div>
-          <label>Objective<textarea rows={3} value={spec.objective} onChange={(event) => setSpec({ ...spec, objective: event.target.value })} /></label>
-          <label>Product requirements / policy<textarea rows={6} value={spec.requirements || ''} onChange={(event) => setSpec({ ...spec, requirements: event.target.value })} placeholder="The agent offers housing options. It must never sell a house or handle payments." /></label>
-          <label>Permissible behavior boundary<textarea rows={3} value={spec.permissible_behavior || ''} onChange={(event) => setSpec({ ...spec, permissible_behavior: event.target.value })} placeholder="May explain options and costs, but cannot execute a sale or collect payment." /></label>
-          <div className="spec-field-row">
-            <label>Success checks<textarea rows={8} value={successChecks} onChange={(event) => setSuccessChecks(event.target.value)} /></label>
-            <label>Failure / forbidden checks<textarea rows={8} value={failureChecks} onChange={(event) => setFailureChecks(event.target.value)} /></label>
-          </div>
-          {checks.map((check, index) => <div key={check.id}>
-            <label>Behavior definition {index + 1}: {check.label}<textarea rows={2} value={check.description} onChange={(event) => updateBehavior(check.id, { description: event.target.value })} /><small>ID: {check.id}</small></label>
-            <label>Source quotation for behavior {index + 1} (optional)<input value={check.source_quote || ''} onChange={(event) => updateBehavior(check.id, { source_quote: event.target.value })} /></label>
-          </div>)}
-          <div className="spec-field-row">
-            <label>Scenario guidance<textarea rows={6} value={scenarioSeeds} onChange={(event) => setScenarioSeeds(event.target.value)} /></label>
-            <label>Scenario examples<textarea rows={6} value={scenarios} onChange={(event) => setScenarios(event.target.value)} /></label>
-          </div>
-          <section aria-label="Runnable case authoring">
-            <h2>Reviewed runnable cases</h2>
-            <p>Select behaviors to generate three drafts each: normal, boundary, and adversarial. Generation replaces the current cases. Edit and approve before saving.</p>
-            <ul>{checks.map((check) => <li key={check.id}>{check.label}: {workingSpec.scenarios.filter((item) => item.behavior_id === check.id).length} cases · {Array.from(new Set(workingSpec.scenarios.filter((item) => item.behavior_id === check.id).map((item) => item.variant || 'normal'))).join(', ') || 'not covered'}</li>)}</ul>
-            <label>Behaviors to cover<select multiple size={Math.min(6, Math.max(2, checks.length))} value={selectedBehaviors} onChange={(event) => setSelectedBehaviors(Array.from(event.currentTarget.selectedOptions, (option) => option.value))}>
-              {checks.map((check) => <option key={check.id} value={check.id}>{check.label}</option>)}
-            </select></label>
-            <button type="button" className="secondary-link" onClick={generateCases} disabled={mutationBusy || needsApproval || !selectedBehaviors.length || !spec.permissible_behavior?.trim()}>{busy === 'cases' ? 'Generating cases…' : 'Generate runnable case drafts'}</button>
-            {workingSpec.scenarios.map((item, index) => <fieldset key={item.id}>
-              <legend>{item.title || `Case ${index + 1}`}</legend>
+      <section className="card spec-form-card" aria-labelledby="define-test-title">
+        <h2 id="define-test-title">1 · Define test</h2>
+        <div className="spec-field-row">
+          <label>Title<input value={spec.title} onChange={(event) => setSpec({ ...spec, title: event.target.value })} /></label>
+          <label>Agent role<input value={spec.role} onChange={(event) => setSpec({ ...spec, role: event.target.value })} /></label>
+        </div>
+        <label>Objective<textarea rows={2} value={spec.objective} onChange={(event) => setSpec({ ...spec, objective: event.target.value })} /></label>
+        <label>Product requirements / policy<textarea rows={3} value={spec.requirements || ''} onChange={(event) => setSpec({ ...spec, requirements: event.target.value })} placeholder="The rules the agent must follow." /></label>
+        <label>Permissible behavior boundary<textarea rows={2} value={spec.permissible_behavior || ''} onChange={(event) => setSpec({ ...spec, permissible_behavior: event.target.value })} placeholder="What may the agent do, and where must it stop?" /></label>
+        <div className="spec-field-row">
+          <label>Success checks<textarea rows={3} value={successChecks} onChange={(event) => setSuccessChecks(event.target.value)} placeholder="What must happen? One rule per line." /></label>
+          <label>Failure / forbidden checks<textarea rows={3} value={failureChecks} onChange={(event) => setFailureChecks(event.target.value)} placeholder="What must never happen? One rule per line." /></label>
+        </div>
+        <fieldset className={styles.coverage}>
+          <legend>Behaviors to cover</legend>
+          <p>Choose up to 6 reviewed rules. Each gets a normal, boundary, and adversarial caller case.</p>
+          {checks.length ? checks.map((check) => <label key={check.id} className="spec-check-option">
+            <input type="checkbox" checked={validSelectedBehaviors.includes(check.id)}
+              disabled={mutationBusy || (!validSelectedBehaviors.includes(check.id) && validSelectedBehaviors.length >= 6)}
+              onChange={(event) => setSelectedBehaviors((current) => event.target.checked ? [...new Set([...current, check.id])] : current.filter((id) => id !== check.id))} />
+            {check.label}
+          </label>) : <p>Add a success or forbidden check above to generate targeted cases.</p>}
+          <strong role="status">{validSelectedBehaviors.length} rules selected · {validSelectedBehaviors.length * 3} cases · maximum 20 per request</strong>
+        </fieldset>
+        {needsApproval ? <p className="spec-approval-note">Generated suggestions are draft content. Review the rules; generating cases approves the submitted rules, and the new cases remain drafts.</p> : null}
+        <div className={styles.actions}>
+          <button type="button" className="primary-link" onClick={generateCases} disabled={mutationBusy || !validSelectedBehaviors.length || validSelectedBehaviors.length > 6 || !spec.permissible_behavior?.trim()}>
+            {busy === 'cases' ? 'Generating cases…' : workingSpec.scenarios.length ? needsApproval ? 'Approve rules and regenerate test cases' : 'Regenerate test cases' : needsApproval ? 'Approve rules and generate test cases' : 'Generate test cases'}
+          </button>
+          <button type="button" className="secondary-link" onClick={addManualCase} disabled={mutationBusy}>Add manual case</button>
+        </div>
+        {workingSpec.scenarios.length ? <small>Regeneration replaces {workingSpec.scenarios.length} {workingSpec.scenarios.length === 1 ? 'case' : 'cases'}, including your edits, with {validSelectedBehaviors.length * 3} new cases. Save a version first if you want to keep them.</small> : null}
+        <small>{caseGenerator === 'assert' ? 'ASSERT generates caller prompts using the model in Console Settings. Expected outcomes come from your rules; agent responses are not prewritten.' : 'CAE custom generation uses its prompt template and the model in Console Settings.'}</small>
+      </section>
+
+      <section className="card spec-form-card" aria-labelledby="review-cases-title">
+        <h2 id="review-cases-title">2 · Review cases <span className={styles.count}>{workingSpec.scenarios.length}</span></h2>
+        <p>Check each caller opening and expected outcome. Targeted case coverage: {coveredRules.length} of {checks.length} rules.</p>
+        {checks.length ? <ul className={styles.coverageList}>{checks.map((check) => {
+          const focused = workingSpec.scenarios.filter((item) => item.behavior_id === check.id);
+          return <li key={check.id}><span>{check.label}</span><strong data-covered={focused.length > 0}>{focused.length ? `${focused.length} focused cases · ${Array.from(new Set(focused.map((item) => item.variant || 'normal'))).join(', ')}` : 'No targeted cases'}</strong></li>;
+        })}</ul> : null}
+        <small>Every case retains the full policy. A rule with no targeted cases has no dedicated coverage yet.</small>
+        {workingSpec.scenarios.length ? <div className={styles.cases}>{workingSpec.scenarios.map((item, index) => <fieldset key={item.id} className={styles.caseCard}>
+          <legend>{index + 1} · {item.title || `Case ${index + 1}`} <span className={styles.variant}>{item.variant || 'normal'}</span></legend>
+          {item.generation_provenance?.engine === 'assert' ? <small>ASSERT {item.generation_provenance.assert_version} · caller prompt</small> : null}
+          {item.generation_provenance?.engine === 'assert' ? <label>Opening caller message for case {index + 1}<textarea rows={3} value={item.steps?.[0] || ''} onChange={(event) => updateCase(item.id, { steps: [event.target.value, ...(item.steps || []).slice(1)] })} /></label>
+            : <label>Caller instructions for case {index + 1}<textarea rows={3} value={(item.steps || []).join('\n')} onChange={(event) => updateCase(item.id, { steps: event.target.value.split('\n') })} /><small>First line is the opening; remaining lines guide the adaptive tester.</small></label>}
+          <label>Expected outcome for case {index + 1}<textarea rows={2} value={item.expected_outcome || ''} onChange={(event) => updateCase(item.id, { expected_outcome: event.target.value })} /></label>
+          <details className={styles.details}>
+            <summary>Case {index + 1} details</summary>
+            <div className={styles.detailBody}>
+              <label>Case title {index + 1}<input value={item.title} onChange={(event) => updateCase(item.id, { title: event.target.value })} /></label>
               <label>Target behavior for case {index + 1}<select value={item.behavior_id || ''} onChange={(event) => updateCase(item.id, { behavior_id: event.target.value || null })}>
                 <option value="">Choose one behavior…</option>{checks.map((check) => <option key={check.id} value={check.id}>{check.label}</option>)}
               </select></label>
               <label>Variant for case {index + 1}<select value={item.variant || 'normal'} onChange={(event) => updateCase(item.id, { variant: event.target.value as AssertScenario['variant'] })}>
                 <option value="normal">Normal</option><option value="boundary">Boundary</option><option value="adversarial">Adversarial</option>
               </select></label>
-              <label>Caller instructions for case {index + 1}<textarea rows={3} value={(item.steps || []).join('\n')} onChange={(event) => updateCase(item.id, { steps: event.target.value.split('\n') })} /></label>
-              <small>First line is the opening caller utterance. Remaining lines guide the adaptive tester, not the target agent.</small>
-              <label>Expected outcome for case {index + 1}<textarea rows={2} value={item.expected_outcome || ''} onChange={(event) => updateCase(item.id, { expected_outcome: event.target.value })} /></label>
-            </fieldset>)}
-            <p>Generation uses CAE’s configured LLM; it does not run ASSERT’s inference pipeline. Rule-only evaluation stays Needs review for authored policies; optional ASSERT semantic judgment is separate.</p>
-            <label className="spec-check-option"><input type="checkbox" checked={publishConfirmed} onChange={(event) => setPublishConfirmed(event.target.checked)} />I reviewed the saved rules and cases; publish this version to the shared local catalog.</label>
-            <button className="primary-link" type="button" onClick={publishCases} disabled={mutationBusy || needsApproval || unsavedChanges || !publishConfirmed}>{busy === 'publish' ? 'Publishing…' : 'Publish saved cases to Scenarios'}</button>
-            {unsavedChanges ? <p>Save the current design before publishing.</p> : null}
-            {publishedSuite ? <p role="status">Published version {saved?.version}. <Link href={{ pathname: '/scenarios', query: publishedSuite }}>View runnable scenarios</Link> · <Link href={{ pathname: '/runs', query: publishedSuite }}>Choose a target and run</Link></p> : null}
-          </section>
+              {item.generation_provenance?.engine === 'assert' ? <label>Follow-up caller instructions for case {index + 1}<textarea rows={2} value={(item.steps || []).slice(1).join('\n')} onChange={(event) => updateCase(item.id, { steps: [item.steps?.[0] || '', ...lines(event.target.value)] })} /><small>The whole opening is one utterance. Follow-up instructions guide compatible adaptive testers.</small></label> : null}
+              <button type="button" className="secondary-link" onClick={() => removeCase(item.id)} disabled={mutationBusy} aria-label={`Remove case ${index + 1}`}>Remove case</button>
+            </div>
+          </details>
+        </fieldset>)}</div> : <p>Generate cases or add one manually to start reviewing.</p>}
+        <div className={styles.continueBar}>
+          <p>Continuing confirms you reviewed the rules and cases. CAE saves an immutable version and publishes that version, then opens target selection. No voice call starts yet.</p>
+          <button className="primary-link" type="button" onClick={approveAndContinue} disabled={mutationBusy || !runnableCases}>
+            {busy === 'save' ? 'Saving approved test set…' : busy === 'publish' ? 'Publishing test set…' : 'Approve test set and continue'}
+          </button>
+          {!runnableCases && workingSpec.scenarios.length ? <small>Each case needs a caller opening, an expected outcome, and one target behavior.</small> : null}
+        </div>
+        {publishedSuite ? <p role="status">Published version {saved?.version}. <Link href={{ pathname: '/scenarios', query: withCurrentApiBase(publishedSuite) }}>View runnable scenarios</Link> · <Link href={{ pathname: '/runs', query: withCurrentApiBase({ ...publishedSuite, run_scope: 'suite' }) }}>Choose a target and run</Link></p> : null}
+      </section>
+
+      <details className={`card ${styles.advanced}`}>
+        <summary>Advanced · templates, custom generation, scoring and YAML</summary>
+        <div className={`spec-form-card ${styles.detailBody}`}>
+          <div className={styles.actions}>
+            <label>Template<select value="" onChange={(event) => loadTemplate(event.target.value)} disabled={mutationBusy}>
+              <option value="">Choose a starter template…</option>{templates.map((template) => <option key={template.id} value={template.id}>{template.label}</option>)}
+            </select></label>
+            <button className="secondary-link" type="button" onClick={generateDraft} disabled={mutationBusy}>{busy === 'generate' ? 'Generating…' : 'Generate draft checks/scenarios'}</button>
+            <button className="secondary-link" type="button" onClick={() => setGeneratedApproved(true)} disabled={!needsApproval || mutationBusy}>Approve generated draft</button>
+            <button className="secondary-link" type="button" onClick={saveVersion} disabled={mutationBusy || needsApproval}>{busy === 'save' ? 'Saving…' : 'Save version'}</button>
+          </div>
+          <small>Loading a template or generating draft checks/scenarios replaces the current rules and cases. Save a version first to keep your reviewed work.</small>
+          <span className="spec-workspace-context">Workspace: {identity.projectId}</span>
+          <label>Case generator<select value={caseGenerator} onChange={(event) => setCaseGenerator(event.target.value as typeof caseGenerator)} disabled={mutationBusy}>
+            <option value="assert">ASSERT test generation</option><option value="cae_configured_llm">CAE custom generation</option>
+          </select></label>
+          {checks.map((check, index) => <div key={check.id} className={styles.detailBody}>
+            <label>Behavior definition {index + 1}: {check.label}<textarea rows={2} value={check.description} onChange={(event) => updateBehavior(check.id, { description: event.target.value })} /><small>ID: {check.id}</small></label>
+            <label>Source quotation for behavior {index + 1} (optional)<input value={check.source_quote || ''} onChange={(event) => updateBehavior(check.id, { source_quote: event.target.value })} /></label>
+          </div>)}
+          <label>Scenario guidance<textarea rows={3} value={scenarioSeeds} onChange={(event) => setScenarioSeeds(event.target.value)} /></label>
+          {!hasAssertCases ? <label>Scenario examples<textarea rows={3} value={scenarios} onChange={(event) => { setScenarios(event.target.value); setScenarioExamplesEdited(true); }} /></label> : null}
           <div className="spec-field-row">
             <label>Programmatic checks<textarea rows={5} value={deterministicChecks} onChange={(event) => setDeterministicChecks(event.target.value)} /></label>
             <label>Required evidence<textarea rows={5} value={evidenceRequirements} onChange={(event) => setEvidenceRequirements(event.target.value)} /></label>
@@ -556,24 +680,23 @@ export function SpecEditorPage() {
               </label>
             </div>
           </section>
-        </section>
-
-        <aside className="spec-preview-panel" aria-label="Advanced ASSERT preview and validation">
-          <p className="eyebrow">Advanced ASSERT preview</p>
-          <div className="spec-preview-status">
-            <span data-valid={preview?.valid === true}>{preview?.valid ? 'Valid preview' : 'Needs edits'}</span>
-            <span>{workingSpec.generated_content_status === 'draft' ? 'Generated draft' : 'User-approved'}</span>
-          </div>
-          {needsApproval ? <div className="spec-approval-note">Generated suggestions are draft content. Edit them and click “Approve generated draft” before saving.</div> : null}
-          {preview?.errors.length ? (
-            <div className="spec-validation-list" role="alert"><strong>Inline validation</strong><ul>{preview.errors.map((item) => <li key={`${item.field}-${item.message}`}>{item.field}: {item.message}</li>)}</ul></div>
-          ) : null}
-          {preview?.warnings.length ? (
-            <div className="spec-warning-list"><strong>Warnings</strong><ul>{preview.warnings.map((item) => <li key={`${item.field}-${item.message}`}>{item.message}</li>)}</ul></div>
-          ) : null}
-          <pre className="spec-yaml-preview">{preview?.yaml || 'YAML preview will appear here.'}</pre>
-        </aside>
-      </div>
+          <details className={styles.details}>
+            <summary>Saved-version publication controls</summary>
+            <div className={styles.detailBody}>
+              <label className="spec-check-option"><input type="checkbox" checked={publishConfirmed} onChange={(event) => setPublishConfirmed(event.target.checked)} />I reviewed the saved rules and cases; publish this version to the shared local catalog.</label>
+              <button className="secondary-link" type="button" onClick={publishCases} disabled={mutationBusy || needsApproval || unsavedChanges || !publishConfirmed}>{busy === 'publish' ? 'Publishing…' : 'Publish saved cases to Scenarios'}</button>
+              {unsavedChanges ? <p>Save the current design before publishing.</p> : null}
+            </div>
+          </details>
+          <aside className="spec-preview-panel" aria-label="Advanced ASSERT preview and validation">
+            <p className="eyebrow">Advanced ASSERT preview</p>
+            <div className="spec-preview-status"><span data-valid={preview?.valid === true}>{preview?.valid ? 'Valid preview' : 'Needs edits'}</span><span>{workingSpec.generated_content_status === 'draft' ? 'Generated draft' : 'User-approved'}</span></div>
+            {preview?.errors.length ? <div className="spec-validation-list" role="alert"><strong>Inline validation</strong><ul>{preview.errors.map((item) => <li key={`${item.field}-${item.message}`}>{item.field}: {item.message}</li>)}</ul></div> : null}
+            {preview?.warnings.length ? <div className="spec-warning-list"><strong>Warnings</strong><ul>{preview.warnings.map((item) => <li key={`${item.field}-${item.message}`}>{item.field}: {item.message}</li>)}</ul></div> : null}
+            <pre className="spec-yaml-preview">{preview?.yaml || 'YAML preview will appear here.'}</pre>
+          </aside>
+        </div>
+      </details>
     </main>
   );
 }
