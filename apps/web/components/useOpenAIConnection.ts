@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { getApiBase } from '@/lib/execution';
 import { apiErrorMessage } from '@/lib/apiError';
 
@@ -35,6 +35,12 @@ export function useOpenAIConnection(enabled = true) {
   const [disconnecting, setDisconnecting] = useState(false);
   const [failed, setFailed] = useState(false);
   const generation = useRef(0);
+  const pendingLoginTab = useRef<Window | null>(null);
+
+  const closePendingLoginTab = useCallback(() => {
+    pendingLoginTab.current?.close();
+    pendingLoginTab.current = null;
+  }, []);
 
   useEffect(() => {
     if (!enabled) return;
@@ -48,18 +54,30 @@ export function useOpenAIConnection(enabled = true) {
         setMessage('Connection status unavailable. You can retry connecting.');
       }
     });
-    return () => { lifecycle.current++; };
-  }, [enabled]);
+    return () => {
+      lifecycle.current++;
+      closePendingLoginTab();
+    };
+  }, [enabled, closePendingLoginTab]);
 
   async function connect() {
     const attempt = ++generation.current;
+    closePendingLoginTab();
     setConnecting(true);
     setMessage(null);
     setFailed(false);
+    let popup: Window | null = null;
     try {
+      // Reserve the tab inside the click's user activation, before any network wait.
+      popup = window.open('about:blank', '_blank');
+      if (!popup) throw new Error('Login tab blocked. Allow pop-ups for this site, then connect again.');
+      popup.opener = null;
+      pendingLoginTab.current = popup;
       const started = await request<{ authorize_url: string }>('oauth/start', 'POST');
       if (attempt !== generation.current) return;
-      window.open(started.authorize_url, '_blank', 'noopener,noreferrer');
+      if (popup.closed) throw new Error('Login tab was closed. Connect again to retry.');
+      popup.location.href = started.authorize_url;
+      pendingLoginTab.current = null;
       setMessage('Complete OpenAI login in the opened tab. This page will refresh when connected.');
       const deadline = Date.now() + 120_000;
       while (Date.now() < deadline && attempt === generation.current) {
@@ -78,6 +96,7 @@ export function useOpenAIConnection(enabled = true) {
         setMessage('Login timed out. Connect again to retry.');
       }
     } catch (error) {
+      if (pendingLoginTab.current === popup) closePendingLoginTab();
       if (attempt === generation.current) {
         setFailed(true);
         setMessage(error instanceof Error ? error.message : 'Could not connect OpenAI.');
@@ -89,6 +108,7 @@ export function useOpenAIConnection(enabled = true) {
 
   async function disconnect() {
     const attempt = ++generation.current;
+    closePendingLoginTab();
     setConnecting(false);
     setDisconnecting(true);
     setMessage(null);

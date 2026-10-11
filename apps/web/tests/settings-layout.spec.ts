@@ -69,3 +69,106 @@ test('Judge status failures show a recovery action rather than an empty settings
   await expect(judge).toContainText('Local judging is not enabled.');
   await expect(judge.getByRole('alert')).toHaveCount(0);
 });
+
+test('OpenAI login reserves a safe tab before a delayed start request', async ({ page, context }) => {
+  await mockSettings(page);
+  let connected = false;
+  await page.route('**/api/product/providers/openai/status', (route) => route.fulfill({ json: {
+    status: connected ? 'connected' : 'disconnected', email: connected ? 'qa@example.test' : null,
+  } }));
+  let releaseStart!: () => void;
+  const startGate = new Promise<void>((resolve) => { releaseStart = resolve; });
+  let startRequested = false;
+  await page.route('**/api/product/providers/openai/oauth/start', async (route) => {
+    startRequested = true;
+    await startGate;
+    await route.fulfill({ json: { authorize_url: `${new URL(page.url()).origin}/oauth-test` } });
+  });
+  await context.route('**/oauth-test', (route) => route.fulfill({ body: 'Mock login only' }));
+  await page.goto('/settings');
+  const provider = page.getByRole('region', { name: 'OpenAI agent provider' });
+  const popupPromise = context.waitForEvent('page');
+  await provider.getByRole('button', { name: 'Connect OpenAI', exact: true }).click();
+  const popup = await popupPromise;
+  try {
+    await expect.poll(() => startRequested).toBe(true);
+    expect(popup.url()).toBe('about:blank');
+    expect(await popup.evaluate(() => window.opener)).toBeNull();
+    await expect(provider.getByRole('button', { name: /Waiting for OpenAI/ })).toBeDisabled();
+    connected = true;
+    releaseStart();
+    await expect(popup).toHaveURL(/\/oauth-test$/);
+    await expect(provider).toContainText('Connected as qa@example.test.');
+  } finally {
+    releaseStart();
+    await popup.close();
+  }
+});
+
+test('Blocked OpenAI login tabs show immediate recovery without starting or polling OAuth', async ({ page }) => {
+  const writes = await mockSettings(page);
+  let statusReads = 0;
+  await page.route('**/api/product/providers/openai/status', (route) => {
+    statusReads++;
+    return route.fulfill({ json: { status: 'disconnected' } });
+  });
+  await page.addInitScript(() => { window.open = () => null; });
+  await page.goto('/settings');
+  const provider = page.getByRole('region', { name: 'OpenAI agent provider' });
+  await provider.getByRole('button', { name: 'Connect OpenAI', exact: true }).click();
+  await expect(provider.getByRole('alert')).toContainText('Login tab blocked. Allow pop-ups for this site');
+  await expect(provider.getByRole('button', { name: 'Connect OpenAI', exact: true })).toBeEnabled();
+  expect(writes).toEqual([]);
+  expect(statusReads).toBe(1);
+});
+
+test('Failed OAuth start closes the reserved tab and permits retry', async ({ page, context }) => {
+  await mockSettings(page);
+  await page.route('**/api/product/providers/openai/status', (route) => route.fulfill({ json: { status: 'disconnected' } }));
+  await page.route('**/api/product/providers/openai/oauth/start', (route) => route.fulfill({
+    status: 503, json: { detail: 'Login service unavailable.' },
+  }));
+  await page.goto('/settings');
+  const provider = page.getByRole('region', { name: 'OpenAI agent provider' });
+  const popupPromise = context.waitForEvent('page');
+  await provider.getByRole('button', { name: 'Connect OpenAI', exact: true }).click();
+  const popup = await popupPromise;
+  await expect(provider.getByRole('alert')).toHaveText('Login service unavailable.');
+  await expect.poll(() => popup.isClosed()).toBe(true);
+  await expect(provider.getByRole('button', { name: 'Connect OpenAI', exact: true })).toBeEnabled();
+});
+
+test('Leaving Settings cancels a delayed OAuth start and closes its blank tab', async ({ page, context }) => {
+  await mockSettings(page);
+  await page.route('**/api/product/providers/openai/status', (route) => route.fulfill({ json: { status: 'disconnected' } }));
+  let releaseStart!: () => void;
+  const gate = new Promise<void>((resolve) => { releaseStart = resolve; });
+  let started = false;
+  let navigated = false;
+  await context.route('**/oauth-test', (route) => {
+    navigated = true;
+    return route.fulfill({ body: 'Mock login only' });
+  });
+  await page.route('**/api/product/providers/openai/oauth/start', async (route) => {
+    started = true;
+    await gate;
+    await route.fulfill({ json: { authorize_url: `${new URL(page.url()).origin}/oauth-test` } });
+  });
+  await page.goto('/settings');
+  const popupPromise = context.waitForEvent('page');
+  await page.getByRole('button', { name: 'Connect OpenAI', exact: true }).click();
+  const popup = await popupPromise;
+  try {
+    await expect.poll(() => started).toBe(true);
+    await page.getByRole('navigation', { name: 'Primary', exact: true }).getByRole('link', { name: 'Overview', exact: true }).click();
+    await expect(page).toHaveURL(/\/$/);
+    await expect.poll(() => popup.isClosed()).toBe(true);
+    releaseStart();
+    await page.unrouteAll({ behavior: 'wait' });
+    expect(navigated).toBe(false);
+  } finally {
+    releaseStart();
+    await page.unrouteAll({ behavior: 'wait' });
+    if (!popup.isClosed()) await popup.close();
+  }
+});
