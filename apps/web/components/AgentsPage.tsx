@@ -12,6 +12,7 @@ import {
   agentTryItOutHref,
   createAgent,
   getApiBase,
+  demoUserId,
   deleteAgent,
   isBuiltInAgent,
   isSeedAgent,
@@ -265,6 +266,8 @@ function WayloSessionCapture({ agent }: { agent: AgentRecord }) {
   const connection = useWayloConnection(agent.connection);
   const needsConnection = agent.connection?.auth_type === 'waylo_browser_session' && !connection;
   const [session, setSession] = useState('');
+  const [refreshRun, setRefreshRun] = useState('');
+  const [refreshConversation, setRefreshConversation] = useState('');
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState('');
   async function download() {
@@ -273,7 +276,10 @@ function WayloSessionCapture({ agent }: { agent: AgentRecord }) {
     try {
       const endpoint = `${getApiBase()}/api/agents/${encodeURIComponent(agent.id)}/capture`;
       const response = await fetch(endpoint, {
-        method: 'POST', headers: { 'content-type': 'application/json', ...wayloRequestHeaders(agent.connection, endpoint) }, body: JSON.stringify({ session_id: session.trim() }),
+        method: 'POST', headers: { 'content-type': 'application/json', ...wayloRequestHeaders(agent.connection, endpoint) },
+        body: JSON.stringify({ session_id: session.trim(), ...(refreshRun.trim() ? {
+          execution_run_id: refreshRun.trim(), conversation_id: refreshConversation.trim(), user_id: demoUserId(),
+        } : {}) }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Could not capture the session.');
@@ -283,7 +289,7 @@ function WayloSessionCapture({ agent }: { agent: AgentRecord }) {
       anchor.download = `waylo-${session.trim()}.vcon.json`;
       anchor.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-      setStatus('Captured existing human call. Upload the vCon in Eval when you choose to evaluate it. Missing evidence remains unknown.');
+      setStatus(refreshRun.trim() ? 'Refreshed the existing CAE run export. Prior scores are invalidated when evidence changes; evaluate manually. Capture remains provisional.' : 'Captured existing human call. Upload the vCon in Eval when you choose to evaluate it. Missing evidence remains unknown.');
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Capture failed.');
     } finally {
@@ -296,7 +302,12 @@ function WayloSessionCapture({ agent }: { agent: AgentRecord }) {
       <div className="waylo-control-content">
         <p>Read provider evidence without starting a call or submitting an evaluation.</p>
         <label><span>Session UUID</span><input aria-label={`Session UUID for ${agent.name}`} value={session} onChange={(e) => setSession(e.target.value)} /></label>
-        <button type="button" className="secondary-link" disabled={busy || !session.trim() || needsConnection} onClick={() => void download()}>{busy ? 'Capturing…' : 'Download session vCon'}</button>
+        <details><summary>Refresh a finished CAE tester run instead</summary>
+          <p>Use the run and conversation IDs from run analysis to include late provider writes. This replaces that export; it does not relabel the call or submit an evaluation.</p>
+          <label><span>CAE run ID (optional)</span><input aria-label={`CAE run ID for ${agent.name}`} value={refreshRun} onChange={(e) => setRefreshRun(e.target.value)} /></label>
+          <label><span>CAE conversation ID</span><input aria-label={`CAE conversation ID for ${agent.name}`} value={refreshConversation} onChange={(e) => setRefreshConversation(e.target.value)} /></label>
+        </details>
+        <button type="button" className="secondary-link" disabled={busy || !session.trim() || needsConnection || Boolean(refreshRun.trim() && !refreshConversation.trim())} onClick={() => void download()}>{busy ? 'Capturing…' : 'Download session vCon'}</button>
         {needsConnection ? <p>Connect Waylo above before reading a session.</p> : null}
         {status ? <p role="status">{status}</p> : null}
       </div>

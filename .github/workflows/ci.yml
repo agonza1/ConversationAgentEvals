@@ -34,5 +34,6 @@ jobs:
           "${RUNNER_TEMP}/cae-audio-tests/bin/python" -m pytest apps/pipecat/test_continuous_audio.py -q
       - run: npm run test:benchmark-smoke
       - run: npm run test:voice-lab-proof
+      - run: node --test scripts/waylo-dev-origins.test.js
       - run: node --test apps/web/tests/evidence-timeline.test.cjs apps/web/tests/assert-review-model.test.cjs apps/web/tests/next-proxy-timeout.test.cjs apps/web/tests/voice-call-status.test.cjs
       - run: npm run build:web

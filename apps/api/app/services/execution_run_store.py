@@ -171,6 +171,39 @@ def append_conversation(execution_run_id: str, conversation: ConversationRecord)
     return upsert_conversation(execution_run_id, conversation)
 
 
+def refresh_waylo_evidence(execution_run_id: str, expected: dict, captured: dict, exported: dict) -> None:
+    """Replace one provisional export, retaining RTC media and invalidating old scores.
+
+    Compare under the store lock so concurrent refresh/review cannot be overwritten.
+    """
+    from app.services.execution_vcon import ietf_vcon_summary
+    from app.services.vcon_evidence import decode_evidence, latest_tool_events
+    with _LOCK:
+        run = _get_run_unlocked(execution_run_id)
+        row = next((c for c in (run or {}).get('conversations', []) if c['conversation_id'] == expected['conversation_id']), None)
+        if row != expected or not run or run['status'] in {'queued', 'running'}:
+            raise ValueError('Conversation changed during refresh; reload and try again.')
+        if row.get('ietf_vcon_export') == exported['vcon']:
+            return  # No new provider evidence; do not invalidate an unchanged review.
+        profile = decode_evidence(exported['vcon'])
+        final = next((s['state'] for s in profile['state_snapshots'] if s['phase'] == 'final'), {})
+        row.update(ietf_vcon_export=exported['vcon'], ietf_vcon_export_summary=ietf_vcon_summary(exported['vcon']),
+            transcript='\n'.join(f'{"Caller" if t["role"] == "user" else "Agent"}: {t["text"]}' for t in captured['transcripts'] if t['role'] in {'user', 'agent'}),
+            action_trace=latest_tool_events(profile['tool_events']), final_state={**{k: v for k, v in row.get('final_state', {}).items() if k == 'tester_error'}, **final},
+            state_snapshots=profile['state_snapshots'], evidence_coverage=exported['coverage'],
+            configuration_check=exported['configuration_check'],
+            vcon_export=None, vcon_export_summary=None, evaluation_findings={}, evaluation_adjudication=None,
+            metrics_summary=None, verdict='needs_review', score=None,
+            status='failed' if row.get('error') else 'needs_review')
+        for review in row.get('judge_reviews', []):
+            review.update(status='superseded', superseded_at=_now())
+        run.update(status='failed' if run.get('error') else 'needs_review', updated_at=_now())
+        _persist_unlocked(run)
+        # Keep the downloadable inference rows consistent without appending duplicates.
+        inference = RUNS_DIR / execution_run_id / 'inference_set.jsonl'
+        inference.write_text(''.join(json.dumps(c, sort_keys=True) + '\n' for c in run['conversations']), encoding='utf-8')
+
+
 def append_live_event(
     execution_run_id: str,
     conversation_id: str,

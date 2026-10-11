@@ -1,5 +1,25 @@
 # Waylo targets and evidence
 
+Review hardening: fixed audio plans must match the selected scenario, use default
+sequential realtime controls, and contain complete mono PCM16 WAVs with one sample
+rate. Unsupported delay/event/acceleration/plan-barge controls are rejected before
+a remote session is created. Fixed scripted TTS is also prepared and validated
+before bootstrap. A greeting already speaking must finish before caller audio.
+
+Controlled interruptions retain a single overlapping response window, including
+the original response tail. The window names all caller turns it overlaps;
+individual response attribution and interruption handling remain unknown rather
+than assigning old speech to the next reply.
+
+Provider `endedAt` is not a worker-flush acknowledgement. Run exports explicitly
+remain provisional. In Targets → Import existing human call → **Refresh a finished
+CAE tester run instead**, enter its session UUID, CAE run ID and conversation ID.
+This uses the current tab's authorization, checks recorded target/user/session
+correlation, and replaces the existing run export and inference row under the same
+vCon UUID. It preserves local RTC media and tester references, updates provider
+transcripts/tools/items, invalidates stale scores/reviews, and never evaluates
+automatically. Repeating an unchanged refresh does not duplicate evidence.
+
 Waylo is one reusable **Targets** adapter. Mike is a saved Waylo agent configuration
 and a catalog-aware notes contract, not a new target type. Existing Waylo transcript
 examples are unchanged and remain transcript-only.

@@ -202,7 +202,8 @@ class WayloClient:
 def project_capture(capture: dict, *, voice_events: list[dict] | None = None,
                     before_items: list[dict] | None = None, scenario_id: str = 'waylo-capture',
                     suite_id: str = 'waylo', media_dialogs: list[dict] | None = None,
-                    test_expectations: dict | None = None, after_items: list[dict] | None = None) -> dict:
+                    test_expectations: dict | None = None, after_items: list[dict] | None = None,
+                    execution_run_id: str | None = None, conversation_id: str | None = None) -> dict:
     """Map only typed observations. Free-form events remain ancillary evidence."""
     capture = clean_native(deepcopy(capture))
     session = capture['session']
@@ -305,7 +306,8 @@ def project_capture(capture: dict, *, voice_events: list[dict] | None = None,
                        'missing': missing, 'scoreable': False} for area, (present, missing) in observed.items()}
     turns = [{'speaker': 'Caller' if t.get('role') == 'user' else 'Agent', 'text': t.get('text', ''),
               'turn_index': t['seq']} for t in capture['transcripts'] if t.get('role') in {'user', 'agent'}]
-    vcon = build_ietf_execution_vcon(conversation_id=session_id, execution_run_id=f'waylo-{session_id}',
+    vcon = build_ietf_execution_vcon(conversation_id=conversation_id or session_id,
+        execution_run_id=execution_run_id or f'waylo-{session_id}',
         suite_id=suite_id, scenario_id=scenario_id, scenario_title='Waylo session capture', mode='waylo_livekit',
         turns=turns, recording=None, created_at=session['createdAt'], updated_at=session.get('endedAt') or session['createdAt'])
     vcon['uuid'] = str(uuid.uuid5(uuid.NAMESPACE_URL, f'cae-waylo/{identity}'))
@@ -315,6 +317,10 @@ def project_capture(capture: dict, *, voice_events: list[dict] | None = None,
     context = {'target_id': target_id, 'session_id': session_id, 'source_format': 'waylo-session-v1',
                'source_call_kind': capture['origin'], 'suite_id': suite_id, 'scenario_id': scenario_id,
                'evaluation_submission': 'manual', 'coverage': coverage,
+               'execution_run_id': execution_run_id or f'waylo-{session_id}',
+               'conversation_id': conversation_id or session_id,
+               'capture_completeness': 'provisional',
+               'capture_refresh': 'Refresh this CAE run capture after provider writes; endedAt is not a worker-flush acknowledgement.' if execution_run_id else 'Reimport the session to include later provider writes.',
                'diagnostics': diagnostics, 'test_expectations': expectations,
                'effective_configuration': {'status': config_status, 'reason': config_reason,
                                             'agent_version': session.get('agentVersion')}}

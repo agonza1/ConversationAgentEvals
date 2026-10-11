@@ -716,6 +716,7 @@ def _execution_model_name(payload: ExecutionRunCreateRequest, *, target: str) ->
 async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenario_id,
                          payload, agent_snapshot, event_observer):
     from app.services.waylo_livekit import run_waylo_call
+    from app.services.waylo_livekit import read_wav
     from app.services.waylo_target import WayloClient
     from app.services.waylo_connection import run_lease
     from app.services.vcon_evidence import decode_evidence, latest_tool_events
@@ -725,14 +726,20 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
     model = payload.tester_model_name or default_reference_model_name()
     provider = None if scenario.get('caller_steps') or payload.audio_plan_path else resolve_reference_completion_provider(model)
     config = ReferenceRuntimeConfig(tester_llm_model=model)
-    media = ReferenceMediaServices(config)
     fixture_audio = []
     if payload.audio_plan_path:
         import hashlib
         plan = AccAudioPlan.model_validate_json(_repo_path(payload.audio_plan_path).read_text())
+        if plan.scenario_id != scenario_id:
+            raise ValueError('Waylo audio plan scenario_id must match the selected scenario.')
         fixtures = {fixture.fixture_id: fixture for fixture in plan.fixtures}
         steps = []
         for step in plan.steps:
+            if (step.delay_after_previous_ms or step.wait_for_event is not None
+                    or step.wait_timeout_seconds != 20.0 or step.pacing_mode != 'realtime'
+                    or step.acceleration_factor != 1.0 or step.barge_in):
+                raise ValueError('Waylo audio plans support only default realtime sequential steps; '
+                                 'delay, event waits, acceleration and plan barge-in are not supported.')
             fixture = fixtures[step.fixture_id]
             text = str(fixture.metadata.get('reference_text') or '').strip()
             if not text:
@@ -743,11 +750,16 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
             audio = fixture_path.read_bytes()
             if fixture.sha256 and hashlib.sha256(audio).hexdigest() != fixture.sha256:
                 raise ValueError('Waylo controlled audio fixture hash mismatch.')
+            rate, _ = read_wav(audio)
+            if fixture_audio and rate != read_wav(fixture_audio[0])[0]:
+                raise ValueError('Waylo controlled audio fixtures must use the same sample rate.')
             fixture_audio.append(audio)
             steps.append(text)
         if not steps:
             raise ValueError('Waylo audio plan requires caller steps.')
         scenario = {**scenario, 'caller_steps': steps}
+
+    media = ReferenceMediaServices(config)
 
     async def wording(turns, index):
         # The opener/controlled fixture wording is exact, not LLM paraphrased.
@@ -784,6 +796,7 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
 
     try:
         result = await run_waylo_call(target=target, correlation_id=f'{execution_run_id}/{conversation_id}',
+            execution_run_id=execution_run_id, conversation_id=conversation_id,
             scenario=scenario, suite_id=suite_id,
             artifact_dir=REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id / 'audio' / conversation_id,
             max_exchanges=payload.max_exchanges, timeout_seconds=payload.duplex_timeout_seconds,

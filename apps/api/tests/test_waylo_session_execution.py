@@ -216,3 +216,92 @@ def test_disconnect_cancels_active_rtc_and_closes_client(connected, monkeypatch,
                 next_utterance=None, synthesize=None, client=Client(), credential_lease=lease), 2)
     asyncio.run(exercise())
     assert flags == ['rtc-closed', 'client-closed']
+
+
+def finished_waylo_run(connected, monkeypatch):
+    from app.schemas.execution import ConversationRecord
+    from app.services.waylo_target import project_capture
+    from test_waylo_target import captured, S
+    _, proof, http = connected
+    monkeypatch.setattr(execution_routes, 'execute_execution_run', lambda *args: None)
+    queued = http.post('/api/execution/runs', json=run_payload(), headers={**HEADERS, 'X-CAE-Waylo-Session': proof}).json()
+    run_id, conv_id = queued['execution_run_id'], 'conv-refresh'
+    native = captured(target_id=TARGET['id'], origin='cae_ai_tester')
+    native['session']['metadata'] = {'cae': {'origin': 'cae_ai_tester', 'correlation_id': f'{run_id}/{conv_id}'}}
+    export = project_capture(native, execution_run_id=run_id, conversation_id=conv_id)
+    row = ConversationRecord(execution_run_id=run_id, conversation_id=conv_id,
+        suite_id='waylo-mike-notes', scenario_id='mike-five-bags', mode='pipecat_webrtc',
+        status='needs_review', ietf_vcon_export=export['vcon'], score=50,
+        audio_session={'session_id': S}, judge_reviews=[{'review_id': 'old', 'status': 'pending_confirmation'}])
+    execution_run_store.upsert_conversation(run_id, row)
+    execution_run_store.complete_execution_run(run_id, status='needs_review')
+    return proof, http, run_id, conv_id, native
+
+
+def test_late_provider_write_refresh_replaces_run_export_without_duplicate(connected, monkeypatch, tmp_path):
+    from test_waylo_target import transcript, S
+    from app.services.vcon_evidence import decode_evidence
+    proof, http, run_id, conv_id, native = finished_waylo_run(connected, monkeypatch)
+    before = execution_run_store.get_conversation(run_id, conv_id)
+    native['transcripts'].append(transcript(3, 'agent', 'Late durable notes readback'))
+    native['items'] = [{'position': 1, 'rawText': 'White Potatoes', 'quantity': 5, 'unit': 'bags'}]
+    async def read(self, session_id, *, origin='imported_human_call'):
+        assert session_id == S and origin == 'cae_ai_tester'
+        return deepcopy(native)
+    monkeypatch.setattr(WayloClient, 'capture', read)
+    data = {'session_id': S, 'execution_run_id': run_id, 'conversation_id': conv_id, 'user_id': 'execution-user'}
+    for _ in range(2):
+        response = http.post(f'/api/agents/{TARGET["id"]}/capture', json=data,
+            headers={**HEADERS, 'X-CAE-Waylo-Session': proof})
+        assert response.status_code == 200, response.text
+    after = execution_run_store.get_conversation(run_id, conv_id)
+    assert after['ietf_vcon_export']['uuid'] == before['ietf_vcon_export']['uuid']
+    assert len(after['ietf_vcon_export']['dialog']) == 3
+    assert after['score'] is None and after['verdict'] == 'needs_review'
+    assert after['judge_reviews'][0]['status'] == 'superseded'
+    assert 'Late durable notes readback' in after['transcript']
+    assert after['final_state']['request_list'][0]['quantity'] == 5
+    context = decode_evidence(after['ietf_vcon_export'])['context']
+    assert context['source_call_kind'] == 'cae_ai_tester' and context['capture_completeness'] == 'provisional'
+    assert context['execution_run_id'] == run_id and context['conversation_id'] == conv_id
+    lines = (tmp_path / 'runs' / run_id / 'inference_set.jsonl').read_text().splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])['ietf_vcon_export'] == after['ietf_vcon_export']
+    assert len(execution_run_store.get_execution_run(run_id)['conversations']) == 1
+
+
+@pytest.mark.parametrize('change,expected', [({'user_id': 'wrong'}, 404),
+    ({'conversation_id': 'other'}, 404), ({'session_id': str(uuid4())}, 409)])
+def test_refresh_rejects_cross_run_or_session_identity_before_provider_read(connected, monkeypatch, change, expected):
+    from test_waylo_target import S
+    proof, http, run_id, conv_id, _ = finished_waylo_run(connected, monkeypatch)
+    async def no_read(*args, **kwargs):
+        pytest.fail('Wrong refresh identity must not read the provider')
+    monkeypatch.setattr(WayloClient, 'capture', no_read)
+    data = {'session_id': S, 'execution_run_id': run_id, 'conversation_id': conv_id, 'user_id': 'execution-user', **change}
+    response = http.post(f'/api/agents/{TARGET["id"]}/capture', json=data,
+        headers={**HEADERS, 'X-CAE-Waylo-Session': proof})
+    assert response.status_code == expected
+
+
+def test_refresh_cannot_relabel_foreign_correlation_or_import_as_human(connected, monkeypatch):
+    from test_waylo_target import S
+    proof, http, run_id, conv_id, native = finished_waylo_run(connected, monkeypatch)
+    native['session']['metadata']['cae']['correlation_id'] = 'another/run'
+    async def read(*args, **kwargs):
+        return deepcopy(native)
+    monkeypatch.setattr(WayloClient, 'capture', read)
+    for data in ({'session_id': S}, {'session_id': S, 'execution_run_id': run_id, 'conversation_id': conv_id, 'user_id': 'execution-user'}):
+        response = http.post(f'/api/agents/{TARGET["id"]}/capture', json=data,
+            headers={**HEADERS, 'X-CAE-Waylo-Session': proof})
+        assert response.status_code == 409
+
+
+def test_refresh_checks_concurrent_evidence_change(connected, monkeypatch):
+    from app.services.waylo_target import project_capture
+    proof, http, run_id, conv_id, native = finished_waylo_run(connected, monkeypatch)
+    expected = execution_run_store.get_conversation(run_id, conv_id)
+    from app.schemas.execution import ConversationRecord
+    execution_run_store.upsert_conversation(run_id, ConversationRecord.model_validate({**expected, 'score': 75}))
+    with pytest.raises(ValueError, match='changed during refresh'):
+        execution_run_store.refresh_waylo_evidence(run_id, expected, native, project_capture(native))

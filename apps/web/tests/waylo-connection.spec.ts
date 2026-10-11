@@ -87,6 +87,17 @@ test('temporary connection clears password, saves IDs only, and preserves proof 
   await card.getByRole('button', { name: 'Download session vCon' }).click();
   await expect.poll(() => fixture.requests.some((request) => request.path.endsWith('/capture'))).toBeTruthy();
   expect(fixture.requests.find((request) => request.path.endsWith('/capture'))?.headers['x-cae-waylo-session']).toBe(proof);
+  await card.getByText('Refresh a finished CAE tester run instead', { exact: true }).click();
+  await card.getByLabel('CAE run ID for Mike fixture').fill('exec-fixture-refresh');
+  await expect(card.getByRole('button', { name: 'Download session vCon' })).toBeDisabled();
+  await card.getByLabel('CAE conversation ID for Mike fixture').fill('conv-fixture-refresh');
+  await card.getByRole('button', { name: 'Download session vCon' }).click();
+  await expect.poll(() => fixture.requests.filter((request) => request.path.endsWith('/capture')).length).toBe(2);
+  const refresh = fixture.requests.filter((request) => request.path.endsWith('/capture'))[1];
+  expect(refresh?.body).toMatchObject({ session_id: workspaceId, execution_run_id: 'exec-fixture-refresh', conversation_id: 'conv-fixture-refresh' });
+  expect(refresh?.body?.user_id).toBeTruthy();
+  expect(refresh?.headers['x-cae-waylo-session']).toBe(proof);
+  await expect(card.getByRole('status').filter({ hasText: /Refreshed the existing CAE run export/ })).toBeVisible();
   await card.getByRole('link', { name: 'Test Mike’s five-bags case' }).click();
   await expect(page.getByLabel('Execution agent target')).toHaveValue('waylo-memory-fixture');
   await expect(page.getByText(/Connected to Mike fixture/)).toBeVisible();
