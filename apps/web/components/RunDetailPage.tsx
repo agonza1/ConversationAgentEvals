@@ -824,7 +824,7 @@ function MetricDetail({
       ) : null}
       {conversation.mode === 'pipecat_webrtc' && builtInTarget ? (
         <p className="latency-definition">
-          Measured in the local reference pipeline (rtc-asr → LLM → Kokoro).
+          Measured in the configured reference pipeline (STT → LLM → TTS).
           This is the response delay of this configured runtime; it is not a phone/network latency benchmark.
           Recorded turn playback omits these waits.
         </p>

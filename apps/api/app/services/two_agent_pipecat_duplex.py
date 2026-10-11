@@ -328,6 +328,8 @@ def build_builtin_sample_voice_graphs(
     target_llm_model: str,
     stt_model: str,
     tts_model: str,
+    stt_provider: str = 'rtc-asr',
+    tts_provider: str = 'kokoro',
     tester_tts_voice: str = 'af_heart',
     target_tts_voice: str = 'af_bella',
     llm_mode: Literal['real', 'mock'],
@@ -336,9 +338,9 @@ def build_builtin_sample_voice_graphs(
         participant_id='pipecat_tester',
         label='Pipecat scenario tester',
         processors=(
-            PipecatProcessorSpec('rtc-asr', 'rtc-asr', stt_model),
+            PipecatProcessorSpec(stt_provider, stt_provider, stt_model),
             PipecatProcessorSpec('llm', tester_llm_provider, tester_llm_model),
-            PipecatProcessorSpec('kokoro', 'kokoro', tts_model, voice=tester_tts_voice),
+            PipecatProcessorSpec(tts_provider, tts_provider, tts_model, voice=tester_tts_voice),
         ),
         llm_mode=llm_mode,
     )
@@ -346,9 +348,9 @@ def build_builtin_sample_voice_graphs(
         participant_id='pipecat_target',
         label='Pipecat evaluated built-in voice agent',
         processors=(
-            PipecatProcessorSpec('rtc-asr', 'rtc-asr', stt_model),
+            PipecatProcessorSpec(stt_provider, stt_provider, stt_model),
             PipecatProcessorSpec('llm', target_llm_provider, target_llm_model),
-            PipecatProcessorSpec('kokoro', 'kokoro', tts_model, voice=target_tts_voice),
+            PipecatProcessorSpec(tts_provider, tts_provider, tts_model, voice=target_tts_voice),
         ),
         llm_mode=llm_mode,
     )
