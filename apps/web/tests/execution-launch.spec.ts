@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 
-async function mockReviewedVoiceSuite(page: Page, options: { caseCount?: number; ready?: boolean; resultCases?: boolean; active?: boolean } = {}) {
+async function mockReviewedVoiceSuite(page: Page, options: { caseCount?: number; ready?: boolean; resultCases?: boolean; active?: boolean; publicMedia?: 'pipecat_daily_webrtc' | 'signalwire_webrtc' } = {}) {
   const scenarios = Array.from({ length: options.caseCount ?? 3 }, (_, index) => ({
     id: `assert-case-${index + 1}`, title: `Address correction ${index + 1}`,
     user_goal: 'Read back the corrected address without claiming an account update.',
@@ -12,7 +12,8 @@ async function mockReviewedVoiceSuite(page: Page, options: { caseCount?: number;
     mode: 'pipecat_webrtc', iteration: 1, turns: [],
     status: index === 0 ? 'needs_review' : 'failed',
     completed_at: '2026-10-10T00:02:00Z',
-    audio_session: { tester_status: index === 1 ? 'failed' : 'completed' },
+    audio_session: options.publicMedia ? { transport: options.publicMedia, closed: true, proof: true }
+      : { tester_status: index === 1 ? 'failed' : 'completed' },
     verdict: index === 2 ? 'fail' : 'needs_review',
     evaluation_findings: index === 1 ? {} : { verdict: index === 2 ? 'fail' : 'needs_review' },
     error: index === 1 ? 'ASR timed out; partial recording preserved.' : null,
@@ -1109,3 +1110,25 @@ test('saved ACC evidence is not offered as a Run Agent target', async ({ page })
   expect(posted).toBeNull();
   expect(pageErrors).toEqual([]);
 });
+
+
+
+for (const [agentId, publicMedia] of [
+  ['public-pipecat', 'pipecat_daily_webrtc'],
+  ['public-signalwire', 'signalwire_webrtc'],
+] as const) {
+  test(`${agentId} displays media completion independently of policy findings`, async ({ page }) => {
+    await mockReviewedVoiceSuite(page, { resultCases: true, publicMedia });
+    await page.goto(`/runs?suite_id=reviewed-assert-suite&run_scope=suite&agent_id=${agentId}`);
+    const launch = page.getByRole('region', { name: 'Launch agent run' });
+    await launch.getByRole('button', { name: 'Run 3 voice tests' }).click();
+    const rows = launch.getByLabel('Execution conversations');
+    for (const index of [1, 3]) {
+      const row = rows.locator('article').filter({ hasText: `Address correction ${index}` });
+      await expect(row).toContainText('Call: completed');
+      await expect(row.getByLabel('Voice test result')).toContainText(index === 3 ? 'fail' : 'needs review');
+    }
+    await expect(rows.locator('article').filter({ hasText: 'Address correction 2' })).toContainText('Call: incomplete');
+    await expect(launch).not.toContainText('All tests passed');
+  });
+}

@@ -1134,8 +1134,9 @@ function voiceCallStatus(conversation: ExecutionConversationRecord) {
   const testerStatus = conversation.audio_session?.tester_status;
   if (conversation.error || testerStatus === 'failed' || testerStatus === 'needs_review') return 'incomplete';
   if (testerStatus === 'completed') return 'completed';
-  if (conversation.status === 'failed') return 'incomplete';
-  if (conversation.status === 'completed') return 'completed';
+  // Public executors have media proof but no local tester_status. Their
+  // conversation status reflects policy evaluation, not call completion.
+  if (conversation.audio_session?.closed === true && conversation.audio_session?.proof === true) return 'completed';
   return 'completion unverified';
 }
 
