@@ -15,7 +15,7 @@ from typing import Any, Literal, Protocol
 
 ParticipantId = Literal['pipecat_tester', 'pipecat_target']
 FrameDirection = Literal['tester_to_target', 'target_to_tester']
-ProcessorName = Literal['rtc-asr', 'llm', 'kokoro']
+ProcessorName = Literal['rtc-asr', 'llm', 'kokoro', 'deepgram', 'cartesia']
 
 
 class TextGenerator(Protocol):
@@ -63,8 +63,13 @@ class PipecatAgentGraph:
 
     def __post_init__(self) -> None:
         chain = tuple(processor.name for processor in self.processors)
-        if chain != ('rtc-asr', 'llm', 'kokoro'):
-            raise ValueError(f'Pipecat graph must be rtc-asr -> llm -> kokoro, got {chain!r}')
+        if (
+            len(chain) != 3
+            or chain[0] not in {'rtc-asr', 'deepgram', 'cartesia'}
+            or chain[1] != 'llm'
+            or chain[2] not in {'kokoro', 'deepgram', 'cartesia'}
+        ):
+            raise ValueError(f'Pipecat graph must be supported STT -> llm -> TTS, got {chain!r}')
 
     def as_dict(self) -> dict[str, Any]:
         return {

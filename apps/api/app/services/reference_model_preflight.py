@@ -321,9 +321,11 @@ def _voice_graphs(
         target_llm_provider=target_provider,
         target_llm_model=config.llm_model,
         stt_model=str(stt_runtime.get('model') or 'service-selected'),
-        tts_model=config.kokoro_model,
-        tester_tts_voice=config.kokoro_tester_voice,
-        target_tts_voice=config.kokoro_target_voice,
+        stt_provider=config.speech.stt_provider,
+        tts_provider=config.speech.tts_provider,
+        tts_model=config.speech.tts_model,
+        tester_tts_voice=config.speech.tester_voice,
+        target_tts_voice=config.speech.target_voice,
         llm_mode='real',
     )
 

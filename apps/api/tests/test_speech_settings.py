@@ -91,3 +91,50 @@ def test_saved_local_voice_ids_are_not_replaced_by_environment_defaults():
     selected = settings.SpeechSelection(tester_voice='am_michael', target_voice='af_sky')
     settings.save_speech_selection(selected)
     assert ReferenceRuntimeConfig().speech == selected
+
+
+@pytest.mark.parametrize('stt_provider', ['deepgram', 'cartesia'])
+@pytest.mark.parametrize('tts_provider', ['deepgram', 'cartesia'])
+def test_model_aware_voice_launch_preserves_cloud_graphs_and_voices(tmp_path, stt_provider, tts_provider):
+    from app.services.reference_model_preflight import _ModelAwareReferencePipecatAgentTransport
+
+    class ConnectedCompletion:
+        provider_id = 'openai'
+
+        def status(self):
+            return {'status': 'connected', 'provider': self.provider_id}
+
+    selected = settings.SpeechSelection(
+        stt_provider=stt_provider, tts_provider=tts_provider,
+        stt_model='nova-3' if stt_provider == 'deepgram' else 'ink-2',
+        tts_model='aura-2' if tts_provider == 'deepgram' else 'sonic-3.6',
+        tester_voice='aura-2-asteria-en' if tts_provider == 'deepgram' else 'caller-id',
+        target_voice='aura-2-orion-en' if tts_provider == 'deepgram' else 'agent-id',
+    )
+    requests = []
+
+    def respond(request):
+        requests.append(request.url.path)
+        if request.url.path == '/reference-agent/speech-readiness':
+            assert json.loads(request.content) == selected.model_dump()
+            return httpx.Response(200, json={'ready': True, 'issues': []})
+        assert request.url.path == '/reference-agent/readiness'
+        return httpx.Response(200, json={
+            'ready': False, 'pipeline_runtime': True, 'duplex_route_ready': True,
+            'route': '/reference-duplex/run',
+        })
+
+    config = ReferenceRuntimeConfig(speech=selected, internal_token='worker-token',
+        llm_model='test-model', tester_llm_model='test-model')
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        transport = _ModelAwareReferencePipecatAgentTransport(
+            artifact_dir=tmp_path, media=ReferenceMediaServices(config, client=client),
+            completion=ConnectedCompletion(), config=config,
+        )
+    assert requests == ['/reference-agent/speech-readiness', '/reference-agent/readiness']
+    for participant, voice in (('tester', selected.tester_voice), ('target', selected.target_voice)):
+        processors = transport.graphs[participant]['processors']
+        assert [item['name'] for item in processors] == [stt_provider, 'llm', tts_provider]
+        assert processors[0]['model'] == selected.stt_model
+        assert processors[2]['model'] == selected.tts_model
+        assert processors[2]['voice'] == voice
