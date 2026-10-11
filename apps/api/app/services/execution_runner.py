@@ -724,7 +724,9 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
     lease = run_lease(execution_run_id, target) if target['connection'].get('auth_type') == 'waylo_browser_session' else None
     scenario = _scenario_definition(suite_id, scenario_id)
     model = payload.tester_model_name or default_reference_model_name()
-    provider = None if scenario.get('caller_steps') or payload.audio_plan_path else resolve_reference_completion_provider(model)
+    # The first caller utterance is an exact scenario opener, not an LLM request.
+    # A one-exchange transport smoke test must not require an unrelated LLM login.
+    provider = None if scenario.get('caller_steps') or payload.audio_plan_path or payload.max_exchanges == 1 else resolve_reference_completion_provider(model)
     config = ReferenceRuntimeConfig(tester_llm_model=model)
     fixture_audio = []
     if payload.audio_plan_path:

@@ -202,3 +202,20 @@ def test_selected_dev_origin_enforced_exactly(monkeypatch):
         ('http://localhost:3012', 403), ('http://localhost:3014', 403), ('https://evil.test', 403)]:
         result = client.get('/api/waylo/connection/status', headers={'Origin': origin, 'X-CAE-Waylo-Control': '1'})
         assert result.status_code == status
+
+
+def test_one_exchange_exact_opener_does_not_require_an_unrelated_llm_login(tmp_path, monkeypatch):
+    from app.services import waylo_target
+    monkeypatch.setattr(execution_runner, '_scenario_definition', lambda *args: {'id': 'case', 'title': 'Product information only'})
+    monkeypatch.setattr(execution_runner, 'resolve_reference_completion_provider', lambda *args: pytest.fail('No generated continuation needed'))
+    monkeypatch.setattr(execution_runner, 'ReferenceMediaServices', lambda *args: SimpleNamespace(client=SimpleNamespace(close=lambda: None)))
+    monkeypatch.setattr(waylo_target, 'WayloClient', lambda *args, **kwargs: Client())
+    async def fake_call(**kwargs):
+        assert kwargs['max_exchanges'] == 1
+        assert await kwargs['next_utterance']([], 1) == 'Hi, I need help with product information only.'
+        return {'ietf_vcon_export': project_capture(captured())['vcon'], 'final_state': {}}
+    monkeypatch.setattr(waylo_livekit, 'run_waylo_call', fake_call)
+    result = asyncio.run(execution_runner._execute_waylo(execution_run_id='exec-test', conversation_id='conv-test',
+        suite_id='suite', scenario_id='case', payload=ExecutionRunCreateRequest(agent_id='mike', max_exchanges=1),
+        agent_snapshot=TARGET, event_observer=None))
+    assert 'action_trace' in result
