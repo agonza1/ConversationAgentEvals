@@ -212,3 +212,80 @@ def test_slow_provider_finishes_before_next_native_job(native_generation, monkey
     result = generation.generate_assert_case_drafts(design(), selected=['payment!'], samples_per_behavior=3, artifact_root=root)
     assert len(result['scenarios']) == 3
     assert peak == 1 and active == 0 and calls == 3
+
+
+
+@pytest.mark.parametrize('failure', [
+    'artifact_directory', 'request_write', 'worker_start', 'timeout',
+    'worker_exit', 'malformed_output', 'partial_output',
+])
+def test_failed_generation_refunds_real_shared_credits_and_releases_slot(native_generation, monkeypatch, failure):
+    from app.services import judge_budget
+    root, _, _, child = native_generation
+    ledger = root / 'credits.json'
+    monkeypatch.setattr(judge_budget, '_judge_spend_path', lambda: ledger)
+    monkeypatch.setenv('LLM_JUDGE_DAILY_CREDIT_LIMIT', '60')
+    monkeypatch.setenv('LLM_JUDGE_RESERVED_DAILY_CREDITS', '0')
+    monkeypatch.setattr(generation, '_reserve_judge_credits', judge_budget._reserve_judge_credits)
+    assert judge_budget._reserve_judge_credits(judge_budget._judge_spend_control(), credits=10)[0]
+    artifact_root = root / 'generation'
+    calls = []
+
+    def worker(command, **kwargs):
+        calls.append(command)
+        if failure == 'worker_start':
+            raise OSError('private worker startup detail')
+        if failure == 'timeout':
+            raise subprocess.TimeoutExpired('worker', 300)
+        if failure == 'worker_exit':
+            return SimpleNamespace(returncode=1)
+        response = child(command, **kwargs)
+        if failure == 'malformed_output':
+            (artifact_root / 'test_set.jsonl').write_text('{invalid', encoding='utf-8')
+        elif failure == 'partial_output':
+            (artifact_root / 'summary.json').write_text(json.dumps({'errored_count': 1, 'saved_count': 3}), encoding='utf-8')
+        return response
+
+    with monkeypatch.context() as failing:
+        failing.setattr(generation.subprocess, 'run', worker)
+        if failure == 'artifact_directory':
+            artifact_root.write_text('Not a directory', encoding='utf-8')
+        elif failure == 'request_write':
+            original_write = Path.write_text
+            def fail_request(path, *args, **kwargs):
+                if path.name == 'request.json':
+                    raise OSError('private artifact path detail')
+                return original_write(path, *args, **kwargs)
+            failing.setattr(Path, 'write_text', fail_request)
+        with pytest.raises(SpecGenerationFailed) as exc:
+            generation.generate_assert_case_drafts(design(), selected=['payment!'],
+                samples_per_behavior=3, artifact_root=artifact_root)
+        assert 'private' not in str(exc.value)
+    assert generation._ACTIVE == 0
+    assert judge_budget._load_judge_spend()['spent'] == 10
+    if failure in {'artifact_directory', 'request_write'}:
+        assert calls == []
+    # A failure must not lock out either a later generation or a judge request.
+    result = generation.generate_assert_case_drafts(design(), selected=['payment!'],
+        samples_per_behavior=3, artifact_root=root / 'retry')
+    assert len(result['scenarios']) == 3
+    assert judge_budget._load_judge_spend()['spent'] == 40
+    assert judge_budget._reserve_judge_credits(judge_budget._judge_spend_control(), credits=10)[0]
+    assert judge_budget._load_judge_spend()['spent'] == 50
+
+
+def test_rejected_generation_does_not_refund_other_work(native_generation, monkeypatch):
+    from app.services import judge_budget
+    root, _, calls, _ = native_generation
+    monkeypatch.setattr(judge_budget, '_judge_spend_path', lambda: root / 'credits.json')
+    monkeypatch.setenv('LLM_JUDGE_DAILY_CREDIT_LIMIT', '30')
+    monkeypatch.setenv('LLM_JUDGE_RESERVED_DAILY_CREDITS', '0')
+    monkeypatch.setattr(generation, '_reserve_judge_credits', judge_budget._reserve_judge_credits)
+    assert judge_budget._reserve_judge_credits(judge_budget._judge_spend_control(), credits=10)[0]
+    with pytest.raises(SpecGenerationUnavailable, match='budget is exhausted'):
+        generation.generate_assert_case_drafts(design(), selected=['payment!'],
+            samples_per_behavior=3, artifact_root=root / 'rejected')
+    assert judge_budget._load_judge_spend()['spent'] == 10
+    assert generation._ACTIVE == 0
+    assert calls == []
+    assert not (root / 'rejected').exists()

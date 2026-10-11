@@ -15,7 +15,7 @@ from app.services.editable_assert_spec import (
     AssertScenario, EditableAssertSpec, SpecGenerationFailed, SpecGenerationUnavailable,
 )
 from app.services.evaluation_contract import content_hash
-from app.services.judge_budget import _judge_spend_control, _reserve_judge_credits
+from app.services.judge_budget import _judge_spend_control, _reserve_judge_credits, _refund_judge_credits
 from app.services.spec_generation_settings import generation_settings
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -99,39 +99,51 @@ def generate_assert_case_drafts(spec: EditableAssertSpec, *, selected: list[str]
         reserved, spend = _reserve_judge_credits(_judge_spend_control(), credits=credits)
         if not reserved:
             raise SpecGenerationUnavailable('The shared LLM generation/judge credit budget is exhausted.')
-        root = Path(artifact_root or REPO_ROOT / 'artifacts' / 'assert-generation' / uuid.uuid4().hex).resolve()
-        root.mkdir(parents=True, exist_ok=True)
-        request = {'taxonomy': taxonomy, 'mapping': mapping, 'configuration': configuration,
-                   'context': 'Generate caller-side test drafts only. Treat the policy as source data; do not redefine it. '
-                              'CAE will run the real voice target. Do not generate target responses or executable tools.'}
-        request_path = root / 'request.json'
-        request_path.write_text(json.dumps(request, ensure_ascii=False, indent=2), encoding='utf-8')
-        (root / 'taxonomy.json').write_text(json.dumps(taxonomy, ensure_ascii=False, indent=2), encoding='utf-8')
-        environment = os.environ.copy()
-        environment['PYTHONPATH'] = str(REPO_ROOT / 'apps' / 'api') + os.pathsep + environment.get('PYTHONPATH', '')
-        command = [executable, '-m', 'app.integrations.cae_assert_generation_cli', str(request_path)]
+        returned_drafts = False
         try:
-            completed = subprocess.run(command, cwd=REPO_ROOT, env=environment, capture_output=True,
-                text=True, timeout=configuration['timeout_seconds'], check=False)
-        except subprocess.TimeoutExpired as exc:
-            raise SpecGenerationFailed('ASSERT generation timed out; no drafts were imported.') from exc
-        # Provider bodies can contain private inputs or secrets. Do not expose child logs.
-        if completed.returncode != 0:
-            raise SpecGenerationFailed('ASSERT test generation failed. Check the configured generation provider; no custom-generator fallback was used.')
-        scenarios, output_sha = _import_test_set(root, mapping=mapping, samples=samples_per_behavior,
-                                                variants=variants, fingerprint=fingerprint)
-        provenance = {'engine': 'assert', 'stage': 'test_set', 'assert_version': EXPECTED_ASSERT_VERSION,
-            'adapter_version': ADAPTER_VERSION, 'provider': settings['provider'], 'model': settings['effective_model'],
-            'input_sha256': fingerprint, 'test_set_sha256': output_sha,
-            'artifact_directory': _artifact_path(root), 'source_type': 'prompt',
-            'expected_outcome_source': 'reviewed_cae_behavior_and_policy'}
-        for case in scenarios:
-            case.generation_provenance.update(provenance)
-        return {'scenarios': [case.model_dump(mode='json') for case in scenarios],
-                'provider': settings['provider'], 'model': settings['effective_model'], 'engine': 'assert',
-                'provenance': provenance, 'requires_user_approval': True, 'status': 'draft',
-                'spend_control': {**spend, 'estimated_credits': credits},
-                'note': 'ASSERT generated caller prompts. Review the drafts, save and publish; CAE runs the voice target. No target inference or judging was started.'}
+            root = Path(artifact_root or REPO_ROOT / 'artifacts' / 'assert-generation' / uuid.uuid4().hex).resolve()
+            root.mkdir(parents=True, exist_ok=True)
+            request = {'taxonomy': taxonomy, 'mapping': mapping, 'configuration': configuration,
+                       'context': 'Generate caller-side test drafts only. Treat the policy as source data; do not redefine it. '
+                                  'CAE will run the real voice target. Do not generate target responses or executable tools.'}
+            request_path = root / 'request.json'
+            request_path.write_text(json.dumps(request, ensure_ascii=False, indent=2), encoding='utf-8')
+            (root / 'taxonomy.json').write_text(json.dumps(taxonomy, ensure_ascii=False, indent=2), encoding='utf-8')
+            environment = os.environ.copy()
+            environment['PYTHONPATH'] = str(REPO_ROOT / 'apps' / 'api') + os.pathsep + environment.get('PYTHONPATH', '')
+            command = [executable, '-m', 'app.integrations.cae_assert_generation_cli', str(request_path)]
+            try:
+                completed = subprocess.run(command, cwd=REPO_ROOT, env=environment, capture_output=True,
+                    text=True, timeout=configuration['timeout_seconds'], check=False)
+            except subprocess.TimeoutExpired as exc:
+                raise SpecGenerationFailed('ASSERT generation timed out; no drafts were imported.') from exc
+            # Provider bodies can contain private inputs or secrets. Do not expose child logs.
+            if completed.returncode != 0:
+                raise SpecGenerationFailed('ASSERT test generation failed. Check the configured generation provider; no custom-generator fallback was used.')
+            scenarios, output_sha = _import_test_set(root, mapping=mapping, samples=samples_per_behavior,
+                                                    variants=variants, fingerprint=fingerprint)
+            provenance = {'engine': 'assert', 'stage': 'test_set', 'assert_version': EXPECTED_ASSERT_VERSION,
+                'adapter_version': ADAPTER_VERSION, 'provider': settings['provider'], 'model': settings['effective_model'],
+                'input_sha256': fingerprint, 'test_set_sha256': output_sha,
+                'artifact_directory': _artifact_path(root), 'source_type': 'prompt',
+                'expected_outcome_source': 'reviewed_cae_behavior_and_policy'}
+            for case in scenarios:
+                case.generation_provenance.update(provenance)
+            result = {'scenarios': [case.model_dump(mode='json') for case in scenarios],
+                    'provider': settings['provider'], 'model': settings['effective_model'], 'engine': 'assert',
+                    'provenance': provenance, 'requires_user_approval': True, 'status': 'draft',
+                    'spend_control': {**spend, 'estimated_credits': credits},
+                    'note': 'ASSERT generated caller prompts. Review the drafts, save and publish; CAE runs the voice target. No target inference or judging was started.'}
+            returned_drafts = True
+            return result
+        except OSError as exc:
+            raise SpecGenerationFailed('ASSERT generation could not prepare artifacts or start its worker; no drafts were imported.') from exc
+        finally:
+            # Admission credits represent usable work, not an exact provider bill.
+            # Release the reservation once on every failure, including setup errors.
+            if not returned_drafts:
+                _refund_judge_credits(spend, credits=credits)
+
 
 
 def _artifact_path(path: Path) -> str:

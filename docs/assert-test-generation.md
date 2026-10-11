@@ -147,3 +147,13 @@ remains bounded to at most 300 seconds. Such a run can validate conversation sem
 should not be presented as a real-time latency benchmark. Tune and validate the
 rtc-asr backend separately; a partial cadence setting does not guarantee CPU
 decoding meets the final deadline.
+
+
+
+### Failed-request admission credits
+
+A generation reservation is retained only when a complete, validated set of drafts is returned. Local artifact errors, worker startup failures, timeouts, unsuccessful worker exits, and rejected native artifacts release the request's shared generation/judge credit reservation. A request rejected before reservation does not refund other work. These are estimated admission credits: a refund does not reverse an external provider charge for model calls already attempted. The existing single-process limitation still applies.
+
+### Call completion versus evaluation
+
+The voice results view derives call completion from local tester completion or closed, proven public media capture, never from the policy verdict. A completed call can fail automatic checks or require semantic review. Missing media proof remains completion-unverified, and capture errors remain incomplete. Saved ASSERT proposals are still separate from confirmation and application.
