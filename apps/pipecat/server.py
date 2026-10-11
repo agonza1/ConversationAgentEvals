@@ -1436,12 +1436,21 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                     'speech_ended_at': result.tester_speech_ended_at,
                     'tester_speech_ended_at': result.tester_speech_ended_at,
                     'target_endpoint_speech_ended_at': result.target_asr.speech_ended_at,
+                    'target_asr_final_received_at': result.target_asr.final_at,
                     'first_audible_byte_at': result.target_audio_received_at,
                     'target_audio_received_at': result.target_audio_received_at,
                     'response_complete_latency_ms': result.target_response_complete_latency_ms,
                     'asr_interim_count': len(result.tester_asr.interims),
                     'asr_timing': result.tester_asr.server_timing,
                     'stage_metrics': {
+                        'caller_end_to_asr_final_ms': (
+                            round((result.target_asr.final_at - result.tester_speech_ended_at) * 1000, 3)
+                            if result.target_asr.final_at is not None else None
+                        ),
+                        'asr_final_to_first_audio_ms': (
+                            round((result.target_audio_received_at - result.target_asr.final_at) * 1000, 3)
+                            if result.target_asr.final_at is not None else None
+                        ),
                         'asr_finalize_ms': (
                             round(
                                 (result.target_asr.final_at - result.target_asr.speech_ended_at) * 1000,

@@ -166,3 +166,25 @@ The voice service closes the current pipeline and releases its run lease before
 sending a terminal event. Failed cleanup always releases the lease, preserves a
 primary execution error, and turns an otherwise successful exchange into an error.
 The next suite case can therefore start without racing the previous case's cleanup.
+
+### Session playback and timing
+
+Each suite case/iteration has a fresh voice session, transcript and recording.
+Completed-run replay plays one selected session and stops at that session's last
+turn. Changing the selected case stops its current audio and queued turns. The
+suite listener follows sequential sessions while execution is active; its
+evidence explicitly labels session boundaries.
+
+Turn replay joins captured speech segments without the original response waits.
+It cannot be used to time the live response. Suite tiles aggregate all captured
+responses; the selected conversation's detail uses only its own marks.
+
+Built-in response delay is measured from the final caller PCM playback frame's
+end to the first target PCM frame at the tester bridge. It measures the configured
+local rtc-asr/LLM/Kokoro runtime, not SIP/PSTN or a production network. The saved
+caller-end, ASR-final and target-first-audio timestamps expose the measured
+boundaries. Caller-end → ASR-final and ASR-final → first-audio split this interval;
+LLM/TTS diagnostics describe parts of that path and are not additional delays.
+Historical ASR-finalization metrics start at a VAD boundary, which may precede
+caller playback end or lag behind it, so those stage durations need not sum to
+the response interval. WAV integrity alone does not validate this timing.

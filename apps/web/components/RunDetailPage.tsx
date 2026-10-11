@@ -94,6 +94,12 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
       <section className="minimal-hero" aria-labelledby="run-title">
         <p className="eyebrow">Run analysis</p>
         <h1 id="run-title">{run?.agent_name || run?.agent_id || executionRunId}</h1>
+        {run?.mode === 'pipecat_webrtc' && run.conversations.length > 1 ? (
+          <p role="status">
+            {run.conversations.length} independent sessions · one case per session.
+            Select a conversation to inspect or play only that session.
+          </p>
+        ) : null}
         {run?.provenance?.honesty_label ? (
           <p className="runs-honesty-label" role="status">
             {run.provenance.honesty_label}
@@ -141,6 +147,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
               <small>Invokes the adapter and persists evidence; it is not scored.</small>
             </div>
           </section>
+          <p className="scenarios-muted">Suite summary · {run.conversations.length} conversations</p>
           <section className="metric-summary-grid" aria-label="Metric summaries">
             <MetricTile
               title="Interruption Detection"
@@ -157,7 +164,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
                   : 'Latency'}
               value={summary.avgLatency != null ? `${Math.round(summary.avgLatency)}ms` : 'n/a'}
               detail={summary.avgLatency != null
-                ? `${summary.latencyDefinition} · p90 ${
+                ? `${summary.latencyDefinition} · ${summary.latencyCount} responses across the suite · p90 ${
                   summary.p90Latency != null ? `${Math.round(summary.p90Latency)}ms` : 'n/a'
                 }`
                 : 'response timing not captured'}
@@ -245,7 +252,10 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
               <h2>{conversation?.scenario_title || conversation?.scenario_id || 'Conversation'}</h2>
               {run.mode === 'pipecat_webrtc' ? (
                 <LiveRunFeedback
-                  conversations={run.conversations || []}
+                  key={conversation?.conversation_id || 'no-conversation'}
+                  conversations={run.status === 'running' || run.status === 'queued'
+                    ? run.conversations : conversation ? [conversation] : []}
+                  conversationId={conversation?.conversation_id}
                   apiBase={getApiBase()}
                   voice
                   executionRunId={run.execution_run_id}
@@ -812,6 +822,13 @@ function MetricDetail({
           This end-to-end measurement includes transport, target processing, and media handoff overhead.
         </p>
       ) : null}
+      {conversation.mode === 'pipecat_webrtc' && builtInTarget ? (
+        <p className="latency-definition">
+          Measured in the local reference pipeline (rtc-asr → LLM → Kokoro).
+          This is the response delay of this configured runtime; it is not a phone/network latency benchmark.
+          Recorded turn playback omits these waits.
+        </p>
+      ) : null}
       <p>
         count {latency.count} · avg {fmtMs(latency.avg_ms)} · median {fmtMs(latency.median_ms)} · p90 {fmtMs(latency.p90_ms)} ·
         outliers {latency.outlier_count}
@@ -1218,6 +1235,7 @@ function aggregateRunMetrics(run: ExecutionRunRecord | null) {
   return {
     interruptionCount,
     avgLatency: measuredLatency.avg_ms,
+    latencyCount: measuredLatency.count,
     p90Latency: measuredLatency.p90_ms,
     targetSpecific,
     usesSpeechEndMetric,
@@ -1651,7 +1669,10 @@ function LatencyBreakdown({
   if (!stages || typeof stages !== 'object') return null;
   const values = stages as Record<string, unknown>;
   const entries = [
-    ['Target endpointing + ASR finalization', values.asr_finalize_ms],
+    [
+      values.caller_end_to_asr_final_ms != null ? 'Caller audio end → ASR final' : 'ASR endpoint → final',
+      values.caller_end_to_asr_final_ms ?? values.asr_finalize_ms,
+    ],
     ['LLM TTFT', values.llm_ttft_ms],
     ['TTS text aggregation', values.tts_aggregation_delay_ms],
     [
@@ -1671,7 +1692,18 @@ function LatencyBreakdown({
   return (
     <div className="latency-breakdown">
       <strong>{heading}</strong>
+      {typeof values.caller_end_to_asr_final_ms === 'number'
+        && typeof values.asr_final_to_first_audio_ms === 'number' ? (
+        <small>
+          Response path: caller audio end → ASR final {fmtMs(values.caller_end_to_asr_final_ms)}
+          {' · '}ASR final → first target PCM {fmtMs(values.asr_final_to_first_audio_ms)}
+        </small>
+      ) : null}
       <small>{entries.map(([label, value]) => `${label} ${fmtMs(value)}`).join(' · ')}</small>
+      <small>LLM and TTS diagnostics describe parts of the response path; they are not extra time to add to it.</small>
+      {values.caller_end_to_asr_final_ms == null ? (
+        <small>Historical ASR timing starts at its VAD boundary, which can differ from caller playback end. Stages can overlap.</small>
+      ) : null}
     </div>
   );
 }

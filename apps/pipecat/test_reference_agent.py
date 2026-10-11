@@ -524,6 +524,15 @@ def test_reference_duplex_stream_emits_streaming_graph_evidence(monkeypatch):
     assert exchanges[0]['target']['tester_asr_receipt'] == 'Please help me.'
     assert exchanges[0]['latency_kind'] == 'tester_speech_end_to_first_target_audio_received'
     assert exchanges[0]['latency_ms'] >= 0
+    response_frame = exchanges[0]['target']['frame']
+    stages = response_frame['stage_metrics']
+    assert stages['caller_end_to_asr_final_ms'] == pytest.approx(
+        (response_frame['target_asr_final_received_at'] - response_frame['tester_speech_ended_at']) * 1000,
+        abs=0.001,
+    )
+    assert stages['caller_end_to_asr_final_ms'] + stages['asr_final_to_first_audio_ms'] == pytest.approx(
+        response_frame['response_latency_ms'], abs=0.002,
+    )
     assert exchanges[0]['exchange_elapsed_ms'] >= exchanges[0]['latency_ms']
     assert exchanges[0]['target']['frame']['response_metric'] == (
         'tester_speech_end_to_first_target_audio_received'
