@@ -190,6 +190,24 @@ def test_publication_rejects_wrong_owner_and_missing_version():
     assert publish(saved, version=999).status_code == 422
 
 
+def test_mixed_case_publication_retains_individual_generator_lineage():
+    spec = design()
+    spec['generation_provenance'] = {'engine': 'assert', 'test_set_sha256': 'native-source-hash'}
+    spec['scenarios'][0]['generation_provenance'] = {
+        'engine': 'assert', 'test_set_sha256': 'native-source-hash', 'upstream_test_case_id': 'test_case_000001'}
+    spec['scenarios'].append({**spec['scenarios'][0], 'id': 'manual-payment-case', 'title': 'Manual addition',
+                              'generation_provenance': {}})
+    spec['scenarios'].append({**spec['scenarios'][0], 'id': 'custom-payment-case', 'title': 'Custom generation',
+                              'generation_provenance': {'engine': 'cae_configured_llm', 'model': 'custom-model'}})
+    suite_id = publish(save(spec)).json()['suite_id']
+    cases = {case['id']: case for case in benchmark_service.get_suite(suite_id)['scenarios']}
+    assert cases['payment-pressure']['generation_provenance']['upstream_test_case_id'] == 'test_case_000001'
+    assert cases['manual-payment-case']['generation_provenance'] == {'engine': 'manual'}
+    assert cases['custom-payment-case']['generation_provenance'] == {'engine': 'cae_configured_llm', 'model': 'custom-model'}
+    contract = benchmark_service.get_scenario_contract(suite_id, 'manual-payment-case')['scenario_contract']
+    assert contract['generation_provenance'] == {'engine': 'manual'}
+
+
 def test_visible_workspace_viewer_cannot_publish_but_editor_can(isolated_publications):
     saved = save()
     with isolated_publications() as db:

@@ -57,6 +57,19 @@ def cli_executable() -> str:
     return sys.executable
 
 
+def native_test_set_runtime() -> SimpleNamespace:
+    """Expose the pinned native generation stage through CAE's runtime boundary."""
+    ensure_expected_version()
+    from assert_ai.core.io import normalize_test_case_rows, write_jsonl
+    from assert_ai.stages.test_set import run_test_set
+
+    return SimpleNamespace(
+        run_test_set=run_test_set,
+        normalize_test_case_rows=normalize_test_case_rows,
+        write_jsonl=write_jsonl,
+    )
+
+
 def validate_config(config: dict[str, Any], *, config_path: Path) -> None:
     """Validate one CAE-compiled config with the sole supported ASSERT runtime."""
     ensure_expected_version()
@@ -175,6 +188,7 @@ __all__ = [
     'judge_score_contract',
     'judge_preset',
     'judge_presets',
+    'native_test_set_runtime',
     'scenario_preset',
     'scenario_presets',
     'validate_config',
