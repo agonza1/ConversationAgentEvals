@@ -771,6 +771,8 @@ def _execute_public_pipecat_daily(
         'daily_room_credentials_persisted': False,
         'tester_media': 'current_run_kokoro',
         'target_media': 'current_run_daily_webrtc',
+        'target_transcript': (result.get('provenance') or {}).get('target_transcript'),
+        'target_reported_text': (result.get('provenance') or {}).get('target_reported_text'),
     }
     target = result.get('target') if isinstance(result.get('target'), dict) else {}
     connection = result.get('connection') if isinstance(result.get('connection'), dict) else {}

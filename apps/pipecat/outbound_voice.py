@@ -162,9 +162,12 @@ class OutboundVoiceRunContext:
         target_text: str,
         caller_wav: bytes,
         caller_audio_frames: int,
+        caller_metadata: dict[str, Any] | None = None,
+        target_metadata: dict[str, Any] | None = None,
+        target_wav: bytes | None = None,
     ) -> tuple[dict[str, Any], bytes]:
         evidence = self.evidence
-        target_wav = pcm_to_wav(
+        target_wav = target_wav if target_wav is not None else pcm_to_wav(
             bytes(evidence.target_audio),
             evidence.target_audio_sample_rate,
             evidence.target_audio_channels,
@@ -200,8 +203,8 @@ class OutboundVoiceRunContext:
         )
         exchange = {
             'turn_pair': turn_pair,
-            'caller': {'text': caller_text},
-            'target': {'text': target_text},
+            'caller': {'text': caller_text, 'frame_metadata': caller_metadata or {}},
+            'target': {'text': target_text, 'frame_metadata': target_metadata or {}},
             'latency': {
                 'tester_speech_end_to_first_target_audio_received_ms': first_speech_ms,
                 'tester_speech_end_to_first_target_speech_received_ms': first_speech_ms,
@@ -234,8 +237,10 @@ class OutboundVoiceRunContext:
         self.caller_wavs.append(caller_wav)
         self.target_wavs.append(target_wav)
         self.turns.extend([
-            {'speaker': 'caller', 'text': caller_text, 'turn_pair': turn_pair},
-            {'speaker': 'agent', 'text': target_text, 'turn_pair': turn_pair},
+            {'speaker': 'caller', 'text': caller_text, 'turn_pair': turn_pair,
+             'frame_metadata': caller_metadata or {}},
+            {'speaker': 'agent', 'text': target_text, 'turn_pair': turn_pair,
+             'frame_metadata': target_metadata or {}},
         ])
         self.exchanges.append(exchange)
         return exchange, target_wav
@@ -244,6 +249,14 @@ class OutboundVoiceRunContext:
         if self.event_callback is None:
             return
         turn_pair = int(exchange['turn_pair'])
+        caller_metadata = exchange['caller'].get('frame_metadata') or {}
+        if caller_metadata:
+            await self.event_callback({
+                'type': 'live_transcript', 'turn_pair': turn_pair,
+                'speaker': 'Caller', 'direction': 'tester_to_target',
+                'text': str(exchange['caller']['text']),
+                'frame_metadata': caller_metadata,
+            })
         await self.event_callback({
             'type': 'live_audio',
             'turn_pair': turn_pair,
@@ -253,6 +266,7 @@ class OutboundVoiceRunContext:
             'audio_wav_base64': base64.b64encode(target_wav).decode(),
             'media_event': 'target_response_complete',
             'latency': exchange['latency'],
+            'frame_metadata': exchange['target'].get('frame_metadata') or {},
         })
         await self.event_callback({'type': 'exchange', **exchange})
 
