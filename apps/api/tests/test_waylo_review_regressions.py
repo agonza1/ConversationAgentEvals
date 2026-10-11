@@ -107,6 +107,45 @@ def test_active_greeting_must_finish_before_first_caller(tmp_path):
     result = call(tmp_path, peer=peer)
     assert not peer.sent
     assert result['final_state']['tester_error'] == 'Greeting never finished'
+    assert result['verdict'] == 'failed'
+    assert result['ietf_vcon_export'] and result['waylo_capture']
+
+
+@pytest.mark.parametrize('failure', ['send', 'response'])
+def test_rtc_failure_keeps_partial_evidence_but_fails_execution(tmp_path, failure):
+    class FailedPeer(Peer):
+        async def send(self, *args, **kwargs):
+            if failure == 'send':
+                raise WayloError('Caller audio send failed')
+            return await super().send(*args, **kwargs)
+        async def wait_response(self, previous, timeout=25):
+            if timeout != 5:
+                raise WayloError('No target response')
+            await super().wait_response(previous, timeout=timeout)
+    result = call(tmp_path, peer=FailedPeer())
+    assert result['verdict'] == 'failed'
+    assert result['final_state']['tester_error']
+    assert result['ietf_vcon_export'] and result['waylo_capture']
+    assert result['score'] is None and result['evaluation_report'] == {}
+
+
+def test_failed_rtc_result_becomes_failed_conversation_with_evidence(tmp_path, monkeypatch):
+    class FailedPeer(Peer):
+        async def send(self, *args, **kwargs):
+            raise WayloError('Caller audio send failed')
+    result = call(tmp_path, peer=FailedPeer())
+    async def execute(**kwargs):
+        return result
+    monkeypatch.setattr(execution_runner, '_execute_waylo', execute)
+    monkeypatch.setattr(execution_runner, 'get_suite', lambda ident: {'id': ident, 'scenarios': [{'id': 'case', 'title': 'Case'}]})
+    monkeypatch.setattr(runs, 'get_conversation', lambda *args: None)
+    monkeypatch.setattr(execution_runner, '_live_event_publisher', lambda **kwargs: lambda event: None)
+    record = execution_runner._run_one_conversation(execution_run_id='exec-test', suite_id='suite',
+        scenario_id='case', iteration=1,
+        payload=ExecutionRunCreateRequest(mode='pipecat_webrtc', executor_id='waylo_livekit'), agent_snapshot=TARGET)
+    assert record.status == 'failed' and record.verdict == 'failed'
+    assert record.error == 'Caller audio send failed'
+    assert record.ietf_vcon_export and record.final_state['tester_error']
 
 
 def test_long_greeting_waits_for_boundary_then_sends(tmp_path):
@@ -122,7 +161,8 @@ def test_long_greeting_waits_for_boundary_then_sends(tmp_path):
             assert self.finished
             return await super().send(*args, **kwargs)
     peer = Greeting()
-    call(tmp_path, peer=peer)
+    result = call(tmp_path, peer=peer)
+    assert result['verdict'] == 'needs_review'
     assert peer.sent == ['caller-1']
 
 

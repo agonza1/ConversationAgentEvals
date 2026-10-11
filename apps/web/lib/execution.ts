@@ -1,5 +1,5 @@
 import { apiErrorMessage } from './apiError';
-import { wayloRequestHeaders, type WayloTargetConnection } from './wayloConnection';
+import { wayloExecutionHeaders, wayloRequestHeaders, type WayloTargetConnection } from './wayloConnection';
 
 export type ExecutionMode = 'text_callable' | 'voice_fixture' | 'pipecat_webrtc';
 export type AudioTransportId =
@@ -628,7 +628,7 @@ export async function createExecutionRun(payload: {
   return handleJson(
     await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(payload.executor_id === 'waylo_livekit' ? wayloRequestHeaders(connection, endpoint) : {}) },
+      headers: { 'Content-Type': 'application/json', ...wayloExecutionHeaders(connection, endpoint) },
       body: JSON.stringify(payload),
     }),
   );

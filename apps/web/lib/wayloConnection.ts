@@ -96,6 +96,15 @@ export function wayloRequestHeaders(connection?: WayloTargetConnection, requestU
   return found ? { 'X-CAE-Waylo-Control': '1', 'X-CAE-Waylo-Session': found.entry.proof } : {};
 }
 
+/** Run authorization follows the target's credential type, not UI executor state. */
+export function wayloExecutionHeaders(connection?: WayloTargetConnection, requestUrl?: string): Record<string, string> {
+  if (connection?.auth_type !== 'waylo_browser_session') return {};
+  if (!sameOriginRequest(requestUrl)) throw new Error('Temporary Waylo calls require same-origin local CAE.');
+  const headers = wayloRequestHeaders(connection, requestUrl);
+  if (!headers['X-CAE-Waylo-Session']) throw new Error('Reconnect Waylo in this tab before starting the call.');
+  return headers;
+}
+
 export async function connectWaylo(payload: {
   email: string; password: string; waylo_agent_id: string; tenant_id?: string; confirm: true; expected_endpoint_url: string;
 }): Promise<WayloConnectionInfo> {

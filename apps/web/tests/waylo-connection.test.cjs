@@ -51,6 +51,21 @@ const login = (overrides = {}) => ({ email: 'fixture@example.test', password: 's
 const target = (overrides = {}) => ({ endpoint_url: endpoint, workspace_id: workspace,
   waylo_agent_id: agent, auth_type: 'waylo_browser_session', ...overrides });
 
+test('run headers require a matching live grant independently of executor selection', async () => {
+  const client = memoryClient();
+  assert.throws(() => client.wayloExecutionHeaders(target(), '/api/execution/runs'), /Reconnect Waylo in this tab/);
+  await client.connectWaylo(login());
+  assert.deepEqual(client.wayloExecutionHeaders(target(), '/api/execution/runs'), {
+    'X-CAE-Waylo-Control': '1', 'X-CAE-Waylo-Session': 'fixture-private-proof',
+  });
+  assert.throws(() => client.wayloExecutionHeaders(target({ workspace_id: tenant }), '/api/execution/runs'), /Reconnect/);
+  assert.throws(() => client.wayloExecutionHeaders(target(), 'https://other.example.test/api/execution/runs'), /same-origin local CAE/);
+  assert.deepEqual(client.wayloExecutionHeaders(undefined, '/api/execution/runs'), {});
+  assert.deepEqual(client.wayloExecutionHeaders(target({ auth_type: 'bearer_secret' }), '/api/execution/runs'), {});
+  client.advance(300_001);
+  assert.throws(() => client.wayloExecutionHeaders(target(), '/api/execution/runs'), /Reconnect/);
+});
+
 test('normal connection exposes safe status only and sends proof solely in same-origin headers', async () => {
   const client = memoryClient();
   assert.equal(await client.loadWayloConnectionConfig(), endpoint);

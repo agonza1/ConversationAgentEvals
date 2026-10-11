@@ -8,7 +8,7 @@ import { DesignResults } from './DesignResults';
 import { LiveRunFeedback, type LiveRunEvent } from './LiveRunFeedback';
 import { apiErrorMessage } from '@/lib/apiError';
 import { WayloConnection, useWayloConnection } from './WayloConnection';
-import { wayloRequestHeaders, type WayloTargetConnection } from '@/lib/wayloConnection';
+import { wayloExecutionHeaders, type WayloTargetConnection } from '@/lib/wayloConnection';
 import { sortedAssertReviews } from '@/lib/assertReview';
 import { listProductProjects, requestBenchmarkJudge, type ProductProjectOption, type AssertJudgeReadiness, type ConversationRecord } from '@/lib/execution';
 
@@ -1080,7 +1080,7 @@ async function createExecutionRun(payload: {
   return handleJson<ExecutionRunRecord>(
     await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(payload.executor_id === 'waylo_livekit' ? wayloRequestHeaders(connection, endpoint) : {}) },
+      headers: { 'Content-Type': 'application/json', ...wayloExecutionHeaders(connection, endpoint) },
       body: JSON.stringify(payload),
     }),
   );
@@ -2743,39 +2743,39 @@ export function BenchmarkRunner({
         if (selected && (view !== 'score' || matched)) {
           applyAgentProfileDefaults(selected, { setAgentProfile, setModelName, setPromptVersion });
         }
-        if (matched) {
-          if (matched.target === 'waylo') {
+        if (selected) {
+          if (selected.target === 'waylo') {
             setExecutionMode('pipecat_webrtc');
             setExecutionTesterId('pipecat_tester');
             setExecutionExecutorId('waylo_livekit');
-          } else if (matched.target === 'builtin_sample_voice') {
+          } else if (selected.target === 'builtin_sample_voice') {
             setExecutionMode('pipecat_webrtc');
             setExecutionTesterId('pipecat_tester');
             setExecutionExecutorId('cae_local_audio_loop');
-          } else if (matched.target === 'pipecat_public_demo') {
+          } else if (selected.target === 'pipecat_public_demo') {
             setExecutionMode('pipecat_webrtc');
             setExecutionTesterId('pipecat_tester');
             setExecutionExecutorId('pipecat_public_daily');
-          } else if (matched.target === 'signalwire_holy_guacamole') {
+          } else if (selected.target === 'signalwire_holy_guacamole') {
             setExecutionMode('pipecat_webrtc');
             setExecutionTesterId('pipecat_tester');
             setExecutionExecutorId('signalwire_public_webrtc');
             setExecutionMaxExchanges(1);
-          } else if (matched.target === 'voice_fixture') {
+          } else if (selected.target === 'voice_fixture') {
             setExecutionMode('voice_fixture');
             setExecutionTesterId('fixture_replay');
             setExecutionExecutorId('evidence_replay');
-          } else if (matched.target === 'offline_acc_fixture') {
+          } else if (selected.target === 'offline_acc_fixture') {
             setExecutionMode('text_callable');
             setExecutionTesterId('fixture_replay');
             setExecutionExecutorId('evidence_replay');
-          } else if (isExternalVoiceTargetId(matched.target)) {
+          } else if (isExternalVoiceTargetId(selected.target)) {
             setExecutionMode('text_callable');
             setExecutionTesterId('scenario_simulator');
             setExecutionExecutorId(
-              matched.target === 'sip_agent'
+              selected.target === 'sip_agent'
                 ? 'acc_sip'
-                : matched.target === 'phone_agent'
+                : selected.target === 'phone_agent'
                   ? 'acc_phone'
                   : 'acc_browser_webrtc',
             );
@@ -3792,8 +3792,8 @@ export function BenchmarkRunner({
           : selectedScoreAgent?.target === 'http_endpoint'
             ? 'http_endpoint'
           : 'mock_agent';
-    const runTesterId: NonNullable<ExecutionRunRecord['tester_id']> = executionTesterId;
-    const runExecutorId: NonNullable<ExecutionRunRecord['executor_id']> = executionExecutorId;
+    const runTesterId: NonNullable<ExecutionRunRecord['tester_id']> = wayloAgent ? 'pipecat_tester' : executionTesterId;
+    const runExecutorId: NonNullable<ExecutionRunRecord['executor_id']> = wayloAgent ? 'waylo_livekit' : executionExecutorId;
 
     const offlineFixtureText =
       runMode === 'text_callable' && runTextCallable === 'offline_acc_fixture';

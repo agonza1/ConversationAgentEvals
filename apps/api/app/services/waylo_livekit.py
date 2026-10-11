@@ -494,7 +494,7 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                 'evidence_coverage': exported['coverage'], 'waylo_capture': capture,
                 'configuration_check': exported['configuration_check'], 'action_trace': [],
                 'final_state': {'evidence_scope': 'waylo_capture', 'tester_error': error} if error else {},
-                'verdict': 'needs_review', 'score': None, 'latency_marks': [],
+                'verdict': 'failed' if error else 'needs_review', 'score': None, 'latency_marks': [],
                 'evaluation_report': {}, 'recording': None,
                 'audio_session': {'transport': 'waylo_livekit', 'session_id': bootstrap['sessionId']}}
     finally:
