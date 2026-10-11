@@ -32,6 +32,8 @@ export function useOpenAIConnection(enabled = true) {
   const [provider, setProvider] = useState<OpenAIProviderStatus | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [failed, setFailed] = useState(false);
   const generation = useRef(0);
 
   useEffect(() => {
@@ -41,7 +43,10 @@ export function useOpenAIConnection(enabled = true) {
     request<OpenAIProviderStatus>('status').then((status) => {
       if (attempt === generation.current) setProvider(status);
     }).catch(() => {
-      if (attempt === generation.current) setMessage('Connection status unavailable. You can retry connecting.');
+      if (attempt === generation.current) {
+        setFailed(true);
+        setMessage('Connection status unavailable. You can retry connecting.');
+      }
     });
     return () => { lifecycle.current++; };
   }, [enabled]);
@@ -50,6 +55,7 @@ export function useOpenAIConnection(enabled = true) {
     const attempt = ++generation.current;
     setConnecting(true);
     setMessage(null);
+    setFailed(false);
     try {
       const started = await request<{ authorize_url: string }>('oauth/start', 'POST');
       if (attempt !== generation.current) return;
@@ -67,9 +73,15 @@ export function useOpenAIConnection(enabled = true) {
           return;
         }
       }
-      if (attempt === generation.current) setMessage('Login timed out. Connect again to retry.');
+      if (attempt === generation.current) {
+        setFailed(true);
+        setMessage('Login timed out. Connect again to retry.');
+      }
     } catch (error) {
-      if (attempt === generation.current) setMessage(error instanceof Error ? error.message : 'Could not connect OpenAI.');
+      if (attempt === generation.current) {
+        setFailed(true);
+        setMessage(error instanceof Error ? error.message : 'Could not connect OpenAI.');
+      }
     } finally {
       if (attempt === generation.current) setConnecting(false);
     }
@@ -78,15 +90,23 @@ export function useOpenAIConnection(enabled = true) {
   async function disconnect() {
     const attempt = ++generation.current;
     setConnecting(false);
+    setDisconnecting(true);
+    setMessage(null);
+    setFailed(false);
     try {
       const status = await request<OpenAIProviderStatus>('disconnect', 'POST');
       if (attempt !== generation.current) return;
       setProvider(status);
       setMessage('OpenAI disconnected.');
     } catch (error) {
-      if (attempt === generation.current) setMessage(error instanceof Error ? error.message : 'Could not disconnect OpenAI.');
+      if (attempt === generation.current) {
+        setFailed(true);
+        setMessage(error instanceof Error ? error.message : 'Could not disconnect OpenAI.');
+      }
+    } finally {
+      if (attempt === generation.current) setDisconnecting(false);
     }
   }
 
-  return { provider, message, connecting, connect, disconnect };
+  return { provider, message, connecting, disconnecting, failed, connect, disconnect };
 }

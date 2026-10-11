@@ -30,25 +30,27 @@ async function mockConnection(page: Page, { enabled = true, sharing = true, fail
 
 test('ChatGPT account model selects the same ASSERT judge for upload and live reviews', async ({ page }) => {
   const writes = await mockConnection(page);
-  await page.goto('/benchmarks');
+  await page.goto('/settings');
   const panel = page.getByRole('region', { name: 'ChatGPT plan judge settings' });
   await panel.getByRole('button', { name: 'Load account models' }).click();
   await panel.getByLabel('ChatGPT judge model').selectOption('gpt-exact');
-  await panel.getByRole('button', { name: 'Use ChatGPT model for ASSERT reviews' }).click();
-  await expect(panel).toContainText('Active judge: chatgpt_plan/gpt-exact');
+  await panel.getByRole('button', { name: 'Save judge model' }).click();
+  await expect(panel.getByText('gpt-exact', { exact: true })).toBeVisible();
+  await expect(panel.getByLabel('ChatGPT judge model')).toBeEnabled();
   expect(writes).toContainEqual({ path: 'judge-model', body: { model: 'gpt-exact' }, header: '1' });
+  await panel.getByText('Account options', { exact: true }).click();
   await panel.getByRole('button', { name: 'Restore deployment judge' }).click();
   await expect(panel).toContainText('Deployment default (not using this ChatGPT connection)');
 });
 
 test('switching ChatGPT accounts clears the model catalog and requires a new explicit selection', async ({ page }) => {
   await mockConnection(page);
-  await page.goto('/benchmarks');
+  await page.goto('/settings');
   const panel = page.getByRole('region', { name: 'ChatGPT plan judge settings' });
   await panel.getByRole('button', { name: 'Load account models' }).click();
   await expect(panel.getByLabel('ChatGPT judge model')).toContainText('Exact account model');
   await panel.getByLabel('ChatGPT account').selectOption('profile-b');
-  await expect(panel.getByRole('button', { name: 'Use ChatGPT model for ASSERT reviews' })).toBeDisabled();
+  await expect(panel.getByRole('button', { name: 'Save judge model' })).toBeDisabled();
   await expect(panel.getByLabel('ChatGPT judge model')).not.toContainText('Exact account model');
   await panel.getByRole('button', { name: 'Load account models' }).click();
   await expect(panel.getByLabel('ChatGPT judge model')).toContainText('Other account model');
@@ -56,11 +58,11 @@ test('switching ChatGPT accounts clears the model catalog and requires a new exp
 
 test('failed saves do not claim a ChatGPT judge was activated', async ({ page }) => {
   await mockConnection(page, { failSave: true });
-  await page.goto('/benchmarks');
+  await page.goto('/settings');
   const panel = page.getByRole('region', { name: 'ChatGPT plan judge settings' });
   await panel.getByRole('button', { name: 'Load account models' }).click();
   await panel.getByLabel('ChatGPT judge model').selectOption('gpt-exact');
-  await panel.getByRole('button', { name: 'Use ChatGPT model for ASSERT reviews' }).click();
+  await panel.getByRole('button', { name: 'Save judge model' }).click();
   await expect(panel.getByRole('alert')).toContainText('no longer listed');
   await expect(panel).not.toContainText('Saved.');
   await expect(panel).toContainText('Deployment default');
@@ -68,7 +70,7 @@ test('failed saves do not claim a ChatGPT judge was activated', async ({ page })
 
 test('identity-only and disabled connections cannot select a judge model', async ({ page }) => {
   await mockConnection(page, { sharing: false });
-  await page.goto('/benchmarks');
+  await page.goto('/settings');
   const panel = page.getByRole('region', { name: 'ChatGPT plan judge settings' });
   await expect(panel).toContainText('identity alone cannot judge');
   await expect(panel.getByRole('button', { name: 'Load account models' })).toHaveCount(0);
@@ -80,8 +82,9 @@ test('identity-only and disabled connections cannot select a judge model', async
 
 test('deployment judge can be explicitly restored without an active plan grant', async ({ page }) => {
   const writes = await mockConnection(page, { sharing: false });
-  await page.goto('/benchmarks');
+  await page.goto('/settings');
   const panel = page.getByRole('region', { name: 'ChatGPT plan judge settings' });
+  await panel.getByText('Account options', { exact: true }).click();
   await panel.getByRole('button', { name: 'Restore deployment judge' }).click();
   await expect(panel).toContainText('Restored deployment judge settings. No model was called.');
   expect(writes).toContainEqual({ path: 'judge-model', body: { model: null }, header: '1' });
