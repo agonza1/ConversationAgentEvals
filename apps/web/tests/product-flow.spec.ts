@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test('homepage links to focused workflow demos', async ({ page }) => {
+test('homepage links to the two evaluation workflows', async ({ page }) => {
   await page.goto('/');
 
   await expect(page.getByRole('link', { name: 'Browse test sets', exact: true }).first()).toHaveAttribute('href', '/tests');
@@ -9,7 +9,38 @@ test('homepage links to focused workflow demos', async ({ page }) => {
   await expect(
     page.getByRole('img', { name: 'Run an agent or import transcript or vCon evidence, then evaluate and report' }),
   ).toBeVisible();
+  const diagram = page.locator('.home-flow-visual img');
+  await diagram.scrollIntoViewIfNeeded();
+  await expect.poll(() => diagram.evaluate((element) => (element as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
   await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Benchmarks' })).toHaveCount(0);
+});
+
+test('homepage keeps workflows usable on desktop and small screens without starting a run', async ({ page }) => {
+  const writes: string[] = [];
+  page.on('request', (request) => {
+    if (!['GET', 'HEAD'].includes(request.method())) writes.push(request.url());
+  });
+  for (const width of [1440, 768, 641, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/');
+    await expect(page.getByRole('heading', { level: 1 })).toContainText('Proven outcomes.');
+    await expect(page.locator('.home-path')).toHaveCount(2);
+    for (const name of ['Start an agent test', 'Analyze existing evidence']) {
+      const link = page.getByRole('link', { name, exact: true });
+      await expect(link).toBeVisible();
+      await link.focus();
+      await expect(link).toBeFocused();
+      expect(await link.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe('solid');
+    }
+    await expect(page.getByRole('navigation', { name: 'Workspace shortcuts' }).getByRole('link')).toHaveCount(4);
+    await expect(page.getByText('Missing proof stays unverified', { exact: false })).toBeVisible();
+    await expect(page.getByText('Benchmark report', { exact: true })).toHaveCount(0);
+    for (const anchor of ['product', 'coverage', 'benchmarks']) {
+      await expect(page.locator(`#${anchor}`)).toHaveCount(1);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+  }
+  expect(writes).toEqual([]);
 });
 
 test('homepage navigation preserves an API base override', async ({ page }) => {
@@ -26,6 +57,13 @@ test('homepage navigation preserves an API base override', async ({ page }) => {
   await expect(page.getByRole('link', { name: 'Start an agent test', exact: true })).toHaveAttribute(
     'href',
     '/runs?api_base=http%3A%2F%2Fapi.example.test',
+  );
+  const shortcuts = page.getByRole('navigation', { name: 'Workspace shortcuts' });
+  for (const [name, path] of [['Manage agents', '/targets'], ['View results', '/results'], ['Open settings', '/settings']]) {
+    await expect(shortcuts.getByRole('link', { name, exact: true })).toHaveAttribute('href', `${path}?api_base=http%3A%2F%2Fapi.example.test`);
+  }
+  await expect(page.getByRole('link', { name: 'Analyze existing evidence', exact: true })).toHaveAttribute(
+    'href', '/eval?api_base=http%3A%2F%2Fapi.example.test',
   );
 });
 

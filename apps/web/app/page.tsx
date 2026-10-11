@@ -3,225 +3,111 @@ import Image from 'next/image';
 import { ApiAwareLink } from '@/components/ApiAwareLink';
 import { SiteNav } from '@/components/SiteNav';
 
-const domains = [
-  {
-    name: 'Call center voice AI',
-    detail: 'Appointments, cancellations, transfers, interruptions, escalation.',
-  },
-  {
-    name: 'Telehealth intake',
-    detail: 'Patient routing, privacy boundaries, medication and emergency handling.',
-  },
-  {
-    name: 'Online teaching',
-    detail: 'Adaptive tutoring, quiz flow, confusion handling, grading boundaries.',
-  },
-  {
-    name: 'Fintech support',
-    detail: 'Identity checks, disputes, card freezes, fraud escalation, compliance.',
-  },
-];
-
-const surfaces = [
-  {
-    title: 'Conversations',
-    copy: 'Score transcripts, chats, and vCon records against scenario expectations.',
-  },
-  {
-    title: 'Voice AI',
-    copy: 'Evaluate real-time calls, interruptions, escalation, and voice-specific behavior.',
-  },
-  {
-    title: 'Group calls',
-    copy: 'Track speakers, decisions, commitments, and follow-up actions across multi-party sessions.',
-  },
-  {
-    title: 'E2E actions',
-    copy: 'Verify tools, policy constraints, and final system state in one report.',
-  },
-];
+const workspaceLinks = [
+  { title: 'Tests', copy: 'Choose scenarios and success criteria.', href: '/tests', cta: 'Browse test sets' },
+  { title: 'Agents', copy: 'Configure the targets you want to test.', href: '/targets', cta: 'Manage agents' },
+  { title: 'Results', copy: 'Review runs, evidence, and saved evaluations.', href: '/results', cta: 'View results' },
+  { title: 'Settings', copy: 'Manage providers, drafting, and judging.', href: '/settings', cta: 'Open settings' },
+] as const;
 
 const workflow = [
-  {
-    label: 'Define',
-    title: 'Write scenarios that match real jobs',
-    copy: 'Capture persona, task goal, policy constraints, required actions, forbidden actions, and expected final state.',
-  },
-  {
-    label: 'Run',
-    title: 'Exercise real agent behavior across channels',
-    copy: 'Run configured agents against the same scenarios across text, voice, WebRTC, and phone workflows.',
-  },
-  {
-    label: 'Eval',
-    title: 'Measure outcomes, not vibes',
-    copy: 'Grade task completion, action correctness, policy compliance, final state, and evidence artifacts.',
-  },
+  { title: 'Define success', copy: 'Choose a scenario with required actions, policy boundaries, and an expected outcome.' },
+  { title: 'Capture evidence', copy: 'Run a connected agent or import an existing transcript or vCon.' },
+  { title: 'Inspect the result', copy: 'Review the verdict, supporting evidence, and any missing checks.' },
 ];
 
-const signals = [
-  'Task completion',
-  'Tool/action correctness',
-  'Policy boundaries',
-  'Final-state assertions',
-  'Voice and WebRTC readiness',
-  'Evidence artifacts',
+const evidence = [
+  { title: 'Task & policy checks', copy: 'Compare the conversation, recorded actions, and final state with the scenario requirements.' },
+  { title: 'Voice & transcript evidence', copy: 'Inspect captured audio, transcripts, latency, and word error rate when the run provides them.' },
+  { title: 'Traceable verdicts', copy: 'See how the evaluation was calculated. Missing proof stays unverified, not silently passed.' },
 ];
-
-const proofRows = [
-  ['Scenario', 'Angry caller needs appointment reschedule'],
-  ['Evidence', 'Transcript, action trace, final state'],
-  ['Scores', 'Task, policy, tool, outcome'],
-  ['Output', 'Pass/fail report with suggested fixes'],
-];
-
-const workspacePaths = [
-  {
-    eyebrow: 'Define the test',
-    title: 'Tests',
-    copy: 'Browse evaluation suites, inspect scenario requirements, and choose what an agent must prove.',
-    href: '/tests?suite_id=call-center-voice-ai&scenario_id=billing-address-change',
-    cta: 'Browse test sets',
-  },
-  {
-    eyebrow: 'Evaluate artifacts',
-    title: 'Analyze a conversation',
-    copy: 'Evaluate transcripts, action traces, final state, calls, and vCon records against a scenario contract.',
-    href: '/eval',
-    cta: 'Analyze existing evidence',
-  },
-  {
-    eyebrow: 'Exercise targets',
-    title: 'Test an agent',
-    copy: 'Launch a configured agent target, watch conversations complete, then inspect the run analysis.',
-    href: '/runs',
-    cta: 'Start an agent test',
-  },
-] as const;
 
 export default function HomePage() {
   return (
-    <main className="saas-shell">
+    <main className="saas-shell home-shell">
       <SiteNav current="home" />
 
-      <section className="saas-hero" aria-labelledby="hero-title">
-        <div className="saas-hero-copy">
-          <p className="eyebrow">Agentic AI evaluation platform</p>
-          <h1 id="hero-title">Prove your AI agent can actually do the job.</h1>
-          <p>
-            Evaluate conversations, voice AI, group calls, tool execution, and final task outcomes in one
-            regression platform before agents reach production.
-          </p>
-          <div className="hero-cta">
-            <ApiAwareLink className="primary-link" href="/runs">Test an agent</ApiAwareLink>
-            <ApiAwareLink className="secondary-link" href="/eval">Analyze a conversation</ApiAwareLink>
-            <ApiAwareLink href="/tests">Browse test sets</ApiAwareLink>
-          </div>
-        </div>
+      <section className="home-start" aria-labelledby="hero-title">
+        <header className="home-intro">
+          <p className="eyebrow">Your evaluation workspace</p>
+          <h1 id="hero-title">Better conversations.<br /><span>Proven outcomes.</span></h1>
+          <p>Test an agent or analyze a conversation. Turn what happened into evidence you can inspect.</p>
+        </header>
 
-        <aside className="score-panel" aria-label="Benchmark report preview">
-          <div className="score-panel-header">
-            <span>Benchmark report</span>
-            <strong>91</strong>
-          </div>
-          <div className="score-bars">
-            <ScoreRow label="Task completion" value="94%" />
-            <ScoreRow label="Policy compliance" value="88%" />
-            <ScoreRow label="Tool correctness" value="91%" />
-            <ScoreRow label="Final state" value="90%" />
-          </div>
-        </aside>
+        <div className="home-paths">
+          <article className="home-path home-path-live" aria-labelledby="live-path-title">
+            <span className="home-path-icon" aria-hidden="true">↗</span>
+            <div>
+              <p className="eyebrow">Create new evidence</p>
+              <h2 id="live-path-title">Test an agent</h2>
+              <p>Choose a scenario and a connected text or voice agent. Run the exchange, then review the outcome.</p>
+            </div>
+            <div className="home-path-footer">
+              <ApiAwareLink className="primary-link" href="/runs">Start an agent test</ApiAwareLink>
+              <span>You review the setup before running.</span>
+            </div>
+          </article>
+          <article className="home-path" aria-labelledby="import-path-title">
+            <span className="home-path-icon" aria-hidden="true">≡</span>
+            <div>
+              <p className="eyebrow">Use existing evidence</p>
+              <h2 id="import-path-title">Analyze a conversation</h2>
+              <p>Upload a transcript or vCon, choose the evaluation criteria, and inspect the verdict. No live agent required.</p>
+            </div>
+            <div className="home-path-footer">
+              <ApiAwareLink className="secondary-link" href="/eval">Analyze existing evidence</ApiAwareLink>
+              <span>Bring a conversation you already have.</span>
+            </div>
+          </article>
+        </div>
       </section>
 
-      <section className="section-band" id="product" aria-labelledby="product-title">
-        <div className="section-heading">
-          <p className="eyebrow">Product</p>
-          <h2 id="product-title">A regression suite for agentic behavior.</h2>
-          <p>
-            Most eval tools stop at conversation quality. This tests whether the agent understood the user,
-            handled the channel correctly, executed the right actions, respected constraints, and left systems
-            in the correct state.
-          </p>
+      <nav className="home-workspace" aria-label="Workspace shortcuts">
+        {workspaceLinks.map((link) => (
+          <ApiAwareLink className="home-workspace-link" href={link.href} key={link.title} aria-label={link.cta}>
+            <strong>{link.title}<span aria-hidden="true">→</span></strong>
+            <span>{link.copy}</span>
+            <span className="home-workspace-cta">{link.cta}</span>
+          </ApiAwareLink>
+        ))}
+      </nav>
+
+      <section className="home-process" id="product" aria-labelledby="product-title">
+        <div>
+          <p className="eyebrow">One evaluation flow</p>
+          <h2 id="product-title">From conversation to a clear verdict.</h2>
+          <ol className="home-steps">
+            {workflow.map((step) => (
+              <li key={step.title}>
+                <h3>{step.title}</h3>
+                <p>{step.copy}</p>
+              </li>
+            ))}
+          </ol>
         </div>
-        <div className="product-flow-visual">
+        <div className="home-flow-visual">
           <Image
             src="/images/convoice-qa-evaluation-pipeline.png"
             alt="Run an agent or import transcript or vCon evidence, then evaluate and report"
             width={1774}
             height={887}
-            sizes="(max-width: 640px) calc(100vw - 28px), (max-width: 1160px) calc(100vw - 40px), 1120px"
+            sizes="(max-width: 760px) calc(100vw - 60px), (max-width: 1160px) 50vw, 580px"
           />
-        </div>
-        <div className="signal-grid">
-          {signals.map((signal) => (
-            <div className="signal-item" key={signal}>{signal}</div>
-          ))}
+          <p>Two ways to capture evidence. The same scenario-based evaluation.</p>
         </div>
       </section>
 
-      <section className="coverage-section" id="coverage" aria-labelledby="coverage-title">
-        <div className="section-heading">
-          <p className="eyebrow">Coverage</p>
-          <h2 id="coverage-title">One evaluation layer across every agent surface.</h2>
+      <section className="home-evidence" id="coverage" aria-labelledby="coverage-title">
+        <div className="home-section-header">
+          <div>
+            <p className="eyebrow">What you can review</p>
+            <h2 id="coverage-title">Evidence, not just a score.</h2>
+          </div>
+          <ApiAwareLink className="secondary-link" href="/results">Review past results</ApiAwareLink>
         </div>
-        <div className="surface-grid">
-          {surfaces.map((surface) => (
-            <article className="surface-card" key={surface.title}>
-              <h3>{surface.title}</h3>
-              <p>{surface.copy}</p>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="proof-section" aria-labelledby="proof-title">
-        <div className="section-heading">
-          <p className="eyebrow">Workspace</p>
-          <h2 id="proof-title">A useful test run in one screen.</h2>
-          <p>
-            The focused workflow stays honest: choose a scenario, run an agent, inspect the captured evidence, and
-            require one QA run for every PR before merge.
-          </p>
-        </div>
-        <div className="proof-table" aria-label="Benchmark runner workflow preview">
-          {proofRows.map(([label, value]) => (
-            <div className="proof-row" key={label}>
-              <span>{label}</span>
-              <strong>{value}</strong>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="embedded-runner" aria-labelledby="homepage-runner-title">
-        <div className="section-heading">
-          <p className="eyebrow">Workspace</p>
-          <h2 id="homepage-runner-title">Choose the workflow that fits your evidence.</h2>
-          <p>
-            Test an agent or analyze an existing conversation. Both use reviewed criteria and produce inspectable evidence.
-          </p>
-        </div>
-        <div className="surface-grid">
-          {workspacePaths.map((path) => (
-            <article className="surface-card" key={path.title}>
-              <p className="eyebrow">{path.eyebrow}</p>
-              <h3>{path.title}</h3>
-              <p>{path.copy}</p>
-              <ApiAwareLink className="primary-link" href={path.href}>{path.cta}</ApiAwareLink>
-            </article>
-          ))}
-        </div>
-      </section>
-
-      <section className="workflow-section" aria-labelledby="workflow-title">
-        <div className="section-heading">
-          <p className="eyebrow">Workflow</p>
-          <h2 id="workflow-title">Text-first benchmarks that graduate to voice.</h2>
-        </div>
-        <div className="workflow-grid">
-          {workflow.map((item) => (
-            <article className="workflow-card" key={item.label}>
-              <span>{item.label}</span>
+        <div className="home-evidence-grid">
+          {evidence.map((item) => (
+            <article key={item.title}>
               <h3>{item.title}</h3>
               <p>{item.copy}</p>
             </article>
@@ -229,30 +115,13 @@ export default function HomePage() {
         </div>
       </section>
 
-      <section className="section-band" id="benchmarks" aria-labelledby="benchmarks-title">
-        <div className="section-heading">
-          <p className="eyebrow">Benchmark families</p>
-          <h2 id="benchmarks-title">Designed for consequential agent workflows.</h2>
+      <section className="home-test-library" id="benchmarks" aria-labelledby="benchmarks-title">
+        <div>
+          <h2 id="benchmarks-title">Start with a test that matches the job.</h2>
+          <p>Explore call center, telehealth, teaching, and fintech scenarios — or define your own.</p>
         </div>
-        <div className="domain-strip">
-          {domains.map((domain) => (
-            <article key={domain.name}>
-              <h3>{domain.name}</h3>
-              <p>{domain.detail}</p>
-            </article>
-          ))}
-        </div>
+        <ApiAwareLink className="secondary-link" href="/tests">Explore scenarios</ApiAwareLink>
       </section>
-
     </main>
-  );
-}
-
-function ScoreRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="score-row">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
   );
 }
