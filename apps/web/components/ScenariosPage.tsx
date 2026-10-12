@@ -15,6 +15,7 @@ interface ScenarioRecord {
   user_persona: string;
   user_goal: string;
   simulated_user_prompt: string;
+  spoken_opener: string;
   expected_output: string;
   constraints: string[];
   required_actions: string[];
@@ -76,6 +77,7 @@ function normalizeScenario(value: unknown, suiteId: string): ScenarioRecord {
     user_persona: String(record.user_persona ?? record.persona ?? ''),
     user_goal: String(record.user_goal ?? record.goal ?? ''),
     simulated_user_prompt: String(record.simulated_user_prompt ?? record.prompt ?? record.persona ?? ''),
+    spoken_opener: String(record.spoken_opener ?? ''),
     expected_output: displayValue(record.expected_output ?? record.expected_final_state),
     constraints: stringList(record.constraints),
     required_actions: stringList(record.required_actions),
@@ -120,6 +122,7 @@ async function listScenarioSuites(signal?: AbortSignal): Promise<ScenarioSuite[]
 async function createScenario(payload: {
   title?: string;
   simulated_user_prompt: string;
+  spoken_opener: string;
   expected_output: string;
   description: string;
   required_actions: string[];
@@ -212,6 +215,7 @@ export function ScenariosPage() {
   const [mode, setMode] = useState<'create' | 'view'>('view');
   const [title, setTitle] = useState('');
   const [simulatedUserPrompt, setSimulatedUserPrompt] = useState('');
+  const [spokenOpener, setSpokenOpener] = useState('');
   const [expectedOutput, setExpectedOutput] = useState('');
   const [description, setDescription] = useState('');
   const [requiredActions, setRequiredActions] = useState('');
@@ -307,6 +311,7 @@ export function ScenariosPage() {
       const created = await createScenario({
         title: title.trim() || undefined,
         simulated_user_prompt: simulatedUserPrompt.trim(),
+        spoken_opener: spokenOpener.trim(),
         expected_output: expectedOutput.trim(),
         description: description.trim(),
         required_actions: stringList(requiredActions),
@@ -317,6 +322,7 @@ export function ScenariosPage() {
       setSaveMessage('Scenario created in the User Scenarios evaluation suite.');
       setTitle('');
       setSimulatedUserPrompt('');
+      setSpokenOpener('');
       setExpectedOutput('');
       setDescription('');
       setRequiredActions('');
@@ -420,6 +426,7 @@ export function ScenariosPage() {
               {error ? <div className="scenarios-error" role="alert">{error}</div> : null}
               <label htmlFor="scenario-title"><span>Title (optional)</span><input id="scenario-title" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Account lockout handoff" /></label>
               <label htmlFor="scenario-prompt"><span>User prompt / persona</span><textarea id="scenario-prompt" required rows={6} value={simulatedUserPrompt} onChange={(event) => setSimulatedUserPrompt(event.target.value)} placeholder="Describe the user’s situation and request…" /></label>
+              <label htmlFor="scenario-opener"><span>Spoken opening line</span><textarea id="scenario-opener" required maxLength={4000} rows={3} value={spokenOpener} onChange={(event) => setSpokenOpener(event.target.value)} placeholder="Hi, can you tell me about your wireless headphones?" /><small className="scenarios-muted">The tester says this line exactly. Keep persona, instructions and expected results in their separate fields.</small></label>
               <label htmlFor="scenario-expected"><span>Expected outcome</span><textarea id="scenario-expected" required rows={5} value={expectedOutput} onChange={(event) => setExpectedOutput(event.target.value)} placeholder="What the agent should do or say…" /></label>
               <label htmlFor="scenario-required"><span>Required behaviors (one per line)</span><textarea id="scenario-required" required rows={4} value={requiredActions} onChange={(event) => setRequiredActions(event.target.value)} placeholder="Offer housing options within the caller’s budget" /></label>
               <label htmlFor="scenario-forbidden"><span>Forbidden behaviors (one per line, optional)</span><textarea id="scenario-forbidden" rows={4} value={forbiddenActions} onChange={(event) => setForbiddenActions(event.target.value)} placeholder="Execute a house sale\nHandle payments" /></label>
@@ -457,6 +464,7 @@ export function ScenariosPage() {
               </div>
               <a className="scenario-back-link" href="#scenario-catalog">← Back to scenario catalog</a>
               <FieldCard title="User persona / starting prompt" value={selected.scenario.user_persona || selected.scenario.simulated_user_prompt} onCopy={(label, text) => void onCopy(label, text)} />
+              <FieldCard title="Spoken opening line" value={selected.scenario.spoken_opener || (selected.scenario.caller_steps[0] ? selected.scenario.caller_steps[0] : 'Not explicitly set. A direct caller request or neutral greeting is used; persona instructions are not spoken.')} onCopy={(label, text) => void onCopy(label, text)} />
               <FieldCard title="Goal" value={selected.scenario.user_goal || selected.scenario.description} onCopy={(label, text) => void onCopy(label, text)} />
               {selected.scenario.target_behavior_id ? <p className="scenarios-muted">This case exercises behavior {selected.scenario.target_behavior_id} only. Other rules remain policy context, not measured coverage.</p> : null}
               <FieldCard title="Required actions" value={selected.scenario.target_behavior_id && !selected.scenario.required_actions.length ? 'n/a — not this case’s focus.' : listText(selected.scenario.required_actions)} onCopy={(label, text) => void onCopy(label, text)} />

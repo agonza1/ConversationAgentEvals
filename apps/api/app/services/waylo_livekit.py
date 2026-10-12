@@ -42,6 +42,52 @@ def read_wav(audio: bytes):
         raise WayloError('Tester audio must be complete, nonempty mono PCM16 WAV at 16, 24 or 48 kHz (up to 10 MB).') from None
 
 
+def _record_transcription(peer, key: tuple, event: dict) -> None:
+    """Keep native revisions; collapse only matching dual-channel final receipts.
+
+    LiveKit's deprecated event and modern text stream may use different IDs for
+    the same speech. A text-only global set would erase legitimate repetition.
+    Pair one receipt per channel in a short, turn-scoped observation window;
+    preserve partials, corrections and every native final in the event journal.
+    """
+    if any(e.get('event_id') == event['event_id'] for e in peer.events):
+        return
+    aliases = getattr(peer, '_transcript_aliases', None)
+    if aliases is None:
+        peer._transcript_aliases = aliases = {}
+        peer._transcript_finals = {}
+    finals = peer._transcript_finals
+    canonical = aliases.get(key, key)
+    scope = getattr(peer, 'transcript_turn_id', 'greeting')
+    event['observation_turn_id'] = scope
+    source = event['source']
+    if event['final']:
+        if key not in aliases and key not in finals:
+            for candidate, info in reversed(list(finals.items())):
+                if (candidate[0] != key[0] or info['scope'] != scope
+                        or source in info['sources'] or info['text'] != event['text']
+                        or not 0 <= event['received_at_ms'] - info['received_at_ms'] <= 1000):
+                    continue
+                track = event.get('transcribed_track_id')
+                if track and info.get('track') and track != info['track']:
+                    continue
+                canonical = candidate
+                aliases[key] = canonical
+                break
+        previous = finals.get(canonical)
+        if canonical != key:
+            event['canonical_segment_id'] = canonical[1]
+            if previous and previous['text'] == event['text']:
+                event['duplicate_of_segment_id'] = canonical[1]
+        # Corrected finals remain authoritative, not concatenated or paraphrased.
+        peer.segments[canonical] = event['text']
+        finals[canonical] = {'text': event['text'], 'scope': scope,
+            'sources': (previous['sources'] if previous else set()) | {source},
+            'received_at_ms': event['received_at_ms'],
+            'track': event.get('transcribed_track_id') or (previous.get('track') if previous else None)}
+    peer.events.append(event)
+
+
 class LiveKitVoicePeer:
     def __init__(self, *, rtc=None):
         if rtc is None:
@@ -88,7 +134,6 @@ class LiveKitVoicePeer:
             for segment in segments:
                 key = ('caller' if local else 'remote', segment.id)
                 revision = hashlib.sha256(f'{segment.text}/{segment.final}'.encode()).hexdigest()[:16]
-                self.segments[key] = segment.text if segment.final else self.segments.get(key, '')
                 event = {'event_id': f'livekit/transcript/{key[0]}/{segment.id}/{revision}',
                          'event_type': 'asr.final' if local and segment.final else 'asr.partial' if local else 'transcript.remote',
                          'source': 'livekit.transcription_received', 'text': segment.text, 'final': segment.final,
@@ -96,8 +141,9 @@ class LiveKitVoicePeer:
                          'clock_origin': 'cae_monotonic_since_transport_creation',
                          'native_start_time': segment.start_time, 'native_end_time': segment.end_time,
                          'native_clock_origin': 'unspecified_by_provider', 'native_unit': 'unknown'}
-                if not any(e['event_id'] == event['event_id'] for e in self.events):
-                    self.events.append(event)
+                if getattr(publication, 'sid', None):
+                    event['transcribed_track_id'] = publication.sid
+                _record_transcription(self, key, event)
 
         for kind in ('reconnecting', 'reconnected', 'disconnected'):
             self.room.on(kind, lambda *args, event_kind=kind: self.events.append({
@@ -137,17 +183,17 @@ class LiveKitVoicePeer:
         final = attributes.get('lk.transcription_final') == 'true'
         speaker = 'caller' if local else 'remote'
         key = (speaker, segment_id)
-        if final:
-            self.segments[key] = text
         revision = hashlib.sha256(f'{text}/{final}'.encode()).hexdigest()[:16]
         event_id = f'livekit/transcript/{speaker}/{segment_id}/{revision}'
-        if not any(e['event_id'] == event_id for e in self.events):
-            self.events.append({'event_id': event_id,
+        event = {'event_id': event_id,
                 'event_type': 'asr.final' if local and final else 'asr.partial' if local else 'transcript.remote',
                 'source': 'livekit.lk.transcription', 'text': text, 'final': final,
                 'segment_id': segment_id, 'speaker': speaker, 'received_at_ms': self.now_ms(),
                 'clock_origin': 'cae_monotonic_since_transport_creation',
-                'native_unit': 'unknown', 'native_clock_origin': 'unspecified_by_provider'})
+                'native_unit': 'unknown', 'native_clock_origin': 'unspecified_by_provider'}
+        if track_id:
+            event['transcribed_track_id'] = track_id
+        _record_transcription(self, key, event)
 
     async def connect(self, bootstrap: dict):
         rtc = self.rtc

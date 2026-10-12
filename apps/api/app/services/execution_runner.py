@@ -1822,18 +1822,8 @@ def _scenario_definition(suite_id: str, scenario_id: str) -> dict[str, Any]:
 
 def _scenario_user_opener(scenario: dict[str, Any]) -> str:
     """Return caller-facing speech, never the internal persona/checklist description."""
-    if scenario.get('evaluation_spec_ref') and scenario.get('caller_steps'):
-        return str(scenario['caller_steps'][0]).strip()
-    sample = str(scenario.get('sample_transcript') or '')
-    for line in sample.splitlines():
-        stripped = line.strip()
-        speaker, separator, text = stripped.partition(':')
-        if separator and speaker.strip().lower() in {'user', 'caller', 'customer', 'patient', 'learner'}:
-            opener = text.strip()
-            if opener:
-                return opener
-    title = str(scenario.get('title') or scenario.get('id') or 'this request').strip()
-    return f'Hi, I need help with {title.lower()}.'
+    from app.services.scenario_caller import scenario_spoken_opener
+    return scenario_spoken_opener(scenario)
 
 
 def _conversation_history_text(history: list[dict[str, str]]) -> str:
