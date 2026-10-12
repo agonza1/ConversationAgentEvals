@@ -51,4 +51,4 @@ jobs:
       - name: Verify workspace navigation and legacy links
         env:
           PLAYWRIGHT_REUSE_EXISTING_SERVER: "0"
-        run: npm exec --workspace apps/web -- playwright test tests/workspace-navigation.spec.ts tests/product-flow.spec.ts tests/spec-generation-settings.spec.ts tests/chatgpt-judge-settings.spec.ts tests/settings-layout.spec.ts --config playwright.config.ts --workers=1
+        run: npm exec --workspace apps/web -- playwright test tests/workspace-navigation.spec.ts tests/product-flow.spec.ts tests/spec-generation-settings.spec.ts tests/chatgpt-judge-settings.spec.ts tests/settings-layout.spec.ts tests/speech-settings.spec.ts --config playwright.config.ts --workers=1

@@ -1,8 +1,10 @@
 # Speech providers for built-in voice evaluations
 
-In **Run → Speech providers · STT / TTS**, choose STT and TTS independently,
-enter model/voice IDs, then **Apply speech settings**. Dependency preflight
-refreshes before you queue the next run. Choices apply deployment-wide to new
+In **Settings → Speech · STT / TTS**, choose STT and TTS independently,
+enter model/voice IDs, then **Save speech settings**. Run agent displays a
+read-only summary linking back to Settings; its dependency preflight checks
+readiness before queueing. Saving a selection does not start a call or verify
+provider access, credits or health. Choices apply deployment-wide to new
 **built-in two-agent voice runs**, including the ASSERT case queue.
 
 | Stage | Local default | Deepgram | Cartesia |
@@ -13,6 +15,9 @@ refreshes before you queue the next run. Choices apply deployment-wide to new
 All nine combinations are configurable. Caller and agent must use distinct
 voices. Deepgram's voice **is** the Aura model ID; Cartesia voice IDs come from
 your account's voice library. Pin supported model snapshots for repeatability.
+The local rtc-asr model is managed by that service's deployment, not by this
+console; its model field is read-only. Reload saved settings discards unsaved
+form edits without making a write. Existing runs are not modified.
 
 ## Credentials and defaults
 
