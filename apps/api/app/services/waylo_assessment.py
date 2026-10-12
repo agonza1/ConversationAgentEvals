@@ -33,13 +33,23 @@ def assess_speech(capture: dict, voice_events: list[dict], expected_by_turn: lis
     for index, (reference, receipt) in enumerate(zip(references, receipts, strict=True)):
         wer = calculate_word_error_rate(reference['reference_text'], receipt['text'])
         expected = (expected_by_turn or [])[index] if index < len(expected_by_turn or []) else []
-        local_complete = reference.get('accepted_samples') == reference.get('intended_samples')
+        accepted, intended = reference.get('accepted_samples'), reference.get('intended_samples')
+        counts_known = (type(accepted) is int and type(intended) is int
+                        and intended > 0 and 0 <= accepted <= intended)
+        local_complete = (counts_known and accepted == intended
+                          and reference.get('delivery') == 'local_queue_drained')
+        local_send = ('complete' if local_complete else
+                      'clipped_or_incomplete' if counts_known and accepted < intended else
+                      'playout_unconfirmed' if counts_known else 'unknown')
         comparisons.append({'turn_id': reference['turn_id'], 'transcript_id': receipt['id'],
             'reference_text': reference['reference_text'], 'target_asr_final': receipt['text'],
             'alignment': 'ordered_one_to_one_provisional', 'scoreable': False,
             'word_error_rate_diagnostic': wer.as_dict() if wer else None,
             'critical_entities': [{'expected': value, 'recognition': entities(receipt['text'], value)} for value in expected],
-            'local_send': 'complete' if local_complete else 'clipped_or_incomplete',
+            'local_send': local_send,
+            'local_sample_acceptance': 'complete_samples' if counts_known and accepted == intended else
+                                       'partial_samples' if counts_known else 'unknown',
+            'local_playout': 'drained' if reference.get('delivery') == 'local_queue_drained' else 'unconfirmed',
             'receiver_drop': 'unknown', 'asr_error_vs_peer_loss': 'needs_review',
             'agent_interpretation': 'requires_tool_and_backend_comparison'})
     return {'status': 'needs_review', 'comparisons': comparisons}

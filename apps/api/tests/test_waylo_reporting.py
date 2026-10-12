@@ -109,3 +109,43 @@ def test_missing_turn_timing_is_order_only_not_fabricated_400ms():
         {'speaker': 'Agent', 'text': 'Hello'}], latency_marks=[], verdict=None, score=None)
     assert summary.latency.count == 0
     assert [(event.t_ms, event.latency_ms) for event in timeline] == [(None, None), (None, None)]
+
+
+def test_sample_acceptance_does_not_falsely_prove_playout_or_peer_receipt():
+    from app.services.waylo_assessment import assess_speech
+    capture = {'transcripts': [{'id': 'receipt', 'role': 'user', 'text': 'Tell me the warranty.'}]}
+    reference = {'event_id': 'caller-1/sent', 'event_type': 'tester.audio.sent',
+                 'turn_id': 'caller-1', 'reference_text': 'Tell me the warranty.'}
+    for sample_fields, expected in [
+        ({}, 'unknown'),
+        ({'accepted_samples': 0, 'intended_samples': 0, 'delivery': 'local_queue_drained'}, 'unknown'),
+        ({'accepted_samples': True, 'intended_samples': True, 'delivery': 'local_queue_drained'}, 'unknown'),
+        ({'accepted_samples': 50, 'intended_samples': 100}, 'clipped_or_incomplete'),
+        ({'accepted_samples': 0, 'intended_samples': 100}, 'clipped_or_incomplete'),
+        ({'accepted_samples': 100, 'intended_samples': 100}, 'playout_unconfirmed'),
+        ({'accepted_samples': 100, 'intended_samples': 100, 'delivery': 'partial_or_unconfirmed'}, 'playout_unconfirmed'),
+        ({'accepted_samples': 100, 'intended_samples': 100, 'delivery': 'local_queue_drained'}, 'complete'),
+    ]:
+        comparison = assess_speech(capture, [{**reference, **sample_fields}])['comparisons'][0]
+        assert comparison['local_send'] == expected
+        assert comparison['receiver_drop'] == 'unknown' and comparison['scoreable'] is False
+    comparison = assess_speech(capture, [{**reference, 'accepted_samples': 100, 'intended_samples': 100,
+        'delivery': 'partial_or_unconfirmed'}])['comparisons'][0]
+    assert comparison['local_sample_acceptance'] == 'complete_samples'
+    assert comparison['local_playout'] == 'unconfirmed'
+
+
+def test_zero_sample_or_metadata_only_events_do_not_claim_captured_audio():
+    voice = [{'event_id': 'caller-1/sent', 'event_type': 'tester.audio.sent',
+              'accepted_samples': 0, 'intended_samples': 100, 'audio_sha256': 'empty-wav-header'},
+             {'event_id': 'agent-1/received', 'event_type': 'target.audio.received', 'duration_ms': 0}]
+    def coverage(events, dialogs=None):
+        return observed_coverage(tools=[], voice=events, snapshots=[], diagnostics={}, media_dialogs=dialogs, expectations={})
+    assert 'audio' not in coverage(voice)['conversation_experience']['observed']
+    assert coverage(voice)['conversation_experience']['status'] == 'unknown'
+    assert 'audio' not in coverage(voice, [{'type': 'recording'}])['conversation_experience']['observed']
+    voice[1]['duration_ms'] = 20
+    assert 'audio' in coverage(voice)['conversation_experience']['observed']
+    voice[1]['duration_ms'] = 0
+    voice[0]['accepted_samples'] = 1
+    assert 'audio' in coverage(voice)['conversation_experience']['observed']

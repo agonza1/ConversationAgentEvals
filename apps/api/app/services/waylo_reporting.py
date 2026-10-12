@@ -66,7 +66,13 @@ def observed_coverage(*, tools: list[dict], voice: list[dict], snapshots: list[d
     success. Native interruption=false is an observation, not an exercised test.
     """
     observed = {key: [] for key in ('conversation_experience', 'speech_boundary', 'agent_execution', 'business_outcome')}
-    if media_dialogs or any(event.get('event_type') in {'target.audio.received', 'tester.audio.sent'} for event in voice):
+    sent = [event for event in voice if event.get('event_type') == 'tester.audio.sent']
+    received = [event for event in voice if event.get('event_type') == 'target.audio.received']
+    has_sent_audio = any(type(event.get('accepted_samples')) is int and event['accepted_samples'] > 0 for event in sent)
+    has_received_audio = any(type(event.get('duration_ms')) in {int, float}
+        and isfinite(event['duration_ms']) and event['duration_ms'] > 0 for event in received)
+    if has_sent_audio or has_received_audio or any(dialog.get('type') == 'recording'
+            and (dialog.get('body') or dialog.get('url')) for dialog in media_dialogs or []):
         observed['conversation_experience'].append('audio')
     if any(event.get('event_type') == 'latency.observation' and _valid_ms(event)
            and event.get('source') == 'cae_livekit_observer' and event.get('clock_origin') == OBSERVER_CLOCK for event in voice):
@@ -77,7 +83,6 @@ def observed_coverage(*, tools: list[dict], voice: list[dict], snapshots: list[d
         observed['conversation_experience'].append('native_interruption_flags')
     if any(event.get('event_type') == 'tester.barge_in_scheduled' for event in voice):
         observed['conversation_experience'].append('controlled_barge_in_attempt')
-    sent = [event for event in voice if event.get('event_type') == 'tester.audio.sent']
     if any(isinstance(event.get('reference_text'), str) and event['reference_text'].strip() for event in sent):
         observed['speech_boundary'].append('tester_reference')
     if any(event.get('audio_sha256') and type(event.get('accepted_samples')) is int and event['accepted_samples'] > 0 for event in sent):
