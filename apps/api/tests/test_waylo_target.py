@@ -132,6 +132,28 @@ def test_transcript_pagination_beyond_embedded_500_and_optional_scopes():
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize('source,value', [
+    ('agent_version', None), ('agent_version', []), ('agent_version', {'config': None}),
+    ('agent_version', {'config': []}), ('items', [None]), ('events', [None]), ('events', [{'id': None}]),
+])
+def test_malformed_optional_sources_are_unavailable_not_projection_crashes(source, value):
+    def handler(request):
+        path = request.url.path
+        if path.endswith('/transcripts'):
+            return httpx.Response(200, json=[transcript(1), transcript(2, 'agent')])
+        current = 'events' if path.endswith('/events') else 'items' if path.endswith('/items') else 'agent_version' if '/versions/' in path else None
+        if current:
+            return httpx.Response(200, json=value if current == source else {'config': {}} if current == 'agent_version' else [])
+        return httpx.Response(200, json=session())
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            capture = await WayloClient(TARGET, client=http).capture(S)
+            assert source in capture['unavailable'] and source not in capture
+            result = project_capture(capture)
+            assert result['evaluation_submitted'] is False
+    asyncio.run(exercise())
+
+
 @pytest.mark.parametrize('mode', ['repeat', 'gap', 'wrong-workspace', 'wrong-agent'])
 def test_incomplete_or_wrong_target_capture_fails_closed(mode):
     def handler(request):

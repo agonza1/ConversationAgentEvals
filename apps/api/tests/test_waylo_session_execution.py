@@ -505,6 +505,204 @@ def test_identical_export_refresh_repairs_original_rtc_turns_once(connected, mon
     assert execution_run_store.get_conversation(run_id, conv_id) == expected
 
 
+def optional_source_refresh_baseline(connected, monkeypatch, tmp_path, *, empty=False, unknown=False, legacy=False):
+    from app.schemas.execution import ConversationRecord
+    from app.services.waylo_target import project_capture
+    from test_waylo_target import native_event
+    proof, http, run_id, conv_id, native = finished_waylo_run(connected, monkeypatch)
+    native.update(events=[] if empty else [native_event(1, 'call'), native_event(2, 'result')],
+                  items=[] if empty else [{'position': 1, 'rawText': 'White Potatoes', 'quantity': 5, 'unit': 'bags'}],
+                  agent_version={} if empty else {'config': {'persona': 'Notes-only assistant'}})
+    native['session']['eventCount'] = len(native['events'])
+    if unknown:
+        native['unavailable'] = {source: 'Unavailable in original capture' for source in ('events', 'items', 'agent_version')}
+        for source in native['unavailable']:
+            native.pop(source)
+    export = project_capture(native, execution_run_id=run_id, conversation_id=conv_id,
+        before_items=[{'rawText': 'Earlier before-state'}] if unknown else None,
+        after_items=[{'turn_id': 'caller-1', 'items': [], 'observed_at': '2026-10-09T12:00:03Z'}] if unknown else None)
+    original = execution_run_store.get_conversation(run_id, conv_id)
+    if unknown:
+        # Build an initially unavailable capture, rather than erasing the
+        # fixture's already successful source reads via a forbidden refresh.
+        from app.services.vcon_evidence import decode_evidence
+        profile = decode_evidence(export['vcon'])
+        original.update(ietf_vcon_export=export['vcon'], action_trace=[], final_state={},
+                        state_snapshots=profile['state_snapshots'],
+                        evidence_coverage=export['coverage'], configuration_check=export['configuration_check'])
+        execution_run_store.upsert_conversation(run_id, ConversationRecord.model_validate(original))
+    else:
+        execution_run_store.refresh_waylo_evidence(run_id, original, native, export)
+    row = execution_run_store.get_conversation(run_id, conv_id)
+    if legacy:
+        row['ietf_vcon_export']['attachments'] = [attachment for attachment in row['ietf_vcon_export']['attachments']
+            if attachment.get('purpose') != 'Waylo native source evidence']
+    row.update(judge_reviews=[{'review_id': 'accepted-review', 'status': 'accepted'}], score=75, verdict='pass')
+    execution_run_store.upsert_conversation(run_id, ConversationRecord.model_validate(row))
+    inference = tmp_path / 'runs' / run_id / 'inference_set.jsonl'
+    inference.write_text(json.dumps(row) + '\n', encoding='utf-8')
+    return proof, http, run_id, conv_id, native
+
+
+@pytest.mark.parametrize('source', ['events', 'items', 'agent_version'])
+@pytest.mark.parametrize('empty', [False, True])
+@pytest.mark.parametrize('failure', ['unavailable', 'omitted'])
+def test_optional_source_loss_refuses_http_refresh_atomically(connected, monkeypatch, tmp_path, source, empty, failure):
+    proof, http, run_id, conv_id, native = optional_source_refresh_baseline(connected, monkeypatch, tmp_path, empty=empty)
+    before = execution_run_store.get_execution_run(run_id)
+    run_path = tmp_path / 'runs' / run_id / 'run.json'
+    inference_path = run_path.with_name('inference_set.jsonl')
+    files = (run_path.read_bytes(), inference_path.read_bytes())
+    native.pop(source)
+    if failure == 'unavailable':
+        native['unavailable'][source] = 'Temporary provider read failure'
+    elif source == 'agent_version':
+        native['session'].pop('agentVersion')  # No version fetch, hence no unavailable marker.
+    async def read(*args, **kwargs):
+        return deepcopy(native)
+    monkeypatch.setattr(WayloClient, 'capture', read)
+    response = http.post(f'/api/agents/{TARGET["id"]}/capture', json={
+        'session_id': native['session']['id'], 'execution_run_id': run_id,
+        'conversation_id': conv_id, 'user_id': 'execution-user'},
+        headers={**HEADERS, 'X-CAE-Waylo-Session': proof})
+    assert response.status_code == 400, response.text
+    assert 'would lose saved' in response.json()['detail']
+    assert 'saved evidence and reviews were not changed' in response.json()['detail']
+    assert execution_run_store.get_execution_run(run_id) == before
+    assert (run_path.read_bytes(), inference_path.read_bytes()) == files
+
+
+@pytest.mark.parametrize('failure', ['event-id', 'config-structure', 'end-metadata'])
+def test_successful_looking_source_regressions_refuse_refresh(connected, monkeypatch, tmp_path, failure):
+    from app.services.waylo_target import project_capture
+    _, _, run_id, conv_id, native = optional_source_refresh_baseline(connected, monkeypatch, tmp_path)
+    before = execution_run_store.get_execution_run(run_id)
+    expected = execution_run_store.get_conversation(run_id, conv_id)
+    run_path = tmp_path / 'runs' / run_id / 'run.json'
+    inference_path = run_path.with_name('inference_set.jsonl')
+    files = (run_path.read_bytes(), inference_path.read_bytes())
+    if failure == 'event-id':
+        native['events'] = []
+        native['session']['eventCount'] = 0
+    elif failure == 'config-structure':
+        native['agent_version'] = {}
+    else:
+        native['session'].pop('endedAt')
+    with pytest.raises(ValueError, match='would lose saved'):
+        execution_run_store.refresh_waylo_evidence(run_id, expected, native,
+            project_capture(native, execution_run_id=run_id, conversation_id=conv_id))
+    assert execution_run_store.get_execution_run(run_id) == before
+    assert (run_path.read_bytes(), inference_path.read_bytes()) == files
+
+
+def test_unknown_optional_sources_can_gain_transcripts_without_fabricated_availability(connected, monkeypatch, tmp_path):
+    from test_waylo_target import transcript
+    from app.services.waylo_target import project_capture
+    from app.services.vcon_evidence import decode_evidence
+    _, _, run_id, conv_id, native = optional_source_refresh_baseline(connected, monkeypatch, tmp_path, unknown=True)
+    expected = execution_run_store.get_conversation(run_id, conv_id)
+    native['transcripts'].append(transcript(3, 'agent', 'Late provider final'))
+    old = decode_evidence(expected['ietf_vcon_export'])
+    export = project_capture(native, execution_run_id=run_id, conversation_id=conv_id,
+        before_items=old['state_snapshots'][0]['state']['request_list'],
+        after_items=[{'turn_id': 'caller-1', 'items': [], 'observed_at': '2026-10-09T12:00:03Z'}])
+    execution_run_store.refresh_waylo_evidence(run_id, expected, native, export)
+    after = execution_run_store.get_conversation(run_id, conv_id)
+    assert after['turns'][-1]['text'] == 'Late provider final'
+    assert after['action_trace'] == [] and 'request_list' not in after['final_state']
+    profile = decode_evidence(after['ietf_vcon_export'])
+    assert [snapshot['phase'] for snapshot in profile['state_snapshots']] == ['before', 'after']
+    assert profile['context']['capture_completeness'] == 'provisional'
+    assert after['score'] is None and after['verdict'] == 'needs_review'
+
+
+def test_optional_sources_can_recover_and_successfully_observe_empty_current_state(connected, monkeypatch, tmp_path):
+    from app.schemas.execution import ConversationRecord
+    from app.services.waylo_target import project_capture
+    _, _, run_id, conv_id, native = optional_source_refresh_baseline(connected, monkeypatch, tmp_path, unknown=True)
+    native.update(unavailable={}, events=[], items=[], agent_version={'config': {'persona': 'Recovered configuration'}})
+    expected = execution_run_store.get_conversation(run_id, conv_id)
+    execution_run_store.refresh_waylo_evidence(run_id, expected, native,
+        project_capture(native, execution_run_id=run_id, conversation_id=conv_id))
+    after = execution_run_store.get_conversation(run_id, conv_id)
+    assert after['final_state']['request_list'] == []
+    # Items and config values are mutable observations, not append-only journals.
+    native['agent_version']['config'] = {}
+    export = project_capture(native, execution_run_id=run_id, conversation_id=conv_id)
+    execution_run_store.refresh_waylo_evidence(run_id, after, native, export)
+    after = execution_run_store.get_conversation(run_id, conv_id)
+    after.update(judge_reviews=[{'review_id': 'new-review', 'status': 'accepted'}], score=75, verdict='pass')
+    execution_run_store.upsert_conversation(run_id, ConversationRecord.model_validate(after))
+    expected = execution_run_store.get_conversation(run_id, conv_id)
+    execution_run_store.refresh_waylo_evidence(run_id, expected, native, export)
+    assert execution_run_store.get_conversation(run_id, conv_id) == expected
+
+
+def test_successful_item_removal_is_not_an_availability_regression(connected, monkeypatch, tmp_path):
+    from app.services.waylo_target import project_capture
+    _, _, run_id, conv_id, native = optional_source_refresh_baseline(connected, monkeypatch, tmp_path)
+    expected = execution_run_store.get_conversation(run_id, conv_id)
+    native['items'] = []
+    execution_run_store.refresh_waylo_evidence(run_id, expected, native,
+        project_capture(native, execution_run_id=run_id, conversation_id=conv_id))
+    after = execution_run_store.get_conversation(run_id, conv_id)
+    assert after['final_state']['request_list'] == [] and after['verdict'] == 'needs_review'
+
+
+@pytest.mark.parametrize('source', ['events', 'items'])
+def test_legacy_source_labelled_evidence_prevents_optional_loss(connected, monkeypatch, tmp_path, source):
+    from app.services.waylo_target import project_capture
+    _, _, run_id, conv_id, native = optional_source_refresh_baseline(connected, monkeypatch, tmp_path, legacy=True)
+    expected = execution_run_store.get_conversation(run_id, conv_id)
+    before = execution_run_store.get_execution_run(run_id)
+    native.pop(source)
+    native['unavailable'][source] = 'Temporary failure'
+    with pytest.raises(ValueError, match='would lose saved'):
+        execution_run_store.refresh_waylo_evidence(run_id, expected, native,
+            project_capture(native, execution_run_id=run_id, conversation_id=conv_id))
+    assert execution_run_store.get_execution_run(run_id) == before
+
+
+def test_legacy_version_number_alone_does_not_invent_config_availability(connected, monkeypatch, tmp_path):
+    from app.services.waylo_target import project_capture
+    _, _, run_id, conv_id, native = optional_source_refresh_baseline(connected, monkeypatch, tmp_path, legacy=True)
+    expected = execution_run_store.get_conversation(run_id, conv_id)
+    assert expected['configuration_check']['status'] == 'needs_review'
+    native.pop('agent_version')
+    native['unavailable']['agent_version'] = 'Still unknown'
+    execution_run_store.refresh_waylo_evidence(run_id, expected, native,
+        project_capture(native, execution_run_id=run_id, conversation_id=conv_id))
+    assert execution_run_store.get_conversation(run_id, conv_id)['verdict'] == 'needs_review'
+
+
+def test_same_event_identity_can_receive_corrected_provider_payload(connected, monkeypatch, tmp_path):
+    from app.services.waylo_target import project_capture
+    _, _, run_id, conv_id, native = optional_source_refresh_baseline(connected, monkeypatch, tmp_path)
+    expected = execution_run_store.get_conversation(run_id, conv_id)
+    native['events'][0]['corrected_provider_note'] = 'Newly persisted observation'
+    execution_run_store.refresh_waylo_evidence(run_id, expected, native,
+        project_capture(native, execution_run_id=run_id, conversation_id=conv_id))
+    assert execution_run_store.get_conversation(run_id, conv_id)['judge_reviews'][0]['status'] == 'superseded'
+
+
+@pytest.mark.parametrize('source', ['waylo.native_event', 'waylo.agent.turn_metrics'])
+def test_legacy_event_observation_without_native_id_cannot_be_erased(source):
+    row = {'action_trace': [{'source': source, 'event_id': 'legacy-observation'}]}
+    with pytest.raises(ValueError, match='provider event observations'):
+        execution_run_store._assert_waylo_refresh_sources(row, {'events': []}, [])
+    execution_run_store._assert_waylo_refresh_sources(row, {'events': [{'id': 'fresh'}]}, [])
+
+
+@pytest.mark.parametrize('items', [[], [{'rawText': 'Saved observation'}]])
+def test_legacy_row_final_item_snapshot_establishes_source_availability(items):
+    row = {'state_snapshots': [None, {'source': 'waylo.sessions.items', 'phase': 'final',
+                                    'state': {'request_list': items}}]}
+    with pytest.raises(ValueError, match='backend items'):
+        execution_run_store._assert_waylo_refresh_sources(row, {}, [])
+    execution_run_store._assert_waylo_refresh_sources(row,
+        {'items': [], 'session': {'endedAt': '2026-10-09T12:00:03Z'}}, [])
+
+
 @pytest.mark.parametrize('status,error', [('failed', 'Target response timeout'), ('failed', None),
     ('needs_review', 'Caller audio send failed')])
 def test_refresh_preserves_failed_execution_and_verdict(connected, monkeypatch, tmp_path, status, error):

@@ -187,8 +187,15 @@ class WayloClient:
                 value = await self.request('GET', path)
                 if name in {'events', 'items'} and not isinstance(value, list):
                     raise WayloError(f'Invalid Waylo {name} response.')
+                if name in {'events', 'items'} and any(not isinstance(entry, dict) for entry in value):
+                    raise WayloError(f'Invalid Waylo {name} entries.')
+                if name == 'events' and any(not isinstance(entry.get('id'), str) or not entry['id'] for entry in value):
+                    raise WayloError('Invalid Waylo event identity.')
                 if name == 'events' and (len(value) > MAX_EVENTS or len(value) != session.get('eventCount')):
                     raise WayloError('Native event count changed or exceeds capture limit; refresh required.')
+                if name == 'agent_version' and (not isinstance(value, dict)
+                        or ('config' in value and not isinstance(value['config'], dict))):
+                    raise WayloError('Invalid Waylo agent version response.')
                 optional[name] = value
             except WayloError as exc:
                 unavailable[name] = str(exc)

@@ -190,6 +190,77 @@ def _waylo_dialogue_counts(entries: list, *, native: bool = False) -> dict[str, 
     return counts
 
 
+def _assert_waylo_refresh_sources(row: dict, captured: dict, native_bodies: list[dict]) -> None:
+    """Keep unavailable sources unknown without erasing earlier observations."""
+    native = [body for body in native_bodies
+              if isinstance(body.get('session'), dict) and isinstance(body.get('transcripts'), list)]
+    known = set()
+    event_ids = set()
+    known_config = False
+    ended = False
+    legacy_events_observed = False
+    for body in native:
+        unavailable = body.get('unavailable') or {}
+        for source, expected_type in (('events', list), ('items', list), ('agent_version', dict)):
+            if source not in unavailable and isinstance(body.get(source), expected_type):
+                known.add(source)  # Empty lists/objects are still captured observations.
+        if 'events' not in unavailable and isinstance(body.get('events'), list):
+            event_ids.update(event['id'] for event in body['events']
+                             if isinstance(event, dict) and isinstance(event.get('id'), str) and event['id'])
+        version = body.get('agent_version')
+        if 'agent_version' not in unavailable and isinstance(version, dict) and isinstance(version.get('config'), dict):
+            known_config = True
+        ended_at = body['session'].get('endedAt')
+        ended = ended or (isinstance(ended_at, str) and bool(ended_at.strip()))
+    if not native:
+        # Only source-labelled legacy observations can establish availability.
+        # Before/after item reads do not prove that the final items read worked.
+        from app.services.vcon_evidence import decode_evidence
+        profile = decode_evidence(row.get('ietf_vcon_export') or {}) or {}
+        observations = [*(profile.get('tool_events') or []), *(profile.get('voice_events') or []),
+                        *(row.get('action_trace') or [])]
+        for event in observations:
+            if not isinstance(event, dict) or event.get('source') not in {'waylo.native_event', 'waylo.agent.turn_metrics'}:
+                continue
+            known.add('events')
+            legacy_events_observed = True
+            event_id = event.get('event_id')
+            if isinstance(event_id, str) and '/event/' in event_id:
+                event_ids.add(event_id.split('/event/', 1)[1].split('/', 1)[0])
+        for snapshot in [*(profile.get('state_snapshots') or []), *(row.get('state_snapshots') or [])]:
+            if (isinstance(snapshot, dict) and snapshot.get('source') == 'waylo.sessions.items'
+                    and snapshot.get('phase') == 'final' and isinstance(snapshot.get('state'), dict)
+                    and isinstance(snapshot['state'].get('request_list'), list)):
+                known.add('items')
+                ended = True
+        # A session version number or a needs-review configuration label alone
+        # is not proof that the version/configuration endpoint was available.
+
+    def refuse(source: str) -> None:
+        raise ValueError(f'Waylo evidence refresh would lose saved {source}. '
+                         'Refresh refused; saved evidence and reviews were not changed. '
+                         'Retry later or review the retained evidence manually.')
+
+    unavailable = captured.get('unavailable') or {}
+    for source, expected_type in (('events', list), ('items', list), ('agent_version', dict)):
+        if source in known and (source in unavailable or not isinstance(captured.get(source), expected_type)):
+            refuse({'events': 'provider events', 'items': 'backend items', 'agent_version': 'agent configuration'}[source])
+    if 'events' in known:
+        if legacy_events_observed and not captured['events']:
+            refuse('provider event observations')
+        fresh_ids = {event['id'] for event in captured['events']
+                     if isinstance(event, dict) and isinstance(event.get('id'), str)}
+        if not event_ids.issubset(fresh_ids):
+            refuse('provider event journal entries')
+    if known_config and not isinstance(captured.get('agent_version', {}).get('config'), dict):
+        refuse('agent configuration structure')
+    ended_at = (captured.get('session') or {}).get('endedAt')
+    if ended and not (isinstance(ended_at, str) and ended_at.strip()):
+        # A final readback observation must not silently become an after-state.
+        # endedAt still does not establish worker flush or complete capture.
+        refuse('session end/final readback metadata')
+
+
 def refresh_waylo_evidence(execution_run_id: str, expected: dict, captured: dict, exported: dict) -> None:
     """Replace one provisional export, retaining RTC media and invalidating old scores.
 
@@ -217,10 +288,13 @@ def refresh_waylo_evidence(execution_run_id: str, expected: dict, captured: dict
         # Legitimate ASR merges that reduce entries are conservatively refused.
         baselines = [_waylo_dialogue_counts(row.get('turns') or []),
                      _waylo_dialogue_counts(row.get('rtc_turns') or [])]
+        native_bodies = []
         for attachment in (row.get('ietf_vcon_export') or {}).get('attachments', []):
             if not isinstance(attachment, dict) or attachment.get('purpose') != 'Waylo native source evidence':
                 continue
             body = attachment.get('body')
+            if isinstance(body, dict):
+                native_bodies.append(body)
             transcripts = body.get('transcripts') if isinstance(body, dict) else None
             if isinstance(transcripts, list):
                 baselines.append(_waylo_dialogue_counts(transcripts, native=True))
@@ -229,6 +303,7 @@ def refresh_waylo_evidence(execution_run_id: str, expected: dict, captured: dict
             raise ValueError("Waylo's provisional transcript is shorter than saved dialogue for at least one speaker. "
                              'Refresh refused; saved evidence and reviews were not changed. '
                              'Retry later or review the retained RTC evidence manually; ASR merges can also trigger this safeguard.')
+        _assert_waylo_refresh_sources(row, captured, native_bodies)
         if row.get('ietf_vcon_export') == exported['vcon'] and row.get('turns') == turns:
             return  # Neither provider evidence nor judge-visible dialogue changed.
         profile = decode_evidence(exported['vcon'])
