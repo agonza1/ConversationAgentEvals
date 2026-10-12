@@ -6,12 +6,12 @@ const workspaceId = '11111111-1111-4111-8111-111111111111';
 const tenantId = '22222222-2222-4222-8222-222222222222';
 const proof = 'fixture-private-proof-not-a-provider-token';
 
-async function fixtureApis(page: Page, admin = false, initialAgents: Record<string, unknown>[] = []) {
+async function fixtureApis(page: Page, admin = false, initialAgents: Record<string, unknown>[] = [], caseCount = 1) {
   const agents: Record<string, unknown>[] = [...initialAgents];
   const requests: Array<{ path: string; method: string; headers: Record<string, string>; body?: Record<string, unknown> }> = [];
   let allowLogin: (() => void) | undefined;
   const loginGate = new Promise<void>((resolve) => { allowLogin = resolve; });
-  const status = () => ({ connected: true, expires_at: new Date(Date.now() + 120_000).toISOString(),
+  const status = () => ({ connected: true, expires_at: new Date(Date.now() + 900_000).toISOString(),
     endpoint_url: admin ? `${endpoint}/admin/tenants/${tenantId}` : endpoint,
     workspace_id: workspaceId, waylo_agent_id: agentId, agent_name: 'Mike fixture' });
   await page.route('**/api/**', async (route) => {
@@ -28,7 +28,7 @@ async function fixtureApis(page: Page, admin = false, initialAgents: Record<stri
     else if (path === '/api/agents' && method === 'POST') { const agent = { id: 'waylo-memory-fixture', ...body, metadata: {} }; agents.push(agent); value = agent; }
     else if (path === '/api/agents') value = { agents };
     else if (path.endsWith('/capture')) value = { vcon: { vcon: '0.4.0', uuid: workspaceId, parties: [], dialog: [] } };
-    else if (path === '/api/benchmarks/suites') value = [{ id: 'waylo-mike-notes', title: 'Waylo Mike notes', scenarios: [{ id: 'mike-five-bags', title: 'Five bags, not catalog pack size', caller_steps: ['Please note five bags of white potatoes.', 'Read back my notes.'] }] }];
+    else if (path === '/api/benchmarks/suites') value = [{ id: 'waylo-mike-notes', title: 'Waylo Mike notes', scenarios: Array.from({ length: caseCount }, (_, index) => ({ id: index ? `case-${index}` : 'mike-five-bags', title: index ? `Case ${index}` : 'Five bags, not catalog pack size', caller_steps: ['Please note five bags of white potatoes.', 'Read back my notes.'] })) }];
     else if (path.endsWith('/providers/openai/status')) value = { status: 'disconnected', provider: 'openai_codex' };
     else if (path === '/api/execution/runs' && method === 'POST') {
       if (request.headers()['x-cae-waylo-control'] !== '1' || request.headers()['x-cae-waylo-session'] !== proof) {
@@ -56,6 +56,60 @@ async function openTemporaryForm(page: Page) {
   await expect(page.getByRole('button', { name: 'Connect Waylo', exact: true })).toBeDisabled();
   await page.getByLabel('Confirm temporary Waylo sign-in').check();
 }
+
+async function openConnectedRun(page: Page, caseCount: number) {
+  const fixture = await fixtureApis(page, false, [], caseCount);
+  await openTemporaryForm(page);
+  fixture.allowLogin();
+  await page.getByRole('button', { name: 'Connect Waylo', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Create target' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Create target' }).click();
+  const card = page.getByRole('article').filter({ hasText: 'Mike fixture' });
+  await card.getByRole('button', { name: /Show details/ }).click();
+  await card.getByRole('link', { name: 'Test Mike’s five-bags case' }).click();
+  await expect(page.getByLabel('Execution agent target')).toHaveValue('waylo-memory-fixture');
+  return fixture;
+}
+
+test('temporary grant visibly blocks oversized suite scope and iterations while single calls remain available', async ({ page }) => {
+  const fixture = await openConnectedRun(page, 10);
+  const entireSuite = page.getByRole('button', { name: /Entire suite/ });
+  const run = page.getByRole('button', { name: 'Run evaluation', exact: true });
+  await expect(entireSuite).toBeDisabled();
+  await expect(page.getByRole('status', { name: 'Waylo suite access limit' })).toContainText('15-minute');
+  await expect(run).toBeEnabled();
+  await page.getByLabel('Duplex session timeout').fill('30');
+  await expect(entireSuite).toBeDisabled();
+  await page.getByLabel('Execution iterations').fill('7');
+  await expect(run).toBeDisabled();
+  await expect(page.getByRole('status', { name: 'Waylo run access limit' })).toContainText('fewer iterations');
+  await page.getByLabel('Execution iterations').fill('1');
+  await expect(run).toBeEnabled();
+  expect(fixture.requests.filter((request) => request.path === '/api/execution/runs' && request.method === 'POST')).toHaveLength(0);
+});
+
+test('temporary grant supports small whole suites that fit its capture budget', async ({ page }) => {
+  const fixture = await openConnectedRun(page, 3);
+  const entireSuite = page.getByRole('button', { name: /Entire suite/ });
+  await expect(entireSuite).toBeEnabled();
+  await entireSuite.click();
+  await page.getByRole('button', { name: 'Run evaluation', exact: true }).click();
+  await expect.poll(() => fixture.requests.some((request) => request.path === '/api/execution/runs' && request.method === 'POST')).toBe(true);
+  const request = fixture.requests.find((item) => item.path === '/api/execution/runs' && item.method === 'POST');
+  expect(request?.body?.scenario_ids).toEqual(['mike-five-bags', 'case-1', 'case-2']);
+});
+
+test('idle time reduces the usable grant budget without extending temporary access', async ({ page }) => {
+  await page.clock.install();
+  await openConnectedRun(page, 1);
+  const run = page.getByRole('button', { name: 'Run evaluation', exact: true });
+  await expect(run).toBeEnabled();
+  await page.clock.fastForward(12 * 60_000);
+  await expect(run).toBeDisabled();
+  await expect(page.getByRole('status', { name: 'Waylo run access limit' })).toContainText('expires before');
+  await page.getByLabel('Duplex session timeout').fill('30');
+  await expect(run).toBeEnabled();
+});
 
 test('temporary connection clears password, saves IDs only, and preserves proof through explicit SPA test launch', async ({ page }) => {
   const fixture = await fixtureApis(page);

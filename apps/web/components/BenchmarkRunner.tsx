@@ -12,6 +12,7 @@ import { SpeechProviderSettings } from './SpeechProviderSettings';
 import { apiErrorMessage } from '@/lib/apiError';
 import { WayloConnection, useWayloConnection } from './WayloConnection';
 import { wayloExecutionHeaders, type WayloTargetConnection } from '@/lib/wayloConnection';
+import { wayloRunBudgetError } from '@/lib/wayloRunBudget';
 import { sortedAssertReviews } from '@/lib/assertReview';
 import { getApiBase, listProductProjects, requestBenchmarkJudge, type ProductProjectOption, type AssertJudgeReadiness, type ConversationRecord } from '@/lib/execution';
 
@@ -2361,7 +2362,7 @@ export function BenchmarkRunner({
     selectedScoreAgent
     && !isSavedReplayTargetId(selectedScoreAgent.target)
     && !isExternalVoiceTargetId(selectedScoreAgent.target)
-    && (selectedScoreAgent.channel === 'text' || isQueuedVoiceTargetId(selectedScoreAgent.target)),
+    && (selectedScoreAgent.channel === 'text' || isQueuedVoiceTargetId(selectedScoreAgent.target) || selectedScoreAgent.target === 'waylo'),
   );
   const queuedVoiceTarget = isQueuedVoiceTargetId(selectedScoreAgent?.target);
   const requestedSuiteScope = executionScope === 'suite';
@@ -2369,7 +2370,20 @@ export function BenchmarkRunner({
     ? selectedSuite?.scenarios.length ?? 0
     : selectedScenario ? 1 : 0;
   const executionConversationCount = executionCaseCount * executionIterations;
-  const voiceQueueLimitError = queuedVoiceTarget && (
+  const temporaryWayloTarget = selectedScoreAgent?.target === 'waylo'
+    && selectedScoreAgent.connection?.auth_type === 'waylo_browser_session';
+  const wayloExpiresAt = wayloConnection?.expires_at;
+  const [, refreshWayloBudget] = useState(0);
+  useEffect(() => {
+    if (!temporaryWayloTarget || !wayloExpiresAt) return;
+    const timer = window.setInterval(() => refreshWayloBudget((tick) => tick + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [temporaryWayloTarget, wayloExpiresAt]);
+  const wayloQueueBudgetError = temporaryWayloTarget
+    ? wayloRunBudgetError(executionDuplexTimeoutSeconds, executionConversationCount, wayloExpiresAt) : null;
+  const wayloSuiteBudgetError = temporaryWayloTarget
+    ? wayloRunBudgetError(executionDuplexTimeoutSeconds, (selectedSuite?.scenarios.length ?? 0) * executionIterations, wayloExpiresAt) : null;
+  const voiceQueueLimitError = (queuedVoiceTarget || selectedScoreAgent?.target === 'waylo') && (
     executionCaseCount > MAX_VOICE_CASES || executionConversationCount > MAX_VOICE_CONVERSATIONS
   ) ? `Choose at most ${MAX_VOICE_CASES} cases and ${MAX_VOICE_CONVERSATIONS} total voice tests per run. Reduce iterations or run a single scenario.` : null;
   const matchingProductProjects = useMemo(
@@ -3586,6 +3600,10 @@ export function BenchmarkRunner({
       setExecutionMessage(voiceQueueLimitError);
       return null;
     }
+    if (temporaryWayloTarget) {
+      const budgetError = wayloRunBudgetError(executionDuplexTimeoutSeconds, executionConversationCount, wayloExpiresAt);
+      if (budgetError) { setExecutionMessage(budgetError); return null; }
+    }
     if (queuedVoiceTarget && executionRun && isActiveExecutionStatus(executionRun.status)) {
       setExecutionMessage('Wait for this voice run to finish before starting another from this page.');
       return null;
@@ -4698,12 +4716,15 @@ export function BenchmarkRunner({
                 type="button"
                 className={executionScope === 'suite' ? 'is-active' : ''}
                 aria-pressed={executionScope === 'suite'}
+                disabled={Boolean(wayloSuiteBudgetError)}
+                title={wayloSuiteBudgetError || undefined}
                 onClick={() => setExecutionScope('suite')}
               >
                 <strong>Entire suite</strong>
                 <span>{selectedSuite?.scenarios.length || 0} {queuedVoiceTarget ? 'voice cases' : 'scenarios'}</span>
               </button>
             </div>
+            {wayloSuiteBudgetError ? <p role="status" aria-label="Waylo suite access limit">{wayloSuiteBudgetError}</p> : null}
           </fieldset>
         ) : null}
 
@@ -5023,6 +5044,7 @@ export function BenchmarkRunner({
               || !executionCaseCount
               || (requestedSuiteScope && !supportsSuiteExecutionScope)
               || Boolean(voiceQueueLimitError)
+              || Boolean(wayloQueueBudgetError)
               || (queuedVoiceTarget && Boolean(executionRun && isActiveExecutionStatus(executionRun.status)))
               || (matchingProductProjects.length > 1 && !productProjectId)
               || ((selectedScoreAgent?.target === 'openai_codex'
@@ -5047,6 +5069,10 @@ export function BenchmarkRunner({
                   : 'Run evaluation'}
           </button>
         </div>
+
+        {temporaryWayloTarget ? <p role="status" aria-label="Waylo run access limit" style={{ margin: 0, color: wayloQueueBudgetError ? 'var(--error-text)' : 'var(--muted)', fontSize: 13 }}>
+          {wayloQueueBudgetError || 'Temporary access is limited to 15 minutes. Each conversation reserves its session timeout plus 2 minutes for evidence capture; the server checks the remaining access again before queueing.'}
+        </p> : null}
 
         {queuedVoiceTarget ? (
           <p role="status" aria-label="Voice queue bounds" style={{ margin: 0, color: voiceQueueLimitError ? 'var(--error-text)' : 'var(--muted)', fontSize: 13 }}>
