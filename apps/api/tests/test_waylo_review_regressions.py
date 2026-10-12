@@ -74,7 +74,7 @@ def fast_capture_poll(monkeypatch):
     monkeypatch.setattr(waylo_livekit.asyncio, 'sleep', no_sleep)
 
 
-def call(tmp_path, *, peer=None, client=None, audio=None, steps=None, **extra):
+def call(tmp_path, *, peer=None, client=None, audio=None, steps=None, max_exchanges=None, **extra):
     async def wording(turns, index):
         return f'caller {index}'
     async def synthesis(text, index):
@@ -82,7 +82,7 @@ def call(tmp_path, *, peer=None, client=None, audio=None, steps=None, **extra):
     return asyncio.run(run_waylo_call(target=TARGET, correlation_id='exec-test/conv-test',
         execution_run_id='exec-test', conversation_id='conv-test',
         scenario={'id': 'case', 'caller_steps': steps or ['hello'], **extra}, suite_id='suite',
-        artifact_dir=tmp_path, max_exchanges=len(steps or ['hello']), timeout_seconds=30,
+        artifact_dir=tmp_path, max_exchanges=max_exchanges or len(steps or ['hello']), timeout_seconds=30,
         next_utterance=wording, synthesize=synthesis, client=client or Client(), peer=peer or Peer()))
 
 
@@ -184,6 +184,46 @@ def test_barge_in_keeps_response_tail_in_original_overlapping_window(tmp_path):
     assert received['response_to_turn_ids'] == ['caller-1', 'caller-2']
     assert received['individual_response_attribution'] == 'unknown'
     assert not any(e['event_type'] == 'latency.observation' for e in events)
+
+
+@pytest.mark.parametrize('cap', [1, 2, 3])
+def test_interruption_only_runs_when_next_caller_is_within_exchange_cap(tmp_path, cap):
+    from app.services.waylo_mike_cases import WAYLO_MIKE_SUITE
+    scenario = next(s for s in WAYLO_MIKE_SUITE['scenarios'] if s['id'] == 'mike-interrupted-list')
+
+    class Barge(Peer):
+        async def send(self, *args, **kwargs):
+            result = await super().send(*args, **kwargs)
+            self.remote_pcm.extend(b'\x01\x00' * 100)
+            self.speech_count += 1
+            self.last_speech = time.monotonic()
+            return result
+
+    class ItemClient(Client):
+        def __init__(self):
+            super().__init__()
+            self.item_reads = 0
+
+        async def request(self, method, path):
+            if path.endswith('/items'):
+                self.item_reads += 1
+            return []
+
+    peer, client = Barge(), ItemClient()
+    result = call(tmp_path, peer=peer, client=client, max_exchanges=cap,
+                  steps=scenario['caller_steps'], waylo_test=scenario['waylo_test'])
+    assert result['verdict'] == 'needs_review'
+    assert not result['final_state'].get('tester_error')
+    assert peer.sent == [f'caller-{n}' for n in range(1, cap + 1)]
+    events = decode_evidence(result['ietf_vcon_export'])['voice_events']
+    scheduled = [e for e in events if e['event_type'] == 'tester.barge_in_scheduled']
+    received = [e for e in events if e['event_type'] == 'target.audio.received']
+    assert len(scheduled) == (1 if cap >= 2 else 0)
+    assert received[0]['response_to_turn_ids'] == (['caller-1', 'caller-2'] if cap >= 2 else ['caller-1'])
+    assert received[0]['individual_response_attribution'] == ('unknown' if cap >= 2 else 'sequential_observation')
+    if cap == 1:
+        assert [t['speaker'] for t in result['turns']] == ['Caller', 'Agent']
+        assert client.item_reads == 2  # Before call and after the final sequential response.
 
 
 def stereo_wav():

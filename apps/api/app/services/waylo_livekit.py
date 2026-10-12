@@ -314,6 +314,10 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                     raise WayloError('Tester sample rate changed within the call; no call started.')
                 prepared[step_index] = (text, prepared_audio)
             barge_turn = scenario.get('waylo_test', {}).get('barge_in_turn')
+            if barge_turn and barge_turn > max_exchanges:
+                # A capped-out caller turn cannot interrupt this call or skip
+                # its final sequential response/state observation.
+                barge_turn = None
             if barge_turn and barge_turn <= max_exchanges and barge_turn not in prepared:
                 next_text = await next_utterance([], barge_turn)
                 prepared[barge_turn] = (next_text, await synthesize(next_text, barge_turn))
@@ -380,7 +384,7 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                     media_dialogs.append({'type': 'recording', 'parties': [0], 'mediatype': 'audio/wav',
                         'encoding': 'base64url', 'body': base64.urlsafe_b64encode(sent_wav).decode().rstrip('='),
                         'content_hash': base64.urlsafe_b64encode(hashlib.sha512(sent_wav).digest()).decode().rstrip('=')})
-                if scenario.get('waylo_test', {}).get('barge_in_turn') == index + 1:
+                if index < max_exchanges and barge_turn == index + 1:
                     # Start the next caller turn during observed target speech,
                     # not after the usual observer-side silence boundary.
                     deadline = time.monotonic() + 15
