@@ -28,6 +28,13 @@ vCon UUID. It preserves local RTC media and tester references, updates provider
 transcripts/tools/items, invalidates stale scores/reviews, and never evaluates
 automatically. Repeating an unchanged refresh does not duplicate evidence.
 
+Refresh conservatively refuses fewer usable caller or agent transcript entries
+than the saved native, visible or original RTC dialogue. Rejection leaves the
+saved capture, tools, state and reviews untouched: retry after provider writes,
+or review the retained RTC evidence manually. Native ASR merges may also trigger
+this refusal. Segment counts are only a non-regression safeguard, not proof of
+transcript completeness or audio alignment; accepted captures remain provisional.
+
 Waylo is one reusable **Targets** adapter. Mike is a saved Waylo agent configuration
 and a catalog-aware notes contract, not a new target type. Existing Waylo transcript
 examples are unchanged and remain transcript-only.
