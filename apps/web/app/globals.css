@@ -222,7 +222,7 @@ select {
 .results-pagination button:disabled { opacity: .45; cursor: default; }
 .results-page a:focus-visible, .results-pagination button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .results-advanced { margin-top: 24px; color: var(--muted); font-size: 13px; }
-.results-saved-history { grid-template-columns: 1fr; }
+.results-page .results-saved-history { grid-template-columns: 1fr; }
 .results-saved-history > .card { box-shadow: none; min-width: 0; }
 .results-evidence-details summary { color: var(--accent); font-size: 13px; cursor: pointer; padding: 8px 0; }
 .results-evidence-details[open] { display: grid; gap: 8px; }
