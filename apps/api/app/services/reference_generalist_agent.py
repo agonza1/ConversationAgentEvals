@@ -28,6 +28,7 @@ from app.services.llm_providers import get_provider
 from app.services.llm_providers.openai_codex import OpenAICodexProvider, effective_codex_model_name
 from app.services.word_error_rate import calculate_word_error_rate
 from app.services.speech_settings import SpeechSelection, speech_selection
+from app.services.synthesized_audio import finalize_tts_wav
 from app.services.two_agent_pipecat_duplex import (
     InMemoryDuplexFrameTransport,
     TwoPipecatDuplexHarness,
@@ -461,12 +462,16 @@ class ReferenceMediaServices:
                 'voice': voice or self.config.kokoro_tester_voice,
                 'input': text,
                 'response_format': 'wav',
+                'stream': False,
             },
         )
         response.raise_for_status()
         if not response.content:
             raise ReferenceRuntimeError('Kokoro returned empty audio.')
-        return response.content
+        try:
+            return finalize_tts_wav(response.content)
+        except ValueError as exc:
+            raise ReferenceRuntimeError(str(exc)) from None
 
     def transcribe(self, wav_bytes: bytes) -> str:
         response = self.client.post(

@@ -6,6 +6,12 @@ rate. Unsupported delay/event/acceleration/plan-barge controls are rejected befo
 a remote session is created. Fixed scripted TTS is also prepared and validated
 before bootstrap. A greeting already speaking must finish before caller audio.
 
+Completed Kokoro TTS responses are finalized before transport preflight: only
+known streaming RIFF/data length markers are replaced with the observed PCM byte
+counts. Samples, rate, channels and metadata are unchanged. Finite truncated
+lengths, empty/incomplete frames and unsupported audio are rejected; controlled
+uploaded fixtures retain their original strict validation.
+
 Controlled interruptions retain a single overlapping response window, including
 the original response tail. The window names all caller turns it overlaps;
 individual response attribution and interruption handling remain unknown rather
