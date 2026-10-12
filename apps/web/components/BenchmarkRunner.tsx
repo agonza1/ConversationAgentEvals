@@ -8,7 +8,7 @@ import { DesignResults } from './DesignResults';
 import { OpenAIConnectionPanel } from './OpenAIConnectionSettings';
 import { useOpenAIConnection, type OpenAIProviderStatus } from './useOpenAIConnection';
 import { LiveRunFeedback, type LiveRunEvent } from './LiveRunFeedback';
-import { SpeechProviderSettings } from './SpeechProviderSettings';
+import { SpeechProviderSummary } from './SpeechProviderSettings';
 import { apiErrorMessage } from '@/lib/apiError';
 import { WayloConnection, useWayloConnection } from './WayloConnection';
 import { wayloExecutionHeaders, type WayloTargetConnection } from '@/lib/wayloConnection';
@@ -2335,7 +2335,6 @@ export function BenchmarkRunner({
   const [referenceVoicePreflight, setReferenceVoicePreflight] = useState<ReferenceVoicePreflight | null>(null);
   const [referenceVoicePreflightError, setReferenceVoicePreflightError] = useState<string | null>(null);
   const [referenceVoicePreflightLoaded, setReferenceVoicePreflightLoaded] = useState(false);
-  const [speechSettingsRevision, setSpeechSettingsRevision] = useState(0);
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const selectedScoreAgent = useMemo(
     () => agents.find((agent) => agent.id === selectedAgentId) ?? null,
@@ -2748,24 +2747,32 @@ export function BenchmarkRunner({
   useEffect(() => {
     if (view !== 'run') return;
     let active = true;
-    setReferenceVoicePreflightLoaded(false);
-    fetchReferenceVoicePreflight()
+    let requestSequence = 0;
+    function refreshVoiceReadiness() {
+      const request = ++requestSequence;
+      setReferenceVoicePreflightLoaded(false);
+      setReferenceVoicePreflight(null);
+      fetchReferenceVoicePreflight()
       .then((preflight) => {
-        if (!active) return;
+        if (!active || request !== requestSequence) return;
         setReferenceVoicePreflight(preflight);
         setReferenceVoicePreflightError(null);
         setReferenceVoicePreflightLoaded(true);
       })
       .catch((error) => {
-        if (!active) return;
+        if (!active || request !== requestSequence) return;
         setReferenceVoicePreflight(null);
         setReferenceVoicePreflightError(error instanceof Error ? error.message : 'Voice preflight unavailable.');
         setReferenceVoicePreflightLoaded(true);
       });
+    }
+    refreshVoiceReadiness();
+    window.addEventListener('focus', refreshVoiceReadiness);
     return () => {
       active = false;
+      window.removeEventListener('focus', refreshVoiceReadiness);
     };
-  }, [view, speechSettingsRevision]);
+  }, [view]);
 
   useEffect(() => {
     if (view !== 'run' || typeof window === 'undefined') return;
@@ -4957,7 +4964,7 @@ export function BenchmarkRunner({
         ) : null}
 
         {selectedScoreAgent?.target === 'builtin_sample_voice' ? (
-          <SpeechProviderSettings onSaved={() => setSpeechSettingsRevision((value) => value + 1)} />
+          <SpeechProviderSummary />
         ) : null}
 
         {selectedScoreAgent ? (

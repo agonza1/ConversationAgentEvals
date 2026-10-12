@@ -72,7 +72,8 @@ test('Settings loads connections and models without loading catalogs or executio
   await expect(page.getByRole('button', { name: 'Disconnect OpenAI' })).toBeVisible();
   await page.getByRole('button', { name: 'Disconnect OpenAI' }).click();
   await expect(page.getByRole('button', { name: 'Connect OpenAI', exact: true })).toBeVisible();
-  expect(requests.some((path) => path.includes('/execution/') || path.includes('/benchmarks/') || path === '/api/agents')).toBe(false);
+  expect(requests).toContain('/api/execution/speech-settings');
+  expect(requests.some((path) => (path.includes('/execution/') && path !== '/api/execution/speech-settings') || path.includes('/benchmarks/') || path === '/api/agents')).toBe(false);
 });
 
 test('Results shows project-wide saved evaluations and exports all displayed history', async ({ page }) => {
