@@ -35,6 +35,12 @@ or review the retained RTC evidence manually. Native ASR merges may also trigger
 this refusal. Segment counts are only a non-regression safeguard, not proof of
 transcript completeness or audio alignment; accepted captures remain provisional.
 
+Previously fetched optional sources must remain available too: a transient tools,
+items or configuration read failure cannot replace the saved evidence. Refresh
+also refuses a missing previously recorded final read-back or truncated native
+event journal. Successful item corrections or deletions remain valid observations;
+sources that have never been available remain explicitly unknown.
+
 Waylo is one reusable **Targets** adapter. Mike is a saved Waylo agent configuration
 and a catalog-aware notes contract, not a new target type. Existing Waylo transcript
 examples are unchanged and remain transcript-only.
