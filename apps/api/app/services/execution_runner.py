@@ -220,7 +220,7 @@ def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool =
         max_exchanges=resolved.max_exchanges,
         duplex_timeout_seconds=resolved.duplex_timeout_seconds,
         tester_id=resolved.tester_id,
-        tester_model_name=resolved.tester_model_name,
+        tester_model_name=None if target == 'waylo' else resolved.tester_model_name,
         executor_id=resolved.executor_id,
         provenance=provenance,
         execution_snapshot={
@@ -529,6 +529,8 @@ def _run_one_conversation(
             status=status,
             iteration=iteration,
             turns=result['turns'],
+            tester_model_name=result.get('tester_model_name'),
+            tester_source=result.get('tester_source'),
             live_events=current.get('live_events') or [],
             transcript=result.get('transcript'),
             action_trace=result.get('action_trace') or [],
@@ -565,6 +567,7 @@ def _run_one_conversation(
             mode=payload.mode,
             status='failed',
             iteration=iteration,
+            tester_source='execution_failed' if payload.executor_id == 'waylo_livekit' else None,
             live_events=(
                 execution_run_store.get_conversation(execution_run_id, conversation_id) or {}
             ).get('live_events') or [],
@@ -625,7 +628,9 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
     if target in {'openai_codex', 'builtin_sample_voice'}:
         model_name = effective_reference_model_name(model_name)
     tester_model_name = payload.tester_model_name
-    if not tester_model_name and target in {'pipecat_public_demo', 'signalwire_holy_guacamole', 'waylo'}:
+    if target == 'waylo':
+        tester_model_name = _waylo_tester_model_name(payload)
+    elif not tester_model_name and target in {'pipecat_public_demo', 'signalwire_holy_guacamole'}:
         tester_model_name = default_reference_model_name()
     if tester_model_name:
         tester_model_name = effective_reference_model_name(tester_model_name)
@@ -680,6 +685,20 @@ def _resolve_agent_payload(payload: ExecutionRunCreateRequest) -> ExecutionRunCr
     })
 
 
+def _waylo_tester_model_name(payload: ExecutionRunCreateRequest) -> str | None:
+    """A configured model is relevant only if selected callers can be adaptive."""
+    if payload.audio_plan_path or payload.max_exchanges == 1:
+        return None
+    suite = get_suite(payload.suite_id) or {}
+    scenarios = suite.get('scenarios') or []
+    optional = suite.get('optional_scenarios') or []
+    ids = payload.scenario_ids or ([optional[0]['id']] if optional else [s['id'] for s in scenarios])
+    definitions = {s['id']: s for s in [*scenarios, *optional]}
+    if ids and all(definitions.get(sid, {}).get('caller_steps') for sid in ids):
+        return None
+    return payload.tester_model_name or default_reference_model_name()
+
+
 def _resolve_max_exchanges_for_target(
     payload: ExecutionRunCreateRequest,
     *,
@@ -727,6 +746,7 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
     # The first caller utterance is an exact scenario opener, not an LLM request.
     # A one-exchange transport smoke test must not require an unrelated LLM login.
     provider = None if scenario.get('caller_steps') or payload.audio_plan_path or payload.max_exchanges == 1 else resolve_reference_completion_provider(model)
+    used_tester_model = None
     config = ReferenceRuntimeConfig(tester_llm_model=model)
     fixture_audio = []
     if payload.audio_plan_path:
@@ -764,6 +784,7 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
     media = ReferenceMediaServices(config)
 
     async def wording(turns, index):
+        nonlocal used_tester_model
         # The opener/controlled fixture wording is exact, not LLM paraphrased.
         # Subsequent free-form scenarios reuse CAE's existing adaptive tester.
         steps = scenario.get('caller_steps') or []
@@ -774,6 +795,7 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
         else:
             if provider is None:
                 raise ValueError('Controlled caller steps exhausted; no invented substitution.')
+            used_tester_model = model
             text = await asyncio.to_thread(provider.complete, _openai_tester_prompt(
                 scenario, turns, next_exchange=index, max_exchanges=payload.max_exchanges), model_name=model)
         return text
@@ -810,6 +832,12 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
         result['final_state'] = {**observed_final, **result['final_state']}
         # Business observations are distinct from CAE lifecycle bookkeeping.
         result['state_snapshots'] = profile['state_snapshots']
+        result['tester_model_name'] = used_tester_model
+        result['tester_source'] = (
+            'adaptive_llm' if used_tester_model else
+            'controlled_audio_fixture' if fixture_audio else
+            'scripted_caller' if scenario.get('caller_steps') else 'scenario_opener'
+        )
         return result
     finally:
         media.client.close()

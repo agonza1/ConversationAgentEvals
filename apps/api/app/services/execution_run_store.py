@@ -155,6 +155,10 @@ def upsert_conversation(execution_run_id: str, conversation: ConversationRecord)
                 active_id = item.get('conversation_id')
                 break
         run['conversations'] = conversations
+        if run.get('executor_id') == 'waylo_livekit':
+            models = {item['tester_model_name'] for item in conversations
+                      if item.get('tester_source') == 'adaptive_llm' and item.get('tester_model_name')}
+            run['tester_model_name'] = next(iter(models)) if len(models) == 1 else None
         run['updated_at'] = _now()
         run['progress'] = ExecutionRunProgress(
             phase='executing',

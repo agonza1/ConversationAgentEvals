@@ -209,6 +209,8 @@ class ConversationRecord(BaseModel):
     mode: ExecutionMode
     status: ConversationStatus
     iteration: int = 1
+    tester_model_name: str | None = None
+    tester_source: str | None = None
     turns: list[ConversationTurn] = Field(default_factory=list)
     live_events: list[LiveExecutionEvent] = Field(default_factory=list)
     transcript: str | None = None
