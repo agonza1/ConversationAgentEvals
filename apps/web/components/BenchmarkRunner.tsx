@@ -926,12 +926,12 @@ async function saveBenchmarkRun(payload: {
   );
 }
 
-async function listBenchmarkSuiteRuns(userId: string, projectId: string, suiteId?: string, status?: string, page?: number) {
+async function listBenchmarkSuiteRuns(userId: string, projectId: string, suiteId?: string, status?: string, page?: number, limit = RESULTS_PAGE_SIZE + 1) {
   const params = new URLSearchParams({ user_id: userId, project_id: projectId });
   if (suiteId) params.set('suite_id', suiteId);
   if (status) params.set('status', status);
 
-  if (page !== undefined) { params.set('limit', String(RESULTS_PAGE_SIZE + 1)); params.set('offset', String(page * RESULTS_PAGE_SIZE)); }
+  if (page !== undefined) { params.set('limit', String(limit)); params.set('offset', String(page * RESULTS_PAGE_SIZE)); }
   return handleJson<BenchmarkSuiteRunRecord[]>(
     await fetch(`${getApiBase()}/api/benchmarks/suite-runs?${params.toString()}`, { cache: 'no-store' }),
   );
@@ -2847,12 +2847,15 @@ export function BenchmarkRunner({
     setSuiteHistoryError(null);
     setSuiteRuns([]);
     setSuitePageHasActiveRun(false);
-    listBenchmarkSuiteRuns(userId, projectId, undefined, suiteRunStatusFilter, suitePage)
-      .then((runs) => {
+    Promise.all([
+      listBenchmarkSuiteRuns(userId, projectId, undefined, suiteRunStatusFilter, suitePage),
+      listBenchmarkSuiteRuns(userId, projectId, undefined, 'active', 0, 1).catch(() => null),
+    ])
+      .then(([runs, activeRuns]) => {
         if (!active) return;
         setSuiteRuns(runs.slice(0, RESULTS_PAGE_SIZE));
         setSuiteHasNext(runs.length > RESULTS_PAGE_SIZE);
-        setSuitePageHasActiveRun(runs.some((run) => isActiveSuiteRunStatus(run.status)));
+        setSuitePageHasActiveRun(activeRuns === null || [...runs, ...activeRuns].some((run) => isActiveSuiteRunStatus(run.status)));
       })
       .catch((err) => {
         if (active) setSuiteHistoryError(err instanceof Error ? err.message : 'Could not load suite runs');
@@ -2991,11 +2994,14 @@ export function BenchmarkRunner({
     const historySuite = view === 'history' ? undefined : selectedSuite?.id;
 
     const interval = window.setInterval(() => {
-      listBenchmarkSuiteRuns(userId, projectId, historySuite, suiteRunStatusFilter, view === 'history' ? suitePage : undefined)
-        .then((nextSuiteRuns) => {
+      Promise.all([
+        listBenchmarkSuiteRuns(userId, projectId, historySuite, suiteRunStatusFilter, view === 'history' ? suitePage : undefined),
+        view === 'history' ? listBenchmarkSuiteRuns(userId, projectId, undefined, 'active', 0, 1).catch(() => null) : Promise.resolve([]),
+      ])
+        .then(([nextSuiteRuns, activeRuns]) => {
           if (active) {
             setSuiteHasNext(nextSuiteRuns.length > RESULTS_PAGE_SIZE);
-            if (view === 'history') setSuitePageHasActiveRun(nextSuiteRuns.some((run) => isActiveSuiteRunStatus(run.status)));
+            if (view === 'history') setSuitePageHasActiveRun(activeRuns === null || [...nextSuiteRuns, ...activeRuns].some((run) => isActiveSuiteRunStatus(run.status)));
             setSuiteRuns((current) => view === 'history' ? nextSuiteRuns.slice(0, RESULTS_PAGE_SIZE) : mergeSuiteRunRecords(current, nextSuiteRuns, historySuite, suiteRunStatusFilter));
           }
         })

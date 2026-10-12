@@ -124,7 +124,7 @@ def list_benchmark_suite_runs(
     if suite_id is not None:
         query = query.filter(BenchmarkSuiteRunRecord.suite_id == suite_id)
     if status is not None:
-        query = query.filter(BenchmarkSuiteRunRecord.status == status)
+        query = query.filter(BenchmarkSuiteRunRecord.status.in_(['queued', 'running']) if status == 'active' else BenchmarkSuiteRunRecord.status == status)
     query = query.order_by(BenchmarkSuiteRunRecord.updated_at.desc(), BenchmarkSuiteRunRecord.created_at.desc(), BenchmarkSuiteRunRecord.id.desc()).offset(offset)
     if limit is not None:
         query = query.limit(limit)

@@ -46,11 +46,14 @@ export function RunsListPage({ view = 'launch' }: { view?: 'launch' | 'results' 
       setLoading(true);
       setError(null);
       try {
-        const next = await listExecutionRunSummaries(userId, projectId, { limit: RESULTS_PAGE_SIZE + 1, offset: page * RESULTS_PAGE_SIZE, status: statusFilter });
+        const [next, activeRuns] = await Promise.all([
+          listExecutionRunSummaries(userId, projectId, { limit: RESULTS_PAGE_SIZE + 1, offset: page * RESULTS_PAGE_SIZE, status: statusFilter }),
+          listExecutionRunSummaries(userId, projectId, { limit: 1, offset: 0, status: 'active' }).catch(() => null),
+        ]);
         if (!active) return;
         setRuns(next.slice(0, RESULTS_PAGE_SIZE));
         setHasNext(next.length > RESULTS_PAGE_SIZE);
-        setHasActiveRuns(next.some((run) => run.status === 'queued' || run.status === 'running'));
+        setHasActiveRuns(activeRuns === null || [...next, ...activeRuns].some((run) => run.status === 'queued' || run.status === 'running'));
       } catch (err) {
         if (!active) return;
         setError(err instanceof Error ? err.message : 'Could not load runs');
@@ -71,13 +74,16 @@ export function RunsListPage({ view = 'launch' }: { view?: 'launch' | 'results' 
 
     async function poll() {
       try {
-        const next = await listExecutionRunSummaries(userId, projectId, { limit: RESULTS_PAGE_SIZE + 1, offset: page * RESULTS_PAGE_SIZE, status: statusFilter });
+        const [next, activeRuns] = await Promise.all([
+          listExecutionRunSummaries(userId, projectId, { limit: RESULTS_PAGE_SIZE + 1, offset: page * RESULTS_PAGE_SIZE, status: statusFilter }),
+          listExecutionRunSummaries(userId, projectId, { limit: 1, offset: 0, status: 'active' }).catch(() => null),
+        ]);
         if (!active) return;
         setRuns(next.slice(0, RESULTS_PAGE_SIZE));
         setHasNext(next.length > RESULTS_PAGE_SIZE);
-        setHasActiveRuns(next.some((run) => run.status === 'queued' || run.status === 'running'));
+        setHasActiveRuns(activeRuns === null || [...next, ...activeRuns].some((run) => run.status === 'queued' || run.status === 'running'));
         setError(null);
-        if (next.some((run) => run.status === 'queued' || run.status === 'running')) {
+        if (activeRuns === null || [...next, ...activeRuns].some((run) => run.status === 'queued' || run.status === 'running')) {
           timer = setTimeout(() => void poll(), 1500);
         }
       } catch (err) {

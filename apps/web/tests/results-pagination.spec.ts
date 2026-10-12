@@ -4,6 +4,7 @@ test('results fetch bounded summaries, page forward, and reset server filters', 
   const requests: URL[] = [];
   await page.route('**/api/execution/runs?*', async (route) => {
     const url = new URL(route.request().url());
+    if (url.searchParams.get('status') === 'active') { await route.fulfill({ json: [] }); return; }
     requests.push(url);
     const offset = Number(url.searchParams.get('offset'));
     const count = url.searchParams.has('status') ? 2 : offset === 0 ? 11 : 3;
@@ -79,7 +80,7 @@ test('saved history pages are bounded and evidence stays collapsed', async ({ pa
   const savedRequests = requests.filter((url) => url.pathname === '/api/product/runs');
   expect(savedRequests.every((url) => url.searchParams.get('limit') === '11')).toBe(true);
   expect(savedRequests.at(-1)?.searchParams.get('offset')).toBe('10');
-  const suiteRequests = requests.filter((url) => url.pathname === '/api/benchmarks/suite-runs');
+  const suiteRequests = requests.filter((url) => url.pathname === '/api/benchmarks/suite-runs' && url.searchParams.get('status') !== 'active');
   expect(suiteRequests.every((url) => url.searchParams.get('limit') === '11')).toBe(true);
 });
 
@@ -119,40 +120,48 @@ test('each history panel stays usable when the other endpoint fails', async ({ p
   await expect(page.getByLabel('Suite run history', { exact: true }).getByRole('article').getByText('completed', { exact: true })).toBeVisible();
 });
 
-test('active lookahead rows keep execution and suite history polling', async ({ page }) => {
+test('active runs beyond the lookahead keep execution and suite history polling', async ({ page }) => {
   let executionRequests = 0;
   let suiteRequests = 0;
   await page.route('**/api/**', async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === '/api/execution/runs') {
+      if (url.searchParams.get('status') === 'active') {
+        expect(url.searchParams.get('limit')).toBe('1');
+        await route.fulfill({ json: executionRequests < 2 ? [{ execution_run_id: 'lookahead-exec-11', status: 'running' }] : [] }); return;
+      }
       executionRequests += 1;
-      const rows = Array.from({ length: 11 }, (_, index) => ({
+      const rows = Array.from({ length: 12 }, (_, index) => ({
         execution_run_id: `lookahead-exec-${index}`, agent_name: `Lookahead agent ${index}`,
-        status: index === 10 && executionRequests === 1 ? 'running' : 'completed',
+        status: index === 11 && executionRequests === 1 ? 'running' : 'completed',
         mode: 'text_callable', conversations: [],
       }));
-      await route.fulfill({ json: executionRequests > 1 ? [rows[10], ...rows.slice(0, 10)] : rows });
+      await route.fulfill({ json: executionRequests > 1 ? [rows[11], ...rows.slice(0, 10)] : rows.slice(0, 11) });
     } else if (url.pathname === '/api/benchmarks/suite-runs') {
+      if (url.searchParams.get('status') === 'active') {
+        expect(url.searchParams.get('limit')).toBe('1');
+        await route.fulfill({ json: suiteRequests < 2 ? [{ suite_run_id: 'lookahead-suite-11', status: 'running' }] : [] }); return;
+      }
       suiteRequests += 1;
-      const rows = Array.from({ length: 11 }, (_, index) => ({
+      const rows = Array.from({ length: 12 }, (_, index) => ({
         suite_run_id: `lookahead-suite-${index}`, suite_id: `Lookahead suite ${index}`,
-        status: index === 10 && suiteRequests === 1 ? 'running' : 'completed', scenario_count: 1,
+        status: index === 11 && suiteRequests === 1 ? 'running' : 'completed', scenario_count: 1,
       }));
-      await route.fulfill({ json: suiteRequests > 1 ? [rows[10], ...rows.slice(0, 10)] : rows });
+      await route.fulfill({ json: suiteRequests > 1 ? [rows[11], ...rows.slice(0, 10)] : rows.slice(0, 11) });
     } else {
       await route.fulfill({ json: [] });
     }
   });
   await page.goto('/results');
   await expect(page.locator('.runs-list-item')).toHaveCount(10);
-  await expect(page.getByText('Lookahead agent 10', { exact: true })).toHaveCount(0);
-  await expect(page.getByText('Lookahead agent 10', { exact: true })).toBeVisible();
+  await expect(page.getByText('Lookahead agent 11', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Lookahead agent 11', { exact: true })).toBeVisible();
   expect(executionRequests).toBe(2);
   await page.getByRole('button', { name: 'Saved evaluations', exact: true }).click();
   const history = page.getByLabel('Suite run history', { exact: true });
   await expect(history.getByRole('article')).toHaveCount(10);
-  await expect(history.getByText('Lookahead suite 10', { exact: true })).toHaveCount(0);
-  await expect(history.getByText('Lookahead suite 10', { exact: true })).toBeVisible();
+  await expect(history.getByText('Lookahead suite 11', { exact: true })).toHaveCount(0);
+  await expect(history.getByText('Lookahead suite 11', { exact: true })).toBeVisible();
   expect(suiteRequests).toBe(2);
   await expect(history.getByRole('article')).toHaveCount(10);
 });

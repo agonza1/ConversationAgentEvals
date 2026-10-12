@@ -49,7 +49,7 @@ def test_saved_and_suite_pages_preserve_access_filters_and_stable_ties():
                 db.add(ProductSavedRun(id=f'{owner}-{index:02d}', user_id=owner, project_id=owner,
                                        report_json=json.dumps({'suite_id': 'paging-suite', 'scenario_id': str(index % 2)}), created_at=now))
                 db.add(BenchmarkSuiteRunRecord(id=f'{owner}-{index:02d}', user_id=owner, project_key='paging-project',
-                                              suite_id='paging-suite', status='completed' if index % 2 else 'failed',
+                                              suite_id='paging-suite', status='running' if index == 0 else 'queued' if index == 2 else 'completed' if index % 2 else 'failed',
                                               created_at=now, updated_at=now, retained_until=now + timedelta(days=3650)))
         db.commit()
     try:
@@ -65,6 +65,8 @@ def test_saved_and_suite_pages_preserve_access_filters_and_stable_ties():
             assert len(client.get(endpoint, params={'user_id': user}).json()) == 13
         filtered = client.get('/api/benchmarks/suite-runs', params={**params, 'status': 'completed', 'limit': 2, 'offset': 2}).json()
         assert [row['suite_run_id'] for row in filtered] == [user + '-07', user + '-05']
+        active = client.get('/api/benchmarks/suite-runs', params={**params, 'status': 'active', 'limit': 1}).json()
+        assert [row['suite_run_id'] for row in active] == [user + '-02']
         saved = client.get('/api/product/runs', params={**params, 'scenario_id': '1', 'limit': 2, 'offset': 2}).json()
         assert [row['id'] for row in saved] == [user + '-07', user + '-05']
     finally:
