@@ -243,6 +243,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
                   turns={conversation?.turns || []}
                   latencyMarks={conversation?.latency_marks || []}
                   firstByteEvidence={conversation?.mode === 'pipecat_webrtc'}
+                  wayloCapture={run.executor_id === 'waylo_livekit'}
                 />
               ) : null}
             </section>
@@ -913,12 +914,59 @@ function ConversationFlow({
   turns,
   latencyMarks,
   firstByteEvidence,
+  wayloCapture = false,
 }: {
   turns: ConversationTurn[];
   latencyMarks: Array<Record<string, unknown>>;
   firstByteEvidence: boolean;
+  wayloCapture?: boolean;
 }) {
   if (!turns.length) return null;
+  // Waylo capture does not currently provide a complete, audio-aligned turn
+  // clock. Do not invent timed bars from word counts or attach caller latency
+  // to an unrelated greeting by the target turn's ordinal position.
+  if (wayloCapture) {
+    return (
+      <section className="conversation-flow" aria-label="Waylo conversation turn sequence">
+        <p className="eyebrow">Conversation flow</p>
+        <h3>Tester and target turns</h3>
+        <p>Ordered evidence, not an elapsed-time timeline. Speech durations are shown only when observed;
+          response waits require a uniquely identified caller turn.</p>
+        <ol className="conversation-flow-turns" aria-label="Conversation turn sequence">
+          {turns.map((turn) => {
+            const lane = turnLane(turn);
+            const metadata = turn.frame_metadata || {};
+            const durationMs = observedTurnAudioDurationMs(turn);
+            const responseIds = Array.isArray(metadata.response_to_turn_ids)
+              ? [...new Set(metadata.response_to_turn_ids.filter((id): id is string => typeof id === 'string' && Boolean(id)))]
+              : [];
+            const correlatedMarks = lane === 'agent' && !metadata.greeting
+              && !metadata.overlapping_response_window && responseIds.length === 1
+              ? latencyMarks.filter((mark) => isWayloObserverMark(mark)
+                && mark.turn_id === responseIds[0] && markLatencyMs(mark) != null)
+              : [];
+            const responseMs = correlatedMarks.length === 1 ? markLatencyMs(correlatedMarks[0]) : null;
+            return (
+              <li key={`flow-${turn.turn_index}`} data-speaker={lane}>
+                <span>{turn.turn_index}</span>
+                <strong>{lane === 'caller' ? 'Caller' : 'Agent'}</strong>
+                <p>{spokenTurnText(turn) || 'No transcript text.'}</p>
+                <small>
+                  {durationMs == null ? 'Speech duration unknown' : `Observed speech duration: ${fmtDuration(durationMs)}`}
+                  {lane === 'agent' ? metadata.greeting
+                    ? ' · Greeting; no caller response latency'
+                    : responseMs != null
+                      ? ` · Observed response to ${responseIds[0]}: ${fmtMs(responseMs)}`
+                      : ' · Individual response timing unknown'
+                    : ''}
+                </small>
+              </li>
+            );
+          })}
+        </ol>
+      </section>
+    );
+  }
   const candidateMarks = firstByteEvidence
     ? latencyMarks.filter(isTargetFirstAudioByteMark)
     : latencyMarks;
@@ -1952,6 +2000,21 @@ function turnAudioDurationMs(turn: ConversationTurn) {
   }
   const words = spokenTurnText(turn).trim().split(/\s+/).filter(Boolean).length;
   return Math.min(12_000, Math.max(700, (words / 2.6) * 1000));
+}
+
+function observedTurnAudioDurationMs(turn: ConversationTurn): number | null {
+  const metadata = turn.frame_metadata || {};
+  const explicitDuration = metadata.duration_ms;
+  if (typeof explicitDuration === 'number' && Number.isFinite(explicitDuration) && explicitDuration >= 0) return explicitDuration;
+  const bytes = metadata.bytes;
+  const sampleRate = metadata.sample_rate;
+  const channels = metadata.channels ?? 1;
+  if (typeof bytes === 'number' && Number.isFinite(bytes) && bytes > 0
+    && typeof sampleRate === 'number' && Number.isFinite(sampleRate) && sampleRate > 0
+    && typeof channels === 'number' && Number.isFinite(channels) && channels > 0) {
+    return (bytes / (sampleRate * channels * 2)) * 1000;
+  }
+  return null;
 }
 
 function markLatencyMs(mark: unknown): number | null {

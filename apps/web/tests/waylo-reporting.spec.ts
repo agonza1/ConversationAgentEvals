@@ -88,3 +88,38 @@ test('Waylo missing flags and unaligned speech stay unknown rather than zero', a
   await expect(page.getByLabel('Metric detail')).toContainText('Observer response timing is unknown');
   await expect(page.getByLabel('Worker latency observations')).toContainText('2964ms');
 });
+
+test('Waylo turn sequence does not invent a clock or shift caller latency onto greetings', async ({ page }) => {
+  const run = fixture();
+  const turns = [
+    { turn_index: 1, speaker: 'Agent', text: 'Welcome to the store.', frame_metadata: { greeting: true } },
+    { turn_index: 2, speaker: 'Caller', text: 'Tell me the warranty.', frame_metadata: { duration_ms: 1800 } },
+    { turn_index: 3, speaker: 'Agent', text: 'It has a one-year warranty.',
+      frame_metadata: { response_to_turn_ids: ['caller-1'] } },
+    { turn_index: 4, speaker: 'Caller', text: 'What is the return policy?', frame_metadata: { duration_ms: 500 } },
+    { turn_index: 5, speaker: 'Agent', text: 'Returns are accepted for thirty days.',
+      frame_metadata: { response_to_turn_ids: ['caller-2'] } },
+    { turn_index: 6, speaker: 'Agent', text: 'I heard both corrections.',
+      frame_metadata: { response_to_turn_ids: ['caller-1', 'caller-2'], overlapping_response_window: true } },
+    { turn_index: 7, speaker: 'Agent', text: 'An unassociated response.',
+      frame_metadata: { transcript_source: 'waylo_final_transcript' } },
+  ];
+  run.conversations[0].turns = turns;
+  // Mark order differs from conversation order; correlation must use IDs.
+  run.conversations[0].latency_marks.reverse();
+  await page.addInitScript(() => localStorage.setItem('conversation-evals-demo-user', 'demo-user'));
+  await page.route('**/api/**', (route) => route.fulfill({ json: route.request().url().includes('/runs/exec-steven-reporting') ? run : {} }));
+  await page.goto('/runs/exec-steven-reporting');
+  const sequence = page.getByLabel('Waylo conversation turn sequence');
+  await expect(sequence).toContainText('Ordered evidence, not an elapsed-time timeline');
+  await expect(sequence.locator('.conversation-flow-chart')).toHaveCount(0);
+  const rows = sequence.getByRole('listitem');
+  await expect(rows.nth(0)).toContainText('Speech duration unknown · Greeting; no caller response latency');
+  await expect(rows.nth(0)).not.toContainText('1910ms');
+  await expect(rows.nth(1)).toContainText('Observed speech duration: 1.8s');
+  await expect(rows.nth(2)).toContainText('Speech duration unknown · Observed response to caller-1: 1910ms');
+  await expect(rows.nth(2)).not.toContainText('3098ms');
+  await expect(rows.nth(4)).toContainText('Speech duration unknown · Observed response to caller-2: 3098ms');
+  await expect(rows.nth(5)).toContainText('Individual response timing unknown');
+  await expect(rows.nth(6)).toContainText('Individual response timing unknown');
+});
