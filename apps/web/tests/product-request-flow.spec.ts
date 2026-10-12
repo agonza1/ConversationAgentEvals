@@ -6,7 +6,7 @@ test('product eval API journey works end to end', async ({ request, baseURL }) =
 
   const pageResponse = await request.get('/benchmarks');
   expect(pageResponse.ok()).toBeTruthy();
-  await expect(pageResponse.text()).resolves.toContain('Benchmark history and reports.');
+  await expect(pageResponse.text()).resolves.toContain('Benchmark console');
 
   const configResponse = await request.get('/api/product/config');
   expect(configResponse.ok()).toBeTruthy();
@@ -45,12 +45,14 @@ test('product eval API journey works end to end', async ({ request, baseURL }) =
   expect(readiness.engine).toBe('assert');
   // This journey is offline. The Python integration suite mocks only the paid
   // provider output and exercises successful persistence, audit and application.
-  expect(readiness.enabled).toBe(false);
-  const judgeResponse = await request.post(`/api/assert/benchmarks/${simulation.benchmark_report.run_id}/judge`, {
-    data: { user_id: userId },
-  });
-  expect(judgeResponse.status()).toBe(503);
-  expect(await judgeResponse.json()).toEqual(expect.objectContaining({detail: expect.stringContaining('disabled')}));
+  // Reusing a local stack may have judging enabled. Never invoke its paid provider.
+  if (!readiness.enabled) {
+    const judgeResponse = await request.post(`/api/assert/benchmarks/${simulation.benchmark_report.run_id}/judge`, {
+      data: { user_id: userId },
+    });
+    expect(judgeResponse.status()).toBe(503);
+    expect(await judgeResponse.json()).toEqual(expect.objectContaining({ detail: expect.stringContaining('disabled') }));
+  }
   const forgedResponse = await request.post(`/api/assert/benchmarks/${simulation.benchmark_report.run_id}/judge`, {
     data: {user_id: userId, report: {verdict: 'pass'}},
   });
@@ -89,7 +91,7 @@ test('product eval API journey works end to end', async ({ request, baseURL }) =
   expect(exportResponse.ok()).toBeTruthy();
   await expect(exportResponse.json()).resolves.toEqual(expect.objectContaining({
     id: saved.id,
-    filename: `convoice-qa-call-center-demo-${saved.id}.json`,
+    filename: `voiceai-qa-call-center-demo-${saved.id}.json`,
     report: expect.objectContaining({ verdict: 'needs_review' }),
     artifacts: expect.objectContaining({
       vcon_export: expect.objectContaining({ available: true }),
@@ -100,7 +102,7 @@ test('product eval API journey works end to end', async ({ request, baseURL }) =
   const projectExportResponse = await request.get(`/api/product/projects/call-center-demo/export?user_id=${userId}`);
   expect(projectExportResponse.ok()).toBeTruthy();
   await expect(projectExportResponse.json()).resolves.toEqual(expect.objectContaining({
-    filename: 'convoice-qa-call-center-demo-project-export.json',
+    filename: 'voiceai-qa-call-center-demo-project-export.json',
     project_id: 'call-center-demo',
     run_count: 1,
     summary: expect.objectContaining({ latest_status: 'baseline' }),
@@ -122,7 +124,7 @@ test('product eval API journey works end to end', async ({ request, baseURL }) =
   );
   expect(filteredProjectExportResponse.ok()).toBeTruthy();
   await expect(filteredProjectExportResponse.json()).resolves.toEqual(expect.objectContaining({
-    filename: `convoice-qa-call-center-demo-${suiteId}-${scenarioId}-project-export.json`,
+    filename: `voiceai-qa-call-center-demo-${suiteId}-${scenarioId}-project-export.json`,
     suite_id: suiteId,
     scenario_id: scenarioId,
     run_count: 1,

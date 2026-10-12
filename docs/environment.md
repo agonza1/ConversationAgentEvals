@@ -1,5 +1,8 @@
 # Environment Reference
 
+For built-in voice STT/TTS choices (local, Deepgram or Cartesia), console
+configuration and server-side credentials, see [Speech providers](speech-providers.md).
+
 Use `.env.example` for the first-run local demo. It is intentionally small: copy it to `.env`, run `npm run setup`, then run `npm run dev`.
 
 For concurrent worktrees, port slots, isolated CAE state, and shared rtc-asr or

@@ -65,6 +65,16 @@ def _rtc_asr_settings() -> tuple[bool, int, float, float]:
     return interim == "true", interval, window, final_timeout
 
 
+def _rtc_asr_max_buffer_seconds() -> float:
+    try:
+        value = float(os.getenv("RTC_ASR_MAX_BUFFER_SECONDS", "60"))
+    except ValueError as exc:
+        raise ValueError("RTC_ASR_MAX_BUFFER_SECONDS must be a number from 1 to 300.") from exc
+    if not 1 <= value <= 300:
+        raise ValueError("RTC_ASR_MAX_BUFFER_SECONDS must be a number from 1 to 300.")
+    return value
+
+
 def rtc_asr_stream_url(base_url: str, stream_path: str = "/v1/stt/stream") -> str:
     """Return the configured Local STT websocket URL."""
     base = base_url.rstrip("/")
@@ -128,6 +138,7 @@ class StreamingWavDecoder:
 
 class StreamingKokoroProcessor(FrameProcessor):
     """Aggregate streaming LLM deltas into natural Kokoro synthesis chunks."""
+    provider_name = 'kokoro'
 
     def __init__(
         self,
@@ -146,7 +157,7 @@ class StreamingKokoroProcessor(FrameProcessor):
         first_chunk_min_words: int = 6,
         first_chunk_max_words: int = 12,
     ) -> None:
-        super().__init__(name=f"{participant}_kokoro")
+        super().__init__(name=f"{participant}_{self.provider_name}_tts")
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.voice = voice
@@ -188,7 +199,7 @@ class StreamingKokoroProcessor(FrameProcessor):
         if self.end_type is not None and isinstance(frame, self.end_type):
             await self._flush_pending(direction, final=True)
             if not self.audio:
-                raise RuntimeError(f"{self.participant} Kokoro returned no PCM audio.")
+                raise RuntimeError(f"{self.participant} {self.provider_name} returned no PCM audio.")
             self.total_ms = round(
                 (
                     time.perf_counter()
@@ -290,16 +301,7 @@ class StreamingKokoroProcessor(FrameProcessor):
         first_payload = True
         client = self.client or httpx.AsyncClient(timeout=90)
         try:
-            async with client.stream(
-                "POST",
-                f"{self.base_url}/v1/audio/speech",
-                json={
-                    "model": self.model,
-                    "voice": self.voice,
-                    "input": text,
-                    "response_format": "wav",
-                },
-            ) as response:
+            async with client.stream("POST", **self._speech_request(text)) as response:
                 response.raise_for_status()
                 async for http_chunk in response.aiter_bytes():
                     pcm = decoder.feed(http_chunk)
@@ -344,7 +346,13 @@ class StreamingKokoroProcessor(FrameProcessor):
                     direction,
                 )
         if first_payload:
-            raise RuntimeError("Kokoro returned no PCM audio.")
+            raise RuntimeError(f"{self.provider_name} returned no PCM audio.")
+
+    def _speech_request(self, text: str) -> dict[str, Any]:
+        return {
+            'url': f'{self.base_url}/v1/audio/speech',
+            'json': {'model': self.model, 'voice': self.voice, 'input': text, 'response_format': 'wav'},
+        }
 
 
 def _next_tts_chunk(
@@ -561,6 +569,8 @@ class StreamingMediaBridge(FrameProcessor):
 class StreamingRtcAsrProcessor(FrameProcessor):
     """Pipecat processor for rtc-asr Local STT v1 with Silero turn boundaries."""
 
+    protocol = "local-stt.v1"
+
     def __init__(
         self,
         *,
@@ -574,7 +584,9 @@ class StreamingRtcAsrProcessor(FrameProcessor):
     ) -> None:
         super().__init__(name=f"{participant}_rtc_asr")
         (self.interim_results, self.partial_interval_ms,
-         self.partial_window_seconds, self.final_timeout_seconds) = _rtc_asr_settings()
+         self.partial_window_seconds, self.final_timeout_seconds) = self._stream_settings()
+        self.max_buffer_seconds = self._buffer_limit()
+        self.negotiated_max_buffer_bytes: int | None = None
         self.url = rtc_asr_stream_url(base_url, stream_path)
         self.participant = participant
         self.final_frame_type = final_frame_type
@@ -612,6 +624,12 @@ class StreamingRtcAsrProcessor(FrameProcessor):
         self.speech_ended_at: float | None = None
         self.final_at: float | None = None
         self.server_timing: dict[str, Any] = {}
+
+    def _stream_settings(self):
+        return _rtc_asr_settings()
+
+    def _buffer_limit(self):
+        return _rtc_asr_max_buffer_seconds()
 
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
@@ -728,7 +746,7 @@ class StreamingRtcAsrProcessor(FrameProcessor):
                     "interim_results": self.interim_results,
                     "partial_interval_ms": self.partial_interval_ms,
                     "partial_window_seconds": self.partial_window_seconds,
-                    "max_buffer_seconds": 20.0,
+                    "max_buffer_seconds": self.max_buffer_seconds,
                     "client_stream_id": self.current_stream_id,
                     "metadata": {"participant": self.participant},
                 }
@@ -791,6 +809,9 @@ class StreamingRtcAsrProcessor(FrameProcessor):
                 payload = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
                 event_type = payload.get("type")
                 if event_type == "ready":
+                    metadata = payload.get("metadata")
+                    limit = metadata.get("max_buffer_bytes") if isinstance(metadata, dict) else None
+                    self.negotiated_max_buffer_bytes = limit if type(limit) is int and limit > 0 else None
                     self.ready.set()
                     continue
                 if event_type == "ping":

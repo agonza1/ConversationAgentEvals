@@ -15,7 +15,7 @@ from typing import Any, Literal, Protocol
 
 ParticipantId = Literal['pipecat_tester', 'pipecat_target']
 FrameDirection = Literal['tester_to_target', 'target_to_tester']
-ProcessorName = Literal['rtc-asr', 'llm', 'kokoro']
+ProcessorName = Literal['rtc-asr', 'llm', 'kokoro', 'deepgram', 'cartesia']
 
 
 class TextGenerator(Protocol):
@@ -63,8 +63,13 @@ class PipecatAgentGraph:
 
     def __post_init__(self) -> None:
         chain = tuple(processor.name for processor in self.processors)
-        if chain != ('rtc-asr', 'llm', 'kokoro'):
-            raise ValueError(f'Pipecat graph must be rtc-asr -> llm -> kokoro, got {chain!r}')
+        if (
+            len(chain) != 3
+            or chain[0] not in {'rtc-asr', 'deepgram', 'cartesia'}
+            or chain[1] != 'llm'
+            or chain[2] not in {'kokoro', 'deepgram', 'cartesia'}
+        ):
+            raise ValueError(f'Pipecat graph must be supported STT -> llm -> TTS, got {chain!r}')
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -328,6 +333,8 @@ def build_builtin_sample_voice_graphs(
     target_llm_model: str,
     stt_model: str,
     tts_model: str,
+    stt_provider: str = 'rtc-asr',
+    tts_provider: str = 'kokoro',
     tester_tts_voice: str = 'af_heart',
     target_tts_voice: str = 'af_bella',
     llm_mode: Literal['real', 'mock'],
@@ -336,9 +343,9 @@ def build_builtin_sample_voice_graphs(
         participant_id='pipecat_tester',
         label='Pipecat scenario tester',
         processors=(
-            PipecatProcessorSpec('rtc-asr', 'rtc-asr', stt_model),
+            PipecatProcessorSpec(stt_provider, stt_provider, stt_model),
             PipecatProcessorSpec('llm', tester_llm_provider, tester_llm_model),
-            PipecatProcessorSpec('kokoro', 'kokoro', tts_model, voice=tester_tts_voice),
+            PipecatProcessorSpec(tts_provider, tts_provider, tts_model, voice=tester_tts_voice),
         ),
         llm_mode=llm_mode,
     )
@@ -346,9 +353,9 @@ def build_builtin_sample_voice_graphs(
         participant_id='pipecat_target',
         label='Pipecat evaluated built-in voice agent',
         processors=(
-            PipecatProcessorSpec('rtc-asr', 'rtc-asr', stt_model),
+            PipecatProcessorSpec(stt_provider, stt_provider, stt_model),
             PipecatProcessorSpec('llm', target_llm_provider, target_llm_model),
-            PipecatProcessorSpec('kokoro', 'kokoro', tts_model, voice=target_tts_voice),
+            PipecatProcessorSpec(tts_provider, tts_provider, tts_model, voice=target_tts_voice),
         ),
         llm_mode=llm_mode,
     )

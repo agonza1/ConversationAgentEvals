@@ -2044,8 +2044,8 @@ async def _execute_pipecat_webrtc(
         'capture_surface': 'pipecat_in_process_duplex_bus',
         'tester': {
             'participant': 'pipecat_tester',
-            'tts_provider': 'kokoro',
-            'tts_voice': config.kokoro_tester_voice,
+            'tts_provider': config.speech.tts_provider,
+            'tts_voice': config.speech.tester_voice,
         },
         'tester_llm': {
             'participant': 'pipecat_tester',

@@ -5,12 +5,15 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiAwareLink } from './ApiAwareLink';
 import { EvidenceTimeline } from './EvidenceTimeline';
 import { DesignResults } from './DesignResults';
+import { OpenAIConnectionPanel } from './OpenAIConnectionSettings';
+import { useOpenAIConnection, type OpenAIProviderStatus } from './useOpenAIConnection';
 import { LiveRunFeedback, type LiveRunEvent } from './LiveRunFeedback';
+import { SpeechProviderSettings } from './SpeechProviderSettings';
 import { apiErrorMessage } from '@/lib/apiError';
 import { WayloConnection, useWayloConnection } from './WayloConnection';
 import { wayloExecutionHeaders, type WayloTargetConnection } from '@/lib/wayloConnection';
 import { sortedAssertReviews } from '@/lib/assertReview';
-import { listProductProjects, requestBenchmarkJudge, type ProductProjectOption, type AssertJudgeReadiness, type ConversationRecord } from '@/lib/execution';
+import { getApiBase, listProductProjects, requestBenchmarkJudge, type ProductProjectOption, type AssertJudgeReadiness, type ConversationRecord } from '@/lib/execution';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -274,19 +277,6 @@ interface ProductConfig {
   };
   voice_status: 'planned' | 'gated' | 'enabled';
   llm_judge_status: 'planned' | 'gated' | 'enabled';
-}
-
-interface OpenAIProviderStatus {
-  id?: string;
-  provider?: string;
-  status: 'connected' | 'disconnected' | 'expired' | string;
-  email?: string | null;
-  account_id?: string | null;
-  plan_type?: string | null;
-  message?: string | null;
-  last_error?: string | null;
-  execution_provider?: string | null;
-  execution_default_model?: string | null;
 }
 
 const DEFAULT_EXECUTION_MODEL = 'gpt-4.1-mini';
@@ -684,26 +674,6 @@ interface BenchmarkSuiteSimulationResponse {
   vcon_export?: JsonRecord;
 }
 
-function normalizeApiBase(value: string) {
-  return value.replace(/\/$/, '').replace(/\/api$/, '');
-}
-
-function getApiBase() {
-  if (typeof window === 'undefined') {
-    return normalizeApiBase(process.env.API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://127.0.0.1:8025');
-  }
-
-  const fromQuery = new URLSearchParams(window.location.search).get('api_base');
-  if (fromQuery) {
-    try {
-      return normalizeApiBase(new URL(fromQuery, window.location.origin).toString());
-    } catch {
-      // Fall through to the same-origin API proxy.
-    }
-  }
-
-  return '';
-}
 
 function executionAnalysisHref(executionRunId: string) {
   const params = new URLSearchParams();
@@ -1190,13 +1160,6 @@ async function fetchExecutionRun(userId: string, executionRunId: string) {
   );
 }
 
-async function listExecutionRuns(userId: string, projectId: string) {
-  const params = new URLSearchParams({ user_id: userId, project_id: projectId });
-  return handleJson<ExecutionRunRecord[]>(
-    await fetch(`${getApiBase()}/api/execution/runs?${params.toString()}`, { cache: 'no-store' }),
-  );
-}
-
 function executionStatusColor(status?: string) {
   if (status === 'completed' || status === 'pass') return 'var(--success-text)';
   if (status === 'failed') return 'var(--error-text)';
@@ -1365,7 +1328,7 @@ function buildSavedRunAuditArtifactExport(userId: string, run: SavedRun): Benchm
   const artifacts = Array.isArray(evidenceArtifacts.artifacts) ? evidenceArtifacts.artifacts : [];
   const exportReadiness = report.evidence_audit_summary?.export_readiness;
   const runId = report.run_id ?? run.id;
-  const filenameParts = ['convoice-qa', report.suite_id, report.scenario_id, runId, 'audit-artifacts']
+  const filenameParts = ['voiceai-qa', report.suite_id, report.scenario_id, runId, 'audit-artifacts']
     .filter(Boolean)
     .map(slugFilenamePart);
 
@@ -1378,7 +1341,7 @@ function buildSavedRunAuditArtifactExport(userId: string, run: SavedRun): Benchm
     user_id: userId,
     project_id: run.project_id,
     status: report.run_status ?? report.verdict ?? report.overall,
-    filename: `${filenameParts.join('-') || 'convoice-qa-run-audit-artifacts'}.json`,
+    filename: `${filenameParts.join('-') || 'voiceai-qa-run-audit-artifacts'}.json`,
     operator_summary: {
       verdict: report.verdict ?? report.overall,
       overall_score: report.overall_score ?? report.score,
@@ -1416,33 +1379,6 @@ function downloadJson(filename: string, payload: unknown) {
 async function fetchProductConfig(): Promise<ProductConfig> {
   return handleJson<ProductConfig>(await fetch(`${getApiBase()}/api/product/config`, { cache: 'no-store' }));
 }
-
-async function fetchOpenAIProviderStatus() {
-  return handleJson<OpenAIProviderStatus>(
-    await fetch(`${getApiBase()}/api/product/providers/openai/status`, { cache: 'no-store' }),
-  );
-}
-
-async function startOpenAIProviderOAuth() {
-  return handleJson<{ authorize_url: string; redirect_uri: string; provider?: string }>(
-    await fetch(`${getApiBase()}/api/product/providers/openai/oauth/start`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
-    }),
-  );
-}
-
-async function disconnectOpenAIProvider() {
-  return handleJson<OpenAIProviderStatus>(
-    await fetch(`${getApiBase()}/api/product/providers/openai/disconnect`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{}',
-    }),
-  );
-}
-
 
 async function listAuditEvents(userId: string, projectId: string) {
   const params = new URLSearchParams({ user_id: userId, project_id: projectId, limit: '8' });
@@ -1621,8 +1557,8 @@ function currentReportRegressionDelta(report: BenchmarkReport | null, savedRuns:
   const priorRun = [...savedRuns]
     .sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime())
     .find((run) => {
-      if (report.scenario_id && run.report.scenario_id !== report.scenario_id) return false;
-      if (report.suite_id && run.report.suite_id !== report.suite_id) return false;
+      if (!report.scenario_id || run.report.scenario_id !== report.scenario_id) return false;
+      if (!report.suite_id || run.report.suite_id !== report.suite_id) return false;
       return run.report.run_id !== report.run_id;
     });
   const previousScore = reportScore(priorRun?.report);
@@ -1824,7 +1760,8 @@ function suiteRunFailureCategorySummary(scenarios: BenchmarkSuiteScenarioSummary
 function suiteHistorySummaryFromRuns(runs: BenchmarkSuiteRunRecord[]): BenchmarkSuiteRunHistoryExport['summary'] | null {
   if (!runs.length) return null;
   const latest = runs[0];
-  const previous = runs.slice(1).find((run) => typeof run.average_score === 'number');
+  const previous = runs.slice(1).find((run) => Boolean(latest.suite_id)
+    && run.suite_id === latest.suite_id && typeof run.average_score === 'number');
   const latestScore = typeof latest.average_score === 'number' ? latest.average_score : null;
   const previousScore = typeof previous?.average_score === 'number' ? previous.average_score : null;
   const totalScenarios = runs.reduce((total, run) => total + Math.max(run.scenario_count ?? 0, 0), 0);
@@ -2187,7 +2124,7 @@ async function copyText(text: string) {
   }
 }
 
-export type BenchmarkRunnerView = 'all' | 'simulate' | 'score' | 'run';
+export type BenchmarkRunnerView = 'all' | 'score' | 'run' | 'history';
 
 const WORKFLOW_DEMO_PRESETS: Record<string, { suiteId: string; scenarioId: string }> = {
   'angry-caller': { suiteId: 'call-center-voice-ai', scenarioId: 'angry-outage-escalation' },
@@ -2319,15 +2256,11 @@ function describeUploadedEvidence(filename: string, text: string): {
 
 export function BenchmarkRunner({
   view = 'all',
-  onExecutionCreated,
-  onExecutionUpdated,
 }: {
   view?: BenchmarkRunnerView;
-  onExecutionCreated?: (run: ExecutionRunRecord) => void;
-  onExecutionUpdated?: (run: ExecutionRunRecord) => void;
 }) {
   const loadingSavedRunRef = useRef(false);
-  const autoLaunchDemoRef = useRef(false);
+  const pendingScenarioMessage = useRef<string | null>(null);
   const preserveScoreEvidenceRef = useRef(false);
   const evidenceRequestRef = useRef(0);
   const [suites, setSuites] = useState<BenchmarkSuite[]>([]);
@@ -2372,9 +2305,9 @@ export function BenchmarkRunner({
   const [judgeGate, setJudgeGate] = useState<JudgeGate | null>(null);
   const [isJudging, setIsJudging] = useState(false);
   const [showJudgePrompt, setShowJudgePrompt] = useState(false);
-  const [openaiProvider, setOpenaiProvider] = useState<OpenAIProviderStatus | null>(null);
-  const [openaiProviderMessage, setOpenaiProviderMessage] = useState<string | null>(null);
-  const [isConnectingOpenAI, setIsConnectingOpenAI] = useState(false);
+  const openAIConnection = useOpenAIConnection(view !== 'history');
+  const { provider: openaiProvider, message: openaiProviderMessage,
+    connecting: isConnectingOpenAI } = openAIConnection;
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
@@ -2400,6 +2333,7 @@ export function BenchmarkRunner({
   const [referenceVoicePreflight, setReferenceVoicePreflight] = useState<ReferenceVoicePreflight | null>(null);
   const [referenceVoicePreflightError, setReferenceVoicePreflightError] = useState<string | null>(null);
   const [referenceVoicePreflightLoaded, setReferenceVoicePreflightLoaded] = useState(false);
+  const [speechSettingsRevision, setSpeechSettingsRevision] = useState(0);
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const selectedScoreAgent = useMemo(
     () => agents.find((agent) => agent.id === selectedAgentId) ?? null,
@@ -2415,12 +2349,13 @@ export function BenchmarkRunner({
   const suiteLoadRequestRef = useRef(0);
 
   const selectedSuite = useMemo(
-    () => suites.find((suite) => suite.id === selectedSuiteId) ?? suites[0] ?? null,
-    [selectedSuiteId, suites],
+    () => suites.find((suite) => suite.id === selectedSuiteId) ?? (view === 'history' ? null : suites[0] ?? null),
+    [selectedSuiteId, suites, view],
   );
   const selectedScenario = useMemo(
-    () => selectedSuite?.scenarios.find((scenario) => scenario.id === selectedScenarioId) ?? selectedSuite?.scenarios[0] ?? null,
-    [selectedScenarioId, selectedSuite],
+    () => selectedSuite?.scenarios.find((scenario) => scenario.id === selectedScenarioId)
+      ?? (view === 'history' ? null : selectedSuite?.scenarios[0] ?? null),
+    [selectedScenarioId, selectedSuite, view],
   );
   const supportsSuiteExecutionScope = Boolean(
     selectedScoreAgent
@@ -2665,13 +2600,9 @@ export function BenchmarkRunner({
 
       if (suiteLoadRequestRef.current !== requestId) return;
       try {
-        const [nextConfig, nextOpenAI] = await Promise.all([
-          fetchProductConfig().catch(() => null),
-          fetchOpenAIProviderStatus().catch(() => null),
-        ]);
+        const nextConfig = await fetchProductConfig().catch(() => null);
         if (suiteLoadRequestRef.current !== requestId) return;
         if (nextConfig) setProductConfig(nextConfig);
-        if (nextOpenAI) setOpenaiProvider(nextOpenAI);
       } catch {
         // Suites can still run without product config / OpenAI status.
       }
@@ -2691,6 +2622,7 @@ export function BenchmarkRunner({
   useEffect(() => {
     let active = true;
     async function loadExecutionModels() {
+      if (view === 'history') return;
       if (!usesCodexExecution(openaiProvider)) {
         setExecutionModelOptions([...API_KEY_EXECUTION_MODELS, ...LOCAL_EXECUTION_MODELS]);
         setExecutionModelsMessage('Connect OpenAI to load GPT models; local Ollama models stay available.');
@@ -2715,10 +2647,11 @@ export function BenchmarkRunner({
     return () => {
       active = false;
     };
-  }, [openaiProvider]);
+  }, [openaiProvider, view]);
 
   useEffect(() => {
     let active = true;
+    if (view === 'history') return;
     setAgentsLoaded(false);
     listAgents()
       .then((next) => {
@@ -2817,7 +2750,7 @@ export function BenchmarkRunner({
     return () => {
       active = false;
     };
-  }, [view]);
+  }, [view, speechSettingsRevision]);
 
   useEffect(() => {
     if (view !== 'run' || typeof window === 'undefined') return;
@@ -2826,51 +2759,6 @@ export function BenchmarkRunner({
     document.getElementById('launch-agent')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [view]);
 
-  useEffect(() => {
-    if (view !== 'run' || typeof window === 'undefined') return;
-    const waitingForVoicePreflight = (
-      selectedScoreAgent?.target === 'builtin_sample_voice'
-      && !referenceVoicePreflightLoaded
-    );
-    if (
-      autoLaunchDemoRef.current
-      || isLoading
-      || isLaunchingExecution
-      || !selectedSuite
-      || !agentsLoaded
-      || !openaiProvider
-      || waitingForVoicePreflight
-    ) return;
-
-    const params = new URLSearchParams(window.location.search);
-    // Target-specific links must open the configured form, including old bookmarks
-    // that still contain launch=demo. Only the untargeted homepage demo auto-runs.
-    if (params.get('launch') !== 'demo' || params.has('agent_id')) return;
-
-    if (!selectedAgentId) return;
-
-    if (executionMode === 'text_callable' && !selectedScenario) return;
-
-    autoLaunchDemoRef.current = true;
-    setExecutionMessage('Starting try-it-out run…');
-    void onLaunchExecution({
-      redirectToAnalysis: true,
-    });
-    // Intentionally omit onLaunchExecution: including it retriggers auto-launch on every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    view,
-    isLoading,
-    isLaunchingExecution,
-    selectedSuite,
-    selectedScenario,
-    selectedAgentId,
-    agentsLoaded,
-    executionMode,
-    openaiProvider,
-    referenceVoicePreflightLoaded,
-    selectedScoreAgent?.target,
-  ]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -2934,27 +2822,29 @@ export function BenchmarkRunner({
       setScenarioRegressionSummary(null);
       return;
     }
-    if (!selectedSuite?.id || !selectedScenario?.id) return;
+    if (view !== 'history' && (!selectedSuite?.id || !selectedScenario?.id)) return;
 
     let isMounted = true;
+    const historySuite = view === 'history' ? undefined : selectedSuite?.id;
+    const historyScenario = view === 'history' ? undefined : selectedScenario?.id;
     Promise.all([
-      listSavedRuns(userId, projectId, selectedSuite.id, selectedScenario.id),
-      listSavedRuns(userId, projectId, selectedSuite.id).catch(() => []),
+      listSavedRuns(userId, projectId, historySuite, historyScenario),
+      historySuite ? listSavedRuns(userId, projectId, historySuite).catch(() => []) : Promise.resolve([]),
       listAuditEvents(userId, projectId).catch(() => []),
-      listBenchmarkSuiteRuns(userId, projectId, selectedSuite.id, suiteRunStatusFilter).catch(() => []),
+      listBenchmarkSuiteRuns(userId, projectId, historySuite, suiteRunStatusFilter).catch(() => []),
     ])
       .then(async ([runs, nextSuiteSavedRuns, events, nextSuiteRuns]) => {
         const [summary, scenarioSummary] = await Promise.all([
-          nextSuiteSavedRuns.length ? fetchProjectRegressionSummary(userId, projectId).catch(() => null) : Promise.resolve(null),
-          runs.length
-            ? fetchProjectRegressionSummary(userId, projectId, selectedSuite.id, selectedScenario.id).catch(() => null)
+          runs.length || nextSuiteSavedRuns.length ? fetchProjectRegressionSummary(userId, projectId).catch(() => null) : Promise.resolve(null),
+          runs.length && view !== 'history'
+            ? fetchProjectRegressionSummary(userId, projectId, historySuite, historyScenario).catch(() => null)
             : Promise.resolve(null),
         ]);
         if (!isMounted) return;
         setSavedRuns(runs);
         setSuiteSavedRuns(nextSuiteSavedRuns);
         setAuditEvents(events);
-        setSuiteRuns((current) => mergeSuiteRunRecords(current, nextSuiteRuns, selectedSuite.id, suiteRunStatusFilter));
+        setSuiteRuns((current) => mergeSuiteRunRecords(current, nextSuiteRuns, historySuite, suiteRunStatusFilter));
         setProjectRegressionSummary(summary);
         setScenarioRegressionSummary(scenarioSummary);
       })
@@ -2971,14 +2861,14 @@ export function BenchmarkRunner({
     return () => {
       isMounted = false;
     };
-  }, [projectId, selectedScenario?.id, selectedSuite?.id, suiteRunStatusFilter, userId]);
+  }, [projectId, selectedScenario?.id, selectedSuite?.id, suiteRunStatusFilter, userId, view]);
 
   useEffect(() => {
-    if (!selectedSuite) return;
+    if (!selectedSuite || view === 'history') return;
     setSelectedScenarioId((current) => (
       selectedSuite.scenarios.some((scenario) => scenario.id === current) ? current : selectedSuite.scenarios[0]?.id ?? ''
     ));
-  }, [selectedSuite]);
+  }, [selectedSuite, view]);
 
   useEffect(() => {
     if (!selectedSuite?.id) {
@@ -3008,6 +2898,8 @@ export function BenchmarkRunner({
   useEffect(() => {
     if (!selectedScenario) return;
 
+    // Results reviews retained evidence, not the catalog's default sample.
+    if (view === 'history') return;
     if (loadingSavedRunRef.current) {
       loadingSavedRunRef.current = false;
       return;
@@ -3031,7 +2923,8 @@ export function BenchmarkRunner({
     setVconEvidence('');
     setReport(null);
     setSuiteSimulation(null);
-    setSaveMessage(null);
+    setSaveMessage(pendingScenarioMessage.current);
+    pendingScenarioMessage.current = null;
     setJudgeGate(null);
     setCopyMessage(null);
     setRunError(null);
@@ -3041,20 +2934,22 @@ export function BenchmarkRunner({
   }, [selectedScenario, view]);
 
   useEffect(() => {
-    if (!userId || !projectId || !selectedSuite?.id) return;
+    if (!userId || !projectId || (view !== 'history' && !selectedSuite?.id)) return;
     const hasActiveSuiteRun = suiteRuns.some((run) => isActiveSuiteRunStatus(run.status));
     if (!hasActiveSuiteRun) return;
+    let active = true;
+    const historySuite = view === 'history' ? undefined : selectedSuite?.id;
 
     const interval = window.setInterval(() => {
-      listBenchmarkSuiteRuns(userId, projectId, selectedSuite.id, suiteRunStatusFilter)
+      listBenchmarkSuiteRuns(userId, projectId, historySuite, suiteRunStatusFilter)
         .then((nextSuiteRuns) => {
-          setSuiteRuns((current) => mergeSuiteRunRecords(current, nextSuiteRuns, selectedSuite.id, suiteRunStatusFilter));
+          if (active) setSuiteRuns((current) => mergeSuiteRunRecords(current, nextSuiteRuns, historySuite, suiteRunStatusFilter));
         })
         .catch(() => undefined);
     }, 4000);
 
-    return () => window.clearInterval(interval);
-  }, [projectId, selectedSuite?.id, suiteRunStatusFilter, suiteRuns, userId]);
+    return () => { active = false; window.clearInterval(interval); };
+  }, [projectId, selectedSuite?.id, suiteRunStatusFilter, suiteRuns, userId, view]);
 
   const activeExecutionRunId = executionRun && isActiveExecutionStatus(executionRun.status)
     ? executionRun.execution_run_id
@@ -3071,7 +2966,6 @@ export function BenchmarkRunner({
         .then((next) => {
           if (!active) return;
           setExecutionRun(next);
-          onExecutionUpdated?.(next);
           if (!isActiveExecutionStatus(next.status)) {
             const completed = next.progress?.completed_conversations ?? 0;
             const total = next.progress?.total_conversations ?? 0;
@@ -3096,7 +2990,7 @@ export function BenchmarkRunner({
       active = false;
       if (timer) window.clearTimeout(timer);
     };
-  }, [activeExecutionRunId, onExecutionUpdated, userId]);
+  }, [activeExecutionRunId, userId]);
 
   function ensureDemoIdentity(): { userId: string; projectId: string; plan: PricingPlan['id'] } {
     const nextUser = userId || (typeof window !== 'undefined'
@@ -3217,62 +3111,9 @@ export function BenchmarkRunner({
   }
 
   async function onConnectOpenAI() {
-    setIsConnectingOpenAI(true);
-    setOpenaiProviderMessage(null);
-    try {
-      const started = await startOpenAIProviderOAuth();
-      if (started.authorize_url && typeof window !== 'undefined') {
-        window.open(started.authorize_url, '_blank', 'noopener,noreferrer');
-      }
-      setOpenaiProviderMessage('Complete OpenAI login in the opened browser tab. This page will refresh when connected.');
-      const deadline = Date.now() + 120_000;
-      while (Date.now() < deadline) {
-        await delay(2000);
-        const status = await fetchOpenAIProviderStatus();
-        setOpenaiProvider(status);
-        if (status.status === 'connected') {
-          setOpenaiProviderMessage(`Connected as ${status.email || status.account_id || 'OpenAI account'}.`);
-          const nextConfig = await fetchProductConfig().catch(() => null);
-          if (nextConfig) setProductConfig(nextConfig);
-          if (!usesCodexExecution(status)) {
-            setExecutionModelOptions([...API_KEY_EXECUTION_MODELS, ...LOCAL_EXECUTION_MODELS]);
-            setExecutionModelsMessage('API key is the active execution provider.');
-            setExecutionModelName(apiKeyModelOrDefault);
-            break;
-          }
-          const defaultModel = codexExecutionDefault(status);
-          const { models, message } = await fetchOpenAIModels(defaultModel).catch(() => ({
-            models: FALLBACK_EXECUTION_MODELS,
-            message: 'Using built-in model list. Re-connect OpenAI to refresh.',
-          }));
-          setExecutionModelOptions(models);
-          setExecutionModelsMessage(message);
-          setExecutionModelName((current) => (current !== DEFAULT_EXECUTION_MODEL && models.includes(current) ? current : defaultModel));
-          break;
-        }
-      }
-    } catch (err) {
-      setOpenaiProviderMessage(err instanceof Error ? err.message : 'Could not start OpenAI OAuth.');
-    } finally {
-      setIsConnectingOpenAI(false);
-    }
-  }
-
-  async function onDisconnectOpenAI() {
-    setOpenaiProviderMessage(null);
-    try {
-      await disconnectOpenAIProvider();
-      const status = await fetchOpenAIProviderStatus();
-      setOpenaiProvider(status);
-      setExecutionModelOptions([...API_KEY_EXECUTION_MODELS, ...LOCAL_EXECUTION_MODELS]);
-      setExecutionModelsMessage('Connect OpenAI to load models');
-      setExecutionModelName(apiKeyModelOrDefault);
-      const nextConfig = await fetchProductConfig().catch(() => null);
-      if (nextConfig) setProductConfig(nextConfig);
-      setOpenaiProviderMessage('OpenAI disconnected.');
-    } catch (err) {
-      setOpenaiProviderMessage(err instanceof Error ? err.message : 'Could not disconnect OpenAI.');
-    }
+    await openAIConnection.connect();
+    const nextConfig = await fetchProductConfig().catch(() => null);
+    if (nextConfig) setProductConfig(nextConfig);
   }
 
   async function onJudge() {
@@ -3366,7 +3207,7 @@ export function BenchmarkRunner({
     if (!userId) return;
 
     try {
-      const exported = await exportProjectHistory(userId, projectId, selectedSuite?.id, selectedScenario?.id);
+      const exported = await exportProjectHistory(userId, projectId, view === 'history' ? undefined : selectedSuite?.id, view === 'history' ? undefined : selectedScenario?.id);
       downloadJson(exported.filename, exported);
       await refreshAuditTrail();
       setExportMessage(`Exported ${exported.run_count} runs to ${exported.filename}. ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.contract_artifact_summary)} ${scenarioCoverageExportSummary(exported.scenario_coverage_summary)}`);
@@ -3379,7 +3220,7 @@ export function BenchmarkRunner({
     if (!userId) return;
 
     try {
-      const exported = await exportBenchmarkRunHistory(userId, projectId, selectedSuite?.id, selectedScenario?.id);
+      const exported = await exportBenchmarkRunHistory(userId, projectId, view === 'history' ? undefined : selectedSuite?.id, view === 'history' ? undefined : selectedScenario?.id);
       downloadJson(exported.filename, exported);
       setExportMessage(`Exported ${exported.run_count} benchmark runs to ${exported.filename}. ${benchmarkRunHistoryExportSummary(exported.summary)} ${scenarioCoverageExportSummary(exported.scenario_coverage_summary)} ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.contract_artifact_summary)}`);
     } catch (err) {
@@ -3393,8 +3234,8 @@ export function BenchmarkRunner({
       || (run.report.scenario_id && run.report.scenario_id !== selectedScenarioId),
     );
     loadingSavedRunRef.current = willSwitchSelection;
-    if (run.report.suite_id) setSelectedSuiteId(run.report.suite_id);
-    if (run.report.scenario_id) setSelectedScenarioId(run.report.scenario_id);
+    setSelectedSuiteId(run.report.suite_id ?? '');
+    setSelectedScenarioId(run.report.scenario_id ?? '');
     setTranscript(run.transcript ?? run.report.transcript ?? '');
     setActionTrace(stringifyEditable(run.report.action_trace, '[]'));
     setFinalState(stringifyEditable(run.report.final_state, '{}'));
@@ -3410,12 +3251,17 @@ export function BenchmarkRunner({
     setSaveMessage(`Loaded saved run ${run.id} for review.`);
   }
 
+  function canRetrySavedRun(run: SavedRun) {
+    return Boolean(suites.find((suite) => suite.id === run.report.suite_id)
+      ?.scenarios.some((scenario) => scenario.id === run.report.scenario_id));
+  }
+
   async function onRetrySavedRun(run: SavedRun) {
     const sourceReport = run.report;
-    const suiteId = sourceReport.suite_id || selectedSuiteId;
-    const scenarioId = sourceReport.scenario_id || selectedScenarioId;
-    if (!suiteId || !scenarioId) {
-      setRunError('Saved run is missing suite or scenario metadata.');
+    const suiteId = sourceReport.suite_id;
+    const scenarioId = sourceReport.scenario_id;
+    if (!suiteId || !scenarioId || !canRetrySavedRun(run)) {
+      setRunError('Retry unavailable: this saved run’s suite or scenario is not in the current catalog. Its evidence can still be reviewed and exported.');
       return;
     }
 
@@ -3452,7 +3298,7 @@ export function BenchmarkRunner({
       setJudgeGate(null);
       setSaveMessage(`Retried saved run ${run.id} as attempt ${nextAttempt}.`);
       if (userId) {
-        listSavedRuns(userId, projectId, suiteId, scenarioId)
+        listSavedRuns(userId, projectId, view === 'history' ? undefined : suiteId, view === 'history' ? undefined : scenarioId)
           .then(setSavedRuns)
           .catch(() => undefined);
       }
@@ -3472,6 +3318,7 @@ export function BenchmarkRunner({
 
     const focusedRun = suiteReport.scenario_runs[0];
     const focusedReport = focusedRun.benchmark_report;
+    loadingSavedRunRef.current = view !== 'history';
     setSelectedSuiteId(suiteReport.suite_id ?? run.suite_id);
     setSelectedScenarioId(focusedRun.scenario_id ?? focusedReport.scenario_id ?? '');
     setTranscript(focusedRun.transcript ?? focusedReport.transcript ?? '');
@@ -3508,7 +3355,7 @@ export function BenchmarkRunner({
     if (!userId) return;
 
     try {
-      const exported = await exportBenchmarkSuiteRunHistory(userId, projectId, selectedSuite?.id, suiteRunStatusFilter);
+      const exported = await exportBenchmarkSuiteRunHistory(userId, projectId, view === 'history' ? undefined : selectedSuite?.id, suiteRunStatusFilter);
       downloadJson(exported.filename, exported);
       setExportMessage(`Exported ${exported.suite_run_count} suite runs to ${exported.filename}. ${suiteHistoryExportSummary(exported.summary)} ${scenarioCoverageExportSummary(exported.scenario_coverage_summary)} ${projectVconExportSummary(exported.vcon_export_summary)} ${projectContractArtifactSummary(exported.suite_contract_artifact_summary)}`);
     } catch (err) {
@@ -3519,25 +3366,28 @@ export function BenchmarkRunner({
   function onSelectRecommendedScenario() {
     const nextScenarioId = suiteScenarioCoverage?.recommended_next_scenario?.id;
     if (!nextScenarioId || nextScenarioId === selectedScenario?.id) return;
+    pendingScenarioMessage.current = `Switched to the next uncovered scenario: ${suiteScenarioCoverage?.recommended_next_scenario?.title ?? nextScenarioId}.`;
     setSelectedScenarioId(nextScenarioId);
-    setSaveMessage(`Switched to the next uncovered scenario: ${suiteScenarioCoverage?.recommended_next_scenario?.title ?? nextScenarioId}.`);
+    setSaveMessage(pendingScenarioMessage.current);
   }
 
   function onSelectCoverageScenario(scenarioId: string, scenarioTitle?: string) {
     if (!scenarioId || scenarioId === selectedScenario?.id) return;
+    pendingScenarioMessage.current = `Focused uncovered scenario: ${scenarioTitle ?? scenarioId}.`;
     setSelectedScenarioId(scenarioId);
-    setSaveMessage(`Focused uncovered scenario: ${scenarioTitle ?? scenarioId}.`);
+    setSaveMessage(pendingScenarioMessage.current);
   }
 
   async function onRefreshSuiteRuns() {
-    if (!userId || !selectedSuite?.id) return;
+    if (!userId || (view !== 'history' && !selectedSuite?.id)) return;
 
     setIsRefreshingSuiteRuns(true);
     try {
-      const refreshed = await listBenchmarkSuiteRuns(userId, projectId, selectedSuite.id, suiteRunStatusFilter);
-      const merged = mergeSuiteRunRecords(suiteRuns, refreshed, selectedSuite.id, suiteRunStatusFilter);
+      const historySuite = view === 'history' ? undefined : selectedSuite?.id;
+      const refreshed = await listBenchmarkSuiteRuns(userId, projectId, historySuite, suiteRunStatusFilter);
+      const merged = mergeSuiteRunRecords(suiteRuns, refreshed, historySuite, suiteRunStatusFilter);
       setSuiteRuns(merged);
-      setSaveMessage(`Refreshed ${merged.length} suite runs for ${selectedSuite.title}.`);
+      setSaveMessage(`Refreshed ${merged.length} suite runs for ${view === 'history' ? projectId : selectedSuite?.title}.`);
     } catch (err) {
       setSaveMessage(err instanceof Error ? err.message : 'Could not refresh suite runs.');
     } finally {
@@ -3572,20 +3422,20 @@ export function BenchmarkRunner({
 
   function onExportCurrentVcon() {
     if (!report?.vcon_export) return;
-    const filenameParts = ['convoice-qa', report.suite_id, report.scenario_id, report.run_id, 'vcon']
+    const filenameParts = ['voiceai-qa', report.suite_id, report.scenario_id, report.run_id, 'vcon']
       .filter(Boolean)
       .map(slugFilenamePart);
-    downloadJson(`${filenameParts.join('-') || 'convoice-qa-vcon'}.vcon`, report.ietf_vcon_export || report.vcon_export);
+    downloadJson(`${filenameParts.join('-') || 'voiceai-qa-vcon'}.vcon`, report.ietf_vcon_export || report.vcon_export);
     setExportMessage('Exported vCon with conversation, available tool events and observed state.');
   }
 
   function onExportCurrentReport() {
     if (!report) return;
-    const filenameParts = ['convoice-qa', report.suite_id, report.scenario_id, report.run_id, 'report']
+    const filenameParts = ['voiceai-qa', report.suite_id, report.scenario_id, report.run_id, 'report']
       .filter(Boolean)
       .map(slugFilenamePart);
 
-    downloadJson(`${filenameParts.join('-') || 'convoice-qa-report'}.json`, {
+    downloadJson(`${filenameParts.join('-') || 'voiceai-qa-report'}.json`, {
       report,
       transcript: report.transcript ?? transcript,
       action_trace: report.action_trace ?? parseMaybeJson(actionTrace),
@@ -3605,10 +3455,10 @@ export function BenchmarkRunner({
       return;
     }
 
-    const filenameParts = ['convoice-qa', suiteSimulation.suite_id, suiteSimulation.suite_run_id, 'vcon-bundle']
+    const filenameParts = ['voiceai-qa', suiteSimulation.suite_id, suiteSimulation.suite_run_id, 'vcon-bundle']
       .filter(Boolean)
       .map((part) => String(part).replace(/[^a-z0-9-]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase());
-    downloadJson(`${filenameParts.join('-') || 'convoice-qa-suite-vcon-bundle'}.json`, {
+    downloadJson(`${filenameParts.join('-') || 'voiceai-qa-suite-vcon-bundle'}.json`, {
       suite_run_id: suiteSimulation.suite_run_id,
       suite_id: suiteSimulation.suite_id,
       suite_name: suiteSimulation.suite_name,
@@ -3711,7 +3561,7 @@ export function BenchmarkRunner({
     }
   }
 
-  async function onLaunchExecution(options?: { redirectToAnalysis?: boolean }) {
+  async function onLaunchExecution() {
     if (!selectedSuite) return null;
     const identity = ensureDemoIdentity();
 
@@ -3864,14 +3714,9 @@ export function BenchmarkRunner({
         executor_id: queued.executor_id || runExecutorId,
       };
       setExecutionRun(queuedWithLaunchContext);
-      onExecutionCreated?.(queuedWithLaunchContext);
       setExecutionMessage(
         `${suiteNote || ''}Execution queued: ${selectedScoreAgent.name} driven by ${testerDisplayName(runTesterId)} through ${queued.executor_id || runExecutorId}. Open /runs/${queued.execution_run_id} for analysis when complete.`,
       );
-      listExecutionRuns(identity.userId, identity.projectId).catch(() => undefined);
-      if (options?.redirectToAnalysis && queued.execution_run_id) {
-        window.location.assign(executionAnalysisHref(queued.execution_run_id));
-      }
       return queued;
     } catch (err) {
       setExecutionMessage(err instanceof Error ? err.message : 'Could not launch execution.');
@@ -3991,8 +3836,9 @@ export function BenchmarkRunner({
     : null;
   const reportSuiteManifestFingerprint = report?.suite_contract_manifest_sha256
     ? report.suite_contract_manifest_sha256.slice(0, 12)
-    : suiteManifestFingerprint ?? 'Not captured';
-  const scenarioContractFingerprint = report?.scenario_contract_sha256 ? report.scenario_contract_sha256.slice(0, 12) : selectedScenarioManifestFingerprint ?? 'Not captured';
+    : (view === 'history' ? null : suiteManifestFingerprint) ?? 'Not captured';
+  const scenarioContractFingerprint = report?.scenario_contract_sha256 ? report.scenario_contract_sha256.slice(0, 12)
+    : (view === 'history' ? null : selectedScenarioManifestFingerprint) ?? 'Not captured';
   const hasTranscriptEvidence = Boolean(transcript.trim());
   const hasStructuredEvidence = Boolean(
     !isBlankJsonField(actionTrace)
@@ -4011,8 +3857,13 @@ export function BenchmarkRunner({
   );
   const currentRegressionDelta = useMemo(() => currentReportRegressionDelta(report, savedRuns), [report, savedRuns]);
   const suiteScenarioCoverage = useMemo(
-    () => scenarioCoverageFromRuns(selectedSuite, suiteSavedRuns, report),
-    [selectedSuite, suiteSavedRuns, report],
+    () => scenarioCoverageFromRuns(
+      view === 'history' && (!selectedScenario || report?.suite_id !== selectedSuite?.id
+        || report?.scenario_id !== selectedScenario.id) ? null : selectedSuite,
+      view === 'history' ? savedRuns.filter((run) => run.report.suite_id === selectedSuite?.id) : suiteSavedRuns,
+      report,
+    ),
+    [selectedSuite, selectedScenario, suiteSavedRuns, savedRuns, report, view],
   );
   const actionPlan = report ? reportActionPlan(report, currentRegressionDelta, suiteScenarioCoverage) : null;
   const reportBrief = report
@@ -4083,33 +3934,7 @@ export function BenchmarkRunner({
 
   return (
     <section style={{ display: 'grid', gap: 20 }}>
-      {(view === 'all') ? (
-        <section className="card openai-provider-panel" aria-label="OpenAI agent provider">
-          <div className="openai-provider-control">
-            <div>
-              <p className="eyebrow">Agent execution provider</p>
-              <h2 style={{ margin: '4px 0 0', fontSize: 22 }}>Connect OpenAI for agent execution</h2>
-              <p style={{ margin: '8px 0 0', color: 'var(--muted)' }}>
-                {openaiProvider?.status === 'connected'
-                  ? `Connected${openaiProvider.email ? ` as ${openaiProvider.email}` : ''}${openaiProvider.plan_type ? ` (${openaiProvider.plan_type})` : ''}.`
-                  : openaiProvider?.message || 'OpenAI OAuth is for agent execution. ASSERT semantic reviews use separately configured server credentials.'}
-              </p>
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-              {openaiProvider?.status === 'connected' ? (
-                <button type="button" className="secondary-link" onClick={() => void onDisconnectOpenAI()}>
-                  Disconnect OpenAI
-                </button>
-              ) : (
-                <button type="button" className="primary-link" disabled={isConnectingOpenAI} onClick={() => void onConnectOpenAI()}>
-                  {isConnectingOpenAI ? 'Waiting for OpenAI…' : 'Connect OpenAI'}
-                </button>
-              )}
-            </div>
-            {openaiProviderMessage ? <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13 }}>{openaiProviderMessage}</p> : null}
-          </div>
-        </section>
-      ) : null}
+      {view === 'all' ? <OpenAIConnectionPanel connection={{ ...openAIConnection, connect: onConnectOpenAI }} /> : null}
 
       {view === 'all' ? <section className="first-run-panel" aria-label="First run checklist">
         <div>
@@ -4151,7 +3976,7 @@ export function BenchmarkRunner({
       ) : null}
 
       {/* /runs (view=run): omit suite/scenario contract panel — launch uses catalog defaults. */}
-      {view !== 'run' ? (
+      {view !== 'run' && view !== 'history' ? (
       <form
         onSubmit={onSubmit}
         className="card"
@@ -4312,7 +4137,7 @@ export function BenchmarkRunner({
               )}
             </div>
           </div>
-        ) : selectedSuite && !isLoading ? (
+        ) : selectedSuite && !selectedSuite.scenarios.length && !isLoading ? (
           <div
             aria-label="Suite setup guidance"
             style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, background: 'var(--panel-alt)', display: 'grid', gap: 8 }}
@@ -4644,7 +4469,7 @@ export function BenchmarkRunner({
           >
             {isEnqueueingSuite ? 'Queueing simulated suite...' : 'Queue simulated suite'}
           </button> : null}
-          {view !== 'simulate' ? <button
+          <button
             type="submit"
             disabled={isRunning || isSimulating || isEnqueueingSuite || !selectedScenario || !hasRunnableEvidence}
             style={{
@@ -4658,8 +4483,8 @@ export function BenchmarkRunner({
             }}
           >
             {isRunning ? 'Evaluating evidence...' : 'Evaluate evidence'}
-          </button> : null}
-          {view !== 'simulate' ? <button
+          </button>
+          <button
             type="button"
             disabled={!report}
             onClick={onSaveRun}
@@ -4674,8 +4499,7 @@ export function BenchmarkRunner({
             }}
           >
             Save run
-          </button> : null}
-          {view !== 'simulate' ? (
+          </button>
             <div
               aria-label="LLM judge controls"
               style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}
@@ -4708,7 +4532,6 @@ export function BenchmarkRunner({
                 </ApiAwareLink>
               ) : null}
             </div>
-          ) : null}
         </div>
 
         {view === 'score' && openaiProviderMessage ? (
@@ -4812,7 +4635,7 @@ export function BenchmarkRunner({
       </form>
       ) : null}
 
-      <section id="launch-agent" className="card run-launch-card" style={{ display: view === 'score' || view === 'simulate' ? 'none' : 'grid' }} aria-label="Launch agent run">
+      {view === 'all' || view === 'run' ? <section id="launch-agent" className="card run-launch-card" aria-label="Launch agent run">
         <div className="run-launch-heading">
           <div>
             <p className="eyebrow" style={{ margin: '0 0 6px' }}>
@@ -5111,6 +4934,10 @@ export function BenchmarkRunner({
           </label>
         ) : null}
 
+        {selectedScoreAgent?.target === 'builtin_sample_voice' ? (
+          <SpeechProviderSettings onSaved={() => setSpeechSettingsRevision((value) => value + 1)} />
+        ) : null}
+
         {selectedScoreAgent ? (
           <div className={`run-provenance-notice ${isFixtureTargetId(selectedScoreAgent.target) || isSavedReplayTargetId(selectedScoreAgent.target) ? 'is-fixture' : 'is-live'}`} role="note">
             <strong>
@@ -5130,7 +4957,7 @@ export function BenchmarkRunner({
               {selectedScoreAgent.target === 'http_endpoint'
                 ? `POSTs to ${selectedScoreAgent.connection?.endpoint_url || 'the configured endpoint'}; black-box response evidence only.`
                 : selectedScoreAgent.target === 'builtin_sample_voice'
-                  ? 'Runs a separate Pipecat target through rtc-asr, the configured LLM, and Kokoro. Evaluation uses current-run local evidence; it is not a browser, SIP, or phone call.'
+                  ? 'Runs a separate Pipecat target through the configured STT, LLM, and TTS providers. Evaluation uses current-run audio and transcripts.'
                   : selectedScoreAgent.target === 'pipecat_public_demo'
                     ? 'Runs the selected scenario through direct Daily WebRTC and captures current-run audio, transcript, latency, evaluation, and vCon evidence without a browser.'
                    : selectedScoreAgent.target === 'signalwire_holy_guacamole'
@@ -5393,7 +5220,7 @@ export function BenchmarkRunner({
             </div>
           </div>
         ) : null}
-      </section>
+      </section> : null}
 
       {suiteSimulation && view !== 'score' && view !== 'run' ? (
         <section className="card" style={{ padding: 24, display: 'grid', gap: 16 }} aria-label="Suite simulation summary">
@@ -5524,6 +5351,20 @@ export function BenchmarkRunner({
       ) : null}
 
 
+      {view === 'history' && report ? <section className="card" aria-label="Saved evaluation actions">
+        <button type="button" className="secondary-link" disabled={!judgeProviderReady || isJudging} onClick={() => void onJudge()}>
+          {isJudging ? 'Requesting ASSERT review…' : 'Request LLM judge'}
+        </button>
+        <p>{productConfig?.assert_judge?.message || 'Checking ASSERT judge configuration…'}</p>
+        <button type="button" className="secondary-link" onClick={() => {
+          void fetchProductConfig().then(setProductConfig).catch(() => setProductConfig(null));
+        }}>Refresh judge readiness</button>
+        {judgeGate?.execution_run_id ? <ApiAwareLink href={`/runs/${encodeURIComponent(judgeGate.execution_run_id)}`}>View saved ASSERT review, apply or export</ApiAwareLink> : null}
+        {judgeGate?.message ? <p role="status">{judgeGate.message}</p> : null}
+        {runError ? <p role="alert">{runError}</p> : null}
+        {saveMessage ? <p role="status">{saveMessage}</p> : null}
+      </section> : null}
+
       {report ? (
         <section className="card" style={{ padding: 24, display: 'grid', gap: 18 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -5580,7 +5421,7 @@ export function BenchmarkRunner({
             </p>
           ) : null}
 
-          {(report.completed_actions?.length || report.missing_actions?.length || selectedScenario?.required_actions?.length) ? (
+          {(report.completed_actions?.length || report.missing_actions?.length || (view !== 'history' && selectedScenario?.required_actions?.length)) ? (
             <section
               aria-label="Required action checklist"
               style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 10, background: 'white' }}
@@ -5594,7 +5435,7 @@ export function BenchmarkRunner({
                 </p>
               </div>
               <ul style={{ margin: 0, paddingLeft: 0, listStyle: 'none', display: 'grid', gap: 6 }}>
-                {(selectedScenario?.required_actions?.length
+                {(view !== 'history' && selectedScenario?.required_actions?.length
                   ? toStringList(selectedScenario.required_actions)
                   : [...(report.completed_actions ?? []), ...(report.missing_actions ?? [])]
                 ).map((action) => {
@@ -5736,7 +5577,7 @@ export function BenchmarkRunner({
 
           <RunMetadataPanel metadata={report.run_metadata} />
           <EvidenceAuditPanel summary={report.evidence_audit_summary} />
-          <section style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 12, background: 'var(--panel-alt)' }}>
+          <section aria-label="Contract evidence" style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 16, display: 'grid', gap: 12, background: 'var(--panel-alt)' }}>
             <div>
               <h3 style={{ margin: 0 }}>Contract evidence</h3>
               <p style={{ margin: '4px 0 0', color: 'var(--muted)' }}>Immutable suite and scenario fingerprints attached to this result.</p>
@@ -5744,8 +5585,8 @@ export function BenchmarkRunner({
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
               <AuditFact label="Suite manifest" value={reportSuiteManifestFingerprint} />
               <AuditFact label="Scenario contract" value={scenarioContractFingerprint} />
-              <AuditFact label="Required artifacts" value={(contractManifest?.evidence_requirements?.required_artifacts ?? []).join(', ') || 'Not declared'} />
-              <AuditFact label="Optional artifacts" value={(contractManifest?.evidence_requirements?.optional_artifacts ?? []).join(', ') || 'None'} />
+              <AuditFact label="Required artifacts" value={view === 'history' ? 'Not captured in this report' : (contractManifest?.evidence_requirements?.required_artifacts ?? []).join(', ') || 'Not declared'} />
+              <AuditFact label="Optional artifacts" value={view === 'history' ? 'Not captured in this report' : (contractManifest?.evidence_requirements?.optional_artifacts ?? []).join(', ') || 'None'} />
             </div>
           </section>
           <SimulationValidationPanel validation={report.simulation_validation} onRegenerate={onSimulate} isRegenerating={isSimulating} />
@@ -5827,13 +5668,13 @@ export function BenchmarkRunner({
         </section>
       ) : null}
 
-      {view === 'all' || (view === 'score' && Boolean(report || savedRuns.length || suiteRuns.length)) ? (
+      {view === 'all' || view === 'history' || (view === 'score' && Boolean(report || savedRuns.length || suiteRuns.length)) ? (
       <section className="validation-grid" aria-label="Saved runs and e2e validation">
         <div className="card" style={{ padding: 20, display: 'grid', gap: 12 }}>
           <p className="eyebrow">Saved runs</p>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
             <h3 style={{ margin: 0 }}>
-              {userId ? `${savedRuns.length} saved for ${selectedScenario?.title ?? projectId}` : 'Signup required'}
+              {userId ? `${savedRuns.length} saved for ${view === 'history' ? projectId : selectedScenario?.title ?? projectId}` : 'Signup required'}
             </h3>
             {userId ? (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -5937,7 +5778,7 @@ export function BenchmarkRunner({
               </p>
             </div>
           ) : null}
-          {suiteScenarioCoverage ? (
+          {view !== 'history' && suiteScenarioCoverage ? (
             <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'white', display: 'grid', gap: 8 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
                 <strong style={{ color: suiteScenarioCoverage.coverage_status === 'complete' ? 'var(--success-text)' : 'var(--text)' }}>
@@ -6008,13 +5849,15 @@ export function BenchmarkRunner({
           ) : null}
           {savedRuns.length ? (
             <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--muted)', display: 'grid', gap: 8 }}>
-              {savedRuns.slice(0, 4).map((run, index) => (
+              {(view === 'history' ? savedRuns : savedRuns.slice(0, 4)).map((run, index) => (
                 <li key={run.id}>
                   <span>
                     {run.id}: {run.report.scenario_title ?? run.report.run_id ?? 'benchmark run'} ({run.report.overall_score ?? run.report.score ?? 'n/a'})
                   </span>
                   <div style={{ marginTop: 4, fontSize: 13 }}>
-                    {metadataChangeSummary(run.report.run_metadata, savedRuns[index + 1]?.report.run_metadata)}
+                    {metadataChangeSummary(run.report.run_metadata, (view === 'history'
+                      ? savedRuns.slice(index + 1).find((prior) => prior.report.suite_id === run.report.suite_id && prior.report.scenario_id === run.report.scenario_id)
+                      : savedRuns[index + 1])?.report.run_metadata)}
                   </div>
                   <div style={{ marginTop: 4, fontSize: 13, color: regressionDeltaColor(run.artifacts?.regression_delta?.status) }}>
                     {regressionDeltaSummary(run.artifacts?.regression_delta)}
@@ -6049,7 +5892,8 @@ export function BenchmarkRunner({
                     <button
                       type="button"
                       onClick={() => void onRetrySavedRun(run)}
-                      disabled={isRunning}
+                      disabled={isRunning || !canRetrySavedRun(run)}
+                      title={canRetrySavedRun(run) ? undefined : 'Suite or scenario unavailable in the current catalog. Review or export the retained evidence instead.'}
                       style={{
                         border: '1px solid var(--border)',
                         borderRadius: 8,
@@ -6061,6 +5905,7 @@ export function BenchmarkRunner({
                     >
                       Retry run
                     </button>
+                    {!canRetrySavedRun(run) ? <span style={{ fontSize: 12, color: 'var(--muted)', alignSelf: 'center' }}>Retry unavailable · suite or scenario not in the current catalog</span> : null}
                     <button
                       type="button"
                       onClick={() => void onExportRun(run.id)}
@@ -6122,7 +5967,7 @@ export function BenchmarkRunner({
           <p className="eyebrow">Suite runs</p>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
             <h3 style={{ margin: 0 }}>
-              {userId ? `${suiteRuns.length} suite runs for ${selectedSuite?.title ?? projectId}` : 'Signup required'}
+              {userId ? `${suiteRuns.length} suite runs for ${view === 'history' ? projectId : selectedSuite?.title ?? projectId}` : 'Signup required'}
             </h3>
             {userId ? (
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -6190,7 +6035,7 @@ export function BenchmarkRunner({
           ) : null}
           {suiteRuns.length ? (
             <div style={{ display: 'grid', gap: 10 }}>
-              {suiteRuns.slice(0, 4).map((run) => {
+              {(view === 'history' ? suiteRuns : suiteRuns.slice(0, 4)).map((run) => {
                 const scenarioSummaries = run.artifacts?.scenario_summaries ?? [];
                 const reliability = suiteReliabilityMetrics(run);
                 const lifecycleSummary = suiteRunLifecycleSummary(run.run_lifecycle);

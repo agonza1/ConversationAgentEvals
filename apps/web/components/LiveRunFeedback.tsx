@@ -56,7 +56,16 @@ function connectionPhaseLabel(event: LiveRunEvent) {
 
 export interface LiveRunConversation {
   conversation_id: string;
+  scenario_title?: string | null;
   live_events?: LiveRunEvent[];
+}
+
+export function sessionEvents(conversations: LiveRunConversation[], conversationId?: string) {
+  return conversations.filter((item) => !conversationId || item.conversation_id === conversationId)
+    .flatMap((conversation) => (conversation.live_events ?? []).map((event) => ({
+      ...event, conversationId: conversation.conversation_id,
+      conversationTitle: conversation.scenario_title || conversation.conversation_id,
+    })));
 }
 
 interface LiveRunFeedbackProps {
@@ -68,6 +77,7 @@ interface LiveRunFeedbackProps {
   runStatus?: string;
   autoExpandLiveEvents?: boolean;
   httpCaptureOnly?: boolean;
+  conversationId?: string;
 }
 
 function mediaUrl(apiBase: string, value: string) {
@@ -131,8 +141,10 @@ export function LiveRunFeedback({
   runStatus,
   autoExpandLiveEvents = false,
   httpCaptureOnly = false,
+  conversationId,
 }: LiveRunFeedbackProps) {
   const [expanded, setExpanded] = useState(false);
+  const [replayConversationId, setReplayConversationId] = useState('');
   const [playbackMode, setPlaybackMode] = useState<PlaybackMode>('idle');
   const [playbackMessage, setPlaybackMessage] = useState<string | null>(null);
   const [livePlaybackBlocked, setLivePlaybackBlocked] = useState(false);
@@ -167,11 +179,13 @@ export function LiveRunFeedback({
   const displayedConversations = listenerActive && listenerConversations
     ? listenerConversations
     : conversations;
+  const selectedReplayConversationId = conversationId
+    || (displayedConversations.some((item) => item.conversation_id === replayConversationId)
+      ? replayConversationId
+      : displayedConversations[0]?.conversation_id);
   const events = useMemo(
-    () => displayedConversations.flatMap((conversation) =>
-      (conversation.live_events ?? []).map((event) => ({ ...event, conversationId: conversation.conversation_id })),
-    ),
-    [displayedConversations],
+    () => sessionEvents(displayedConversations, listenerActive ? undefined : selectedReplayConversationId),
+    [displayedConversations, listenerActive, selectedReplayConversationId],
   );
   const audioEvents = useMemo(
     () => events.filter((event) => event.kind === 'audio' && event.media_url
@@ -746,6 +760,10 @@ export function LiveRunFeedback({
   }, [executionRunId, stopPlayback]);
 
   useEffect(() => {
+    if (!listenerActive) stopPlayback();
+  }, [selectedReplayConversationId, listenerActive, stopPlayback]);
+
+  useEffect(() => {
     if (!listenerActive) setListenerConversations(null);
   }, [listenerActive]);
 
@@ -805,12 +823,30 @@ export function LiveRunFeedback({
     ? 'Hear audio as each agent produces it. Starting live listening never replays earlier turns.'
     : replayEvents.length
       ? (partialRecording
-        ? 'Partial call recording is available. Audio capture ended when the run failed.'
-        : 'Recorded playback starts at the beginning and includes the complete captured conversation.')
+        ? 'Partial call recording is available. Audio capture ended when the run failed. Plays only the selected session.'
+        : replayEvents.some((event) => event.frame_metadata?.media_event === 'continuous_recording')
+          ? 'Plays only the selected session. Continuous recording preserves captured pauses and overlaps.'
+          : 'Plays only the selected session. Turn recordings are joined without the original response waits.')
       : 'No captured conversation audio is available for playback.';
 
   return (
     <section aria-label="Live run feedback" style={{ display: 'grid', gap: 8 }}>
+      {!listenerActive && !conversationId && conversations.length > 1 ? (
+        <label>
+          Recorded session{' '}
+          <select aria-label="Recorded session" value={selectedReplayConversationId}
+            onChange={(event) => setReplayConversationId(event.target.value)}>
+            {conversations.map((item) => (
+              <option key={item.conversation_id} value={item.conversation_id}>
+                {item.scenario_title || item.conversation_id}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+      {listenerActive && displayedConversations.length > 1 ? (
+        <p style={{ margin: 0 }}>Live suite monitor · follows sequential, independent sessions.</p>
+      ) : null}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
         <button type="button" onClick={() => setExpanded((value) => !value)}>
           {expanded
@@ -940,8 +976,11 @@ export function LiveRunFeedback({
           aria-live="polite"
           style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12, display: 'grid', gap: 8 }}
         >
-          {transcriptEvents.length ? transcriptEvents.map((event) => (
+          {transcriptEvents.length ? transcriptEvents.map((event, index) => (
             <div key={`${event.conversationId}-${event.sequence}`} style={{ display: 'grid', gap: 2 }}>
+              {index === 0 || transcriptEvents[index - 1].conversationId !== event.conversationId ? (
+                <strong>Session · {event.conversationTitle}</strong>
+              ) : null}
               <strong style={{ fontSize: 13 }}>
                 {connectionPhaseLabel(event)
                   ? `Connection · ${connectionPhaseLabel(event)}`

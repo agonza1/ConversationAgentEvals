@@ -14,7 +14,7 @@ from app.schemas.execution import ExecutionRunCreateRequest
 from app.main import app  # Bootstrap built-in catalog extensions as production does.
 from app.services import agent_store, execution_runner
 from app.services.execution_vcon import validate_ietf_vcon
-from app.services.vcon_evidence import decode_evidence, intake_vcon
+from app.services.vcon_evidence import PURPOSE, decode_evidence, intake_vcon
 from app.services.waylo_target import WayloClient, WayloError, clean_native, project_capture
 from app.services.waylo_livekit import LiveKitVoicePeer, pcm_wav, read_wav, run_waylo_call
 from app.services.waylo_mike_cases import WAYLO_MIKE_SUITE
@@ -447,7 +447,26 @@ def test_native_attachment_references_actual_exporter_party(monkeypatch):
     exported = project_capture(captured())['vcon']
     native = next(a for a in exported['attachments'] if a['purpose'] == 'Waylo native source evidence')
     assert native['party'] < len(exported['parties'])
-    assert exported['parties'][native['party']]['name'] == 'ConVoice QA'
+    profile = next(a for a in exported['attachments'] if a.get('purpose') == PURPOSE)
+    assert native['party'] == profile['party']
+    assert exported['parties'][native['party']]['name'] == 'VoiceAI QA'
+
+
+def test_native_attachment_does_not_depend_on_exporter_display_name(monkeypatch):
+    from app.services import waylo_target
+    attach = waylo_target.attach_evidence
+    def renamed_exporter(vcon, body):
+        value = attach(vcon, body)
+        profile = next(a for a in value['attachments'] if a.get('purpose') == PURPOSE)
+        value['parties'][profile['party']]['name'] = 'Renamed evidence recorder'
+        return value
+    monkeypatch.setattr(waylo_target, 'attach_evidence', renamed_exporter)
+    exported = project_capture(captured())['vcon']
+    native = next(a for a in exported['attachments'] if a['purpose'] == 'Waylo native source evidence')
+    profile = next(a for a in exported['attachments'] if a.get('purpose') == PURPOSE)
+    assert native['party'] == profile['party']
+    assert exported['parties'][native['party']]['name'] == 'Renamed evidence recorder'
+    assert validate_ietf_vcon(exported)['valid']
 
 
 @pytest.mark.parametrize('preset', ['item_capture_assistant', 'catalog_order_assistant'])

@@ -142,7 +142,11 @@ window provides more partial context and can increase each decode's work.
 The final-transcript deadline remains 20 seconds by default. A local CPU backend
 that needs more decoding time can set `RTC_ASR_FINAL_TIMEOUT_SECONDS=60` after
 confirming decoder latency is the cause. This extends only the bounded wait for a
-final result; the audio buffer stays 20 seconds and the overall voice session
+final result. `RTC_ASR_MAX_BUFFER_SECONDS` separately bounds the requested utterance
+buffer (default 60 seconds; configurable from 1 to 300). The ASR service can impose
+a lower byte cap, so this setting does not guarantee 60 seconds of accepted audio.
+The requested seconds and negotiated byte cap are saved in the processor graph.
+There is no automatic rollover for an utterance exceeding that cap. The overall voice session
 remains bounded to at most 300 seconds. Such a run can validate conversation semantics, but
 should not be presented as a real-time latency benchmark. Tune and validate the
 rtc-asr backend separately; a partial cadence setting does not guarantee CPU
@@ -157,3 +161,32 @@ A generation reservation is retained only when a complete, validated set of draf
 ### Call completion versus evaluation
 
 The voice results view derives call completion from local tester completion or closed, proven public media capture, never from the policy verdict. A completed call can fail automatic checks or require semantic review. Missing media proof remains completion-unverified, and capture errors remain incomplete. Saved ASSERT proposals are still separate from confirmation and application.
+
+The voice service closes the current pipeline and releases its run lease before
+sending a terminal event. Failed cleanup always releases the lease, preserves a
+primary execution error, and turns an otherwise successful exchange into an error.
+The next suite case can therefore start without racing the previous case's cleanup.
+
+### Session playback and timing
+
+Each suite case/iteration has a fresh voice session, transcript and recording.
+Completed-run replay plays one selected session and stops at that session's last
+turn. Changing the selected case stops its current audio and queued turns. The
+suite listener follows sequential sessions while execution is active; its
+evidence explicitly labels session boundaries.
+
+Replay prefers the selected session's continuous recording, which retains its
+captured pauses and overlaps. Historical turn-only replay joins speech segments
+without the original response waits and cannot be used to time the live response.
+The player distinguishes the two recording types. Suite tiles aggregate all captured
+responses; the selected conversation's detail uses only its own marks.
+
+Built-in response delay is measured from the final caller PCM playback frame's
+end to the first target PCM frame at the tester bridge. It measures the configured
+local rtc-asr/LLM/Kokoro runtime, not SIP/PSTN or a production network. The saved
+caller-end, ASR-final and target-first-audio timestamps expose the measured
+boundaries. Caller-end → ASR-final and ASR-final → first-audio split this interval;
+LLM/TTS diagnostics describe parts of that path and are not additional delays.
+Historical ASR-finalization metrics start at a VAD boundary, which may precede
+caller playback end or lag behind it, so those stage durations need not sum to
+the response interval. WAV integrity alone does not validate this timing.

@@ -1,28 +1,19 @@
-import { VoiceEvalPage } from '@/components/VoiceEvalPage';
-import { SiteNav } from '@/components/SiteNav';
+import { redirect } from 'next/navigation';
+import type { Route } from 'next';
 
-export default function VoicePage() {
-  return (
-    <main className="page-shell voice-eval-shell">
-      <SiteNav current="voice" />
-
-      <section className="voice-eval-hero" aria-labelledby="voice-title">
-        <div className="voice-eval-hero-copy">
-          <p className="eyebrow">Call center benchmark · guided run</p>
-          <h1 id="voice-title">Voice eval</h1>
-          <p>
-            Run a target-backed call-center scenario through Run Agent, then inspect the transcript,
-            scoring, recording metadata, and vCon evidence without confusing a sample run for a live call.
-          </p>
-        </div>
-        <div className="voice-eval-proof-strip" aria-label="Voice evaluation outputs">
-          <span>Run Agent target</span>
-          <span>Pipecat capture proof</span>
-          <span>Sample-based score</span>
-        </div>
-      </section>
-
-      <VoiceEvalPage />
-    </main>
-  );
+/** Old voice links use the shared launcher, never a second execution workflow. */
+export default async function VoiceQuickStart({ searchParams }: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const params = await searchParams;
+  const query = new URLSearchParams();
+  Object.entries(params ?? {}).forEach(([key, value]) => {
+    if (Array.isArray(value)) value.forEach((item) => query.append(key, item));
+    else if (value !== undefined) query.set(key, value);
+  });
+  const defaults = { suite_id: 'call-center-voice-ai', scenario_id: 'cancellation-rescue', agent_id: 'generalist-voice-agent' };
+  Object.entries(defaults).forEach(([key, value]) => { if (!query.has(key)) query.set(key, value); });
+  // Opening an old demo link is configuration, not authorization to start a call.
+  query.delete('launch');
+  redirect(`/runs?${query.toString()}` as Route);
 }

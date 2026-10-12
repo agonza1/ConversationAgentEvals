@@ -208,7 +208,7 @@ test('targets page shows agent target cards and try-it-out deep links', async ({
   await mockRunnerApis(page);
   await page.goto('/targets');
 
-  await expect(page.getByRole('heading', { name: 'Targets', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Agents', exact: true })).toBeVisible();
   await expect(page.locator('.agents-page-header').getByRole('button', { name: 'Add agent target' })).toBeVisible();
 
   const mockCard = page.getByRole('article').filter({ hasText: 'Mock text agent' });
@@ -281,7 +281,7 @@ test('targets try-it-out opens a preselected form before launching', async ({ pa
   await page.getByRole('article').filter({ hasText: 'Built-in generalist voice agent' }).getByRole('link', { name: 'Try it Out' }).click();
   await expect(page).toHaveURL(/\/runs\?agent_id=acc-voice-fixture-agent/);
   await expect(page.getByLabel('Execution agent target')).toHaveValue('acc-voice-fixture-agent');
-  const runButton = page.getByRole('button', { name: 'Run 1 voice test', exact: true });
+  const runButton = page.getByRole('button', { name: /^Run evaluation$|^Run \d+ voice tests?$/ });
   await expect(runButton).toBeEnabled();
   expect(launches).toHaveLength(0);
   await runButton.click();
@@ -300,7 +300,7 @@ test('public Pipecat target needs an explicit click even from an old demo link',
 
   await page.goto('/runs?launch=demo&agent_id=pipecat-public-demo');
   await expect(page.getByLabel('Execution agent target')).toHaveValue('pipecat-public-demo');
-  const runButton = page.getByRole('button', { name: 'Run 1 voice test', exact: true });
+  const runButton = page.getByRole('button', { name: /^Run evaluation$|^Run \d+ voice tests?$/ });
   await expect(runButton).toBeEnabled();
   await page.reload();
   await expect(page.getByLabel('Execution agent target')).toHaveValue('pipecat-public-demo');
@@ -343,7 +343,7 @@ test('OpenAI agent try-it-out launches its configured live target', async ({ pag
   await expect(page).toHaveURL(/\/runs\?agent_id=live-openai-agent/);
   await expect(page.getByLabel('Execution agent target')).toHaveValue('live-openai-agent');
   expect(launches).toHaveLength(0);
-  await page.getByRole('button', { name: 'Run evaluation' }).click();
+  await page.getByRole('button', { name: /^Run evaluation$|^Run \d+ voice tests?$/ }).click();
   await expect.poll(() => launches.length).toBe(1);
   expect(launches).toHaveLength(1);
   expect(launches[0]).toMatchObject({
@@ -369,7 +369,7 @@ test('HTTP agent try-it-out uses its configured adapter and explicit tester', as
   await expect(page).toHaveURL(/\/runs\?agent_id=staging-http-agent/);
   await expect(page.getByLabel('Execution agent target')).toHaveValue('staging-http-agent');
   expect(launches).toHaveLength(0);
-  await page.getByRole('button', { name: 'Run evaluation' }).click();
+  await page.getByRole('button', { name: /^Run evaluation$|^Run \d+ voice tests?$/ }).click();
   await expect.poll(() => launches.length).toBe(1);
   expect(launches).toHaveLength(1);
   expect(launches[0]).toMatchObject({
@@ -381,7 +381,7 @@ test('HTTP agent try-it-out uses its configured adapter and explicit tester', as
   });
 });
 
-test('homepage demo waits for its default agent before auto-launching', async ({ page }) => {
+test('legacy demo links wait for explicit launch after the default agent loads', async ({ page }) => {
   const launches: Record<string, unknown>[] = [];
   await mockRunnerApis(page, {
     agentsDelayMs: 250,
@@ -389,17 +389,19 @@ test('homepage demo waits for its default agent before auto-launching', async ({
   });
 
   await page.goto('/runs?launch=demo');
-  await expect(page).toHaveURL(/\/runs\/exec-try-it-out/, { timeout: 20000 });
-
+  await expect(page.getByLabel('Execution agent target')).toHaveValue('mock-text-agent');
+  expect(launches).toHaveLength(0);
+  await page.getByRole('button', { name: /^Run evaluation$|^Run \d+ voice tests?$/, exact: true }).click();
+  await expect.poll(() => launches.length).toBe(1);
   expect(launches).toHaveLength(1);
   expect(launches[0]?.agent_id).toBe('mock-text-agent');
 });
 
-test('demo analysis redirect preserves the api base override', async ({ page }) => {
+test('legacy demo analysis link preserves the api base override after explicit launch', async ({ page }) => {
   await mockRunnerApis(page);
   await page.goto('/runs?launch=demo&api_base=https%3A%2F%2Fapi.example.test');
-  await expect(page).toHaveURL(/\/runs\/exec-try-it-out/, { timeout: 20000 });
-
+  await page.getByRole('button', { name: /^Run evaluation$|^Run \d+ voice tests?$/, exact: true }).click();
+  await expect(page.getByRole('link', { name: 'Open analysis' })).toHaveAttribute('href', '/runs/exec-try-it-out?api_base=https%3A%2F%2Fapi.example.test');
   expect(new URL(page.url()).searchParams.get('api_base')).toBe('https://api.example.test');
 });
 

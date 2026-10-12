@@ -1,9 +1,28 @@
 import { expect, test } from '@playwright/test';
 
+// Coverage fixtures below describe four reviewed cases, independent of optional
+// cases subsequently added to the built-in catalog.
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/benchmarks/suites', async (route) => {
+    const response = await route.fetch();
+    const suites = await response.json();
+    const reviewedCases = new Set(['billing-address-change', 'angry-outage-escalation', 'interruption-correction-handling', 'refund-policy-boundary']);
+    await route.fulfill({ response, json: suites.map((suite: { id: string; scenarios: Array<{ id: string }> }) => (
+      suite.id === 'call-center-voice-ai' ? { ...suite, optional_scenarios: [], scenarios: suite.scenarios.filter((scenario) => reviewedCases.has(scenario.id)) } : suite
+    )) });
+  });
+});
+
+test.afterEach(async ({ page }) => {
+  // A loaded retained record can trigger another catalog request. Drain fixture
+  // callbacks before Playwright closes the page rather than aborting route.fetch.
+  await page.unrouteAll({ behavior: 'wait' });
+});
+
 test('benchmark report includes a share-ready brief', async ({ page }) => {
   await page.goto('/benchmarks');
 
-  await expect(page.getByRole('heading', { name: 'Benchmark history and reports.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Benchmark console' })).toBeVisible();
   await expect(page.getByLabel('Suite contract manifest')).toContainText('Required evidence: transcript, action_trace, final_state');
   await expect(page.getByLabel(/Scenario contract: [a-f0-9]{12}/)).toBeVisible();
   await expect(page.getByLabel(/Suite manifest: [a-f0-9]{12}/)).toBeVisible();
@@ -515,10 +534,10 @@ test('empty suites show setup guidance before users try to run evidence checks',
     'Add at least one scenario to run evidence checks, queue suite runs, and track coverage for this suite.',
   );
   await expect(page.getByLabel('First run checklist')).toContainText(
-    'Empty Suite has no scenarios yet.',
+    'Empty Suite needs at least one scenario before you can run evidence checks.',
   );
   await expect(page.getByRole('button', { name: 'Simulate scenario' })).toBeDisabled();
-  await expect(page.getByRole('button', { name: 'Queue suite run' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Queue simulated suite' })).toBeDisabled();
 });
 
 test('current benchmark report previews regression delta before saving', async ({ page }) => {
@@ -649,6 +668,7 @@ test('benchmark runner submits structured voice call evidence', async ({ page })
   await page.goto('/benchmarks');
   await page.getByText('Evidence payload').click();
   await page.getByLabel('Transcript').fill('Caller: I need a human. Agent: I escalated to a representative.');
+  await page.getByText('Structured and channel evidence (optional)', { exact: true }).click();
   await page.getByLabel('Voice call evidence').fill(JSON.stringify({
     turns: [
       { speaker: 'Caller', body: 'I need a human.' },
@@ -657,7 +677,7 @@ test('benchmark runner submits structured voice call evidence', async ({ page })
     metrics: { durationMs: 92000 },
     media: { recordingUrl: 'https://storage.example.test/calls/demo.wav', mimeType: 'audio/wav' },
   }));
-  await page.getByRole('button', { name: 'Run benchmark' }).click();
+  await page.getByRole('button', { name: 'Evaluate evidence' }).click();
 
   await expect(page.getByText('Voice interaction evidence')).toBeVisible();
   await expect(page.getByLabel('Duration: 92000 ms')).toBeVisible();
@@ -868,7 +888,7 @@ test(`benchmark runner shows suite simulation summary (${verdict})`, async ({ pa
   const downloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Export suite vCon bundle' }).click();
   const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe('convoice-qa-call-center-voice-ai-suite-run-1-vcon-bundle.json');
+  expect(download.suggestedFilename()).toBe('voiceai-qa-call-center-voice-ai-suite-run-1-vcon-bundle.json');
   await expect(page.getByText('Exported 3 vCon-compatible suite records.')).toBeVisible();
 
   await page.getByRole('button', { name: 'Copy suite brief' }).click();
@@ -924,7 +944,9 @@ test('benchmark runner queues retained suite runs in the background', async ({ p
   });
 
   await page.goto('/benchmarks');
-  await page.getByRole('button', { name: 'Queue suite run' }).click();
+  await expect(page.getByLabel('Agent profile', { exact: true })).toHaveValue('Built-in sample text agent');
+  await page.getByLabel('Agent profile', { exact: true }).fill('mock text agent');
+  await page.getByRole('button', { name: 'Queue simulated suite' }).click();
 
   await expect(page.getByText('Queued suite run suite-queued-1 for qa-project.')).toBeVisible();
   const suiteHistory = page.getByLabel('Suite run history');
@@ -948,7 +970,7 @@ test('benchmark history export handles zero-scenario coverage without claiming f
         user_id: 'demo-user',
         project_id: 'qa-project',
         suite_id: 'empty-suite',
-        filename: 'convoice-qa-qa-project-empty-suite-run-history.json',
+        filename: 'voiceai-qa-qa-project-empty-suite-run-history.json',
         run_count: 1,
         summary: {
           latest_run_id: 'scenario-run-1',
@@ -1001,7 +1023,7 @@ test('benchmark history export handles zero-scenario coverage without claiming f
   const historyDownloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Export benchmark history' }).click();
   const historyDownload = await historyDownloadPromise;
-  expect(historyDownload.suggestedFilename()).toBe('convoice-qa-qa-project-empty-suite-run-history.json');
+  expect(historyDownload.suggestedFilename()).toBe('voiceai-qa-qa-project-empty-suite-run-history.json');
   await expect(page.getByText(/^Exported 1 benchmark runs to .* Benchmark trend baseline: 88 vs n\/a \(n\/a\)\. No recurring failure category\. No suite scenarios configured\. Outside suite: Legacy Escalation\./)).toBeVisible();
 });
 
@@ -1139,7 +1161,7 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
         suite_name: 'Call Center Voice AI',
         user_id: 'demo-user',
         project_id: 'qa-project',
-        filename: 'convoice-qa-call-center-voice-ai-suite-history-1-vcon-bundle.json',
+        filename: 'voiceai-qa-call-center-voice-ai-suite-history-1-vcon-bundle.json',
         record_count: 3,
         records: [{ source_format: 'benchmark_suite' }, { source_format: 'transcript' }, { source_format: 'transcript' }],
         exported_at: '2026-05-29T15:00:00+00:00',
@@ -1158,7 +1180,7 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
         suite_name: 'Call Center Voice AI',
         user_id: 'demo-user',
         project_id: 'qa-project',
-        filename: 'convoice-qa-call-center-voice-ai-suite-history-1-suite-audit-artifacts.json',
+        filename: 'voiceai-qa-call-center-voice-ai-suite-history-1-suite-audit-artifacts.json',
         operator_summary: {
           ready_for_export: true,
           ready_scenarios: 2,
@@ -1183,7 +1205,7 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
         project_id: 'qa-project',
         suite_id: 'call-center-voice-ai',
         scenario_id: 'membership-renewal-save',
-        filename: 'convoice-qa-qa-project-call-center-voice-ai-run-history.json',
+        filename: 'voiceai-qa-qa-project-call-center-voice-ai-run-history.json',
         run_count: 2,
         summary: {
           latest_run_id: 'scenario-run-2',
@@ -1250,7 +1272,7 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
         user_id: 'demo-user',
         project_id: 'qa-project',
         suite_id: 'call-center-voice-ai',
-        filename: 'convoice-qa-qa-project-call-center-voice-ai-suite-run-history.json',
+        filename: 'voiceai-qa-qa-project-call-center-voice-ai-suite-run-history.json',
         suite_run_count: 2,
         summary: {
           latest_suite_run_id: 'suite-history-1',
@@ -1321,7 +1343,7 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   const benchmarkHistoryDownloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Export benchmark history' }).click();
   const benchmarkHistoryDownload = await benchmarkHistoryDownloadPromise;
-  expect(benchmarkHistoryDownload.suggestedFilename()).toBe('convoice-qa-qa-project-call-center-voice-ai-run-history.json');
+  expect(benchmarkHistoryDownload.suggestedFilename()).toBe('voiceai-qa-qa-project-call-center-voice-ai-run-history.json');
   await expect(page.getByText(/^Exported 2 benchmark runs to .* Benchmark trend regressed: 73 vs 91 \(-18\)\. Top issue: required action execution \(1\)\. 2\/4 suite scenarios covered \(50%\); 2 missing: Refund Policy Boundary, Interruption and Correction Handling\. Next: Refund Policy Boundary\. Outside suite: Legacy Escalation\./)).toBeVisible();
 
   await suiteHistory.getByLabel('Filter suite runs by status').selectOption('completed');
@@ -1329,7 +1351,7 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   const historyDownloadPromise = page.waitForEvent('download');
   await suiteHistory.getByRole('button', { name: 'Export suite history' }).click();
   const historyDownload = await historyDownloadPromise;
-  expect(historyDownload.suggestedFilename()).toBe('convoice-qa-qa-project-call-center-voice-ai-suite-run-history.json');
+  expect(historyDownload.suggestedFilename()).toBe('voiceai-qa-qa-project-call-center-voice-ai-suite-run-history.json');
   await expect(page.getByText(/^Exported 2 suite runs to .* Suite trend improved: 82 vs 76 \(\+6\), 75% pass rate\. Top issue: required action execution \(1\)\. 4\/4 suite scenarios covered \(100%\); full suite covered\. Covered: Membership Renewal Save, Billing Escalation\./)).toBeVisible();
   await expect(page.getByText('3/2 vCon-ready runs with 4 dialog turns and 1 analysis records.')).toBeVisible();
 
@@ -1343,13 +1365,13 @@ test('benchmark runner shows retained suite run history', async ({ page }) => {
   const auditDownloadPromise = page.waitForEvent('download');
   await latestSuiteRun.getByRole('button', { name: 'Export suite audit artifacts' }).click();
   const auditDownload = await auditDownloadPromise;
-  expect(auditDownload.suggestedFilename()).toBe('convoice-qa-call-center-voice-ai-suite-history-1-suite-audit-artifacts.json');
+  expect(auditDownload.suggestedFilename()).toBe('voiceai-qa-call-center-voice-ai-suite-history-1-suite-audit-artifacts.json');
   await expect(page.getByText('Exported suite audit artifacts for 2 ready scenarios')).toBeVisible();
 
   const downloadPromise = page.waitForEvent('download');
   await latestSuiteRun.getByRole('button', { name: 'Export retained vCon bundle' }).click();
   const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe('convoice-qa-call-center-voice-ai-suite-history-1-vcon-bundle.json');
+  expect(download.suggestedFilename()).toBe('voiceai-qa-call-center-voice-ai-suite-history-1-vcon-bundle.json');
   await expect(page.getByText('Exported 3 retained suite vCon records')).toBeVisible();
 });
 

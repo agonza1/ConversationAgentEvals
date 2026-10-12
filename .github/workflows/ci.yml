@@ -6,6 +6,16 @@ on:
   pull_request:
 
 jobs:
+  speech-protocols:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -r apps/pipecat/requirements-speech-test.txt
+      - run: python -m pytest apps/pipecat/test_speech_providers.py apps/pipecat/test_streaming_media.py -q
+
   api-and-web:
     runs-on: ubuntu-latest
     steps:
@@ -35,5 +45,11 @@ jobs:
       - run: npm run test:benchmark-smoke
       - run: npm run test:voice-lab-proof
       - run: node --test scripts/waylo-dev-origins.test.js
-      - run: node --test apps/web/tests/evidence-timeline.test.cjs apps/web/tests/assert-review-model.test.cjs apps/web/tests/next-proxy-timeout.test.cjs apps/web/tests/voice-call-status.test.cjs
+      - run: node --test apps/web/tests/evidence-timeline.test.cjs apps/web/tests/assert-review-model.test.cjs apps/web/tests/next-proxy-timeout.test.cjs apps/web/tests/voice-call-status.test.cjs apps/web/tests/session-playback.test.cjs
       - run: npm run build:web
+      - name: Install browser for workspace navigation regression tests
+        run: npm exec --workspace apps/web -- playwright install --with-deps chromium
+      - name: Verify workspace navigation and legacy links
+        env:
+          PLAYWRIGHT_REUSE_EXISTING_SERVER: "0"
+        run: npm exec --workspace apps/web -- playwright test tests/workspace-navigation.spec.ts tests/product-flow.spec.ts tests/spec-generation-settings.spec.ts tests/chatgpt-judge-settings.spec.ts tests/settings-layout.spec.ts --config playwright.config.ts --workers=1

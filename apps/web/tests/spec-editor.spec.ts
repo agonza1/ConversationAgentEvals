@@ -154,8 +154,8 @@ test('spec editor generates draft checks, requires approval, previews YAML, and 
 
   await page.goto('/specs/new?api_base=http%3A%2F%2Fapi.example.test');
   await page.getByText('Advanced · templates, custom generation, scoring and YAML', { exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Create an evaluation design' })).toBeVisible();
-  await expect(page.getByText('Evaluation design · Experimental')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Create a test set' })).toBeVisible();
+  await expect(page.getByText('Tests · create a test set')).toBeVisible();
   await expect(page.getByLabel('Title')).toHaveValue('Conversation agent quality gate');
   await expect(page.getByLabel('Title')).not.toHaveValue('Cancellation rescue agent');
   await page.getByLabel('Template').selectOption('agentic-contact-center-cancellation-rescue');
@@ -191,7 +191,7 @@ test('evaluation guidance labels distinguish suggestions from enforced runtime c
   await expect(page.getByLabel('Programmatic checks')).toBeVisible();
   await expect(page.getByLabel('Required evidence')).toBeVisible();
   await expect(page.getByLabel('Advanced ASSERT preview and validation')).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Evaluation design' })).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Tests' })).toHaveAttribute('aria-current', 'page');
 });
 
 test('loading and previewing a rich template preserves structured fields', async ({ page }) => {

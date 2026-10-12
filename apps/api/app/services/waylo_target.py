@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from app.services.target_secrets import resolve_http_target_secret
-from app.services.vcon_evidence import MAX_EVENTS, MAX_PROFILE_BYTES, attach_evidence, evidence_body, redact
+from app.services.vcon_evidence import MAX_EVENTS, MAX_PROFILE_BYTES, PURPOSE, attach_evidence, evidence_body, redact
 from app.services.execution_vcon import build_ietf_execution_vcon
 
 
@@ -327,7 +327,8 @@ def project_capture(capture: dict, *, voice_events: list[dict] | None = None,
     body = evidence_body(state_snapshots=snapshots, voice_events=voice, context=context)
     body['tool_events'] = tools
     vcon = attach_evidence(vcon, body)
-    exporter_party = next(i for i, party in enumerate(vcon['parties']) if party.get('name') == 'ConVoice QA')
+    # Reuse the structured profile's exporter reference, not a mutable display brand.
+    exporter_party = next(a['party'] for a in vcon['attachments'] if a.get('purpose') == PURPOSE)
     vcon['attachments'].append({'type': 'ancillary', 'purpose': 'Waylo native source evidence', 'party': exporter_party,
                                 'start': vcon['updated_at'],
                                 'mediatype': 'application/json', 'encoding': 'json', 'body': capture})

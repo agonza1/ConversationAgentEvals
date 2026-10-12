@@ -118,8 +118,8 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([runFixture]) });
   });
 
-  await page.goto('/runs');
-  await expect(page.getByRole('heading', { name: 'Run an agent' })).toBeVisible();
+  await page.goto('/results');
+  await expect(page.getByRole('heading', { name: 'Results', exact: true })).toBeVisible();
   await expect(page.getByRole('link', { name: /ACC voice fixture agent/ })).toBeVisible();
 
   await page.getByRole('link', { name: /ACC voice fixture agent/ }).click();
@@ -831,14 +831,14 @@ test('runs list preserves an API base override in analysis links', async ({ page
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([runFixture]) });
   });
 
-  await page.goto('/runs?api_base=http%3A%2F%2Fapi.example.test');
+  await page.goto('/results?api_base=http%3A%2F%2Fapi.example.test');
   await expect(page.getByRole('link', { name: /ACC voice fixture agent/ })).toHaveAttribute(
     'href',
     '/runs/exec-demo123?api_base=http%3A%2F%2Fapi.example.test',
   );
-  await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Scenarios' })).toHaveAttribute(
+  await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Tests' })).toHaveAttribute(
     'href',
-    '/scenarios?api_base=http%3A%2F%2Fapi.example.test',
+    '/tests?api_base=http%3A%2F%2Fapi.example.test',
   );
 });
 
@@ -859,7 +859,7 @@ test('runs list exposes readable status filtering and run metadata', async ({ pa
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([runFixture, reviewRun]) });
   });
 
-  await page.goto('/runs');
+  await page.goto('/results');
   await expect(page.getByRole('heading', { name: 'Recent runs' })).toBeVisible();
   await expect(page.getByRole('link', { name: /Billing support staging/ })).toContainText('needs review');
   await expect(page.getByRole('link', { name: /Billing support staging/ })).toContainText('scenario simulator');
@@ -888,14 +888,14 @@ test('runs list refreshes active executions until their terminal status is visib
     });
   });
 
-  await page.goto('/runs');
+  await page.goto('/results');
   const runLink = page.getByRole('link', { name: /ACC voice fixture agent/ });
   await expect(runLink).toContainText('running');
   await expect(runLink).toContainText('completed', { timeout: 10_000 });
   expect(requests).toBeGreaterThanOrEqual(2);
 });
 
-test('run analysis preserves an API base override on the All runs link', async ({ page }) => {
+test('run analysis preserves an API base override on the All results link', async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
   });
@@ -904,9 +904,9 @@ test('run analysis preserves an API base override on the All runs link', async (
   });
 
   await page.goto('/runs/exec-demo123?api_base=http%3A%2F%2Fapi.example.test');
-  await expect(page.getByRole('link', { name: 'All runs' })).toHaveAttribute(
+  await expect(page.getByRole('link', { name: 'All results' })).toHaveAttribute(
     'href',
-    '/runs?api_base=http%3A%2F%2Fapi.example.test',
+    '/results?api_base=http%3A%2F%2Fapi.example.test',
   );
 });
 
@@ -1098,7 +1098,7 @@ test('voice analysis reports end-to-end target latency and scopes target diagnos
   await expect(page.getByLabel('Per-mark latency bars')).toContainText('End-to-end target response');
   await expect(page.getByLabel('Per-mark latency bars')).toContainText('Built-in target diagnostics');
   await expect(page.getByLabel('Per-mark latency bars')).toContainText(
-    'Target endpointing + ASR finalization 120ms',
+    'ASR endpoint → final 120ms',
   );
   await expect(page.getByLabel('Per-mark latency bars')).toContainText('LLM TTFT 180ms');
   await expect(page.getByLabel('Per-mark latency bars')).not.toContainText('LLM TTLT');

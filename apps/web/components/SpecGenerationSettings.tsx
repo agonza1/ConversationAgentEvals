@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { getDraftModelOptions, getSpecGenerationSettings, saveSpecGenerationSettings, type SpecGenerationSettings as Settings } from '@/lib/api';
 
 export function SpecGenerationSettings() {
@@ -13,13 +13,13 @@ export function SpecGenerationSettings() {
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
-  async function load() {
+  const load = useCallback(async (preserveSelection = false) => {
     setBusy(true);
     setError(null);
     try {
       const next = await getSpecGenerationSettings();
       setSettings(next);
-      setModel(next.model || '');
+      if (!preserveSelection) setModel(next.model || '');
       setLoaded(true);
       try {
         const options = await getDraftModelOptions();
@@ -30,9 +30,9 @@ export function SpecGenerationSettings() {
       }
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not load settings.'); }
     finally { setBusy(false); }
-  }
+  }, []);
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); }, [load]);
 
   async function save(selection = model.trim() || null) {
     setBusy(true);
@@ -48,27 +48,41 @@ export function SpecGenerationSettings() {
     finally { setBusy(false); }
   }
 
-  return <section className="card" aria-label="Draft generation settings">
-    <h2>Draft-generation model</h2>
-    <p>Used by both draft buttons in Evaluation design. Applies to this CAE deployment, not voice agents or evaluation judges.</p>
-    <label>Model
-      <select aria-label="Draft model choices" value={model && !ids.includes(model) ? '__custom__' : model} disabled={busy} onChange={(event) => { setMessage(null); setModel(event.target.value === '__custom__' ? '__custom__' : event.target.value); }}>
-        <option value="">Use deployment default{settings ? ` (${settings.default_model})` : ''}</option>
+  const changed = loaded && model !== (settings?.model || '');
+  return <section id="draft-generation" className="card settings-card" aria-label="Draft generation settings" aria-busy={busy}>
+    <header className="settings-card-header">
+      <div><p className="eyebrow">Test design</p><h2>Draft-generation model</h2></div>
+      <span className="settings-badge" data-tone={settings?.available ? 'success' : 'neutral'}>{settings ? settings.available ? 'Ready' : 'Needs connection' : error ? 'Unavailable' : 'Checking…'}</span>
+    </header>
+    <p className="settings-description">Creates draft behaviors and cases for your test sets. It does not change agent responses or evaluation judging.</p>
+    {settings ? <dl className="settings-summary">
+      <div><dt>{settings.available ? 'Active model' : 'Configured model'}</dt><dd><code>{settings.effective_model}</code></dd></div>
+      <div><dt>Source</dt><dd>{settings.source === 'console' ? 'Saved selection' : 'Deployment default'}</dd></div>
+    </dl> : null}
+    <label className="settings-field">Draft model
+      <select aria-label="Draft model choices" value={model && !ids.includes(model) ? '__custom__' : model} disabled={busy || !loaded} onChange={(event) => { setMessage(null); setModel(event.target.value === '__custom__' ? '__custom__' : event.target.value); }}>
+        <option value="">Use deployment default{settings && !settings.model ? ` (${settings.effective_model})` : ''}</option>
         {ids.map((id) => <option key={id} value={id}>{id}</option>)}
         <option value="__custom__">Custom model ID</option>
       </select>
     </label>
-    {model && !ids.includes(model) ? <label>Custom model ID
-      <input aria-label="Custom draft model ID" maxLength={160} value={model === '__custom__' ? '' : model} onChange={(event) => { setMessage(null); setModel(event.target.value || '__custom__'); }} />
+    {model && !ids.includes(model) ? <label className="settings-field">Custom model ID
+      <input aria-label="Custom draft model ID" disabled={busy || !loaded} maxLength={160} placeholder="Enter a model supported by your account" value={model === '__custom__' ? '' : model} onChange={(event) => { setMessage(null); setModel(event.target.value || '__custom__'); }} />
     </label> : null}
-    {settings ? <p>{settings.available ? 'Active' : 'Configured'}: {settings.effective_model} · {settings.provider} · {settings.source === 'console' ? 'Console setting' : 'Deployment default'}{settings.model && settings.model !== settings.effective_model ? ` (mapped from ${settings.model})` : ''}</p> : null}
-    {settings && !settings.available ? <p>No generation provider is connected. Connect Codex below or configure OPENAI_API_KEY/LLM_JUDGE_API_KEY.</p> : null}
-    <p>Only OpenAI text models supported by your active provider are usable. Saving does not verify model access or make a model call.</p>
-    {hint ? <p>{hint}</p> : null}
-    <button type="button" className="primary-link" disabled={busy || !loaded || model === '__custom__'} onClick={() => void save()}>{busy ? 'Working…' : 'Save draft model'}</button>{' '}
-    <button type="button" className="secondary-link" disabled={busy} onClick={() => void load()}>Refresh model list</button>
-    {!loaded && error ? <button type="button" className="secondary-link" disabled={busy} onClick={() => void save(null)}>Reset to deployment default</button> : null}
-    {message ? <p role="status">{message}</p> : null}
-    {error ? <p role="alert">{error}</p> : null}
+    {changed ? <p className="settings-help settings-unsaved">Unsaved selection · the active model stays unchanged until you save.</p> : null}
+    {settings && !settings.available ? <p className="settings-help">No generation provider is connected. <a href="#agent-execution">Connect OpenAI for agent execution</a>, or configure an API key on the server.</p> : null}
+    <div className="settings-actions">
+      <button type="button" className="primary-link" disabled={busy || !loaded || model === '__custom__'} onClick={() => void save()}>{busy ? 'Working…' : 'Save draft model'}</button>
+      <button type="button" className="secondary-link" disabled={busy} onClick={() => void load(loaded)}>Refresh model list</button>
+      {!loaded && error ? <button type="button" className="secondary-link" disabled={busy} onClick={() => void save(null)}>Reset to deployment default</button> : null}
+    </div>
+    {message ? <p className="settings-feedback" role="status">{message}</p> : null}
+    {error ? <p className="settings-feedback" role="alert">{error}</p> : null}
+    <details className="settings-details">
+      <summary>Model compatibility and provider details</summary>
+      <p>Only text models supported by your active OpenAI provider are usable. Saving a selection does not verify access or make a model call.</p>
+      {settings ? <p>Provider: <code>{settings.provider}</code>{settings.model && settings.model !== settings.effective_model ? <> · Mapped from <code>{settings.model}</code></> : null}.</p> : null}
+      {hint ? <p>{hint}</p> : null}
+    </details>
   </section>;
 }
