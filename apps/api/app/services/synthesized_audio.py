@@ -43,9 +43,13 @@ def finalize_tts_wav(audio: bytes) -> bytes:
                 if (channels != 1 or rate not in {16000, 24000, 48000}
                         or bits != 16 or alignment != 2 or byte_rate != rate * 2):
                     raise ValueError(invalid)
-                if tag == 0xfffe and (size < 40 or int.from_bytes(
-                        audio[start + 18:start + 20], 'little') != 16):
-                    raise ValueError(invalid)
+                if tag == 0xfffe:
+                    if size < 40:
+                        raise ValueError(invalid)
+                    extension_size = int.from_bytes(audio[start + 16:start + 18], 'little')
+                    if (extension_size < 22 or 18 + extension_size != size
+                            or int.from_bytes(audio[start + 18:start + 20], 'little') != 16):
+                        raise ValueError(invalid)
             elif kind == b'data':
                 if data_size is not None:
                     raise ValueError(invalid)

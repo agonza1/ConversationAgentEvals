@@ -59,8 +59,10 @@ def _replace_u16(audio, offset, value):
     return audio[:offset] + struct.pack('<H', value) + audio[offset + 2:]
 
 
-def _extensible_wav(*, guid=bytes.fromhex('0100000000001000800000aa00389b71'), valid_bits=16):
-    fmt = struct.pack('<HHIIHHHHI', 0xFFFE, 1, 24000, 48000, 2, 16, 22, valid_bits, 4) + guid
+def _extensible_wav(*, guid=bytes.fromhex('0100000000001000800000aa00389b71'), valid_bits=16,
+                    extension_size=22, extra_extension=b''):
+    fmt = (struct.pack('<HHIIHHHHI', 0xFFFE, 1, 24000, 48000, 2, 16,
+                       extension_size, valid_bits, 4) + guid + extra_extension)
     body = b'WAVEfmt ' + struct.pack('<I', len(fmt)) + fmt + b'data' + struct.pack('<I', len(PCM)) + PCM
     return b'RIFF' + struct.pack('<I', len(body)) + body
 
@@ -76,6 +78,39 @@ def test_complete_extensible_pcm16_wav_is_preserved():
     audio = _extensible_wav()
     assert finalize_tts_wav(audio) == audio
     assert read_wav(audio) == (24000, PCM)
+
+
+def test_extensible_pcm16_with_consistent_longer_extension_is_preserved():
+    audio = _extensible_wav(extension_size=24, extra_extension=b'\x00\x00')
+    assert finalize_tts_wav(audio) == audio
+    assert read_wav(audio) == (24000, PCM)
+
+
+@pytest.mark.parametrize('audio', [
+    _extensible_wav(extension_size=0),
+    _extensible_wav(extension_size=1),
+    _extensible_wav(extension_size=21),
+    _extensible_wav(extension_size=23),
+    _extensible_wav(extension_size=24),
+    _extensible_wav(extension_size=0xFFFF),
+    _extensible_wav(extra_extension=b'\x00\x00'),
+])
+def test_extensible_extension_length_must_match_available_format_bytes(audio):
+    with pytest.raises(ValueError):
+        finalize_tts_wav(audio)
+
+
+@pytest.mark.parametrize('remaining_format_bytes', [18, 20, 22, 38, 39])
+def test_truncated_extensible_format_extension_is_not_repaired(remaining_format_bytes):
+    original = _extensible_wav()
+    # Rebuild the RIFF and fmt sizes honestly around the truncated format,
+    # keeping otherwise-valid PCM so only the extension itself is broken.
+    fmt = original[20:20 + remaining_format_bytes]
+    body = (b'WAVEfmt ' + struct.pack('<I', len(fmt)) + fmt
+            + (b'\x00' if len(fmt) % 2 else b'') + original[60:])
+    audio = b'RIFF' + struct.pack('<I', len(body)) + body
+    with pytest.raises(ValueError):
+        finalize_tts_wav(audio)
 
 
 @pytest.mark.parametrize('audio', [
