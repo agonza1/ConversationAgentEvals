@@ -136,7 +136,7 @@ test('Returning to Run refreshes saved speech and readiness without placing a ca
   ready = false;
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(summary).toContainText('nova-3');
-  await expect(page.getByText('Saved speech provider is unavailable.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('alert', { name: 'Run Agent voice preflight blocked' })).toContainText('Saved speech provider is unavailable.');
   await expect(page.getByRole('button', { name: /^Run evaluation$|^Run 1 voice test$/ })).toBeDisabled();
   expect(mock.writes).toEqual([]);
 });
