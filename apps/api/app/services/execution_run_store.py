@@ -176,6 +176,20 @@ def append_conversation(execution_run_id: str, conversation: ConversationRecord)
     return upsert_conversation(execution_run_id, conversation)
 
 
+def _waylo_dialogue_counts(entries: list, *, native: bool = False) -> dict[str, int]:
+    counts = {'user': 0, 'agent': 0}
+    speakers = {'user': {'user', 'caller', 'customer', 'patient', 'learner', 'tester', 'human'},
+                'agent': {'agent', 'assistant', 'target', 'bot', 'ai'}}
+    for entry in entries:
+        if not isinstance(entry, dict) or not str(entry.get('text') or '').strip():
+            continue
+        speaker = str(entry.get('role' if native else 'speaker') or '').lower()
+        for role, aliases in speakers.items():
+            if speaker in ({role} if native else aliases):
+                counts[role] += 1
+    return counts
+
+
 def refresh_waylo_evidence(execution_run_id: str, expected: dict, captured: dict, exported: dict) -> None:
     """Replace one provisional export, retaining RTC media and invalidating old scores.
 
@@ -198,6 +212,23 @@ def refresh_waylo_evidence(execution_run_id: str, expected: dict, captured: dict
                             'transcript_id': line['id'],
                             'text_source_label': 'Target ASR receipt (Waylo)' if line['role'] == 'user' else 'Target-reported final transcript (Waylo)'},
         ).model_dump(mode='json') for line in captured['transcripts'] if line['role'] in {'user', 'agent'}]
+        # Captures are provisional. Refuse to hide known dialogue; counts are a
+        # non-regression gate, NOT proof of completeness or audio alignment.
+        # Legitimate ASR merges that reduce entries are conservatively refused.
+        baselines = [_waylo_dialogue_counts(row.get('turns') or []),
+                     _waylo_dialogue_counts(row.get('rtc_turns') or [])]
+        for attachment in (row.get('ietf_vcon_export') or {}).get('attachments', []):
+            if not isinstance(attachment, dict) or attachment.get('purpose') != 'Waylo native source evidence':
+                continue
+            body = attachment.get('body')
+            transcripts = body.get('transcripts') if isinstance(body, dict) else None
+            if isinstance(transcripts, list):
+                baselines.append(_waylo_dialogue_counts(transcripts, native=True))
+        received = _waylo_dialogue_counts(turns)
+        if any(received[role] < max(baseline[role] for baseline in baselines) for role in received):
+            raise ValueError("Waylo's provisional transcript is shorter than saved dialogue for at least one speaker. "
+                             'Refresh refused; saved evidence and reviews were not changed. '
+                             'Retry later or review the retained RTC evidence manually; ASR merges can also trigger this safeguard.')
         if row.get('ietf_vcon_export') == exported['vcon'] and row.get('turns') == turns:
             return  # Neither provider evidence nor judge-visible dialogue changed.
         profile = decode_evidence(exported['vcon'])

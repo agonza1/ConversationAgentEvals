@@ -331,33 +331,154 @@ def test_changed_refreshes_keep_original_rtc_provenance_and_latest_assert_dialog
         assert persisted[0]['rtc_turns'] == original['turns']
 
 
-@pytest.mark.parametrize('retained_count', [0, 1])
-def test_refresh_removes_stale_dialogue_and_unchanged_revision_preserves_review(connected, monkeypatch, retained_count):
+@pytest.mark.parametrize('receipts', [[], [('agent', 'Partial target transcript')],
+    [('user', 'Partial caller transcript')], [('user', 'First fragment'), ('user', 'Second fragment')],
+    [('user', '   '), ('agent', 'Target transcript')]])
+def test_partial_refresh_refuses_atomically_without_replacing_saved_evidence(connected, monkeypatch, tmp_path, receipts):
+    from app.schemas.execution import ConversationRecord
+    from test_waylo_target import transcript
+    proof, http, run_id, conv_id, native = finished_waylo_run(connected, monkeypatch)
+    reviewed = {**execution_run_store.get_conversation(run_id, conv_id),
+                'judge_reviews': [{'review_id': 'new-review', 'status': 'accepted'}],
+                'score': 75, 'verdict': 'pass'}
+    execution_run_store.upsert_conversation(run_id, ConversationRecord.model_validate(reviewed))
+    before = execution_run_store.get_execution_run(run_id)
+    run_path = tmp_path / 'runs' / run_id / 'run.json'
+    run_bytes = run_path.read_bytes()
+    inference_path = run_path.with_name('inference_set.jsonl')
+    inference_path.write_text(json.dumps(reviewed) + '\n', encoding='utf-8')
+    inference_bytes = inference_path.read_bytes()
+    native['transcripts'] = [transcript(index, role, text) for index, (role, text) in enumerate(receipts, 1)]
+    native['items'] = [{'position': 1, 'rawText': 'A new backend observation', 'quantity': 99, 'unit': 'boxes'}]
+    async def read(*args, **kwargs):
+        return deepcopy(native)
+    monkeypatch.setattr(WayloClient, 'capture', read)
+    response = http.post(f'/api/agents/{TARGET["id"]}/capture', json={
+        'session_id': native['session']['id'], 'execution_run_id': run_id,
+        'conversation_id': conv_id, 'user_id': 'execution-user'},
+        headers={**HEADERS, 'X-CAE-Waylo-Session': proof})
+    assert response.status_code == 400, response.text
+    assert 'provisional transcript is shorter' in response.json()['detail']
+    assert 'saved evidence and reviews were not changed' in response.json()['detail']
+    assert execution_run_store.get_execution_run(run_id) == before
+    assert execution_run_store.get_conversation(run_id, conv_id) == reviewed
+    assert run_path.read_bytes() == run_bytes
+    assert inference_path.read_bytes() == inference_bytes
+
+
+@pytest.mark.parametrize('baseline_source', ['native', 'primary', 'rtc'])
+def test_refresh_checks_each_saved_dialogue_baseline(connected, monkeypatch, baseline_source):
+    from app.schemas.execution import ConversationRecord
     from app.services.waylo_target import project_capture
-    from app.services.assert_transcript_adapter import build_assert_inference_row
     from test_waylo_target import transcript
     _, _, run_id, conv_id, native = finished_waylo_run(connected, monkeypatch)
     original = execution_run_store.get_conversation(run_id, conv_id)
-    native['transcripts'] = [transcript(4, 'agent', 'Only retained native final')] if retained_count else []
+    if baseline_source == 'native':
+        fuller = deepcopy(native)
+        fuller['transcripts'].append(transcript(3, 'agent', 'Previously captured late response'))
+        original['ietf_vcon_export'] = project_capture(fuller, execution_run_id=run_id, conversation_id=conv_id)['vcon']
+    else:
+        original['rtc_turns'] = deepcopy(original['turns'])
+        key = 'turns' if baseline_source == 'primary' else 'rtc_turns'
+        original[key].append({'turn_index': 3, 'speaker': 'Agent', 'text': '[Target audio captured; transcript pending]'})
+    execution_run_store.upsert_conversation(run_id, ConversationRecord.model_validate(original))
+    expected = execution_run_store.get_conversation(run_id, conv_id)
+    before = execution_run_store.get_execution_run(run_id)
+    with pytest.raises(ValueError, match='provisional transcript is shorter'):
+        execution_run_store.refresh_waylo_evidence(run_id, expected, native,
+            project_capture(native, execution_run_id=run_id, conversation_id=conv_id))
+    assert execution_run_store.get_execution_run(run_id) == before
+
+
+def test_later_provider_regression_cannot_erase_a_successful_refresh(connected, monkeypatch):
+    from app.services.waylo_target import project_capture
+    from test_waylo_target import transcript
+    _, _, run_id, conv_id, native = finished_waylo_run(connected, monkeypatch)
+    original = deepcopy(native)
+    native['transcripts'].append(transcript(3, 'agent', 'Late target response'))
+    expected = execution_run_store.get_conversation(run_id, conv_id)
+    execution_run_store.refresh_waylo_evidence(run_id, expected, native,
+        project_capture(native, execution_run_id=run_id, conversation_id=conv_id))
+    expected = execution_run_store.get_conversation(run_id, conv_id)
+    before = execution_run_store.get_execution_run(run_id)
+    with pytest.raises(ValueError, match='provisional transcript is shorter'):
+        execution_run_store.refresh_waylo_evidence(run_id, expected, original,
+            project_capture(original, execution_run_id=run_id, conversation_id=conv_id))
+    assert execution_run_store.get_execution_run(run_id) == before
+
+
+def test_identical_partial_export_cannot_bypass_archived_rtc_guard(connected, monkeypatch):
+    from app.schemas.execution import ConversationRecord
+    from app.services.waylo_target import project_capture
+    _, _, run_id, conv_id, native = finished_waylo_run(connected, monkeypatch)
+    original = execution_run_store.get_conversation(run_id, conv_id)
     export = project_capture(native, execution_run_id=run_id, conversation_id=conv_id)
     execution_run_store.refresh_waylo_evidence(run_id, original, native, export)
-    after = execution_run_store.get_conversation(run_id, conv_id)
-    assert len(after['turns']) == retained_count
-    assert after['rtc_turns'] == original['turns']
-    assert after['timeline'] == []
-    if retained_count:
-        assert after['turns'][0]['turn_index'] == 4  # Native sequence, not the filtered position.
-    inference = build_assert_inference_row(run=execution_run_store.get_execution_run(run_id), conversation=after)
-    messages = [event['edit']['message']['content'] for event in inference['events'] if 'message' in event['edit']]
-    assert messages == [line['text'] for line in native['transcripts']]
-    # Re-reading the identical export must not supersede a new manual review.
-    from app.schemas.execution import ConversationRecord
-    reviewed = {**after, 'judge_reviews': [{'review_id': 'new-review', 'status': 'accepted'}],
-                'score': 75, 'verdict': 'pass'}
-    execution_run_store.upsert_conversation(run_id, ConversationRecord.model_validate(reviewed))
+    damaged = execution_run_store.get_conversation(run_id, conv_id)
+    damaged['rtc_turns'].append({'turn_index': 3, 'speaker': 'Agent', 'text': '[Retained target audio; transcript pending]'})
+    damaged['judge_reviews'] = [{'review_id': 'accepted-review', 'status': 'accepted'}]
+    execution_run_store.upsert_conversation(run_id, ConversationRecord.model_validate(damaged))
     expected = execution_run_store.get_conversation(run_id, conv_id)
+    before = execution_run_store.get_execution_run(run_id)
+    with pytest.raises(ValueError, match='provisional transcript is shorter'):
+        execution_run_store.refresh_waylo_evidence(run_id, expected, native, export)
+    assert execution_run_store.get_execution_run(run_id) == before
+
+
+def test_empty_native_baseline_still_preserves_nonempty_rtc_dialogue(connected, monkeypatch):
+    from app.schemas.execution import ConversationRecord
+    from app.services.waylo_target import project_capture
+    _, _, run_id, conv_id, native = finished_waylo_run(connected, monkeypatch)
+    native['transcripts'] = []
+    export = project_capture(native, execution_run_id=run_id, conversation_id=conv_id)
+    original = execution_run_store.get_conversation(run_id, conv_id)
+    original['ietf_vcon_export'] = export['vcon']
+    execution_run_store.upsert_conversation(run_id, ConversationRecord.model_validate(original))
+    expected = execution_run_store.get_conversation(run_id, conv_id)
+    before = execution_run_store.get_execution_run(run_id)
+    with pytest.raises(ValueError, match='provisional transcript is shorter'):
+        execution_run_store.refresh_waylo_evidence(run_id, expected, native, export)
+    assert execution_run_store.get_execution_run(run_id) == before
+
+
+def test_identical_empty_canonical_export_cannot_bypass_retained_rtc_guard(connected, monkeypatch):
+    from app.schemas.execution import ConversationRecord
+    from app.services.waylo_target import project_capture
+    _, _, run_id, conv_id, native = finished_waylo_run(connected, monkeypatch)
+    original = execution_run_store.get_conversation(run_id, conv_id)
+    native['transcripts'] = []
+    export = project_capture(native, execution_run_id=run_id, conversation_id=conv_id)
+    damaged = {**original, 'turns': [], 'rtc_turns': deepcopy(original['turns']),
+               'ietf_vcon_export': export['vcon'], 'transcript': '',
+               'judge_reviews': [{'review_id': 'accepted-review', 'status': 'accepted'}]}
+    execution_run_store.upsert_conversation(run_id, ConversationRecord.model_validate(damaged))
+    expected = execution_run_store.get_conversation(run_id, conv_id)
+    assert expected['turns'] == [] and expected['ietf_vcon_export'] == export['vcon']
+    before = execution_run_store.get_execution_run(run_id)
+    with pytest.raises(ValueError, match='provisional transcript is shorter'):
+        execution_run_store.refresh_waylo_evidence(run_id, expected, native, export)
+    assert execution_run_store.get_execution_run(run_id) == before
+
+
+def test_empty_dialogue_can_refresh_backend_evidence_without_claiming_completeness(connected, monkeypatch):
+    from app.schemas.execution import ConversationRecord
+    from app.services.waylo_target import project_capture
+    _, _, run_id, conv_id, native = finished_waylo_run(connected, monkeypatch)
+    native['transcripts'] = []
+    original = execution_run_store.get_conversation(run_id, conv_id)
+    original.update(turns=[], live_events=[], ietf_vcon_export=project_capture(native,
+        execution_run_id=run_id, conversation_id=conv_id)['vcon'])
+    execution_run_store.upsert_conversation(run_id, ConversationRecord.model_validate(original))
+    native['items'] = [{'position': 1, 'rawText': 'Observed backend note', 'quantity': 1}]
+    expected = execution_run_store.get_conversation(run_id, conv_id)
+    export = project_capture(native, execution_run_id=run_id, conversation_id=conv_id)
     execution_run_store.refresh_waylo_evidence(run_id, expected, native, export)
-    assert execution_run_store.get_conversation(run_id, conv_id) == expected
+    after = execution_run_store.get_conversation(run_id, conv_id)
+    assert after['turns'] == [] and after['rtc_turns'] == []
+    assert after['final_state']['request_list'] == native['items']
+    assert after['status'] == after['verdict'] == 'needs_review'
+    from app.services.vcon_evidence import decode_evidence
+    assert decode_evidence(after['ietf_vcon_export'])['context']['capture_completeness'] == 'provisional'
 
 
 def test_identical_export_refresh_repairs_original_rtc_turns_once(connected, monkeypatch):
