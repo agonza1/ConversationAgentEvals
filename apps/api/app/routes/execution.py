@@ -244,7 +244,10 @@ def get_run(execution_run_id: str, user_id: str = Query(...)):
     run = execution_run_store.get_execution_run(execution_run_id)
     if run is None or run.get('user_id') != user_id:
         raise HTTPException(status_code=404, detail='Execution run not found.')
-    return run
+    # Presentation-only projection: internal store snapshots remain byte-for-
+    # byte authoritative for capture/review optimistic concurrency checks.
+    from app.services.waylo_reporting import present_run
+    return present_run(run)
 
 
 @router.get('/runs/{execution_run_id}/conversations/{conversation_id}')

@@ -151,13 +151,13 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
           <section className="metric-summary-grid" aria-label="Metric summaries">
             <MetricTile
               title="Interruption Detection"
-              value={run.executor_id === 'waylo_livekit' ? 'unknown' : `${summary.interruptionCount}`}
-              detail={run.executor_id === 'waylo_livekit' ? 'Target interruption handling is not proven by caller barge-in' : 'sample count across conversations'}
+              value={run.executor_id === 'waylo_livekit' ? wayloInterruptionSummary(run.conversations).value : `${summary.interruptionCount}`}
+              detail={run.executor_id === 'waylo_livekit' ? wayloInterruptionSummary(run.conversations).detail : 'sample count across conversations'}
               selected={metric === 'audio_interruption'}
               onClick={() => setMetric('audio_interruption')}
             />
             <MetricTile
-              title={run.mode === 'pipecat_webrtc'
+              title={run.executor_id === 'waylo_livekit' ? 'Observed target response latency' : run.mode === 'pipecat_webrtc'
                 ? 'End-to-end target response latency'
                 : summary.targetSpecific
                   ? 'Target Response Latency'
@@ -174,12 +174,12 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
             />
             {run.mode !== 'text_callable' ? (
               <MetricTile
-                title="Word Error Rate"
+                title={run.executor_id === 'waylo_livekit' ? 'Provisional caller WER' : 'Word Error Rate'}
                 value={summary.wordErrorRate
                   ? formatWerPercent(summary.wordErrorRate.percent)
                   : 'n/a'}
                 detail={summary.wordErrorRate
-                  ? `${summary.wordErrorRate.errors} errors / ${summary.wordErrorRate.referenceWords} reference words`
+                  ? `${summary.wordErrorRate.errors} errors / ${summary.wordErrorRate.referenceWords} reference words${run.executor_id === 'waylo_livekit' ? ' · ordered alignment, needs review' : ''}`
                   : 'Source text and ASR receipt not captured'}
                 selected={metric === 'word_error_rate'}
                 onClick={() => setMetric('word_error_rate')}
@@ -255,7 +255,11 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
                   <p>Capture only — evaluation submission is manual. Missing observations remain unknown, not a pass or a failure.</p>
                   {conversation.configuration_check ? <p role="note">Configuration: {conversation.configuration_check.reason}</p> : null}
                   <dl>{Object.entries(conversation.evidence_coverage).map(([area, coverage]) => (
-                    <div key={area}><dt>{area.replaceAll('_', ' ')}</dt><dd>{coverage.status} · needs review. Missing: {coverage.missing.join(', ').replaceAll('_', ' ')}</dd></div>
+                    <div key={area}><dt>{coverageAreaLabel(area)}</dt><dd>
+                      {coverage.status} · needs review.
+                      {coverage.observed?.length ? <> Captured: {coverage.observed.join(', ').replaceAll('_', ' ')}.</> : null}
+                      {' '}Missing or unverified: {coverage.missing.join(', ').replaceAll('_', ' ')}.
+                    </dd></div>
                   ))}</dl>
                 </section>
               ) : null}
@@ -271,7 +275,6 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
                   userId={run.user_id || userId}
                   runStatus={run.status}
                   autoExpandLiveEvents
-                  httpCaptureOnly={run.executor_id === 'waylo_livekit'}
                 />
               ) : null}
               {(conversation?.turns || []).length ? (
@@ -302,7 +305,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
             {conversation?.ietf_vcon_export ? (
               <p>
                 <a href={`${getApiBase()}/api/execution/runs/${encodeURIComponent(executionRunId)}/conversations/${encodeURIComponent(conversation.conversation_id)}/vcon?user_id=${encodeURIComponent(userId)}`}>Download vCon evidence</a>
-                {conversation.recording ? <> · <a href={`${getApiBase()}/api/execution/runs/${encodeURIComponent(executionRunId)}/conversations/${encodeURIComponent(conversation.conversation_id)}/vcon?user_id=${encodeURIComponent(userId)}&include_audio=true`}>Include local recording (up to 20 MB)</a></> : null}
+                {conversation.recording || conversation.audio_session?.transport === 'waylo_livekit' ? <> · <a href={`${getApiBase()}/api/execution/runs/${encodeURIComponent(executionRunId)}/conversations/${encodeURIComponent(conversation.conversation_id)}/vcon?user_id=${encodeURIComponent(userId)}&include_audio=true`}>Include local recording (up to 20 MB)</a></> : null}
               </p>
             ) : null}
           </div>
@@ -723,10 +726,12 @@ function MetricDetail({
     const wordErrorRate = aggregateWordErrorRates(turns.map((item) => item.result));
     return (
       <div className="runs-detail-copy">
-        <h2>Word Error Rate</h2>
+        <h2>{run.executor_id === 'waylo_livekit' ? 'Provisional caller Word Error Rate' : 'Word Error Rate'}</h2>
         <p className="latency-definition">
           <strong>Source text → received ASR transcript.</strong>{' '}
-          Public-demo source text is target-reported, not independently verified ground truth.{' '}
+          {run.executor_id === 'waylo_livekit'
+            ? 'Tester reference → Waylo final ASR, provisionally aligned by turn order. Splits/merges are not forced into alignment. This diagnostic cannot distinguish recognition errors from clipped/dropped delivery and is not an accepted grade. '
+            : 'Public-demo source text is target-reported, not independently verified ground truth. '}
           Lower is better. This measures the speech path&apos;s transcription fidelity, not whether the agent gave
           a semantically correct answer.
         </p>
@@ -774,8 +779,9 @@ function MetricDetail({
           </>
         ) : (
           <p>
-            WER is unavailable because this conversation does not contain both source text and received ASR
-            receipt for any voice turn.
+            {run.executor_id === 'waylo_livekit'
+              ? String(asRecord(conversation.evidence_diagnostics?.speech_boundary).reason || 'Provisional WER is unknown: no uniquely aligned tester reference and Waylo final ASR turns.')
+              : 'WER is unavailable because this conversation does not contain both source text and received ASR receipt for any voice turn.'}
           </p>
         )}
         <p className="resolution-note">
@@ -791,6 +797,16 @@ function MetricDetail({
   }
 
   if (metric === 'audio_interruption') {
+    if (run.executor_id === 'waylo_livekit') {
+      const interruption = asRecord(conversation.evidence_diagnostics?.interruption);
+      return <div className="runs-detail-copy">
+        <h2>Interruption observations</h2>
+        <p>{wayloInterruptionSummary([conversation]).detail}</p>
+        <p>Controlled attempts: {Number(interruption.controlled_attempts || 0)}.
+          {' '}Handling: {String(interruption.handling_status || 'unknown').replaceAll('_', ' ')}.</p>
+        <p>Native true/false flags are not proof of detection or correct handling. No flag recorded means unknown, not zero interruptions.</p>
+      </div>;
+    }
     return (
       <div className="runs-detail-copy">
         <h2>Interruption Detection</h2>
@@ -806,6 +822,24 @@ function MetricDetail({
     .map((mark) => ({ mark, ms: markLatencyMs(mark) }))
     .filter((item): item is { mark: Record<string, unknown>; ms: number } => item.ms != null);
   const latency = latencyStats(measuredMarks.map((item) => item.ms));
+  if (run.executor_id === 'waylo_livekit') {
+    const worker = asRecord(conversation.evidence_diagnostics?.response_latency).worker_observations;
+    const workerMarks = Array.isArray(worker) ? worker.map(asRecord) : [];
+    return <div className="runs-detail-copy">
+      <h2>Observed target response latency</h2>
+      <p>Local caller audio queue drained → first remote frame received above RMS 150.
+        {' '}CAE monotonic transport clock; milliseconds. This is an observer speech-onset heuristic, not browser playback delay or target-internal processing time.</p>
+      <p>{latency.count ? `count ${latency.count} · avg ${fmtMs(latency.avg_ms)} · p90 ${fmtMs(latency.p90_ms)}` : 'Observer response timing is unknown.'}</p>
+      <ul aria-label="Observer latency observations">{measuredMarks.map(({ mark, ms }, index) =>
+        <li key={String(mark.event_id || index)}>{String(mark.turn_id || `response ${index + 1}`)}: {fmtMs(ms)}</li>)}</ul>
+      <h3>Native worker diagnostics — separate clock and boundary</h3>
+      <p>Waylo worker-reported LiveKit turn e2e_latency, converted from seconds to milliseconds.
+        {' '}Do not add or average these with observer latency; the boundaries differ.</p>
+      {workerMarks.length ? <ul aria-label="Worker latency observations">{workerMarks.map((mark, index) =>
+        <li key={String(mark.event_id || index)}>Turn {String(mark.turn_index || mark.turn_id || index + 1)}: {fmtMs(Number(mark.value_ms))} · {String(mark.clock_origin || 'clock unknown')}</li>)}</ul>
+        : <p>Native worker timing is unknown.</p>}
+    </div>;
+  }
   if (conversation.mode === 'pipecat_webrtc' && !evidence.marks.length) {
     return (
       <div className="runs-detail-copy">
@@ -1221,6 +1255,9 @@ function aggregateRunMetrics(run: ExecutionRunRecord | null) {
   const usesSpeechEndMetric = conversations.some((item) => (
     responseLatencyEvidence(item).marks.some(isSpeechEndToFirstAudiblePcmMark)
   ));
+  const usesWayloObserverMetric = conversations.some((item) => (
+    responseLatencyEvidence(item).marks.some(isWayloObserverMark)
+  ));
   const voiceTargetSpecific = conversations.length > 0 && conversations.every(
     (item) => item.mode === 'pipecat_webrtc',
   );
@@ -1252,7 +1289,9 @@ function aggregateRunMetrics(run: ExecutionRunRecord | null) {
     p90Latency: measuredLatency.p90_ms,
     targetSpecific,
     usesSpeechEndMetric,
-    latencyDefinition: usesSpeechEndMetric
+    latencyDefinition: usesWayloObserverMetric
+      ? 'Local caller queue drained → received target speech (RMS > 150)'
+      : usesSpeechEndMetric
       ? 'Tester speech end → first target audio received at tester'
       : voiceTargetSpecific
         ? 'first audible byte'
@@ -1625,12 +1664,36 @@ function isTargetResponseMark(mark: Record<string, unknown>) {
 }
 
 function isTargetFirstAudioByteMark(mark: Record<string, unknown>) {
-  return isEndToEndTargetResponseMark(mark)
+  return isWayloObserverMark(mark) || isEndToEndTargetResponseMark(mark)
     || mark.kind === 'target_first_audio_byte'
     || mark.kind === 'speech_end_to_first_audible_byte'
     || mark.kind === 'speech_end_to_first_audible_pcm'
     || mark.response_metric === 'speech_end_to_first_audible_byte'
     || mark.response_metric === 'target_time_to_first_audio_byte';
+}
+
+function isWayloObserverMark(mark: Record<string, unknown>) {
+  return mark.kind === 'cae_livekit_queue_end_to_received_speech';
+}
+
+function coverageAreaLabel(area: string) {
+  const labels: Record<string, string> = {
+    conversation_experience: 'Conversation · experience',
+    speech_boundary: 'Comprehension · speech boundary',
+    agent_execution: 'Conduct · execution',
+    business_outcome: 'Completion · business outcome',
+  };
+  return labels[area] || area.replaceAll('_', ' ');
+}
+
+function wayloInterruptionSummary(conversations: ConversationRecord[]) {
+  const reports = conversations.map((item) => asRecord(item.evidence_diagnostics?.interruption));
+  const yes = reports.reduce((sum, item) => sum + Number(item.reported_true || 0), 0);
+  const no = reports.reduce((sum, item) => sum + Number(item.reported_false || 0), 0);
+  const attempts = reports.reduce((sum, item) => sum + Number(item.controlled_attempts || 0), 0);
+  const unknown = reports.filter((item) => item.status !== 'observed').length;
+  return { value: yes + no ? `${yes} true / ${no} false` : 'unknown',
+    detail: `${yes + no ? `Native interruption flags: ${yes} true, ${no} false` : 'No native interruption flags recorded'}${unknown ? ` · ${unknown} conversations unknown` : ''} · ${attempts ? 'handling needs review' : 'handling not tested'}` };
 }
 
 function isEndToEndTargetResponseMark(mark: Record<string, unknown>) {
@@ -1761,7 +1824,16 @@ type WordErrorRateResult = {
 };
 
 function conversationWordErrorRates(conversation: ConversationRecord) {
-  return (conversation.turns || []).flatMap((turn) => {
+  const boundary = asRecord(conversation.evidence_diagnostics?.speech_boundary);
+  // The diagnostic is kept separate from recorded turns/grades. Only uniquely
+  // order-aligned comparisons supplied by capture are shown, never fuzzy matched.
+  const diagnosticTurns: ConversationTurn[] = Array.isArray(boundary.comparisons)
+    ? boundary.comparisons.map(asRecord).filter((row) => row.alignment === 'ordered_one_to_one_provisional')
+      .map((row, index) => ({ turn_index: index + 1, speaker: 'Caller', direction: 'tester_to_target',
+        frame_metadata: { source_text: row.reference_text, asr_receipt: row.target_asr_final,
+          source_text_label: 'Tester reference (provisional alignment)', asr_receipt_label: 'Waylo final ASR' } }))
+    : [];
+  return (conversation.evidence_diagnostics ? diagnosticTurns : conversation.turns || []).flatMap((turn) => {
     const metadata = turn.frame_metadata || {};
     const reference = stringValue(metadata.source_text) || stringValue(metadata.llm_output);
     const hypothesis = typeof metadata.asr_receipt === 'string'

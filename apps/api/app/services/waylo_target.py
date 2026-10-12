@@ -275,7 +275,7 @@ def project_capture(capture: dict, *, voice_events: list[dict] | None = None,
                     'event_type': 'playback.interruption_observed', 'interrupted': payload['interrupted'],
                     'source': 'waylo.agent.turn_metrics', 'scope': 'Reported agent speech interruption; cause not independently proven.'})
             latency = payload.get('e2e_latency')
-            if type(latency) in {int, float} and 0 <= latency < 1000:
+            if e.get('subject') == 'agent' and type(latency) in {int, float} and 0 <= latency < 1000:
                 native_voice.append({**common, 'event_id': common['event_id'] + '/latency',
                     'event_type': 'latency.observation', 'value_ms': round(latency * 1000, 3), 'unit': 'ms',
                     'source': 'waylo.agent.turn_metrics', 'definition': 'Worker-reported LiveKit turn e2e_latency, not tester-observed network latency.'})
@@ -303,14 +303,9 @@ def project_capture(capture: dict, *, voice_events: list[dict] | None = None,
     config_reason = 'Internal effective session snapshot is not public; versioned persona alone does not prove preset rules.'
     if config.get('presetId') == 'item_capture_assistant':
         config_reason = 'Item Capture preset forbids catalog lookup and overrides persona; Mike catalog contract conflicts.'
-    observed = {
-        'conversation_experience': (bool(media_dialogs), ['interruptions', 'silence', 'continuity', 'remote_playback_ack']),
-        'speech_boundary': (any(e.get('event_type') == 'tester.audio.sent' for e in voice), ['peer_delivery_ack', 'target_asr_alignment']),
-        'agent_execution': (bool(tools), ['complete_tool_payloads', 'policy_decisions', 'turn_associations']),
-        'business_outcome': (bool(snapshots), ['expected_state_comparison', 'spoken_confirmation_alignment', 'catalog_resolution']),
-    }
-    coverage = {area: {'status': 'partial' if present else 'unknown', 'evaluation_status': 'needs_review',
-                       'missing': missing, 'scoreable': False} for area, (present, missing) in observed.items()}
+    from app.services.waylo_reporting import observed_coverage
+    coverage = observed_coverage(tools=tools, voice=voice, snapshots=snapshots,
+        diagnostics=diagnostics, media_dialogs=media_dialogs, expectations=expectations)
     turns = [{'speaker': 'Caller' if t.get('role') == 'user' else 'Agent', 'text': t.get('text', ''),
               'turn_index': t['seq']} for t in capture['transcripts'] if t.get('role') in {'user', 'agent'}]
     vcon = build_ietf_execution_vcon(conversation_id=conversation_id or session_id,

@@ -141,7 +141,8 @@ export interface ConversationLiveEvent {
 }
 
 export interface ConversationRecord {
-  evidence_coverage?: Record<string, { status: string; evaluation_status: string; missing: string[] }>;
+  evidence_coverage?: Record<string, { status: string; evaluation_status: string; observed?: string[]; missing: string[] }>;
+  evidence_diagnostics?: Record<string, unknown>;
   configuration_check?: { status: string; reason: string; agent_version?: number };
   conversation_id: string;
   execution_run_id: string;

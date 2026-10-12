@@ -535,6 +535,7 @@ def _run_one_conversation(
             transcript=result.get('transcript'),
             action_trace=result.get('action_trace') or [],
             evidence_coverage=result.get('evidence_coverage'),
+            evidence_diagnostics=result.get('evidence_diagnostics'),
             configuration_check=result.get('configuration_check'),
             final_state=result.get('final_state') or {},
             evaluation_findings=_compact_evaluation_findings(result.get('evaluation_report')),
@@ -827,6 +828,8 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
             next_utterance=wording, synthesize=synthesis, event_observer=event_observer,
             client=WayloClient(target, credential_lease=lease), credential_lease=lease, monitor_runtime=config)
         profile = decode_evidence(result['ietf_vcon_export'])
+        from app.services.waylo_reporting import report_profile
+        result.update(report_profile(profile))
         result['action_trace'] = latest_tool_events(profile['tool_events'])
         observed_final = next((s['state'] for s in profile['state_snapshots'] if s['phase'] == 'final'), {})
         result['final_state'] = {**observed_final, **result['final_state']}
