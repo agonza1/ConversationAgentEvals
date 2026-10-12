@@ -1,5 +1,7 @@
 'use client';
 
+import { ResultsPagination, RESULTS_PAGE_SIZE, ResultsEvidenceDetails } from '@/components/ResultsPagination';
+
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiAwareLink } from './ApiAwareLink';
@@ -924,11 +926,12 @@ async function saveBenchmarkRun(payload: {
   );
 }
 
-async function listBenchmarkSuiteRuns(userId: string, projectId: string, suiteId?: string, status?: string) {
+async function listBenchmarkSuiteRuns(userId: string, projectId: string, suiteId?: string, status?: string, page?: number) {
   const params = new URLSearchParams({ user_id: userId, project_id: projectId });
   if (suiteId) params.set('suite_id', suiteId);
   if (status) params.set('status', status);
 
+  if (page !== undefined) { params.set('limit', String(RESULTS_PAGE_SIZE + 1)); params.set('offset', String(page * RESULTS_PAGE_SIZE)); }
   return handleJson<BenchmarkSuiteRunRecord[]>(
     await fetch(`${getApiBase()}/api/benchmarks/suite-runs?${params.toString()}`, { cache: 'no-store' }),
   );
@@ -1234,11 +1237,12 @@ function executionAudioSessionSummary(session?: JsonRecord | null): string | nul
   return parts.length ? parts.join(' · ') : null;
 }
 
-async function listSavedRuns(userId: string, projectId: string, suiteId?: string, scenarioId?: string) {
+async function listSavedRuns(userId: string, projectId: string, suiteId?: string, scenarioId?: string, page?: number) {
   const params = new URLSearchParams({ user_id: userId, project_id: projectId });
   if (suiteId) params.set('suite_id', suiteId);
   if (scenarioId) params.set('scenario_id', scenarioId);
 
+  if (page !== undefined) { params.set('limit', String(RESULTS_PAGE_SIZE + 1)); params.set('offset', String(page * RESULTS_PAGE_SIZE)); }
   return handleJson<SavedRun[]>(
     await fetch(`${getApiBase()}/api/product/runs?${params.toString()}`, { cache: 'no-store' }),
   );
@@ -2284,6 +2288,13 @@ export function BenchmarkRunner({
   const [productConfig, setProductConfig] = useState<ProductConfig | null>(null);
   const judgeRequestId = useRef<string | undefined>(undefined);
   useEffect(() => { judgeRequestId.current = undefined; }, [report?.run_id]);
+  const [savedPage, setSavedPage] = useState(0);
+  const [suitePage, setSuitePage] = useState(0);
+  const [savedHasNext, setSavedHasNext] = useState(false);
+  const [suiteHasNext, setSuiteHasNext] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyRefresh, setHistoryRefresh] = useState(0);
   const [savedRuns, setSavedRuns] = useState<SavedRun[]>([]);
   const [suiteSavedRuns, setSuiteSavedRuns] = useState<SavedRun[]>([]);
   const [auditEvents, setAuditEvents] = useState<ProductAuditEvent[]>([]);
@@ -2821,29 +2832,37 @@ export function BenchmarkRunner({
     let isMounted = true;
     const historySuite = view === 'history' ? undefined : selectedSuite?.id;
     const historyScenario = view === 'history' ? undefined : selectedScenario?.id;
+    if (view === 'history') { setHistoryLoading(true); setHistoryError(null); setSavedRuns([]); setSuiteRuns([]); }
     Promise.all([
-      listSavedRuns(userId, projectId, historySuite, historyScenario),
+      listSavedRuns(userId, projectId, historySuite, historyScenario, view === 'history' ? savedPage : undefined),
       historySuite ? listSavedRuns(userId, projectId, historySuite).catch(() => []) : Promise.resolve([]),
-      listAuditEvents(userId, projectId).catch(() => []),
-      listBenchmarkSuiteRuns(userId, projectId, historySuite, suiteRunStatusFilter).catch(() => []),
+      view === 'history' ? Promise.resolve([]) : listAuditEvents(userId, projectId).catch(() => []),
+      view === 'history'
+        ? listBenchmarkSuiteRuns(userId, projectId, historySuite, suiteRunStatusFilter, suitePage)
+        : listBenchmarkSuiteRuns(userId, projectId, historySuite, suiteRunStatusFilter).catch(() => []),
     ])
       .then(async ([runs, nextSuiteSavedRuns, events, nextSuiteRuns]) => {
         const [summary, scenarioSummary] = await Promise.all([
-          runs.length || nextSuiteSavedRuns.length ? fetchProjectRegressionSummary(userId, projectId).catch(() => null) : Promise.resolve(null),
+          view !== 'history' && (runs.length || nextSuiteSavedRuns.length) ? fetchProjectRegressionSummary(userId, projectId).catch(() => null) : Promise.resolve(null),
           runs.length && view !== 'history'
             ? fetchProjectRegressionSummary(userId, projectId, historySuite, historyScenario).catch(() => null)
             : Promise.resolve(null),
         ]);
         if (!isMounted) return;
-        setSavedRuns(runs);
+        setSavedRuns(view === 'history' ? runs.slice(0, RESULTS_PAGE_SIZE) : runs);
+        setSavedHasNext(runs.length > RESULTS_PAGE_SIZE);
+        setSuiteHasNext(nextSuiteRuns.length > RESULTS_PAGE_SIZE);
+        setHistoryLoading(false);
         setSuiteSavedRuns(nextSuiteSavedRuns);
         setAuditEvents(events);
-        setSuiteRuns((current) => mergeSuiteRunRecords(current, nextSuiteRuns, historySuite, suiteRunStatusFilter));
+        setSuiteRuns((current) => view === 'history' ? nextSuiteRuns.slice(0, RESULTS_PAGE_SIZE) : mergeSuiteRunRecords(current, nextSuiteRuns, historySuite, suiteRunStatusFilter));
         setProjectRegressionSummary(summary);
         setScenarioRegressionSummary(scenarioSummary);
       })
-      .catch(() => {
+      .catch((err) => {
         if (!isMounted) return;
+        setHistoryLoading(false);
+        setHistoryError(err instanceof Error ? err.message : 'Could not load saved evaluations');
         setSavedRuns([]);
         setSuiteSavedRuns([]);
         setAuditEvents([]);
@@ -2855,7 +2874,7 @@ export function BenchmarkRunner({
     return () => {
       isMounted = false;
     };
-  }, [projectId, selectedScenario?.id, selectedSuite?.id, suiteRunStatusFilter, userId, view]);
+  }, [historyRefresh, savedPage, suitePage, projectId, selectedScenario?.id, selectedSuite?.id, suiteRunStatusFilter, userId, view]);
 
   useEffect(() => {
     if (!selectedSuite || view === 'history') return;
@@ -2935,15 +2954,18 @@ export function BenchmarkRunner({
     const historySuite = view === 'history' ? undefined : selectedSuite?.id;
 
     const interval = window.setInterval(() => {
-      listBenchmarkSuiteRuns(userId, projectId, historySuite, suiteRunStatusFilter)
+      listBenchmarkSuiteRuns(userId, projectId, historySuite, suiteRunStatusFilter, view === 'history' ? suitePage : undefined)
         .then((nextSuiteRuns) => {
-          if (active) setSuiteRuns((current) => mergeSuiteRunRecords(current, nextSuiteRuns, historySuite, suiteRunStatusFilter));
+          if (active) {
+            setSuiteHasNext(nextSuiteRuns.length > RESULTS_PAGE_SIZE);
+            setSuiteRuns((current) => view === 'history' ? nextSuiteRuns.slice(0, RESULTS_PAGE_SIZE) : mergeSuiteRunRecords(current, nextSuiteRuns, historySuite, suiteRunStatusFilter));
+          }
         })
         .catch(() => undefined);
     }, 4000);
 
     return () => { active = false; window.clearInterval(interval); };
-  }, [projectId, selectedSuite?.id, suiteRunStatusFilter, suiteRuns, userId, view]);
+  }, [projectId, selectedSuite?.id, suitePage, suiteRunStatusFilter, suiteRuns, userId, view]);
 
   const activeExecutionRunId = executionRun && isActiveExecutionStatus(executionRun.status)
     ? executionRun.execution_run_id
@@ -3292,9 +3314,14 @@ export function BenchmarkRunner({
       setJudgeGate(null);
       setSaveMessage(`Retried saved run ${run.id} as attempt ${nextAttempt}.`);
       if (userId) {
-        listSavedRuns(userId, projectId, view === 'history' ? undefined : suiteId, view === 'history' ? undefined : scenarioId)
-          .then(setSavedRuns)
-          .catch(() => undefined);
+        if (view === 'history') {
+          setSavedPage(0);
+          setHistoryRefresh((key) => key + 1);
+        } else {
+          listSavedRuns(userId, projectId, suiteId, scenarioId)
+            .then(setSavedRuns)
+            .catch(() => undefined);
+        }
       }
     } catch (err) {
       setRunError(err instanceof Error ? err.message : 'Retry run failed');
@@ -3375,13 +3402,14 @@ export function BenchmarkRunner({
   async function onRefreshSuiteRuns() {
     if (!userId || (view !== 'history' && !selectedSuite?.id)) return;
 
+    if (view === 'history') { setHistoryRefresh((key) => key + 1); return; }
     setIsRefreshingSuiteRuns(true);
     try {
-      const historySuite = view === 'history' ? undefined : selectedSuite?.id;
+      const historySuite = selectedSuite?.id;
       const refreshed = await listBenchmarkSuiteRuns(userId, projectId, historySuite, suiteRunStatusFilter);
       const merged = mergeSuiteRunRecords(suiteRuns, refreshed, historySuite, suiteRunStatusFilter);
       setSuiteRuns(merged);
-      setSaveMessage(`Refreshed ${merged.length} suite runs for ${view === 'history' ? projectId : selectedSuite?.title}.`);
+      setSaveMessage(`Refreshed ${merged.length} suite runs for ${selectedSuite?.title}.`);
     } catch (err) {
       setSaveMessage(err instanceof Error ? err.message : 'Could not refresh suite runs.');
     } finally {
@@ -5645,12 +5673,14 @@ export function BenchmarkRunner({
       ) : null}
 
       {view === 'all' || view === 'history' || (view === 'score' && Boolean(report || savedRuns.length || suiteRuns.length)) ? (
-      <section className="validation-grid" aria-label="Saved runs and e2e validation">
+      <section className={`validation-grid ${view === 'history' ? 'results-saved-history' : ''}`} aria-label="Saved runs and e2e validation" aria-busy={historyLoading}>
+        {view === 'history' && historyLoading ? <p role="status">Loading saved evaluations…</p> : null}
+        {view === 'history' && historyError ? <p role="alert">{historyError} <button type="button" onClick={() => setHistoryRefresh((key) => key + 1)}>Retry</button></p> : null}
         <div className="card" style={{ padding: 20, display: 'grid', gap: 12 }}>
           <p className="eyebrow">Saved runs</p>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
             <h3 style={{ margin: 0 }}>
-              {userId ? `${savedRuns.length} saved for ${view === 'history' ? projectId : selectedScenario?.title ?? projectId}` : 'Signup required'}
+              {userId ? `${savedRuns.length} ${view === 'history' ? 'evaluations on this page' : `saved for ${selectedScenario?.title ?? projectId}`}` : 'Signup required'}
             </h3>
             {userId ? (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -5830,11 +5860,10 @@ export function BenchmarkRunner({
                   <span>
                     {run.id}: {run.report.scenario_title ?? run.report.run_id ?? 'benchmark run'} ({run.report.overall_score ?? run.report.score ?? 'n/a'})
                   </span>
-                  <div style={{ marginTop: 4, fontSize: 13 }}>
-                    {metadataChangeSummary(run.report.run_metadata, (view === 'history'
-                      ? savedRuns.slice(index + 1).find((prior) => prior.report.suite_id === run.report.suite_id && prior.report.scenario_id === run.report.scenario_id)
-                      : savedRuns[index + 1])?.report.run_metadata)}
-                  </div>
+                  <ResultsEvidenceDetails collapsed={view === 'history'}>
+                  {view !== 'history' ? <div style={{ marginTop: 4, fontSize: 13 }}>
+                    {metadataChangeSummary(run.report.run_metadata, savedRuns[index + 1]?.report.run_metadata)}
+                  </div> : null}
                   <div style={{ marginTop: 4, fontSize: 13, color: regressionDeltaColor(run.artifacts?.regression_delta?.status) }}>
                     {regressionDeltaSummary(run.artifacts?.regression_delta)}
                   </div>
@@ -5911,12 +5940,14 @@ export function BenchmarkRunner({
                       Export audit artifacts
                     </button>
                   </div>
+                </ResultsEvidenceDetails>
                 </li>
               ))}
             </ul>
           ) : (
-            <p style={{ margin: 0, color: 'var(--muted)' }}>Run this scenario, sign up, then save it to build focused history.</p>
+            <p style={{ margin: 0, color: 'var(--muted)' }}>{view === 'history' ? (historyLoading ? 'Loading…' : historyError ? 'History unavailable.' : 'No saved evaluations on this page.') : 'Run this scenario, sign up, then save it to build focused history.'}</p>
           )}
+          {view === 'history' ? <ResultsPagination page={savedPage} hasNext={savedHasNext && !historyError} loading={historyLoading} onChange={setSavedPage} label="Saved evaluations" /> : null}
           {auditEvents.length ? (
             <div style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, background: 'var(--panel-alt)', display: 'grid', gap: 8 }} aria-label="Project audit trail">
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
@@ -5943,7 +5974,7 @@ export function BenchmarkRunner({
           <p className="eyebrow">Suite runs</p>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
             <h3 style={{ margin: 0 }}>
-              {userId ? `${suiteRuns.length} suite runs for ${view === 'history' ? projectId : selectedSuite?.title ?? projectId}` : 'Signup required'}
+              {userId ? `${suiteRuns.length} ${view === 'history' ? 'suite runs on this page' : `suite runs for ${selectedSuite?.title ?? projectId}`}` : 'Signup required'}
             </h3>
             {userId ? (
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -5954,7 +5985,7 @@ export function BenchmarkRunner({
                   Status
                   <select
                     value={suiteRunStatusFilter}
-                    onChange={(event) => setSuiteRunStatusFilter(event.target.value)}
+                    onChange={(event) => { setSuiteRunStatusFilter(event.target.value); setSuitePage(0); }}
                     aria-label="Filter suite runs by status"
                     style={{ border: '1px solid var(--border)', borderRadius: 8, background: 'white', color: 'var(--text)', padding: '8px 10px', fontWeight: 800 }}
                   >
@@ -5999,6 +6030,7 @@ export function BenchmarkRunner({
               </div>
             ) : null}
           </div>
+          {view === 'history' ? <ResultsPagination page={suitePage} hasNext={suiteHasNext && !historyError} loading={historyLoading} onChange={setSuitePage} label="Suite runs" /> : null}
           {visibleSuiteHistorySummary ? (
             <p style={{ margin: 0, color: regressionDeltaColor(visibleSuiteHistorySummary.latest_trend ?? undefined), fontWeight: 800 }}>
               Visible {suiteHistoryExportSummary(visibleSuiteHistorySummary)}
@@ -6028,6 +6060,7 @@ export function BenchmarkRunner({
                         {run.status.replace(/_/g, ' ')}
                       </span>
                     </div>
+                    <ResultsEvidenceDetails collapsed={view === 'history'}>
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8 }}>
                       <AuditFact label="Scenarios" value={String(run.scenario_count)} />
                       <AuditFact label="Passing" value={String(run.pass_count)} />
@@ -6141,12 +6174,13 @@ export function BenchmarkRunner({
                     ) : (
                       <p style={{ margin: 0, color: 'var(--muted)' }}>Scenario artifacts appear when the suite run completes.</p>
                     )}
+                  </ResultsEvidenceDetails>
                   </article>
                 );
               })}
             </div>
           ) : (
-            <p style={{ margin: 0, color: 'var(--muted)' }}>Run a suite while signed in to retain suite-level history and child report links.</p>
+            <p style={{ margin: 0, color: 'var(--muted)' }}>{view === 'history' ? (historyLoading ? 'Loading…' : historyError ? 'History unavailable.' : 'No suite runs on this page.') : 'Run a suite while signed in to retain suite-level history and child report links.'}</p>
           )}
         </div>
       </section>

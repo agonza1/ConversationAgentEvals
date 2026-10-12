@@ -234,6 +234,8 @@ def create_saved_run(payload: SavedRunRequest, db: Session = Depends(get_db)):
 
 @router.get('/runs')
 def get_saved_runs(
+    limit: int | None = Query(default=None, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     user_id: str = Query(min_length=1),
     project_id: str | None = None,
     suite_id: str | None = None,
@@ -246,6 +248,8 @@ def get_saved_runs(
         project_id=project_id,
         suite_id=suite_id,
         scenario_id=scenario_id,
+        limit=limit,
+        offset=offset,
     )
 
 

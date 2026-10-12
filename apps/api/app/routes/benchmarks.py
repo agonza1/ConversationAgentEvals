@@ -213,6 +213,8 @@ def get_benchmark_suite_runs(
     project_id: str | None = None,
     suite_id: str | None = None,
     status: str | None = None,
+    limit: int | None = Query(default=None, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
     return list_benchmark_suite_runs(
@@ -221,6 +223,8 @@ def get_benchmark_suite_runs(
         project_id=project_id,
         suite_id=suite_id,
         status=status,
+        limit=limit,
+        offset=offset,
     )
 
 

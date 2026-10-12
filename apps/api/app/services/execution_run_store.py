@@ -93,16 +93,30 @@ def list_execution_runs(
     user_id: str,
     project_id: str | None = None,
     status: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+    summary: bool = False,
 ) -> list[dict[str, Any]]:
     _hydrate_from_disk()
     with _LOCK:
-        rows = [deepcopy(item) for item in _RUNS.values() if item.get('user_id') == user_id]
-    if project_id:
-        rows = [item for item in rows if item.get('project_id') == project_id]
-    if status:
-        rows = [item for item in rows if item.get('status') == status]
-    rows.sort(key=lambda item: item.get('updated_at') or '', reverse=True)
-    return rows
+        rows = [item for item in _RUNS.values()
+                if item.get('user_id') == user_id
+                and (not project_id or item.get('project_id') == project_id)
+                and (not status or (item.get('status') in {'queued', 'running'}
+                     if status == 'active' else item.get('status') == status))]
+        rows.sort(key=lambda item: (item.get('updated_at') or '', item.get('execution_run_id') or ''), reverse=True)
+        page = rows[offset:offset + limit if limit is not None else None]
+        if not summary:
+            return deepcopy(page)
+        # History needs scores and counts, not transcripts, media, or judge evidence.
+        return [{
+            **{key: item.get(key) for key in (
+                'execution_run_id', 'agent_name', 'agent_id', 'mode', 'status',
+                'tester_id', 'executor_id', 'updated_at',
+            )},
+            'conversations': [{'score': conversation.get('score')}
+                              for conversation in item.get('conversations') or []],
+        } for item in page]
 
 
 def mark_execution_run_running(execution_run_id: str) -> dict[str, Any] | None:

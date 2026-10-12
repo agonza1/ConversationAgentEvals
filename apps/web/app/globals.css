@@ -193,6 +193,44 @@ select {
 .results-source-control { display: flex; flex-wrap: wrap; gap: 10px; }
 .results-source-control button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 
+.results-page .minimal-hero { gap: 8px; margin-bottom: 20px; }
+.results-page .minimal-hero h1 { font-size: clamp(32px, 5vw, 44px); }
+.results-page .runs-list { gap: 0; border-top: 1px solid var(--border); }
+.results-page .runs-list-item {
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  padding: 16px 4px;
+  box-shadow: none;
+  transform: none;
+}
+.results-page .runs-list-item:hover { background: var(--panel-alt); box-shadow: none; }
+.results-page .runs-list-meta { display: block; text-transform: none; }
+.results-page .runs-list-secondary { display: flex; gap: 18px; color: var(--muted); font-size: 13px; }
+.results-page .runs-list-primary p { overflow-wrap: anywhere; }
+.results-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 0; color: var(--muted); font-size: 13px; }
+.results-pagination > div { display: flex; gap: 8px; }
+.results-pagination button {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  background: white;
+  color: var(--text);
+  cursor: pointer;
+}
+.results-pagination button:disabled { opacity: .45; cursor: default; }
+.results-page a:focus-visible, .results-pagination button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.results-advanced { margin-top: 24px; color: var(--muted); font-size: 13px; }
+.results-saved-history { grid-template-columns: 1fr; }
+.results-saved-history > .card { box-shadow: none; min-width: 0; }
+.results-evidence-details summary { color: var(--accent); font-size: 13px; cursor: pointer; padding: 8px 0; }
+.results-evidence-details[open] { display: grid; gap: 8px; }
+@media (max-width: 760px) {
+  .results-page .runs-list-item { gap: 8px; }
+  .results-page .runs-list-secondary { justify-content: space-between; }
+}
+
 .primary-link,
 .secondary-link {
   min-height: 44px;

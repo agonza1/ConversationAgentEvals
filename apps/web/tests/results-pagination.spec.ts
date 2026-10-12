@@ -1,0 +1,74 @@
+import { expect, test } from '@playwright/test';
+
+test('results fetch bounded summaries, page forward, and reset server filters', async ({ page }) => {
+  const requests: URL[] = [];
+  await page.route('**/api/execution/runs?*', async (route) => {
+    const url = new URL(route.request().url());
+    requests.push(url);
+    const offset = Number(url.searchParams.get('offset'));
+    const count = url.searchParams.has('status') ? 2 : offset === 0 ? 11 : 3;
+    await route.fulfill({ json: Array.from({ length: count }, (_, index) => ({
+      execution_run_id: `exec-page-${offset + index}`, agent_name: `Agent ${offset + index}`,
+      status: 'completed', mode: 'text_callable', tester_id: 'scenario_simulator',
+      updated_at: '2026-01-01T12:00:00Z', conversations: [{ score: 90 }],
+    })) });
+  });
+  await page.goto('/results?api_base=http://127.0.0.1:8025');
+  const pagination = page.getByRole('navigation', { name: 'Agent tests pagination' });
+  await expect(page.locator('.runs-list-item')).toHaveCount(10);
+  expect(requests[0].searchParams.get('limit')).toBe('11');
+  expect(requests[0].searchParams.get('summary')).toBe('true');
+  await expect(pagination.getByRole('button', { name: 'Previous' })).toBeDisabled();
+  await pagination.getByRole('button', { name: 'Next' }).click();
+  await expect(page.locator('.runs-list-item')).toHaveCount(3);
+  await expect(pagination).toContainText('Page 2');
+  expect(requests.at(-1)?.searchParams.get('offset')).toBe('10');
+  await expect(pagination.getByRole('button', { name: 'Next' })).toBeDisabled();
+  await page.getByLabel('Filter runs by status').selectOption('completed');
+  await expect(page.locator('.runs-list-item')).toHaveCount(2);
+  expect(requests.at(-1)?.searchParams.get('status')).toBe('completed');
+  expect(requests.at(-1)?.searchParams.get('offset')).toBe('0');
+  await expect(page.locator('.runs-list-item').first()).toHaveAttribute('href', /api_base=http%3A%2F%2F127.0.0.1%3A8025/);
+});
+
+test('failed result loads offer retry without showing an empty-state claim', async ({ page }) => {
+  let fail = true;
+  await page.route('**/api/execution/runs?*', async (route) => {
+    await route.fulfill(fail ? { status: 503, json: { detail: 'Results unavailable' } } : { json: [] });
+  });
+  await page.goto('/results');
+  await expect(page.getByRole('alert').filter({ hasText: 'Results unavailable' })).toBeVisible();
+  await expect(page.getByText('No execution runs yet')).toHaveCount(0);
+  fail = false;
+  await page.getByRole('button', { name: 'Retry', exact: true }).click();
+  await expect(page.getByText('No execution runs yet')).toBeVisible();
+});
+
+test('saved history pages are bounded and evidence stays collapsed', async ({ page }) => {
+  const requests: URL[] = [];
+  await page.route('**/api/**', async (route) => {
+    const url = new URL(route.request().url());
+    requests.push(url);
+    if (url.pathname === '/api/product/runs') {
+      const offset = Number(url.searchParams.get('offset'));
+      await route.fulfill({ json: Array.from({ length: offset ? 2 : 11 }, (_, index) => ({
+        id: `saved-${offset + index}`, report: { scenario_title: `Evaluation ${offset + index}`, overall_score: 80 },
+      })) });
+    } else {
+      await route.fulfill({ json: [] });
+    }
+  });
+  await page.goto('/results');
+  await page.getByRole('button', { name: 'Saved evaluations', exact: true }).click();
+  const pagination = page.getByRole('navigation', { name: 'Saved evaluations pagination' });
+  await expect(page.getByText('10 evaluations on this page')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Load run', exact: true })).toHaveCount(0);
+  await pagination.getByRole('button', { name: 'Next' }).click();
+  await expect(page.getByText('2 evaluations on this page')).toBeVisible();
+  await expect(pagination).toContainText('Page 2');
+  const savedRequests = requests.filter((url) => url.pathname === '/api/product/runs');
+  expect(savedRequests.every((url) => url.searchParams.get('limit') === '11')).toBe(true);
+  expect(savedRequests.at(-1)?.searchParams.get('offset')).toBe('10');
+  const suiteRequests = requests.filter((url) => url.pathname === '/api/benchmarks/suite-runs');
+  expect(suiteRequests.every((url) => url.searchParams.get('limit') === '11')).toBe(true);
+});
