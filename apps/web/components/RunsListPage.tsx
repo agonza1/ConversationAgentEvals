@@ -1,9 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { SiteNav } from '@/components/SiteNav';
+import { ApiAwareLink } from '@/components/ApiAwareLink';
 import { BenchmarkRunner } from '@/components/BenchmarkRunner';
 import {
   demoProjectId,
@@ -19,14 +20,13 @@ function testerLabel(testerId?: ExecutionRunRecord['tester_id']) {
   return null;
 }
 
-export function RunsListPage() {
+export function RunsListPage({ view = 'launch' }: { view?: 'launch' | 'results' }) {
+  const [source, setSource] = useState<'agents' | 'saved'>('agents');
   const [runs, setRuns] = useState<ExecutionRunRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [apiBase, setApiBase] = useState('');
-  const [refreshKey, setRefreshKey] = useState(0);
   const [statusFilter, setStatusFilter] = useState('all');
-  const hasRunsRef = useRef(false);
   const userId = useMemo(() => demoUserId(), []);
   const projectId = useMemo(() => demoProjectId(), []);
 
@@ -35,16 +35,15 @@ export function RunsListPage() {
   }, []);
 
   useEffect(() => {
+    if (view !== 'results') { setLoading(false); return; }
     let active = true;
     async function load() {
-      // Keep existing rows visible while refreshing after a launch.
-      if (!hasRunsRef.current) setLoading(true);
+      setLoading(true);
       setError(null);
       try {
         const next = await listExecutionRuns(userId, projectId);
         if (!active) return;
         setRuns(next);
-        hasRunsRef.current = next.length > 0;
       } catch (err) {
         if (!active) return;
         setError(err instanceof Error ? err.message : 'Could not load runs');
@@ -56,12 +55,12 @@ export function RunsListPage() {
     return () => {
       active = false;
     };
-  }, [projectId, refreshKey, userId]);
+  }, [projectId, userId, view]);
 
   const hasActiveRuns = runs.some((run) => run.status === 'queued' || run.status === 'running');
 
   useEffect(() => {
-    if (!hasActiveRuns) return undefined;
+    if (view !== 'results' || !hasActiveRuns) return undefined;
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -70,7 +69,6 @@ export function RunsListPage() {
         const next = await listExecutionRuns(userId, projectId);
         if (!active) return;
         setRuns(next);
-        hasRunsRef.current = next.length > 0;
         setError(null);
         if (next.some((run) => run.status === 'queued' || run.status === 'running')) {
           timer = setTimeout(() => void poll(), 1500);
@@ -87,7 +85,7 @@ export function RunsListPage() {
       active = false;
       if (timer) clearTimeout(timer);
     };
-  }, [hasActiveRuns, projectId, userId]);
+  }, [hasActiveRuns, projectId, userId, view]);
 
   const visibleRuns = useMemo(() => runs.filter((run) => {
     if (statusFilter === 'all') return true;
@@ -95,45 +93,39 @@ export function RunsListPage() {
     return run.status === statusFilter;
   }), [runs, statusFilter]);
 
-  const upsertExecutionRun = useCallback((run: ExecutionRunRecord) => {
-    setRuns((current) => {
-      const next = [run, ...current.filter((item) => item.execution_run_id !== run.execution_run_id)];
-      hasRunsRef.current = next.length > 0;
-      return next;
-    });
-  }, []);
-
-  function onExecutionCreated(run: ExecutionRunRecord) {
-    upsertExecutionRun(run);
-    setRefreshKey((value) => value + 1);
-  }
-
   return (
     <main className="page-shell compact-shell">
-      <SiteNav current="runs" />
+      <SiteNav current={view === 'results' ? 'results' : 'runs'} />
       <section className="minimal-hero" aria-labelledby="runs-title">
-        <p className="eyebrow">Run agent → analyze</p>
-        <h1 id="runs-title">Run an agent</h1>
-        <p>Launch a configured agent target, then review execution metrics, latency detail, and transcripts.</p>
+        <p className="eyebrow">{view === 'results' ? 'Results · evidence and history' : 'New evaluation · live agent'}</p>
+        <h1 id="runs-title">{view === 'results' ? 'Results' : 'Test an agent'}</h1>
+        <p>{view === 'results' ? 'Review agent tests and saved evidence evaluations. Their source stays explicit; scores are not proof of missing actions.' : 'Choose reviewed cases and a text or voice agent. This starts a new execution and captures evidence for evaluation.'}</p>
       </section>
 
-      <BenchmarkRunner
-        view="run"
-        onExecutionCreated={onExecutionCreated}
-        onExecutionUpdated={upsertExecutionRun}
-      />
+      {view === 'launch' ? <>
+      <BenchmarkRunner view="run" />
+      <ApiAwareLink href="/results">View results and history →</ApiAwareLink>
+      </> : <>
+        <div className="results-source-control" role="group" aria-label="Result source">
+          <button type="button" className="secondary-link" aria-pressed={source === 'agents'} onClick={() => setSource('agents')}>Agent tests</button>
+          <button type="button" className="secondary-link" aria-pressed={source === 'saved'} onClick={() => setSource('saved')}>Saved evaluations</button>
+        </div>
+        <p className="scenarios-muted">{source === 'agents' ? 'Executions captured by CAE, including live targets and explicitly labeled replays.' : 'Saved evaluations of existing evidence and benchmark suites; these records do not imply a new live call.'}</p>
+        {source === 'saved' ? <BenchmarkRunner view="history" /> : null}
+        <details><summary>Advanced tools</summary><ApiAwareLink href="/benchmarks">Open legacy benchmark console</ApiAwareLink> · <ApiAwareLink href="/voice">Voice quick start</ApiAwareLink></details>
+      </>}
 
+      {view === 'results' && source === 'agents' ? <>
       {loading ? <p className="scenarios-muted">Loading runs…</p> : null}
       {error ? <div className="scenarios-error" role="alert">{error}</div> : null}
 
       {!loading && !runs.length ? (
         <section className="card scenarios-empty">
           <h2>No execution runs yet</h2>
-          <p className="scenarios-muted">Launch the selected agent above, or choose a different test from the scenario catalog.</p>
-          <Link className="secondary-link" href="/scenarios">Browse scenarios</Link>
+          <p className="scenarios-muted">Choose a test set and agent to capture your first execution.</p>
+          <ApiAwareLink className="secondary-link" href="/runs">Test an agent</ApiAwareLink>
         </section>
       ) : null}
-
       {runs.length ? (
       <section className="runs-history" aria-labelledby="recent-runs-title">
         <div className="runs-history-heading">
@@ -183,6 +175,7 @@ export function RunsListPage() {
         </div>
       </section>
       ) : null}
+      </> : null}
     </main>
   );
 }

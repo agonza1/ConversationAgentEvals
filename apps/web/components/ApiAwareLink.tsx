@@ -9,8 +9,9 @@ type ApiAwareLinkProps = Omit<ComponentProps<typeof Link>, 'href'> & {
 type LinkHref = ComponentProps<typeof Link>['href'];
 
 function withApiBase(path: string, apiBase: string) {
-  const separator = path.includes('?') ? '&' : '?';
-  return `${path}${separator}api_base=${encodeURIComponent(apiBase)}`;
+  const url = new URL(path, window.location.origin);
+  url.searchParams.set('api_base', apiBase);
+  return url.origin === window.location.origin ? `${url.pathname}${url.search}${url.hash}` : url.toString();
 }
 
 export function ApiAwareLink({ href, ...props }: ApiAwareLinkProps) {

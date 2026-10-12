@@ -1,31 +1,69 @@
 import { expect, test } from '@playwright/test';
 
-test('homepage links to focused workflow demos', async ({ page }) => {
+test('homepage links to the two evaluation workflows', async ({ page }) => {
   await page.goto('/');
 
-  await expect(page.getByRole('link', { name: 'Browse evaluation scenarios' })).toHaveAttribute('href', '/scenarios');
-  await expect(page.getByRole('link', { name: 'Eval evidence' })).toHaveAttribute('href', '/eval?demo=sample-evidence');
-  await expect(page.getByRole('link', { name: 'Launch agent run' })).toHaveAttribute('href', '/runs');
+  await expect(page.getByRole('link', { name: 'Browse test sets', exact: true }).first()).toHaveAttribute('href', '/tests');
+  await expect(page.getByRole('link', { name: 'Analyze existing evidence' })).toHaveAttribute('href', '/eval');
+  await expect(page.getByRole('link', { name: 'Start an agent test', exact: true })).toHaveAttribute('href', '/runs');
   await expect(
     page.getByRole('img', { name: 'Run an agent or import transcript or vCon evidence, then evaluate and report' }),
   ).toBeVisible();
+  const diagram = page.locator('.home-flow-visual img');
+  await diagram.scrollIntoViewIfNeeded();
+  await expect.poll(() => diagram.evaluate((element) => (element as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
   await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Benchmarks' })).toHaveCount(0);
+});
+
+test('homepage keeps workflows usable on desktop and small screens without starting a run', async ({ page }) => {
+  const writes: string[] = [];
+  page.on('request', (request) => {
+    if (!['GET', 'HEAD'].includes(request.method())) writes.push(request.url());
+  });
+  for (const width of [1440, 768, 641, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/');
+    await expect(page.getByRole('heading', { level: 1 })).toContainText('Proven outcomes.');
+    await expect(page.locator('.home-path')).toHaveCount(2);
+    for (const name of ['Start an agent test', 'Analyze existing evidence']) {
+      const link = page.getByRole('link', { name, exact: true });
+      await expect(link).toBeVisible();
+      await link.focus();
+      await expect(link).toBeFocused();
+      expect(await link.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe('solid');
+    }
+    await expect(page.getByRole('navigation', { name: 'Workspace shortcuts' }).getByRole('link')).toHaveCount(4);
+    await expect(page.getByText('Missing proof stays unverified', { exact: false })).toBeVisible();
+    await expect(page.getByText('Benchmark report', { exact: true })).toHaveCount(0);
+    for (const anchor of ['product', 'coverage', 'benchmarks']) {
+      await expect(page.locator(`#${anchor}`)).toHaveCount(1);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+  }
+  expect(writes).toEqual([]);
 });
 
 test('homepage navigation preserves an API base override', async ({ page }) => {
   await page.goto('/?api_base=http%3A%2F%2Fapi.example.test');
 
-  await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Run agent' })).toHaveAttribute(
+  await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link', { name: 'Results' })).toHaveAttribute(
+    'href',
+    '/results?api_base=http%3A%2F%2Fapi.example.test',
+  );
+  await expect(page.getByRole('link', { name: 'Browse test sets', exact: true }).first()).toHaveAttribute(
+    'href',
+    '/tests?api_base=http%3A%2F%2Fapi.example.test',
+  );
+  await expect(page.getByRole('link', { name: 'Start an agent test', exact: true })).toHaveAttribute(
     'href',
     '/runs?api_base=http%3A%2F%2Fapi.example.test',
   );
-  await expect(page.getByRole('link', { name: 'Browse evaluation scenarios' })).toHaveAttribute(
-    'href',
-    '/scenarios?api_base=http%3A%2F%2Fapi.example.test',
-  );
-  await expect(page.getByRole('link', { name: 'Launch agent run' })).toHaveAttribute(
-    'href',
-    '/runs?api_base=http%3A%2F%2Fapi.example.test',
+  const shortcuts = page.getByRole('navigation', { name: 'Workspace shortcuts' });
+  for (const [name, path] of [['Manage agents', '/targets'], ['View results', '/results'], ['Open settings', '/settings']]) {
+    await expect(shortcuts.getByRole('link', { name, exact: true })).toHaveAttribute('href', `${path}?api_base=http%3A%2F%2Fapi.example.test`);
+  }
+  await expect(page.getByRole('link', { name: 'Analyze existing evidence', exact: true })).toHaveAttribute(
+    'href', '/eval?api_base=http%3A%2F%2Fapi.example.test',
   );
 });
 
@@ -35,7 +73,7 @@ test('dedicated paths expose only their primary workflow', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Choose what your agent must prove.' })).toBeVisible();
 
   await page.goto('/eval');
-  await expect(page.getByRole('heading', { name: 'Evaluate conversation evidence.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Analyze a conversation' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Evaluate evidence' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Simulate scenario' })).toHaveCount(0);
   await expect(page.getByLabel('Evidence upload')).toBeVisible();
@@ -74,7 +112,7 @@ test('dedicated paths expose only their primary workflow', async ({ page }) => {
   await expect(page.getByLabel('Saved runs and e2e validation')).toHaveCount(0);
 
   await page.goto('/runs');
-  await expect(page.getByRole('heading', { name: 'Run an agent' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Test an agent' })).toBeVisible();
   await expect(page.getByLabel('Launch agent run')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Run evaluation' })).toBeVisible();
   await expect(page.getByLabel('Execution tester')).toContainText('Scenario user (AI)');
@@ -87,9 +125,9 @@ test('dedicated paths expose only their primary workflow', async ({ page }) => {
   await expect(page.getByText('Required evidence:')).toHaveCount(0);
 });
 
-test('legacy benchmark route keeps Console Settings for history workflows', async ({ page }) => {
+test('legacy benchmark route keeps advanced simulation and history workflows', async ({ page }) => {
   await page.goto('/benchmarks');
-  await expect(page.getByRole('heading', { name: 'Benchmark history and reports.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Benchmark console' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Simulate scenario' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Evaluate evidence' })).toBeVisible();
   await expect(page.getByLabel('Saved runs and e2e validation')).toBeVisible();
@@ -98,8 +136,8 @@ test('legacy benchmark route keeps Console Settings for history workflows', asyn
 test('scenario and eval deep links preload the advertised scenario', async ({ page }) => {
   await page.goto('/scenarios?suite_id=call-center-voice-ai&scenario_id=billing-address-change');
   await expect(page.getByRole('heading', { name: 'Billing Address Change' })).toBeVisible();
-  await expect(page.getByLabel('Selected scenario').getByRole('link', { name: 'Run agent' })).toHaveAttribute('href', /suite_id=call-center-voice-ai&scenario_id=billing-address-change/);
-  await expect(page.getByLabel('Selected scenario').getByRole('link', { name: 'Eval evidence' })).toHaveAttribute('href', /sample=1/);
+  await expect(page.getByLabel('Selected scenario').getByRole('link', { name: 'Test an agent' })).toHaveAttribute('href', /suite_id=call-center-voice-ai&scenario_id=billing-address-change/);
+  await expect(page.getByLabel('Selected scenario').getByRole('link', { name: 'Analyze a conversation' })).toHaveAttribute('href', /sample=1/);
 
   await page.goto('/eval?demo=sample-evidence');
   await expect(page.getByText('Loading benchmark suites...')).toHaveCount(0);
@@ -130,7 +168,7 @@ test('empty eval history does not request unavailable regression summaries', asy
   });
 
   await page.goto('/eval');
-  await expect(page.getByRole('heading', { name: 'Evaluate conversation evidence.' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Analyze a conversation' })).toBeVisible();
   await page.waitForLoadState('networkidle');
   expect(regressionSummaryRequests).toBe(0);
 });

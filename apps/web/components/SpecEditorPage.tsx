@@ -499,14 +499,14 @@ export function SpecEditorPage() {
     <main className={`page-shell spec-editor-shell ${styles.shell}`}>
       <SiteNav current="specs" />
       <section className="minimal-hero spec-hero" aria-labelledby="spec-title">
-        <p className="eyebrow">Evaluation design · Experimental</p>
-        <h1 id="spec-title">Create an evaluation design</h1>
-        <p>Define the rules, review caller cases, then choose a voice agent and run the test set.</p>
+        <p className="eyebrow">Tests · create a test set</p>
+        <h1 id="spec-title">Create a test set</h1>
+        <p>Define the rules, review caller cases, then choose an agent and run the test set.</p>
       </section>
       <ol className={styles.steps} aria-label="Evaluation workflow">
         <li aria-current={workingSpec.scenarios.length ? undefined : 'step'}>1 · Define test</li>
         <li aria-current={workingSpec.scenarios.length ? 'step' : undefined}>2 · Review cases</li>
-        <li>3 · Run voice tests</li><li>4 · Inspect results</li>
+        <li>3 · Test an agent</li><li>4 · Inspect results</li>
       </ol>
       {error ? <div className="scenarios-error" role="alert">{error}</div> : null}
       {saved ? <div className="spec-save-banner" role="status">Saved `{saved.id}` version {saved.version}.{unsavedChanges ? ' Current edits are not saved.' : ' Ready to publish; retrying will reuse this version.'}</div> : null}

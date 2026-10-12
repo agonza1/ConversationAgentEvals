@@ -90,7 +90,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
 
   return (
     <main className="page-shell runs-analysis-shell">
-      <SiteNav current="runs" />
+      <SiteNav current="results" />
       <section className="minimal-hero" aria-labelledby="run-title">
         <p className="eyebrow">Run analysis</p>
         <h1 id="run-title">{run?.agent_name || run?.agent_id || executionRunId}</h1>
@@ -118,7 +118,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
           </dl>
         ) : null}
         <p>
-          <ApiAwareLink href="/runs">All runs</ApiAwareLink>
+          <ApiAwareLink href="/results">All results</ApiAwareLink>
           {' · '}
           {executionRunId}
           {run ? ` · ${run.status}` : ''}
@@ -1070,7 +1070,7 @@ function JudgeResult({
         </div>
       ) : null}
       {judge.block_reason === 'provider' ? (
-        <p><ApiAwareLink href="/benchmarks">Connect OpenAI in Console Settings</ApiAwareLink>, then try again.</p>
+        <p><ApiAwareLink href="/settings">Connect OpenAI in Settings</ApiAwareLink>, then try again.</p>
       ) : null}
       {judge.prompt_preview ? (
         <div>

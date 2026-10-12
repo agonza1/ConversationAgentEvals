@@ -400,7 +400,9 @@ def _suite_history_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     scores = [_suite_score_from_record(record) for record in records]
     numeric_scores = [score for score in scores if score is not None]
     latest_score = scores[0] if scores else None
-    previous_score = next((score for score in scores[1:] if score is not None), None)
+    latest_suite_id = records[0].get('suite_id') if records else None
+    previous_score = next((score for record, score in zip(records[1:], scores[1:])
+                           if latest_suite_id and record.get('suite_id') == latest_suite_id and score is not None), None)
     latest_delta = latest_score - previous_score if latest_score is not None and previous_score is not None else None
     status_counts: dict[str, int] = {}
     failure_category_counts: dict[str, int] = {}

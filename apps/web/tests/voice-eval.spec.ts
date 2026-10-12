@@ -1,6 +1,25 @@
 import { expect, test } from '@playwright/test';
 
-test('voice eval page launches and shows conversation evidence', async ({ page }) => {
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem('conversation-evals-demo-user', 'voice-user'));
+  await page.route('**/api/benchmarks/suites', (route) => route.fulfill({ json: [{
+    id: 'call-center-voice-ai', title: 'Call Center Voice AI',
+    scenarios: [{ id: 'cancellation-rescue', title: 'Cancellation rescue', user_goal: 'I want to cancel.' }],
+  }] }));
+  await page.route('**/api/benchmarks/suites/*/contract-manifest', (route) => route.fulfill({ json: {} }));
+  await page.route('**/api/product/config', (route) => route.fulfill({ json: {
+    pricing: [], usage_rules: [], voice_status: 'enabled', llm_judge_status: 'gated',
+    auth: { enabled: false, mode: 'placeholder', providers: [], api_key_configured: false },
+  } }));
+  await page.route('**/api/product/providers/openai/status', (route) => route.fulfill({ json: {
+    status: 'connected', execution_provider: 'openai_codex', execution_default_model: 'gpt-6-luna',
+  } }));
+  await page.route('**/api/product/providers/openai/models', (route) => route.fulfill({ json: {
+    models: [{ id: 'gpt-6-luna' }], default_model: 'gpt-6-luna',
+  } }));
+});
+
+test('legacy voice quick start uses the shared launcher and shows captured evidence', async ({ page }) => {
   let polled = 0;
 
   await page.addInitScript(() => {
@@ -149,7 +168,7 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
         audio_transport: 'pipecat_small_webrtc',
         evaluate: true,
       });
-      expect(posted).not.toHaveProperty('model_name');
+      expect(posted.model_name).toBe('gpt-6-luna');
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -290,51 +309,19 @@ test('voice eval page launches and shows conversation evidence', async ({ page }
   });
 
   await page.goto('/voice?api_base=http%3A%2F%2Fapi.example.test');
-  await expect(page.getByRole('heading', { name: 'Voice eval' })).toBeVisible();
-  await expect(page.getByRole('region', { name: 'Voice evaluation' })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Manage targets' })).toHaveAttribute(
-    'href',
-    '/targets?api_base=http%3A%2F%2Fapi.example.test',
+  await expect(page).toHaveURL(/\/runs\?.*scenario_id=cancellation-rescue/);
+  await expect(page.getByRole('heading', { name: 'Test an agent', exact: true })).toBeVisible();
+  const launch = page.getByRole('region', { name: 'Launch agent run' });
+  await expect(launch.getByLabel('Execution agent target')).toHaveValue('generalist-voice-agent');
+  await launch.getByRole('button', { name: /^Run evaluation$|^Run \d+ voice tests?$/ }).click();
+  await expect(launch.getByText('voice-run-1', { exact: true })).toBeVisible();
+  await launch.getByRole('button', { name: 'Show live exchange' }).click();
+  await expect(launch.getByLabel('Observed live exchange')).toContainText('I want to cancel.');
+  await expect(launch.getByLabel('Observed live exchange')).toContainText('Spoken (LLM output): I want to cancel.');
+  await expect(launch.getByLabel('Observed live exchange')).toContainText('Peer ASR receipt: I want to cancel.');
+  await expect(launch.getByRole('link', { name: 'Open analysis' })).toHaveAttribute(
+    'href', '/runs/voice-run-1?api_base=http%3A%2F%2Fapi.example.test',
   );
-  await expect(page.getByLabel('Voice target')).toHaveValue('generalist-voice-agent');
-  await expect(page.getByLabel('Voice target').locator('option')).toHaveCount(1);
-  await expect(page.getByLabel('Voice target').locator('option')).not.toContainText('ACC offline text fixture');
-  await expect(page.getByRole('heading', { name: 'Pick the Run Agent target' })).toBeVisible();
-  await expect(page.getByLabel('Built-in generalist voice evaluation')).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Open Eval evidence' })).toHaveAttribute(
-    'href',
-    '/eval?api_base=http%3A%2F%2Fapi.example.test',
-  );
-  await expect(page.getByText('Browser microphone/target')).toBeVisible();
-  await expect(page.getByText('Unavailable; listener is receive-only')).toBeVisible();
-  await page.getByRole('button', { name: 'Run evaluation' }).click();
-  const results = page.getByRole('region', { name: 'Run results' });
-  await expect(results.getByText('voice-run-1')).toBeVisible();
-  await results.getByRole('button', { name: 'Create live listener link' }).click();
-  const listenerLink = results.getByRole('link', { name: '/listeners/listener-token?api_base=http%3A%2F%2Fapi.example.test' });
-  await expect(listenerLink).toHaveAttribute('href', '/listeners/listener-token?api_base=http%3A%2F%2Fapi.example.test');
-  await expect(results.getByLabel('Run listener link')).toContainText('cannot inject audio');
-  await expect(results.getByLabel('Run listener link')).toContainText('no microphone');
-  await expect(results.getByLabel('Observed live exchange')).toContainText('I want to cancel.', { timeout: 10000 });
-  await expect(results.getByLabel('Observed live exchange')).toContainText('tester → target');
-  await expect(results.getByLabel('Observed live exchange')).toContainText('Spoken (LLM output): I want to cancel.');
-  await expect(results.getByLabel('Observed live exchange')).toContainText('Peer ASR receipt: I want to cancel.');
-  await expect(results.getByRole('progressbar', { name: 'Voice evaluation progress' })).toHaveAttribute('aria-valuenow', '100');
-  await results.getByRole('button', { name: 'Play recorded conversation' }).click();
-  await expect.poll(() => page.evaluate(() => (
-    window as Window & { __audioPlayAttempts: string[] }
-  ).__audioPlayAttempts.filter((url) => url.includes('/listeners/listener-token/') && url.includes('/audio/1')).length)).toBe(1);
-  await expect(results.getByRole('button', { name: 'Play recorded conversation' })).toBeVisible();
-  await results.getByRole('button', { name: 'Play recorded conversation' }).click();
-  await expect.poll(() => page.evaluate(() => (
-    window as Window & { __audioPlayAttempts: string[] }
-  ).__audioPlayAttempts.filter((url) => url.includes('/listeners/listener-token/') && url.includes('/audio/1')).length)).toBeGreaterThan(1);
-  await expect(results.getByRole('link', { name: 'Open Run Agent detail' })).toHaveAttribute(
-    'href',
-    '/runs/voice-run-1?api_base=http%3A%2F%2Fapi.example.test',
-  );
-  await expect(results.getByText('Cancellation rescue', { exact: true })).toBeVisible({ timeout: 10000 });
-  await expect(results.getByText(/vCon|recording metadata|Pipecat capture proof|sample-based score/i).first()).toBeVisible();
 });
 
 test('voice eval sends the selected exact project identity', async ({ page }) => {
@@ -413,11 +400,11 @@ test('voice eval sends the selected exact project identity', async ({ page }) =>
   });
 
   await page.goto('/voice?api_base=http%3A%2F%2Fapi.example.test');
-  await expect(page.getByLabel('Voice execution project')).toHaveValue('voice-project-shared');
-  await page.getByLabel('Voice execution project').selectOption('voice-project-personal');
-  await expect(page.getByLabel('Voice execution project')).toHaveValue('voice-project-personal');
-  await page.getByLabel('Voice execution project').selectOption('voice-project-shared');
-  await page.getByRole('button', { name: 'Run evaluation' }).click();
+  await expect(page.getByLabel('Execution project')).toHaveValue('voice-project-shared');
+  await page.getByLabel('Execution project').selectOption('voice-project-personal');
+  await expect(page.getByLabel('Execution project')).toHaveValue('voice-project-personal');
+  await page.getByLabel('Execution project').selectOption('voice-project-shared');
+  await page.getByRole('button', { name: /^Run evaluation$|^Run \d+ voice tests?$/ }).click();
 
   await expect.poll(() => posted).not.toBeNull();
   expect(posted).toMatchObject({
@@ -638,11 +625,10 @@ test('voice page blocks before queueing when real dependencies are unavailable',
   });
 
   await page.goto('/voice?api_base=http://api.example.test');
-  await expect(page.getByLabel('Voice preflight blocked')).toContainText('Set OPENAI_API_KEY');
-  await expect(page.getByLabel('Voice preflight blocked')).toContainText('Set RTC_ASR_BASE_URL');
+  await expect(page.getByLabel('Run Agent voice preflight blocked')).toContainText('Set OPENAI_API_KEY');
+  await expect(page.getByLabel('Run Agent voice preflight blocked')).toContainText('Set RTC_ASR_BASE_URL');
   await expect(page.getByRole('link', { name: 'rtc-asr setup' })).toHaveAttribute('href', 'https://github.com/agonza1/rtc-asr');
   await expect(page.getByRole('link', { name: 'Kokoro TTS setup' })).toHaveAttribute('href', 'https://github.com/remsky/Kokoro-FastAPI');
-  await expect(page.getByRole('button', { name: 'Run evaluation' })).toBeDisabled();
-  await expect(page.getByText('Current-run duplex capture')).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Run evaluation$|^Run \d+ voice tests?$/ })).toBeDisabled();
   await expect(page.getByText('Sample-based capture')).toHaveCount(0);
 });

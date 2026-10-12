@@ -1,26 +1,21 @@
-import Link from 'next/link';
-
 import { BenchmarkRunner } from '@/components/BenchmarkRunner';
 import { SiteNav } from '@/components/SiteNav';
-import { SpecGenerationSettings } from '@/components/SpecGenerationSettings';
-import { ChatGPTJudgeSettings } from '@/components/ChatGPTJudgeSettings';
+import { ApiAwareLink } from '@/components/ApiAwareLink';
 
-/** Console Settings retains advanced history/report workflows. */
+/** Compatibility console: keep existing query-driven benchmark workflows. */
 export default function BenchmarksPage() {
   return (
     <main className="page-shell compact-shell">
       <SiteNav current="benchmarks" />
       <section className="minimal-hero" aria-labelledby="benchmarks-title">
-        <p className="eyebrow">Console Settings</p>
-        <h1 id="benchmarks-title">Benchmark history and reports.</h1>
+        <p className="eyebrow">Advanced · legacy console</p>
+        <h1 id="benchmarks-title">Benchmark console</h1>
         <p>
-          Saved runs, suite history, and report tooling. For day-to-day work use{' '}
-          <Link href="/scenarios">Scenarios</Link>, <Link href="/runs">Run agent</Link>, or{' '}
-          <Link href="/eval">Eval</Link>.
+          Existing benchmark links and simulation tools still work here. For day-to-day work use{' '}
+          <ApiAwareLink href="/tests">Tests</ApiAwareLink>, <ApiAwareLink href="/results">Results</ApiAwareLink>, or{' '}
+          <ApiAwareLink href="/settings">Settings</ApiAwareLink>.
         </p>
       </section>
-      <SpecGenerationSettings />
-      <ChatGPTJudgeSettings />
       <BenchmarkRunner view="all" />
     </main>
   );

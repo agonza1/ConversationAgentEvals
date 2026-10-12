@@ -6,7 +6,7 @@ test('product eval API journey works end to end', async ({ request, baseURL }) =
 
   const pageResponse = await request.get('/benchmarks');
   expect(pageResponse.ok()).toBeTruthy();
-  await expect(pageResponse.text()).resolves.toContain('Benchmark history and reports.');
+  await expect(pageResponse.text()).resolves.toContain('Benchmark console');
 
   const configResponse = await request.get('/api/product/config');
   expect(configResponse.ok()).toBeTruthy();
@@ -45,12 +45,14 @@ test('product eval API journey works end to end', async ({ request, baseURL }) =
   expect(readiness.engine).toBe('assert');
   // This journey is offline. The Python integration suite mocks only the paid
   // provider output and exercises successful persistence, audit and application.
-  expect(readiness.enabled).toBe(false);
-  const judgeResponse = await request.post(`/api/assert/benchmarks/${simulation.benchmark_report.run_id}/judge`, {
-    data: { user_id: userId },
-  });
-  expect(judgeResponse.status()).toBe(503);
-  expect(await judgeResponse.json()).toEqual(expect.objectContaining({detail: expect.stringContaining('disabled')}));
+  // Reusing a local stack may have judging enabled. Never invoke its paid provider.
+  if (!readiness.enabled) {
+    const judgeResponse = await request.post(`/api/assert/benchmarks/${simulation.benchmark_report.run_id}/judge`, {
+      data: { user_id: userId },
+    });
+    expect(judgeResponse.status()).toBe(503);
+    expect(await judgeResponse.json()).toEqual(expect.objectContaining({ detail: expect.stringContaining('disabled') }));
+  }
   const forgedResponse = await request.post(`/api/assert/benchmarks/${simulation.benchmark_report.run_id}/judge`, {
     data: {user_id: userId, report: {verdict: 'pass'}},
   });
