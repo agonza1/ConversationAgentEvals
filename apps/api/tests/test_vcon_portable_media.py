@@ -135,6 +135,58 @@ def test_continuous_duplex_is_exported_once_with_explicit_known_clock(tmp_path):
     assert result['analysis'][1]['body']['recording']['media_scope'] == 'continuous_duplex'
 
 
+@pytest.mark.parametrize('mix_exists', [True, False])
+def test_partial_or_failed_mix_exports_retained_raw_turns_without_complete_claim(tmp_path, mix_exists):
+    root = tmp_path / 'exec'
+    root.mkdir()
+    mix = root / 'partial-mix.wav'
+    mix_audio = wav(500)
+    if mix_exists:
+        mix.write_bytes(mix_audio)
+    raw_audio = [wav(5000), wav(7000)]
+    tracks = []
+    for index, audio in enumerate(raw_audio):
+        path = root / f'raw-{index}.wav'
+        path.write_bytes(audio)
+        tracks.append({'uri': str(path), 'track_id': f'turn-{index}', 'parties': [index],
+                       'mime_type': 'audio/wav', 'duration_ms': (len(audio) - 44) / 48})
+    conversation = {'recording': {'uri': str(mix), 'mime_type': 'audio/wav',
+        'metadata': {'scope': 'continuous_duplex', 'partial': True, 'audio_tracks': tracks}}}
+    result = export_conversation_media(document(), conversation, root, include_audio=True)
+    media = [d for d in result['dialog'] if d['type'] == 'recording' and d.get('body')]
+    assert len(media) == 2 and [d['parties'] for d in media] == [[0], [1]]
+    assert [base64.urlsafe_b64decode(d['body'] + '=' * (-len(d['body']) % 4)) for d in media] == raw_audio
+    assert all('start' not in d for d in media)  # unknown offsets are not stitched into a fake timeline
+    manifest = result['analysis'][1]['body']['recording']
+    assert manifest['included_tracks'] == 2 and manifest['omitted_tracks'] == 1
+    assert manifest['selection_strategy'] == 'raw_tracks_due_to_partial_mix'
+    assert manifest['capture_completeness'] == 'partial'
+    assert manifest['full_media_coverage'] == 'not_established'
+    assert manifest['media_scope'] == 'captured_tracks_only'
+    assert manifest['excluded_audio_bytes'] == (len(mix_audio) if mix_exists else 0)
+    assert manifest['omissions'][0]['reason'] == 'partial_continuous_mix_excluded'
+    assert manifest['omissions'][0]['availability'] == ('retained_locally' if mix_exists else 'unavailable')
+    assert validate_ietf_vcon(result)['valid'] and intake_vcon({'vcon': result})[1]['profile']
+
+
+def test_partial_mix_recovers_old_waylo_raw_turn_filenames(tmp_path):
+    root = tmp_path / 'exec'
+    directory = root / 'audio' / 'conv'
+    directory.mkdir(parents=True)
+    mix = directory / 'partial-mix.wav'
+    mix.write_bytes(wav(500))
+    for filename in ['caller-1-sent.wav', 'agent-1-received.wav']:
+        (directory / filename).write_bytes(wav())
+    conversation = {'conversation_id': 'conv', 'audio_session': {'transport': 'waylo_livekit'},
+                    'recording': {'uri': str(mix), 'metadata': {'scope': 'continuous_duplex', 'partial': True}}}
+    result = export_conversation_media(document(), conversation, root, include_audio=True)
+    media = [d for d in result['dialog'] if d['type'] == 'recording' and d.get('body')]
+    assert len(media) == 2 and [d['parties'] for d in media] == [[0], [1]]
+    manifest = result['analysis'][1]['body']['recording']
+    assert manifest['capture_completeness'] == 'partial' and manifest['full_media_coverage'] == 'not_established'
+    assert manifest['omissions'][0]['reason'] == 'partial_continuous_mix_excluded'
+
+
 def test_unknown_clock_is_not_converted_and_media_paths_are_owner_scoped(tmp_path):
     root = tmp_path / 'exec'
     root.mkdir()

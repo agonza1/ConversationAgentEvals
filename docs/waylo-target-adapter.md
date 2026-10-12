@@ -175,6 +175,10 @@ accepts `include_audio=true` for up to **20 MB of decoded audio in total**, not 
 track. It includes the correctly aligned continuous duplex recording once when
 available; otherwise it includes all retained caller/greeting/reply tracks. Older
 Waylo runs recover the adapter's exact known turn filenames, not arbitrary files.
+An incomplete or failed continuous mix never suppresses later raw turn capture:
+the raw tracks are selected, the partial mix is explicitly reported as excluded,
+and complete-call coverage remains unestablished. Unknown raw-track offsets are
+not stitched into an invented timeline.
 An oversized or unavailable selected track fails the whole opt-in request; no
 silent truncation or partial success is returned. Neither export reads remote
 URLs, arbitrary paths, or credentials. The native capture and structured execution

@@ -62,9 +62,10 @@ def _timing(track: dict[str, Any]) -> dict[str, Any]:
 def _local_tracks(conversation: dict[str, Any], root: Path) -> list[dict[str, Any]]:
     recording = conversation.get('recording') or {}
     metadata = recording.get('metadata') or {}
+    partial_mix = metadata.get('scope') == 'continuous_duplex' and metadata.get('partial') is True
     # A correctly aligned duplex recording is the complete media source. Export
     # it once, not again alongside overlapping per-turn tracks.
-    if metadata.get('scope') == 'continuous_duplex' and recording.get('uri'):
+    if metadata.get('scope') == 'continuous_duplex' and recording.get('uri') and not partial_mix:
         return [{**metadata, 'uri': recording['uri'], 'parties': [0, 1],
                  'mime_type': recording.get('mime_type', 'audio/wav'),
                  'duration_ms': recording.get('duration_ms'), 'track_id': 'continuous-duplex'}]
@@ -74,7 +75,7 @@ def _local_tracks(conversation: dict[str, Any], root: Path) -> list[dict[str, An
             raise MediaExportError('Invalid or oversized local audio track manifest.')
         return deepcopy(tracks)
     uri = recording.get('uri') or recording.get('recording_url')
-    if uri:
+    if uri and not partial_mix:
         scope = str(metadata.get('scope') or '')
         return [{**metadata, 'uri': uri, 'mime_type': recording.get('mime_type', 'audio/wav'),
                  'duration_ms': recording.get('duration_ms'), 'track_id': 'conversation-recording',
@@ -102,6 +103,21 @@ def _local_tracks(conversation: dict[str, Any], root: Path) -> list[dict[str, An
     return sorted(tracks, key=lambda t: t['_order'])
 
 
+def _partial_mix_omission(conversation: dict[str, Any], root: Path) -> dict[str, Any] | None:
+    recording = conversation.get('recording') or {}
+    metadata = recording.get('metadata') or {}
+    if metadata.get('scope') != 'continuous_duplex' or metadata.get('partial') is not True:
+        return None
+    # This derived mix is incomplete; it must not hide later retained raw audio.
+    # Inspect only run-local file size, never open a provider/private path.
+    uri = recording.get('uri') or recording.get('recording_url')
+    path = Path(uri).resolve() if isinstance(uri, str) and uri and '://' not in uri and not uri.startswith('/api/') else None
+    size = path.stat().st_size if path and path.is_relative_to(root) and path.is_file() else None
+    return {'track_id': 'continuous-duplex', 'parties': [0, 1], 'scope': 'continuous_duplex',
+            'bytes': size, 'reason': 'partial_continuous_mix_excluded',
+            'availability': 'retained_locally' if size else 'unavailable', 'capture_completeness': 'partial'}
+
+
 def export_conversation_media(vcon: dict[str, Any], conversation: dict[str, Any], root: Path,
                               *, include_audio: bool) -> dict[str, Any]:
     exported = deepcopy(vcon)
@@ -122,7 +138,8 @@ def export_conversation_media(vcon: dict[str, Any], conversation: dict[str, Any]
             inline_indexes.append(index)
             inline_bytes += len(item['body'].rstrip('=')) * 3 // 4
     tracks = _local_tracks(conversation, root)
-    omitted: list[dict[str, Any]] = []
+    partial_mix = _partial_mix_omission(conversation, root)
+    omitted: list[dict[str, Any]] = [partial_mix] if partial_mix else []
     local: list[tuple[dict[str, Any], Path, int]] = []
     seen: set[Path] = set()
     for index, track in enumerate(tracks):
@@ -145,6 +162,7 @@ def export_conversation_media(vcon: dict[str, Any], conversation: dict[str, Any]
             continue
         local.append((track, path, size))
     total = sum(size for _, _, size in local)
+    excluded_mix_bytes = (partial_mix.get('bytes') or 0) if partial_mix else 0
     if include_audio and total > MAX_INLINE_AUDIO_BYTES:
         raise MediaExportError(f'Complete inline audio exceeds the 20 MB limit ({len(local)} tracks, {total} bytes); use the metadata-only export. No tracks were truncated.', 413)
     if include_audio and not local and not inline_indexes and not any(d.get('url') for d in dialogs if d.get('type') == 'recording'):
@@ -191,13 +209,15 @@ def export_conversation_media(vcon: dict[str, Any], conversation: dict[str, Any]
                                 'clock_origin': track.get('clock_origin', 'not_recorded')})
     included = sum(1 for d in dialogs if d.get('type') == 'recording' and (d.get('body') or d.get('url')))
     manifest = {'status': 'inline' if include_audio and any(d.get('body') for d in dialogs if d.get('type') == 'recording') else 'retained_locally' if local or inline_indexes else 'portable' if included else 'not_captured',
-                'captured_tracks': len(local) if local else len(inline_indexes) + sum(1 for d in dialogs if d.get('type') == 'recording' and d.get('url')),
+                'captured_tracks': (len(local) if local else len(inline_indexes) + sum(1 for d in dialogs if d.get('type') == 'recording' and d.get('url'))) + (1 if excluded_mix_bytes else 0),
                 'included_tracks': included, 'omitted_tracks': len(omitted),
-                'local_audio_bytes': total, 'inline_audio_limit_bytes': MAX_INLINE_AUDIO_BYTES,
+                'local_audio_bytes': total + excluded_mix_bytes, 'selected_audio_bytes': total,
+                'excluded_audio_bytes': excluded_mix_bytes, 'inline_audio_limit_bytes': MAX_INLINE_AUDIO_BYTES,
                 'media_scope': 'continuous_duplex' if len(local) == 1 and local[0][0].get('scope') == 'continuous_duplex' else 'captured_tracks_only',
                 'full_media_coverage': 'all_retained_local_tracks_included' if include_audio and local and not omitted else 'not_established',
-                'capture_completeness': 'partial' if any(t.get('partial') is True for t, _, _ in local) else
+                'capture_completeness': 'partial' if partial_mix or any(t.get('partial') is True for t, _, _ in local) else
                                         'source_reported_continuous' if len(local) == 1 and local[0][0].get('scope') == 'continuous_duplex' and local[0][0].get('partial') is False else 'unknown',
+                'selection_strategy': 'raw_tracks_due_to_partial_mix' if partial_mix else 'preferred_continuous_mix' if len(local) == 1 and local[0][0].get('scope') == 'continuous_duplex' else 'captured_tracks',
                 'tracks': portable_tracks, 'omissions': omitted}
     if any(item['reason'] in {'local_media_unavailable', 'local_media_empty'} for item in omitted):
         manifest['status'] = 'media_unavailable'
