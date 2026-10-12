@@ -569,6 +569,8 @@ class StreamingMediaBridge(FrameProcessor):
 class StreamingRtcAsrProcessor(FrameProcessor):
     """Pipecat processor for rtc-asr Local STT v1 with Silero turn boundaries."""
 
+    protocol = "local-stt.v1"
+
     def __init__(
         self,
         *,

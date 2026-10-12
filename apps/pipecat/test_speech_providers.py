@@ -126,6 +126,7 @@ def test_final_segments_do_not_release_turn_before_flush_ack(provider, monkeypat
         await processor._emit_turn_final(FrameDirection.DOWNSTREAM)
         finals = [f for f in pushes if isinstance(f, TranscriptionFrame)]
         assert len(finals) == 1 and finals[0].text == 'Do not cancel.'
+        assert processor.protocol == ('deepgram-listen-v1' if provider == 'deepgram' else 'cartesia-stt-websocket')
         assert processor.final_at >= processor.speech_ended_at
         assert b'\x01\x00' * 320 in socket.sent
         url, kwargs = connections[0]

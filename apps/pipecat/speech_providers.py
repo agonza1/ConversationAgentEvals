@@ -61,6 +61,8 @@ speech-end frame. This avoids idle keep-alives and cross-utterance receipts.
     def __init__(self, *, selection: SpeechSelection, **kwargs: Any) -> None:
         self.selection = selection
         super().__init__(base_url='', **kwargs)
+        self.protocol = ('deepgram-listen-v1' if selection.stt_provider == 'deepgram'
+                         else 'cartesia-stt-websocket')
         self.interim_results = selection.stt_provider == 'deepgram'
         self.partial_interval_ms = None
         self.partial_window_seconds = None

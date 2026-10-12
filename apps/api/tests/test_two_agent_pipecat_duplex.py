@@ -169,7 +169,7 @@ def test_duplex_transport_rejects_wrong_direction_and_empty_audio():
 
 
 def test_pipecat_graph_requires_canonical_processor_order():
-    with pytest.raises(ValueError, match='rtc-asr -> llm -> kokoro'):
+    with pytest.raises(ValueError, match='supported STT -> llm -> TTS'):
         PipecatAgentGraph(
             participant_id='pipecat_tester',
             label='bad graph',
@@ -179,4 +179,30 @@ def test_pipecat_graph_requires_canonical_processor_order():
                 PipecatProcessorSpec('kokoro', 'kokoro', 'kokoro'),
             ),
             llm_mode='mock',
+        )
+
+
+@pytest.mark.parametrize('stt_provider', ['rtc-asr', 'deepgram', 'cartesia'])
+@pytest.mark.parametrize('tts_provider', ['kokoro', 'deepgram', 'cartesia'])
+def test_duplex_graphs_accept_independent_supported_speech_stages(stt_provider, tts_provider):
+    tester, target = build_builtin_sample_voice_graphs(
+        tester_llm_provider='openai', tester_llm_model='caller-model',
+        target_llm_provider='openai', target_llm_model='agent-model',
+        stt_provider=stt_provider, tts_provider=tts_provider,
+        stt_model='selected-stt', tts_model='selected-tts', llm_mode='real',
+    )
+    for graph in (tester, target):
+        assert [processor.name for processor in graph.processors] == [stt_provider, 'llm', tts_provider]
+
+
+@pytest.mark.parametrize('chain', [
+    ('kokoro', 'llm', 'deepgram'), ('deepgram', 'llm', 'rtc-asr'),
+    ('unknown', 'llm', 'kokoro'), ('rtc-asr', 'llm', 'unknown'),
+    ('deepgram', 'cartesia', 'kokoro'),
+])
+def test_duplex_graph_rejects_wrong_stage_roles_and_unknown_providers(chain):
+    with pytest.raises(ValueError, match='supported STT -> llm -> TTS'):
+        PipecatAgentGraph(
+            participant_id='pipecat_tester', label='bad graph', llm_mode='mock',
+            processors=tuple(PipecatProcessorSpec(name, name, 'model') for name in chain),
         )
