@@ -170,6 +170,46 @@ def test_total_media_budget_is_atomic_and_metadata_export_reports_every_omission
     assert manifest['omitted_tracks'] == 3 and manifest['included_tracks'] == 0
 
 
+def test_metadata_export_survives_missing_or_empty_audio_and_reports_unknown(tmp_path):
+    root = tmp_path / 'exec'
+    root.mkdir()
+    empty = root / 'empty.wav'
+    empty.write_bytes(b'')
+    tracks = [{'uri': str(root / 'missing.wav'), 'track_id': 'missing'},
+              {'uri': str(empty), 'track_id': 'empty'}]
+    result = export_conversation_media(document(), {'local_audio_tracks': tracks}, root, include_audio=False)
+    manifest = result['analysis'][1]['body']['recording']
+    assert manifest['status'] == 'media_unavailable' and manifest['capture_completeness'] == 'unknown'
+    assert manifest['omitted_tracks'] == 2 and manifest['included_tracks'] == 0
+    assert {i['reason'] for i in manifest['omissions']} == {'local_media_unavailable', 'local_media_empty'}
+    with pytest.raises(MediaExportError):
+        export_conversation_media(document(), {'local_audio_tracks': tracks}, root, include_audio=True)
+
+
+def test_inline_only_metadata_omission_reports_exact_decoded_size(tmp_path):
+    source = document()
+    audio = wav()
+    source['dialog'].append(inline(audio))
+    result = export_conversation_media(source, {}, tmp_path, include_audio=False)
+    manifest = result['analysis'][1]['body']['recording']
+    assert manifest['omissions'] == [{'track_id': 'dialog-1', 'bytes': len(audio), 'parties': [1], 'reason': 'audio_opt_in_required'}]
+
+
+def test_legacy_track_symlink_does_not_read_private_wav_header(monkeypatch, tmp_path):
+    root = tmp_path / 'exec'
+    directory = root / 'audio' / 'conv'
+    directory.mkdir(parents=True)
+    private = tmp_path / 'private.wav'
+    private.write_bytes(wav())
+    (directory / 'caller-1-sent.wav').symlink_to(private)
+    def forbidden_header_read(*args, **kwargs):
+        pytest.fail('Private WAV metadata must not be dereferenced')
+    monkeypatch.setattr(wave, 'open', forbidden_header_read)
+    result = export_conversation_media(document(), {'conversation_id': 'conv', 'audio_session': {'transport': 'waylo_livekit'}},
+                                       root, include_audio=False)
+    assert result['analysis'][1]['body']['recording']['status'] == 'media_unavailable'
+
+
 def test_empty_capture_placeholder_does_not_claim_failure_or_spoken_text():
     exported = build_ietf_execution_vcon(conversation_id='empty', execution_run_id='exec', suite_id='s', scenario_id='s',
         scenario_title=None, mode='waylo_livekit', turns=[], recording=None,

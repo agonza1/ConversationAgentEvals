@@ -92,9 +92,10 @@ def _local_tracks(conversation: dict[str, Any], root: Path) -> list[dict[str, An
         match = re.fullmatch(r'(agent-greeting-received|caller-([1-9][0-9]*)-sent|agent-([1-9][0-9]*)-received)\.wav', path.name)
         if not match or not path.is_file():
             continue
+        safe_path = path.resolve().is_relative_to(root)
         tracks.append({'uri': str(path), 'track_id': path.stem, 'mime_type': 'audio/wav',
                        'parties': [0] if path.name.startswith('caller-') else [1],
-                       'duration_ms': _duration_ms(path),
+                       'duration_ms': _duration_ms(path) if safe_path else None,
                        '_order': 0 if 'greeting' in path.name else int(match[2] or match[3]) * 2 + (1 if match[3] else 0)})
     if len(tracks) > MAX_AUDIO_TRACKS:
         raise MediaExportError('Too many local audio tracks for portable export.')
@@ -119,7 +120,7 @@ def export_conversation_media(vcon: dict[str, Any], conversation: dict[str, Any]
                 pass  # final semantic validation rejects malformed hashes
         if item.get('type') == 'recording' and item.get('encoding') == 'base64url' and isinstance(item.get('body'), str):
             inline_indexes.append(index)
-            inline_bytes += len(item['body']) * 3 // 4
+            inline_bytes += len(item['body'].rstrip('=')) * 3 // 4
     tracks = _local_tracks(conversation, root)
     omitted: list[dict[str, Any]] = []
     local: list[tuple[dict[str, Any], Path, int]] = []
@@ -137,7 +138,11 @@ def export_conversation_media(vcon: dict[str, Any], conversation: dict[str, Any]
         seen.add(path)
         size = path.stat().st_size
         if size <= 0:
-            raise MediaExportError('Local audio contains an empty track; refusing a partial export.')
+            if include_audio:
+                raise MediaExportError('Local audio contains an empty track; refusing a partial export.')
+            omitted.append({'track_id': str(track.get('track_id') or f'track-{index + 1}'),
+                            'bytes': 0, 'reason': 'local_media_empty'})
+            continue
         local.append((track, path, size))
     total = sum(size for _, _, size in local)
     if include_audio and total > MAX_INLINE_AUDIO_BYTES:
@@ -147,10 +152,13 @@ def export_conversation_media(vcon: dict[str, Any], conversation: dict[str, Any]
     if not include_audio or local:
         for index in inline_indexes:
             item = dialogs[index]
+            if not local:
+                omitted.append({'track_id': f'dialog-{index}',
+                                'bytes': len(item['body'].rstrip('=')) * 3 // 4,
+                                'parties': item.get('parties', []),
+                                'reason': 'audio_opt_in_required'})
             for key in ('body', 'encoding', 'content_hash'):
                 item.pop(key, None)
-        if not local:
-            omitted.extend({'track_id': f'dialog-{i}', 'reason': 'audio_opt_in_required'} for i in inline_indexes)
     elif inline_bytes > MAX_INLINE_AUDIO_BYTES:
         raise MediaExportError('Inline audio exceeds the 20 MB limit; use the metadata-only export.', 413)
     portable_tracks = []
@@ -191,6 +199,9 @@ def export_conversation_media(vcon: dict[str, Any], conversation: dict[str, Any]
                 'capture_completeness': 'partial' if any(t.get('partial') is True for t, _, _ in local) else
                                         'source_reported_continuous' if len(local) == 1 and local[0][0].get('scope') == 'continuous_duplex' and local[0][0].get('partial') is False else 'unknown',
                 'tracks': portable_tracks, 'omissions': omitted}
+    if any(item['reason'] in {'local_media_unavailable', 'local_media_empty'} for item in omitted):
+        manifest['status'] = 'media_unavailable'
+        manifest['capture_completeness'] = 'unknown'
     for attachment in exported.get('attachments') or []:
         if 'dialog' not in attachment and dialogs:
             attachment['dialog'] = 0  # normalize known legacy CAE native attachments
