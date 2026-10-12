@@ -82,3 +82,39 @@ test('saved history pages are bounded and evidence stays collapsed', async ({ pa
   const suiteRequests = requests.filter((url) => url.pathname === '/api/benchmarks/suite-runs');
   expect(suiteRequests.every((url) => url.searchParams.get('limit') === '11')).toBe(true);
 });
+
+test('each history panel stays usable when the other endpoint fails', async ({ page }) => {
+  let failure = 'suite';
+  const historyRequests: string[] = [];
+  await page.route('**/api/**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/product/runs') {
+      historyRequests.push('saved');
+      await route.fulfill(failure === 'saved' ? { status: 503, json: { detail: 'Saved history unavailable' } } : {
+        json: [{ id: 'retained-result', report: { scenario_title: 'Retained evaluation', overall_score: 80 } }],
+      });
+    } else if (url.pathname === '/api/benchmarks/suite-runs') {
+      historyRequests.push('suite');
+      await route.fulfill(failure === 'suite' ? { status: 503, json: { detail: 'Suite history unavailable' } } : {
+        json: [{ suite_run_id: 'retained-suite', suite_id: 'suite-a', status: 'completed', scenario_count: 1, pass_count: 1, average_score: 80 }],
+      });
+    } else {
+      await route.fulfill({ json: [] });
+    }
+  });
+  await page.goto('/results');
+  await page.getByRole('button', { name: 'Saved evaluations', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Suite history unavailable' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Load run', exact: true })).toHaveCount(1);
+  const savedRequestCount = historyRequests.filter((kind) => kind === 'saved').length;
+  failure = '';
+  await page.getByRole('button', { name: 'Retry suite runs', exact: true }).click();
+  await expect(page.getByText('1 suite runs on this page')).toBeVisible();
+  expect(historyRequests.filter((kind) => kind === 'saved').length).toBe(savedRequestCount);
+  failure = 'saved';
+  await page.reload();
+  await page.getByRole('button', { name: 'Saved evaluations', exact: true }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Saved history unavailable' })).toBeVisible();
+  await expect(page.getByText('1 suite runs on this page')).toBeVisible();
+  await expect(page.getByLabel('Suite run history', { exact: true }).getByRole('article').getByText('completed', { exact: true })).toBeVisible();
+});
