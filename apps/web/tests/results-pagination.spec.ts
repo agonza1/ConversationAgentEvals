@@ -118,3 +118,41 @@ test('each history panel stays usable when the other endpoint fails', async ({ p
   await expect(page.getByText('1 suite runs on this page')).toBeVisible();
   await expect(page.getByLabel('Suite run history', { exact: true }).getByRole('article').getByText('completed', { exact: true })).toBeVisible();
 });
+
+test('active lookahead rows keep execution and suite history polling', async ({ page }) => {
+  let executionRequests = 0;
+  let suiteRequests = 0;
+  await page.route('**/api/**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/api/execution/runs') {
+      executionRequests += 1;
+      const rows = Array.from({ length: 11 }, (_, index) => ({
+        execution_run_id: `lookahead-exec-${index}`, agent_name: `Lookahead agent ${index}`,
+        status: index === 10 && executionRequests === 1 ? 'running' : 'completed',
+        mode: 'text_callable', conversations: [],
+      }));
+      await route.fulfill({ json: executionRequests > 1 ? [rows[10], ...rows.slice(0, 10)] : rows });
+    } else if (url.pathname === '/api/benchmarks/suite-runs') {
+      suiteRequests += 1;
+      const rows = Array.from({ length: 11 }, (_, index) => ({
+        suite_run_id: `lookahead-suite-${index}`, suite_id: `Lookahead suite ${index}`,
+        status: index === 10 && suiteRequests === 1 ? 'running' : 'completed', scenario_count: 1,
+      }));
+      await route.fulfill({ json: suiteRequests > 1 ? [rows[10], ...rows.slice(0, 10)] : rows });
+    } else {
+      await route.fulfill({ json: [] });
+    }
+  });
+  await page.goto('/results');
+  await expect(page.locator('.runs-list-item')).toHaveCount(10);
+  await expect(page.getByText('Lookahead agent 10', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Lookahead agent 10', { exact: true })).toBeVisible();
+  expect(executionRequests).toBe(2);
+  await page.getByRole('button', { name: 'Saved evaluations', exact: true }).click();
+  const history = page.getByLabel('Suite run history', { exact: true });
+  await expect(history.getByRole('article')).toHaveCount(10);
+  await expect(history.getByText('Lookahead suite 10', { exact: true })).toHaveCount(0);
+  await expect(history.getByText('Lookahead suite 10', { exact: true })).toBeVisible();
+  expect(suiteRequests).toBe(2);
+  await expect(history.getByRole('article')).toHaveCount(10);
+});

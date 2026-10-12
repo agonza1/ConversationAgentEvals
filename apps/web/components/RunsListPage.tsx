@@ -30,6 +30,7 @@ export function RunsListPage({ view = 'launch' }: { view?: 'launch' | 'results' 
   const [statusFilter, setStatusFilter] = useState('all');
   const [page, setPage] = useState(0);
   const [hasNext, setHasNext] = useState(false);
+  const [hasActiveRuns, setHasActiveRuns] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const userId = useMemo(() => demoUserId(), []);
   const projectId = useMemo(() => demoProjectId(), []);
@@ -49,6 +50,7 @@ export function RunsListPage({ view = 'launch' }: { view?: 'launch' | 'results' 
         if (!active) return;
         setRuns(next.slice(0, RESULTS_PAGE_SIZE));
         setHasNext(next.length > RESULTS_PAGE_SIZE);
+        setHasActiveRuns(next.some((run) => run.status === 'queued' || run.status === 'running'));
       } catch (err) {
         if (!active) return;
         setError(err instanceof Error ? err.message : 'Could not load runs');
@@ -62,8 +64,6 @@ export function RunsListPage({ view = 'launch' }: { view?: 'launch' | 'results' 
     };
   }, [page, projectId, refreshKey, source, statusFilter, userId, view]);
 
-  const hasActiveRuns = runs.some((run) => run.status === 'queued' || run.status === 'running');
-
   useEffect(() => {
     if (view !== 'results' || source !== 'agents' || !hasActiveRuns) return undefined;
     let active = true;
@@ -75,6 +75,7 @@ export function RunsListPage({ view = 'launch' }: { view?: 'launch' | 'results' 
         if (!active) return;
         setRuns(next.slice(0, RESULTS_PAGE_SIZE));
         setHasNext(next.length > RESULTS_PAGE_SIZE);
+        setHasActiveRuns(next.some((run) => run.status === 'queued' || run.status === 'running'));
         setError(null);
         if (next.some((run) => run.status === 'queued' || run.status === 'running')) {
           timer = setTimeout(() => void poll(), 1500);

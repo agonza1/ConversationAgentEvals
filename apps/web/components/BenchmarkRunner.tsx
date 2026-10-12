@@ -2292,6 +2292,7 @@ export function BenchmarkRunner({
   const [suitePage, setSuitePage] = useState(0);
   const [savedHasNext, setSavedHasNext] = useState(false);
   const [suiteHasNext, setSuiteHasNext] = useState(false);
+  const [suitePageHasActiveRun, setSuitePageHasActiveRun] = useState(false);
   const [savedHistoryLoading, setSavedHistoryLoading] = useState(false);
   const [suiteHistoryLoading, setSuiteHistoryLoading] = useState(false);
   const [savedHistoryError, setSavedHistoryError] = useState<string | null>(null);
@@ -2845,11 +2846,13 @@ export function BenchmarkRunner({
     setSuiteHistoryLoading(true);
     setSuiteHistoryError(null);
     setSuiteRuns([]);
+    setSuitePageHasActiveRun(false);
     listBenchmarkSuiteRuns(userId, projectId, undefined, suiteRunStatusFilter, suitePage)
       .then((runs) => {
         if (!active) return;
         setSuiteRuns(runs.slice(0, RESULTS_PAGE_SIZE));
         setSuiteHasNext(runs.length > RESULTS_PAGE_SIZE);
+        setSuitePageHasActiveRun(runs.some((run) => isActiveSuiteRunStatus(run.status)));
       })
       .catch((err) => {
         if (active) setSuiteHistoryError(err instanceof Error ? err.message : 'Could not load suite runs');
@@ -2982,7 +2985,7 @@ export function BenchmarkRunner({
 
   useEffect(() => {
     if (!userId || !projectId || (view !== 'history' && !selectedSuite?.id)) return;
-    const hasActiveSuiteRun = suiteRuns.some((run) => isActiveSuiteRunStatus(run.status));
+    const hasActiveSuiteRun = view === 'history' ? suitePageHasActiveRun : suiteRuns.some((run) => isActiveSuiteRunStatus(run.status));
     if (!hasActiveSuiteRun) return;
     let active = true;
     const historySuite = view === 'history' ? undefined : selectedSuite?.id;
@@ -2992,6 +2995,7 @@ export function BenchmarkRunner({
         .then((nextSuiteRuns) => {
           if (active) {
             setSuiteHasNext(nextSuiteRuns.length > RESULTS_PAGE_SIZE);
+            if (view === 'history') setSuitePageHasActiveRun(nextSuiteRuns.some((run) => isActiveSuiteRunStatus(run.status)));
             setSuiteRuns((current) => view === 'history' ? nextSuiteRuns.slice(0, RESULTS_PAGE_SIZE) : mergeSuiteRunRecords(current, nextSuiteRuns, historySuite, suiteRunStatusFilter));
           }
         })
@@ -2999,7 +3003,7 @@ export function BenchmarkRunner({
     }, 4000);
 
     return () => { active = false; window.clearInterval(interval); };
-  }, [projectId, selectedSuite?.id, suitePage, suiteRunStatusFilter, suiteRuns, userId, view]);
+  }, [projectId, selectedSuite?.id, suitePage, suitePageHasActiveRun, suiteRunStatusFilter, suiteRuns, userId, view]);
 
   const activeExecutionRunId = executionRun && isActiveExecutionStatus(executionRun.status)
     ? executionRun.execution_run_id
