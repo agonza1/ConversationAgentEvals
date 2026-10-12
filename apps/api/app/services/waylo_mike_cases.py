@@ -94,3 +94,16 @@ for case in WAYLO_MIKE_SUITE['scenarios']:
         ]
     elif case['id'] == 'mike-ambiguous':
         case['waylo_test']['expected_entities_by_turn'] = [[{'product_name': 'potatoes', 'quantity': 5, 'unit': 'bags'}], [{'product_name': 'White Potatoes'}]]
+    elif case['id'] == 'mike-unavailable':
+        # Spoken recognition is independent of whether catalog lookup permits
+        # an item to appear in the backend request list (empty for this case).
+        case['waylo_test']['expected_entities_by_turn'] = [
+            [{'product_name': 'Old Pears', 'quantity': 2, 'unit': 'boxes'},
+             {'product_name': 'dragonfruit', 'quantity': 3, 'unit': 'boxes'}],
+            [],
+        ]
+    elif case['id'] == 'mike-lookup-failure':
+        case['waylo_test']['expected_entities_by_turn'] = [
+            [{'product_name': 'potatoes', 'quantity': 5, 'unit': 'bags'}],
+            [],
+        ]
