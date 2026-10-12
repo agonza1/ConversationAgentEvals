@@ -187,17 +187,19 @@ def refresh_waylo_evidence(execution_run_id: str, expected: dict, captured: dict
             return  # No new provider evidence; do not invalidate an unchanged review.
         profile = decode_evidence(exported['vcon'])
         final = next((s['state'] for s in profile['state_snapshots'] if s['phase'] == 'final'), {})
+        execution_failed = row.get('status') == 'failed' or bool(row.get('error'))
         row.update(ietf_vcon_export=exported['vcon'], ietf_vcon_export_summary=ietf_vcon_summary(exported['vcon']),
             transcript='\n'.join(f'{"Caller" if t["role"] == "user" else "Agent"}: {t["text"]}' for t in captured['transcripts'] if t['role'] in {'user', 'agent'}),
             action_trace=latest_tool_events(profile['tool_events']), final_state={**{k: v for k, v in row.get('final_state', {}).items() if k == 'tester_error'}, **final},
             state_snapshots=profile['state_snapshots'], evidence_coverage=exported['coverage'],
             configuration_check=exported['configuration_check'],
             vcon_export=None, vcon_export_summary=None, evaluation_findings={}, evaluation_adjudication=None,
-            metrics_summary=None, verdict='needs_review', score=None,
-            status='failed' if row.get('error') else 'needs_review')
+            metrics_summary=None, verdict='failed' if execution_failed else 'needs_review', score=None,
+            status='failed' if execution_failed else 'needs_review')
         for review in row.get('judge_reviews', []):
             review.update(status='superseded', superseded_at=_now())
-        run.update(status='failed' if run.get('error') else 'needs_review', updated_at=_now())
+        run_failed = bool(run.get('error')) or any(c.get('status') == 'failed' for c in run['conversations'])
+        run.update(status='failed' if run_failed else 'needs_review', updated_at=_now())
         _persist_unlocked(run)
         # Keep the downloadable inference rows consistent without appending duplicates.
         inference = RUNS_DIR / execution_run_id / 'inference_set.jsonl'

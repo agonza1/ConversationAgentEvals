@@ -270,6 +270,69 @@ def test_late_provider_write_refresh_replaces_run_export_without_duplicate(conne
     assert len(execution_run_store.get_execution_run(run_id)['conversations']) == 1
 
 
+@pytest.mark.parametrize('status,error', [('failed', 'Target response timeout'), ('failed', None),
+    ('needs_review', 'Caller audio send failed')])
+def test_refresh_preserves_failed_execution_and_verdict(connected, monkeypatch, tmp_path, status, error):
+    from app.schemas.execution import ConversationRecord
+    from test_waylo_target import transcript, S
+    proof, http, run_id, conv_id, native = finished_waylo_run(connected, monkeypatch)
+    before = execution_run_store.get_conversation(run_id, conv_id)
+    failure = error or 'RTC failed without an error string'
+    execution_run_store.upsert_conversation(run_id, ConversationRecord.model_validate({
+        **before, 'status': status, 'verdict': 'failed', 'error': error,
+        'final_state': {'tester_error': failure},
+    }))
+    execution_run_store.complete_execution_run(run_id, status='failed')
+    assert execution_run_store.get_execution_run(run_id)['error'] is None
+    native['transcripts'].append(transcript(3, 'agent', 'Late transcript after RTC failure'))
+    async def read(*args, **kwargs):
+        return deepcopy(native)
+    monkeypatch.setattr(WayloClient, 'capture', read)
+    data = {'session_id': S, 'execution_run_id': run_id, 'conversation_id': conv_id, 'user_id': 'execution-user'}
+    for _ in range(2):
+        response = http.post(f'/api/agents/{TARGET["id"]}/capture', json=data,
+            headers={**HEADERS, 'X-CAE-Waylo-Session': proof})
+        assert response.status_code == 200, response.text
+    after = execution_run_store.get_conversation(run_id, conv_id)
+    assert after['status'] == after['verdict'] == 'failed'
+    assert after['error'] == error and after['final_state']['tester_error'] == failure
+    assert after['score'] is None and after['judge_reviews'][0]['status'] == 'superseded'
+    assert 'Late transcript after RTC failure' in after['transcript']
+    assert execution_run_store.get_execution_run(run_id)['status'] == 'failed'
+    lines = (tmp_path / 'runs' / run_id / 'inference_set.jsonl').read_text().splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])['status'] == json.loads(lines[0])['verdict'] == 'failed'
+
+
+def test_refresh_retains_run_failure_from_another_conversation(connected, monkeypatch, tmp_path):
+    from app.schemas.execution import ConversationRecord
+    from test_waylo_target import transcript, S
+    proof, http, run_id, conv_id, native = finished_waylo_run(connected, monkeypatch)
+    before = execution_run_store.get_conversation(run_id, conv_id)
+    other = ConversationRecord.model_validate({**before, 'conversation_id': 'conv-failed-other',
+        'iteration': 2, 'status': 'failed', 'verdict': 'failed', 'score': None, 'error': None})
+    execution_run_store.upsert_conversation(run_id, other)
+    execution_run_store.complete_execution_run(run_id, status='failed')
+    assert execution_run_store.get_execution_run(run_id)['error'] is None
+    native['transcripts'].append(transcript(3, 'agent', 'Late transcript for successful capture'))
+    async def read(*args, **kwargs):
+        return deepcopy(native)
+    monkeypatch.setattr(WayloClient, 'capture', read)
+    response = http.post(f'/api/agents/{TARGET["id"]}/capture', json={
+        'session_id': S, 'execution_run_id': run_id, 'conversation_id': conv_id, 'user_id': 'execution-user'},
+        headers={**HEADERS, 'X-CAE-Waylo-Session': proof})
+    assert response.status_code == 200, response.text
+    after = execution_run_store.get_conversation(run_id, conv_id)
+    assert after['status'] == after['verdict'] == 'needs_review'
+    assert after['score'] is None
+    assert execution_run_store.get_conversation(run_id, other.conversation_id) == other.model_dump(mode='json')
+    assert execution_run_store.get_execution_run(run_id)['status'] == 'failed'
+    lines = (tmp_path / 'runs' / run_id / 'inference_set.jsonl').read_text().splitlines()
+    assert len(lines) == 2
+    assert {json.loads(line)['conversation_id']: json.loads(line)['status'] for line in lines} == {
+        conv_id: 'needs_review', other.conversation_id: 'failed'}
+
+
 @pytest.mark.parametrize('change,expected', [({'user_id': 'wrong'}, 404),
     ({'conversation_id': 'other'}, 404), ({'session_id': str(uuid4())}, 409)])
 def test_refresh_rejects_cross_run_or_session_identity_before_provider_read(connected, monkeypatch, change, expected):
