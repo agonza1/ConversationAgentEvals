@@ -1165,6 +1165,11 @@ def test_outbound_voice_broadcast_reuses_reference_listener_bus(monkeypatch):
     packet['listener_media_keys'] = ['other-session:1:target_to_tester']
     assert client.post('/outbound-voice/broadcast/audio', headers={'x-cae-reference-token': 'test-token'}, json=packet).status_code == 422
     assert 'other-session:1:target_to_tester' not in broadcast.started_listener_media_keys
+    packet['listener_media_keys'] = []
+    packet['pcm16_base64'] = base64.b64encode(bytes(480)).decode()
+    before_keys = set(broadcast.started_listener_media_keys)
+    assert client.post('/outbound-voice/broadcast/audio', headers={'x-cae-reference-token': 'test-token'}, json=packet).status_code == 200
+    assert broadcast.started_listener_media_keys == before_keys
 
     closed = client.post(
         '/outbound-voice/broadcast/close',

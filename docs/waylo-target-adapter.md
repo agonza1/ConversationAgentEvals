@@ -107,9 +107,14 @@ identity is recorded only when invoked, and ASSERT exports prefer each conversat
 source so a mixed suite cannot attribute scripted turns to another case's model.
 Tester audio accepted by AudioSource and target audio received by AudioStream are
 retained as separate WAV artifacts, including accepted samples on a failed send.
-The existing live-turn HTTP playback/capture flow is reused. This adapter does not
-publish a Pipecat listener WebRTC bus; do not confuse listener transport with the
-actual Waylo call's LiveKit connection.
+Waylo audio also publishes to CAE's existing receive-only listener WebRTC bus,
+using the same clocked duplex mixer as the public Pipecat demo. Live listening
+does not wait for a completed turn and never joins the provider room from the
+browser. Its continuous recording preserves local pauses and overlap; raw
+accepted caller and received target WAVs remain separately available.
+Monitoring is optional: failure leaves the target call running and switches the
+UI to a red, explicitly delayed HTTP turn fallback. See
+[shared monitoring semantics](execution-audio-webrtc.md#shared-live-listening-and-replay).
 
 **Calls capture only. Evaluation is always manual**, even if a client sends
 `evaluate=true`. Use the existing vCon download and Eval intake / saved ASSERT review.

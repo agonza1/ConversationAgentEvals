@@ -596,7 +596,12 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
         exported = project_capture(capture, voice_events=media_events, before_items=before,
                                    suite_id=suite_id, scenario_id=scenario['id'], media_dialogs=media_dialogs,
                                    test_expectations=scenario.get('waylo_test'), after_items=after_items,
-                                   execution_run_id=execution_run_id, conversation_id=conversation_id)
+                                   execution_run_id=execution_run_id, conversation_id=conversation_id,
+                                   media_capture={'status': 'retained_locally' if recording or audio_tracks else 'not_captured',
+                                       'captured_tracks': 1 if recording else len(audio_tracks), 'included_tracks': 0,
+                                       'omitted_tracks': 1 if recording else len(audio_tracks),
+                                       'media_scope': 'continuous_duplex' if recording else 'captured_tracks_only',
+                                       'reason': 'audio_opt_in_required' if recording or audio_tracks else 'media_unavailable'})
         # Native finals remain receipts, not the tester's intended utterance. Both are retained.
         transcript = '\n'.join(f'{"Caller" if line["role"] == "user" else "Agent"}: {line["text"]}'
                                for line in capture['transcripts'])

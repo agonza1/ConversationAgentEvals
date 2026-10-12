@@ -48,7 +48,8 @@ class LiveAudioMonitor:
         self.pump = asyncio.create_task(self._pump())
         try:
             if not (self.run_id and self.conversation_id and self.runtime and self.runtime.internal_token):
-                self._unavailable()
+                if self.run_id and self.conversation_id:
+                    self._unavailable()
                 return
             if self.http is None:
                 self.http = httpx.AsyncClient(timeout=2, follow_redirects=False, trust_env=False)
@@ -178,7 +179,7 @@ class LiveAudioMonitor:
             await asyncio.gather(self.pump, return_exceptions=True)
         recording = self.recording
         if recording.origin is not None:
-            end = max(recording.ready_sample(delay_seconds=0), *recording.cursors.values())
+            end = max([recording.ready_sample(delay_seconds=0), *recording.cursors.values()])
             step = recording.sample_rate // 50
             while recording.rendered < end:
                 self._publish(recording.render(min(end, recording.rendered + step)))
