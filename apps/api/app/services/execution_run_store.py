@@ -188,11 +188,6 @@ def refresh_waylo_evidence(execution_run_id: str, expected: dict, captured: dict
         row = next((c for c in (run or {}).get('conversations', []) if c['conversation_id'] == expected['conversation_id']), None)
         if row != expected or not run or run['status'] in {'queued', 'running'}:
             raise ValueError('Conversation changed during refresh; reload and try again.')
-        if row.get('ietf_vcon_export') == exported['vcon']:
-            return  # No new provider evidence; do not invalidate an unchanged review.
-        profile = decode_evidence(exported['vcon'])
-        final = next((s['state'] for s in profile['state_snapshots'] if s['phase'] == 'final'), {})
-        execution_failed = row.get('status') == 'failed' or bool(row.get('error'))
         # Provider finals may correct or split the original RTC dialogue. Do not
         # align them by position with sent audio or inherit its source_text:
         # downstream UI and ASSERT consumers prefer turns over transcript.
@@ -203,8 +198,14 @@ def refresh_waylo_evidence(execution_run_id: str, expected: dict, captured: dict
                             'transcript_id': line['id'],
                             'text_source_label': 'Target ASR receipt (Waylo)' if line['role'] == 'user' else 'Target-reported final transcript (Waylo)'},
         ).model_dump(mode='json') for line in captured['transcripts'] if line['role'] in {'user', 'agent'}]
+        if row.get('ietf_vcon_export') == exported['vcon'] and row.get('turns') == turns:
+            return  # Neither provider evidence nor judge-visible dialogue changed.
+        profile = decode_evidence(exported['vcon'])
+        final = next((s['state'] for s in profile['state_snapshots'] if s['phase'] == 'final'), {})
+        execution_failed = row.get('status') == 'failed' or bool(row.get('error'))
         row.update(ietf_vcon_export=exported['vcon'], ietf_vcon_export_summary=ietf_vcon_summary(exported['vcon']),
             rtc_turns=deepcopy(row['rtc_turns'] if 'rtc_turns' in row else row.get('turns') or []), turns=turns,
+            timeline=[],  # Old derived dialogue labels cannot be aligned to corrected/split native turns.
             transcript='\n'.join(f'{"Caller" if t["role"] == "user" else "Agent"}: {t["text"]}' for t in captured['transcripts'] if t['role'] in {'user', 'agent'}),
             action_trace=latest_tool_events(profile['tool_events']), final_state={**{k: v for k, v in row.get('final_state', {}).items() if k == 'tester_error'}, **final},
             state_snapshots=profile['state_snapshots'], evidence_coverage=exported['coverage'],

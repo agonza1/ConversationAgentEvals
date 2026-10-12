@@ -240,6 +240,7 @@ def finished_waylo_run(connected, monkeypatch):
                       'llm_output': 'Actual tester spoken reference', 'direction': 'tester_to_target',
                       'media_url': '/recorded-tester.wav', 'created_at': '2026-10-09T12:00:01Z'}],
         recording={'url': '/recorded-conversation.wav'},
+        timeline=[{'label': 'Actual tester spoken reference', 't_ms': 0, 'kind': 'turn'}],
         audio_session={'session_id': S}, judge_reviews=[{'review_id': 'old', 'status': 'pending_confirmation'}])
     execution_run_store.upsert_conversation(run_id, row)
     execution_run_store.complete_execution_run(run_id, status='needs_review')
@@ -275,6 +276,7 @@ def test_late_provider_write_refresh_replaces_run_export_without_duplicate(conne
     assert after['audio_session'] == before['audio_session']
     assert after['live_events'] == before['live_events']
     assert after['recording'] == before['recording']
+    assert after['timeline'] == []
     assert all(turn['frame_metadata']['transcript_source'] == 'waylo_final_transcript' for turn in after['turns'])
     assert all('source_text' not in turn['frame_metadata'] and 'audio_sha256' not in turn['frame_metadata'] for turn in after['turns'])
     assert after['turns'][0]['frame_metadata']['text_source_label'] == 'Target ASR receipt (Waylo)'
@@ -327,6 +329,59 @@ def test_changed_refreshes_keep_original_rtc_provenance_and_latest_assert_dialog
         persisted = [json.loads(line) for line in (tmp_path / 'runs' / run_id / 'inference_set.jsonl').read_text().splitlines()]
         assert len(persisted) == 1 and persisted[0]['turns'] == after['turns']
         assert persisted[0]['rtc_turns'] == original['turns']
+
+
+@pytest.mark.parametrize('retained_count', [0, 1])
+def test_refresh_removes_stale_dialogue_and_unchanged_revision_preserves_review(connected, monkeypatch, retained_count):
+    from app.services.waylo_target import project_capture
+    from app.services.assert_transcript_adapter import build_assert_inference_row
+    from test_waylo_target import transcript
+    _, _, run_id, conv_id, native = finished_waylo_run(connected, monkeypatch)
+    original = execution_run_store.get_conversation(run_id, conv_id)
+    native['transcripts'] = [transcript(4, 'agent', 'Only retained native final')] if retained_count else []
+    export = project_capture(native, execution_run_id=run_id, conversation_id=conv_id)
+    execution_run_store.refresh_waylo_evidence(run_id, original, native, export)
+    after = execution_run_store.get_conversation(run_id, conv_id)
+    assert len(after['turns']) == retained_count
+    assert after['rtc_turns'] == original['turns']
+    assert after['timeline'] == []
+    if retained_count:
+        assert after['turns'][0]['turn_index'] == 4  # Native sequence, not the filtered position.
+    inference = build_assert_inference_row(run=execution_run_store.get_execution_run(run_id), conversation=after)
+    messages = [event['edit']['message']['content'] for event in inference['events'] if 'message' in event['edit']]
+    assert messages == [line['text'] for line in native['transcripts']]
+    # Re-reading the identical export must not supersede a new manual review.
+    from app.schemas.execution import ConversationRecord
+    reviewed = {**after, 'judge_reviews': [{'review_id': 'new-review', 'status': 'accepted'}],
+                'score': 75, 'verdict': 'pass'}
+    execution_run_store.upsert_conversation(run_id, ConversationRecord.model_validate(reviewed))
+    expected = execution_run_store.get_conversation(run_id, conv_id)
+    execution_run_store.refresh_waylo_evidence(run_id, expected, native, export)
+    assert execution_run_store.get_conversation(run_id, conv_id) == expected
+
+
+def test_identical_export_refresh_repairs_original_rtc_turns_once(connected, monkeypatch):
+    from app.services.waylo_target import project_capture
+    from app.services.assert_transcript_adapter import build_assert_inference_row
+    from app.schemas.execution import ConversationRecord
+    _, _, run_id, conv_id, native = finished_waylo_run(connected, monkeypatch)
+    original = execution_run_store.get_conversation(run_id, conv_id)
+    export = project_capture(native, execution_run_id=run_id, conversation_id=conv_id)
+    assert export['vcon'] == original['ietf_vcon_export']
+    execution_run_store.refresh_waylo_evidence(run_id, original, native, export)
+    after = execution_run_store.get_conversation(run_id, conv_id)
+    assert after['turns'] != original['turns']
+    assert after['rtc_turns'] == original['turns']
+    assert after['judge_reviews'][0]['status'] == 'superseded' and after['score'] is None
+    inference = build_assert_inference_row(run=execution_run_store.get_execution_run(run_id), conversation=after)
+    assert [event['edit']['message']['content'] for event in inference['events'] if 'message' in event['edit']] == [
+        line['text'] for line in native['transcripts']]
+    reviewed = {**after, 'judge_reviews': [{'review_id': 'fresh-review', 'status': 'accepted'}],
+                'score': 75, 'verdict': 'pass'}
+    execution_run_store.upsert_conversation(run_id, ConversationRecord.model_validate(reviewed))
+    expected = execution_run_store.get_conversation(run_id, conv_id)
+    execution_run_store.refresh_waylo_evidence(run_id, expected, native, export)
+    assert execution_run_store.get_conversation(run_id, conv_id) == expected
 
 
 @pytest.mark.parametrize('status,error', [('failed', 'Target response timeout'), ('failed', None),

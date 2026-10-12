@@ -280,6 +280,9 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
                     <li key={`${turn.turn_index}-${turn.speaker}`}>
                       <strong>{turn.speaker || 'speaker'}</strong>
                       <p>{spokenTurnText(turn) || '—'}</p>
+                      {turn.frame_metadata?.transcript_source === 'waylo_final_transcript' ? (
+                        <small>{stringValue(turn.frame_metadata.text_source_label) || 'Waylo final transcript'} · not independently audio-aligned</small>
+                      ) : null}
                       {turn.frame_metadata?.transcript_source === 'rtc_asr_received_audio' ? (
                         <>
                           <small>Received audio transcript (rtc-asr)</small>
