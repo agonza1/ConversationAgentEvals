@@ -11,6 +11,7 @@ from typing import Any
 
 from app.schemas.execution import (
     ConversationRecord,
+    ConversationTurn,
     ExecutionRunProgress,
     ExecutionRunRecord,
     LiveExecutionEvent,
@@ -192,7 +193,18 @@ def refresh_waylo_evidence(execution_run_id: str, expected: dict, captured: dict
         profile = decode_evidence(exported['vcon'])
         final = next((s['state'] for s in profile['state_snapshots'] if s['phase'] == 'final'), {})
         execution_failed = row.get('status') == 'failed' or bool(row.get('error'))
+        # Provider finals may correct or split the original RTC dialogue. Do not
+        # align them by position with sent audio or inherit its source_text:
+        # downstream UI and ASSERT consumers prefer turns over transcript.
+        turns = [ConversationTurn(
+            turn_index=line['seq'], speaker='Caller' if line['role'] == 'user' else 'Agent',
+            text=line['text'], direction='tester_to_target' if line['role'] == 'user' else 'target_to_tester',
+            frame_metadata={'transcript_source': 'waylo_final_transcript',
+                            'transcript_id': line['id'],
+                            'text_source_label': 'Target ASR receipt (Waylo)' if line['role'] == 'user' else 'Target-reported final transcript (Waylo)'},
+        ).model_dump(mode='json') for line in captured['transcripts'] if line['role'] in {'user', 'agent'}]
         row.update(ietf_vcon_export=exported['vcon'], ietf_vcon_export_summary=ietf_vcon_summary(exported['vcon']),
+            rtc_turns=deepcopy(row['rtc_turns'] if 'rtc_turns' in row else row.get('turns') or []), turns=turns,
             transcript='\n'.join(f'{"Caller" if t["role"] == "user" else "Agent"}: {t["text"]}' for t in captured['transcripts'] if t['role'] in {'user', 'agent'}),
             action_trace=latest_tool_events(profile['tool_events']), final_state={**{k: v for k, v in row.get('final_state', {}).items() if k == 'tester_error'}, **final},
             state_snapshots=profile['state_snapshots'], evidence_coverage=exported['coverage'],

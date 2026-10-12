@@ -232,6 +232,14 @@ def finished_waylo_run(connected, monkeypatch):
     row = ConversationRecord(execution_run_id=run_id, conversation_id=conv_id,
         suite_id='waylo-mike-notes', scenario_id='mike-five-bags', mode='pipecat_webrtc',
         status='needs_review', ietf_vcon_export=export['vcon'], score=50,
+        turns=[{'turn_index': 1, 'speaker': 'Caller', 'text': 'Actual tester spoken reference',
+                'frame_metadata': {'source_text': 'Actual tester spoken reference', 'audio_sha256': 'sent-audio-hash'}},
+               {'turn_index': 2, 'speaker': 'Agent', 'text': '[Target audio captured; transcript pending]',
+                'frame_metadata': {'audio_sha256': 'received-audio-hash', 'transcript_source': 'livekit_remote_transcription'}}],
+        live_events=[{'sequence': 1, 'kind': 'audio', 'speaker': 'Caller', 'text': 'Actual tester spoken reference',
+                      'llm_output': 'Actual tester spoken reference', 'direction': 'tester_to_target',
+                      'media_url': '/recorded-tester.wav', 'created_at': '2026-10-09T12:00:01Z'}],
+        recording={'url': '/recorded-conversation.wav'},
         audio_session={'session_id': S}, judge_reviews=[{'review_id': 'old', 'status': 'pending_confirmation'}])
     execution_run_store.upsert_conversation(run_id, row)
     execution_run_store.complete_execution_run(run_id, status='needs_review')
@@ -241,6 +249,7 @@ def finished_waylo_run(connected, monkeypatch):
 def test_late_provider_write_refresh_replaces_run_export_without_duplicate(connected, monkeypatch, tmp_path):
     from test_waylo_target import transcript, S
     from app.services.vcon_evidence import decode_evidence
+    from app.services.assert_transcript_adapter import build_assert_inference_row
     proof, http, run_id, conv_id, native = finished_waylo_run(connected, monkeypatch)
     before = execution_run_store.get_conversation(run_id, conv_id)
     native['transcripts'].append(transcript(3, 'agent', 'Late durable notes readback'))
@@ -260,6 +269,21 @@ def test_late_provider_write_refresh_replaces_run_export_without_duplicate(conne
     assert after['score'] is None and after['verdict'] == 'needs_review'
     assert after['judge_reviews'][0]['status'] == 'superseded'
     assert 'Late durable notes readback' in after['transcript']
+    assert [(turn['turn_index'], turn['speaker'], turn['text']) for turn in after['turns']] == [
+        (line['seq'], 'Caller' if line['role'] == 'user' else 'Agent', line['text']) for line in native['transcripts']]
+    assert after['rtc_turns'] == before['turns']
+    assert after['audio_session'] == before['audio_session']
+    assert after['live_events'] == before['live_events']
+    assert after['recording'] == before['recording']
+    assert all(turn['frame_metadata']['transcript_source'] == 'waylo_final_transcript' for turn in after['turns'])
+    assert all('source_text' not in turn['frame_metadata'] and 'audio_sha256' not in turn['frame_metadata'] for turn in after['turns'])
+    assert after['turns'][0]['frame_metadata']['text_source_label'] == 'Target ASR receipt (Waylo)'
+    assert after['turns'][1]['frame_metadata']['text_source_label'] == 'Target-reported final transcript (Waylo)'
+    assert all('llm_output' not in turn for turn in after['turns'])
+    inference_row = build_assert_inference_row(run=execution_run_store.get_execution_run(run_id), conversation=after)
+    messages = [event['edit']['message']['content'] for event in inference_row['events'] if 'message' in event['edit']]
+    assert messages == [line['text'] for line in native['transcripts']]
+    assert 'Actual tester spoken reference' not in messages
     assert after['final_state']['request_list'][0]['quantity'] == 5
     context = decode_evidence(after['ietf_vcon_export'])['context']
     assert context['source_call_kind'] == 'cae_ai_tester' and context['capture_completeness'] == 'provisional'
@@ -267,7 +291,42 @@ def test_late_provider_write_refresh_replaces_run_export_without_duplicate(conne
     lines = (tmp_path / 'runs' / run_id / 'inference_set.jsonl').read_text().splitlines()
     assert len(lines) == 1
     assert json.loads(lines[0])['ietf_vcon_export'] == after['ietf_vcon_export']
+    assert json.loads(lines[0])['turns'] == after['turns']
+    assert json.loads(lines[0])['rtc_turns'] == before['turns']
     assert len(execution_run_store.get_execution_run(run_id)['conversations']) == 1
+
+
+def test_changed_refreshes_keep_original_rtc_provenance_and_latest_assert_dialogue(connected, monkeypatch, tmp_path):
+    from app.services.waylo_target import project_capture
+    from app.services.assert_transcript_adapter import build_assert_inference_row
+    from test_waylo_target import transcript
+    _, _, run_id, conv_id, native = finished_waylo_run(connected, monkeypatch)
+    original = execution_run_store.get_conversation(run_id, conv_id)
+    native['transcripts'] = [transcript(1, text='Corrected provider caller receipt'),
+                             transcript(2, 'agent', 'Final target wording')]
+    for revision in range(2):
+        expected = execution_run_store.get_conversation(run_id, conv_id)
+        if revision:
+            # ASR may split the caller differently and append a late target turn.
+            native['transcripts'] = [transcript(1, text='Corrected provider'),
+                                     transcript(2, text='caller receipt'),
+                                     transcript(3, 'agent', 'Corrected target wording'),
+                                     transcript(4, 'agent', 'Late readback')]
+        export = project_capture(native, execution_run_id=run_id, conversation_id=conv_id)
+        execution_run_store.refresh_waylo_evidence(run_id, expected, native, export)
+        after = execution_run_store.get_conversation(run_id, conv_id)
+        assert after['rtc_turns'] == original['turns']
+        assert after['live_events'] == original['live_events']
+        assert after['recording'] == original['recording']
+        assert after['audio_session'] == original['audio_session']
+        assert [turn['text'] for turn in after['turns']] == [line['text'] for line in native['transcripts']]
+        inference = build_assert_inference_row(run=execution_run_store.get_execution_run(run_id), conversation=after)
+        messages = [event['edit']['message']['content'] for event in inference['events'] if 'message' in event['edit']]
+        assert messages == [line['text'] for line in native['transcripts']]
+        assert all('source_text' not in turn['frame_metadata'] for turn in after['turns'])
+        persisted = [json.loads(line) for line in (tmp_path / 'runs' / run_id / 'inference_set.jsonl').read_text().splitlines()]
+        assert len(persisted) == 1 and persisted[0]['turns'] == after['turns']
+        assert persisted[0]['rtc_turns'] == original['turns']
 
 
 @pytest.mark.parametrize('status,error', [('failed', 'Target response timeout'), ('failed', None),
