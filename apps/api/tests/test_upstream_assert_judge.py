@@ -677,6 +677,98 @@ def test_upstream_assert_judge_rejects_unexpected_taxonomy_nodes(monkeypatch, tm
     assert _spent_credits() == 0
 
 
+@pytest.mark.parametrize('keep_relevant_node', [False, True])
+def test_upstream_assert_judge_retains_native_non_relevant_nodes(
+    monkeypatch, tmp_path, keep_relevant_node,
+):
+    """The real ASSERT 0.3 output uses null judgments for explicit non-relevance."""
+    run, conversation = _run_and_conversation()
+    conversation['verdict'] = 'needs_review'
+    _configure_assert_runtime(monkeypatch, tmp_path)
+
+    def writer(score_path, config):
+        score = _valid_score(run, conversation, config['pipeline']['judge']['model']['name'])
+        for index, node in enumerate(score['verdict']['node_judgments']):
+            if keep_relevant_node and index == 0:
+                node['relevant'] = True
+                continue
+            node.update(relevant=False, violated=None, confidence=None, evidence_turns=[])
+        score_path.write_text(json.dumps(score) + '\n', encoding='utf-8')
+
+    _install_fake_assert(monkeypatch, writer)
+    response = run_upstream_assert_judge(
+        run=run, conversation=conversation, scenario_contract=_scenario_contract(),
+        artifact_root=tmp_path / 'non-relevant-nodes',
+    )
+    assert response['status'] == 'ready'
+    review = response['judge_result']
+    nodes = review['provenance']['node_judgments']
+    non_relevant_nodes = nodes[1:] if keep_relevant_node else nodes
+    assert non_relevant_nodes and all(node['relevant'] is False and node['violated'] is None
+                         and node['confidence'] is None for node in non_relevant_nodes)
+    assert review['proposed_evaluation']['verdict'] == 'needs_review'
+    assert len(review['proposed_evaluation']['corrected_findings']) == int(keep_relevant_node)
+    # Even an otherwise eligible semantic pass cannot infer successful behavior
+    # from a non-relevant node or rewrite its null judgment to False.
+    score = json.loads(Path(response['artifacts']['scores']).read_text().splitlines()[0])
+    assert upstream_assert_judge._review(score, 'needs_review', allow_semantic_pass=True)[
+        'proposed_evaluation']['verdict'] == 'needs_review'
+    assert _spent_credits() == 10
+
+
+@pytest.mark.parametrize('mutation,message', [
+    ({'relevant': None}, 'non-boolean relevant'),
+    ({'relevant': 'false'}, 'non-boolean relevant'),
+    ({'relevant': 0}, 'non-boolean relevant'),
+    ({'relevant': False, 'violated': False, 'confidence': None}, 'must have null'),
+    ({'relevant': False, 'violated': None, 'confidence': 'low'}, 'must have null'),
+    ({'relevant': True, 'violated': None}, 'non-boolean violated'),
+    ({'relevant': True, 'confidence': None}, 'invalid confidence'),
+    ({'violated': None, 'confidence': None}, 'non-boolean violated'),
+])
+def test_upstream_assert_judge_rejects_invalid_node_relevance(
+    monkeypatch, tmp_path, mutation, message,
+):
+    run, conversation = _run_and_conversation()
+    _configure_assert_runtime(monkeypatch, tmp_path)
+
+    def writer(score_path, config):
+        score = _valid_score(run, conversation, config['pipeline']['judge']['model']['name'])
+        score['verdict']['node_judgments'][0].update(mutation)
+        score_path.write_text(json.dumps(score) + '\n', encoding='utf-8')
+
+    _install_fake_assert(monkeypatch, writer)
+    with pytest.raises(UpstreamAssertJudgeFailed, match=message):
+        run_upstream_assert_judge(
+            run=run, conversation=conversation, scenario_contract=_scenario_contract(),
+            artifact_root=tmp_path / 'invalid-relevance',
+        )
+    assert _spent_credits() == 0
+
+
+@pytest.mark.parametrize('missing_field', ['violated', 'confidence'])
+def test_upstream_assert_judge_requires_explicit_nulls_for_non_relevant_nodes(
+    monkeypatch, tmp_path, missing_field,
+):
+    run, conversation = _run_and_conversation()
+    _configure_assert_runtime(monkeypatch, tmp_path)
+
+    def writer(score_path, config):
+        score = _valid_score(run, conversation, config['pipeline']['judge']['model']['name'])
+        node = score['verdict']['node_judgments'][0]
+        node.update(relevant=False, violated=None, confidence=None)
+        node.pop(missing_field)
+        score_path.write_text(json.dumps(score) + '\n', encoding='utf-8')
+
+    _install_fake_assert(monkeypatch, writer)
+    with pytest.raises(UpstreamAssertJudgeFailed, match='must have null'):
+        run_upstream_assert_judge(
+            run=run, conversation=conversation, scenario_contract=_scenario_contract(),
+            artifact_root=tmp_path / 'missing-non-relevant-field',
+        )
+    assert _spent_credits() == 0
+
+
 def test_upstream_assert_judge_rejects_missing_taxonomy_nodes(monkeypatch, tmp_path):
     run, conversation = _run_and_conversation()
     _configure_assert_runtime(monkeypatch, tmp_path)

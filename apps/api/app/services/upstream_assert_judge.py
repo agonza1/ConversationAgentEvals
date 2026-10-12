@@ -410,11 +410,26 @@ def _select_valid_score(
             raise UpstreamAssertJudgeFailed(
                 f'ASSERT returned unexpected node judgment {node_name!r}.'
             )
-        if not is_valid_event_flag(node.get('violated')):
+        # ASSERT 0.3 emits explicit non-relevant nodes with null judgment and
+        # confidence (including its multi-judge aggregation). They are not
+        # malformed booleans, nor evidence of a successful required behavior.
+        if 'relevant' in node and not is_valid_event_flag(node['relevant']):
+            raise UpstreamAssertJudgeFailed(
+                f'ASSERT node judgment {node_name!r} has a non-boolean relevant flag.'
+            )
+        non_relevant = node.get('relevant') is False
+        if non_relevant and (
+            'violated' not in node or node['violated'] is not None
+            or 'confidence' not in node or node['confidence'] is not None
+        ):
+            raise UpstreamAssertJudgeFailed(
+                f'ASSERT non-relevant node judgment {node_name!r} must have null violated and confidence values.'
+            )
+        if not non_relevant and not is_valid_event_flag(node.get('violated')):
             raise UpstreamAssertJudgeFailed(
                 f'ASSERT node judgment {node_name!r} has a non-boolean violated flag.'
             )
-        if not is_valid_confidence_label(node.get('confidence')):
+        if not non_relevant and not is_valid_confidence_label(node.get('confidence')):
             raise UpstreamAssertJudgeFailed(
                 f'ASSERT node judgment {node_name!r} has an invalid confidence value.'
             )
