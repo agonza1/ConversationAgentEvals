@@ -226,6 +226,8 @@ select {
 .results-saved-history > .card { box-shadow: none; min-width: 0; }
 .results-evidence-details summary { color: var(--accent); font-size: 13px; cursor: pointer; padding: 8px 0; }
 .results-evidence-details[open] { display: grid; gap: 8px; }
+.results-saved-row { display: grid; gap: 4px; padding: 12px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.results-saved-row > button { justify-self: start; }
 @media (max-width: 760px) {
   .results-page .runs-list-item { gap: 8px; }
   .results-page .runs-list-secondary { justify-content: space-between; }

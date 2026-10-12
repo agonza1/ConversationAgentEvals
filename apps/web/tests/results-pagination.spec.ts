@@ -62,7 +62,8 @@ test('saved history pages are bounded and evidence stays collapsed', async ({ pa
   await page.getByRole('button', { name: 'Saved evaluations', exact: true }).click();
   const pagination = page.getByRole('navigation', { name: 'Saved evaluations pagination' });
   await expect(page.getByText('10 evaluations on this page')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Load run', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Load run', exact: true })).toHaveCount(10);
+  await expect(page.getByRole('button', { name: 'Export JSON', exact: true })).toHaveCount(0);
   await pagination.getByRole('button', { name: 'Next' }).click();
   await expect(page.getByText('2 evaluations on this page')).toBeVisible();
   await expect(pagination).toContainText('Page 2');

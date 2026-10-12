@@ -5854,12 +5854,26 @@ export function BenchmarkRunner({
             </div>
           ) : null}
           {savedRuns.length ? (
-            <ul style={{ margin: 0, paddingLeft: 18, color: 'var(--muted)', display: 'grid', gap: 8 }}>
+            <ul style={{ margin: 0, paddingLeft: view === 'history' ? 0 : 18, color: 'var(--muted)', display: 'grid', gap: 8 }}>
               {(view === 'history' ? savedRuns : savedRuns.slice(0, 4)).map((run, index) => (
-                <li key={run.id}>
+                <li key={run.id} className={view === 'history' ? 'results-saved-row' : undefined}>
                   <span>
                     {run.id}: {run.report.scenario_title ?? run.report.run_id ?? 'benchmark run'} ({run.report.overall_score ?? run.report.score ?? 'n/a'})
                   </span>
+                    <button
+                      type="button"
+                      onClick={() => onLoadSavedRun(run)}
+                      style={{
+                        border: '1px solid var(--border)',
+                        borderRadius: 8,
+                        background: 'white',
+                        color: 'var(--text)',
+                        padding: '6px 10px',
+                        fontWeight: 800,
+                      }}
+                    >
+                      Load run
+                    </button>
                   <ResultsEvidenceDetails collapsed={view === 'history'}>
                   {view !== 'history' ? <div style={{ marginTop: 4, fontSize: 13 }}>
                     {metadataChangeSummary(run.report.run_metadata, savedRuns[index + 1]?.report.run_metadata)}
@@ -5880,20 +5894,6 @@ export function BenchmarkRunner({
                     {run.firestore_path}
                   </div>
                   <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    <button
-                      type="button"
-                      onClick={() => onLoadSavedRun(run)}
-                      style={{
-                        border: '1px solid var(--border)',
-                        borderRadius: 8,
-                        background: 'white',
-                        color: 'var(--text)',
-                        padding: '6px 10px',
-                        fontWeight: 800,
-                      }}
-                    >
-                      Load run
-                    </button>
                     <button
                       type="button"
                       onClick={() => void onRetrySavedRun(run)}
