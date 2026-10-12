@@ -73,6 +73,43 @@ async function mockReviewedVoiceSuite(page: Page, options: { caseCount?: number;
   return posts;
 }
 
+async function mockActiveWayloVoiceRun(page: Page, initialStatus: 'queued' | 'running') {
+  await mockReviewedVoiceSuite(page, { caseCount: 1 });
+  const posts: Record<string, unknown>[] = [];
+  const polledRunIds: string[] = [];
+  let status: 'queued' | 'running' | 'completed' | 'failed' = initialStatus;
+  let launchCount = 0;
+  const run = (executionRunId: string) => ({
+    execution_run_id: executionRunId, status, mode: 'pipecat_webrtc',
+    suite_id: 'reviewed-assert-suite', scenario_ids: ['assert-case-1'],
+    user_id: 'voice-suite-tester', project_id: 'call-center-demo', agent_id: 'waylo-server-fixture',
+    executor_id: 'waylo_livekit', conversations: [],
+    progress: { phase: status, completed_conversations: ['completed', 'failed'].includes(status) ? 1 : 0,
+      total_conversations: 1, percent: ['completed', 'failed'].includes(status) ? 100 : 0 },
+    created_at: '2026-10-10T00:00:00Z', updated_at: '2026-10-10T00:02:00Z',
+  });
+  await page.route('**/api/agents', async (route) => route.fulfill({ json: { agents: [{
+    id: 'waylo-server-fixture', name: 'Waylo server credential fixture', channel: 'voice', target: 'waylo',
+    connection: { endpoint_url: 'https://waylo.invalid', workspace_id: '11111111-1111-4111-8111-111111111111',
+      waylo_agent_id: '22222222-2222-4222-8222-222222222222', auth_type: 'bearer_secret', secret_ref: 'fixture-key-reference' },
+  }] } }));
+  await page.route('**/api/execution/runs**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/api/execution/runs' && route.request().method() === 'POST') {
+      posts.push(route.request().postDataJSON());
+      launchCount += 1;
+      return route.fulfill({ json: run(`exec-waylo-active-${launchCount}`) });
+    }
+    if (path.startsWith('/api/execution/runs/exec-waylo-active-')) {
+      const executionRunId = path.split('/').at(-1)!;
+      polledRunIds.push(executionRunId);
+      return route.fulfill({ json: run(executionRunId) });
+    }
+    return route.fulfill({ json: [] });
+  });
+  return { posts, polledRunIds, setStatus(next: typeof status) { status = next; } };
+}
+
 test('reviewed ASSERT voice set queues exactly the selected cases with explicit target and caps', async ({ page }) => {
   const posts = await mockReviewedVoiceSuite(page);
   await page.goto('/runs?suite_id=reviewed-assert-suite&run_scope=suite&agent_id=voice-custom');
@@ -197,6 +234,40 @@ test('an active voice queue cannot be launched twice from the same page', async 
   await expect(launch.getByRole('button', { name: 'Evaluation running...' })).toBeDisabled();
   expect(posts).toHaveLength(1);
 });
+
+for (const [activeStatus, terminalStatus] of [['queued', 'completed'], ['running', 'failed']] as const) {
+  test(`a ${activeStatus} Waylo run blocks duplicate calls without replacing its poll, then allows another after ${terminalStatus}`, async ({ page }) => {
+    const fixture = await mockActiveWayloVoiceRun(page, activeStatus);
+    await page.goto('/runs?suite_id=reviewed-assert-suite&run_scope=suite&agent_id=waylo-server-fixture');
+    const launch = page.getByRole('region', { name: 'Launch agent run' });
+    const runButton = launch.getByRole('button', { name: /^Run evaluation$|^Run \d+ voice tests?$/ });
+    await expect(runButton).toBeEnabled();
+    await runButton.click();
+    await expect.poll(() => fixture.posts.length).toBe(1);
+    expect(fixture.posts[0]).toMatchObject({ agent_id: 'waylo-server-fixture', executor_id: 'waylo_livekit',
+      scenario_ids: ['assert-case-1'], evaluate: false });
+    const activeButton = launch.getByRole('button', { name: 'Evaluation running...', exact: true });
+    await expect(activeButton).toBeDisabled();
+    await expect(launch.getByRole('link', { name: 'Open analysis', exact: true })).toHaveAttribute('href', /\/runs\/exec-waylo-active-1(?:\?|$)/);
+    // A native click remains inert on the disabled control; subsequent polls must still follow the first call.
+    await activeButton.evaluate((button) => (button as HTMLButtonElement).click());
+    await expect.poll(() => fixture.polledRunIds.length).toBeGreaterThanOrEqual(2);
+    expect(fixture.posts).toHaveLength(1);
+    expect(fixture.posts[0]).toMatchObject({ concurrent_sessions: 1 });
+    expect(new Set(fixture.polledRunIds)).toEqual(new Set(['exec-waylo-active-1']));
+    await expect(activeButton).toBeDisabled();
+    await expect(launch.getByRole('link', { name: 'Open analysis', exact: true })).toHaveAttribute('href', /\/runs\/exec-waylo-active-1(?:\?|$)/);
+    fixture.setStatus(terminalStatus);
+    await expect(runButton).toBeEnabled();
+    const pollsBeforeRelaunch = fixture.polledRunIds.length;
+    fixture.setStatus(activeStatus);
+    await runButton.click();
+    await expect.poll(() => fixture.posts.length).toBe(2);
+    await expect(activeButton).toBeDisabled();
+    await expect(launch.getByRole('link', { name: 'Open analysis', exact: true })).toHaveAttribute('href', /\/runs\/exec-waylo-active-2(?:\?|$)/);
+    await expect.poll(() => fixture.polledRunIds.slice(pollsBeforeRelaunch)).toContain('exec-waylo-active-2');
+  });
+}
 
 for (const executionProvider of ['openai', 'openai_codex']) {
   test(`connected ${executionProvider} execution uses the deployment model default`, async ({ page }) => {

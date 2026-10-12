@@ -324,7 +324,7 @@ test('Waylo launch is explicit and captures without automatic evaluation', async
   await mockRunnerApis(page, {onExecutionLaunch: request => launches.push(request)});
   await page.goto('/runs?agent_id=waylo-notes');
   await expect(page.getByLabel('Execution agent target')).toHaveValue('waylo-notes');
-  const run = page.getByRole('button', {name: 'Run evaluation'});
+  const run = page.getByRole('button', {name: 'Run 1 voice test', exact: true});
   await expect(run).toBeEnabled();
   expect(launches).toHaveLength(0);
   await run.click();
