@@ -15,7 +15,9 @@ uploaded fixtures retain their original strict validation.
 Controlled interruptions retain a single overlapping response window, including
 the original response tail. The window names all caller turns it overlaps;
 individual response attribution and interruption handling remain unknown rather
-than assigning old speech to the next reply.
+than assigning old speech to the next reply. If the next caller turn is outside
+the exchange cap, no interruption is scheduled: the final response and backend
+observation follow the normal sequential path.
 
 Provider `endedAt` is not a worker-flush acknowledgement. Run exports explicitly
 remain provisional. In Targets → Import existing human call → **Refresh a finished
@@ -57,7 +59,11 @@ the originating browser's proof and local same-origin control headers. Credentia
 are rechecked on HTTP retries and during RTC; disconnect, expiry and successful
 reconnect cancel active calls. Queueing reserves call/cleanup/capture time for each
 selected scenario and rejects runs longer than the available token lifetime. Start
-with one controlled Mike case, not the entire suite.
+with one controlled Mike case, not the entire suite. The run UI explains and blocks
+suite scopes or iteration counts that exceed the 15-minute ceiling or the shown
+remaining access; the API still makes the authoritative admission check. This does
+not renew or extend access. The ten-case Mike suite cannot fit the temporary grant
+even at the minimum session timeout; use a provisioned server credential for it.
 
 Temporary sign-in is a **local, single-API-worker preview**, not general-purpose
 multi-user OAuth. `CAE_WAYLO_API_BASE_URL` must match an operator-provisioned
@@ -82,6 +88,10 @@ The normal Run agent flow starts `POST /sessions/web` with a deterministic
 RTC SDK. Relay-only TURN information is honored. There is no text-call fallback.
 Caller speech uses CAE's existing tester/TTS; fixed reference cases are not paraphrased.
 Free-form scenarios use the existing adaptive tester for subsequent utterances.
+Caller provenance is recorded per conversation. Scripts, controlled audio fixtures
+and exact single-turn openers do not claim an unused tester LLM. Adaptive model
+identity is recorded only when invoked, and ASSERT exports prefer each conversation's
+source so a mixed suite cannot attribute scripted turns to another case's model.
 Tester audio accepted by AudioSource and target audio received by AudioStream are
 retained as separate WAV artifacts, including accepted samples on a failed send.
 The existing live-turn HTTP playback/capture flow is reused. This adapter does not
