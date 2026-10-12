@@ -1152,6 +1152,20 @@ def test_outbound_voice_broadcast_reuses_reference_listener_bus(monkeypatch):
     assert track.audio
     assert 'external-session:1:target_to_tester' in broadcast.started_listener_media_keys
 
+    # Clocked external duplex mixes carry both directions' current media keys,
+    # while publishing the mixed PCM only once to the listener FIFO.
+    packet = {'execution_run_id': 'external-run', 'publisher_id': publisher_id,
+              'direction': 'target_to_tester', 'turn_pair': 1, 'sample_rate': 24000,
+              'channels': 1, 'pcm16_base64': base64.b64encode(audio).decode(),
+              'listener_media_keys': ['external-session:2:tester_to_target', 'external-session:2:target_to_tester']}
+    count = len(track.audio)
+    mixed = client.post('/outbound-voice/broadcast/audio', headers={'x-cae-reference-token': 'test-token'}, json=packet)
+    assert mixed.status_code == 200 and len(track.audio) == count + 1
+    assert set(packet['listener_media_keys']).issubset(broadcast.started_listener_media_keys)
+    packet['listener_media_keys'] = ['other-session:1:target_to_tester']
+    assert client.post('/outbound-voice/broadcast/audio', headers={'x-cae-reference-token': 'test-token'}, json=packet).status_code == 422
+    assert 'other-session:1:target_to_tester' not in broadcast.started_listener_media_keys
+
     closed = client.post(
         '/outbound-voice/broadcast/close',
         headers={'x-cae-reference-token': 'test-token'},

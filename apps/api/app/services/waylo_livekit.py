@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import hashlib
 import io
 import math
@@ -14,6 +13,7 @@ from pathlib import Path
 from typing import Callable
 
 from app.services.waylo_target import WayloClient, WayloError, clean_native, project_capture
+from app.services.live_audio_monitor import LiveAudioMonitor
 
 
 def pcm_wav(pcm: bytes, rate: int = 24000) -> bytes:
@@ -60,6 +60,8 @@ class LiveKitVoicePeer:
         self.ready = asyncio.Event()
         self.remote_identity = None
         self.error = None
+        self.monitor = None
+        self.monitor_turn_pair = 1
 
         def text_stream(reader, participant_identity):
             task = asyncio.create_task(self._read_transcription(reader, participant_identity))
@@ -104,6 +106,14 @@ class LiveKitVoicePeer:
 
     def now_ms(self):
         return round((time.monotonic() - self.origin) * 1000, 3)
+
+    def _monitor_audio(self, direction, pcm, rate):
+        if self.monitor:
+            try:
+                self.monitor.add(direction, pcm, sample_rate=rate, turn_pair=self.monitor_turn_pair)
+            except Exception:
+                # Optional monitoring must not falsify delivery or stop capture.
+                self.monitor.disable()
 
     async def _read_transcription(self, reader, participant_identity):
         attributes = reader.info.attributes
@@ -170,12 +180,15 @@ class LiveKitVoicePeer:
                     self.last_speech = time.monotonic()
                     self.speech_count += 1
                 self.remote_chunks.append({'received_at_ms': start, 'pcm_offset': offset, 'bytes': len(pcm), 'speech': rms > 150})
+                self._monitor_audio('target_to_tester', pcm, 24000)
         except Exception:
             self.error = 'LiveKit audio receive failed.'
         finally:
             await stream.aclose()
 
     async def send(self, audio: bytes, *, turn_id: str, reference: str, artifact_dir: Path):
+        self.transcript_turn_id = turn_id
+        self.monitor_turn_pair = int(turn_id.split('-')[-1])
         rate, pcm = read_wav(audio)
         if not self.source:
             self.source = self.rtc.AudioSource(rate, 1)
@@ -186,12 +199,17 @@ class LiveKitVoicePeer:
             raise WayloError('Tester sample rate changed within the call.')
         started, sent = self.now_ms(), bytearray()
         chunk_bytes = rate // 50 * 2  # 20 ms, AudioSource applies queue backpressure
+        playout_origin = time.monotonic()
         failure = False
         try:
             for offset in range(0, len(pcm), chunk_bytes):
+                # Pace the accepted frames instead of enqueuing a whole turn
+                # ahead of local playout. Peer receipt remains unconfirmed.
+                await asyncio.sleep(max(0, playout_origin + offset / (rate * 2) - time.monotonic()))
                 chunk = pcm[offset:offset + chunk_bytes]
                 await self.source.capture_frame(self.rtc.AudioFrame(chunk, rate, 1, len(chunk) // 2))
                 sent.extend(chunk)
+                self._monitor_audio('tester_to_target', chunk, rate)
             await self.source.wait_for_playout()
         except Exception:
             failure = True
@@ -238,7 +256,7 @@ async def run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, s
                          event_observer: Callable | None = None,
                          peer: LiveKitVoicePeer | None = None, client: WayloClient | None = None,
                          credential_lease=None, execution_run_id: str | None = None,
-                         conversation_id: str | None = None):
+                         conversation_id: str | None = None, monitor_runtime=None):
     client = client or WayloClient(target, credential_lease=credential_lease)
     call = None
     guard = None
@@ -248,7 +266,7 @@ async def run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, s
                 suite_id=suite_id, artifact_dir=artifact_dir, max_exchanges=max_exchanges,
                 timeout_seconds=timeout_seconds, next_utterance=next_utterance, synthesize=synthesize,
                 event_observer=event_observer, peer=peer, client=client,
-                execution_run_id=execution_run_id, conversation_id=conversation_id)
+                execution_run_id=execution_run_id, conversation_id=conversation_id, monitor_runtime=monitor_runtime)
 
         async def monitor_authorization():
             while True:
@@ -259,7 +277,7 @@ async def run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, s
             scenario=scenario, suite_id=suite_id, artifact_dir=artifact_dir, max_exchanges=max_exchanges,
             timeout_seconds=timeout_seconds, next_utterance=next_utterance, synthesize=synthesize,
             event_observer=event_observer, peer=peer, client=client,
-            execution_run_id=execution_run_id, conversation_id=conversation_id))
+            execution_run_id=execution_run_id, conversation_id=conversation_id, monitor_runtime=monitor_runtime))
         guard = asyncio.create_task(monitor_authorization())
         await asyncio.wait((call, guard), return_when=asyncio.FIRST_COMPLETED)
         if guard.done():
@@ -280,15 +298,41 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                           next_utterance: Callable, synthesize: Callable,
                           event_observer: Callable | None,
                           peer: LiveKitVoicePeer | None, client: WayloClient,
-                          execution_run_id: str | None = None, conversation_id: str | None = None):
+                          execution_run_id: str | None = None, conversation_id: str | None = None,
+                          monitor_runtime=None):
     peer = peer or LiveKitVoicePeer()
     bootstrap, before, capture, media_dialogs, turns = None, None, None, [], []
     error = None
-    sent_media_bytes = 0
+    audio_tracks = []
+    recording = None
+    monitor = None
+
+    def monitor_unavailable():
+        if event_observer:
+            event_observer({'speaker': 'Listener',
+                'text': 'Continuous live monitoring is unavailable. The target call continues; captured turns remain available.',
+                'frame_metadata': {'media_event': 'live_monitor_unavailable', 'transport': 'waylo_livekit'}})
+
+    if isinstance(peer, LiveKitVoicePeer):
+        try:
+            monitor = LiveAudioMonitor(execution_run_id=execution_run_id, conversation_id=conversation_id,
+                runtime=monitor_runtime, max_seconds=timeout_seconds + 30, on_unavailable=monitor_unavailable)
+            peer.monitor = monitor
+        except Exception:
+            monitor_unavailable()
     after_items = []
     prepared = {}
     pending_response = None
     steps = scenario.get('caller_steps')
+
+    def audio_track(path, track_id, parties, audio, rate, start_ms=None):
+        audio_tracks.append({'uri': str(path.resolve()), 'track_id': track_id, 'parties': parties,
+            'mime_type': 'audio/wav', 'duration_ms': (len(audio) - 44) / (rate * 2) * 1000,
+            **({'start_ms': start_ms, 'clock_origin': 'cae_monotonic_since_transport_creation',
+                'clock_origin_utc': peer.origin_utc} if start_ms is not None else {})})
+
+    def media_key(index, direction):
+        return f'{conversation_id}:{index}:{direction}'
 
     def safe_text(text):
         turn_auth = bootstrap.get('turn') or {} if bootstrap else {}
@@ -299,6 +343,8 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
     if steps:
         max_exchanges = min(max_exchanges, len(steps))
     try:
+        if monitor:
+            await monitor.start()  # Pre-register before TTS and remote bootstrap.
         async with asyncio.timeout(timeout_seconds):
             # Resolve tester media before creating a billable remote session.
             utterance = await next_utterance([], 1)
@@ -347,17 +393,15 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                 greeting = pcm_wav(bytes(peer.remote_pcm))
                 artifact_dir.mkdir(parents=True, exist_ok=True)
                 (artifact_dir / 'agent-greeting-received.wav').write_bytes(greeting)
+                audio_track(artifact_dir / 'agent-greeting-received.wav', 'greeting', [1], greeting, 24000,
+                            peer.remote_chunks[0]['received_at_ms'] if peer.remote_chunks else None)
                 greeting_text = safe_text('\n'.join(text for key, text in peer.segments.items() if key[0] == 'remote' and text))
                 if event_observer:
                     event_observer({'speaker': 'Agent', 'text': greeting_text or '[Greeting audio; transcript pending]',
-                        'audio': greeting, 'direction': 'target_to_tester'})
+                        'audio': greeting, 'direction': 'target_to_tester',
+                        'frame_metadata': {'listener_media_key': media_key(1, 'target_to_tester')}})
                 turns.append({'speaker': 'Agent', 'text': greeting_text or '[Greeting audio; transcript pending]',
                     'turn_index': 1, 'direction': 'target_to_tester', 'frame_metadata': {'greeting': True}})
-                sent_media_bytes += len(greeting)
-                if sent_media_bytes <= 600_000:
-                    media_dialogs.append({'type': 'recording', 'parties': [1], 'mediatype': 'audio/wav',
-                        'encoding': 'base64url', 'body': base64.urlsafe_b64encode(greeting).decode().rstrip('='),
-                        'content_hash': base64.urlsafe_b64encode(hashlib.sha512(greeting).digest()).decode().rstrip('=')})
             for index in range(1, max_exchanges + 1):
                 turn_id = f'caller-{index}'
                 previous = peer.speech_count
@@ -372,18 +416,16 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                 observation, sent_wav = await peer.send(audio_bytes, turn_id=turn_id, reference=utterance,
                                                         artifact_dir=artifact_dir)
                 observation['audio_condition'] = audio_condition
+                audio_track(artifact_dir / f'{turn_id}-sent.wav', turn_id, [0], sent_wav, rate,
+                            observation.get('started_at_ms'))
                 safe_utterance = safe_text(utterance)
                 if event_observer:
                     event_observer({'speaker': 'Caller', 'text': safe_utterance, 'audio': sent_wav,
-                                    'direction': 'tester_to_target', 'llm_output': safe_utterance})
+                                    'direction': 'tester_to_target', 'llm_output': safe_utterance,
+                                    'frame_metadata': {'listener_media_key': media_key(index, 'tester_to_target')}})
                 turns.append({'speaker': 'Caller', 'text': safe_utterance, 'turn_index': len(turns) + 1,
                               'direction': 'tester_to_target', 'frame_metadata': {'source_text': safe_utterance,
                               'duration_ms': observation['duration_ms'], 'audio_sha256': observation['audio_sha256']}})
-                sent_media_bytes += len(sent_wav)
-                if sent_media_bytes <= 600_000:
-                    media_dialogs.append({'type': 'recording', 'parties': [0], 'mediatype': 'audio/wav',
-                        'encoding': 'base64url', 'body': base64.urlsafe_b64encode(sent_wav).decode().rstrip('='),
-                        'content_hash': base64.urlsafe_b64encode(hashlib.sha512(sent_wav).digest()).decode().rstrip('=')})
                 if index < max_exchanges and barge_turn == index + 1:
                     # Start the next caller turn during observed target speech,
                     # not after the usual observer-side silence boundary.
@@ -407,6 +449,9 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                     await peer.wait_response(previous)
                 target_audio = pcm_wav(bytes(peer.remote_pcm[offset:]))
                 (artifact_dir / f'agent-{response_index}-received.wav').write_bytes(target_audio)
+                response_chunk = next((chunk for chunk in peer.remote_chunks if chunk['pcm_offset'] >= offset), None)
+                audio_track(artifact_dir / f'agent-{response_index}-received.wav', f'agent-{response_index}',
+                            [1], target_audio, 24000, response_chunk['received_at_ms'] if response_chunk else None)
                 response = safe_text('\n'.join(text for key, text in peer.segments.items()
                                      if key[0] == 'remote' and text and text != previous_segments.get(key)))
                 peer.events.append({'event_id': f'agent-{response_index}/received', 'event_type': 'target.audio.received',
@@ -424,14 +469,10 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                         'value_ms': round(candidates[0]['received_at_ms'] - observation['ended_at_ms'], 3),
                         'unit': 'ms', 'clock_origin': 'cae_monotonic_since_transport_creation',
                         'definition': 'Local caller queue drained to first received remote frame above RMS 150; not target-internal latency.'})
-                sent_media_bytes += len(target_audio)
-                if sent_media_bytes <= 600_000:
-                    media_dialogs.append({'type': 'recording', 'parties': [1], 'mediatype': 'audio/wav',
-                        'encoding': 'base64url', 'body': base64.urlsafe_b64encode(target_audio).decode().rstrip('='),
-                        'content_hash': base64.urlsafe_b64encode(hashlib.sha512(target_audio).digest()).decode().rstrip('=')})
                 if event_observer:
                     event_observer({'speaker': 'Agent', 'text': response or 'Target audio captured; transcript pending.',
-                                    'audio': target_audio, 'direction': 'target_to_tester'})
+                                    'audio': target_audio, 'direction': 'target_to_tester',
+                                    'frame_metadata': {'listener_media_key': media_key(index, 'target_to_tester')}})
                 turns.append({'speaker': 'Agent', 'text': response or '[Target audio captured; transcript pending]',
                               'turn_index': len(turns) + 1, 'direction': 'target_to_tester',
                               'frame_metadata': {'audio_sha256': hashlib.sha256(target_audio).hexdigest(),
@@ -453,6 +494,9 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                                                 'observed_at': datetime.now(UTC).isoformat()})
                     except WayloError:
                         pass  # Final capture reports unavailable state, not synthetic success.
+    except asyncio.CancelledError:
+        error = 'Waylo call cancelled; partial local audio retained.'
+        raise
     except Exception as exc:
         # SDK/provider errors can embed URLs/tokens. Export only a safe class/adapter message.
         error = str(exc) if isinstance(exc, WayloError) else f'Waylo call interrupted ({type(exc).__name__}).'
@@ -461,6 +505,24 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
             await asyncio.wait_for(peer.close(), 10)
         except Exception:
             error = error or 'LiveKit cleanup failed; capture needs review.'
+        if monitor:
+            wav, metadata = await monitor.finish(partial=bool(error))
+            if wav:
+                path = artifact_dir / 'conversation-continuous.wav'
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(wav)
+                metadata.update(audio_tracks=audio_tracks,
+                    start_ms=round((monitor.recording.origin - peer.origin) * 1000, 3),
+                    clock_origin='cae_monotonic_since_transport_creation', clock_origin_utc=peer.origin_utc)
+                recording = {'uri': str(path.resolve()), 'recording_url': str(path.resolve()),
+                    'mime_type': 'audio/wav', 'sha256': hashlib.sha256(wav).hexdigest(),
+                    'duration_ms': metadata['duration_ms'], 'bytes_captured': len(wav),
+                    'transport': 'waylo_livekit', 'metadata': metadata}
+                if event_observer:
+                    event_observer({'speaker': 'Conversation', 'text': 'Continuous local call recording.',
+                                    'audio': wav, 'frame_metadata': {
+                                        **{k: v for k, v in metadata.items() if k != 'audio_tracks'},
+                                        'media_event': 'continuous_recording'}})
     try:
         if not bootstrap:
             raise WayloError(error or 'No Waylo session was created.')
@@ -499,7 +561,7 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                 'configuration_check': exported['configuration_check'], 'action_trace': [],
                 'final_state': {'evidence_scope': 'waylo_capture', 'tester_error': error} if error else {},
                 'verdict': 'failed' if error else 'needs_review', 'score': None, 'latency_marks': [],
-                'evaluation_report': {}, 'recording': None,
+                'evaluation_report': {}, 'recording': recording, 'local_audio_tracks': audio_tracks,
                 'audio_session': {'transport': 'waylo_livekit', 'session_id': bootstrap['sessionId']}}
     finally:
         await client.close()

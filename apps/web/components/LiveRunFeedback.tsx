@@ -76,7 +76,6 @@ interface LiveRunFeedbackProps {
   userId?: string;
   runStatus?: string;
   autoExpandLiveEvents?: boolean;
-  httpCaptureOnly?: boolean;
   conversationId?: string;
 }
 
@@ -140,7 +139,6 @@ export function LiveRunFeedback({
   userId,
   runStatus,
   autoExpandLiveEvents = false,
-  httpCaptureOnly = false,
   conversationId,
 }: LiveRunFeedbackProps) {
   const [expanded, setExpanded] = useState(false);
@@ -165,6 +163,7 @@ export function LiveRunFeedback({
   const replayResumeResolveRef = useRef<(() => void) | null>(null);
   const playbackRef = useRef(Promise.resolve());
   const liveSegmentFallbackRef = useRef(false);
+  const activateFallbackRef = useRef<(() => void) | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const liveAudioRef = useRef<HTMLAudioElement | null>(null);
   const stopUrlRef = useRef<string | null>(null);
@@ -582,15 +581,15 @@ export function LiveRunFeedback({
       setPlaybackMessage('WebRTC could not reach the local voice runtime. Playing each new audio turn over the live HTTP fallback.');
       void queueAudioEvents(audioEventsRef.current, generation, 'live');
     };
+    activateFallbackRef.current = activateHttpFallback;
     playbackModeRef.current = 'live';
     setPlaybackMode('live');
     setExpanded(true);
     // Mark audio that existed before the click as heard. If WebRTC cannot
     // connect, the fallback starts with the next captured turn.
     markAudioEventsHeard(audioEvents, generation);
-    if (httpCaptureOnly) {
-      liveSegmentFallbackRef.current = true;
-      setPlaybackMessage('Playing newly captured Waylo audio turns over HTTP. The tester call itself uses LiveKit; this is not continuous live monitoring.');
+    if (events.some((event) => event.frame_metadata?.media_event === 'live_monitor_unavailable')) {
+      activateHttpFallback();
       return;
     }
     const preListenMediaKeys = new Set(
@@ -667,6 +666,9 @@ export function LiveRunFeedback({
 
   useEffect(() => {
     if (playbackMode !== 'live') return;
+    if (events.some((event) => event.frame_metadata?.media_event === 'live_monitor_unavailable')) {
+      activateFallbackRef.current?.();
+    }
     if (!liveSegmentFallbackRef.current) {
       if (webrtcStatus === 'listening') {
         markAudioEventsHeard(audioEvents, playbackGenerationRef.current);
@@ -674,7 +676,7 @@ export function LiveRunFeedback({
       return;
     }
     void queueAudioEvents(audioEvents, playbackGenerationRef.current, 'live');
-  }, [audioEvents, markAudioEventsHeard, playbackMode, queueAudioEvents, webrtcStatus]);
+  }, [audioEvents, events, markAudioEventsHeard, playbackMode, queueAudioEvents, webrtcStatus]);
 
   function pauseReplay() {
     if (playbackModeRef.current !== 'replay' || replayPausedRef.current) return;
@@ -811,11 +813,11 @@ export function LiveRunFeedback({
   }, [listenerToken, refreshListener]);
 
   const audioButtonLabel = playbackMode === 'live'
-    ? (httpCaptureOnly ? 'Stop listening to captured turns' : 'Stop live WebRTC')
+    ? 'Stop live WebRTC'
     : playbackMode === 'replay'
       ? (replayPaused ? 'Resume playback' : 'Pause playback')
       : listenerActive
-        ? (httpCaptureOnly ? 'Listen to new captured turns' : 'Listen to live WebRTC')
+        ? 'Listen to live WebRTC'
         : replayEvents.length
           ? 'Play recorded conversation'
           : 'No recorded audio';
@@ -899,7 +901,7 @@ export function LiveRunFeedback({
                 Retry missed live audio
               </button>
             ) : null}
-            {listenerActive && !httpCaptureOnly ? (
+            {listenerActive ? (
               <button
                 type="button"
                 onClick={() => void createListener()}
@@ -924,7 +926,7 @@ export function LiveRunFeedback({
           >
             {playbackMessage || defaultPlaybackMessage}
           </span>
-          {listenerActive && !httpCaptureOnly ? (
+          {listenerActive ? (
             <span
               aria-label="WebRTC listener status"
               data-transport-status={webrtcStatus}

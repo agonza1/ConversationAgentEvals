@@ -825,7 +825,7 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
             artifact_dir=REPO_ROOT / 'artifacts' / 'execution-runs' / execution_run_id / 'audio' / conversation_id,
             max_exchanges=payload.max_exchanges, timeout_seconds=payload.duplex_timeout_seconds,
             next_utterance=wording, synthesize=synthesis, event_observer=event_observer,
-            client=WayloClient(target, credential_lease=lease), credential_lease=lease)
+            client=WayloClient(target, credential_lease=lease), credential_lease=lease, monitor_runtime=config)
         profile = decode_evidence(result['ietf_vcon_export'])
         result['action_trace'] = latest_tool_events(profile['tool_events'])
         observed_final = next((s['state'] for s in profile['state_snapshots'] if s['phase'] == 'final'), {})
