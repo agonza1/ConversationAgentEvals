@@ -74,7 +74,7 @@ async function openConnectedRun(page: Page, caseCount: number) {
 test('temporary grant visibly blocks oversized suite scope and iterations while single calls remain available', async ({ page }) => {
   const fixture = await openConnectedRun(page, 10);
   const entireSuite = page.getByRole('button', { name: /Entire suite/ });
-  const run = page.getByRole('button', { name: 'Run evaluation', exact: true });
+  const run = page.getByRole('button', { name: /^Run \d+ voice tests?$/ });
   await expect(entireSuite).toBeDisabled();
   await expect(page.getByRole('status', { name: 'Waylo suite access limit' })).toContainText('15-minute');
   await expect(run).toBeEnabled();
@@ -93,7 +93,7 @@ test('temporary grant supports small whole suites that fit its capture budget', 
   const entireSuite = page.getByRole('button', { name: /Entire suite/ });
   await expect(entireSuite).toBeEnabled();
   await entireSuite.click();
-  await page.getByRole('button', { name: 'Run evaluation', exact: true }).click();
+  await page.getByRole('button', { name: 'Run 3 voice tests', exact: true }).click();
   await expect.poll(() => fixture.requests.some((request) => request.path === '/api/execution/runs' && request.method === 'POST')).toBe(true);
   const request = fixture.requests.find((item) => item.path === '/api/execution/runs' && item.method === 'POST');
   expect(request?.body?.scenario_ids).toEqual(['mike-five-bags', 'case-1', 'case-2']);
@@ -102,7 +102,7 @@ test('temporary grant supports small whole suites that fit its capture budget', 
 test('idle time reduces the usable grant budget without extending temporary access', async ({ page }) => {
   await page.clock.install();
   await openConnectedRun(page, 1);
-  const run = page.getByRole('button', { name: 'Run evaluation', exact: true });
+  const run = page.getByRole('button', { name: 'Run 1 voice test', exact: true });
   await expect(run).toBeEnabled();
   await page.clock.fastForward(12 * 60_000);
   await expect(run).toBeDisabled();
@@ -162,7 +162,7 @@ test('temporary connection clears password, saves IDs only, and preserves proof 
   await expect(page.getByLabel('Execution agent target')).toHaveValue('waylo-memory-fixture');
   await expect(page.getByText(/Connected to Mike fixture/)).toBeVisible();
   expect(fixture.requests.filter((request) => request.path === '/api/execution/runs' && request.method === 'POST')).toHaveLength(0);
-  await page.getByRole('button', { name: 'Run evaluation', exact: true }).click();
+  await page.getByRole('button', { name: 'Run 1 voice test', exact: true }).click();
   await expect.poll(() => fixture.requests.filter((request) => request.path === '/api/execution/runs' && request.method === 'POST').length).toBe(1);
   const run = fixture.requests.find((request) => request.path === '/api/execution/runs' && request.method === 'POST');
   expect(run?.headers['x-cae-waylo-session']).toBe(proof);
@@ -170,7 +170,7 @@ test('temporary connection clears password, saves IDs only, and preserves proof 
   expect(JSON.stringify(run?.body)).not.toContain(proof);
   await page.reload();
   await expect(page.getByRole('button', { name: 'Connect Waylo', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Run evaluation', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Run 1 voice test', exact: true })).toBeDisabled();
   await expect(page.getByLabel('Waylo password')).toHaveValue('');
   await page.goto('/targets');
   await expect(page.getByRole('status', { name: 'Waylo connection status' })).toContainText('Not connected');
@@ -185,14 +185,14 @@ test('automatically selected saved Waylo target launches with the voice executor
   // No agent_id query parameter: exercise default selection, not the explicit target link.
   await page.goto('/runs?suite_id=waylo-mike-notes&scenario_id=mike-five-bags');
   await expect(page.getByLabel('Execution agent target')).toHaveValue('waylo-memory-fixture');
-  await expect(page.getByRole('button', { name: 'Run evaluation', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Run 1 voice test', exact: true })).toBeDisabled();
   await page.getByLabel('Waylo email').fill('fixture@example.test');
   await page.getByLabel('Waylo password').fill('synthetic-password-not-a-real-secret');
   await page.getByLabel('Confirm temporary Waylo sign-in').check();
   fixture.allowLogin();
   await page.getByRole('button', { name: 'Connect Waylo', exact: true }).click();
   await expect(page.getByText(/Connected to Mike fixture/)).toBeVisible();
-  await page.getByRole('button', { name: 'Run evaluation', exact: true }).click();
+  await page.getByRole('button', { name: 'Run 1 voice test', exact: true }).click();
   await expect.poll(() => fixture.requests.filter((request) => request.path === '/api/execution/runs' && request.method === 'POST').length).toBe(1);
   const run = fixture.requests.find((request) => request.path === '/api/execution/runs' && request.method === 'POST');
   expect(run?.headers['x-cae-waylo-control']).toBe('1');

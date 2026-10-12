@@ -17,6 +17,26 @@ const context = { module: { exports: {} } };
 vm.runInNewContext(compiled, context);
 const voiceCallStatus = context.module.exports;
 
+const queueDeclaration = source.statements.find((item) => ts.isFunctionDeclaration(item) && item.name?.text === 'isQueuedVoiceTargetId');
+assert.ok(queueDeclaration, 'queued voice classification must remain independently testable');
+const queueCompiled = ts.transpileModule(`${queueDeclaration.getText(source)}\nmodule.exports = isQueuedVoiceTargetId;`, {
+  compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS },
+}).outputText;
+const queueContext = { module: { exports: {} } };
+vm.runInNewContext(queueCompiled, queueContext);
+const isQueuedVoiceTargetId = queueContext.module.exports;
+
+for (const target of ['waylo', 'builtin_sample_voice', 'pipecat_public_demo', 'signalwire_holy_guacamole']) {
+  test(`${target} uses queued voice launch guards, serial calls and queue limits`, () => {
+    assert.equal(isQueuedVoiceTargetId(target), true);
+  });
+}
+for (const target of [undefined, null, 'openai_codex', 'voice_fixture', 'browser_webrtc_agent', 'sip_agent', 'phone_agent']) {
+  test(`${target} does not inherit queued voice behavior`, () => {
+    assert.equal(isQueuedVoiceTargetId(target), false);
+  });
+}
+
 for (const transport of ['pipecat_daily_webrtc', 'signalwire_webrtc']) {
   for (const status of ['completed', 'failed', 'needs_review']) {
     test(`${transport}: completed media remains completed with ${status} evaluation status`, () => {

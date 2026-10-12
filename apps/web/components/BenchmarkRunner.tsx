@@ -1100,7 +1100,8 @@ function isExternalVoiceTargetId(target?: string | null) {
 function isQueuedVoiceTargetId(target?: string | null) {
   return target === 'builtin_sample_voice'
     || target === 'pipecat_public_demo'
-    || target === 'signalwire_holy_guacamole';
+    || target === 'signalwire_holy_guacamole'
+    || target === 'waylo';
 }
 
 const MAX_VOICE_CASES = 20;
@@ -2362,7 +2363,7 @@ export function BenchmarkRunner({
     selectedScoreAgent
     && !isSavedReplayTargetId(selectedScoreAgent.target)
     && !isExternalVoiceTargetId(selectedScoreAgent.target)
-    && (selectedScoreAgent.channel === 'text' || isQueuedVoiceTargetId(selectedScoreAgent.target) || selectedScoreAgent.target === 'waylo'),
+    && (selectedScoreAgent.channel === 'text' || isQueuedVoiceTargetId(selectedScoreAgent.target)),
   );
   const queuedVoiceTarget = isQueuedVoiceTargetId(selectedScoreAgent?.target);
   const requestedSuiteScope = executionScope === 'suite';
@@ -2383,7 +2384,7 @@ export function BenchmarkRunner({
     ? wayloRunBudgetError(executionDuplexTimeoutSeconds, executionConversationCount, wayloExpiresAt) : null;
   const wayloSuiteBudgetError = temporaryWayloTarget
     ? wayloRunBudgetError(executionDuplexTimeoutSeconds, (selectedSuite?.scenarios.length ?? 0) * executionIterations, wayloExpiresAt) : null;
-  const voiceQueueLimitError = (queuedVoiceTarget || selectedScoreAgent?.target === 'waylo') && (
+  const voiceQueueLimitError = queuedVoiceTarget && (
     executionCaseCount > MAX_VOICE_CASES || executionConversationCount > MAX_VOICE_CONVERSATIONS
   ) ? `Choose at most ${MAX_VOICE_CASES} cases and ${MAX_VOICE_CONVERSATIONS} total voice tests per run. Reduce iterations or run a single scenario.` : null;
   const matchingProductProjects = useMemo(
