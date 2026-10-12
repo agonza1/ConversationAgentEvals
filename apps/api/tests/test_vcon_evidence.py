@@ -233,11 +233,11 @@ def test_structured_only_run_exports_and_replays_portable_evidence(fields):
     vcon = original['ietf_vcon_export']
     assert vcon is not None
     assert vcon['vcon'] == '0.4.0'
-    assert vcon['dialog'] == []
+    assert vcon['dialog'] == [{'type': 'recording', 'parties': [0]}]
     body = decode_evidence(vcon)
     assert len(body['tool_events']) == len(payload.get('action_trace', []))
     assert len(body['state_snapshots']) == int('final_state' in fields)
-    assert 'dialog' not in vcon['attachments'][0]
+    assert vcon['attachments'][0]['dialog'] == 0
     replay = run_scenario({'vcon': vcon}, persist_artifacts=False)
     for key in ('overall_score', 'verdict', 'task_completion_score', 'final_state_score',
                 'completed_actions', 'missing_actions', 'score_components'):
@@ -262,7 +262,7 @@ def test_saved_structured_only_run_download_uses_portable_profile():
     assert download.status_code == 200
     vcon = download.json()['record']
     assert vcon['vcon'] == '0.4.0'
-    assert vcon['dialog'] == []
+    assert vcon['dialog'] == [{'type': 'recording', 'parties': [0]}]
     body = decode_evidence(vcon)
     assert len(body['tool_events']) == len(payload['action_trace'])
     assert body['state_snapshots'][0]['state'] == payload['final_state']
@@ -311,7 +311,9 @@ def test_optional_inline_recording_is_owner_checked_and_path_scoped(monkeypatch,
     outside.write_bytes(b'private')
     conversation['recording']['uri'] = str(outside)
     assert client.get(url, params={'user_id': 'owner', 'include_audio': True}).status_code == 422
-    assert client.get(url, params={'user_id': 'owner'}).json() == exported
+    default = client.get(url, params={'user_id': 'owner'}).json()
+    assert default['dialog'] == exported['dialog']
+    assert default['attachments'] == exported['attachments']
 
 
 def test_unknown_critical_extension_and_duplicate_sequence_rejected():
@@ -392,19 +394,20 @@ def test_new_portable_exports_have_validator_accepted_timestamps(kind):
         assert result == {'valid': True, 'errors': []}
 
 
-def test_profile_without_dialog_reevaluates_and_exports_empty_dialog():
+def test_legacy_profile_without_dialog_reevaluates_and_exports_placeholder():
     payload = sample()
     payload.pop('transcript')
     original = run_scenario(payload, persist_artifacts=False)
     vcon = deepcopy(original['ietf_vcon_export'])
     vcon.pop('dialog')
+    vcon['attachments'][0].pop('dialog')  # original legacy no-dialog profile has no reference
     unrelated = {'purpose': 'External metadata', 'body': {'retained': True}}
     vcon['attachments'].append(unrelated)
     intake_vcon({'vcon': vcon})
     replay = run_scenario({'vcon': vcon}, persist_artifacts=False)
     exported = replay['ietf_vcon_export']
-    assert exported['dialog'] == []
-    assert exported['analysis'][-1]['dialog'] == []
+    assert exported['dialog'] == [{'type': 'recording', 'parties': [0, 1]}]
+    assert exported['analysis'][-1]['dialog'] == [0]
     assert exported['attachments'][-1] == unrelated
     assert exported['created_at'] == vcon['created_at']
     assert exported['updated_at'] == vcon['updated_at']
@@ -412,7 +415,7 @@ def test_profile_without_dialog_reevaluates_and_exports_empty_dialog():
     assert replay['score_components'] == original['score_components']
     response = TestClient(app).post('/api/benchmarks/run', json={'vcon': vcon})
     assert response.status_code == 200
-    assert response.json()['ietf_vcon_export']['dialog'] == []
+    assert response.json()['ietf_vcon_export']['dialog'] == [{'type': 'recording', 'parties': [0, 1]}]
 
 
 @pytest.mark.parametrize('field', ['created_at', 'updated_at'])
@@ -619,11 +622,16 @@ def test_valid_portable_dialogs_are_preserved_on_api_replay(kind):
             item['url'] = 'https://example.test/audio.wav'
         else:
             item.update(encoding='base64url', body=base64.urlsafe_b64encode(b'RIFFaudio').decode('ascii').rstrip('='))
+            from app.services.vcon_interop import vcon_content_hash
+            item['content_hash'] = vcon_content_hash(b'RIFFaudio')[7:]  # old CAE digest intake remains accepted
     vcon['dialog'] = [item]
     response = TestClient(app).post('/api/benchmarks/run', json={'vcon': vcon})
     assert response.status_code == 200, response.text
     exported = response.json()['ietf_vcon_export']
-    assert exported['dialog'] == [item]
+    expected = deepcopy(item)
+    if kind != 'text':
+        expected['content_hash'] = 'sha512-' + item['content_hash']
+    assert exported['dialog'] == [expected]
     assert validate_ietf_vcon(exported) == {'valid': True, 'errors': []}
 
 

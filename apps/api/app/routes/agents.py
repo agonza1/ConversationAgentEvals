@@ -84,6 +84,8 @@ async def capture_waylo_session(agent_id: str, payload: WayloCaptureRequest, req
                 conversation_id=payload.conversation_id, suite_id=previous['suite_id'], scenario_id=previous['scenario_id'],
                 voice_events=[e for e in profile['voice_events'] if e.get('source') not in {'waylo.native_event', 'waylo.agent.turn_metrics'}],
                 media_dialogs=[d for d in previous['ietf_vcon_export'].get('dialog', []) if d.get('type') == 'recording'],
+                media_capture=next((a.get('body', {}).get('recording') for a in previous['ietf_vcon_export'].get('analysis', [])
+                                    if a.get('schema') == 'cae-execution-evidence-v1'), None),
                 before_items=before, after_items=after, test_expectations=context.get('test_expectations'))
             runs.refresh_waylo_evidence(payload.execution_run_id, previous, captured, exported)
             return {**exported, 'refreshed_execution_run_id': payload.execution_run_id}

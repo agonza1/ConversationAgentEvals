@@ -210,6 +210,7 @@ def project_capture(capture: dict, *, voice_events: list[dict] | None = None,
                     before_items: list[dict] | None = None, scenario_id: str = 'waylo-capture',
                     suite_id: str = 'waylo', media_dialogs: list[dict] | None = None,
                     test_expectations: dict | None = None, after_items: list[dict] | None = None,
+                    media_capture: dict | None = None,
                     execution_run_id: str | None = None, conversation_id: str | None = None) -> dict:
     """Map only typed observations. Free-form events remain ancillary evidence."""
     capture = clean_native(deepcopy(capture))
@@ -315,7 +316,31 @@ def project_capture(capture: dict, *, voice_events: list[dict] | None = None,
     vcon['uuid'] = str(uuid.uuid5(uuid.NAMESPACE_URL, f'cae-waylo/{identity}'))
     vcon['parties'][0]['type'] = 'human' if capture['origin'] == 'imported_human_call' else 'bot'
     vcon['analysis'][0]['body']['capture_method'] = 'waylo_final_transcript_not_tts_reference'
+    from app.services.vcon_interop import is_vcon_timestamp
+    from datetime import datetime
+    native_lines = [t for t in capture['transcripts'] if t.get('role') in {'user', 'agent'} and str(t.get('text') or '').strip()]
+    for index, line in enumerate(native_lines):
+        started, ended = line.get('startedAt'), line.get('endedAt')
+        if not is_vcon_timestamp(started):
+            continue
+        vcon['dialog'][index]['start'] = started
+        timing = {'clock_origin': 'waylo_provider_utc', 'source': 'waylo.transcripts.startedAt', 'duration_unit': 's'}
+        if is_vcon_timestamp(ended):
+            duration = (datetime.fromisoformat(ended.replace('Z', '+00:00')) - datetime.fromisoformat(started.replace('Z', '+00:00'))).total_seconds()
+            if duration >= 0:
+                vcon['dialog'][index]['duration'] = duration
+                timing['source'] = 'waylo.transcripts.startedAt/endedAt'
+        vcon['analysis'][0]['body']['turns'][index]['timing'] = timing
     vcon['dialog'].extend(media_dialogs or [])
+    from app.services.vcon_interop import normalize_vcon_sha512
+    for dialog in vcon['dialog']:
+        if dialog.get('type') == 'recording' and isinstance(dialog.get('content_hash'), str):
+            dialog['content_hash'] = normalize_vcon_sha512(dialog['content_hash'])
+    # The profile/native capture bounds are independent of opt-in media payloads.
+    from app.services.vcon_media import recording_manifest
+    media_manifest = recording_manifest(vcon['dialog'])
+    if media_manifest['included_tracks'] or media_capture:
+        vcon['analysis'][1]['body']['recording'] = clean_native(media_capture) if media_capture else media_manifest
     context = {'target_id': target_id, 'session_id': session_id, 'source_format': 'waylo-session-v1',
                'source_call_kind': capture['origin'], 'suite_id': suite_id, 'scenario_id': scenario_id,
                'evaluation_submission': 'manual', 'coverage': coverage,
@@ -332,11 +357,11 @@ def project_capture(capture: dict, *, voice_events: list[dict] | None = None,
     # Reuse the structured profile's exporter reference, not a mutable display brand.
     exporter_party = next(a['party'] for a in vcon['attachments'] if a.get('purpose') == PURPOSE)
     vcon['attachments'].append({'type': 'ancillary', 'purpose': 'Waylo native source evidence', 'party': exporter_party,
-                                'start': vcon['updated_at'],
+                                'start': vcon['updated_at'], 'dialog': 0,
                                 'mediatype': 'application/json', 'encoding': 'json', 'body': capture})
     # Revision describes native + mapped evidence, never wall-clock export time.
     revision = hashlib.sha256(json.dumps(vcon, sort_keys=True, separators=(',', ':'), default=str).encode()).hexdigest()
-    if len(json.dumps(vcon).encode()) > MAX_PROFILE_BYTES:
+    if len(json.dumps(capture, default=str).encode()) > MAX_PROFILE_BYTES:
         raise WayloError('Waylo evidence exceeds export limit; refusing a truncated export.')
     from app.services.execution_vcon import validate_ietf_vcon
     validation = validate_ietf_vcon(vcon)

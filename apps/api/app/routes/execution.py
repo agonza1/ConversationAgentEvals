@@ -585,29 +585,18 @@ def download_conversation_vcon(
     exported = deepcopy((conversation or {}).get('ietf_vcon_export'))
     if not isinstance(exported, dict):
         raise HTTPException(status_code=404, detail='Portable conversation evidence not found.')
-    if include_audio:
-        recording = (conversation or {}).get('recording') or {}
-        uri = str(recording.get('uri') or recording.get('recording_url') or '')
-        root = (execution_run_store.RUNS_DIR / execution_run_id).resolve()
-        path = Path(uri).resolve() if uri and '://' not in uri and not uri.startswith('/api/') else None
-        if path is None or not path.is_relative_to(root) or not path.is_file():
-            raise HTTPException(status_code=422, detail='No local recording available for inline export; use the default export for portable remote media.')
-        limit = 20 * 1024 * 1024
-        with path.open('rb') as stream:
-            audio = stream.read(limit + 1)
-        if len(audio) > limit:
-            raise HTTPException(status_code=413, detail='Inline recording exceeds the 20 MB limit.')
-        metadata = recording.get('metadata') or {}
-        scope = str(metadata.get('scope') or '')
-        item = {'type': 'recording', 'parties': [1] if 'target' in scope else [0] if 'caller' in scope else [0, 1],
-                'mediatype': str(recording.get('mime_type') or 'audio/wav'), 'encoding': 'base64url',
-                'body': base64.urlsafe_b64encode(audio).decode('ascii').rstrip('='),
-                'content_hash': base64.urlsafe_b64encode(hashlib.sha512(audio).digest()).decode('ascii').rstrip('=')}
-        exported.setdefault('dialog', []).append(item)
-        for analysis in exported.get('analysis') or []:
-            if analysis.get('schema') == 'cae-execution-evidence-v1':
-                analysis['body']['recording'] = {'status': 'inline', 'dialog': len(exported['dialog']) - 1}
-    return JSONResponse(exported, headers={'Content-Disposition': 'attachment; filename="conversation.vcon"'})
+    from app.services.vcon_media import MediaExportError, export_conversation_media
+    from app.services.execution_vcon import validate_ietf_vcon
+    try:
+        exported = export_conversation_media(exported, conversation or {},
+            execution_run_store.RUNS_DIR / execution_run_id, include_audio=include_audio)
+    except MediaExportError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
+    validation = validate_ietf_vcon(exported)
+    if not validation['valid']:
+        raise HTTPException(422, 'Portable conversation evidence failed validation: ' + '; '.join(validation['errors']))
+    return JSONResponse(exported, headers={'Content-Disposition': 'attachment; filename="conversation.vcon"',
+                                          'Cache-Control': 'no-store, private'})
 
 
 def _listener_run_or_403(token: str) -> tuple[dict[str, Any], dict[str, Any]]:

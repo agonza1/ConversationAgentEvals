@@ -167,9 +167,28 @@ truncated capture rather than asserting completeness.
 
 Credentials, participant tokens, TURN data, auth headers, signed URLs and opaque
 strings containing known credentials are redacted/excluded. Bootstrap credentials
-remain memory-only. Large local recordings may not fit the bounded portable export:
-the actual local WAVs remain in CAE; only bounded inline caller audio is exported.
-No local filesystem path is treated as portable vCon media.
+remain memory-only. Local WAVs remain in CAE independently of portable export.
+Default downloads are metadata-only: recording placeholders retain dialog indices,
+and analysis explicitly reports captured/included/omitted tracks, byte counts and
+`audio_opt_in_required`. The existing owner-checked conversation download route
+accepts `include_audio=true` for up to **20 MB of decoded audio in total**, not per
+track. It includes the correctly aligned continuous duplex recording once when
+available; otherwise it includes all retained caller/greeting/reply tracks. Older
+Waylo runs recover the adapter's exact known turn filenames, not arbitrary files.
+An oversized or unavailable selected track fails the whole opt-in request; no
+silent truncation or partial success is returned. Neither export reads remote
+URLs, arbitrary paths, or credentials. The native capture and structured execution
+profile retain their independent **2 MB** bounds; audio is not counted against them.
+
+New exports use `sha512-<base64url digest>` as defined by
+[vCon core-04](https://datatracker.ietf.org/doc/html/draft-ietf-vcon-vcon-core-04#section-2.2),
+and attachments reference a valid dialog. Intake deliberately accepts old CAE bare
+SHA-512 digests/missing attachment references; re-export normalizes these fields.
+Inline hashes are checked against decoded media. Known dialog duration uses seconds.
+Start is included only for a known timestamp or an explicitly paired local monotonic
+offset/UTC anchor; provider and observer clocks are never subtracted or synthesized.
+An empty capture has a recording placeholder, not invented speech or a false call
+failure. Missing media and unknown clocks remain explicitly unestablished.
 
 ## Mike fixtures and contract
 
