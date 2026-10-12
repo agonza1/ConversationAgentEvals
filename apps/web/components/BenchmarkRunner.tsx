@@ -3871,15 +3871,23 @@ export function BenchmarkRunner({
   const hasSavedCurrentScenario = Boolean(
     selectedScenario?.id && savedRuns.some((run) => run.report.scenario_id === selectedScenario.id),
   );
-  const currentRegressionDelta = useMemo(() => currentReportRegressionDelta(report, savedRuns), [report, savedRuns]);
+  const historyIsPartial = view === 'history' && (historyLoading || Boolean(historyError) || savedPage > 0 || savedHasNext);
+  const currentRegressionDelta = useMemo(() => {
+    if (historyIsPartial) {
+      return report?.run_id
+        ? savedRuns.find((run) => run.report.run_id === report.run_id)?.artifacts?.regression_delta ?? null
+        : null;
+    }
+    return currentReportRegressionDelta(report, savedRuns);
+  }, [historyIsPartial, report, savedRuns]);
   const suiteScenarioCoverage = useMemo(
-    () => scenarioCoverageFromRuns(
+    () => historyIsPartial ? null : scenarioCoverageFromRuns(
       view === 'history' && (!selectedScenario || report?.suite_id !== selectedSuite?.id
         || report?.scenario_id !== selectedScenario.id) ? null : selectedSuite,
       view === 'history' ? savedRuns.filter((run) => run.report.suite_id === selectedSuite?.id) : suiteSavedRuns,
       report,
     ),
-    [selectedSuite, selectedScenario, suiteSavedRuns, savedRuns, report, view],
+    [historyIsPartial, selectedSuite, selectedScenario, suiteSavedRuns, savedRuns, report, view],
   );
   const actionPlan = report ? reportActionPlan(report, currentRegressionDelta, suiteScenarioCoverage) : null;
   const reportBrief = report

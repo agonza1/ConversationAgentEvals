@@ -52,8 +52,13 @@ test('saved history pages are bounded and evidence stays collapsed', async ({ pa
     if (url.pathname === '/api/product/runs') {
       const offset = Number(url.searchParams.get('offset'));
       await route.fulfill({ json: Array.from({ length: offset ? 2 : 11 }, (_, index) => ({
-        id: `saved-${offset + index}`, report: { scenario_title: `Evaluation ${offset + index}`, overall_score: 80 },
+        id: `saved-${offset + index}`, report: { run_id: `report-${offset + index}`, suite_id: 'paging-suite',
+          scenario_id: offset ? 'second-case' : 'first-case', scenario_title: `Evaluation ${offset + index}`, overall_score: 80 },
       })) });
+    } else if (url.pathname === '/api/benchmarks/suites') {
+      await route.fulfill({ json: [{ id: 'paging-suite', title: 'Paging suite', scenarios: [
+        { id: 'first-case', title: 'First case' }, { id: 'second-case', title: 'Second case' },
+      ] }] });
     } else {
       await route.fulfill({ json: [] });
     }
@@ -64,6 +69,10 @@ test('saved history pages are bounded and evidence stays collapsed', async ({ pa
   await expect(page.getByText('10 evaluations on this page')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Load run', exact: true })).toHaveCount(10);
   await expect(page.getByRole('button', { name: 'Export JSON', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Load run', exact: true }).first().click();
+  await expect(page.getByLabel('Report brief')).toContainText('Suite coverage: Not available');
+  await expect(page.getByLabel('Report brief')).toContainText('Regression: Not compared');
+  await expect(page.getByLabel('Report brief')).not.toContainText('Next uncovered');
   await pagination.getByRole('button', { name: 'Next' }).click();
   await expect(page.getByText('2 evaluations on this page')).toBeVisible();
   await expect(pagination).toContainText('Page 2');
