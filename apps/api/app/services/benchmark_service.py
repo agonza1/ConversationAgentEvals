@@ -546,7 +546,7 @@ def _run_lifecycle(
     return lifecycle
 
 
-def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, Any]:
+def run_scenario(request: Any, *, persist_artifacts: bool = True, synthetic: bool | None = None) -> dict[str, Any]:
     run_started_at = datetime.now(UTC).isoformat()
     payload = _payload_to_dict(request)
     payload, _ = normalize_assert_payload(payload)
@@ -663,7 +663,7 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, A
             'action_trace': _scope_artifact_present(payload.get('action_trace')),
             'final_state': _scope_artifact_present(payload.get('final_state')),
         },
-        'synthetic': vcon_intake.get('synthetic') if vcon_intake.get('profile') else None,
+        'synthetic': vcon_intake.get('synthetic') if vcon_intake.get('profile') else synthetic,
         'trust': 'source-reported; not independently authenticated',
         'score_meaning': 'Diagnostic evidence matching, not a verified resolution percentage.',
         'semantic_review_required': report.get('semantic_review_required', True),
@@ -688,7 +688,7 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, A
     report['assert_lab_report'] = _assert_lab_report(report)
     report['vcon_analysis'] = _vcon_analysis(report)
     report['vcon_export'] = _vcon_export(payload, transcript, report['vcon_analysis'])
-    report['ietf_vcon_export'] = build_benchmark_vcon(export_payload, transcript, report)
+    report['ietf_vcon_export'] = build_benchmark_vcon(export_payload, transcript, report, synthetic=report['evaluation_scope']['synthetic'] is True)
     report['transcript'] = transcript
     return report
 
@@ -1255,7 +1255,7 @@ def simulate_scenario(request: Any) -> dict[str, Any]:
             **_perturbation_payload(payload),
             **_run_metadata_payload(payload),
             **_run_lifecycle_payload(payload),
-        }
+        }, synthetic=True,
     )
     benchmark_report['simulation_validation'] = simulation_validation
     benchmark_report['ietf_vcon_export'] = build_benchmark_vcon(

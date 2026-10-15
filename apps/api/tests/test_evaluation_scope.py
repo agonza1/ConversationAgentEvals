@@ -3,7 +3,7 @@ from copy import deepcopy
 
 import pytest
 
-from app.services.benchmark_service import get_suite, run_scenario
+from app.services.benchmark_service import get_suite, run_scenario, simulate_scenario, simulate_suite
 from app.services.vcon_evidence import build_benchmark_vcon
 
 
@@ -66,3 +66,21 @@ def test_synthetic_full_sample_preserves_its_marker_and_does_not_gain_authentica
     assert report['evaluation_scope']['artifact_presence'] == {'transcript': True, 'action_trace': True, 'final_state': True}
     assert 'not independently authenticated' in report['evaluation_scope']['trust']
     assert report['verdict'] == 'needs_review'
+
+
+@pytest.mark.parametrize('whole_suite', [False, True])
+def test_generated_simulations_are_synthetic_in_report_and_all_vcon_analyses(whole_suite):
+    payload = {'suite_id': 'call-center-voice-ai', 'scenario_id': 'billing-address-change'}
+    result = simulate_suite(payload) if whole_suite else simulate_scenario(payload)
+    reports = [run['benchmark_report'] for run in result['scenario_runs']] if whole_suite else [result['benchmark_report']]
+    for report in reports:
+        assert report['evaluation_scope']['synthetic'] is True
+        assert report['vcon_analysis']['body']['evaluation_scope']['synthetic'] is True
+        vcon = report['ietf_vcon_export']
+        assert vcon['attachments'][-1]['body']['synthetic'] is True
+        assert vcon['analysis'][-1]['body']['evaluation_scope']['synthetic'] is True
+
+
+def test_arbitrary_request_metadata_cannot_claim_internal_simulation_provenance():
+    report = run_scenario({**sample(), 'synthetic': True}, persist_artifacts=False)
+    assert report['evaluation_scope']['synthetic'] is None
