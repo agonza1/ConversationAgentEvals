@@ -2171,6 +2171,10 @@ async def reference_duplex_listen(
             'status': 'listening',
             'read_only': True,
             'requires_microphone': False,
+            # Joining observes the ongoing stream, not a lossless replay of
+            # speech produced while SDP/ICE was being negotiated. Clients must
+            # disclose any setup gap, not label successful signaling as down.
+            'audio_start_policy': 'live_from_connection',
             'audio_published_during_attach': (
                 attached_after_audio_sequence > attach_started_audio_sequence
             ),

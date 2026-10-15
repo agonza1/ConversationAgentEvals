@@ -130,6 +130,9 @@ interface ListenerState {
 }
 
 type PlaybackMode = 'idle' | 'live' | 'replay';
+// The runtime may wait up to 8s for a queued call's publisher before ICE setup.
+// Do not confuse that bounded startup with a failed media connection.
+const WEBRTC_CONNECTION_TIMEOUT_MS = 20_000;
 
 export function LiveRunFeedback({
   conversations,
@@ -296,7 +299,7 @@ export function LiveRunFeedback({
   const connectWebRTC = useCallback(async (
     token: ListenerToken,
     isCurrentAttempt: () => boolean,
-    activateHttpFallback: () => void,
+    activateHttpFallback: (message?: string) => void,
     hasUnheardSetupAudio: (eventKeys: string[], listenerMediaKeys: string[]) => boolean,
   ) => {
     if (!token.webrtc_url) {
@@ -313,6 +316,7 @@ export function LiveRunFeedback({
     let signalingReady = false;
     let serverListenerAttached = false;
     let recoveringFromDisconnect = false;
+    let setupAudioMayBeMissing = false;
     const ownsSharedConnection = () => peerRef.current === peer;
     const cleanupAttempt = async (notifyServer: boolean) => {
       const ownedSharedConnection = ownsSharedConnection();
@@ -340,7 +344,7 @@ export function LiveRunFeedback({
       liveAudioRef.current.srcObject = event.streams[0] ?? new MediaStream([event.track]);
       void liveAudioRef.current.play().catch(() => {
         if (!ownsSharedConnection() || !isCurrentAttempt()) return;
-        activateHttpFallback();
+        activateHttpFallback('The browser blocked live WebRTC playback. Playing newly captured turns over the HTTP fallback.');
       });
     };
     peer.onconnectionstatechange = () => {
@@ -350,13 +354,15 @@ export function LiveRunFeedback({
         clearDisconnectedFallbackTimer();
         if (recoveringFromDisconnect) {
           recoveringFromDisconnect = false;
-          activateHttpFallback();
+          activateHttpFallback('Live WebRTC was interrupted; playing newly captured turns over the HTTP fallback to avoid silently skipping a gap.');
           return;
         }
         liveSegmentFallbackRef.current = false;
         if (liveAudioRef.current) liveAudioRef.current.muted = false;
         setWebrtcStatus('listening');
-        setPlaybackMessage('Listening to the ongoing WebRTC audio stream. Earlier audio is not replayed.');
+        setPlaybackMessage(setupAudioMayBeMissing
+          ? 'Listening to live WebRTC. Audio during setup may be missing; use the recording for the complete call.'
+          : 'Listening to the ongoing WebRTC audio stream. Earlier audio is not replayed.');
       } else if (peer.connectionState === 'disconnected') {
         recoveringFromDisconnect = true;
         if (liveAudioRef.current) liveAudioRef.current.muted = true;
@@ -370,11 +376,11 @@ export function LiveRunFeedback({
               || !isCurrentAttempt()
               || peer.connectionState !== 'disconnected'
             ) return;
-            activateHttpFallback();
+            activateHttpFallback('Live WebRTC disconnected. Playing newly captured turns over the HTTP fallback.');
           }, 2000);
         }
       } else if (peer.connectionState === 'failed') {
-        activateHttpFallback();
+        activateHttpFallback('The WebRTC media connection failed. Playing newly captured turns over the HTTP fallback.');
       }
     };
     const sendIceCandidate = async (candidate: RTCIceCandidateInit) => {
@@ -399,8 +405,7 @@ export function LiveRunFeedback({
       }
       void sendIceCandidate(candidate).catch(() => {
         if (!ownsSharedConnection() || !isCurrentAttempt()) return;
-        setWebrtcStatus('error');
-        setPlaybackMessage('Could not send a WebRTC ICE candidate.');
+        activateHttpFallback('WebRTC candidate signaling failed. Playing newly captured turns over the HTTP fallback.');
       });
     };
     try {
@@ -412,6 +417,7 @@ export function LiveRunFeedback({
         pre_attach_audio_event_keys?: string[];
         pre_attach_listener_media_keys?: string[];
         audio_published_during_attach?: boolean;
+        audio_start_policy?: 'live_from_connection';
       }>(
         mediaUrl(apiBase, token.webrtc_url),
         {
@@ -425,17 +431,25 @@ export function LiveRunFeedback({
         await cleanupAttempt(true);
         return;
       }
-      if (
+      setupAudioMayBeMissing = Boolean(
         answer.audio_published_during_attach
         || hasUnheardSetupAudio(
           answer.pre_attach_audio_event_keys ?? [],
           answer.pre_attach_listener_media_keys ?? [],
         )
-      ) {
-        activateHttpFallback();
+      );
+      // Current runtimes explicitly offer a live-now join, not a complete
+      // replay from the click. Speech during negotiation is not an ICE error.
+      // Without that contract, keep the conservative complete-turn fallback.
+      if (setupAudioMayBeMissing && answer.audio_start_policy !== 'live_from_connection') {
+        activateHttpFallback('Audio started before live WebRTC was ready. Playing newly captured complete turns over the HTTP fallback.');
         return;
       }
       await peer.setRemoteDescription(answer.answer);
+      if (!ownsSharedConnection() || !isCurrentAttempt()) {
+        await cleanupAttempt(true);
+        return;
+      }
       signalingReady = true;
       for (const candidate of pendingIceCandidates) await sendIceCandidate(candidate);
       if (!ownsSharedConnection() || !isCurrentAttempt()) {
@@ -575,7 +589,7 @@ export function LiveRunFeedback({
       playbackGenerationRef.current === generation
       && playbackModeRef.current === 'live'
     );
-    const activateHttpFallback = (message = 'WebRTC could not reach the local voice runtime. Playing each new audio turn over the live HTTP fallback.') => {
+    const activateHttpFallback = (message = 'Live WebRTC is unavailable. Playing newly captured turns over the HTTP fallback.') => {
       if (!isCurrentAttempt() || liveSegmentFallbackRef.current) return;
       clearSetupFallbackTimer();
       disconnectWebRTC();
@@ -603,7 +617,7 @@ export function LiveRunFeedback({
     setupFallbackTimerRef.current = window.setTimeout(() => {
       setupFallbackTimerRef.current = null;
       if (!isCurrentAttempt()) return;
-      activateHttpFallback();
+      activateHttpFallback('Listener setup timed out. Playing newly captured turns over the HTTP fallback.');
     }, 2500);
     let token: ListenerToken | null = null;
     try {
@@ -618,7 +632,7 @@ export function LiveRunFeedback({
       ) {
         return;
       }
-      activateHttpFallback();
+      activateHttpFallback('Could not create a live listener. Playing newly captured turns over the HTTP fallback.');
       return;
     }
     if (
@@ -633,12 +647,15 @@ export function LiveRunFeedback({
       setPlaybackMode('idle');
       return;
     }
-    listenerTokenRef.current = token;
-    setListenerToken(token);
+    // The embedded receiver owns a separate token. Keep an already-created
+    // share link stable instead of replacing it with that private receiver.
+    const displayedToken = listenerTokenRef.current ?? token;
+    listenerTokenRef.current = displayedToken;
+    setListenerToken(displayedToken);
     try {
-      await refreshListener(token.token);
+      await refreshListener(displayedToken.token);
     } catch {
-      activateHttpFallback();
+      activateHttpFallback('Could not read the live listener. Playing newly captured turns over the HTTP fallback.');
       return;
     }
     if (!isCurrentAttempt() || liveSegmentFallbackRef.current) return;
@@ -648,8 +665,8 @@ export function LiveRunFeedback({
     setupFallbackTimerRef.current = window.setTimeout(() => {
       setupFallbackTimerRef.current = null;
       if (!isCurrentAttempt() || peerRef.current?.connectionState === 'connected') return;
-      activateHttpFallback();
-    }, 2500);
+      activateHttpFallback('The WebRTC connection timed out. Playing newly captured turns over the HTTP fallback.');
+    }, WEBRTC_CONNECTION_TIMEOUT_MS);
     try {
       await connectWebRTC(
         token,
@@ -663,7 +680,7 @@ export function LiveRunFeedback({
         ),
       );
     } catch {
-      activateHttpFallback();
+      activateHttpFallback('WebRTC negotiation failed. Playing newly captured turns over the HTTP fallback.');
     }
   }
 

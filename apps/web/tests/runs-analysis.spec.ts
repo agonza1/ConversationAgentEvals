@@ -1149,11 +1149,15 @@ test('voice analysis reports end-to-end target latency and scopes target diagnos
 
 test('active voice listening falls back after disconnect grace and completed playback restarts from the beginning', async ({ page }) => {
   let polls = 0;
+  let finishRun = false;
+  let publishFallbackTurn = false;
+  let listenerConversations: unknown[] = [];
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
     const runtime = window as Window & {
       __playedVoiceUrls: string[];
       __liveWebrtcPlayCount: number;
+      __disconnectVoice: () => void;
     };
     runtime.__playedVoiceUrls = [];
     runtime.__liveWebrtcPlayCount = 0;
@@ -1195,11 +1199,10 @@ test('active voice listening falls back after disconnect grace and completed pla
           streams: [new MediaStream()],
         });
         this.onconnectionstatechange?.();
-        setTimeout(() => {
-          if (this.connectionState !== 'connected') return;
+        runtime.__disconnectVoice = () => {
           this.connectionState = 'disconnected';
           this.onconnectionstatechange?.();
-        }, 1800);
+        };
       }
       close() {
         this.connectionState = 'closed';
@@ -1232,8 +1235,8 @@ test('active voice listening falls back after disconnect grace and completed pla
     }
     polls += 1;
     const hasWebrtcAgentAudio = polls >= 2;
-    const hasFallbackCallerAudio = polls >= 3;
-    const completed = polls >= 4;
+    const hasFallbackCallerAudio = publishFallbackTurn;
+    const completed = finishRun;
     const liveEvents = [
       {
         sequence: 1,
@@ -1260,6 +1263,11 @@ test('active voice listening falls back after disconnect grace and completed pla
         media_url: '/api/execution/runs/exec-live-cursor/conversations/exec-live-cursor-1/audio/3?user_id=demo-user',
       }] : []),
     ];
+    listenerConversations = [{
+      ...runFixture.conversations[0],
+      conversation_id: 'exec-live-cursor-1', execution_run_id: 'exec-live-cursor',
+      mode: 'pipecat_webrtc', status: completed ? 'completed' : 'running', live_events: liveEvents,
+    }];
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -1312,9 +1320,9 @@ test('active voice listening falls back after disconnect grace and completed pla
           read_only: true,
           can_inject_audio: false,
           requires_microphone: false,
-          run_status: polls >= 4 ? 'completed' : 'running',
+          run_status: finishRun ? 'completed' : 'running',
         },
-        conversations: [],
+        conversations: listenerConversations,
       }),
     });
   });
@@ -1328,6 +1336,9 @@ test('active voice listening falls back after disconnect grace and completed pla
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __liveWebrtcPlayCount: number }
   ).__liveWebrtcPlayCount)).toBe(1);
+  await expect(feedback.getByText('I can help with that.', { exact: true })).toBeVisible();
+  await page.evaluate(() => (window as Window & { __disconnectVoice: () => void }).__disconnectVoice());
+  publishFallbackTurn = true;
   await expect(feedback.getByLabel('WebRTC listener status')).toContainText('HTTP fallback');
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
@@ -1336,6 +1347,7 @@ test('active voice listening falls back after disconnect grace and completed pla
     window as Window & { __playedVoiceUrls: string[] }
   ).__playedVoiceUrls.some((url) => url.includes('/audio/1?') || url.includes('/audio/2?')))).toBe(false);
 
+  finishRun = true;
   await expect(feedback.getByRole('button', { name: 'Play recorded conversation' })).toBeVisible({ timeout: 10_000 });
   await feedback.getByRole('button', { name: 'Play recorded conversation' }).click();
   await expect.poll(() => page.evaluate(() => (
@@ -1357,6 +1369,8 @@ test('brief WebRTC recovery switches to lossless HTTP fallback', async ({ page }
       __playedVoiceUrls: string[];
       __blockedRecoveryOnce: boolean;
       __liveWebrtcMutedAtReconnect: boolean;
+      __disconnectVoice: () => void;
+      __reconnectVoice: () => void;
     };
     runtime.__playedVoiceUrls = [];
     runtime.__blockedRecoveryOnce = false;
@@ -1390,19 +1404,17 @@ test('brief WebRTC recovery switches to lossless HTTP fallback', async ({ page }
         this.connectionState = 'connected';
         this.ontrack?.({ track: { kind: 'audio' }, streams: [new MediaStream()] });
         this.onconnectionstatechange?.();
-        setTimeout(() => {
-          if (this.connectionState !== 'connected') return;
+        runtime.__disconnectVoice = () => {
           this.connectionState = 'disconnected';
           this.onconnectionstatechange?.();
-        }, 500);
-        setTimeout(() => {
-          if (this.connectionState !== 'disconnected') return;
+        };
+        runtime.__reconnectVoice = () => {
           this.connectionState = 'connected';
           runtime.__liveWebrtcMutedAtReconnect = Boolean(
             document.querySelector<HTMLAudioElement>('audio[aria-label="Receive-only live run audio"]')?.muted,
           );
           this.onconnectionstatechange?.();
-        }, 800);
+        };
       }
       close() { this.connectionState = 'closed'; }
     }
@@ -1511,7 +1523,10 @@ test('brief WebRTC recovery switches to lossless HTTP fallback', async ({ page }
   await page.goto('/runs/exec-brief-recovery');
   const feedback = page.getByLabel('Live run feedback');
   await feedback.getByRole('button', { name: 'Listen to live WebRTC' }).click();
+  await expect(feedback.getByLabel('WebRTC listener status')).toContainText('listening');
+  await page.evaluate(() => (window as Window & { __disconnectVoice: () => void }).__disconnectVoice());
   await expect(feedback.getByText('The live WebRTC connection was interrupted. Waiting briefly for it to recover.')).toBeVisible();
+  await page.evaluate(() => (window as Window & { __reconnectVoice: () => void }).__reconnectVoice());
   await expect(feedback.getByLabel('WebRTC listener status')).toContainText('HTTP fallback');
   await expect.poll(() => page.evaluate(() => (
     window as Window & { __playedVoiceUrls: string[] }
