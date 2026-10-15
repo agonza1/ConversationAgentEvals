@@ -49,6 +49,8 @@ test('false completion state is present, not treated as empty or proof of succes
 test('synthetic structured samples are never presented as real-world verification', () => {
   const view = evaluationEvidence({ verdict: 'pass', score: 100, vcon_intake_summary: { synthetic: true }, final_state: { complete: true } });
   assert.match(view.headline, /Synthetic evidence/); assert.equal(view.synthetic, true);
+  const failure = evaluationEvidence({ verdict: 'fail', vcon_intake_summary: { synthetic: true } });
+  assert.equal(failure.headline, 'Evaluation reported a failure'); assert.match(failure.sourceLabel, /Synthetic/);
 });
 test('judge status distinguishes pending, failed, absent and separate completion, never agrees=proof', () => {
   assert.equal(reviewEvidenceStatus(null), 'No completed review recorded');
