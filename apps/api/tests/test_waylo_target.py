@@ -590,7 +590,7 @@ def test_interrupted_list_checks_initial_quantity_and_later_correction_separatel
 
 @pytest.mark.parametrize('scripted_exchanges', [1, 2])
 @pytest.mark.parametrize('capture_failure', [None, 'session', 'transcripts', 'late', 'revoked', 'revoked_during_send', 'missing_created', 'bad_tool_name'])
-def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp_path, monkeypatch, scripted_exchanges, capture_failure):
+def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp_path, monkeypatch, scripted_exchanges, capture_failure, item_read_failure=None):
     revoked = False
     class Client:
         _secret = 'provider-secret'
@@ -606,6 +606,11 @@ def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp
                     'turn': {'credential': 'turn-credential', 'username': 'turn-username'}}
         async def request(self, method, path):
             self.calls.append(path)
+            if item_read_failure:
+                phase, malformed = item_read_failure
+                read_phase = 'before' if self.calls.count(path) == 1 else 'after'
+                if phase == read_phase:
+                    return malformed
             return [{'rawText': 'opaque provider-secret private turn-credential turn-username', 'quantity': 1}]
         async def capture(self, session_id, origin):
             assert not revoked, 'Never read the provider after authorization ends.'
@@ -702,6 +707,16 @@ def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp
     assert 'private' not in repr(observer_events)
     assert 'turn-credential' not in repr(observer_events) and 'turn-username' not in repr(observer_events)
     profile = decode_evidence(result['ietf_vcon_export'])
+    if item_read_failure:
+        phase, _ = item_read_failure
+        assert not any(snapshot['phase'] == phase for snapshot in profile['state_snapshots'])
+        assert any(snapshot['phase'] == 'final' for snapshot in profile['state_snapshots'])
+        assert profile['context']['capture_completeness'] == 'provisional'
+        assert len(result['turns']) == 3
+        native = next(a['body'] for a in result['ietf_vcon_export']['attachments']
+                      if a.get('purpose') == 'Waylo native source evidence')
+        assert native['transcripts'] and native['items'] == []
+        assert set(native['unavailable']) == {('items_before' if phase == 'before' else 'items_after_caller-1')}
     assert profile['context']['source_call_kind'] == 'cae_ai_tester'
     assert profile['context']['evaluation_submission'] == 'manual'
     assert 'private' not in json.dumps(result)
@@ -797,3 +812,10 @@ def test_mike_conflicting_config_does_not_start_a_call(tmp_path, preset):
         asyncio.run(run_waylo_call(target=TARGET, correlation_id='same-run', scenario=WAYLO_MIKE_SUITE['scenarios'][0],
             suite_id='waylo-mike-notes', artifact_dir=tmp_path, max_exchanges=1, timeout_seconds=30,
             next_utterance=wording, synthesize=synthesis, client=Client(), peer=Peer()))
+
+
+@pytest.mark.parametrize('phase', ['before', 'after'])
+@pytest.mark.parametrize('malformed', [[None], [{'rawText': None}], [{'rawText': []}], [{'rawText': 'note', 'quantity': True}]])
+def test_invalid_direct_item_reads_are_unavailable_not_backend_snapshots(tmp_path, monkeypatch, phase, malformed):
+    test_real_call_orchestration_captures_manual_evidence_and_playable_turns(
+        tmp_path, monkeypatch, 1, None, item_read_failure=(phase, malformed))
