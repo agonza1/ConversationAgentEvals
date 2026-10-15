@@ -649,6 +649,8 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
         except Exception:
             error = error or 'LiveKit cleanup failed; capture needs review.'
         continuous = getattr(peer, 'continuous_caller', None)
+        if continuous is not None and continuous.error:
+            error = error or continuous.error
         if continuous is not None and continuous.accepted_samples:
             # A whole-call caller track replaces its turn slices in fallback
             # playback; the individual sent WAVs remain available for ASR audit.

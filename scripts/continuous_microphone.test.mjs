@@ -95,3 +95,24 @@ test('SignalWire publishes one mixed track without marking idle noise as caller 
   assert.deepEqual(sent, Buffer.from(recorded.buffer));
   assert.ok(recorded.some((sample) => sample === 200));
 });
+
+test('first caller calibrates at the current noise cursor after greeting playback', async () => {
+  const noise = new Int16Array(2400);
+  [10, 10, 200, 20, 1000].forEach((level, index) => noise.fill(level, index * 480, (index + 1) * 480));
+  let frames = 0;
+  const mic = new ContinuousMicrophone({ noise, snrDb: 10, send: () => { frames += 1; }, observe: () => {} });
+  mic.start();
+  try {
+    const deadline = Date.now() + 2000;
+    while (frames < 3 && Date.now() < deadline) await sleep(2);
+    assert.ok(frames >= 3);
+    const clean = new Int16Array(960).fill(1000);
+    const sent = await mic.play(clean, 1);
+    const power = sent.reduce((sum, sample) => sum + (sample - 1000) ** 2, 0) / sent.length;
+    assert.ok(Math.abs(10 * Math.log10(1000000 / power) - 10) < .05);
+    assert.ok(mic.calibration.lead_in_samples >= 1440);
+    const gain = mic.noiseGain;
+    await mic.play(new Int16Array(480).fill(100), 2);
+    assert.equal(mic.noiseGain, gain);
+  } finally { await mic.close(); }
+});

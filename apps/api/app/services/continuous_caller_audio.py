@@ -30,6 +30,7 @@ class ContinuousCallerAudio:
         self.accepted_samples = self.late_frames = 0
         self.started_ms = self.ended_ms = None
         self.speech_activity = False
+        self.speech_calibrated = False
 
     def start(self):
         if self.task is not None:
@@ -39,6 +40,12 @@ class ContinuousCallerAudio:
     def enqueue(self, pcm: bytes) -> CallerSpeech:
         if self.closed or self.error or self.pending is not None or not pcm or len(pcm) % 2:
             raise ValueError('Caller stream is closed, unavailable or busy.')
+        if not self.speech_calibrated:
+            # Enqueue and recalibration have no awaits: the next frame uses this
+            # exact cursor window, not the window from before the greeting.
+            from app.services.waylo_audio_conditions import pcm_wav
+            self.mixer.recalibrate(pcm_wav(pcm, self.mixer.rate))
+            self.speech_calibrated = True
         self.pending = CallerSpeech(pcm, asyncio.get_running_loop().create_future())
         return self.pending
 

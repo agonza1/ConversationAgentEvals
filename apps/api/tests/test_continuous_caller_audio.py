@@ -69,6 +69,20 @@ def test_silent_seeded_recording_window_is_rejected_before_bootstrap(monkeypatch
         ContinuousNoise(reference(), snr_db=10, seed=7, noise_type='office')
 
 
+@pytest.mark.parametrize('kind', ['white', 'office', 'cafe', 'traffic'])
+def test_first_speech_recalibrates_at_actual_cursor_after_long_greeting(kind):
+    audio = reference(seconds=.5)
+    mixer = ContinuousNoise(audio, snr_db=10, seed=7, noise_type=kind)
+    mixer.mix(bytes(24000 * 2 * 3 + 640))
+    position = mixer.position
+    mixer.recalibrate(audio)
+    assert mixer.position == position  # no restart of the environment
+    clean = np.frombuffer(read_wav(audio)[1], dtype='<i2').astype(float)
+    sent = np.frombuffer(mixer.mix(read_wav(audio)[1]), dtype='<i2').astype(float)
+    assert 10 * math.log10(np.mean(clean ** 2) / np.mean((sent - clean) ** 2)) == pytest.approx(10, abs=.03)
+    assert mixer.metadata()['lead_in_samples'] == 24000 * 3 + 320
+
+
 class Source:
     def __init__(self, fail_at=None):
         self.frames = []; self.fail_at = fail_at; self.target_speaking = False

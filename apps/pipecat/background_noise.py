@@ -14,8 +14,11 @@ except ModuleNotFoundError:
 
 
 class ClockedNoiseTrack:
-    def __init__(self, reference_wav, condition, *, send, observe):
+    def __init__(self, reference_wav, condition, *, send, observe, max_seconds=310):
         self.mixer = ContinuousNoise(reference_wav, **condition)
+        self.reference_wav = reference_wav
+        self.max_seconds = max_seconds
+        self.speech_calibrated = False
         self.send, self.observe = send, observe
         self.pending = None
         self.task = None
@@ -30,6 +33,9 @@ class ClockedNoiseTrack:
             raise RuntimeError('Caller background noise stream failed.') from self.error
         if self.closed or self.pending or not pcm or len(pcm) % 2:
             raise ValueError('Caller microphone is unavailable or busy.')
+        if not self.speech_calibrated:
+            self.mixer.recalibrate(self.reference_wav)
+            self.speech_calibrated = True
         done = asyncio.get_running_loop().create_future()
         self.pending = [pcm, 0, bytearray(), done, turn_pair]
         return await done
@@ -40,7 +46,7 @@ class ClockedNoiseTrack:
         try:
             while not self.closed:
                 await asyncio.sleep(max(0, deadline - time.monotonic()))
-                if self.mixer.samples >= self.mixer.rate * 310:
+                if self.mixer.samples >= self.mixer.rate * self.max_seconds:
                     raise RuntimeError('Caller microphone duration limit reached.')
                 pending = self.pending
                 clean = pending[0][pending[1]:pending[1] + size] if pending else b''

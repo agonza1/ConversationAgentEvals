@@ -1,6 +1,6 @@
 // A single paced sender: speech changes, the environment does not stop.
 export class ContinuousMicrophone {
-  constructor({ noise, send, observe, sampleRate = 48000 }) {
+  constructor({ noise, send, observe, sampleRate = 48000, snrDb = null }) {
     if (!noise?.length) throw new Error('Background noise is empty.');
     this.noise = noise;
     this.send = send;
@@ -10,10 +10,26 @@ export class ContinuousMicrophone {
     this.closed = false;
     this.pending = null;
     this.clipped = 0;
+    this.snrDb = snrDb;
+    this.noiseGain = 1;
+    this.calibration = null;
+    this.samplesSent = 0;
   }
   start() { this.task = this.run(); }
   async play(samples, turnPair) {
     if (this.closed || this.pending || this.error || !samples.length) throw new Error('Caller microphone unavailable.');
+    if (this.calibration === null && Number.isFinite(this.snrDb)) {
+      let signalPower = 0, noisePower = 0;
+      for (let i = 0; i < samples.length; i += 1) {
+        signalPower += samples[i] ** 2;
+        noisePower += this.noise[(this.position + i) % this.noise.length] ** 2;
+      }
+      if (!signalPower || !noisePower) throw new Error('Caller noise calibration requires audible signal and ambience.');
+      this.noiseGain = Math.sqrt(signalPower / noisePower) / 10 ** (this.snrDb / 20);
+      this.calibration = { lead_in_samples: this.samplesSent, first_speech_noise_bed_offset_samples: this.position,
+        noise_calibration: 'first_speech_cursor_window', noise_calibration_samples: samples.length, sample_rate_hz: this.sampleRate,
+        signal_rms_pcm16: Math.sqrt(signalPower / samples.length), noise_rms_pcm16: Math.sqrt(noisePower / samples.length) * this.noiseGain };
+    }
     return new Promise((resolve, reject) => {
       this.pending = { samples, turnPair, offset: 0, chunks: [], resolve, reject };
     });
@@ -28,13 +44,14 @@ export class ContinuousMicrophone {
         const frame = new Int16Array(size);
         for (let i = 0; i < size; i += 1) {
           const signal = pending?.samples[pending.offset + i] || 0;
-          const value = signal + this.noise[this.position];
+          const value = Math.round(signal + this.noise[this.position] * this.noiseGain);
           this.position = (this.position + 1) % this.noise.length;
           this.clipped += Number(value < -32768 || value > 32767);
           frame[i] = Math.max(-32768, Math.min(32767, value));
         }
         const before = Date.now();
         this.send(frame);
+        this.samplesSent += frame.length;
         this.observe(frame, pending?.turnPair || 0);
         if (pending) {
           const count = Math.min(size, pending.samples.length - pending.offset);

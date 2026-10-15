@@ -426,6 +426,7 @@ class StreamingMediaBridge(FrameProcessor):
         self.trailing_silence_secs = trailing_silence_secs
         self.noise_condition = noise_condition
         self.noise_track = None
+        self._noise_pending = bytearray()
         self.audio = bytearray()
         self.sample_rate = 24000
         self.channels = 1
@@ -518,6 +519,7 @@ class StreamingMediaBridge(FrameProcessor):
             self.first_audio_at = None
             self.audio_ended_at = None
             self._converted_pending = bytearray()
+            self._noise_pending = bytearray()
             self._turn_active = True
         if self.first_audio_at is None:
             self.first_audio_at = time.time()
@@ -545,9 +547,14 @@ class StreamingMediaBridge(FrameProcessor):
                 self.noise_track = ClockedNoiseTrack(pcm_wav(clean, 24000), self.noise_condition, send=send, observe=observe)
                 self.noise_track.mixer.profile['level_reference'] = 'first_caller_tts_chunk_rms'
                 self.noise_track.start()
-            mixed = await self.noise_track.play(clean)
-            self.audio.extend(read_wav(mixed)[1])
-            self.audio_ended_at = time.time()
+            self._noise_pending.extend(clean)
+            size = 24000 // 50 * 2
+            complete = len(self._noise_pending) // size * size
+            if complete:
+                mixed = await self.noise_track.play(bytes(self._noise_pending[:complete]))
+                del self._noise_pending[:complete]
+                self.audio.extend(read_wav(mixed)[1])
+                self.audio_ended_at = time.time()
             return
         self.audio.extend(frame.audio)
         await self.audio_callback(frame.audio, frame.sample_rate, frame.num_channels)
@@ -568,6 +575,12 @@ class StreamingMediaBridge(FrameProcessor):
 
     async def _finish_turn(self, frame: Frame, direction: FrameDirection) -> None:
         if self.noise_track is not None:
+            if self._noise_pending:
+                from background_noise import read_wav
+                mixed = await self.noise_track.play(bytes(self._noise_pending).ljust(24000 // 50 * 2, b'\0'))
+                self.audio.extend(read_wav(mixed)[1])
+                self._noise_pending.clear()
+                self.audio_ended_at = time.time()
             if isinstance(frame, EndFrame):
                 await self.noise_track.close()
             else:

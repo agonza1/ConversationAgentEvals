@@ -52,3 +52,18 @@ def test_send_failure_does_not_publish_unaccepted_pcm():
         assert not observed
         await track.close()
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('cap,accepted', [(310, False), (420, True)])
+def test_public_setup_budget_is_in_addition_to_the_session_budget(cap, accepted):
+    async def run():
+        sent = []
+        async def send(audio, rate): sent.append(audio); track.closed = True
+        async def observe(*_): pass
+        track = ClockedNoiseTrack(pcm_wav(array('h', [1000] * 480).tobytes()), {'seed': 7, 'snr_db': 20},
+            send=send, observe=observe, max_seconds=cap)
+        track.mixer.samples = 311 * track.mixer.rate
+        await track._run()
+        assert bool(sent) == accepted
+        assert bool(track.error) != accepted
+    asyncio.run(run())

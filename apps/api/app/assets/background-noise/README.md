@@ -33,6 +33,8 @@ tests or saved replays. No new service or model is required.
 
 One continuous caller microphone stream carries the noise during the greeting,
 caller speech, target responses, and silence between turns. Its gain stays fixed;
+after a greeting lead-in, it is calibrated once more at the actual first-speech
+cursor, then stays fixed for subsequent turns. Lead-in calibration is retained in metadata.
 SNR is a calibration reference, not an instantaneous ratio during silence. The
 same mixed PCM feeds the live monitor and recording. Waylo also retains a bounded
 raw caller WAV if monitoring fails. SignalWire loops a seeded 20-second noise bed.

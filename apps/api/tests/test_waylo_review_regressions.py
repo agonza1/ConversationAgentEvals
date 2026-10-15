@@ -95,6 +95,16 @@ def test_run_vcon_retains_actual_execution_and_conversation_identity(tmp_path):
     assert 'exec-test' in serialized and 'conv-test' in serialized
 
 
+def test_late_continuous_microphone_failure_is_not_reported_as_success(tmp_path):
+    class LateFailure(Peer):
+        continuous_caller = SimpleNamespace(error=None, accepted_samples=0)
+        async def close(self):
+            self.continuous_caller.error = 'Continuous caller audio publication failed; accepted audio retained.'
+    result = call(tmp_path, peer=LateFailure())
+    assert result['verdict'] == 'failed'
+    assert result['final_state']['tester_error'] == 'Continuous caller audio publication failed; accepted audio retained.'
+
+
 def test_active_greeting_must_finish_before_first_caller(tmp_path):
     class Greeting(Peer):
         async def wait_response(self, previous, timeout=25):

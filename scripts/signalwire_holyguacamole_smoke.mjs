@@ -828,6 +828,7 @@ async function runSmoke(args) {
       const noise = parsePcmWav(await fs.readFile(noisePath)).samples;
       noiseTrack = new ContinuousMicrophone({
         noise,
+        snrDb: JSON.parse(process.env.SIGNALWIRE_HOLYGUACAMOLE_NOISE_PROFILE || '{}').snr_db_requested,
         send: (samples) => audioSource.onData({ samples, sampleRate: OUTBOUND_SAMPLE_RATE, bitsPerSample: 16, channelCount: 1, numberOfFrames: samples.length }),
         observe: (samples, turnPair) => {
           callCapture.add('tester_to_target', samples, OUTBOUND_SAMPLE_RATE);
@@ -970,7 +971,7 @@ async function runSmoke(args) {
   } finally {
     if (noiseTrack) {
       await noiseTrack.close();
-      result.tester.background_noise.clipped_samples = noiseTrack.clipped;
+      Object.assign(result.tester.background_noise, noiseTrack.calibration || {}, { clipped_samples: noiseTrack.clipped });
       if (noiseTrack.error) {
         result.status = 'blocked';
         result.reason = 'Continuous caller microphone failed during the call.';

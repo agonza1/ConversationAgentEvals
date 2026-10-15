@@ -449,7 +449,8 @@ async def run_public_daily_duplex(
             if audio_frame_callback is not None:
                 await audio_frame_callback('tester_to_target', audio, rate, 1, turn_pair)
 
-        run.noise_track = ClockedNoiseTrack(caller_wav, request.tester_noise, send=send_noise, observe=observe_noise)
+        run.noise_track = ClockedNoiseTrack(caller_wav, request.tester_noise, send=send_noise, observe=observe_noise,
+            max_seconds=request.timeout_seconds + 120)
 
     async def capture_participant(participant: dict[str, Any]) -> None:
         participant_id = str(participant.get('id') or '').strip()
