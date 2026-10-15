@@ -4964,11 +4964,23 @@ export function BenchmarkRunner({
                 </label>
               ) : null}
               {selectedScoreAgent?.target === 'waylo' ? (
-                <label>
-                  <span><input type="checkbox" checked={testerNoiseEnabled}
-                    onChange={(event) => setTesterNoiseEnabled(event.target.checked)} /> Add synthetic background noise</span>
-                  <small>Tester audio only · white noise at 20 dB SNR. The random seed is saved for repeatability. Scenario audio conditions still apply when off.</small>
-                </label>
+                <div className="run-noise-option">
+                  <label className="run-noise-toggle">
+                    <span>Synthetic background noise</span>
+                    <input
+                      type="checkbox"
+                      aria-label="Add synthetic background noise"
+                      aria-describedby="run-noise-description"
+                      checked={testerNoiseEnabled}
+                      onChange={(event) => setTesterNoiseEnabled(event.target.checked)}
+                    />
+                  </label>
+                  <p id="run-noise-description">Tester only · White noise · 20 dB SNR</p>
+                  <details className="run-noise-details">
+                    <summary>Audio details</summary>
+                    <p>The random seed is saved for repeatability. Scenario audio conditions still apply when off.</p>
+                  </details>
+                </div>
               ) : null}
             </div>
             <p>
