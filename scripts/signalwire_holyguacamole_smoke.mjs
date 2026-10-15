@@ -146,6 +146,8 @@ class CaeLiveAudioPublisher {
     this.flushTimer = null;
     this.pending = Promise.resolve();
     this.error = null;
+    this.callCapture = null;
+    this.pendingMediaKeys = new Set();
   }
   get configured() { return Boolean(this.baseUrl && this.token && this.executionRunId); }
   async request(pathname, body) {
@@ -183,11 +185,26 @@ class CaeLiveAudioPublisher {
       }, 90);
     }
   }
-  scheduleFlush() {
-    if (!this.queue.length || !this.publisherId) return this.pending;
+  scheduleFlush(final = false) {
+    if ((!this.queue.length && !this.callCapture) || !this.publisherId) return this.pending;
     const queued = this.queue.splice(0);
     this.pending = this.pending.then(async () => {
       if (!this.publisherId) return;
+      if (this.callCapture) {
+        for (const frame of queued) {
+          if (frame.turnPair > 0) this.pendingMediaKeys.add(`${this.sessionId}:${frame.turnPair}:${frame.direction}`);
+        }
+        const audio = pcm16ToBuffer(this.callCapture.render(final));
+        if (audio.length) {
+          await this.request('/outbound-voice/broadcast/audio', {
+            execution_run_id: this.executionRunId, publisher_id: this.publisherId,
+            direction: 'target_to_tester', turn_pair: 1, sample_rate: OUTBOUND_SAMPLE_RATE, channels: 1,
+            listener_media_keys: [...this.pendingMediaKeys], pcm16_base64: audio.toString('base64'),
+          });
+          this.pendingMediaKeys.clear();
+        }
+        return;
+      }
       const batches = [];
       for (const frame of queued) {
         const previous = batches.at(-1);
@@ -227,7 +244,7 @@ class CaeLiveAudioPublisher {
   async close() {
     if (this.flushTimer !== null) clearTimeout(this.flushTimer);
     this.flushTimer = null;
-    await this.scheduleFlush();
+    await this.scheduleFlush(true);
     await this.pending;
     if (!this.publisherId) return;
     const publisherId = this.publisherId;
@@ -794,6 +811,7 @@ async function runSmoke(args) {
   const audioTrack = audioSource.createTrack();
   const noisePath = process.env.SIGNALWIRE_HOLYGUACAMOLE_NOISE_WAV;
   const callCapture = noisePath ? new CallAudioCapture() : null;
+  livePublisher.callCapture = callCapture;
   const remoteMonitor = new RemoteAudioMonitor(livePublisher, callCapture);
   let noiseTrack = null;
   const subscriptions = [];
@@ -953,9 +971,6 @@ async function runSmoke(args) {
     if (noiseTrack) {
       await noiseTrack.close();
       result.tester.background_noise.clipped_samples = noiseTrack.clipped;
-      const conversationPath = path.join(runDir, 'conversation-continuous.wav');
-      await fs.writeFile(conversationPath, createPcmWav([pcm16ToBuffer(callCapture.pcm())], OUTBOUND_SAMPLE_RATE));
-      result.artifacts.conversation_audio = relativeToRepo(conversationPath);
     }
     result.timestamps.completed_at = nowIso();
     result.latency_metrics.total_run_ms = Date.now() - startedMs;
@@ -965,6 +980,11 @@ async function runSmoke(args) {
     remoteMonitor.stop();
     audioTrack.stop();
     await livePublisher.close();
+    if (callCapture) {
+      const conversationPath = path.join(runDir, 'conversation-continuous.wav');
+      await fs.writeFile(conversationPath, createPcmWav([pcm16ToBuffer(callCapture.pcm())], OUTBOUND_SAMPLE_RATE));
+      result.artifacts.conversation_audio = relativeToRepo(conversationPath);
+    }
     if (livePublisher.error) result.connection.cae_live_broadcast_error = livePublisher.error;
     await writeArtifacts(result, runDir, responseAudios, greetingAudio);
   }

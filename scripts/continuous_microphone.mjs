@@ -63,7 +63,10 @@ export class ContinuousMicrophone {
 }
 
 export class CallAudioCapture {
-  constructor(sampleRate = 48000) { this.sampleRate = sampleRate; this.chunks = []; this.started = null; this.cursors = new Map(); }
+  constructor(sampleRate = 48000) {
+    this.sampleRate = sampleRate; this.chunks = []; this.started = null; this.cursors = new Map();
+    this.rendered = 0; this.output = [];
+  }
   add(direction, samples, sampleRate) {
     const now = Date.now();
     this.started ??= now;
@@ -72,18 +75,33 @@ export class CallAudioCapture {
     for (let i = 0; i < count; i += 1) converted[i] = samples[Math.min(samples.length - 1, Math.floor(i * sampleRate / this.sampleRate))];
     const observed = Math.round((now - this.started) * this.sampleRate / 1000);
     const previous = this.cursors.get(direction);
-    const offset = previous === undefined || observed - previous > this.sampleRate * .08 ? observed : previous;
+    const offset = Math.max(this.rendered, previous === undefined || observed - previous > this.sampleRate * .08 ? observed : previous);
     if (offset + count > this.sampleRate * 310) throw new Error('Conversation recording duration limit.');
     this.cursors.set(direction, offset + count);
     this.chunks.push({ offset, samples: converted });
   }
+  render(final = false) {
+    const latest = Math.max(0, ...this.cursors.values());
+    const ready = this.started === null ? 0 : Math.floor((Date.now() - this.started - 60) * this.sampleRate / 1000);
+    const end = Math.max(this.rendered, final ? latest : Math.min(latest, ready));
+    const mix = new Int32Array(end - this.rendered);
+    for (const chunk of this.chunks) {
+      const lo = Math.max(chunk.offset, this.rendered), hi = Math.min(chunk.offset + chunk.samples.length, end);
+      for (let i = lo; i < hi; i += 1) mix[i - this.rendered] += chunk.samples[i - chunk.offset];
+    }
+    const result = new Int16Array(mix.length);
+    for (let i = 0; i < mix.length; i += 1) result[i] = Math.max(-32768, Math.min(32767, mix[i]));
+    this.rendered = end;
+    this.chunks = this.chunks.filter((chunk) => chunk.offset + chunk.samples.length > end);
+    if (result.length) this.output.push(result);
+    return result;
+  }
   pcm() {
-    const end = Math.max(0, ...this.cursors.values());
-    const mix = new Int32Array(end);
-    for (const chunk of this.chunks) for (let i = 0; i < chunk.samples.length; i += 1) mix[chunk.offset + i] += chunk.samples[i];
-    const result = new Int16Array(end);
-    for (let i = 0; i < end; i += 1) result[i] = Math.max(-32768, Math.min(32767, mix[i]));
-    this.chunks = [];
+    this.render(true);
+    const result = new Int16Array(this.rendered);
+    let offset = 0;
+    for (const block of this.output) { result.set(block, offset); offset += block.length; }
+    this.output = [];
     return result;
   }
 }

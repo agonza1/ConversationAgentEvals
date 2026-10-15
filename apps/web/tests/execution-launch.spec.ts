@@ -861,8 +861,8 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect(launch.getByLabel('Execution project')).toHaveValue('proj-personal-call-center');
   await launch.getByLabel('Execution project').selectOption('proj-shared-call-center');
   await expect(launch.locator('.run-config-step-heading strong')).toHaveText([
-    'Tester',
     'Agent target',
+    'Tester',
     'Execution',
   ]);
   await expect(launch.getByText('System under test')).toBeVisible();

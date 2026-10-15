@@ -36,6 +36,25 @@ test('continuous capture overlaps directions, does not concatenate them', () => 
   assert.ok(pcm.some((sample) => sample === 200));
 });
 
+test('live mixed blocks are exact slices of the recorded conversation', () => {
+  const original = Date.now;
+  let now = 1000;
+  Date.now = () => now;
+  try {
+    const capture = new CallAudioCapture(1000);
+    capture.add('tester_to_target', new Int16Array(100).fill(50), 1000);
+    capture.add('target_to_tester', new Int16Array(100).fill(150), 1000);
+    now += 80;
+    const live = capture.render();
+    assert.equal(live.length, 20);
+    assert.ok(live.every((sample) => sample === 200));
+    const recording = capture.pcm();
+    assert.equal(recording.length, 100);
+    assert.deepEqual(recording.slice(0, live.length), live);
+    assert.ok(recording.every((sample) => sample === 200));
+  } finally { Date.now = original; }
+});
+
 test('failure never publishes rejected microphone PCM', async () => {
   const observed = [];
   const mic = new ContinuousMicrophone({ noise: new Int16Array([1]),
