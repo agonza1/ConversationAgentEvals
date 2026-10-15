@@ -44,6 +44,13 @@ continuous low-latency listening. Partial mixed recordings are labelled partial,
 and portable exports retain raw-track recovery rather than claiming completeness.
 
 The common listener surface can be reused by audio adapters that expose PCM.
+Current listeners join the stream live after SDP/ICE connects; they do not promise
+lossless playback from the click. If audio arrives during setup, the UI explicitly
+warns about a possible setup gap and points to the complete recording. Negotiation
+has a bounded 20-second window (the worker may wait 8 seconds for a queued
+publisher), separate from listener-token API setup. Real signaling, playback,
+publisher and media failures still switch to the red HTTP fallback with a
+cause-specific message. Setup speech alone is not a connectivity failure.
 It cannot create live audio for text-only endpoints, saved transcript imports,
 or unimplemented browser/SIP transports. Those capability gaps stay explicit.
 
