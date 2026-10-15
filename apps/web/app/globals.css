@@ -1057,6 +1057,99 @@ select {
   line-height: 1.25;
 }
 
+.run-execution-fields .run-noise-option {
+  grid-column: 1 / -1;
+  gap: 0;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+
+.run-execution-fields .run-noise-toggle {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.run-noise-toggle span {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: none;
+}
+
+.run-noise-toggle input[type='checkbox'] {
+  appearance: none;
+  width: 34px;
+  min-height: 20px;
+  height: 20px;
+  flex: 0 0 34px;
+  margin: 0;
+  border: 1px solid #899995;
+  border-radius: 999px;
+  background: #e2e9e6;
+  padding: 2px;
+  cursor: pointer;
+}
+
+.run-noise-toggle input::before {
+  content: '';
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 1px 2px #0003;
+}
+
+.run-noise-toggle input:checked {
+  border-color: #075e54;
+  background: #075e54;
+}
+
+.run-noise-toggle input:checked::before {
+  transform: translateX(14px);
+}
+
+.run-noise-toggle input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.run-noise-option p,
+.run-noise-details summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.run-noise-details {
+  margin-top: 4px;
+}
+
+.run-noise-details summary {
+  width: fit-content;
+  padding: 4px 0;
+  cursor: pointer;
+}
+
+.run-noise-details p {
+  margin-top: 4px;
+}
+
+@media (forced-colors: active) {
+  .run-noise-toggle input[type='checkbox'] {
+    appearance: auto;
+  }
+
+  .run-noise-toggle input::before {
+    content: none;
+  }
+}
+
 .run-launch-card > .run-provenance-notice,
 .run-launch-card > label,
 .run-launch-card > details,
