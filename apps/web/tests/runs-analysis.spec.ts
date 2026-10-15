@@ -124,6 +124,7 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
 
   await page.getByRole('link', { name: /ACC voice fixture agent/ }).click();
   await expect(page.getByRole('heading', { name: 'ACC voice fixture agent' })).toBeVisible();
+  await page.getByText('Run setup', { exact: false }).click();
   const participants = page.getByLabel('Run participants and executor');
   await expect(participants).toContainText('Saved Conversation Replay');
   await expect(participants).toContainText('Evidence Replay');

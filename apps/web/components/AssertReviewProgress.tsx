@@ -1,9 +1,19 @@
+'use client';
+
+import { useEffect, useState } from 'react';
 import styles from './AssertReviewProgress.module.css';
 
 /** An indeterminate status, not a prediction of the judge's verdict or progress. */
 export function AssertReviewProgress() {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const started = Date.now();
+    const timer = window.setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   return (
-    <div className={styles.card} role="status" aria-live="polite" aria-atomic="true"
+    <div className={styles.card} role="region"
       aria-label="ASSERT review in progress">
       <svg className={styles.illustration} viewBox="0 0 120 88" fill="none"
         aria-hidden="true" focusable="false">
@@ -32,10 +42,15 @@ export function AssertReviewProgress() {
           <path d="M67 50q3-4 7-4" stroke="#ded7ff" strokeWidth="2" strokeLinecap="round" />
         </g>
       </svg>
-      <div className={styles.copy}>
-        <strong>ASSERT is reviewing<span className={styles.dots} aria-hidden="true">…</span></strong>
+      <div className={styles.copy} role="status" aria-live="polite" aria-atomic="true">
+        <strong>ASSERT is reviewing<span className={styles.dots} aria-hidden="true"><i /><i /><i /></span></strong>
         <p>Checking the conversation evidence. Your automatic result stays unchanged.</p>
       </div>
+      <div className={styles.activity}>
+        <span>{elapsed >= 30 ? 'Still reviewing the evidence' : 'Waiting for ASSERT’s response'}</span>
+        <span role="timer" aria-live="off" aria-label="Review elapsed time">{Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, '0')} elapsed</span>
+      </div>
+      <div className={styles.track} aria-hidden="true"><span /></div>
     </div>
   );
 }
