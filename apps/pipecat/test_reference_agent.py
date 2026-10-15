@@ -1001,6 +1001,7 @@ def test_reference_listener_negotiates_receive_only_webrtc_and_receives_frames(
     assert joined.status_code == 200, joined.text
     assert joined.json()['read_only'] is True
     assert joined.json()['requires_microphone'] is False
+    assert joined.json()['audio_start_policy'] == 'live_from_connection'
     assert joined.json()['audio_published_during_attach'] is missed_audio
     assert joined.json()['pre_attach_listener_media_keys'] == [
         'active-session:1:tester_to_target',
