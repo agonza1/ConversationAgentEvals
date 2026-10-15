@@ -29,8 +29,8 @@ CATALOG_FIXTURES = [
 ]
 
 _CASES = [
-    ('five-bags', 'Five bags, not catalog pack size', ['Please note five bags of white potatoes.', 'That is all. Please read back my notes.'],
-     [{'product_name': 'White Potatoes', 'quantity': 5, 'unit': 'bags'}], 'Return only White Potatoes; five bags is not five kilograms.'),
+    ('five-bags', 'Five bags, not catalog pack size', ['Please note five bags of russet potatoes.', 'That is all. Please read back my notes.'],
+     [{'product_name': 'Russet Potatoes', 'quantity': 5, 'unit': 'bags'}], 'Return only Russet Potatoes; five bags is not five kilograms.'),
     ('ambiguous', 'Multiple matching products', ['Please note five bags of potatoes.', 'White Potatoes, please.', 'That is all; read back the notes.'],
      [{'product_name': 'White Potatoes', 'quantity': 5, 'unit': 'bags'}], 'Return White Potatoes and Red Potatoes; do not note until caller chooses.'),
     ('unavailable', 'Missing or discontinued products', ['Please note two boxes of old pears and three boxes of dragonfruit.', 'That is all.'],
@@ -80,6 +80,11 @@ for suffix, title, condition in (
     WAYLO_MIKE_SUITE['scenarios'].append(case)
 
 for case in WAYLO_MIKE_SUITE['scenarios']:
+    if case['id'] == 'mike-five-bags':
+        # Match this live smoke case without changing other controlled fixtures.
+        case['waylo_test']['catalog_fixture'] = [
+            {'id': 'fixture-potato-russet', 'name': 'Russet Potatoes', 'pack_size': '10 kg', 'available': True},
+        ]
     expected = case['waylo_test']['expected_requests']
     # Explicit fixture entities, not inferred from arbitrary natural language.
     case['waylo_test']['expected_entities_by_turn'] = [deepcopy(expected)]

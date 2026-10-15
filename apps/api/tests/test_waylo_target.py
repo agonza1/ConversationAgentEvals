@@ -455,6 +455,24 @@ def test_mike_cases_are_transcript_only_not_fake_tool_evidence():
         assert case['waylo_test']['condition'] == case['waylo_test']['audio_condition']['kind']
 
 
+def test_five_bags_case_uses_russet_consistently_without_changing_other_cases():
+    from app.services.scenario_caller import scenario_spoken_opener
+    case = next(case for case in WAYLO_MIKE_SUITE['scenarios'] if case['id'] == 'mike-five-bags')
+    opener = 'Please note five bags of russet potatoes.'
+    expected = {'product_name': 'Russet Potatoes', 'quantity': 5, 'unit': 'bags'}
+    assert case['caller_steps'] == [opener, 'That is all. Please read back my notes.']
+    assert scenario_spoken_opener(case) == opener
+    assert case['sample_transcript'] == f'Caller: {opener}'
+    assert case['waylo_test']['expected_requests'] == [expected]
+    assert case['waylo_test']['expected_entities_by_turn'] == [[expected]]
+    assert case['waylo_test']['catalog_fixture'] == [
+        {'id': 'fixture-potato-russet', 'name': 'Russet Potatoes', 'pack_size': '10 kg', 'available': True}]
+    assert 'Return only Russet Potatoes' in case['waylo_test']['setup']
+    assert 'white potatoes' not in json.dumps(case).lower()
+    other = next(case for case in WAYLO_MIKE_SUITE['scenarios'] if case['id'] == 'mike-ambiguous')
+    assert other['waylo_test']['expected_requests'][0]['product_name'] == 'White Potatoes'
+
+
 def test_waylo_execution_cannot_enable_automatic_evaluation(tmp_path, monkeypatch):
     monkeypatch.setattr(agent_store, 'AGENTS_DIR', tmp_path / 'agents')
     agent_store.reset_agents_for_tests()
