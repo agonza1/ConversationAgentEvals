@@ -87,7 +87,8 @@ def test_selected_rules_hash_detects_catalog_changes(capture, monkeypatch):
     assert row['evaluation_findings'] == {}
 
 
-@pytest.mark.parametrize('noise', [None, {'snr_db': 20, 'seed': 7}])
+@pytest.mark.parametrize('noise', [None, *({'snr_db': 20, 'seed': 7, 'noise_type': kind}
+    for kind in ['white', 'office', 'cafe', 'traffic'])])
 def test_noise_changes_actual_sent_audio_with_retained_seed(monkeypatch, noise):
     source = pcm_wav(b'\x00\x10' * 2400, 24000)
     scenario = {'id': 'case', 'goal': 'Information only', 'caller_steps': ['Exact opener']}
@@ -103,6 +104,9 @@ def test_noise_changes_actual_sent_audio_with_retained_seed(monkeypatch, noise):
         if noise:
             assert audio != source and metadata['seed'] == 8
             assert metadata['snr_db_requested'] == 20
+            assert metadata['noise_type'] == noise['noise_type']
+            if noise['noise_type'] != 'white':
+                assert len(metadata['recording_sha256']) == 64
             assert (await kw['synthesize']('Exact opener', 1))[0] == audio
         else:
             assert audio == source
@@ -114,7 +118,8 @@ def test_noise_changes_actual_sent_audio_with_retained_seed(monkeypatch, noise):
         event_observer=None, scenario_snapshot=frozen))
 
 
-@pytest.mark.parametrize('value', [{'snr_db': float('inf')}, {'snr_db': 41}, {'seed': -1}, {'seed': 4294967296}])
+@pytest.mark.parametrize('value', [{'snr_db': float('inf')}, {'snr_db': 41}, {'seed': -1}, {'seed': 4294967296},
+    {'noise_type': '../../private'}, {'noise_type': 'unknown'}])
 def test_bad_noise_fails_closed(value):
     with pytest.raises(ValidationError):
         ExecutionRunCreateRequest(mode='pipecat_webrtc', executor_id='waylo_livekit', tester_noise=value)
@@ -144,7 +149,8 @@ def test_completed_capture_retains_launch_contract_without_grading(capture, monk
     assert result.evaluation_findings['scoring_mode'] == 'capture_only'
 
 
-def test_queue_freezes_rules_and_generated_noise_seed(capture, monkeypatch):
+@pytest.mark.parametrize('noise_type', ['white', 'office', 'cafe', 'traffic'])
+def test_queue_freezes_rules_and_generated_noise_seed(capture, monkeypatch, noise_type):
     scenario = {'id': 'case', 'title': 'Original rules', 'caller_steps': ['Original opener'], 'goal': 'Notes only'}
     target = {'id': 'target', 'name': 'Fixture', 'target': 'waylo', 'channel': 'voice',
               'connection': {'auth_type': 'bearer_secret', 'secret_ref': 'fixture-only', 'endpoint_url': 'https://example.test'}}
@@ -153,11 +159,15 @@ def test_queue_freezes_rules_and_generated_noise_seed(capture, monkeypatch):
     monkeypatch.setattr(runner, 'get_suite', lambda *a: {'id': 'suite', 'scenarios': [scenario]})
     monkeypatch.setattr(runner, 'resolve_http_target_secret', lambda *a: 'not-a-real-secret')
     payload = ExecutionRunCreateRequest(agent_id='target', suite_id='suite', scenario_ids=['case'],
-        mode='pipecat_webrtc', executor_id='waylo_livekit', tester_noise={'snr_db': 20})
+        mode='pipecat_webrtc', executor_id='waylo_livekit', tester_noise={'snr_db': 20, 'noise_type': noise_type})
     queued = runner.start_execution_run(payload)
     frozen = queued['execution_snapshot']['evaluation_contracts']['case']
     scenario['goal'] = 'Changed after queueing'
     assert recorded_contract({'evaluation_contract_snapshot': frozen})['goal'] == 'Notes only'
     assert queued['execution_snapshot']['request']['tester_noise']['seed'] == payload.tester_noise.seed
-    assert frozen['contract']['waylo_test']['condition'] == 'seeded_white_noise'
+    expected = 'seeded_white_noise' if noise_type == 'white' else f'recorded_{noise_type}_noise'
+    assert frozen['contract']['waylo_test']['condition'] == expected
+    assert frozen['contract']['waylo_test']['audio_condition']['noise_type'] == noise_type
+    if noise_type != 'white':
+        assert len(frozen['contract']['waylo_test']['audio_condition']['recording_sha256']) == 64
     assert payload.evaluate is False

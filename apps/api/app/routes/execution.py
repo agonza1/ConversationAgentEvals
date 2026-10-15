@@ -94,6 +94,14 @@ class ApplyJudgeReviewRequest(BaseModel):
     confirm: Literal[True]
 
 
+@router.get('/noise-presets/{noise_type}/audio')
+def background_noise_preview(noise_type: Literal['office', 'cafe', 'traffic']):
+    from app.services.waylo_audio_conditions import noise_preview_path
+
+    return FileResponse(noise_preview_path(noise_type), media_type='audio/wav',
+        headers={'Cache-Control': 'public, max-age=3600'})
+
+
 @router.post('/reference/complete')
 def execution_reference_complete(
     payload: ReferenceCompletionRequest,

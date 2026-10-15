@@ -824,7 +824,10 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
     async def synthesis(text, index):
         condition = scenario.get('waylo_test', {}).get('audio_condition', {})
         if payload.tester_noise is not None:
-            condition = {'kind': 'noise', **payload.tester_noise.model_dump()}
+            expected_recording = (condition.get('recording_sha256')
+                if condition.get('noise_type') == payload.tester_noise.noise_type else None)
+            condition = {'kind': 'noise', **payload.tester_noise.model_dump(),
+                'recording_sha256': expected_recording}
         if fixture_audio:
             if index > len(fixture_audio):
                 raise ValueError('Waylo controlled audio plan exhausted; no synthesized substitution.')
@@ -840,7 +843,8 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
             source = {'synthetic_voice': voice}
         if condition.get('kind') == 'noise':
             from app.services.waylo_audio_conditions import add_noise
-            audio, measurements = add_noise(audio, snr_db=condition['snr_db'], seed=condition['seed'] + index)
+            audio, measurements = add_noise(audio, snr_db=condition['snr_db'], seed=condition['seed'] + index,
+                noise_type=condition.get('noise_type', 'white'), recording_sha256=condition.get('recording_sha256'))
             return audio, {**source, **condition, **measurements}
         return audio, {**condition, **source}
 
@@ -1842,9 +1846,11 @@ def _execute_openai_codex_text_agent(
 def _selected_waylo_scenario(payload, suite_id: str, scenario_id: str) -> dict[str, Any]:
     scenario = deepcopy(_scenario_definition(suite_id, scenario_id))
     if payload.tester_noise is not None:
+        from app.services.waylo_audio_conditions import noise_profile
+        profile = noise_profile(payload.tester_noise.noise_type)
         scenario['waylo_test'] = {**scenario.get('waylo_test', {}),
-            'audio_condition': {'kind': 'noise', **payload.tester_noise.model_dump()},
-            'condition': 'seeded_white_noise', 'audio_condition_source': 'operator_override'}
+            'audio_condition': {'kind': 'noise', **payload.tester_noise.model_dump(), **profile},
+            'condition': profile['condition'], 'audio_condition_source': 'operator_override'}
     return scenario
 
 

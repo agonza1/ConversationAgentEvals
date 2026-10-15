@@ -1036,8 +1036,13 @@ interface ExecutionRunRecord {
   completed_at?: string | null;
 }
 
+type TesterNoiseType = 'white' | 'office' | 'cafe' | 'traffic';
+const TESTER_NOISE_LABELS: Record<TesterNoiseType, string> = {
+  white: 'White noise (synthetic)', office: 'Office / call center', cafe: 'Café chatter', traffic: 'Street traffic',
+};
+
 async function createExecutionRun(payload: {
-  tester_noise?: { snr_db: number };
+  tester_noise?: { noise_type: TesterNoiseType; snr_db: number };
   suite_id: string;
   scenario_ids: string[];
   mode: 'text_callable' | 'voice_fixture' | 'pipecat_webrtc';
@@ -2356,6 +2361,8 @@ export function BenchmarkRunner({
   const [executionMaxExchanges, setExecutionMaxExchanges] = useState<number | ''>(3);
   const [executionDuplexTimeoutSeconds, setExecutionDuplexTimeoutSeconds] = useState(120);
   const [testerNoiseEnabled, setTesterNoiseEnabled] = useState(false);
+  const [testerNoiseType, setTesterNoiseType] = useState<TesterNoiseType>('white');
+  const [testerNoiseSnr, setTesterNoiseSnr] = useState(20);
   const [executionTesterId, setExecutionTesterId] = useState<'scenario_simulator' | 'fixture_replay' | 'pipecat_tester'>('scenario_simulator');
   const [executionExecutorId, setExecutionExecutorId] = useState<NonNullable<ExecutionRunRecord['executor_id']>>('local_async_runner');
   const [executionRun, setExecutionRun] = useState<ExecutionRunRecord | null>(null);
@@ -3809,7 +3816,7 @@ export function BenchmarkRunner({
           ? 'signalwire-ai-agent'
           : executionModelName || DEFAULT_EXECUTION_MODEL;
       const queued = await createExecutionRun({
-        tester_noise: wayloAgent && testerNoiseEnabled ? { snr_db: 20 } : undefined,
+        tester_noise: wayloAgent && testerNoiseEnabled ? { noise_type: testerNoiseType, snr_db: testerNoiseSnr } : undefined,
         suite_id: suiteForRun,
         scenario_ids: scenarioIds,
         mode: runMode,
@@ -4968,19 +4975,45 @@ export function BenchmarkRunner({
               {selectedScoreAgent?.target === 'waylo' ? (
                 <div className="run-noise-option">
                   <label className="run-noise-toggle">
-                    <span>Synthetic background noise</span>
+                    <span>Background noise</span>
                     <input
                       type="checkbox"
-                      aria-label="Add synthetic background noise"
+                      aria-label="Add background noise"
                       aria-describedby="run-noise-description"
                       checked={testerNoiseEnabled}
                       onChange={(event) => setTesterNoiseEnabled(event.target.checked)}
                     />
                   </label>
-                  <p id="run-noise-description">Tester only · White noise · 20 dB SNR</p>
+                  <p id="run-noise-description">Tester only · {TESTER_NOISE_LABELS[testerNoiseType]} · {testerNoiseSnr} dB SNR</p>
+                  {testerNoiseEnabled ? <div className="run-noise-settings">
+                    <label>
+                      <span>Environment</span>
+                      <select aria-label="Background noise environment" value={testerNoiseType}
+                        onChange={(event) => setTesterNoiseType(event.target.value as TesterNoiseType)}>
+                        {Object.entries(TESTER_NOISE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                      </select>
+                    </label>
+                    <label>
+                      <span>Noise level</span>
+                      <select aria-label="Background noise level" value={testerNoiseSnr}
+                        onChange={(event) => setTesterNoiseSnr(Number(event.target.value))}>
+                        <option value={20}>Subtle · 20 dB SNR</option>
+                        <option value={10}>Moderate · 10 dB SNR</option>
+                        <option value={5}>Loud · 5 dB SNR</option>
+                        <option value={0}>Very loud · 0 dB SNR</option>
+                      </select>
+                    </label>
+                  </div> : null}
+                  {testerNoiseEnabled && testerNoiseType !== 'white' ? <div className="run-noise-preview">
+                    <small>Preview environment · original recording</small>
+                    <audio key={testerNoiseType} controls preload="none" aria-label={`Preview ${TESTER_NOISE_LABELS[testerNoiseType]} background`}
+                      src={`${getApiBase()}/api/execution/noise-presets/${testerNoiseType}/audio`} />
+                  </div> : null}
                   <details className="run-noise-details">
                     <summary>Audio details</summary>
-                    <p>The random seed is saved for repeatability. Scenario audio conditions still apply when off.</p>
+                    <p>Office, café, and traffic use recorded ambience. Noise is mixed into tester speech only; it pauses between turns.
+                      Type, level, random seed, and recording fingerprint are saved for repeatability. Lower SNR means louder noise.
+                      Scenario audio conditions still apply when off.</p>
                   </details>
                 </div>
               ) : null}
