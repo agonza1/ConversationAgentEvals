@@ -3,17 +3,18 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 
+import { ResultsPagination, RESULTS_PAGE_SIZE } from '@/components/ResultsPagination';
 import { SiteNav } from '@/components/SiteNav';
 import { ApiAwareLink } from '@/components/ApiAwareLink';
 import { BenchmarkRunner } from '@/components/BenchmarkRunner';
 import {
   demoProjectId,
   demoUserId,
-  ExecutionRunRecord,
-  listExecutionRuns,
+  ExecutionRunSummary,
+  listExecutionRunSummaries,
 } from '@/lib/execution';
 
-function testerLabel(testerId?: ExecutionRunRecord['tester_id']) {
+function testerLabel(testerId?: ExecutionRunSummary['tester_id']) {
   if (testerId === 'fixture_replay') return 'saved conversation replay';
   if (testerId === 'pipecat_tester') return 'Pipecat voice tester';
   if (testerId === 'scenario_simulator') return 'scenario simulator';
@@ -22,11 +23,15 @@ function testerLabel(testerId?: ExecutionRunRecord['tester_id']) {
 
 export function RunsListPage({ view = 'launch' }: { view?: 'launch' | 'results' }) {
   const [source, setSource] = useState<'agents' | 'saved'>('agents');
-  const [runs, setRuns] = useState<ExecutionRunRecord[]>([]);
+  const [runs, setRuns] = useState<ExecutionRunSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [apiBase, setApiBase] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [page, setPage] = useState(0);
+  const [hasNext, setHasNext] = useState(false);
+  const [hasActiveRuns, setHasActiveRuns] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
   const userId = useMemo(() => demoUserId(), []);
   const projectId = useMemo(() => demoProjectId(), []);
 
@@ -35,15 +40,20 @@ export function RunsListPage({ view = 'launch' }: { view?: 'launch' | 'results' 
   }, []);
 
   useEffect(() => {
-    if (view !== 'results') { setLoading(false); return; }
+    if (view !== 'results' || source !== 'agents') { setLoading(false); return; }
     let active = true;
     async function load() {
       setLoading(true);
       setError(null);
       try {
-        const next = await listExecutionRuns(userId, projectId);
+        const [next, activeRuns] = await Promise.all([
+          listExecutionRunSummaries(userId, projectId, { limit: RESULTS_PAGE_SIZE + 1, offset: page * RESULTS_PAGE_SIZE, status: statusFilter }),
+          listExecutionRunSummaries(userId, projectId, { limit: 1, offset: 0, status: 'active' }).catch(() => null),
+        ]);
         if (!active) return;
-        setRuns(next);
+        setRuns(next.slice(0, RESULTS_PAGE_SIZE));
+        setHasNext(next.length > RESULTS_PAGE_SIZE);
+        setHasActiveRuns(activeRuns === null || [...next, ...activeRuns].some((run) => run.status === 'queued' || run.status === 'running'));
       } catch (err) {
         if (!active) return;
         setError(err instanceof Error ? err.message : 'Could not load runs');
@@ -55,22 +65,25 @@ export function RunsListPage({ view = 'launch' }: { view?: 'launch' | 'results' 
     return () => {
       active = false;
     };
-  }, [projectId, userId, view]);
-
-  const hasActiveRuns = runs.some((run) => run.status === 'queued' || run.status === 'running');
+  }, [page, projectId, refreshKey, source, statusFilter, userId, view]);
 
   useEffect(() => {
-    if (view !== 'results' || !hasActiveRuns) return undefined;
+    if (view !== 'results' || source !== 'agents' || !hasActiveRuns) return undefined;
     let active = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     async function poll() {
       try {
-        const next = await listExecutionRuns(userId, projectId);
+        const [next, activeRuns] = await Promise.all([
+          listExecutionRunSummaries(userId, projectId, { limit: RESULTS_PAGE_SIZE + 1, offset: page * RESULTS_PAGE_SIZE, status: statusFilter }),
+          listExecutionRunSummaries(userId, projectId, { limit: 1, offset: 0, status: 'active' }).catch(() => null),
+        ]);
         if (!active) return;
-        setRuns(next);
+        setRuns(next.slice(0, RESULTS_PAGE_SIZE));
+        setHasNext(next.length > RESULTS_PAGE_SIZE);
+        setHasActiveRuns(activeRuns === null || [...next, ...activeRuns].some((run) => run.status === 'queued' || run.status === 'running'));
         setError(null);
-        if (next.some((run) => run.status === 'queued' || run.status === 'running')) {
+        if (activeRuns === null || [...next, ...activeRuns].some((run) => run.status === 'queued' || run.status === 'running')) {
           timer = setTimeout(() => void poll(), 1500);
         }
       } catch (err) {
@@ -85,21 +98,16 @@ export function RunsListPage({ view = 'launch' }: { view?: 'launch' | 'results' 
       active = false;
       if (timer) clearTimeout(timer);
     };
-  }, [hasActiveRuns, projectId, userId, view]);
+  }, [hasActiveRuns, page, projectId, source, statusFilter, userId, view]);
 
-  const visibleRuns = useMemo(() => runs.filter((run) => {
-    if (statusFilter === 'all') return true;
-    if (statusFilter === 'active') return run.status === 'queued' || run.status === 'running';
-    return run.status === statusFilter;
-  }), [runs, statusFilter]);
 
   return (
-    <main className="page-shell compact-shell">
+    <main className={`page-shell compact-shell ${view === 'results' ? 'results-page' : ''}`}>
       <SiteNav current={view === 'results' ? 'results' : 'runs'} />
       <section className="minimal-hero" aria-labelledby="runs-title">
         <p className="eyebrow">{view === 'results' ? 'Results · evidence and history' : 'New evaluation · live agent'}</p>
         <h1 id="runs-title">{view === 'results' ? 'Results' : 'Test an agent'}</h1>
-        <p>{view === 'results' ? 'Review agent tests and saved evidence evaluations. Their source stays explicit; scores are not proof of missing actions.' : 'Choose reviewed cases and a text or voice agent. This starts a new execution and captures evidence for evaluation.'}</p>
+        <p>{view === 'results' ? 'Review test outcomes and the evidence behind them.' : 'Choose reviewed cases and a text or voice agent. This starts a new execution and captures evidence for evaluation.'}</p>
       </section>
 
       {view === 'launch' ? <>
@@ -112,31 +120,30 @@ export function RunsListPage({ view = 'launch' }: { view?: 'launch' | 'results' 
         </div>
         <p className="scenarios-muted">{source === 'agents' ? 'Executions captured by CAE, including live targets and explicitly labeled replays.' : 'Saved evaluations of existing evidence and benchmark suites; these records do not imply a new live call.'}</p>
         {source === 'saved' ? <BenchmarkRunner view="history" /> : null}
-        <details><summary>Advanced tools</summary><ApiAwareLink href="/benchmarks">Open legacy benchmark console</ApiAwareLink> · <ApiAwareLink href="/voice">Voice quick start</ApiAwareLink></details>
+
       </>}
 
       {view === 'results' && source === 'agents' ? <>
       {loading ? <p className="scenarios-muted">Loading runs…</p> : null}
-      {error ? <div className="scenarios-error" role="alert">{error}</div> : null}
+      {error ? <div className="scenarios-error" role="alert">{error} <button type="button" onClick={() => setRefreshKey((key) => key + 1)}>Retry</button></div> : null}
 
-      {!loading && !runs.length ? (
+      {!loading && !error && !runs.length && statusFilter === 'all' && page === 0 ? (
         <section className="card scenarios-empty">
           <h2>No execution runs yet</h2>
           <p className="scenarios-muted">Choose a test set and agent to capture your first execution.</p>
           <ApiAwareLink className="secondary-link" href="/runs">Test an agent</ApiAwareLink>
         </section>
       ) : null}
-      {runs.length ? (
-      <section className="runs-history" aria-labelledby="recent-runs-title">
+      {(
+      <section className="runs-history" aria-labelledby="recent-runs-title" aria-busy={loading}>
         <div className="runs-history-heading">
           <div>
-            <p className="eyebrow">Execution history</p>
-            <h2 id="recent-runs-title">Recent runs</h2>
-            <span>{runs.length} {runs.length === 1 ? 'run' : 'runs'} captured for this project</span>
+            <h2 id="recent-runs-title">Agent tests</h2>
+            <span>{runs.length ? `${page * RESULTS_PAGE_SIZE + 1}–${page * RESULTS_PAGE_SIZE + runs.length}` : '0'} shown · newest first</span>
           </div>
           <label>
             <span>Show</span>
-            <select aria-label="Filter runs by status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+            <select aria-label="Filter runs by status" value={statusFilter} onChange={(event) => { setStatusFilter(event.target.value); setPage(0); setRuns([]); setLoading(true); }}>
               <option value="all">All statuses</option>
               <option value="active">Active</option>
               <option value="completed">Completed</option>
@@ -145,9 +152,9 @@ export function RunsListPage({ view = 'launch' }: { view?: 'launch' | 'results' 
             </select>
           </label>
         </div>
-        {!visibleRuns.length ? <p className="runs-filter-empty">No runs match this filter.</p> : null}
+        {!loading && !error && !runs.length && (statusFilter !== 'all' || page > 0) ? <p className="runs-filter-empty">No runs on this page. Choose another status or return to the previous page.</p> : null}
         <div className="runs-list">
-        {visibleRuns.map((run) => {
+        {runs.map((run) => {
           const scores = (run.conversations || [])
             .map((item) => item.score)
             .filter((value): value is number => typeof value === 'number');
@@ -160,22 +167,24 @@ export function RunsListPage({ view = 'launch' }: { view?: 'launch' | 'results' 
                   <strong>{run.agent_name || run.agent_id || run.mode}</strong>
                   <span data-status={run.status}>{run.status.replaceAll('_', ' ')}</span>
                 </div>
-                <p>{run.execution_run_id}</p>
+                <p><time dateTime={run.updated_at}>{run.updated_at ? new Date(run.updated_at).toLocaleString() : 'Date unavailable'}</time> · {run.execution_run_id}</p>
                 <p className="runs-list-meta">
                   {[testerLabel(run.tester_id), run.executor_id?.replaceAll('_', ' ')].filter(Boolean).join(' · ') || 'Execution record'}
                 </p>
               </div>
               <div className="runs-list-secondary">
-                <span>{run.conversations?.length || 0} conversations</span>
-                <span>{avg != null ? `avg ${avg}` : 'scoring pending'}</span>
+                <span>{run.conversations?.length || 0} {run.conversations?.length === 1 ? 'conversation' : 'conversations'}</span>
+                <span>{avg != null ? `Score ${avg}` : 'Score pending'}</span>
               </div>
             </Link>
           );
         })}
         </div>
+        <ResultsPagination page={page} hasNext={hasNext && !error} loading={loading} onChange={(next) => { setPage(next); setRuns([]); setLoading(true); }} label="Agent tests" />
       </section>
-      ) : null}
+      )}
       </> : null}
+      {view === 'results' ? <details className="results-advanced"><summary>Advanced tools</summary><ApiAwareLink href="/benchmarks">Benchmark console and exports</ApiAwareLink> · <ApiAwareLink href="/voice">Voice quick start</ApiAwareLink></details> : null}
     </main>
   );
 }
