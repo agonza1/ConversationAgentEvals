@@ -341,3 +341,13 @@ test('generic clarification IDs preserve the displayed question when a user answ
   expect(state.requests[1].question_context).toEqual({ q1: 'May the agent only collect requests?' });
   expect(state.writes).toEqual([]);
 });
+
+test('an unavailable saved-design link shows the detailed-editor error, not a fresh assisted draft', async ({ page }) => {
+  const state = await setup(page);
+  await page.route('**/api/specs/missing**', (route) => route.fulfill({ status: 404, json: { detail: 'Saved design not found in this workspace.' } }));
+  await page.goto('/specs/new?spec_id=missing');
+  await expect(page.getByRole('alert').filter({ hasText: 'Saved design not found' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '1 · Define test' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Assisted test builder' })).toHaveCount(0);
+  expect(state.writes).toEqual([]);
+});

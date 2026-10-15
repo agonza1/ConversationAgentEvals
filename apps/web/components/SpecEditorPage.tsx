@@ -264,6 +264,8 @@ export function SpecEditorPage() {
 
   useEffect(() => {
     let active = true;
+    const initialQuery = new URLSearchParams(window.location.search);
+    if (initialQuery.get('spec_id') || initialQuery.get('editor') === 'manual') setManualEditor(true);
     setBusy('templates');
     Promise.all([
       listEditableAssertTemplates(),
