@@ -236,3 +236,20 @@ def test_unstructured_state_coverage_matches_canonical_judge_emission(value):
     metadata = report.build_evidence_report(inference, {'verdict': {}}, conversation)
     assert metadata['evidence_coverage']['final_state'] is True
     assert inference['dimensions']['evidence_level'] == 'black_box'
+
+
+@pytest.mark.parametrize('conversation,expected', [
+    ({'turns': [{'speaker': 'observer', 'text': 'Not attributed speech.'}],
+      'final_state': {'phase': 'pending'}}, False),
+    ({'turns': [{'speaker': 'observer', 'text': 'Not attributed speech.'}],
+      'action_trace': [{'tool_name': 'lookup', 'result': 'No match'}]}, False),
+    ({'turns': [{'speaker': 'observer', 'text': 'Not attributed speech.'}],
+      'transcript': 'Caller: Actual fallback transcript.'}, True),
+    ({'turns': [{'speaker': 'agent', 'text': 42}]}, True),
+    ({'error': 'Transport failed before any conversation.'}, False),
+    ({'transcript': 'Unstructured imported conversation note.'}, True),
+])
+def test_transcript_coverage_tracks_emitted_messages_not_saved_turn_text(conversation, expected):
+    inference = build_assert_inference_row(run={}, conversation=conversation)
+    metadata = report.build_evidence_report(inference, {'verdict': {}}, conversation)
+    assert metadata['evidence_coverage']['transcript'] is expected

@@ -23,6 +23,27 @@ MAX_PARTS = 512
 _EVENT_ID = re.compile(r'event:(?:0|[1-9]\d{0,5})\Z')
 
 
+def _has_transcript_evidence(inference: dict[str, Any]) -> bool:
+    """Count only message evidence actually emitted to the judge's target view."""
+    events = inference.get('events')
+    if not isinstance(events, list):
+        return False
+    for event in events:
+        if not isinstance(event, dict) or not isinstance(event.get('view'), list) or 'target' not in event['view']:
+            continue
+        raw = event.get('raw')
+        if isinstance(raw, dict) and 'cae_execution_error' in raw:
+            continue
+        edit = event.get('edit')
+        if not isinstance(edit, dict) or edit.get('type') != 'add_message':
+            continue
+        message = edit.get('message')
+        text = message.get('content') if isinstance(message, dict) else None
+        if isinstance(text, str) and text.strip():
+            return True
+    return False
+
+
 def build_evidence_report(
     inference: dict[str, Any], score: dict[str, Any], conversation: dict[str, Any],
 ) -> dict[str, Any]:
@@ -32,10 +53,7 @@ def build_evidence_report(
         'evidence_messages': [], 'evidence_references': [],
         'evidence_details_status': 'complete',
         'evidence_coverage': {
-            'transcript': bool(str(conversation.get('transcript') or '').strip()) or any(
-                isinstance(turn, dict) and isinstance(turn.get('text'), str) and turn['text'].strip()
-                for turn in conversation.get('turns') or []
-            ),
+            'transcript': _has_transcript_evidence(inference),
             'tool_trace': any(isinstance(action, dict) and bool(action)
                               for action in conversation.get('action_trace') or []),
             'final_state': _structured_final_state(conversation) is not None
