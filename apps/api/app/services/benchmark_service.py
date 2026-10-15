@@ -668,7 +668,7 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True, synthetic: boo
         'artifact_presence': {
             'transcript': bool(transcript.strip()),
             'action_trace': _scope_artifact_present(payload.get('action_trace')),
-            'final_state': _scope_artifact_present(payload.get('final_state')),
+            'final_state': _scope_artifact_present(payload.get('final_state'), business_state=True),
         },
         'synthetic': True if catalog_sample_match else vcon_intake.get('synthetic') if vcon_intake.get('profile') else synthetic,
         'synthetic_basis': 'exact_catalog_transcript_match' if catalog_sample_match else None,
@@ -1939,13 +1939,15 @@ def _group_call_item_count(value: dict[str, Any], *keys: str) -> int:
     return total
 
 
-def _scope_artifact_present(value: Any) -> bool:
+def _scope_artifact_present(value: Any, *, business_state: bool = False) -> bool:
     """Empty JSON and scalars are not structured tool/state evidence."""
     if isinstance(value, str):
         try:
             value = json.loads(value)
         except ValueError:
             return False
+    if business_state and isinstance(value, dict) and value.get('outcome') in {'conversation_only_evidence_recorded', 'reference_conversation_captured'}:
+        return False
     return isinstance(value, (dict, list)) and bool(value)
 
 

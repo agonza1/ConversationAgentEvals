@@ -538,6 +538,7 @@ def test_voice_fixture_execution_runs_audio_plan_and_lists_mid_run():
     conversation = completed['conversations'][0]
     assert conversation['scenario_id'] == 'cancellation-rescue'
     assert conversation['turns']
+    assert conversation['ietf_vcon_export']['attachments'][-1]['body']['synthetic'] is True
     assert any(turn.get('act_id') for turn in conversation['turns'])
     listed = client.get('/api/execution/runs', params={'user_id': 'voice-user', 'project_id': 'voice-project'})
     assert listed.status_code == 200

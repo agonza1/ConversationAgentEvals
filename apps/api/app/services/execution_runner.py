@@ -532,7 +532,7 @@ def _run_one_conversation(
             source_telemetry=result.get('source_telemetry'),
             live_events=current.get('live_events') or [],
             latency_marks=result.get('latency_marks') or [],
-            synthetic=payload.mode == 'voice_fixture',
+            synthetic=payload.mode == 'voice_fixture' or result.get('synthetic') is True,
         )
         return ConversationRecord(
             conversation_id=conversation_id,
@@ -1938,7 +1938,7 @@ def _evidence_from_offline_fixture(
         # Force suite/scenario into cancellation-rescue when that is the selected catalog id.
         if scenario_id == 'cancellation-rescue':
             request = request.model_copy(update={'suite_id': suite_id, 'scenario_id': scenario_id})
-        report = run_scenario(request)
+        report = run_scenario(request, synthetic=True)
     return {
         'turns': turns,
         'transcript': evidence.get('transcript'),
@@ -1948,6 +1948,7 @@ def _evidence_from_offline_fixture(
         'verdict': report.get('verdict'),
         'score': report.get('overall_score'),
         'evaluation_report': report,
+        'synthetic': True,
     }
 
 

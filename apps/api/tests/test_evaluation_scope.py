@@ -56,6 +56,28 @@ def test_scope_measures_presence_not_success(trace, state, expected_trace, expec
     assert report['evaluation_scope']['trust'] == 'source-reported; not independently authenticated'
 
 
+@pytest.mark.parametrize('outcome', ['conversation_only_evidence_recorded', 'reference_conversation_captured'])
+@pytest.mark.parametrize('json_string', [False, True])
+def test_capture_bookkeeping_is_not_business_final_state(outcome, json_string):
+    import json
+    state = {'complete': False, 'outcome': outcome, 'evidence_scope': 'current_run_only'}
+    report = run_scenario({**sample(), 'final_state': json.dumps(state) if json_string else state}, persist_artifacts=False)
+    assert report['evaluation_scope']['artifact_presence']['final_state'] is False
+    assert report['evaluation_scope']['artifact_presence']['action_trace'] is False
+    assert any('operational completion remains unverified' in item for item in report['recommendations'])
+
+
+def test_offline_execution_fixture_propagates_trusted_synthetic_provenance():
+    from app.schemas.execution import ExecutionRunCreateRequest
+    from app.services.execution_runner import _evidence_from_offline_fixture
+    payload = ExecutionRunCreateRequest(suite_id='call-center-voice-ai', scenario_ids=['cancellation-rescue'], mode='voice_fixture')
+    result = _evidence_from_offline_fixture('call-center-voice-ai', 'cancellation-rescue', payload, evaluate=True)
+    assert result['synthetic'] is True
+    report = result['evaluation_report']
+    assert report['evaluation_scope']['synthetic'] is True
+    assert report['ietf_vcon_export']['attachments'][-1]['body']['synthetic'] is True
+
+
 def test_synthetic_full_sample_preserves_its_marker_and_does_not_gain_authenticated_trust():
     payload = sample()
     scenario = get_suite(payload['suite_id'])['scenarios'][0]
