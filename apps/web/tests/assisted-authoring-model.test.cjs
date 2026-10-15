@@ -35,9 +35,10 @@ test('quick cases reject missing caller steps or more than one case', () => {
 });
 test('change review identifies added, changed and removed content without mutating either snapshot', () => {
   const before = draft(); const after = structuredClone(before);
-  after.title = 'Revised'; after.scenarios[0].expected_outcome = 'Revised outcome.'; after.forbidden_behaviors = [];
+  after.title = 'Revised'; after.role = 'Corrected support agent'; after.scenarios[0].expected_outcome = 'Revised outcome.'; after.forbidden_behaviors = [];
   const changes = authoringChanges(before, after);
   assert.ok(changes.some((line) => line.startsWith('Changed title:')));
+  assert.ok(changes.some((line) => line.startsWith('Changed role:')));
   assert.ok(changes.some((line) => line.startsWith('Updated case:')));
   assert.ok(changes.some((line) => line.startsWith('Removed forbidden rule:')));
   assert.equal(before.title, 'Corrections');

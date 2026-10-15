@@ -63,7 +63,7 @@ def test_critical_question_has_no_draft_or_assumed_permission(monkeypatch):
 
 
 def test_answers_and_explicit_context_reach_generator_as_data(monkeypatch):
-    response, calls = generate(monkeypatch, answers={'permission': 'Collect requests only'}, context={'label': 'Existing case', 'text': 'Never confirm an unverified booking.'})
+    response, calls = generate(monkeypatch, answers={'permission': 'Collect requests only'}, question_context={'permission': 'Can the agent book appointments?'}, context={'label': 'Existing case', 'text': 'Never confirm an unverified booking.'})
     assert response.status_code == 200
     assert 'Collect requests only' in calls[0] and 'Existing case' in calls[0]
     assert 'Never confirm an unverified booking.' in response.json()['spec']['requirements']
@@ -136,8 +136,20 @@ def test_generator_failure_keeps_existing_http_error_contract(monkeypatch, error
 
 def test_clarification_cannot_turn_into_an_unbounded_model_loop(monkeypatch):
     data = {'questions': [{'id': 'permission', 'question': 'Can the agent book appointments?', 'options': []}]}
-    response, calls = generate(monkeypatch, data, answers={'permission': 'Collect requests only'})
+    response, calls = generate(monkeypatch, data, answers={'permission': 'Collect requests only'}, question_context={'permission': 'Can the agent book appointments?'})
     assert response.status_code == 502 and len(calls) == 1
+
+
+def test_generic_question_ids_keep_free_form_answer_meaning_in_prompt_and_saved_source(monkeypatch):
+    response, calls = generate(monkeypatch, answers={'q1': 'yes'}, question_context={'q1': 'May the agent only collect requests, without booking?'})
+    assert response.status_code == 200
+    assert 'May the agent only collect requests, without booking?' in calls[0] and 'yes' in calls[0]
+    assert 'Clarification: May the agent only collect requests, without booking?\nAnswer: yes' in response.json()['spec']['requirements']
+
+
+def test_opaque_answer_without_its_question_never_invokes_generation(monkeypatch):
+    response, calls = generate(monkeypatch, answers={'q1': 'yes'})
+    assert response.status_code == 422 and not calls
 
 
 def test_overlapping_cancel_retry_is_not_queued_or_sent_to_provider(monkeypatch):

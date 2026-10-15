@@ -13,7 +13,7 @@ export interface AuthoringDraft {
 
 export async function requestAuthoringDraft(payload: {
   request: string; scope: AuthoringScope; context?: AuthoringContext;
-  answers: Record<string, string>; current_spec?: EditableAssertSpec;
+  answers: Record<string, string>; question_context?: Record<string, string>; current_spec?: EditableAssertSpec;
 }, signal: AbortSignal): Promise<AuthoringDraft> {
   const response = await fetch(`${getApiBase()}/api/specs/assist`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal,
@@ -55,7 +55,7 @@ export function quickCaseFromDraft(spec: EditableAssertSpec) {
 
 export function authoringChanges(before: EditableAssertSpec, after: EditableAssertSpec): string[] {
   const changes: string[] = [];
-  for (const key of ['title', 'objective', 'permissible_behavior'] as const) {
+  for (const key of ['title', 'role', 'objective', 'permissible_behavior'] as const) {
     if (before[key] !== after[key]) changes.push(`Changed ${key.replaceAll('_', ' ')}: ${after[key] || 'removed'}`);
   }
   for (const [key, name] of [['required_behaviors', 'required rule'], ['forbidden_behaviors', 'forbidden rule'], ['scenarios', 'case']] as const) {

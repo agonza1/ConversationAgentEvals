@@ -12,7 +12,7 @@ const starters = [
   ['Account access', 'Test a caller who cannot access their account. Check the agent gives a useful next step without asking for passwords or inventing an identity-verification policy.'],
 ] as const;
 
-type DraftState = { result: AuthoringDraft; request: string; answers: Record<string, string> };
+type DraftState = { result: AuthoringDraft; request: string; answers: Record<string, string>; questionContext: Record<string, string> };
 
 export function AssistedTestBuilder({ scope, context, initialRequest = '', onApprove, onManual, onCancel }: {
   scope: AuthoringScope;
@@ -24,6 +24,7 @@ export function AssistedTestBuilder({ scope, context, initialRequest = '', onApp
 }) {
   const [request, setRequest] = useState(initialRequest);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [questionContext, setQuestionContext] = useState<Record<string, string>>({});
   const [draft, setDraft] = useState<DraftState | null>(null);
   const [previous, setPrevious] = useState<DraftState | null>(null);
   const [questions, setQuestions] = useState<AuthoringDraft['questions']>([]);
@@ -37,7 +38,7 @@ export function AssistedTestBuilder({ scope, context, initialRequest = '', onApp
   const resultRef = useRef<HTMLHeadingElement>(null);
   const spec = draft?.result.spec;
   const outdated = Boolean(draft && (draft.request !== request || JSON.stringify(draft.answers) !== JSON.stringify(answers)));
-  const validDraft = Boolean(spec && spec.title.trim().length >= 3 && spec.objective.trim().length >= 10 && spec.permissible_behavior?.trim()
+  const validDraft = Boolean(spec && spec.title.trim().length >= 3 && spec.role.trim().length >= 3 && spec.objective.trim().length >= 10 && spec.permissible_behavior?.trim()
     && spec.required_behaviors.length && [...spec.required_behaviors, ...spec.forbidden_behaviors].every((rule) => rule.label.trim())
     && spec.scenarios.length && spec.scenarios.every((item) => item.steps?.[0]?.trim() && item.expected_outcome?.trim()));
 
@@ -55,14 +56,15 @@ export function AssistedTestBuilder({ scope, context, initialRequest = '', onApp
     active.current = { id, controller };
     setBusy(true); setError(null);
     try {
-      const result = await requestAuthoringDraft({ request: request.trim(), scope, context, answers, current_spec: spec || undefined }, controller.signal);
+      const result = await requestAuthoringDraft({ request: request.trim(), scope, context, answers, question_context: questionContext, current_spec: spec || undefined }, controller.signal);
       if (active.current?.id !== id) return;
       if (result.questions.length) {
         setQuestions(result.questions);
+        setQuestionContext(Object.fromEntries(result.questions.map((question) => [question.id, question.question])));
       } else {
         setPrevious(draft);
         setChanges(spec && result.spec ? authoringChanges(spec, result.spec) : []);
-        setDraft({ result, request, answers: { ...answers } }); setQuestions([]);
+        setDraft({ result, request, answers: { ...answers }, questionContext: { ...questionContext } }); setQuestions([]);
       }
       window.requestAnimationFrame(() => resultRef.current?.focus());
     } catch (err) {
@@ -95,11 +97,11 @@ export function AssistedTestBuilder({ scope, context, initialRequest = '', onApp
       : <p className={styles.note}>No policy attached. Missing business rules won’t be treated as known facts.</p>}
     <label className={styles.composer}>What would you like to test?
       <textarea rows={3} maxLength={8000} value={request} disabled={busy || saving}
-        onChange={(event) => { setRequest(event.target.value); setAnswers({}); setQuestions([]); }}
+        onChange={(event) => { setRequest(event.target.value); setAnswers({}); setQuestionContext({}); setQuestions([]); }}
         placeholder="e.g. A caller changes their mind twice. Make sure the agent follows the latest request." />
     </label>
     {!draft ? <div className={styles.chips} aria-label="Test starters">{starters.map(([label, text]) =>
-      <button key={label} type="button" disabled={busy || saving} onClick={() => { setRequest(text); setAnswers({}); setQuestions([]); }}>{label}</button>)}</div> : null}
+      <button key={label} type="button" disabled={busy || saving} onClick={() => { setRequest(text); setAnswers({}); setQuestionContext({}); setQuestions([]); }}>{label}</button>)}</div> : null}
     {questions.length ? <section className={styles.questions} aria-label="Clarify the test">
       <h3 ref={resultRef} tabIndex={-1}>Just {questions.length === 1 ? 'one detail' : 'two details'} before drafting</h3>
       <p>These answers change what counts as correct.</p>
@@ -130,7 +132,7 @@ export function AssistedTestBuilder({ scope, context, initialRequest = '', onApp
       {previous ? <details className={styles.changes}><summary>Review changes · {changes.length}</summary>
         {changes.length ? <ul>{changes.map((change, index) => <li key={index}>{change}</li>)}</ul> : <p>No material changes.</p>}
         <button type="button" className="secondary-link" disabled={busy || saving} onClick={() => {
-          setDraft(previous); setRequest(previous.request); setAnswers(previous.answers); setPrevious(null); setChanges([]); setQuestions([]);
+          setDraft(previous); setRequest(previous.request); setAnswers(previous.answers); setQuestionContext(previous.questionContext); setPrevious(null); setChanges([]); setQuestions([]);
         }}>Undo last update</button>
       </details> : null}
       {draft.result.assumptions.length ? <aside className={styles.warning}><strong>Suggested assumptions—please check</strong><ul>{draft.result.assumptions.map((item, index) => <li key={index}>{item}</li>)}</ul></aside> : null}
@@ -138,13 +140,16 @@ export function AssistedTestBuilder({ scope, context, initialRequest = '', onApp
         <RuleList title="Agent should" rules={spec.required_behaviors} onChange={(rules) => editSpec({ ...spec, required_behaviors: rules })} disabled={busy || saving} />
         <RuleList title="Must not" rules={spec.forbidden_behaviors} onChange={(rules) => editSpec({ ...spec, forbidden_behaviors: rules })} disabled={busy || saving} />
       </div>
+      <p className={styles.boundary}><strong>Agent role</strong> {spec.role}</p>
       <p className={styles.boundary}><strong>Allowed assistance</strong> {spec.permissible_behavior}</p>
       {scope === 'set' ? <p className={styles.note}>Dedicated cases for {new Set(spec.scenarios.map((item) => item.behavior_id)).size} of {spec.required_behaviors.length + spec.forbidden_behaviors.length} rules. Other rules remain policy context, not dedicated test coverage.</p> : null}
       <div className={styles.cases}>{spec.scenarios.map((item, index) => <article className={styles.case} key={item.id}>
         <header><strong>{item.title}</strong><span>{item.variant}</span></header>
         {scope === 'set' ? <p><b>Focused check</b>{[...spec.required_behaviors, ...spec.forbidden_behaviors].find((rule) => rule.id === item.behavior_id)?.label || 'Not specified'}</p> : null}
+        <p><b>Caller profile</b>{item.persona || 'No additional persona instructions.'}</p>
         <p><b>Caller does</b>{item.steps?.join('\n')}</p><p><b>Expected outcome</b>{item.expected_outcome}</p>
         <details><summary>Edit this case</summary>
+          <label>Caller profile<textarea rows={2} disabled={busy || saving} value={item.persona || ''} onChange={(event) => editSpec({ ...spec, scenarios: spec.scenarios.map((entry, candidate) => candidate === index ? { ...entry, persona: event.target.value } : entry) })} /></label>
           <label>Caller instructions<textarea rows={3} disabled={busy || saving} value={item.steps?.join('\n') || ''} onChange={(event) => editSpec({ ...spec, scenarios: spec.scenarios.map((entry, candidate) => candidate === index ? { ...entry, steps: event.target.value.split('\n') } : entry) })} /></label>
           <label>Expected outcome<textarea rows={2} disabled={busy || saving} value={item.expected_outcome || ''} onChange={(event) => editSpec({ ...spec, scenarios: spec.scenarios.map((entry, candidate) => candidate === index ? { ...entry, expected_outcome: event.target.value } : entry) })} /></label>
         </details>
@@ -157,8 +162,9 @@ export function AssistedTestBuilder({ scope, context, initialRequest = '', onApp
         ['Make it harder', 'Make the caller pressure more challenging without changing the policy.'],
       ].map(([label, instruction]) => <button key={label} type="button" disabled={busy || saving}
         onClick={() => setRequest((current) => `${current}\n${instruction}`)}>{label}</button>)}</div>
-      <details><summary>Edit title, task and boundary</summary><div className={styles.details}>
+      <details><summary>Edit title, role, task and boundary</summary><div className={styles.details}>
         <label>Title<input disabled={busy || saving} value={spec.title} onChange={(event) => editSpec({ ...spec, title: event.target.value })} /></label>
+        <label>Agent role<input disabled={busy || saving} value={spec.role} onChange={(event) => editSpec({ ...spec, role: event.target.value })} /></label>
         <label>Task<textarea disabled={busy || saving} value={spec.objective} onChange={(event) => editSpec({ ...spec, objective: event.target.value })} /></label>
         <label>Allowed assistance<textarea disabled={busy || saving} value={spec.permissible_behavior || ''} onChange={(event) => editSpec({ ...spec, permissible_behavior: event.target.value })} /></label>
       </div></details>

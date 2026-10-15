@@ -125,6 +125,7 @@ test('consequential questions are clickable, block approval and carry answers in
   await page.getByRole('button', { name: 'Use answers and draft' }).click();
   await expect(page.getByRole('heading', { name: 'Latest requested time' })).toBeVisible();
   expect(state.requests[1].answers).toEqual({ permission: 'Collect requests only' });
+  expect(state.requests[1].question_context).toEqual({ permission: 'Can the agent book appointments?' });
 });
 
 test('a failed publication retries the same approved version without a duplicate save', async ({ page }) => {
@@ -151,7 +152,7 @@ test('refinement includes manual edits, blocks approval of an outdated draft, an
   let count = 0;
   await page.route('**/api/specs/assist', async (route) => {
     const payload = route.request().postDataJSON(); state.requests.push(payload);
-    const response = result(); if (++count > 1) response.spec.scenarios[0].expected_outcome = 'Confirm the corrected time after an interruption.';
+    const response = result(); if (++count > 1) { response.spec.scenarios[0].expected_outcome = 'Confirm the corrected time after an interruption.'; response.spec.role = 'Corrected support agent'; }
     await route.fulfill({ json: response });
   });
   await page.goto('/scenarios?create=1');
@@ -165,6 +166,7 @@ test('refinement includes manual edits, blocks approval of an outdated draft, an
   await expect(page.getByText(/Review changes ·/)).toBeVisible();
   expect(state.requests[1].current_spec.scenarios[0].expected_outcome).toBe('My reviewed outcome must survive.');
   await page.getByText(/Review changes ·/).click();
+  await expect(page.getByText('Changed role: Corrected support agent', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Undo last update' }).click();
   await expect(page.getByText('My reviewed outcome must survive.', { exact: true })).toBeVisible();
   expect(state.writes).toEqual([]);
@@ -280,4 +282,62 @@ test('desktop creation and draft overview are compact and accessible', async ({ 
   await page.getByRole('button', { name: 'Draft my test set' }).click();
   await expect(page.getByRole('heading', { name: 'Latest requested time' })).toBeFocused();
   if (process.env.CAE_AUTHORING_SCREENSHOTS) await page.getByRole('region', { name: 'Review proposed test' }).screenshot({ path: `${process.env.CAE_AUTHORING_SCREENSHOTS}/authoring-draft.png` });
+});
+
+test('generated caller profile is visible and editable before its approved instructions are saved', async ({ page }) => {
+  const state = await setup(page);
+  await page.route('**/api/specs/assist', (route) => {
+    const response = result(); response.spec.scenarios[0].persona = 'A caller who only accepts afternoon appointments.';
+    return route.fulfill({ json: response });
+  });
+  await page.goto('/scenarios?create=1');
+  await page.getByRole('button', { name: 'Appointment changes', exact: true }).click();
+  await page.getByRole('button', { name: 'Draft my case' }).click();
+  const review = page.getByRole('region', { name: 'Review proposed test' });
+  await expect(review.locator('p').filter({ hasText: 'Caller profile' })).toContainText('A caller who only accepts afternoon appointments.');
+  await expect(review.locator('p').filter({ hasText: 'Caller profile' })).toBeVisible();
+  await page.getByText('Edit this case', { exact: true }).click();
+  await page.getByRole('textbox', { name: 'Caller profile', exact: true }).fill('A caller who accepts either morning or afternoon.');
+  await page.getByRole('button', { name: 'Approve and create case' }).click();
+  await expect(page.getByRole('region', { name: 'Selected scenario' })).toBeVisible();
+  expect(state.created().simulated_user_prompt).toContain('A caller who accepts either morning or afternoon.');
+  expect(state.created().simulated_user_prompt).not.toContain('only accepts afternoon');
+});
+
+test('inferred agent role is visible and editable before test-set approval', async ({ page }) => {
+  await setup(page);
+  let saved: any;
+  await page.route('**/api/specs', (route) => {
+    saved = route.request().postDataJSON();
+    return route.fulfill({ json: { ...saved, id: 'new-set', version: 1, spec: { ...saved.spec, id: 'new-set', version: 1 } } });
+  });
+  await page.goto('/specs/new');
+  await page.getByRole('button', { name: 'Appointment changes', exact: true }).click();
+  await page.getByRole('button', { name: 'Draft my test set' }).click();
+  const role = page.getByRole('region', { name: 'Review proposed test' }).locator('p').filter({ hasText: 'Agent role' });
+  await expect(role).toContainText('appointment agent'); await expect(role).toBeVisible();
+  await page.getByText('Edit title, role, task and boundary', { exact: true }).click();
+  await page.getByRole('textbox', { name: 'Agent role', exact: true }).fill('Rescheduling support agent');
+  await expect(role).toContainText('Rescheduling support agent');
+  await page.getByRole('button', { name: 'Approve test set and choose agent' }).click();
+  await expect(page).toHaveURL(/\/runs\?/);
+  expect(saved.spec.role).toBe('Rescheduling support agent');
+});
+
+test('generic clarification IDs preserve the displayed question when a user answers yes', async ({ page }) => {
+  const state = await setup(page);
+  let count = 0;
+  await page.route('**/api/specs/assist', (route) => {
+    const payload = route.request().postDataJSON(); state.requests.push(payload);
+    return route.fulfill({ json: ++count === 1 ? { spec: null, assumptions: [], questions: [{ id: 'q1', question: 'May the agent only collect requests?', options: [] }] } : result() });
+  });
+  await page.goto('/scenarios?create=1');
+  await page.getByRole('button', { name: 'Appointment changes', exact: true }).click();
+  await page.getByRole('button', { name: 'Draft my case' }).click();
+  await page.getByRole('textbox', { name: 'Or answer briefly', exact: true }).fill('yes');
+  await page.getByRole('button', { name: 'Use answers and draft' }).click();
+  await expect(page.getByRole('heading', { name: 'Latest requested time' })).toBeVisible();
+  expect(state.requests[1].answers).toEqual({ q1: 'yes' });
+  expect(state.requests[1].question_context).toEqual({ q1: 'May the agent only collect requests?' });
+  expect(state.writes).toEqual([]);
 });

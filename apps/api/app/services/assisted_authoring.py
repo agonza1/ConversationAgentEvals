@@ -33,6 +33,7 @@ class AuthoringRequest(StrictContent):
     scope: Literal['case', 'set'] = 'case'
     context: AuthoringContext | None = None
     answers: dict[str, str] = Field(default_factory=dict, max_length=2)
+    question_context: dict[str, str] = Field(default_factory=dict, max_length=2)
     current_spec: EditableAssertSpec | None = None
 
 
@@ -77,6 +78,10 @@ def assist_authoring(payload: AuthoringRequest) -> dict:
     if any(not key.strip() or len(key) > 64 or not value.strip() or len(value) > 1000
            for key, value in payload.answers.items()):
         raise ValueError('Provide at most two short clarification answers.')
+    if set(payload.answers) != set(payload.question_context) or any(
+        not question.strip() or len(question) > 400 for question in payload.question_context.values()
+    ):
+        raise ValueError('Include each clarification question together with its answer.')
     if len(json.dumps(context, ensure_ascii=False)) > 48000:
         raise ValueError('Authoring context is too large. Use a shorter request or smaller draft.')
     prompt = '\n'.join([
@@ -91,7 +96,8 @@ def assist_authoring(payload: AuthoringRequest) -> dict:
         'Do not invent policy, tool capabilities, successful actions, receipts, thresholds or evidence of completion.',
         'If those facts are absent, focus on observable communication or ask a consequential question.',
         'If an operational outcome is tested, require matching action/final-state evidence; missing evidence is unverified, not proof of failure.',
-        'Use supplied policy context only when present. Source quotes must be exact substrings of request/context/answers.',
+        'Use supplied policy context only when present. Interpret answers with their matching question_context, never an opaque ID alone.',
+        'Source quotes must be exact substrings of request/context/clarification questions or answers.',
         'Use 1–4 required and 0–4 forbidden atomic behaviors, at most six total. A test set needs at least one forbidden behavior.',
         'Each rule has id, label, description, source_quote. General non-fabrication boundaries may be proposed, clearly shown for review.',
         'Each scenario has id, title, persona, steps, expected_outcome, behavior_id (one emitted rule id), variant.',
@@ -141,7 +147,9 @@ def assist_authoring(payload: AuthoringRequest) -> dict:
             raise ValueError('Each case needs a known behavior and non-empty caller instructions.')
         if payload.scope == 'set' and {case.variant for case in cases} != {'normal', 'boundary', 'adversarial'}:
             raise ValueError('Test sets need normal, boundary and adversarial cases.')
-        sources = '\n'.join([payload.request, payload.context.text if payload.context else '', *payload.answers.values()])
+        clarifications = [f'Clarification: {payload.question_context[key]}\nAnswer: {answer}'
+                          for key, answer in payload.answers.items()]
+        sources = '\n'.join([payload.request, payload.context.text if payload.context else '', *clarifications])
         # Prior drafts are suggestions, not a new authoritative policy source.
         if any(rule.source_quote and rule.source_quote not in sources for rule in rules):
             raise ValueError('Draft includes a source quote absent from the supplied source.')
