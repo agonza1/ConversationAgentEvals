@@ -16,4 +16,6 @@ Only **Approve and create case** persists a quick case. It retains caller instru
 
 The manual editors remain available through **Use detailed editor**; existing saved spec links open the detailed editor, and `editor=manual` explicitly selects it. Advanced ASSERT presets, YAML, programmatic checks and publication controls remain available. Starting a fresh quick case resets previous context. Existing legacy quick cases without the new optional evidence/context fields keep their prior contract.
 
+For assisted quick cases, the detailed editor separates caller background from explicit caller steps. Background edits do not discard the reviewed opening; users can edit the first spoken line and follow-ups directly. Variations include the full retained caller profile and step list. Sources larger than 16,000 Unicode characters require explicit acceptance of a visibly marked excerpt, which can be edited; the original remains readable. The excerpt marker is retained in source requirements. No oversized policy is silently shortened and submitted as complete policy.
+
 All regression fixtures use synthetic data and mocked generation. This change does not deploy/restart local services or include Waylo PR #163. Policy-file ingestion, a Results-to-regression shortcut and importing external agent instructions are follow-up work, not hidden background retrieval.

@@ -3,6 +3,16 @@ import { getApiBase } from './api';
 
 export type AuthoringScope = 'case' | 'set';
 export interface AuthoringContext { label: string; text: string }
+export const AUTHORING_CONTEXT_LIMIT = 16000;
+
+export function prepareAuthoringContext(source?: AuthoringContext): { context?: AuthoringContext; omitted: number } {
+  if (!source) return { omitted: 0 };
+  const characters = Array.from(source.text);
+  const omitted = Math.max(0, characters.length - AUTHORING_CONTEXT_LIMIT);
+  const label = Array.from(source.label).slice(0, omitted ? 170 : 200).join('');
+  return { context: { label: omitted ? `${label} (source excerpt)` : label,
+    text: characters.slice(0, AUTHORING_CONTEXT_LIMIT).join('') }, omitted };
+}
 export interface AuthoringDraft {
   spec: EditableAssertSpec | null;
   questions: { id: string; question: string; options: string[] }[];

@@ -97,6 +97,7 @@ def assist_authoring(payload: AuthoringRequest) -> dict:
         'If those facts are absent, focus on observable communication or ask a consequential question.',
         'If an operational outcome is tested, require matching action/final-state evidence; missing evidence is unverified, not proof of failure.',
         'Use supplied policy context only when present. Interpret answers with their matching question_context, never an opaque ID alone.',
+        'A context labelled source excerpt is incomplete: omitted policy is unknown, not permission. Ask if a missing boundary matters.',
         'Source quotes must be exact substrings of request/context/clarification questions or answers.',
         'Use 1–4 required and 0–4 forbidden atomic behaviors, at most six total. A test set needs at least one forbidden behavior.',
         'Each rule has id, label, description, source_quote. General non-fabrication boundaries may be proposed, clearly shown for review.',
@@ -149,7 +150,8 @@ def assist_authoring(payload: AuthoringRequest) -> dict:
             raise ValueError('Test sets need normal, boundary and adversarial cases.')
         clarifications = [f'Clarification: {payload.question_context[key]}\nAnswer: {answer}'
                           for key, answer in payload.answers.items()]
-        sources = '\n'.join([payload.request, payload.context.text if payload.context else '', *clarifications])
+        source_context = f'Source context ({payload.context.label}):\n{payload.context.text}' if payload.context else ''
+        sources = '\n'.join([payload.request, source_context, *clarifications])
         # Prior drafts are suggestions, not a new authoritative policy source.
         if any(rule.source_quote and rule.source_quote not in sources for rule in rules):
             raise ValueError('Draft includes a source quote absent from the supplied source.')

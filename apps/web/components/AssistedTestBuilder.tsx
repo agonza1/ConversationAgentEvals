@@ -1,9 +1,9 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ApiAwareLink } from './ApiAwareLink';
 import type { EditableAssertSpec } from '@/lib/types';
-import { authoringChanges, requestAuthoringDraft, type AuthoringContext, type AuthoringDraft, type AuthoringScope } from '@/lib/assistedAuthoring';
+import { AUTHORING_CONTEXT_LIMIT, authoringChanges, prepareAuthoringContext, requestAuthoringDraft, type AuthoringContext, type AuthoringDraft, type AuthoringScope } from '@/lib/assistedAuthoring';
 import styles from './AssistedTestBuilder.module.css';
 
 const starters = [
@@ -12,7 +12,7 @@ const starters = [
   ['Account access', 'Test a caller who cannot access their account. Check the agent gives a useful next step without asking for passwords or inventing an identity-verification policy.'],
 ] as const;
 
-type DraftState = { result: AuthoringDraft; request: string; answers: Record<string, string>; questionContext: Record<string, string> };
+type DraftState = { result: AuthoringDraft; request: string; answers: Record<string, string>; questionContext: Record<string, string>; context?: AuthoringContext };
 
 export function AssistedTestBuilder({ scope, context, initialRequest = '', onApprove, onManual, onCancel }: {
   scope: AuthoringScope;
@@ -25,6 +25,9 @@ export function AssistedTestBuilder({ scope, context, initialRequest = '', onApp
   const [request, setRequest] = useState(initialRequest);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [questionContext, setQuestionContext] = useState<Record<string, string>>({});
+  const preparedContext = useMemo(() => prepareAuthoringContext(context), [context]);
+  const [sourceContext, setSourceContext] = useState(preparedContext.context);
+  const [contextApproved, setContextApproved] = useState(preparedContext.omitted === 0);
   const [draft, setDraft] = useState<DraftState | null>(null);
   const [previous, setPrevious] = useState<DraftState | null>(null);
   const [questions, setQuestions] = useState<AuthoringDraft['questions']>([]);
@@ -37,7 +40,8 @@ export function AssistedTestBuilder({ scope, context, initialRequest = '', onApp
   const accepting = useRef(false);
   const resultRef = useRef<HTMLHeadingElement>(null);
   const spec = draft?.result.spec;
-  const outdated = Boolean(draft && (draft.request !== request || JSON.stringify(draft.answers) !== JSON.stringify(answers)));
+  const outdated = Boolean(draft && (draft.request !== request || JSON.stringify(draft.answers) !== JSON.stringify(answers)
+    || JSON.stringify(draft.context) !== JSON.stringify(sourceContext)));
   const validDraft = Boolean(spec && spec.title.trim().length >= 3 && spec.role.trim().length >= 3 && spec.objective.trim().length >= 10 && spec.permissible_behavior?.trim()
     && spec.required_behaviors.length && [...spec.required_behaviors, ...spec.forbidden_behaviors].every((rule) => rule.label.trim())
     && spec.scenarios.length && spec.scenarios.every((item) => item.steps?.[0]?.trim() && item.expected_outcome?.trim()));
@@ -50,13 +54,13 @@ export function AssistedTestBuilder({ scope, context, initialRequest = '', onApp
   }
 
   async function generate() {
-    if (active.current || saving || request.trim().length < 10) return;
+    if (active.current || saving || !contextApproved || request.trim().length < 10) return;
     const id = ++serial.current;
     const controller = new AbortController();
     active.current = { id, controller };
     setBusy(true); setError(null);
     try {
-      const result = await requestAuthoringDraft({ request: request.trim(), scope, context, answers, question_context: questionContext, current_spec: spec || undefined }, controller.signal);
+      const result = await requestAuthoringDraft({ request: request.trim(), scope, context: sourceContext, answers, question_context: questionContext, current_spec: spec || undefined }, controller.signal);
       if (active.current?.id !== id) return;
       if (result.questions.length) {
         setQuestions(result.questions);
@@ -64,7 +68,7 @@ export function AssistedTestBuilder({ scope, context, initialRequest = '', onApp
       } else {
         setPrevious(draft);
         setChanges(spec && result.spec ? authoringChanges(spec, result.spec) : []);
-        setDraft({ result, request, answers: { ...answers }, questionContext: { ...questionContext } }); setQuestions([]);
+        setDraft({ result, request, answers: { ...answers }, questionContext: { ...questionContext }, context: sourceContext }); setQuestions([]);
       }
       window.requestAnimationFrame(() => resultRef.current?.focus());
     } catch (err) {
@@ -79,7 +83,7 @@ export function AssistedTestBuilder({ scope, context, initialRequest = '', onApp
   }
 
   async function approve() {
-    if (!spec || !validDraft || busy || outdated || questions.length || accepting.current) return;
+    if (!spec || !validDraft || !contextApproved || busy || outdated || questions.length || accepting.current) return;
     accepting.current = true; setSaving(true); setError(null);
     try { await onApprove(spec); }
     catch (err) { setError(err instanceof Error ? err.message : 'Could not save. Your draft is still here.'); }
@@ -93,8 +97,18 @@ export function AssistedTestBuilder({ scope, context, initialRequest = '', onApp
         <h2>What should your agent get right?</h2>
         <p>Describe it once. We’ll suggest the caller, checks and expected outcome for you to review.</p></div>
     </div>
-    {context ? <details className={styles.context}><summary>Using context: {context.label}</summary><p>{context.text}</p></details>
+    {context ? <details className={styles.context}><summary>Using context: {context.label}</summary><p>{sourceContext?.text}</p>
+      <details><summary>Edit attached context</summary><label>Source context (maximum 16000 characters)
+        <textarea rows={5} maxLength={AUTHORING_CONTEXT_LIMIT} value={sourceContext?.text || ''} disabled={busy || saving}
+          onChange={(event) => setSourceContext((current) => current ? { ...current, text: event.target.value } : current)} /></label></details>
+      {preparedContext.omitted ? <details><summary>View original full context</summary><p>{context.text}</p></details> : null}
+    </details>
       : <p className={styles.note}>No policy attached. Missing business rules won’t be treated as known facts.</p>}
+    {preparedContext.omitted ? <aside className={styles.warning} aria-label="Source excerpt notice">
+      <strong>This source is larger than one draft request.</strong>
+      <p>Only an excerpt of up to 16,000 characters is attached. The automatic excerpt omitted {preparedContext.omitted.toLocaleString()} characters. Review or edit the attached context before using it. Omitted policy is not known policy.</p>
+      {!contextApproved ? <button className="secondary-link" type="button" onClick={() => setContextApproved(true)}>Use this source excerpt</button> : <p>Using a reviewed source excerpt—not the full policy.</p>}
+    </aside> : null}
     <label className={styles.composer}>What would you like to test?
       <textarea rows={3} maxLength={8000} value={request} disabled={busy || saving}
         onChange={(event) => { setRequest(event.target.value); setAnswers({}); setQuestionContext({}); setQuestions([]); }}
@@ -116,7 +130,7 @@ export function AssistedTestBuilder({ scope, context, initialRequest = '', onApp
     </section> : null}
     <div className={styles.actions}>
       <button className="primary-link" type="button" onClick={() => void generate()}
-        disabled={busy || saving || request.trim().length < 10 || questions.some((question) => !answers[question.id]?.trim())}>
+        disabled={busy || saving || !contextApproved || (Boolean(context) && !sourceContext?.text.trim()) || request.trim().length < 10 || questions.some((question) => !answers[question.id]?.trim())}>
         {busy ? 'Drafting…' : questions.length ? 'Use answers and draft' : draft ? 'Update draft' : scope === 'case' ? 'Draft my case' : 'Draft my test set'}
       </button>
       {busy ? <button className="secondary-link" type="button" onClick={cancelGeneration}>Cancel drafting</button> : null}
@@ -132,7 +146,7 @@ export function AssistedTestBuilder({ scope, context, initialRequest = '', onApp
       {previous ? <details className={styles.changes}><summary>Review changes · {changes.length}</summary>
         {changes.length ? <ul>{changes.map((change, index) => <li key={index}>{change}</li>)}</ul> : <p>No material changes.</p>}
         <button type="button" className="secondary-link" disabled={busy || saving} onClick={() => {
-          setDraft(previous); setRequest(previous.request); setAnswers(previous.answers); setQuestionContext(previous.questionContext); setPrevious(null); setChanges([]); setQuestions([]);
+          setDraft(previous); setRequest(previous.request); setAnswers(previous.answers); setQuestionContext(previous.questionContext); setSourceContext(previous.context); setContextApproved(true); setPrevious(null); setChanges([]); setQuestions([]);
         }}>Undo last update</button>
       </details> : null}
       {draft.result.assumptions.length ? <aside className={styles.warning}><strong>Suggested assumptions—please check</strong><ul>{draft.result.assumptions.map((item, index) => <li key={index}>{item}</li>)}</ul></aside> : null}
@@ -169,7 +183,7 @@ export function AssistedTestBuilder({ scope, context, initialRequest = '', onApp
         <label>Allowed assistance<textarea disabled={busy || saving} value={spec.permissible_behavior || ''} onChange={(event) => editSpec({ ...spec, permissible_behavior: event.target.value })} /></label>
       </div></details>
       <footer className={styles.footer}><p>Approval saves this reviewed {scope === 'case' ? 'case' : 'version and publishes its cases'}. It does not start a call.</p>
-        <button type="button" className="primary-link" disabled={busy || saving || outdated || Boolean(questions.length) || !validDraft}
+        <button type="button" className="primary-link" disabled={busy || saving || !contextApproved || outdated || Boolean(questions.length) || !validDraft}
           onClick={() => void approve()}>{saving ? 'Saving reviewed test…' : scope === 'case' ? 'Approve and create case' : 'Approve test set and choose agent'}</button>
       </footer>
       <small className={styles.note}>Drafted with {draft.result.model}. Suggestions are not verified policy. No model calls happen while you type.</small>

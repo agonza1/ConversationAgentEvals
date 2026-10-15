@@ -323,7 +323,9 @@ export function ScenariosPage() {
     try {
       const created = await createScenario({
         title: title.trim() || undefined,
-        simulated_user_prompt: simulatedUserPrompt.trim(),
+        simulated_user_prompt: manualContext?.caller_steps
+          ? [simulatedUserPrompt.trim(), ...manualContext.caller_steps].filter(Boolean).join('\n')
+          : simulatedUserPrompt.trim(),
         expected_output: expectedOutput.trim(),
         description: description.trim(),
         required_actions: stringList(requiredActions),
@@ -363,7 +365,7 @@ export function ScenariosPage() {
   function editAssistedCase(spec?: EditableAssertSpec) {
     if (spec) {
       const next = quickCaseFromDraft(spec);
-      setTitle(next.title); setSimulatedUserPrompt(next.simulated_user_prompt);
+      setTitle(next.title); setSimulatedUserPrompt(spec.scenarios[0].persona || '');
       setExpectedOutput(next.expected_output); setDescription(next.description);
       setRequiredActions(next.required_actions.join('\n')); setForbiddenActions(next.forbidden_actions.join('\n'));
       setMirrorPrompt(false);
@@ -475,7 +477,12 @@ export function ScenariosPage() {
                 <p>{manualContext.permissible_behavior}</p><p>Required evidence: {manualContext.evidence_requirements.join(', ')}</p><p>{manualContext.requirements}</p>
               </details> : null}
               <label htmlFor="scenario-title"><span>Title (optional)</span><input id="scenario-title" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Account lockout handoff" /></label>
-              <label htmlFor="scenario-prompt"><span>User prompt / persona</span><textarea id="scenario-prompt" required rows={6} value={simulatedUserPrompt} onChange={(event) => { setSimulatedUserPrompt(event.target.value); setManualContext((current) => current ? { ...current, caller_steps: undefined } : null); }} placeholder="Describe the user’s situation and request…" /></label>
+              <label htmlFor="scenario-prompt"><span>{manualContext?.caller_steps ? 'Caller profile / background' : 'User prompt / persona'}</span><textarea id="scenario-prompt" required={!manualContext?.caller_steps} rows={3} value={simulatedUserPrompt} onChange={(event) => setSimulatedUserPrompt(event.target.value)} placeholder="Describe the user’s situation and request…" /></label>
+              {manualContext?.caller_steps ? <label htmlFor="scenario-caller-steps"><span>Caller instructions (first line is spoken)</span>
+                <textarea id="scenario-caller-steps" aria-label="Caller instructions (first line is spoken)" aria-describedby="scenario-caller-help" required rows={4} value={manualContext.caller_steps.join('\n')}
+                  onChange={(event) => setManualContext((current) => current ? { ...current, caller_steps: event.target.value.split('\n') } : null)} />
+                <small id="scenario-caller-help">The first line is the actual opening. Background edits do not replace these instructions.</small>
+              </label> : null}
               <label htmlFor="scenario-expected"><span>Expected outcome</span><textarea id="scenario-expected" required rows={5} value={expectedOutput} onChange={(event) => setExpectedOutput(event.target.value)} placeholder="What the agent should do or say…" /></label>
               <label htmlFor="scenario-required"><span>Required behaviors (one per line)</span><textarea id="scenario-required" required rows={4} value={requiredActions} onChange={(event) => setRequiredActions(event.target.value)} placeholder="Offer housing options within the caller’s budget" /></label>
               <label htmlFor="scenario-forbidden"><span>Forbidden behaviors (one per line, optional)</span><textarea id="scenario-forbidden" rows={4} value={forbiddenActions} onChange={(event) => setForbiddenActions(event.target.value)} placeholder="Execute a house sale\nHandle payments" /></label>
@@ -500,12 +507,14 @@ export function ScenariosPage() {
                   <button type="button" className="secondary-link" onClick={() => {
                     beginQuickCase();
                     setVariation({ label: selected.scenario.title, text: [
-                      `Caller: ${selected.scenario.simulated_user_prompt || selected.scenario.user_persona}`,
+                      `Caller profile: ${selected.scenario.user_persona}`,
+                      `Opening: ${selected.scenario.caller_steps[0] || selected.scenario.simulated_user_prompt}`,
+                      `Complete caller instructions:\n${selected.scenario.caller_steps.join('\n')}`,
                       `Expected outcome: ${selected.scenario.expected_output}`,
                       `Required: ${selected.scenario.required_actions.join('; ')}`,
                       `Forbidden: ${selected.scenario.forbidden_actions.join('; ')}`,
-                      `Policy context: ${selected.scenario.policy_context || selected.scenario.requirements}`,
                       `Allowed assistance: ${selected.scenario.permissible_behavior}`,
+                      `Policy context: ${selected.scenario.policy_context || selected.scenario.requirements}`,
                     ].join('\n') }); setManualCreate(false); setMode('create'); setError(null);
                   }}>Make a variation</button>
                   <Link className="primary-link" href={scenarioHref('/runs', selected.scenario)}>Test an agent</Link>

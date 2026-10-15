@@ -197,7 +197,8 @@ test('failed generation preserves the draft and manual fallback needs no generat
   await expect(page.getByRole('region', { name: 'Assisted test builder' }).getByRole('alert')).toContainText('No generation connection.');
   await expect(page.getByRole('heading', { name: 'Latest requested time' })).toBeVisible();
   await page.getByRole('button', { name: 'Use detailed editor' }).click();
-  await expect(page.getByRole('textbox', { name: 'User prompt / persona', exact: true })).toHaveValue(/Please use 3 PM/);
+  await expect(page.getByRole('textbox', { name: 'Caller profile / background', exact: true })).toHaveValue('A caller');
+  await expect(page.getByRole('textbox', { name: 'Caller instructions (first line is spoken)', exact: true })).toHaveValue(/Please use 3 PM/);
   await expect(page.getByRole('textbox', { name: 'Expected outcome', exact: true })).toHaveValue('Confirm 3 PM without claiming a booking.');
   await page.getByRole('button', { name: 'Create scenario', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Selected scenario' })).toBeVisible();
@@ -350,4 +351,58 @@ test('an unavailable saved-design link shows the detailed-editor error, not a fr
   await expect(page.getByRole('heading', { name: '1 · Define test' })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Assisted test builder' })).toHaveCount(0);
   expect(state.writes).toEqual([]);
+});
+
+test('detailed edits retain a reviewed spoken opening separately from caller background', async ({ page }) => {
+  const state = await setup(page);
+  await page.goto('/scenarios?create=1');
+  await page.getByRole('button', { name: 'Appointment changes', exact: true }).click();
+  await page.getByRole('button', { name: 'Draft my case' }).click();
+  await page.getByRole('button', { name: 'Use detailed editor' }).click();
+  await page.getByRole('textbox', { name: 'Caller profile / background', exact: true }).fill('A caller who prefers concise replies.');
+  const steps = page.getByRole('textbox', { name: 'Caller instructions (first line is spoken)', exact: true });
+  await expect(steps).toHaveValue('Please use 3 PM, not the earlier time.\nIf asked, confirm afternoon.');
+  await steps.fill('Use 4 PM instead of 3 PM.\nIf asked, confirm afternoon.');
+  await page.getByRole('button', { name: 'Create scenario', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Selected scenario' })).toBeVisible();
+  expect(state.created().caller_steps).toEqual(['Use 4 PM instead of 3 PM.', 'If asked, confirm afternoon.']);
+  expect(state.created().simulated_user_prompt).toContain('A caller who prefers concise replies.');
+});
+
+test('variation context includes every published caller follow-up, not just its opening', async ({ page }) => {
+  const state = await setup(page);
+  await page.route('**/api/benchmarks/suites', (route) => route.fulfill({ json: [{ id: 'published', title: 'Published tests', scenarios: [{
+    id: 'multi-step', title: 'Repeated correction', simulated_user_prompt: 'Use 3 PM.', caller_steps: ['Use 3 PM.', 'If the agent asks, correct this to 4 PM.', 'If the agent resists, explain the calendar conflict.'],
+    required_actions: ['Confirm final time'], forbidden_actions: [], expected_output: 'Confirm the latest request.',
+  }] }] }));
+  await page.goto('/scenarios');
+  await page.getByRole('button', { name: 'Make a variation', exact: true }).click();
+  await page.getByRole('button', { name: 'Draft my case' }).click();
+  await expect(page.getByRole('heading', { name: 'Latest requested time' })).toBeVisible();
+  expect(state.requests[0].context.text).toContain('If the agent asks, correct this to 4 PM.');
+  expect(state.requests[0].context.text).toContain('If the agent resists, explain the calendar conflict.');
+});
+
+test('oversized source uses a visible editable excerpt only after explicit confirmation', async ({ page }) => {
+  const state = await setup(page);
+  await page.route('**/api/benchmarks/suites', (route) => route.fulfill({ json: [{ id: 'large', title: 'Large policy', scenarios: [{
+    id: 'long-policy', title: 'Long policy case', simulated_user_prompt: 'Use 3 PM.', caller_steps: ['Use 3 PM.', 'Correct to 4 PM if asked.'],
+    required_actions: ['Confirm the request'], forbidden_actions: ['Invent completion'], expected_output: 'Confirm the latest request.', requirements: 'policy '.repeat(4200),
+  }] }] }));
+  await page.goto('/scenarios');
+  await page.getByRole('button', { name: 'Make a variation', exact: true }).click();
+  await expect(page.getByRole('complementary', { name: 'Source excerpt notice' })).toContainText('automatic excerpt omitted');
+  await expect(page.getByRole('button', { name: 'Draft my case' })).toBeDisabled();
+  expect(state.requests).toHaveLength(0);
+  await page.getByText('Using context: Long policy case', { exact: true }).click();
+  await page.getByText('Edit attached context', { exact: true }).click();
+  await page.getByRole('textbox', { name: 'Source context (maximum 16000 characters)', exact: true }).fill('Caller: Use 3 PM.\nFollow-up: Correct to 4 PM.\nPolicy: No unverified booking claims.');
+  await page.getByRole('button', { name: 'Use this source excerpt', exact: true }).click();
+  await page.getByRole('button', { name: 'Draft my case' }).click();
+  await expect(page.getByRole('heading', { name: 'Latest requested time' })).toBeVisible();
+  expect(Array.from(state.requests[0].context.text).length).toBeLessThanOrEqual(16000);
+  expect(state.requests[0].context.text).toBe('Caller: Use 3 PM.\nFollow-up: Correct to 4 PM.\nPolicy: No unverified booking claims.');
+  expect(state.requests[0].context.label).toContain('source excerpt');
+  expect(state.requests[0].context.text).toContain('Correct to 4 PM');
+  expect(state.writes).toEqual(['/api/specs/assist']);
 });

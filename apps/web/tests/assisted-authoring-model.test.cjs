@@ -9,7 +9,7 @@ const compiled = ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compile
 const loaded = new Module(filename, module);
 loaded.require = (name) => name === './api' ? { getApiBase: () => 'http://synthetic.invalid' } : require(name);
 loaded._compile(compiled, filename);
-const { quickCaseFromDraft, approvedAuthoringSpec, authoringChanges, requestAuthoringDraft } = loaded.exports;
+const { quickCaseFromDraft, approvedAuthoringSpec, authoringChanges, requestAuthoringDraft, prepareAuthoringContext, AUTHORING_CONTEXT_LIMIT } = loaded.exports;
 function draft() { return { title: 'Corrections', objective: 'Follow the latest caller request.', permissible_behavior: 'Collect requests only.',
   generated_content_status: 'draft', required_behaviors: [{ id: 'latest', label: 'Use latest', description: 'Use the corrected time.', draft: true }],
   forbidden_behaviors: [{ id: 'claim', label: 'No claim', description: 'Do not invent completion.', draft: true }],
@@ -52,4 +52,14 @@ test('explicit draft request uses the selected API and abort signal, never saves
     assert.equal(calls.length, 1); assert.equal(calls[0].url, 'http://synthetic.invalid/api/specs/assist');
     assert.equal(calls[0].options.signal, controller.signal);
   } finally { global.fetch = old; }
+});
+
+test('source excerpts are bounded by Unicode characters and explicitly labelled, without mutating the source', () => {
+  const source = { label: 'A very long policy title '.repeat(20), text: '😀'.repeat(AUTHORING_CONTEXT_LIMIT + 12) };
+  const prepared = prepareAuthoringContext(source);
+  assert.equal(Array.from(prepared.context.text).length, AUTHORING_CONTEXT_LIMIT);
+  assert.equal(prepared.omitted, 12); assert.ok(prepared.context.label.includes('source excerpt'));
+  assert.ok(prepared.context.label.length <= 200);
+  assert.equal(Array.from(source.text).length, AUTHORING_CONTEXT_LIMIT + 12);
+  assert.deepEqual(prepareAuthoringContext(), { omitted: 0 });
 });

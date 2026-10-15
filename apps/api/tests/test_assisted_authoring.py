@@ -152,6 +152,13 @@ def test_opaque_answer_without_its_question_never_invokes_generation(monkeypatch
     assert response.status_code == 422 and not calls
 
 
+def test_source_excerpt_marker_is_retained_for_later_evaluation(monkeypatch):
+    response, calls = generate(monkeypatch, context={'label': 'Large policy (source excerpt)', 'text': 'Only the selected policy excerpt is available.'})
+    assert response.status_code == 200
+    assert 'Source context (Large policy (source excerpt)):' in response.json()['spec']['requirements']
+    assert 'omitted policy is unknown' in calls[0]
+
+
 def test_overlapping_cancel_retry_is_not_queued_or_sent_to_provider(monkeypatch):
     calls = []
     monkeypatch.setattr(authoring, '_complete_generation', lambda _: calls.append(True))
