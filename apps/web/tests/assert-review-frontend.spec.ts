@@ -51,7 +51,8 @@ test('real persisted review renders native nodes/typed ordinals/history after re
     await nodes.first().focus(); await page.keyboard.press('Enter');
     await expect(panel.getByText('Confidence: high', { exact: true })).toBeVisible();
     await expect(panel.getByText('Judge turn 1, Judge turn 3 — unresolved reference', { exact: true })).toBeVisible();
-    await expect(panel.getByText('Completion is unsupported <script>alert(1)</script>.')).toBeVisible();
+    await expect(panel.getByLabel('Behavior breakdown').getByText('Completion is unsupported <script>alert(1)</script>.', { exact: true })).toBeVisible();
+    await expect(panel.getByLabel('What needs attention').getByText('Completion is unsupported <script>alert(1)</script>.', { exact: true })).toBeVisible();
     await expect(panel.locator('a[href*="turn"]')).toHaveCount(0);
     await expect(panel).not.toContainText('/Users/private');
     await expect(panel).not.toContainText('NEVER-EXPOSE');
