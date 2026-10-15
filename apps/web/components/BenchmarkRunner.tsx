@@ -4763,6 +4763,7 @@ export function BenchmarkRunner({
               >
                 <strong>Single scenario</strong>
                 <span>{selectedScenario?.title || 'Selected scenario'}</span>
+                {executionScope === 'selected' ? <span className="run-scope-indicator" aria-hidden="true">✓</span> : null}
               </button>
               <button
                 type="button"
@@ -4774,6 +4775,7 @@ export function BenchmarkRunner({
               >
                 <strong>Entire suite</strong>
                 <span>{selectedSuite?.scenarios.length || 0} {queuedVoiceTarget ? 'voice cases' : 'scenarios'}</span>
+                {executionScope === 'suite' ? <span className="run-scope-indicator" aria-hidden="true">✓</span> : null}
               </button>
             </div>
             {wayloSuiteBudgetError ? <p role="status" aria-label="Waylo suite access limit">{wayloSuiteBudgetError}</p> : null}
@@ -4819,20 +4821,6 @@ export function BenchmarkRunner({
           <div className="run-config-step">
             <div className="run-config-step-heading">
               <span>1</span>
-              <div><strong>Tester</strong><small>Scenario driver</small></div>
-            </div>
-            <div className="run-tester-summary" aria-label="Execution tester">
-              <span>Tester type</span>
-              <strong>Scenario user (AI)</strong>
-            </div>
-            <p>
-              Acts as the user defined by the selected scenario and adapts to the target&apos;s responses.
-              The target, not the tester, is evaluated.
-            </p>
-          </div>
-          <div className="run-config-step">
-            <div className="run-config-step-heading">
-              <span>2</span>
               <div><strong>Agent target</strong><small>System under test</small></div>
             </div>
             <label>
@@ -4897,11 +4885,25 @@ export function BenchmarkRunner({
           </div>
           <div className="run-config-step">
             <div className="run-config-step-heading">
+              <span>2</span>
+              <div><strong>Tester</strong><small>Scenario driver</small></div>
+            </div>
+            <div className="run-tester-summary" aria-label="Execution tester">
+              <span>Tester type</span>
+              <strong>Scenario user (AI)</strong>
+            </div>
+            <p>
+              Acts as the user defined by the selected scenario and adapts to the target&apos;s responses.
+              The target, not the tester, is evaluated.
+            </p>
+          </div>
+          <div className="run-config-step">
+            <div className="run-config-step-heading">
               <span>3</span>
-              <div><strong>Execution</strong><small>{executionExecutorId === 'pipecat_public_daily' ? 'Direct Daily WebRTC' : executionExecutorId === 'signalwire_public_webrtc' ? 'Direct SignalWire WebRTC' : 'Local runner'}</small></div>
+              <div><strong>Execution</strong><small>Limits and audio</small></div>
             </div>
             <div className="run-execution-fields" aria-label="Execution runner">
-              <div><span>Executor</span><strong>{executionExecutorId.replaceAll('_', ' ')}</strong></div>
+              <div><span>Mode</span><strong>{selectedScoreAgent?.channel === 'voice' ? 'Voice conversation' : 'Text conversation'}</strong></div>
               <label>
                 <span>Iterations</span>
                 <input
@@ -4984,7 +4986,7 @@ export function BenchmarkRunner({
               ) : null}
             </div>
             <p>
-              Queues the run and writes the ASSERT inference set locally.
+              Each conversation saves its evidence for evaluation.
               {selectedScoreAgent?.target === 'openai_codex'
               || selectedScoreAgent?.target === 'builtin_sample_voice'
               || selectedScoreAgent?.target === 'pipecat_public_demo'
@@ -5101,6 +5103,7 @@ export function BenchmarkRunner({
                 : ''}
               {' · results appear below'}
             </span>
+            {needsWayloConnection ? <small>Connect Waylo above to enable this run.</small> : null}
           </div>
           <button
             type="button"
@@ -5129,8 +5132,19 @@ export function BenchmarkRunner({
               || isExternalVoiceTargetId(selectedScoreAgent.target)
               || (selectedScoreAgent.target === 'builtin_sample_voice' && !referenceVoicePreflight?.ready)
             }
+            aria-busy={isLaunchingExecution || Boolean(executionRun && isActiveExecutionStatus(executionRun.status))}
             onClick={() => void onLaunchExecution()}
           >
+            <svg
+              className={isLaunchingExecution || (executionRun && isActiveExecutionStatus(executionRun.status)) ? 'run-button-icon is-busy' : 'run-button-icon'}
+              aria-hidden="true"
+              viewBox="0 0 20 20"
+              fill="none"
+            >
+              {isLaunchingExecution || (executionRun && isActiveExecutionStatus(executionRun.status))
+                ? <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="2" strokeDasharray="32 12" />
+                : <path d="m7 4 9 6-9 6V4Z" fill="currentColor" />}
+            </svg>
             {isLaunchingExecution
               ? 'Starting evaluation...'
               : executionRun && isActiveExecutionStatus(executionRun.status)
@@ -5141,17 +5155,19 @@ export function BenchmarkRunner({
           </button>
         </div>
 
-        {temporaryWayloTarget ? <p role="status" aria-label="Waylo run access limit" style={{ margin: 0, color: wayloQueueBudgetError ? 'var(--error-text)' : 'var(--muted)', fontSize: 13 }}>
-          {wayloQueueBudgetError || 'Temporary access is limited to 15 minutes. Each conversation reserves its session timeout plus 2 minutes for evidence capture; the server checks the remaining access again before queueing.'}
-        </p> : null}
+        {temporaryWayloTarget || queuedVoiceTarget ? <div className="run-launch-notes">
+          {temporaryWayloTarget ? <p role="status" aria-label="Waylo run access limit" style={{ color: wayloQueueBudgetError ? 'var(--error-text)' : undefined }}>
+            {wayloQueueBudgetError || 'Temporary access is limited to 15 minutes. Each conversation reserves its session timeout plus 2 minutes for evidence capture; the server checks the remaining access again before queueing.'}
+          </p> : null}
 
-        {queuedVoiceTarget ? (
-          <p role="status" aria-label="Voice queue bounds" style={{ margin: 0, color: voiceQueueLimitError ? 'var(--error-text)' : 'var(--muted)', fontSize: 13 }}>
-            {voiceQueueLimitError || `One call at a time · a fresh session for each case · ${executionDuplexTimeoutSeconds}s call-time cap each · up to ${Math.ceil(executionConversationCount * executionDuplexTimeoutSeconds / 60)} min of call time. Limit: ${MAX_VOICE_CASES} cases / ${MAX_VOICE_CONVERSATIONS} conversations per run.`}
-          </p>
-        ) : null}
+          {queuedVoiceTarget ? (
+            <p role="status" aria-label="Voice queue bounds" style={{ color: voiceQueueLimitError ? 'var(--error-text)' : undefined }}>
+              {voiceQueueLimitError || `One call at a time · a fresh session for each case · ${executionDuplexTimeoutSeconds}s call-time cap each · up to ${Math.ceil(executionConversationCount * executionDuplexTimeoutSeconds / 60)} min of call time. Limit: ${MAX_VOICE_CASES} cases / ${MAX_VOICE_CONVERSATIONS} conversations per run.`}
+            </p>
+          ) : null}
+        </div> : null}
 
-        {executionMessage ? <p style={{ margin: 0, color: 'var(--muted)' }}>{executionMessage}</p> : null}
+        {executionMessage ? <p className="run-launch-message" role="status">{executionMessage}</p> : null}
 
         {executionRun ? (
           <div style={{ display: 'grid', gap: 12 }}>
