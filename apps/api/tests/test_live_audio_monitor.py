@@ -95,6 +95,20 @@ def test_silent_pcm_keeps_timeline_without_false_content_markers():
     asyncio.run(exercise())
 
 
+def test_audible_ambience_is_recorded_without_marking_unspoken_turns_as_heard():
+    async def exercise():
+        monitor = LiveAudioMonitor(conversation_id='conv')
+        monitor.add('tester_to_target', b'\x00\x08' * 480, sample_rate=24000, media_activity=False)
+        assert monitor.keys == set()
+        monitor.add('tester_to_target', b'\x00\x10' * 480, sample_rate=24000, turn_pair=2)
+        assert monitor.keys == {'conv:2:tester_to_target'}
+        wav, _ = await monitor.finish()
+        assert wav
+        with wave.open(io.BytesIO(wav)) as reader:
+            assert any(reader.readframes(reader.getnframes()))
+    asyncio.run(exercise())
+
+
 def test_bad_mixer_does_not_escape_or_claim_success_and_notifies_once():
     async def exercise():
         failures = []

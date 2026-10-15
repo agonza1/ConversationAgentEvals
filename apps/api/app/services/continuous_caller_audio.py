@@ -29,6 +29,7 @@ class ContinuousCallerAudio:
         self.error = None
         self.accepted_samples = self.late_frames = 0
         self.started_ms = self.ended_ms = None
+        self.speech_activity = False
 
     def start(self):
         if self.task is not None:
@@ -64,6 +65,7 @@ class ContinuousCallerAudio:
                     self.accepted_samples += frame_bytes // 2
                     self.started_ms = started if self.started_ms is None else self.started_ms
                     self.ended_ms = self.now_ms()
+                    self.speech_activity = bool(count and any(clean))
                     self.on_audio(mixed, rate)
                     if speech:
                         speech.started_ms = started if speech.started_ms is None else speech.started_ms

@@ -63,12 +63,12 @@ class LiveAudioMonitor:
         except Exception:
             self._unavailable()
 
-    def add(self, direction, pcm, *, sample_rate, turn_pair=1):
+    def add(self, direction, pcm, *, sample_rate, turn_pair=1, media_activity=True):
         if self.recording_failed:
             return
         try:
             self.recording.add(direction, pcm, sample_rate=sample_rate, channels=1)
-            if any(pcm):
+            if media_activity and any(pcm):
                 self.keys.add(f'{self.conversation_id}:{turn_pair}:{direction}')
         except Exception:
             self.recording_failed = True

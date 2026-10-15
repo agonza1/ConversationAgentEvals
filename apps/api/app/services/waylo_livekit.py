@@ -155,10 +155,11 @@ class LiveKitVoicePeer:
     def now_ms(self):
         return round((time.monotonic() - self.origin) * 1000, 3)
 
-    def _monitor_audio(self, direction, pcm, rate):
+    def _monitor_audio(self, direction, pcm, rate, *, media_activity=True):
         if self.monitor:
             try:
-                self.monitor.add(direction, pcm, sample_rate=rate, turn_pair=self.monitor_turn_pair)
+                self.monitor.add(direction, pcm, sample_rate=rate, turn_pair=self.monitor_turn_pair,
+                    **({'media_activity': False} if not media_activity else {}))
             except Exception:
                 # Optional monitoring must not falsify delivery or stop capture.
                 self.monitor.disable()
@@ -216,7 +217,8 @@ class LiveKitVoicePeer:
             await self.room.local_participant.publish_track(self.track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE))
             self.continuous_caller = ContinuousCallerAudio(source=self.source, mixer=self.noise_mixer,
                 make_frame=lambda pcm: rtc.AudioFrame(pcm, rate, 1, len(pcm) // 2),
-                on_audio=lambda pcm, sr: self._monitor_audio('tester_to_target', pcm, sr),
+                on_audio=lambda pcm, sr: self._monitor_audio('tester_to_target', pcm, sr,
+                    media_activity=self.continuous_caller.speech_activity),
                 on_error=lambda error: setattr(self, 'error', error), now_ms=self.now_ms,
                 path=self.noise_artifact_dir / 'caller-continuous-sent.wav')
             self.continuous_caller.start()

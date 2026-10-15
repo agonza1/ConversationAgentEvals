@@ -124,6 +124,19 @@ def test_failed_capture_retains_only_accepted_frames_and_stops(tmp_path):
     asyncio.run(run())
 
 
+def test_caller_leading_silence_does_not_count_background_as_spoken_content(tmp_path):
+    async def run():
+        stream, _, _, _ = stream_at(tmp_path / 'activity.wav')
+        flags = []
+        stream.on_audio = lambda pcm, rate: flags.append(stream.speech_activity)
+        speech = stream.enqueue(bytes(960) + b'\x00\x08' * 480)
+        stream.start()
+        await asyncio.wait_for(speech.done, 1)
+        await stream.close()
+        assert flags[:2] == [False, True]
+    asyncio.run(run())
+
+
 def test_cancelled_send_stops_publisher_and_finalizes_partial_utterance(tmp_path):
     async def run():
         stream, source, _, _ = stream_at(tmp_path / 'whole.wav')
@@ -182,7 +195,9 @@ def test_real_peer_publishes_one_mic_track_and_records_noise_with_target_audio(t
         await monitor.start()  # No provider/listener endpoints are configured.
         await peer.connect({'livekitUrl': 'unused', 'participantToken': 'dummy', 'roomName': 'fake-room'})
         await asyncio.sleep(.045)
+        assert monitor.keys == set()  # ambience must not mark caller speech as heard
         receipt, sent = await peer.send(pcm_wav(b'\x00\x08' * 600), turn_id='caller-1', reference='hello', artifact_dir=tmp_path)
+        assert 'None:1:tester_to_target' in monitor.keys
         # Receiving target speech does not stop the caller microphone or add a second noise bed.
         target = b'\x00\x04' * 480
         peer._monitor_audio('target_to_tester', target, 24000)
