@@ -94,7 +94,7 @@ async function pendingReview(page: Page, surface: Surface, outcome: Outcome) {
     await page.goto(`/runs/${runId}`);
     await expect(page.getByRole('heading', { name: 'Review the deterministic verdict' })).toBeVisible();
   }
-  const progress = page.getByRole('status').filter({ hasText: 'ASSERT is reviewing' });
+  const progress = page.getByRole('region', { name: 'ASSERT review in progress' });
   await expect(progress).toHaveCount(0);
   await page.getByRole('button', {
     name: surface === 'Eval' ? 'Request LLM judge' : 'Review with LLM judge', exact: true,
@@ -123,10 +123,18 @@ for (const surface of ['Eval', 'Run analysis'] as const) {
         await expect(progress.getByRole('progressbar')).toHaveCount(0);
         expect(await progress.evaluate((element) => element.getAnimations({ subtree: true })
           .filter((animation) => animation.playState === 'running').length)).toBeGreaterThan(0);
+        const scanner = progress.locator('[aria-hidden="true"]').last().locator('span');
+        const initialTransform = await scanner.evaluate(element => getComputedStyle(element).transform);
+        await expect.poll(() => scanner.evaluate(element => getComputedStyle(element).transform)).not.toBe(initialTransform);
+        await expect(progress.getByRole('timer')).toContainText(/0:0[1-9] elapsed/);
         await expect(page.getByRole('button', { name: surface === 'Eval'
           ? 'Requesting ASSERT review…' : 'Reviewing evidence…', exact: true })).toBeDisabled();
         if (surface === 'Eval' && outcome === 'success' && process.env.CAE_ASSERT_PROGRESS_SCREENSHOTS) {
           await progress.screenshot({ path: path.join(process.env.CAE_ASSERT_PROGRESS_SCREENSHOTS, 'assert-review-desktop.png') });
+          for (let frame = 0; frame < 16; frame += 1) {
+            await progress.screenshot({ path: path.join(process.env.CAE_ASSERT_PROGRESS_SCREENSHOTS, `assert-review-frame-${frame}.png`), animations: 'allow' });
+            await page.waitForTimeout(80);
+          }
         }
         expect(judgeCalls()).toBe(1);
       } finally { release(); }
@@ -147,7 +155,7 @@ for (const surface of ['Eval', 'Run analysis'] as const) {
     });
   }
 
-  test(`${surface}: reduced-motion cartoon is static and fits a narrow viewport`, async ({ page }) => {
+  test(`${surface}: reduced-motion review keeps live timing without animation and fits a narrow viewport`, async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.emulateMedia({ reducedMotion: 'reduce' });
     const { progress, release } = await pendingReview(page, surface, 'success');
@@ -155,6 +163,8 @@ for (const surface of ['Eval', 'Run analysis'] as const) {
       await expect(progress).toBeVisible();
       expect(await progress.evaluate((element) => element.getAnimations({ subtree: true })
         .filter((animation) => animation.playState === 'running').length)).toBe(0);
+      await expect(progress.getByRole('timer')).toContainText(/0:0[1-9] elapsed/);
+      await expect(progress.getByRole('status')).not.toContainText('elapsed');
       const box = await progress.boundingBox();
       expect(box).not.toBeNull();
       expect(box!.x).toBeGreaterThanOrEqual(0);

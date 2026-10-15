@@ -2,6 +2,9 @@
 
 import Link from 'next/link';
 import { ApiAwareLink } from '@/components/ApiAwareLink';
+import { AssistedTestBuilder } from '@/components/AssistedTestBuilder';
+import { normalizedCallerSteps, quickCaseFromDraft, type AuthoringContext } from '@/lib/assistedAuthoring';
+import type { EditableAssertSpec } from '@/lib/types';
 import { getApiBase } from '@/lib/execution';
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -15,6 +18,7 @@ interface ScenarioRecord {
   user_persona: string;
   user_goal: string;
   simulated_user_prompt: string;
+  spoken_opener: string;
   expected_output: string;
   constraints: string[];
   required_actions: string[];
@@ -25,6 +29,9 @@ interface ScenarioRecord {
   caller_steps: string[];
   target_behavior_id: string;
   policy_context: string;
+  evidence_requirements: string[];
+  requirements: string;
+  permissible_behavior: string;
 }
 
 interface ScenarioSuite {
@@ -76,6 +83,7 @@ function normalizeScenario(value: unknown, suiteId: string): ScenarioRecord {
     user_persona: String(record.user_persona ?? record.persona ?? ''),
     user_goal: String(record.user_goal ?? record.goal ?? ''),
     simulated_user_prompt: String(record.simulated_user_prompt ?? record.prompt ?? record.persona ?? ''),
+    spoken_opener: String(record.spoken_opener ?? ''),
     expected_output: displayValue(record.expected_output ?? record.expected_final_state),
     constraints: stringList(record.constraints),
     required_actions: stringList(record.required_actions),
@@ -89,6 +97,9 @@ function normalizeScenario(value: unknown, suiteId: string): ScenarioRecord {
       const rule = asRecord(value);
       return `${rule.kind}: ${rule.label} [${rule.id}]\n${rule.description || ''}`;
     }).join('\n\n') : '',
+    evidence_requirements: stringList(record.evidence_requirements),
+    requirements: String(record.requirements ?? ''),
+    permissible_behavior: String(record.permissible_behavior ?? ''),
   };
 }
 
@@ -120,10 +131,15 @@ async function listScenarioSuites(signal?: AbortSignal): Promise<ScenarioSuite[]
 async function createScenario(payload: {
   title?: string;
   simulated_user_prompt: string;
+  spoken_opener: string;
   expected_output: string;
   description: string;
   required_actions: string[];
   forbidden_actions: string[];
+  evidence_requirements?: string[];
+  requirements?: string;
+  permissible_behavior?: string;
+  caller_steps?: string[];
 }): Promise<ScenarioRecord> {
   const value = await handleJson<unknown>(
     await fetch(`${getApiBase()}/api/scenarios`, {
@@ -210,8 +226,13 @@ export function ScenariosPage() {
   const [suites, setSuites] = useState<ScenarioSuite[]>([]);
   const [selectedKey, setSelectedKey] = useState('');
   const [mode, setMode] = useState<'create' | 'view'>('view');
+  const [manualCreate, setManualCreate] = useState(false);
+  const [authoringSession, setAuthoringSession] = useState(0);
+  const [variation, setVariation] = useState<AuthoringContext | null>(null);
+  const [manualContext, setManualContext] = useState<(Pick<ReturnType<typeof quickCaseFromDraft>, 'evidence_requirements' | 'requirements' | 'permissible_behavior'> & { caller_steps?: string[] }) | null>(null);
   const [title, setTitle] = useState('');
   const [simulatedUserPrompt, setSimulatedUserPrompt] = useState('');
+  const [spokenOpener, setSpokenOpener] = useState('');
   const [expectedOutput, setExpectedOutput] = useState('');
   const [description, setDescription] = useState('');
   const [requiredActions, setRequiredActions] = useState('');
@@ -304,30 +325,68 @@ export function ScenariosPage() {
     setError(null);
     setSaveMessage(null);
     try {
+      const callerSteps = manualContext?.caller_steps ? normalizedCallerSteps(manualContext.caller_steps) : undefined;
       const created = await createScenario({
         title: title.trim() || undefined,
-        simulated_user_prompt: simulatedUserPrompt.trim(),
+        simulated_user_prompt: manualContext?.caller_steps
+          ? [simulatedUserPrompt.trim(), ...(callerSteps || [])].filter(Boolean).join('\n')
+          : simulatedUserPrompt.trim(),
+        spoken_opener: manualContext?.caller_steps ? callerSteps?.[0] || '' : spokenOpener.trim(),
         expected_output: expectedOutput.trim(),
         description: description.trim(),
         required_actions: stringList(requiredActions),
         forbidden_actions: stringList(forbiddenActions),
+        ...(manualContext ? { ...manualContext, caller_steps: callerSteps } : {}),
       });
       preferredSelectionRef.current = scenarioKey('user-scenarios', created.id);
       setMode('view');
       setSaveMessage('Scenario created in the User Scenarios evaluation suite.');
       setTitle('');
       setSimulatedUserPrompt('');
+      setSpokenOpener('');
       setExpectedOutput('');
       setDescription('');
       setRequiredActions('');
       setForbiddenActions('');
       setMirrorPrompt(true);
+      setManualContext(null);
       setReloadKey((value) => value + 1);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create scenario');
     } finally {
       setIsSaving(false);
     }
+  }
+
+  async function createAssistedCase(spec: EditableAssertSpec) {
+    setIsSaving(true); setError(null); setSaveMessage(null);
+    try {
+      const created = await createScenario(quickCaseFromDraft(spec));
+      preferredSelectionRef.current = scenarioKey('user-scenarios', created.id);
+      setMode('view'); setVariation(null);
+      setSaveMessage('Reviewed case created. Choose Test an agent when you are ready—no call has started.');
+      setReloadKey((value) => value + 1);
+    } finally { setIsSaving(false); }
+  }
+
+  function editAssistedCase(spec?: EditableAssertSpec) {
+    if (spec) {
+      const next = quickCaseFromDraft(spec);
+      setTitle(next.title); setSimulatedUserPrompt(spec.scenarios[0].persona || '');
+      setSpokenOpener(next.spoken_opener);
+      setExpectedOutput(next.expected_output); setDescription(next.description);
+      setRequiredActions(next.required_actions.join('\n')); setForbiddenActions(next.forbidden_actions.join('\n'));
+      setMirrorPrompt(false);
+      setManualContext({ evidence_requirements: next.evidence_requirements, requirements: next.requirements, permissible_behavior: next.permissible_behavior, caller_steps: next.caller_steps });
+    }
+    setManualCreate(true);
+  }
+
+  function beginQuickCase() {
+    setTitle(''); setSimulatedUserPrompt(''); setSpokenOpener(''); setExpectedOutput(''); setDescription('');
+    setRequiredActions(''); setForbiddenActions(''); setMirrorPrompt(true); setManualContext(null);
+    setMode('create'); setManualCreate(false); setVariation(null); setError(null); setSaveMessage(null);
+    setAuthoringSession((current) => current + 1);
   }
 
   async function onDelete(scenario: ScenarioRecord) {
@@ -357,7 +416,7 @@ export function ScenariosPage() {
               <h2>Test library</h2>
               <ApiAwareLink className="primary-link" href="/specs/new">Create test set</ApiAwareLink>
             </div>
-            <button type="button" className="primary-link" onClick={() => { setMode('create'); setError(null); setSaveMessage(null); }}>
+            <button type="button" className="primary-link" onClick={beginQuickCase}>
               Add quick case
             </button>
           </div>
@@ -410,16 +469,29 @@ export function ScenariosPage() {
           {saveMessage ? <p className="scenarios-muted" role="status">{saveMessage}</p> : null}
           {copyMessage ? <p className="scenarios-muted" role="status">{copyMessage}</p> : null}
 
-          {mode === 'create' ? (
+          {mode === 'create' && !manualCreate ? <AssistedTestBuilder key={authoringSession} scope="case"
+            context={variation || undefined} initialRequest={variation ? 'Make a variation of this case where the caller changes their mind. Keep the same policy boundaries.' : ''}
+            onApprove={createAssistedCase} onManual={editAssistedCase} onCancel={() => setMode('view')} /> : null}
+          {mode === 'create' && manualCreate ? (
             <form className="card scenarios-create-form" onSubmit={(event) => void onCreate(event)}>
               <div>
                 <p className="eyebrow">User Scenarios</p>
                 <h2>Add a quick case</h2>
-                <p className="scenarios-muted">A one-off case with explicit rules. Expected outcome text is not automatically converted into rules. For reviewed cases and versioned policies, <Link href="/specs/new">create a test set</Link>.</p>
+                <p className="scenarios-muted">Detailed editor · explicit rules. For versioned policies and multiple cases, <ApiAwareLink href="/specs/new">create a test set</ApiAwareLink>.</p>
+                <button type="button" className="secondary-link" onClick={() => setManualCreate(false)}>Back to assisted drafting</button>
               </div>
               {error ? <div className="scenarios-error" role="alert">{error}</div> : null}
+              {manualContext ? <details><summary>Retained draft policy and evidence requirements</summary>
+                <p>{manualContext.permissible_behavior}</p><p>Required evidence: {manualContext.evidence_requirements.join(', ')}</p><p>{manualContext.requirements}</p>
+              </details> : null}
               <label htmlFor="scenario-title"><span>Title (optional)</span><input id="scenario-title" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Account lockout handoff" /></label>
-              <label htmlFor="scenario-prompt"><span>User prompt / persona</span><textarea id="scenario-prompt" required rows={6} value={simulatedUserPrompt} onChange={(event) => setSimulatedUserPrompt(event.target.value)} placeholder="Describe the user’s situation and request…" /></label>
+              <label htmlFor="scenario-prompt"><span>{manualContext?.caller_steps ? 'Caller profile / background' : 'User prompt / persona'}</span><textarea id="scenario-prompt" required={!manualContext?.caller_steps} rows={3} value={simulatedUserPrompt} onChange={(event) => setSimulatedUserPrompt(event.target.value)} placeholder="Describe the user’s situation and request…" /></label>
+              {manualContext?.caller_steps ? <label htmlFor="scenario-caller-steps"><span>Caller instructions (first line is spoken)</span>
+                <textarea id="scenario-caller-steps" aria-label="Caller instructions (first line is spoken)" aria-describedby="scenario-caller-help" required rows={4} value={manualContext.caller_steps.join('\n')}
+                  onChange={(event) => setManualContext((current) => current ? { ...current, caller_steps: event.target.value.split('\n') } : null)} />
+                <small id="scenario-caller-help">The first line is the actual opening. Background edits do not replace these instructions.</small>
+              </label> : null}
+              {!manualContext?.caller_steps ? <label htmlFor="scenario-opener"><span>Spoken opening line</span><textarea id="scenario-opener" required maxLength={4000} rows={3} value={spokenOpener} onChange={(event) => setSpokenOpener(event.target.value)} placeholder="Hi, can you tell me about your wireless headphones?" /><small className="scenarios-muted">The tester says this line exactly. Keep persona, instructions and expected results in their separate fields.</small></label> : null}
               <label htmlFor="scenario-expected"><span>Expected outcome</span><textarea id="scenario-expected" required rows={5} value={expectedOutput} onChange={(event) => setExpectedOutput(event.target.value)} placeholder="What the agent should do or say…" /></label>
               <label htmlFor="scenario-required"><span>Required behaviors (one per line)</span><textarea id="scenario-required" required rows={4} value={requiredActions} onChange={(event) => setRequiredActions(event.target.value)} placeholder="Offer housing options within the caller’s budget" /></label>
               <label htmlFor="scenario-forbidden"><span>Forbidden behaviors (one per line, optional)</span><textarea id="scenario-forbidden" rows={4} value={forbiddenActions} onChange={(event) => setForbiddenActions(event.target.value)} placeholder="Execute a house sale\nHandle payments" /></label>
@@ -441,6 +513,21 @@ export function ScenariosPage() {
                   <p className="scenarios-muted">{selected.suite.description}</p>
                 </div>
                 <div className="scenarios-actions">
+                  <button type="button" className="secondary-link" onClick={() => {
+                    beginQuickCase();
+                    setVariation({ label: selected.scenario.title, text: [
+                      `Caller profile: ${selected.scenario.user_persona}`,
+                      `Opening: ${selected.scenario.caller_steps[0] || selected.scenario.spoken_opener || selected.scenario.simulated_user_prompt}`,
+                      `Complete caller instructions:\n${selected.scenario.caller_steps.join('\n')}`,
+                      `Expected outcome: ${selected.scenario.expected_output}`,
+                      `Required: ${selected.scenario.required_actions.join('; ')}`,
+                      `Forbidden: ${selected.scenario.forbidden_actions.join('; ')}`,
+                      `Allowed assistance: ${selected.scenario.permissible_behavior}`,
+                      `Required evidence: ${selected.scenario.evidence_requirements.join('; ')}`,
+                      `Policy context: ${selected.scenario.policy_context}`,
+                      `Source requirements: ${selected.scenario.requirements}`,
+                    ].join('\n') }); setManualCreate(false); setMode('create'); setError(null);
+                  }}>Make a variation</button>
                   <Link className="primary-link" href={scenarioHref('/runs', selected.scenario)}>Test an agent</Link>
                   <Link className="secondary-link" href={scenarioHref('/eval', selected.scenario)}>Analyze a conversation</Link>
                   {selected.scenario.suite_id === 'user-scenarios' ? (
@@ -457,6 +544,7 @@ export function ScenariosPage() {
               </div>
               <a className="scenario-back-link" href="#scenario-catalog">← Back to scenario catalog</a>
               <FieldCard title="User persona / starting prompt" value={selected.scenario.user_persona || selected.scenario.simulated_user_prompt} onCopy={(label, text) => void onCopy(label, text)} />
+              <FieldCard title="Spoken opening line" value={selected.scenario.caller_steps[0] || selected.scenario.spoken_opener || 'Not explicitly set. A direct caller request or neutral greeting is used; persona instructions are not spoken.'} onCopy={(label, text) => void onCopy(label, text)} />
               <FieldCard title="Goal" value={selected.scenario.user_goal || selected.scenario.description} onCopy={(label, text) => void onCopy(label, text)} />
               {selected.scenario.target_behavior_id ? <p className="scenarios-muted">This case exercises behavior {selected.scenario.target_behavior_id} only. Other rules remain policy context, not measured coverage.</p> : null}
               <FieldCard title="Required actions" value={selected.scenario.target_behavior_id && !selected.scenario.required_actions.length ? 'n/a — not this case’s focus.' : listText(selected.scenario.required_actions)} onCopy={(label, text) => void onCopy(label, text)} />
@@ -465,7 +553,10 @@ export function ScenariosPage() {
               <FieldCard title="Expected final state" value={selected.scenario.expected_final_state || selected.scenario.expected_output} onCopy={(label, text) => void onCopy(label, text)} />
               {selected.scenario.evaluation_spec_ref ? <FieldCard title="Evaluation design version" value={selected.scenario.evaluation_spec_ref} onCopy={(label, text) => void onCopy(label, text)} /> : null}
               {selected.scenario.caller_steps.length ? <FieldCard title="Caller-side instructions" value={selected.scenario.caller_steps.join('\n')} onCopy={(label, text) => void onCopy(label, text)} /> : null}
-              <FieldCard title="Evidence requirements" value={'• Conversation transcript or vCon\n• Action/tool trace\n• Final state'} onCopy={(label, text) => void onCopy(label, text)} />
+              {selected.scenario.permissible_behavior ? <FieldCard title="Allowed assistance" value={selected.scenario.permissible_behavior} onCopy={(label, text) => void onCopy(label, text)} /> : null}
+              <FieldCard title="Evidence requirements" value={selected.scenario.evidence_requirements.length
+                ? listText(selected.scenario.evidence_requirements.map((item) => item.replaceAll('_', ' ')))
+                : '• Conversation transcript or vCon\n• Action/tool trace\n• Final state'} onCopy={(label, text) => void onCopy(label, text)} />
             </section>
           ) : null}
 

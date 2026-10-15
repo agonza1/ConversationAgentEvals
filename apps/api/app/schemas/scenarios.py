@@ -12,11 +12,16 @@ class ScenarioCreateRequest(BaseModel):
     simulated_user_prompt: str | None = None
     simulatedUserPrompt: str | None = None
     prompt: str | None = None
+    spoken_opener: str | None = Field(default=None, max_length=4000)
     expected_output: str | None = None
     expectedOutput: str | None = None
     description: str | None = None
     required_actions: list[str] | None = Field(default=None, max_length=100)
     forbidden_actions: list[str] | None = Field(default=None, max_length=100)
+    evidence_requirements: list[Literal['transcript', 'action_trace', 'final_state', 'vcon', 'final_state_or_action_trace']] | None = Field(default=None, max_length=5)
+    requirements: str | None = Field(default=None, max_length=30000)
+    permissible_behavior: str | None = Field(default=None, max_length=10000)
+    caller_steps: list[str] | None = Field(default=None, min_length=1, max_length=8)
 
     @model_validator(mode='after')
     def require_core_fields(self) -> 'ScenarioCreateRequest':
@@ -32,8 +37,16 @@ class ScenarioCreateRequest(BaseModel):
         self.simulated_user_prompt = prompt
         self.expected_output = expected
         self.description = description
+        if self.spoken_opener is not None:
+            self.spoken_opener = self.spoken_opener.strip()
+            if not self.spoken_opener:
+                raise ValueError('spoken_opener must be non-blank when supplied')
         if self.title is not None:
             self.title = self.title.strip() or None
+        if self.caller_steps is not None:
+            if any(not step.strip() or len(step) > 2000 for step in self.caller_steps):
+                raise ValueError('Caller steps must be non-blank and at most 2000 characters.')
+            self.caller_steps = [step.strip() for step in self.caller_steps]
         for key in ('required_actions', 'forbidden_actions'):
             values = getattr(self, key)
             if values is not None:
@@ -52,6 +65,7 @@ class ScenarioRecord(BaseModel):
     type: Literal['scenario'] = 'scenario'
     description: str
     simulated_user_prompt: str
+    spoken_opener: str | None = None
     expected_output: str
     persona: str | None = None
     goal: str | None = None

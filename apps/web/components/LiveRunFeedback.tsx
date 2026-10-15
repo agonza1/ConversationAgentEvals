@@ -163,6 +163,7 @@ export function LiveRunFeedback({
   const replayResumeResolveRef = useRef<(() => void) | null>(null);
   const playbackRef = useRef(Promise.resolve());
   const liveSegmentFallbackRef = useRef(false);
+  const activateFallbackRef = useRef<((message?: string) => void) | null>(null);
   const peerRef = useRef<RTCPeerConnection | null>(null);
   const liveAudioRef = useRef<HTMLAudioElement | null>(null);
   const stopUrlRef = useRef<string | null>(null);
@@ -198,6 +199,9 @@ export function LiveRunFeedback({
       event.conversationId === conversation.conversation_id);
   }), [audioEvents, displayedConversations, events]);
   const partialRecording = replayEvents.some((event) => event.frame_metadata?.partial === true);
+  const monitorUnavailable = events.some((event) =>
+    event.frame_metadata?.media_event === 'live_monitor_unavailable'
+    && event.conversationId === displayedConversations.at(-1)?.conversation_id);
   const transcriptEvents = events.filter((event) => event.frame_metadata?.media_event !== 'continuous_recording');
   const audioEventsRef = useRef(audioEvents);
   audioEventsRef.current = audioEvents;
@@ -571,21 +575,26 @@ export function LiveRunFeedback({
       playbackGenerationRef.current === generation
       && playbackModeRef.current === 'live'
     );
-    const activateHttpFallback = () => {
+    const activateHttpFallback = (message = 'WebRTC could not reach the local voice runtime. Playing each new audio turn over the live HTTP fallback.') => {
       if (!isCurrentAttempt() || liveSegmentFallbackRef.current) return;
       clearSetupFallbackTimer();
       disconnectWebRTC();
       liveSegmentFallbackRef.current = true;
       setWebrtcStatus('fallback');
-      setPlaybackMessage('WebRTC could not reach the local voice runtime. Playing each new audio turn over the live HTTP fallback.');
+      setPlaybackMessage(message);
       void queueAudioEvents(audioEventsRef.current, generation, 'live');
     };
+    activateFallbackRef.current = activateHttpFallback;
     playbackModeRef.current = 'live';
     setPlaybackMode('live');
     setExpanded(true);
     // Mark audio that existed before the click as heard. If WebRTC cannot
     // connect, the fallback starts with the next captured turn.
     markAudioEventsHeard(audioEvents, generation);
+    if (monitorUnavailable) {
+      activateHttpFallback('Continuous WebRTC monitoring is unavailable. The call continues; playing newly captured turns over the HTTP fallback.');
+      return;
+    }
     const preListenMediaKeys = new Set(
       events.map(listenerMediaKey).filter((value): value is string => Boolean(value)),
     );
@@ -660,6 +669,9 @@ export function LiveRunFeedback({
 
   useEffect(() => {
     if (playbackMode !== 'live') return;
+    if (monitorUnavailable) {
+      activateFallbackRef.current?.('Continuous WebRTC monitoring stopped. The call continues; playing newly captured turns over the HTTP fallback.');
+    }
     if (!liveSegmentFallbackRef.current) {
       if (webrtcStatus === 'listening') {
         markAudioEventsHeard(audioEvents, playbackGenerationRef.current);
@@ -667,7 +679,7 @@ export function LiveRunFeedback({
       return;
     }
     void queueAudioEvents(audioEvents, playbackGenerationRef.current, 'live');
-  }, [audioEvents, markAudioEventsHeard, playbackMode, queueAudioEvents, webrtcStatus]);
+  }, [audioEvents, monitorUnavailable, markAudioEventsHeard, playbackMode, queueAudioEvents, webrtcStatus]);
 
   function pauseReplay() {
     if (playbackModeRef.current !== 'replay' || replayPausedRef.current) return;

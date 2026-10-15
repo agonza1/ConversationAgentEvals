@@ -1,7 +1,22 @@
 import { apiErrorMessage } from './apiError';
+import { wayloExecutionHeaders, wayloRequestHeaders, type WayloTargetConnection } from './wayloConnection';
+
+export type WayloReviewContract = { snapshot: { sha256: string; contract: Record<string, unknown> }; source: string };
+type ReviewContractInput = { executionRunId: string; conversationId: string; userId: string };
+export function wayloReviewContract(input: ReviewContractInput): Promise<WayloReviewContract>;
+export function wayloReviewContract(input: ReviewContractInput, sha256: string): Promise<ExecutionRunRecord>;
+export async function wayloReviewContract(input: ReviewContractInput, sha256?: string): Promise<WayloReviewContract | ExecutionRunRecord> {
+  const url = `${getApiBase()}/api/assert/runs/${encodeURIComponent(input.executionRunId)}/conversations/${encodeURIComponent(input.conversationId)}/review-contract`;
+  const response = await fetch(sha256 ? url : `${url}?user_id=${encodeURIComponent(input.userId)}`, sha256 ? {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: input.userId, contract_sha256: sha256 }),
+  } : { cache: 'no-store' });
+  return handleJson<WayloReviewContract | ExecutionRunRecord>(response);
+}
 
 export type ExecutionMode = 'text_callable' | 'voice_fixture' | 'pipecat_webrtc';
 export type AudioTransportId =
+  | 'waylo_livekit'
   | 'none'
   | 'pipecat_small_webrtc'
   | 'pipecat_daily_webrtc'
@@ -9,6 +24,7 @@ export type AudioTransportId =
   | 'freeswitch_verto_sip';
 export type TesterId = 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
 export type ExecutorId =
+  | 'waylo_livekit'
   | 'local_async_runner'
   | 'evidence_replay'
   | 'cae_local_audio_loop'
@@ -18,6 +34,7 @@ export type ExecutorId =
   | 'acc_sip'
   | 'acc_phone';
 export type AgentTarget =
+  | 'waylo'
   | 'mock_agent'
   | 'openai_codex'
   | 'offline_acc_fixture'
@@ -38,7 +55,7 @@ export interface AgentRecord {
   environment?: 'local' | 'staging' | 'production';
   connection?: {
     endpoint_url?: string | null;
-    auth_type?: 'none' | 'bearer_secret' | 'api_key_secret';
+    auth_type?: 'none' | 'bearer_secret' | 'api_key_secret' | 'waylo_browser_session';
     secret_ref?: string | null;
     api_key_header?: string;
     response_path?: string;
@@ -46,6 +63,8 @@ export interface AgentRecord {
     sip_uri?: string | null;
     phone_number?: string | null;
     acc_base_url?: string | null;
+    workspace_id?: string | null;
+    waylo_agent_id?: string | null;
   };
   description?: string | null;
   metadata?: {
@@ -135,6 +154,9 @@ export interface ConversationLiveEvent {
 }
 
 export interface ConversationRecord {
+  evidence_coverage?: Record<string, { status: string; evaluation_status: string; observed?: string[]; missing: string[] }>;
+  evidence_diagnostics?: Record<string, unknown>;
+  configuration_check?: { status: string; reason: string; agent_version?: number };
   conversation_id: string;
   execution_run_id: string;
   suite_id: string;
@@ -149,6 +171,7 @@ export interface ConversationRecord {
   action_trace?: Array<Record<string, unknown>>;
   final_state?: Record<string, unknown>;
   evaluation_findings?: Record<string, unknown>;
+  evaluation_contract_snapshot?: Record<string, unknown>;
   judge_reviews?: JudgeReviewRecord[];
   evaluation_adjudication?: EvaluationAdjudication | null;
   recording?: Record<string, unknown> | null;
@@ -419,6 +442,9 @@ export function applyAgentLaunchDefaults(
   audioTransport: AudioTransportId;
   textCallable?: AgentTarget;
 } {
+  if (agent.target === 'waylo') {
+    return { mode: 'pipecat_webrtc', testerId: 'pipecat_tester', executorId: 'waylo_livekit', audioTransport: 'waylo_livekit' };
+  }
   if (agent.target === 'builtin_sample_voice') {
     return {
       mode: 'pipecat_webrtc',
@@ -555,10 +581,11 @@ export async function createAgent(payload: {
   connection?: AgentRecord['connection'];
   description?: string | null;
 }): Promise<AgentRecord> {
+  const endpoint = `${getApiBase()}/api/agents`;
   return handleJson(
-    await fetch(`${getApiBase()}/api/agents`, {
+    await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(payload.target === 'waylo' ? wayloRequestHeaders(payload.connection, endpoint) : {}) },
       body: JSON.stringify(payload),
     }),
   );
@@ -568,10 +595,11 @@ export async function updateAgent(
   agentId: string,
   payload: Partial<Pick<AgentRecord, 'name' | 'channel' | 'target' | 'environment' | 'connection' | 'description'>>,
 ): Promise<AgentRecord> {
+  const endpoint = `${getApiBase()}/api/agents/${encodeURIComponent(agentId)}`;
   return handleJson(
-    await fetch(`${getApiBase()}/api/agents/${encodeURIComponent(agentId)}`, {
+    await fetch(endpoint, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(payload.connection?.auth_type === 'waylo_browser_session' ? wayloRequestHeaders(payload.connection, endpoint) : {}) },
       body: JSON.stringify(payload),
     }),
   );
@@ -643,11 +671,12 @@ export async function createExecutionRun(payload: {
   executor_id?: ExecutorId;
   evaluate?: boolean;
   audio_transport?: AudioTransportId;
-}): Promise<ExecutionRunRecord> {
+}, connection?: WayloTargetConnection): Promise<ExecutionRunRecord> {
+  const endpoint = `${getApiBase()}/api/execution/runs`;
   return handleJson(
-    await fetch(`${getApiBase()}/api/execution/runs`, {
+    await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...wayloExecutionHeaders(connection, endpoint) },
       body: JSON.stringify(payload),
     }),
   );

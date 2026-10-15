@@ -15,6 +15,9 @@ import { LiveRunFeedback, type LiveRunEvent } from './LiveRunFeedback';
 import { SpeechProviderSummary } from './SpeechProviderSettings';
 import { apiErrorMessage } from '@/lib/apiError';
 import { buildAssertReportView, sortedAssertReviews } from '@/lib/assertReview';
+import { WayloConnection, useWayloConnection } from './WayloConnection';
+import { wayloExecutionHeaders, type WayloTargetConnection } from '@/lib/wayloConnection';
+import { wayloRunBudgetError } from '@/lib/wayloRunBudget';
 import { getApiBase, listProductProjects, requestBenchmarkJudge, type ProductProjectOption, type AssertJudgeReadiness, type ConversationRecord } from '@/lib/execution';
 
 type JsonRecord = Record<string, unknown>;
@@ -1008,14 +1011,14 @@ interface ExecutionRunRecord {
   duplex_timeout_seconds?: number;
   tester_id?: 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
   tester_model_name?: string | null;
-  executor_id?: 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'signalwire_public_webrtc' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
+  executor_id?: 'waylo_livekit' | 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'signalwire_public_webrtc' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
   provenance?: {
     target_id?: string | null;
     target_kind: string;
     target_channel: 'text' | 'voice';
     target_environment?: string;
     tester_id: 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
-    executor_id: 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'signalwire_public_webrtc' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
+    executor_id: 'waylo_livekit' | 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'signalwire_public_webrtc' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
     evidence_source: string;
     evidence_capabilities?: string[];
     live_external_connection: boolean;
@@ -1030,6 +1033,7 @@ interface ExecutionRunRecord {
 }
 
 async function createExecutionRun(payload: {
+  tester_noise?: { snr_db: number };
   suite_id: string;
   scenario_ids: string[];
   mode: 'text_callable' | 'voice_fixture' | 'pipecat_webrtc';
@@ -1046,13 +1050,14 @@ async function createExecutionRun(payload: {
   model_name?: string;
   tester_id?: 'scenario_simulator' | 'fixture_replay' | 'pipecat_tester';
   tester_model_name?: string;
-  executor_id?: 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'signalwire_public_webrtc' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
-  audio_transport?: 'none' | 'pipecat_small_webrtc' | 'pipecat_daily_webrtc' | 'signalwire_webrtc' | 'freeswitch_verto_sip';
-}) {
+  executor_id?: 'waylo_livekit' | 'local_async_runner' | 'evidence_replay' | 'cae_local_audio_loop' | 'pipecat_public_daily' | 'signalwire_public_webrtc' | 'acc_browser_webrtc' | 'acc_sip' | 'acc_phone';
+  audio_transport?: 'waylo_livekit' | 'none' | 'pipecat_small_webrtc' | 'pipecat_daily_webrtc' | 'signalwire_webrtc' | 'freeswitch_verto_sip';
+}, connection?: WayloTargetConnection) {
+  const endpoint = `${getApiBase()}/api/execution/runs`;
   return handleJson<ExecutionRunRecord>(
-    await fetch(`${getApiBase()}/api/execution/runs`, {
+    await fetch(endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...wayloExecutionHeaders(connection, endpoint) },
       body: JSON.stringify(payload),
     }),
   );
@@ -1070,6 +1075,9 @@ type ScoreAgentOption = {
     sip_uri?: string | null;
     phone_number?: string | null;
     acc_base_url?: string | null;
+    workspace_id?: string | null;
+    waylo_agent_id?: string | null;
+    auth_type?: string;
   };
   metadata?: {
     model_name?: string | null;
@@ -1098,7 +1106,8 @@ function isExternalVoiceTargetId(target?: string | null) {
 function isQueuedVoiceTargetId(target?: string | null) {
   return target === 'builtin_sample_voice'
     || target === 'pipecat_public_demo'
-    || target === 'signalwire_holy_guacamole';
+    || target === 'signalwire_holy_guacamole'
+    || target === 'waylo';
 }
 
 const MAX_VOICE_CASES = 20;
@@ -2327,6 +2336,7 @@ export function BenchmarkRunner({
   const [executionIterations, setExecutionIterations] = useState(1);
   const [executionMaxExchanges, setExecutionMaxExchanges] = useState<number | ''>(3);
   const [executionDuplexTimeoutSeconds, setExecutionDuplexTimeoutSeconds] = useState(120);
+  const [testerNoiseEnabled, setTesterNoiseEnabled] = useState(false);
   const [executionTesterId, setExecutionTesterId] = useState<'scenario_simulator' | 'fixture_replay' | 'pipecat_tester'>('scenario_simulator');
   const [executionExecutorId, setExecutionExecutorId] = useState<NonNullable<ExecutionRunRecord['executor_id']>>('local_async_runner');
   const [executionRun, setExecutionRun] = useState<ExecutionRunRecord | null>(null);
@@ -2345,6 +2355,9 @@ export function BenchmarkRunner({
     () => agents.find((agent) => agent.id === selectedAgentId) ?? null,
     [agents, selectedAgentId],
   );
+  const wayloConnection = useWayloConnection(selectedScoreAgent?.connection);
+  const needsWayloConnection = selectedScoreAgent?.target === 'waylo'
+    && selectedScoreAgent.connection?.auth_type === 'waylo_browser_session' && !wayloConnection;
   const [showSimulateEvidenceOptions, setShowSimulateEvidenceOptions] = useState(false);
   const [includeStructuredEvidence, setIncludeStructuredEvidence] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
@@ -2372,6 +2385,19 @@ export function BenchmarkRunner({
     ? selectedSuite?.scenarios.length ?? 0
     : selectedScenario ? 1 : 0;
   const executionConversationCount = executionCaseCount * executionIterations;
+  const temporaryWayloTarget = selectedScoreAgent?.target === 'waylo'
+    && selectedScoreAgent.connection?.auth_type === 'waylo_browser_session';
+  const wayloExpiresAt = wayloConnection?.expires_at;
+  const [, refreshWayloBudget] = useState(0);
+  useEffect(() => {
+    if (!temporaryWayloTarget || !wayloExpiresAt) return;
+    const timer = window.setInterval(() => refreshWayloBudget((tick) => tick + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [temporaryWayloTarget, wayloExpiresAt]);
+  const wayloQueueBudgetError = temporaryWayloTarget
+    ? wayloRunBudgetError(executionDuplexTimeoutSeconds, executionConversationCount, wayloExpiresAt) : null;
+  const wayloSuiteBudgetError = temporaryWayloTarget
+    ? wayloRunBudgetError(executionDuplexTimeoutSeconds, (selectedSuite?.scenarios.length ?? 0) * executionIterations, wayloExpiresAt) : null;
   const voiceQueueLimitError = queuedVoiceTarget && (
     executionCaseCount > MAX_VOICE_CASES || executionConversationCount > MAX_VOICE_CONVERSATIONS
   ) ? `Choose at most ${MAX_VOICE_CASES} cases and ${MAX_VOICE_CONVERSATIONS} total voice tests per run. Reduce iterations or run a single scenario.` : null;
@@ -2679,35 +2705,39 @@ export function BenchmarkRunner({
         if (selected && (view !== 'score' || matched)) {
           applyAgentProfileDefaults(selected, { setAgentProfile, setModelName, setPromptVersion });
         }
-        if (matched) {
-          if (matched.target === 'builtin_sample_voice') {
+        if (selected) {
+          if (selected.target === 'waylo') {
+            setExecutionMode('pipecat_webrtc');
+            setExecutionTesterId('pipecat_tester');
+            setExecutionExecutorId('waylo_livekit');
+          } else if (selected.target === 'builtin_sample_voice') {
             setExecutionMode('pipecat_webrtc');
             setExecutionTesterId('pipecat_tester');
             setExecutionExecutorId('cae_local_audio_loop');
-          } else if (matched.target === 'pipecat_public_demo') {
+          } else if (selected.target === 'pipecat_public_demo') {
             setExecutionMode('pipecat_webrtc');
             setExecutionTesterId('pipecat_tester');
             setExecutionExecutorId('pipecat_public_daily');
-          } else if (matched.target === 'signalwire_holy_guacamole') {
+          } else if (selected.target === 'signalwire_holy_guacamole') {
             setExecutionMode('pipecat_webrtc');
             setExecutionTesterId('pipecat_tester');
             setExecutionExecutorId('signalwire_public_webrtc');
             setExecutionMaxExchanges(1);
-          } else if (matched.target === 'voice_fixture') {
+          } else if (selected.target === 'voice_fixture') {
             setExecutionMode('voice_fixture');
             setExecutionTesterId('fixture_replay');
             setExecutionExecutorId('evidence_replay');
-          } else if (matched.target === 'offline_acc_fixture') {
+          } else if (selected.target === 'offline_acc_fixture') {
             setExecutionMode('text_callable');
             setExecutionTesterId('fixture_replay');
             setExecutionExecutorId('evidence_replay');
-          } else if (isExternalVoiceTargetId(matched.target)) {
+          } else if (isExternalVoiceTargetId(selected.target)) {
             setExecutionMode('text_callable');
             setExecutionTesterId('scenario_simulator');
             setExecutionExecutorId(
-              matched.target === 'sip_agent'
+              selected.target === 'sip_agent'
                 ? 'acc_sip'
-                : matched.target === 'phone_agent'
+                : selected.target === 'phone_agent'
                   ? 'acc_phone'
                   : 'acc_browser_webrtc',
             );
@@ -3638,6 +3668,10 @@ export function BenchmarkRunner({
       setExecutionMessage('Select an agent target before launching.');
       return null;
     }
+    if (needsWayloConnection) {
+      setExecutionMessage('Connect Waylo for this tab before starting a call.');
+      return null;
+    }
     if (requestedSuiteScope && !supportsSuiteExecutionScope) {
       setExecutionMessage('This target does not support a test-set queue. Choose a supported agent or switch to a single scenario.');
       return null;
@@ -3645,6 +3679,10 @@ export function BenchmarkRunner({
     if (voiceQueueLimitError) {
       setExecutionMessage(voiceQueueLimitError);
       return null;
+    }
+    if (temporaryWayloTarget) {
+      const budgetError = wayloRunBudgetError(executionDuplexTimeoutSeconds, executionConversationCount, wayloExpiresAt);
+      if (budgetError) { setExecutionMessage(budgetError); return null; }
     }
     if (queuedVoiceTarget && executionRun && isActiveExecutionStatus(executionRun.status)) {
       setExecutionMessage('Wait for this voice run to finish before starting another from this page.');
@@ -3654,7 +3692,8 @@ export function BenchmarkRunner({
       selectedScoreAgent.target === 'openai_codex'
       || selectedScoreAgent.target === 'builtin_sample_voice'
       || selectedScoreAgent.target === 'pipecat_public_demo'
-      || selectedScoreAgent.target === 'signalwire_holy_guacamole';
+      || selectedScoreAgent.target === 'signalwire_holy_guacamole'
+      || selectedScoreAgent.target === 'waylo';
     if (supportsConfigurableExchanges && executionMaxExchanges === '') {
       const exchangeLimit = selectedScoreAgent.target === 'signalwire_holy_guacamole' ? 2 : 10;
       setExecutionMessage(`Enter a maximum exchange count from 1 to ${exchangeLimit} before launching.`);
@@ -3687,8 +3726,9 @@ export function BenchmarkRunner({
     const legacyVoiceReplay = selectedScoreAgent.target === 'voice_fixture';
     const publicPipecatAgent = selectedScoreAgent.target === 'pipecat_public_demo';
     const signalwireAgent = selectedScoreAgent.target === 'signalwire_holy_guacamole';
+    const wayloAgent = selectedScoreAgent.target === 'waylo';
     const maxExchangesForRun = signalwireAgent ? Math.min(2, maxExchanges) : maxExchanges;
-    const runMode = sampleVoiceAgent || publicPipecatAgent || signalwireAgent
+    const runMode = sampleVoiceAgent || publicPipecatAgent || signalwireAgent || wayloAgent
       ? 'pipecat_webrtc'
       : legacyVoiceReplay
         ? 'voice_fixture'
@@ -3700,8 +3740,8 @@ export function BenchmarkRunner({
           : selectedScoreAgent?.target === 'http_endpoint'
             ? 'http_endpoint'
           : 'mock_agent';
-    const runTesterId: NonNullable<ExecutionRunRecord['tester_id']> = executionTesterId;
-    const runExecutorId: NonNullable<ExecutionRunRecord['executor_id']> = executionExecutorId;
+    const runTesterId: NonNullable<ExecutionRunRecord['tester_id']> = wayloAgent ? 'pipecat_tester' : executionTesterId;
+    const runExecutorId: NonNullable<ExecutionRunRecord['executor_id']> = wayloAgent ? 'waylo_livekit' : executionExecutorId;
 
     const offlineFixtureText =
       runMode === 'text_callable' && runTextCallable === 'offline_acc_fixture';
@@ -3740,6 +3780,7 @@ export function BenchmarkRunner({
           ? 'signalwire-ai-agent'
           : executionModelName || DEFAULT_EXECUTION_MODEL;
       const queued = await createExecutionRun({
+        tester_noise: wayloAgent && testerNoiseEnabled ? { snr_db: 20 } : undefined,
         suite_id: suiteForRun,
         scenario_ids: scenarioIds,
         mode: runMode,
@@ -3747,23 +3788,23 @@ export function BenchmarkRunner({
         iterations: executionIterations,
         concurrent_sessions: queuedVoiceTarget ? 1 : undefined,
         max_exchanges: maxExchangesForRun,
-        duplex_timeout_seconds: sampleVoiceAgent || publicPipecatAgent || signalwireAgent ? executionDuplexTimeoutSeconds : undefined,
+        duplex_timeout_seconds: sampleVoiceAgent || publicPipecatAgent || signalwireAgent || wayloAgent ? executionDuplexTimeoutSeconds : undefined,
         user_id: identity.userId,
         project_id: identity.projectId,
         product_project_id: productProjectId || undefined,
-        evaluate: true,
+        evaluate: !wayloAgent,
         agent_id: selectedAgentId || undefined,
         model_name: modelNameForExecutionRun,
         tester_id: runTesterId,
         executor_id: runExecutorId,
-        audio_transport: publicPipecatAgent
+        audio_transport: wayloAgent ? 'waylo_livekit' : publicPipecatAgent
           ? 'pipecat_daily_webrtc'
           : signalwireAgent
             ? 'signalwire_webrtc'
           : runMode === 'pipecat_webrtc'
             ? 'pipecat_small_webrtc'
             : 'none',
-      });
+      }, wayloAgent ? selectedScoreAgent.connection : undefined);
       const queuedWithLaunchContext = {
         ...queued,
         agent_id: selectedAgentId || queued.agent_id || undefined,
@@ -4646,6 +4687,9 @@ export function BenchmarkRunner({
           </div>
         </div>
 
+        {selectedScoreAgent?.target === 'waylo' && selectedScoreAgent.connection?.auth_type === 'waylo_browser_session'
+          ? <WayloConnection connection={selectedScoreAgent.connection} /> : null}
+
         {view === 'run' && loadError ? (
           <div style={{ border: '1px solid var(--error-border)', background: 'var(--error-bg)', color: 'var(--error-text)', borderRadius: 8, padding: 12, display: 'grid', gap: 8 }}>
             <span>{loadError}</span>
@@ -4693,12 +4737,15 @@ export function BenchmarkRunner({
                 type="button"
                 className={executionScope === 'suite' ? 'is-active' : ''}
                 aria-pressed={executionScope === 'suite'}
+                disabled={Boolean(wayloSuiteBudgetError)}
+                title={wayloSuiteBudgetError || undefined}
                 onClick={() => setExecutionScope('suite')}
               >
                 <strong>Entire suite</strong>
                 <span>{selectedSuite?.scenarios.length || 0} {queuedVoiceTarget ? 'voice cases' : 'scenarios'}</span>
               </button>
             </div>
+            {wayloSuiteBudgetError ? <p role="status" aria-label="Waylo suite access limit">{wayloSuiteBudgetError}</p> : null}
           </fieldset>
         ) : null}
 
@@ -4767,7 +4814,11 @@ export function BenchmarkRunner({
                 setSelectedAgentId(agentId);
                 const agent = agents.find((item) => item.id === agentId);
                 if (!agent) return;
-                if (agent.target === 'builtin_sample_voice') {
+                if (agent.target === 'waylo') {
+                  setExecutionMode('pipecat_webrtc');
+                  setExecutionTesterId('pipecat_tester');
+                  setExecutionExecutorId('waylo_livekit');
+                } else if (agent.target === 'builtin_sample_voice') {
                   setExecutionMode('pipecat_webrtc');
                   setExecutionTesterId('pipecat_tester');
                   setExecutionExecutorId('cae_local_audio_loop');
@@ -4845,6 +4896,7 @@ export function BenchmarkRunner({
                      && selectedScoreAgent.target !== 'builtin_sample_voice'
                      && selectedScoreAgent.target !== 'pipecat_public_demo'
                      && selectedScoreAgent.target !== 'signalwire_holy_guacamole'
+                     && selectedScoreAgent.target !== 'waylo'
                   )}
                   onChange={(event) => {
                     const nextValue = event.target.value;
@@ -4864,7 +4916,8 @@ export function BenchmarkRunner({
               </label>
               {selectedScoreAgent?.target === 'builtin_sample_voice'
               || selectedScoreAgent?.target === 'pipecat_public_demo'
-              || selectedScoreAgent?.target === 'signalwire_holy_guacamole' ? (
+              || selectedScoreAgent?.target === 'signalwire_holy_guacamole'
+              || selectedScoreAgent?.target === 'waylo' ? (
                 <label>
                   <span>Session timeout (seconds)</span>
                   <input
@@ -4879,12 +4932,20 @@ export function BenchmarkRunner({
                   />
                 </label>
               ) : null}
+              {selectedScoreAgent?.target === 'waylo' ? (
+                <label>
+                  <span><input type="checkbox" checked={testerNoiseEnabled}
+                    onChange={(event) => setTesterNoiseEnabled(event.target.checked)} /> Add synthetic background noise</span>
+                  <small>Tester audio only · white noise at 20 dB SNR. The random seed is saved for repeatability. Scenario audio conditions still apply when off.</small>
+                </label>
+              ) : null}
             </div>
             <p>
               Queues the run and writes the ASSERT inference set locally.
               {selectedScoreAgent?.target === 'openai_codex'
               || selectedScoreAgent?.target === 'builtin_sample_voice'
               || selectedScoreAgent?.target === 'pipecat_public_demo'
+              || selectedScoreAgent?.target === 'waylo'
                 ? ' One exchange is one tester message plus one agent response.'
                 : selectedScoreAgent?.target === 'signalwire_holy_guacamole'
                   ? ' One exchange is one tester message plus one remote target response; SignalWire supports up to two in the same WebRTC call.'
@@ -5006,10 +5067,12 @@ export function BenchmarkRunner({
               || isSimulating
               || !selectedSuite
               || !selectedScoreAgent
+              || needsWayloConnection
               || loadError !== null
               || !executionCaseCount
               || (requestedSuiteScope && !supportsSuiteExecutionScope)
               || Boolean(voiceQueueLimitError)
+              || Boolean(wayloQueueBudgetError)
               || (queuedVoiceTarget && Boolean(executionRun && isActiveExecutionStatus(executionRun.status)))
               || (matchingProductProjects.length > 1 && !productProjectId)
               || ((selectedScoreAgent?.target === 'openai_codex'
@@ -5034,6 +5097,10 @@ export function BenchmarkRunner({
                   : 'Run evaluation'}
           </button>
         </div>
+
+        {temporaryWayloTarget ? <p role="status" aria-label="Waylo run access limit" style={{ margin: 0, color: wayloQueueBudgetError ? 'var(--error-text)' : 'var(--muted)', fontSize: 13 }}>
+          {wayloQueueBudgetError || 'Temporary access is limited to 15 minutes. Each conversation reserves its session timeout plus 2 minutes for evidence capture; the server checks the remaining access again before queueing.'}
+        </p> : null}
 
         {queuedVoiceTarget ? (
           <p role="status" aria-label="Voice queue bounds" style={{ margin: 0, color: voiceQueueLimitError ? 'var(--error-text)' : 'var(--muted)', fontSize: 13 }}>

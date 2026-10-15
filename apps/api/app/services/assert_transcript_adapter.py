@@ -37,7 +37,8 @@ def build_assert_inference_row(
             test_case_id=str(conversation.get('conversation_id') or 'conversation'),
             behavior=scenario_id,
             target=str(run.get('agent_name') or run.get('agent_id') or 'external-conversation-agent'),
-            tester_model=str(run.get('tester_model_name') or run.get('tester_id') or 'cae-tester'),
+            tester_model=str(conversation.get('tester_model_name') or conversation.get('tester_source')
+                             or run.get('tester_model_name') or run.get('tester_id') or 'cae-tester'),
             dimensions={
                 'scenario': scenario_id,
                 'mode': str(conversation.get('mode') or run.get('mode') or 'unknown'),

@@ -38,6 +38,7 @@ AudioTransportId = Literal[
     'pipecat_small_webrtc',
     'pipecat_daily_webrtc',
     'signalwire_webrtc',
+    'waylo_livekit',
     'freeswitch_verto_sip',
 ]
 
@@ -69,6 +70,11 @@ class ExecutionAudioCapabilities(BaseModel):
 def describe_execution_audio_capabilities() -> ExecutionAudioCapabilities:
     return ExecutionAudioCapabilities(
         transports=[
+            ExecutionAudioTransportInfo(
+                id='waylo_livekit', label='Configured Waylo target over LiveKit',
+                available=True, status='available',
+                notes='Starts /sessions/web, sends actual tester audio and captures native evidence. Evaluation is manual.',
+            ),
             ExecutionAudioTransportInfo(
                 id='none',
                 label='No execution audio transport',

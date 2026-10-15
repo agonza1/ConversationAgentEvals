@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
+import math
+import re
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
@@ -27,19 +30,38 @@ def is_vcon_timestamp(value: Any) -> bool:
     return parsed.tzinfo is not None
 
 
-def is_vcon_sha512(value: Any) -> bool:
-    if not isinstance(value, str) or not value.strip() or value.startswith('sha512-'):
+def is_vcon_sha512(value: Any, *, allow_legacy: bool = True) -> bool:
+    """Accept old CAE bare digests only at intake; new tokens name the algorithm."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    digest = value.strip()
+    if digest.startswith('sha512-'):
+        digest = digest[7:]
+        if not re.fullmatch(r'[A-Za-z0-9_-]{86}', digest):
+            return False
+    elif not allow_legacy:
         return False
     try:
-        digest = value.strip()
         decoded = base64.b64decode((digest + '=' * (-len(digest) % 4)).encode('ascii'),
                                    altchars=b'-_', validate=True)
     except (UnicodeEncodeError, ValueError, binascii.Error):
         return False
-    return len(decoded) == 64
+    return len(decoded) == 64 and (allow_legacy or base64.urlsafe_b64encode(decoded).decode('ascii').rstrip('=') == digest)
 
 
-def vcon_dialog_errors(dialog: Any) -> list[str]:
+def vcon_content_hash(data: bytes) -> str:
+    return 'sha512-' + base64.urlsafe_b64encode(hashlib.sha512(data).digest()).decode('ascii').rstrip('=')
+
+
+def normalize_vcon_sha512(value: str) -> str:
+    if not is_vcon_sha512(value):
+        raise ValueError('Invalid SHA-512 content hash')
+    digest = value.strip().removeprefix('sha512-')
+    decoded = base64.b64decode((digest + '=' * (-len(digest) % 4)).encode('ascii'), altchars=b'-_', validate=True)
+    return 'sha512-' + base64.urlsafe_b64encode(decoded).decode('ascii').rstrip('=')
+
+
+def vcon_dialog_errors(dialog: Any, *, allow_legacy_hash: bool = True) -> list[str]:
     """Shared semantic rules for CAE's supported portable text/recording subset."""
     if not isinstance(dialog, list):
         return ['dialog must be a list']
@@ -48,6 +70,11 @@ def vcon_dialog_errors(dialog: Any) -> list[str]:
         if not isinstance(item, dict):
             errors.append(f'dialog[{index}] must be an object')
             continue
+        if 'start' in item and not is_vcon_timestamp(item['start']):
+            errors.append(f'dialog[{index}] start must be an RFC 3339 timestamp')
+        duration = item.get('duration')
+        if 'duration' in item and (type(duration) not in (int, float) or not math.isfinite(duration) or duration < 0):
+            errors.append(f'dialog[{index}] duration must be a finite non-negative number of seconds')
         if item.get('type') == 'text':
             if not isinstance(item.get('body'), str) or not item['body'].strip():
                 errors.append(f'dialog[{index}] text body is required')
@@ -60,18 +87,26 @@ def vcon_dialog_errors(dialog: Any) -> list[str]:
                 if decoded is None or not decoded.strip():
                     errors.append(f'dialog[{index}] text body must decode as non-empty UTF-8 base64url')
         elif item.get('type') == 'recording':
+            # The draft permits a placeholder when captured media is not included.
+            # It is not a claim that audio was captured or a conversation failed.
+            if not any(key in item for key in ('body', 'url', 'encoding', 'content_hash')):
+                continue
             if item.get('encoding') == 'base64url' and isinstance(item.get('body'), str):
                 try:
                     data = item['body']
-                    base64.b64decode((data + '=' * (-len(data) % 4)).encode('ascii'), altchars=b'-_', validate=True)
+                    decoded = base64.b64decode((data + '=' * (-len(data) % 4)).encode('ascii'), altchars=b'-_', validate=True)
+                    digest = item.get('content_hash')
+                    if is_vcon_sha512(digest) and normalize_vcon_sha512(digest) != vcon_content_hash(decoded):
+                        errors.append(f'dialog[{index}] recording content_hash does not match its body')
                 except (UnicodeEncodeError, ValueError, binascii.Error):
                     errors.append(f'dialog[{index}] recording body must be base64url')
             else:
                 parsed = urlparse(str(item.get('url') or ''))
                 if parsed.scheme != 'https':
                     errors.append(f'dialog[{index}] recording URL must use HTTPS')
-            if not is_vcon_sha512(item.get('content_hash')):
-                errors.append(f'dialog[{index}] recording content_hash must be a base64url SHA-512 digest')
+            # Inline content need not have a hash, but when supplied it must be valid.
+            if ('url' in item or 'content_hash' in item) and not is_vcon_sha512(item.get('content_hash'), allow_legacy=allow_legacy_hash):
+                errors.append(f'dialog[{index}] recording content_hash must be a sha512- base64url digest')
         else:
             errors.append(f'dialog[{index}] has unsupported type')
     return errors
