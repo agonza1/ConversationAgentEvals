@@ -160,7 +160,7 @@ async function evaluate(page: Page) {
   await page.getByLabel('Evidence transcript', { exact: true })
     .fill(`User: I need a same-day appointment.\nAgent: ${bookingQuote}`);
   await page.getByRole('button', { name: 'Evaluate evidence', exact: true }).click();
-  await expect(page.getByLabel('Report brief')).toContainText('Score: 100');
+  await expect(page.getByLabel('Report brief')).toContainText('Diagnostic score (not verified resolution): 100');
 }
 
 const evidenceReport = (page: Page) => page.getByLabel('ASSERT evidence report', { exact: true });
@@ -234,7 +234,7 @@ test('Eval judge failure keeps the automatic report and never fabricates an ASSE
   await page.getByRole('button', { name: 'Request LLM judge', exact: true }).click();
   await expect(page.getByLabel('LLM judge result')).toContainText('Synthetic ASSERT review could not complete.');
   await expect(evidenceReport(page)).toHaveCount(0);
-  await expect(page.getByLabel('Report brief')).toContainText('Score: 100');
+  await expect(page.getByLabel('Report brief')).toContainText('Diagnostic score (not verified resolution): 100');
   await expect(page.getByLabel('Report brief')).toContainText('Verdict: pass');
   expect(api.judgeCalls()).toBe(1);
   expect(api.applyCalls()).toBe(0);
