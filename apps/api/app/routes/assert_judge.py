@@ -243,6 +243,11 @@ def judge_execution_conversation(
     )
 
     result = {**response, 'review_id': review['review_id']}
+    # Return the immutable automatic evaluation actually bound to this saved
+    # review, including when reusing a retained provider result. Never rebuild
+    # the historical comparison from a subsequently changed conversation.
+    if isinstance(review.get('deterministic_snapshot'), dict):
+        result['deterministic_snapshot'] = review['deterministic_snapshot']
     assert_judge_requests.retain(db, invocation_id, result, completed=True)
     return {**result, 'reused': retained is not None}
 

@@ -239,7 +239,7 @@ def test_deduplicated_annotation_changes_full_input_identity_and_stales_old_v3_r
     review = {'model': 'openai/gpt-4.1-mini', 'judge_result': {}}
     refresh_review(run, conversation, review)
     provenance = review['judge_result']['provenance']
-    assert provenance['configuration']['adapter_version'] == 'cae-assert-evidence-v3'
+    assert provenance['configuration']['adapter_version'] == 'cae-assert-evidence-v4'
     previous_fingerprint = upstream_assert_judge._input_fingerprint(
         review['model'], 1,
         build_assert_taxonomy(scenario_contract=contract, conversation=conversation), old_row,

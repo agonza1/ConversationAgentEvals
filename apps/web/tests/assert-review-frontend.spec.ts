@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator } from '@playwright/test';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
@@ -18,6 +18,13 @@ const seed = (run: ReturnType<typeof runForTest>) => {
   writeFileSync(path.join(runPath(run.execution_run_id), 'run.json'),
     JSON.stringify(refreshAssertFixture(run, true)));
 };
+async function openAllChecks(panel: Locator) {
+  const summary = panel.locator('summary').filter({ hasText: /^All checks/ });
+  if (!await summary.evaluate((element) => (element.parentElement as HTMLDetailsElement).open)) {
+    await summary.click();
+  }
+  await expect(summary.locator('..')).toHaveJSProperty('open', true);
+}
 test.beforeEach(async ({ page }) => {
   mkdirSync(artifacts, { recursive: true });
   await page.addInitScript(() => localStorage.setItem('conversation-evals-demo-user', 'demo-user'));
@@ -35,6 +42,7 @@ test('real persisted review renders native nodes/typed ordinals/history after re
     const panel = page.getByLabel('Saved ASSERT assessment');
     await expect(page.getByLabel('Saved ASSERT review')).toHaveValue('judge-review-native-newest');
     await expect(panel.getByLabel('Review freshness')).toContainText('Current');
+    await openAllChecks(panel);
     await expect(panel).toContainText('String two recorded');
     await expect(panel.getByText('number: 2 — Numeric two must not match', { exact: true })).not.toBeVisible();
     await expect(panel).toContainText('Not applicable');
@@ -43,7 +51,8 @@ test('real persisted review renders native nodes/typed ordinals/history after re
     await nodes.first().focus(); await page.keyboard.press('Enter');
     await expect(panel.getByText('Confidence: high', { exact: true })).toBeVisible();
     await expect(panel.getByText('Judge turn 1, Judge turn 3 — unresolved reference', { exact: true })).toBeVisible();
-    await expect(panel.getByText('Completion is unsupported <script>alert(1)</script>.')).toBeVisible();
+    await expect(panel.getByLabel('Behavior breakdown').getByText('Completion is unsupported <script>alert(1)</script>.', { exact: true })).toBeVisible();
+    await expect(panel.getByLabel('What needs attention').getByText('Completion is unsupported <script>alert(1)</script>.', { exact: true })).toBeVisible();
     await expect(panel.locator('a[href*="turn"]')).toHaveCount(0);
     await expect(panel).not.toContainText('/Users/private');
     await expect(panel).not.toContainText('NEVER-EXPOSE');
@@ -54,9 +63,12 @@ test('real persisted review renders native nodes/typed ordinals/history after re
     await page.reload();
     await expect(page.getByLabel('Saved ASSERT review')).toHaveValue('judge-review-native-newest');
     await expect(panel.getByLabel('Review freshness')).toContainText('Current');
+    await openAllChecks(panel);
+    await expect(panel).toContainText('String two recorded');
     await page.getByLabel('Saved ASSERT review').selectOption('judge-review-native-older');
     await expect(panel).toContainText('Superseded');
     await expect(panel.getByLabel('Review freshness')).toContainText('Current');
+    await openAllChecks(panel);
     await panel.getByText('Semantic rationale', { exact: true }).click();
     await expect(panel).toContainText('Older recorded assessment.');
     await expect(panel.getByRole('button', { name: 'Apply proposed evaluation' })).toHaveCount(0);
@@ -66,11 +78,13 @@ test('real persisted review renders native nodes/typed ordinals/history after re
     expect((await reportResponse).status()).toBe(200); await (await download).saveAs(path.join(artifacts, 'selected-historical.html'));
     await page.getByLabel('Saved ASSERT review').selectOption('judge-review-native-legacy');
     await expect(panel.getByLabel('Review freshness')).toContainText('Cannot verify');
+    await panel.getByText('Technical details', { exact: true }).click();
     await expect(panel).toContainText('Recorded time unavailable');
     await page.screenshot({ path: path.join(artifacts, 'legacy-unverifiable.png'), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.getByLabel('Saved ASSERT review').selectOption('judge-review-native-newest');
     await expect(panel.getByLabel('Review freshness')).toContainText('Current');
+    await openAllChecks(panel);
     await panel.getByText('flagged_behavior · Flagged', { exact: true }).click();
     await page.screenshot({ path: path.join(artifacts, 'native-behaviors-mobile.png'), fullPage: true });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
@@ -151,6 +165,7 @@ test('undated persisted history defaults and exports to the newest appended revi
     await expect(page.getByLabel('Saved ASSERT review')).toHaveValue(newest.review_id);
     const panel = page.getByLabel('Saved ASSERT assessment');
     await expect(panel.getByLabel('Review freshness')).toContainText('Current');
+    await panel.getByText('Technical details', { exact: true }).click();
     await expect(panel).toContainText('Recorded time unavailable');
     await page.reload();
     await expect(page.getByLabel('Saved ASSERT review')).toHaveValue(newest.review_id);
