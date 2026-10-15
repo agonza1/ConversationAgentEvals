@@ -32,6 +32,7 @@ from app.services.editable_assert_spec import (
 )
 from app.services.spec_scenario_authoring import generate_case_drafts, publish_scenarios
 from app.services.spec_generation_settings import generation_settings, save_generation_settings
+from app.services.assisted_authoring import AuthoringBusy, AuthoringRequest, assist_authoring
 
 
 router = APIRouter(prefix='/api/specs', tags=['specs'])
@@ -155,6 +156,20 @@ def generate_editable_spec_draft(payload: SpecDraftGenerateRequest):
     except SpecGenerationUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except AssertRuntimeUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except SpecGenerationFailed as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post('/assist')
+def assist_test_authoring(payload: AuthoringRequest):
+    try:
+        return assist_authoring(payload)
+    except AuthoringBusy as exc:
+        raise HTTPException(status_code=429, detail=str(exc), headers={'Retry-After': '5'}) from exc
+    except (SpecGenerationUnavailable, AssertRuntimeUnavailable) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except SpecGenerationFailed as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

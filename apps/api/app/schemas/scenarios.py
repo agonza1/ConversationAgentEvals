@@ -17,6 +17,9 @@ class ScenarioCreateRequest(BaseModel):
     description: str | None = None
     required_actions: list[str] | None = Field(default=None, max_length=100)
     forbidden_actions: list[str] | None = Field(default=None, max_length=100)
+    evidence_requirements: list[Literal['transcript', 'action_trace', 'final_state', 'vcon', 'final_state_or_action_trace']] | None = Field(default=None, max_length=5)
+    requirements: str | None = Field(default=None, max_length=30000)
+    permissible_behavior: str | None = Field(default=None, max_length=10000)
 
     @model_validator(mode='after')
     def require_core_fields(self) -> 'ScenarioCreateRequest':

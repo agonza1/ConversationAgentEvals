@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation';
 import styles from './SpecEditorPage.module.css';
 
 import { SiteNav } from '@/components/SiteNav';
+import { AssistedTestBuilder } from '@/components/AssistedTestBuilder';
+import { approvedAuthoringSpec } from '@/lib/assistedAuthoring';
 import {
   generateEditableAssertDraft,
   generateEditableAssertCases,
@@ -181,6 +183,7 @@ export function SpecEditorPage() {
   const router = useRouter();
   const identity = useMemo(() => ({ userId: demoUserId(), projectId: (typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('project_id') : null) || demoProjectId() }), []);
   const [spec, setSpec] = useState<EditableAssertSpec>(starterSpec);
+  const [manualEditor, setManualEditor] = useState(false);
   const [caseGenerator, setCaseGenerator] = useState<'assert' | 'cae_configured_llm'>('assert');
   const [templates, setTemplates] = useState<EditableAssertTemplate[]>([]);
   const [behaviorPresets, setBehaviorPresets] = useState<AssertLibraryPreset[]>([]);
@@ -207,6 +210,8 @@ export function SpecEditorPage() {
   const [publishConfirmed, setPublishConfirmed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const continueInFlight = useRef(false);
+  const assistedSubmission = useRef<EditableAssertSpec | null>(null);
+  useEffect(() => () => { assistedSubmission.current = null; }, []);
   const [busy, setBusy] = useState<'templates' | 'generate' | 'cases' | 'publish' | 'preview' | 'save' | null>(null);
 
   const workingSpec = useMemo<EditableAssertSpec>(() => {
@@ -273,10 +278,11 @@ export function SpecEditorPage() {
         setJudgePresets(nextJudges);
         setScenarioContexts(nextContexts);
         const query = new URLSearchParams(window.location.search);
+        if (query.get('editor') === 'manual') setManualEditor(true);
         const specId = query.get('spec_id');
         if (specId) {
           const next = await getEditableAssertSpec(specId, identity.userId, query.get('project_id') || identity.projectId, Number(query.get('version')) || undefined);
-          if (active) { applySpec(next.spec); setSaved(next); setSavedFingerprint(editableFingerprint(next.spec)); }
+          if (active) { setManualEditor(true); applySpec(next.spec); setSaved(next); setSavedFingerprint(editableFingerprint(next.spec)); }
         }
       })
       .catch((err) => {
@@ -407,32 +413,35 @@ export function SpecEditorPage() {
   }
 
   function approvedSnapshot(snapshot: EditableAssertSpec): EditableAssertSpec {
-    return { ...snapshot, generated_content_status: 'approved',
-      required_behaviors: snapshot.required_behaviors.map((item) => ({ ...item, draft: false })),
-      forbidden_behaviors: snapshot.forbidden_behaviors.map((item) => ({ ...item, draft: false })),
-      deterministic_checks: (snapshot.deterministic_checks || []).map((item) => ({ ...item, draft: false })),
-      scenarios: snapshot.scenarios.map((item) => ({ ...item, draft: false })),
-    };
+    return approvedAuthoringSpec(snapshot);
   }
 
-  async function approveAndContinue() {
-    if (continueInFlight.current || mutationBusy || !runnableCases) return;
+  async function approveAndContinue(assisted?: EditableAssertSpec) {
+    const submitted = assisted || workingSpec;
+    const submittedRules = [...submitted.required_behaviors, ...submitted.forbidden_behaviors];
+    const ready = submitted.scenarios.length > 0 && submitted.scenarios.every((item) =>
+      item.steps?.[0]?.trim() && item.expected_outcome?.trim() && submittedRules.some((rule) => rule.id === item.behavior_id));
+    if (continueInFlight.current || (!assisted && mutationBusy) || !ready) return;
     continueInFlight.current = true;
-    const submitted = workingSpec;
     const submittedFingerprint = editableFingerprint(submitted);
     setError(null); setBusy('save');
     try {
-      let version = saved && !unsavedChanges && !needsApproval ? saved : null;
+      let version = saved && (assisted
+        ? editableFingerprint(saved.spec) === editableFingerprint(approvedSnapshot(submitted))
+        : !unsavedChanges && !needsApproval) ? saved : null;
       if (!version) {
         version = await saveEditableAssertSpec({ user_id: identity.userId, project_id: identity.projectId,
           spec: approvedSnapshot(submitted) });
         setSaved(version);
-        if (editableFingerprint(latestWorkingSpec.current) !== submittedFingerprint) {
+        if (assisted ? assistedSubmission.current !== submitted : editableFingerprint(latestWorkingSpec.current) !== submittedFingerprint) {
           setSavedFingerprint(null);
           throw new Error('The submitted test set was saved, but you made newer edits. Review those edits before continuing; nothing was published.');
         }
         applySpec(version.spec);
         latestWorkingSpec.current = version.spec;
+        setSaved(version); setSavedFingerprint(editableFingerprint(version.spec));
+      } else if (assisted) {
+        applySpec(version.spec); latestWorkingSpec.current = version.spec;
         setSaved(version); setSavedFingerprint(editableFingerprint(version.spec));
       }
       const versionFingerprint = editableFingerprint(version.spec);
@@ -443,13 +452,14 @@ export function SpecEditorPage() {
       const scenarioId = result.scenario_ids[0];
       if (!scenarioId) throw new Error('The published suite returned no runnable scenarios.');
       setPublishedSuite({ suite_id: result.suite_id, scenario_id: scenarioId });
-      if (editableFingerprint(latestWorkingSpec.current) !== versionFingerprint) {
+      if (assisted ? assistedSubmission.current !== submitted : editableFingerprint(latestWorkingSpec.current) !== versionFingerprint) {
         throw new Error('The saved version was published, but newer edits were not included. Review the current test set before continuing.');
       }
       const query = new URLSearchParams(withCurrentApiBase({ suite_id: result.suite_id, scenario_id: scenarioId, run_scope: 'suite' }));
       router.push(`/runs?${query}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not prepare test set. Retry to publish the saved version.');
+      if (assisted) throw err;
     } finally { continueInFlight.current = false; setBusy(null); }
   }
 
@@ -501,8 +511,17 @@ export function SpecEditorPage() {
       <section className="minimal-hero spec-hero" aria-labelledby="spec-title">
         <p className="eyebrow">Tests · create a test set</p>
         <h1 id="spec-title">Create a test set</h1>
-        <p>Define the rules, review caller cases, then choose an agent and run the test set.</p>
+        <p>Describe what matters. Review a small draft, then choose the agent to test.</p>
       </section>
+      {!manualEditor ? <AssistedTestBuilder scope="set"
+        onManual={(next) => { if (next) applySpec(next); setManualEditor(true); }}
+        onApprove={async (next) => {
+          assistedSubmission.current = next;
+          try { await approveAndContinue(next); }
+          finally { if (assistedSubmission.current === next) assistedSubmission.current = null; }
+        }} /> : <>
+      <button type="button" className="secondary-link" disabled={mutationBusy}
+        onClick={() => { if (window.confirm('Start a new assisted draft? Your detailed editor changes stay here until you replace them with a reviewed draft.')) setManualEditor(false); }}>Start a new assisted draft</button>
       <ol className={styles.steps} aria-label="Evaluation workflow">
         <li aria-current={workingSpec.scenarios.length ? undefined : 'step'}>1 · Define test</li>
         <li aria-current={workingSpec.scenarios.length ? 'step' : undefined}>2 · Review cases</li>
@@ -577,7 +596,7 @@ export function SpecEditorPage() {
         </fieldset>)}</div> : <p>Generate cases or add one manually to start reviewing.</p>}
         <div className={styles.continueBar}>
           <p>Continuing confirms you reviewed the rules and cases. CAE saves an immutable version and publishes that version, then opens target selection. No voice call starts yet.</p>
-          <button className="primary-link" type="button" onClick={approveAndContinue} disabled={mutationBusy || !runnableCases}>
+          <button className="primary-link" type="button" onClick={() => void approveAndContinue()} disabled={mutationBusy || !runnableCases}>
             {busy === 'save' ? 'Saving approved test set…' : busy === 'publish' ? 'Publishing test set…' : 'Approve test set and continue'}
           </button>
           {!runnableCases && workingSpec.scenarios.length ? <small>Each case needs a caller opening, an expected outcome, and one target behavior.</small> : null}
@@ -697,6 +716,7 @@ export function SpecEditorPage() {
           </aside>
         </div>
       </details>
+      </>}
     </main>
   );
 }

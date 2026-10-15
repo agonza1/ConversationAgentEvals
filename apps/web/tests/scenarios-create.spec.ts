@@ -12,6 +12,7 @@ test('scenarios page can create and view a scenario', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Call Center Voice AI' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Billing Address Change' })).toBeVisible();
   await page.getByRole('button', { name: 'Add quick case' }).click();
+  await page.getByRole('button', { name: 'Use detailed editor' }).click();
 
   await page.getByPlaceholder('Account lockout handoff').fill('Account access issue');
   await page.getByPlaceholder('Describe the user’s situation and request…').fill(prompt);
@@ -38,9 +39,9 @@ test('scenarios page can create and view a scenario', async ({ page }) => {
 
 test('create=1 deep link opens the new scenario form', async ({ page }) => {
   await page.goto('/scenarios?create=1');
-  await expect(page.getByRole('heading', { name: 'Add a quick case' })).toBeVisible();
-  await expect(page.getByPlaceholder('Account lockout handoff')).toBeVisible();
-  await expect(page.getByPlaceholder('Describe the user’s situation and request…')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'What should your agent get right?' })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'What would you like to test?' })).toBeVisible();
+  await expect(page.getByPlaceholder('Account lockout handoff')).toHaveCount(0);
 });
 
 test('built-in scenarios cannot be deleted', async ({ page }) => {
