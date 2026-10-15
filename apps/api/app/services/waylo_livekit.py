@@ -308,6 +308,8 @@ class LiveKitVoicePeer:
         if rate != self.noise_mixer.rate:
             raise WayloError('Tester sample rate changed within the call.')
         speech = self.continuous_caller.enqueue(pcm)
+        frame_samples = rate // 50
+        intended_samples = (len(pcm) // 2 + frame_samples - 1) // frame_samples * frame_samples
         failure = True
         try:
             await asyncio.shield(speech.done)
@@ -325,7 +327,8 @@ class LiveKitVoicePeer:
             (artifact_dir / f'{turn_id}-sent.wav').write_bytes(sent_wav)
             observation = {'event_id': f'{turn_id}/sent', 'event_type': 'tester.audio.sent', 'source': 'livekit.AudioSource',
                 'turn_id': turn_id, 'reference_text': reference, 'sample_rate_hz': rate, 'channels': 1,
-                'intended_samples': len(pcm) // 2, 'accepted_samples': len(speech.accepted) // 2,
+                'intended_samples': intended_samples, 'accepted_samples': len(speech.accepted) // 2,
+                'source_speech_samples': len(pcm) // 2,
                 'audio_sha256': hashlib.sha256(sent_wav).hexdigest(), 'started_at_ms': speech.started_ms,
                 'ended_at_ms': speech.ended_ms if speech.ended_ms is not None else self.now_ms(),
                 'clock_origin': 'cae_monotonic_since_transport_creation', 'clock_origin_utc': self.origin_utc,

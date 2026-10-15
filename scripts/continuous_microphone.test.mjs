@@ -116,3 +116,20 @@ test('first caller calibrates at the current noise cursor after greeting playbac
     assert.equal(mic.noiseGain, gain);
   } finally { await mic.close(); }
 });
+
+test('partial caller evidence retains the complete final SignalWire frame', async () => {
+  const sent = [];
+  const mic = new ContinuousMicrophone({ noise: new Int16Array([100, -100]),
+    send: (frame) => sent.push(frame), observe: () => {} });
+  mic.start();
+  try {
+    const firstSpeechFrame = sent.length;
+    const played = await mic.play(new Int16Array(600).fill(1000), 1);
+    assert.equal(played.length, 960);
+    const expected = new Int16Array(960);
+    expected.set(sent[firstSpeechFrame]);
+    expected.set(sent[firstSpeechFrame + 1], 480);
+    assert.deepEqual(played, expected);
+    assert.ok(played.slice(600).some((sample) => sample !== 0));
+  } finally { await mic.close(); }
+});

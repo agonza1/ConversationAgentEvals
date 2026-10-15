@@ -76,7 +76,7 @@ class ContinuousCallerAudio:
                     self.on_audio(mixed, rate)
                     if speech:
                         speech.started_ms = started if speech.started_ms is None else speech.started_ms
-                        speech.accepted.extend(mixed[:count]); speech.offset += count
+                        speech.accepted.extend(mixed); speech.offset += count
                         if speech.offset == len(speech.pcm):
                             # Only this task writes the source. Drain the last speech
                             # frame, then immediately resume noise on the same track.

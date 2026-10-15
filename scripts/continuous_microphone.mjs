@@ -55,13 +55,13 @@ export class ContinuousMicrophone {
         this.observe(frame, pending?.turnPair || 0);
         if (pending) {
           const count = Math.min(size, pending.samples.length - pending.offset);
-          pending.chunks.push(frame.slice(0, count));
+          pending.chunks.push(frame.slice());
           pending.offset += count;
         }
         await new Promise((resolve) => setTimeout(resolve, Math.max(0, 10 - (Date.now() - before))));
         if (pending && pending.offset === pending.samples.length) {
           this.pending = null;
-          const played = new Int16Array(pending.samples.length);
+          const played = new Int16Array(pending.chunks.length * size);
           let offset = 0;
           for (const chunk of pending.chunks) { played.set(chunk, offset); offset += chunk.length; }
           pending.resolve(played);

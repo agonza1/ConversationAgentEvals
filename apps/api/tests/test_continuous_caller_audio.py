@@ -142,7 +142,8 @@ def test_noise_published_through_greeting_turn_gaps_and_target_speech(tmp_path, 
         assert any(state and any(pcm) for state, pcm in zip(source.states, source.frames))
         assert all(any(pcm) for pcm in source.frames[gap:gap + 2])
         assert observed == source.frames and not errors
-        assert len(first.accepted) == 1920 and len(second.accepted) == 1200
+        assert len(first.accepted) == 1920 and len(second.accepted) == 1920
+        assert bytes(second.accepted) in b''.join(source.frames)
         with wave.open(str(stream.path)) as reader:
             assert reader.readframes(reader.getnframes()) == b''.join(source.frames)
         assert stream.metadata()['accepted_samples'] == count * 480
@@ -250,7 +251,9 @@ def test_real_peer_publishes_one_mic_track_and_records_noise_with_target_audio(t
         assert len(peer.room.local_participant.published) == 1
         assert len(peer.source.frames) > before and peer.source.closed and peer.room.disconnected
         assert receipt['audio_condition']['scope'] == 'continuous_caller_track'
-        assert receipt['accepted_samples'] == 600 and receipt['peer_receipt'] == 'unknown'
+        assert receipt['accepted_samples'] == receipt['intended_samples'] == 960
+        assert receipt['source_speech_samples'] == 600 and receipt['peer_receipt'] == 'unknown'
+        assert len(read_wav(sent)[1]) == 1920
         assert read_wav(sent)[1] != b'\x00\x08' * 600
         assert wav and len(wav) > len(sent) and not metadata['partial']
         event = next(e for e in peer.events if e['event_type'] == 'tester.background_noise.sent')
