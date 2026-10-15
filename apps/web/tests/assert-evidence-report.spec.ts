@@ -34,7 +34,9 @@ function makeReview(id: string, options: { legacy?: boolean; quote?: string; cre
     review_id: id, status: 'pending_confirmation', provider: 'assert-ai',
     created_at: options.createdAt ?? '2026-10-14T13:00:00Z',
     model: 'chatgpt_plan/gpt-6-luna', latency_ms: 2345,
-    evidence_citations: ['Booking claim — the appointment outcome is not independently confirmed.'],
+    evidence_citations: options.legacy
+      ? [`{"description":"Historical booking claim","quoted_text":"${quote}","fixture":"${rawMarker}","truncated":`]
+      : ['Booking claim — the appointment outcome is not independently confirmed.'],
     judge_result: {
       agrees: false, rationale: 'A conversational claim is not a verified booking outcome.',
       next_action: 'Check the booking receipt before treating the outcome as resolved.',
@@ -293,6 +295,8 @@ test('historical truncated JSON stays out of the default report and never gains 
   await page.goto(`/runs/${runId}`);
   const report = evidenceReport(page);
   await expect(report.getByLabel('Historical evidence mapping', { exact: true })).toBeVisible();
+  await expect(report).toContainText('Historical booking claim');
+  await expect(report).toContainText(bookingQuote);
   await expect(report.getByText(rawMarker, { exact: false })).toBeHidden();
   await expect(details(report, 'Technical details')).toHaveJSProperty('open', false);
   await expect(report.getByRole('button', { name: 'View transcript turn', exact: true })).toHaveCount(0);
