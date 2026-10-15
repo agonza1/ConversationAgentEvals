@@ -10,6 +10,7 @@ import { AssertReviewProgress } from '@/components/AssertReviewProgress';
 import { sortedAssertReviews } from '@/lib/assertReview';
 import { DesignResults } from '@/components/DesignResults';
 import { SiteNav } from '@/components/SiteNav';
+import styles from './RunDetailPage.module.css';
 import {
   applyLlmJudgeReview,
   AssertReviewFreshness,
@@ -33,18 +34,12 @@ import {
 type MetricKey = 'audio_interruption' | 'word_error_rate' | 'latency' | 'call_resolution';
 type ResolutionState = 'verified' | 'unverified' | 'failed' | 'not_evaluated';
 
-const METRICS: Array<{ id: MetricKey; group: string; label: string; voiceOnly?: boolean }> = [
-  { id: 'audio_interruption', group: 'Audio', label: 'Interruption Detection' },
-  { id: 'word_error_rate', group: 'Audio', label: 'Word Error Rate', voiceOnly: true },
-  { id: 'latency', group: 'Audio', label: 'Latency' },
-  { id: 'call_resolution', group: 'Other', label: 'Resolution Evidence' },
-];
-
 export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
   const [run, setRun] = useState<ExecutionRunRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [metric, setMetric] = useState<MetricKey>('call_resolution');
   const [conversationId, setConversationId] = useState('');
+  const [refreshKey, setRefreshKey] = useState(0);
   const userId = useMemo(() => demoUserId(), []);
 
   useEffect(() => {
@@ -82,7 +77,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
       active = false;
       if (timer) clearTimeout(timer);
     };
-  }, [executionRunId, userId]);
+  }, [executionRunId, refreshKey, userId]);
 
   const conversation = useMemo(
     () => run?.conversations.find((item) => item.conversation_id === conversationId) || run?.conversations[0] || null,
@@ -90,49 +85,45 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
   );
 
   const summary = useMemo(() => aggregateRunMetrics(run), [run]);
+  const conversationIndex = run?.conversations.findIndex((item) => item.conversation_id === conversation?.conversation_id) ?? -1;
+  const isActive = run?.status === 'running' || run?.status === 'queued';
+
 
   return (
-    <main className="page-shell runs-analysis-shell">
+    <main className={`page-shell runs-analysis-shell ${styles.page}`}>
       <SiteNav current="results" />
-      <section className="minimal-hero" aria-labelledby="run-title">
-        <p className="eyebrow">Run analysis</p>
-        <h1 id="run-title">{run?.agent_name || run?.agent_id || executionRunId}</h1>
-        {run?.mode === 'pipecat_webrtc' && run.conversations.length > 1 ? (
-          <p role="status">
-            {run.conversations.length} independent sessions · one case per session.
-            Select a conversation to inspect or play only that session.
-          </p>
-        ) : null}
-        {run?.provenance?.honesty_label ? (
-          <p className="runs-honesty-label" role="status">
-            {run.provenance.honesty_label}
-          </p>
-        ) : null}
-        {run?.provenance ? (
-          <dl className="runs-provenance" aria-label="Run provenance">
-            <div><dt>Target</dt><dd>{run.provenance.target_kind}</dd></div>
-            <div><dt>Tester</dt><dd>{run.provenance.tester_id}</dd></div>
-            <div><dt>Executor</dt><dd>{run.provenance.executor_id}</dd></div>
-            <div><dt>Exchange cap</dt><dd>{run.max_exchanges || 3}</dd></div>
-            {run.mode === 'pipecat_webrtc' ? (
-              <div><dt>Session timeout</dt><dd>{run.duplex_timeout_seconds || 120}s</dd></div>
-            ) : null}
-            <div><dt>Evidence</dt><dd>{run.provenance.evidence_source}</dd></div>
-          </dl>
-        ) : null}
-        <p>
-          <ApiAwareLink href="/results">All results</ApiAwareLink>
-          {' · '}
-          {executionRunId}
-          {run ? ` · ${run.status}` : ''}
-        </p>
-      </section>
-
-      {error ? <div className="scenarios-error" role="alert">{error}</div> : null}
-      {!run && !error ? <p className="scenarios-muted">Loading run…</p> : null}
+      <ApiAwareLink href="/results" className={styles.backLink}><span aria-hidden="true">← </span>All results</ApiAwareLink>
+      <header className={styles.header}>
+        <div>
+          <p className="eyebrow">Run analysis</p>
+          <h1 id="run-title">{run?.agent_name || run?.agent_id || 'Run details'}</h1>
+          <div className={styles.metadata}>
+            <code>{executionRunId}</code>
+            {run ? <time dateTime={run.created_at}>{formatRunDate(run.created_at)}</time> : null}
+          </div>
+        </div>
+        {run ? <div className={styles.runState}>
+          <span className={styles.status} data-status={run.status}>{formatRuntimeId(run.status)}</span>
+          <span>{run.conversations.length} {run.conversations.length === 1 ? 'conversation' : 'conversations'}</span>
+        </div> : null}
+      </header>
+      {run?.provenance?.honesty_label ? (
+        <p className={styles.honesty} role="status">{run.provenance.honesty_label}</p>
+      ) : null}
+      {isActive ? <section className={styles.progress} aria-label="Run progress">
+        <div><strong>Run in progress</strong><span>Updates automatically · {run?.progress?.completed_conversations ?? 0} of {run?.progress?.total_conversations ?? run?.scenario_ids.length ?? 0} conversations complete</span></div>
+        <progress aria-label="Conversations completed" value={run?.progress?.completed_conversations ?? 0} max={Math.max(1, run?.progress?.total_conversations ?? run?.scenario_ids.length ?? 1)} />
+      </section> : null}
+      {error ? <div className={`scenarios-error ${styles.error}`} role="alert">
+        <div><strong>{run ? 'Could not refresh this run' : 'Could not load this run'}</strong><p>{error}</p>{run ? <p>Showing the last available evidence. Retrying automatically.</p> : null}</div>
+        <button type="button" onClick={() => setRefreshKey((value) => value + 1)}>Retry</button>
+      </div> : null}
+      {!run && !error ? <p className={styles.empty} role="status">Loading run…</p> : null}
 
       {run ? (
         <>
+          <details className={styles.setup}>
+            <summary>Run setup <span>Target, tester &amp; evidence source</span></summary>
           <section className="card run-participants" aria-label="Run participants and executor">
             <div>
               <span>Target under test</span>
@@ -150,7 +141,14 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
               <small>Invokes the adapter and persists evidence; it is not scored.</small>
             </div>
           </section>
-          <p className="scenarios-muted">Suite summary · {run.conversations.length} conversations</p>
+          {run.provenance ? <dl className="runs-provenance" aria-label="Run provenance">
+            <div><dt>Target</dt><dd>{formatRuntimeId(run.provenance.target_kind)}</dd></div>
+            <div><dt>Evidence</dt><dd>{formatRuntimeId(run.provenance.evidence_source)}</dd></div>
+            <div><dt>Exchange cap</dt><dd>{run.max_exchanges || 3}</dd></div>
+            {run.mode === 'pipecat_webrtc' ? <div><dt>Session timeout</dt><dd>{run.duplex_timeout_seconds || 120}s</dd></div> : null}
+          </dl> : null}
+          </details>
+          <div className={styles.sectionHeading}><h2>Run overview</h2><p>Across all conversations · select a metric to inspect</p></div>
           <section className="metric-summary-grid" aria-label="Metric summaries">
             <MetricTile
               title="Interruption Detection"
@@ -201,42 +199,32 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
             />
           </section>
 
-          <div className="runs-analysis-layout">
-            <aside className="card runs-metric-nav" aria-label="Metric navigation">
-              {['Audio', 'Other'].map((group) => (
-                <div key={group} className="runs-metric-group">
-                  <p className="eyebrow">{group}</p>
-                  {METRICS.filter((item) => (
-                    item.group === group && (!item.voiceOnly || run.mode !== 'text_callable')
-                  )).map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      className={metric === item.id ? 'is-active' : undefined}
-                      onClick={() => setMetric(item.id)}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
-              ))}
-              <label className="runs-conversation-picker">
-                <span>Conversation</span>
-                <select
-                  aria-label="Conversation"
-                  value={conversation?.conversation_id || ''}
-                  onChange={(event) => setConversationId(event.target.value)}
-                >
-                  {(run.conversations || []).map((item) => (
-                    <option key={item.conversation_id} value={item.conversation_id}>
-                      {item.scenario_title || item.scenario_id}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </aside>
-
-            <section className="card runs-metric-detail" aria-label="Metric detail">
+          <section className={styles.conversationToolbar} aria-label="Conversation selection">
+            <label className="runs-conversation-picker">
+              <span>Conversation {conversationIndex >= 0 ? `${conversationIndex + 1} of ${run.conversations.length}` : ''}</span>
+              <select aria-label="Conversation" value={conversation?.conversation_id || ''}
+                disabled={!run.conversations.length}
+                onChange={(event) => setConversationId(event.target.value)}>
+                {!run.conversations.length ? <option value="">Waiting for conversations</option> : null}
+                {run.conversations.map((item) => <option key={item.conversation_id} value={item.conversation_id}>{item.scenario_title || item.scenario_id}</option>)}
+              </select>
+            </label>
+            <div className={styles.conversationMeta}>
+              {conversation ? <><span className={styles.status} data-status={conversation.status}>{formatRuntimeId(conversation.status)}</span><span>{conversation.turns?.length || 0} turns</span></> : null}
+              {run.mode === 'pipecat_webrtc' && run.conversations.length > 1 ? <small>Independent sessions · one case per session</small> : null}
+            </div>
+            <nav className={styles.conversationPaging} aria-label="Conversation navigation">
+              <button type="button" aria-label="Previous conversation" disabled={conversationIndex <= 0} onClick={() => setConversationId(run.conversations[conversationIndex - 1].conversation_id)}>←</button>
+              <button type="button" aria-label="Next conversation" disabled={conversationIndex < 0 || conversationIndex >= run.conversations.length - 1} onClick={() => setConversationId(run.conversations[conversationIndex + 1].conversation_id)}>→</button>
+            </nav>
+          </section>
+          {!run.conversations.length ? <p className={styles.empty}>{isActive ? 'Conversations will appear here as the run progresses.' : 'This run has no conversation evidence.'}</p> : null}
+          <nav className={styles.mobileJump} aria-label="Conversation sections">
+            <a href="#run-metric-detail">Analysis ↓</a>
+            <a href="#run-transcript">Transcript ↓</a>
+          </nav>
+          <div className={`runs-analysis-layout ${styles.workspace}`}>
+            <section className="card runs-metric-detail" id="run-metric-detail" aria-label="Metric detail">
               <MetricDetail
                 key={`${run.execution_run_id}:${conversation?.conversation_id || 'no-conversation'}`}
                 metric={metric}
@@ -255,7 +243,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
               ) : null}
             </section>
 
-            <section className="card runs-transcript" aria-label="Transcript">
+            <section className="card runs-transcript" id="run-transcript" aria-label="Transcript">
               <p className="eyebrow">Transcript</p>
               <h2>{conversation?.scenario_title || conversation?.scenario_id || 'Conversation'}</h2>
               {conversation?.evidence_coverage ? (
@@ -288,8 +276,8 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
               {(conversation?.turns || []).length ? (
                 <ol>
                   {(conversation?.turns || []).map((turn) => (
-                    <li key={`${turn.turn_index}-${turn.speaker}`}>
-                      <strong>{turn.speaker || 'speaker'}</strong>
+                    <li key={`${turn.turn_index}-${turn.speaker}`} data-speaker={turnLane(turn)}>
+                      <div className={styles.speaker}><strong>{turn.speaker || 'speaker'}</strong><span>Turn {turn.turn_index}</span></div>
                       <p>{spokenTurnText(turn) || '—'}</p>
                       {turn.frame_metadata?.transcript_source === 'waylo_final_transcript' ? (
                         <small>{stringValue(turn.frame_metadata.text_source_label) || 'Waylo final transcript'} · not independently audio-aligned</small>
@@ -309,7 +297,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
                 <pre>{conversation?.transcript || 'No transcript available.'}</pre>
               )}
             </section>
-            <EvidenceTimeline vcon={conversation?.ietf_vcon_export} />
+            <div className={styles.evidence}><EvidenceTimeline vcon={conversation?.ietf_vcon_export} /></div>
             {conversation?.ietf_vcon_export ? (
               <p>
                 <a href={`${getApiBase()}/api/execution/runs/${encodeURIComponent(executionRunId)}/conversations/${encodeURIComponent(conversation.conversation_id)}/vcon?user_id=${encodeURIComponent(userId)}`}>Download vCon evidence</a>
@@ -321,6 +309,11 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
       ) : null}
     </main>
   );
+}
+
+function formatRunDate(value: string) {
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? date.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'Date unavailable';
 }
 
 function formatRuntimeId(value: string) {
@@ -383,7 +376,7 @@ function MetricTile({
   onClick: () => void;
 }) {
   return (
-    <button type="button" className={`metric-tile${selected ? ' is-selected' : ''}`} onClick={onClick}>
+    <button type="button" className={`metric-tile${selected ? ' is-selected' : ''}`} aria-pressed={Boolean(selected)} aria-controls="run-metric-detail" onClick={onClick}>
       <span>{title}</span>
       <strong>{value}</strong>
       <em>{detail}</em>
