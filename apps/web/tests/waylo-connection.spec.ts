@@ -33,7 +33,7 @@ async function fixtureApis(page: Page, admin = false, initialAgents: Record<stri
     }
     else if (path === '/api/agents') value = { agents };
     else if (path.endsWith('/capture')) value = { vcon: { vcon: '0.4.0', uuid: workspaceId, parties: [], dialog: [] } };
-    else if (path === '/api/benchmarks/suites') value = [{ id: 'waylo-mike-notes', title: 'Waylo Mike notes', scenarios: Array.from({ length: caseCount }, (_, index) => ({ id: index ? `case-${index}` : 'mike-five-bags', title: index ? `Case ${index}` : 'Five bags, not catalog pack size', caller_steps: ['Please note five bags of white potatoes.', 'Read back my notes.'] })) }];
+    else if (path === '/api/benchmarks/suites') value = [{ id: 'waylo-mike-notes', title: 'Waylo Mike notes', scenarios: Array.from({ length: caseCount }, (_, index) => ({ id: index ? `case-${index}` : 'mike-five-bags', title: index ? `Case ${index}` : 'Five bags, not catalog pack size', caller_steps: ['Please note five bags of russet potatoes.', 'Read back my notes.'] })) }];
     else if (path.endsWith('/providers/openai/status')) value = { status: 'disconnected', provider: 'openai_codex' };
     else if (path === '/api/execution/runs' && method === 'POST') {
       if (request.headers()['x-cae-waylo-control'] !== '1' || request.headers()['x-cae-waylo-session'] !== proof) {
