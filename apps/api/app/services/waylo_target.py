@@ -218,6 +218,7 @@ def project_capture(capture: dict, *, voice_events: list[dict] | None = None,
                     suite_id: str = 'waylo', media_dialogs: list[dict] | None = None,
                     test_expectations: dict | None = None, after_items: list[dict] | None = None,
                     media_capture: dict | None = None,
+                    rtc_turns: list[dict] | None = None,
                     execution_run_id: str | None = None, conversation_id: str | None = None) -> dict:
     """Map only typed observations. Free-form events remain ancillary evidence."""
     capture = clean_native(deepcopy(capture))
@@ -316,13 +317,17 @@ def project_capture(capture: dict, *, voice_events: list[dict] | None = None,
         diagnostics=diagnostics, media_dialogs=media_dialogs, expectations=expectations)
     turns = [{'speaker': 'Caller' if t.get('role') == 'user' else 'Agent', 'text': t.get('text', ''),
               'turn_index': t['seq']} for t in capture['transcripts'] if t.get('role') in {'user', 'agent'}]
+    if rtc_turns is not None:
+        turns = clean_native(deepcopy(rtc_turns))
     vcon = build_ietf_execution_vcon(conversation_id=conversation_id or session_id,
         execution_run_id=execution_run_id or f'waylo-{session_id}',
         suite_id=suite_id, scenario_id=scenario_id, scenario_title='Waylo session capture', mode='waylo_livekit',
         turns=turns, recording=None, created_at=session['createdAt'], updated_at=session.get('endedAt') or session['createdAt'])
     vcon['uuid'] = str(uuid.uuid5(uuid.NAMESPACE_URL, f'cae-waylo/{identity}'))
     vcon['parties'][0]['type'] = 'human' if capture['origin'] == 'imported_human_call' else 'bot'
-    vcon['analysis'][0]['body']['capture_method'] = 'waylo_final_transcript_not_tts_reference'
+    vcon['analysis'][0]['body']['capture_method'] = (
+        'cae_local_rtc_reference_and_remote_transcription_not_provider_finals' if rtc_turns is not None
+        else 'waylo_final_transcript_not_tts_reference')
     from app.services.vcon_interop import is_vcon_timestamp
     from datetime import datetime
     native_lines = [t for t in capture['transcripts'] if t.get('role') in {'user', 'agent'} and str(t.get('text') or '').strip()]
@@ -353,7 +358,8 @@ def project_capture(capture: dict, *, voice_events: list[dict] | None = None,
                'evaluation_submission': 'manual', 'coverage': coverage,
                'execution_run_id': execution_run_id or f'waylo-{session_id}',
                'conversation_id': conversation_id or session_id,
-               'capture_completeness': 'provisional',
+               'capture_completeness': 'partial' if capture.get('capture_error') else 'provisional',
+               **({'capture_error': capture['capture_error']} if capture.get('capture_error') else {}),
                'capture_refresh': 'Refresh this CAE run capture after provider writes; endedAt is not a worker-flush acknowledgement.' if execution_run_id else 'Reimport the session to include later provider writes.',
                'diagnostics': diagnostics, 'test_expectations': expectations,
                'effective_configuration': {'status': config_status, 'reason': config_reason,

@@ -576,7 +576,24 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
         # Stable snapshots are provisional; provider lifecycle is not our authority.
         previous_digest = None
         for _ in range(6):
-            capture = await client.capture(bootstrap['sessionId'], origin='cae_ai_tester')
+            try:
+                capture = await client.capture(bootstrap['sessionId'], origin='cae_ai_tester')
+            except Exception:
+                # A completed RTC call must survive unavailable/invalid provider
+                # reads. Keep any earlier successful snapshot; otherwise retain
+                # only bootstrap identity, NOT invented provider observations.
+                capture_error = 'Final Waylo provider capture unavailable; local RTC evidence retained. Reconnect and refresh this run to retry capture.'
+                error = error or capture_error
+                if capture is None:
+                    capture = {'target_id': target['id'], 'origin': 'cae_ai_tester',
+                        'session': {'id': bootstrap['sessionId'],
+                            'workspaceId': target['connection']['workspace_id'],
+                            'agentId': target['connection']['waylo_agent_id'],
+                            'createdAt': peer.origin_utc, 'metadata_source': 'cae_local_bootstrap_identity'},
+                        'transcripts': [], 'unavailable': {source: capture_error for source in
+                            ('session', 'transcripts', 'events', 'items', 'agent_version')}}
+                capture['capture_error'] = capture_error
+                break
             digest = hashlib.sha256(str(capture).encode()).hexdigest()
             if digest == previous_digest and capture['session'].get('endedAt'):
                 break
@@ -597,6 +614,7 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                                    suite_id=suite_id, scenario_id=scenario['id'], media_dialogs=media_dialogs,
                                    test_expectations=scenario.get('waylo_test'), after_items=after_items,
                                    execution_run_id=execution_run_id, conversation_id=conversation_id,
+                                   rtc_turns=clean_native(turns, secret_values) if capture.get('capture_error') and not capture['transcripts'] else None,
                                    media_capture={'status': 'retained_locally' if recording or audio_tracks else 'not_captured',
                                        'captured_tracks': 1 if recording else len(audio_tracks), 'included_tracks': 0,
                                        'omitted_tracks': 1 if recording else len(audio_tracks),
@@ -605,6 +623,8 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
         # Native finals remain receipts, not the tester's intended utterance. Both are retained.
         transcript = '\n'.join(f'{"Caller" if line["role"] == "user" else "Agent"}: {line["text"]}'
                                for line in capture['transcripts'])
+        if capture.get('capture_error') and not capture['transcripts']:
+            transcript = '\n'.join(f'{turn["speaker"]}: {turn["text"]}' for turn in clean_native(turns, secret_values))
         artifact_dir.mkdir(parents=True, exist_ok=True)
         (artifact_dir / 'agent-received.wav').write_bytes(pcm_wav(bytes(peer.remote_pcm)))
         return {'turns': clean_native(turns, secret_values), 'transcript': transcript, 'ietf_vcon_export': exported['vcon'],

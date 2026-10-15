@@ -52,6 +52,14 @@ vCon UUID. It preserves local RTC media and tester references, updates provider
 transcripts/tools/items, invalidates stale scores/reviews, and never evaluates
 automatically. Repeating an unchanged refresh does not duplicate evidence.
 
+If final provider capture fails after the RTC call, CAE retains local turns,
+recordings, timing observations and session/run identity in a partial, refreshable
+vCon. Missing provider transcripts, tools, items and configuration are unavailable,
+not empty successful observations. A prior successful capture is retained if a
+later polling read fails. Local RTC text is labelled separately from provider
+finals. Reconnect and use the same refresh flow to recover provider evidence;
+the original execution failure remains recorded and no review runs automatically.
+
 Refresh conservatively refuses fewer usable caller or agent transcript entries
 than the saved native, visible or original RTC dialogue. Rejection leaves the
 saved capture, tools, state and reviews untouched: retry after provider writes,

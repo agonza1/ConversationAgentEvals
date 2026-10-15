@@ -439,7 +439,8 @@ def test_interrupted_list_checks_initial_quantity_and_later_correction_separatel
 
 
 @pytest.mark.parametrize('scripted_exchanges', [1, 2])
-def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp_path, scripted_exchanges):
+@pytest.mark.parametrize('capture_failure', [None, 'session', 'transcripts', 'late'])
+def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp_path, monkeypatch, scripted_exchanges, capture_failure):
     class Client:
         _secret = 'provider-secret'
         redaction_values = ('provider-secret',)
@@ -454,6 +455,10 @@ def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp
             return [{'rawText': 'opaque provider-secret private turn-credential turn-username', 'quantity': 1}]
         async def capture(self, session_id, origin):
             self.calls.append('capture')
+            if capture_failure in {'session', 'transcripts'} or (capture_failure == 'late' and self.calls.count('capture') > 1):
+                if capture_failure == 'transcripts':
+                    raise RuntimeError('unsafe upstream private provider-secret turn-credential turn-username')
+                raise WayloError('Waylo API unavailable.', status=503)
             return captured(origin=origin, opaque='private turn-credential')
         async def close(self):
             self.calls.append('close')
@@ -483,6 +488,20 @@ def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp
             self.events.append(event)
             artifact_dir.mkdir(parents=True, exist_ok=True)
             return event, audio
+    if capture_failure:
+        from app.services import waylo_livekit
+        # Exercise the production continuous-recording branch without an SDK,
+        # remote session or live monitor service.
+        Peer = type('MonitoredPeer', (Peer, LiveKitVoicePeer), {'__init__': lambda self: None, 'origin': 0})
+        class Monitor:
+            recording = SimpleNamespace(origin=0)
+            async def start(self):
+                pass
+            async def finish(self, *, partial):
+                return pcm_wav(b'\x00\x10' * 480), {'duration_ms': 20, 'partial': partial}
+            def __init__(self, **kwargs):
+                pass
+        monkeypatch.setattr(waylo_livekit, 'LiveAudioMonitor', Monitor)
     async def wording(turns, index):
         assert index <= scripted_exchanges, 'Never add an undeclared scripted turn.'
         return 'five bags of white potatoes'
@@ -494,8 +513,9 @@ def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp
         scenario={'id': 'case', 'caller_steps': ['five bags of white potatoes'] * scripted_exchanges},
         suite_id='waylo-mike-notes', artifact_dir=tmp_path, max_exchanges=3, timeout_seconds=30,
         next_utterance=wording, synthesize=synthesize, client=client, peer=Peer(), event_observer=observer_events.append))
-    assert result['verdict'] == 'needs_review' and result['score'] is None and result['evaluation_report'] == {}
-    assert [e['speaker'] for e in observer_events] == ['Agent'] + ['Caller', 'Agent'] * scripted_exchanges
+    assert result['verdict'] == ('failed' if capture_failure else 'needs_review')
+    assert result['score'] is None and result['evaluation_report'] == {}
+    assert [e['speaker'] for e in observer_events] == ['Agent'] + ['Caller', 'Agent'] * scripted_exchanges + (['Conversation'] if capture_failure else [])
     assert all(isinstance(e['audio'], bytes) for e in observer_events)
     assert 'provider-secret' not in repr(observer_events)
     assert 'private' not in repr(observer_events)
@@ -509,6 +529,29 @@ def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp
     assert (tmp_path / 'agent-received.wav').exists()
     assert validate_ietf_vcon(result['ietf_vcon_export'])['valid']
     assert client.calls.count('bootstrap') == 1
+    assert client.calls[-1] == 'close'
+    if capture_failure:
+        assert len(result['turns']) == 1 + scripted_exchanges * 2
+        assert len(result['local_audio_tracks']) == 1 + scripted_exchanges * 2
+        assert result['audio_session']['session_id'] == S
+        assert 'local RTC evidence retained' in result['final_state']['tester_error']
+        assert profile['context']['capture_completeness'] == 'partial'
+        assert profile['context']['target_id'] == TARGET['id'] and profile['context']['session_id'] == S
+        assert profile['tool_events'] == []
+        assert result['recording']['transport'] == 'waylo_livekit'
+        assert (tmp_path / 'conversation-continuous.wav').read_bytes() == pcm_wav(b'\x00\x10' * 480)
+        assert result['recording']['metadata']['audio_tracks'] == result['local_audio_tracks']
+        assert profile['context']['coverage']['agent_execution']['status'] == 'unknown'
+        native = result['waylo_capture']
+        if capture_failure != 'late':
+            assert not any(snapshot['phase'] == 'final' for snapshot in profile['state_snapshots'])
+            assert native['transcripts'] == [] and 'items' not in native and 'events' not in native
+            assert set(native['unavailable']) == {'session', 'transcripts', 'items', 'events', 'agent_version'}
+            assert 'local_rtc' in result['ietf_vcon_export']['analysis'][0]['body']['capture_method']
+            assert result['ietf_vcon_export']['dialog'][1]['body'] == 'five bags of white potatoes'
+        else:
+            assert native['transcripts'] == captured()['transcripts']
+            assert native['items'] == []
 
 
 def test_native_attachment_references_actual_exporter_party(monkeypatch):

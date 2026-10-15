@@ -298,6 +298,44 @@ def test_late_provider_write_refresh_replaces_run_export_without_duplicate(conne
     assert len(execution_run_store.get_execution_run(run_id)['conversations']) == 1
 
 
+def test_failed_final_capture_can_recover_through_existing_refresh_route(connected, monkeypatch, tmp_path):
+    from app.services.waylo_target import project_capture
+    from app.services.vcon_evidence import decode_evidence
+    from test_waylo_target import S
+    proof, http, run_id, conv_id, native = finished_waylo_run(connected, monkeypatch)
+    original = execution_run_store.get_conversation(run_id, conv_id)
+    partial = {'target_id': TARGET['id'], 'origin': 'cae_ai_tester',
+        'session': {'id': S, 'createdAt': '2026-10-09T12:00:00Z',
+                    'metadata_source': 'cae_local_bootstrap_identity'},
+        'transcripts': [], 'capture_error': 'Final provider capture unavailable',
+        'unavailable': {source: 'unavailable' for source in ('session', 'transcripts', 'items', 'events', 'agent_version')}}
+    exported = project_capture(partial, execution_run_id=run_id, conversation_id=conv_id,
+        rtc_turns=original['turns'], media_capture={'status': 'retained_locally', 'omitted_tracks': 1})
+    execution_run_store._RUNS[run_id]['conversations'][0].update(
+        ietf_vcon_export=exported['vcon'], status='failed', verdict='failed', score=None,
+        error='Final provider capture unavailable', final_state={'tester_error': 'Final provider capture unavailable'})
+    execution_run_store.complete_execution_run(run_id, status='failed')
+    async def read(self, session_id, *, origin='imported_human_call'):
+        assert session_id == S and origin == 'cae_ai_tester'
+        return deepcopy(native)
+    monkeypatch.setattr(WayloClient, 'capture', read)
+    payload = {'session_id': S, 'execution_run_id': run_id, 'conversation_id': conv_id, 'user_id': 'execution-user'}
+    response = http.post(f'/api/agents/{TARGET["id"]}/capture', json=payload,
+        headers={**HEADERS, 'X-CAE-Waylo-Session': proof})
+    assert response.status_code == 200, response.text
+    recovered = execution_run_store.get_conversation(run_id, conv_id)
+    assert recovered['ietf_vcon_export']['uuid'] == exported['vcon']['uuid']
+    assert recovered['rtc_turns'] == original['turns']
+    assert recovered['recording'] == original['recording'] and recovered['audio_session'] == original['audio_session']
+    assert recovered['live_events'] == original['live_events']
+    assert recovered['status'] == 'failed' and recovered['score'] is None
+    assert recovered['error'] == 'Final provider capture unavailable'
+    assert decode_evidence(recovered['ietf_vcon_export'])['context']['capture_completeness'] == 'provisional'
+    assert recovered['turns'][0]['frame_metadata']['transcript_source'] == 'waylo_final_transcript'
+    persisted = json.loads((tmp_path / 'runs' / run_id / 'inference_set.jsonl').read_text().splitlines()[0])
+    assert persisted['rtc_turns'] == original['turns'] and persisted['recording'] == original['recording']
+
+
 def test_refresh_keeps_selected_rules_while_superseding_old_review(connected, monkeypatch):
     from app.schemas.execution import ConversationRecord
     from app.services.evaluation_contract import freeze_contract, recorded_contract
