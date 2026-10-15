@@ -50,6 +50,7 @@ def test_actual_eleven_line_starter_sample_keeps_six_assistant_turns():
     ('Taylor (assistant)', 'assistant'), ('[00:01.250] Caller Jane', 'user'),
     ('00:01:22 — ASSISTANT (Support)', 'assistant'), ('Tester_A', 'user'),
     ('Customer-Pat', 'user'), ('Patient (new patient)', 'user'),
+    ('AI', 'assistant'), ('Taylor (AI)', 'assistant'),
 ])
 def test_bounded_named_and_timestamped_speaker_labels(label, role):
     assert _parse_transcript(f'{label}: Exact words.\ncontinued line') == [(role, 'Exact words.\ncontinued line')]
@@ -64,6 +65,22 @@ def test_unknown_labels_and_preamble_are_retained_without_inventing_tools():
     ]
     overlong = 'Agent (' + 'x' * 100 + '): not a bounded role label'
     assert _parse_transcript(overlong) == [('system', '[Unstructured CAE transcript evidence]\n' + overlong)]
+
+
+@pytest.mark.parametrize('label', ['AI-generated summary', 'AI summary', 'AI_generated notes', 'AI (summary)'])
+@pytest.mark.parametrize('prefix', ['', 'Agent: Actual spoken reply.\n'])
+def test_generated_ai_notes_are_unstructured_not_assistant_speech(label, prefix):
+    metadata = f'{label}: A generated outcome claim.'
+    parsed = _parse_transcript(prefix + metadata + '\nCaller: Actual caller reply.')
+    expected = ([('assistant', 'Actual spoken reply.')] if prefix else []) + [
+        ('system', '[Unstructured CAE transcript evidence]\n' + metadata),
+        ('user', 'Actual caller reply.'),
+    ]
+    assert parsed == expected
+    inference = build_assert_inference_row(run={}, conversation={'transcript': prefix + metadata})
+    spoken = [event['edit']['message']['content'] for event in inference['events']
+              if event['edit'].get('message', {}).get('role') == 'assistant']
+    assert spoken == (['Actual spoken reply.'] if prefix else [])
 
 
 def test_exact_native_quote_links_only_to_canonical_event_snapshot():
@@ -207,3 +224,15 @@ def test_unavailable_unstructured_final_state_is_not_claimed_as_judge_evidence(v
     conversation['unstructured_final_state_evidence'] = value
     metadata = _metadata(conversation=conversation)
     assert metadata['evidence_coverage']['final_state'] is False
+
+
+@pytest.mark.parametrize('value', ['Reported state', ['Reported state'], [{'phase': 'pending'}, 'unverified']])
+def test_unstructured_state_coverage_matches_canonical_judge_emission(value):
+    conversation = _conversation()
+    conversation['unstructured_final_state_evidence'] = value
+    inference = build_assert_inference_row(run={}, conversation=conversation)
+    assert any(event['edit'].get('tool_name') == 'cae_unverified_final_state_evidence'
+               for event in inference['events'])
+    metadata = report.build_evidence_report(inference, {'verdict': {}}, conversation)
+    assert metadata['evidence_coverage']['final_state'] is True
+    assert inference['dimensions']['evidence_level'] == 'black_box'

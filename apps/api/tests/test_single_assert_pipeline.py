@@ -489,6 +489,7 @@ def test_unstructured_final_state_is_retained_without_inventing_a_snapshot(asser
         result['execution_run_id'], result['conversation_id'])
     assert conversation['final_state'] == {}
     assert conversation['unstructured_final_state_evidence'] == final_state
+    assert result['judge_result']['provenance']['evidence_coverage']['final_state'] is True
     assert len(pipeline.calls) == 1
 
     command = pipeline.calls[0]

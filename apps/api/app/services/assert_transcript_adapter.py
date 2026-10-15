@@ -102,8 +102,7 @@ def build_assert_inference_row(
     # for semantic context, but never promote it to cae_final_state_snapshot:
     # that marker is reserved for an actual structured state observation.
     unstructured_state = conversation.get('unstructured_final_state_evidence')
-    if ((isinstance(unstructured_state, str) and unstructured_state.strip())
-            or (isinstance(unstructured_state, list) and unstructured_state)):
+    if _has_unstructured_final_state_evidence(unstructured_state):
         transcript.add_event(TranscriptEvent(
             view=['target', 'combined'],
             actor='tool',
@@ -299,6 +298,11 @@ def _parse_transcript(value: str) -> list[tuple[str, str]]:
         if next_role:
             flush()
             role, lines = next_role, [match.group(2)]
+        elif match and re.match(r'^ai(?:$|[\s(_-])', match.group(1).strip(), re.IGNORECASE):
+            # Generated summaries/metadata are not spoken turns, even when
+            # placed after an assistant message. Preserve them separately.
+            flush()
+            lines = [line]
         else:
             lines.append(line)
     flush()
@@ -316,8 +320,12 @@ def _role(value: str) -> str | None:
     named_suffix = re.fullmatch(r'[^():\r\n]{1,64}\s+\(([a-z]+)\)', speaker)
     if named_suffix and named_suffix.group(1) in _USER_SPEAKERS | _ASSISTANT_SPEAKERS:
         speaker = named_suffix.group(1)
+    if speaker == 'ai':
+        return 'assistant'
     token = re.match(r'^([a-z]+)(?:$|[\s(_-])', speaker)
     speaker = token.group(1) if token else speaker
+    if speaker == 'ai':
+        return None
     if speaker in _USER_SPEAKERS:
         return 'user'
     if speaker in _ASSISTANT_SPEAKERS:
@@ -361,6 +369,12 @@ def _evidence_level(conversation: dict[str, Any]) -> str:
     actions = bool(conversation.get('action_trace'))
     state = _structured_final_state(conversation) is not None
     return 'gray_box' if actions and state else 'partial_structured' if actions or state else 'black_box'
+
+
+def _has_unstructured_final_state_evidence(value: Any) -> bool:
+    """One predicate for canonical judge emission and supplied-evidence coverage."""
+    return bool((isinstance(value, str) and value.strip())
+                or (isinstance(value, list) and value))
 
 
 def _structured_final_state(conversation: dict[str, Any]) -> dict[str, Any] | None:

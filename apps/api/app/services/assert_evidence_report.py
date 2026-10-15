@@ -11,7 +11,9 @@ import re
 from typing import Any
 
 from app.integrations.assert_runtime import CITE_XML_PATTERN, Transcript, TranscriptEvent, TranscriptMetadata
-from app.services.assert_transcript_adapter import TRANSCRIPT_ADAPTER_VERSION, _structured_final_state
+from app.services.assert_transcript_adapter import (
+    TRANSCRIPT_ADAPTER_VERSION, _has_unstructured_final_state_evidence, _structured_final_state,
+)
 
 MAX_EVENTS = 2_000
 MAX_SNAPSHOT_CHARS = 512_000
@@ -36,9 +38,8 @@ def build_evidence_report(
             ),
             'tool_trace': any(isinstance(action, dict) and bool(action)
                               for action in conversation.get('action_trace') or []),
-            'final_state': _structured_final_state(conversation) is not None or (
-                isinstance(conversation.get('unstructured_final_state_evidence'), str)
-                and bool(conversation['unstructured_final_state_evidence'].strip())),
+            'final_state': _structured_final_state(conversation) is not None
+            or _has_unstructured_final_state_evidence(conversation.get('unstructured_final_state_evidence')),
         },
     }
     try:
