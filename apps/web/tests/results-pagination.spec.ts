@@ -1,5 +1,32 @@
 import { expect, test } from '@playwright/test';
 
+test('agent results render before a slow active-run probe finishes', async ({ page }) => {
+  let release = () => {};
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  let probeFinished = false;
+  await page.route('**/api/execution/runs?*', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get('status') === 'active') {
+      await pending;
+      probeFinished = true;
+      await route.fulfill({ json: [] });
+      return;
+    }
+    await route.fulfill({ json: [{ execution_run_id: 'fast-result', agent_name: 'Ready immediately',
+      status: 'completed', updated_at: '2026-10-15T12:00:00Z', conversations: [{ score: 85 }] }] });
+  });
+  try {
+    await page.goto('/results');
+    await expect(page.getByRole('link', { name: /Ready immediately/ })).toBeVisible();
+    await expect(page.getByText('Score 85', { exact: true })).toBeVisible();
+    await expect(page.getByText('Loading runs…', { exact: true })).toHaveCount(0);
+    expect(probeFinished).toBe(false);
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: 'wait' });
+  }
+});
+
 test('results fetch bounded summaries, page forward, and reset server filters', async ({ page }) => {
   const requests: URL[] = [];
   await page.route('**/api/execution/runs?*', async (route) => {

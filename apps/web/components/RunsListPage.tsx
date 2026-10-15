@@ -1,18 +1,22 @@
 'use client';
 
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { useEffect, useMemo, useState } from 'react';
 
 import { ResultsPagination, RESULTS_PAGE_SIZE } from '@/components/ResultsPagination';
 import { SiteNav } from '@/components/SiteNav';
 import { ApiAwareLink } from '@/components/ApiAwareLink';
-import { BenchmarkRunner } from '@/components/BenchmarkRunner';
 import {
   demoProjectId,
   demoUserId,
   ExecutionRunSummary,
   listExecutionRunSummaries,
 } from '@/lib/execution';
+
+const BenchmarkRunner = dynamic(() => import('@/components/BenchmarkRunner').then((module) => module.BenchmarkRunner), {
+  loading: () => <p className="scenarios-muted" role="status">Loading evaluation tools…</p>,
+});
 
 function testerLabel(testerId?: ExecutionRunSummary['tester_id']) {
   if (testerId === 'fixture_replay') return 'saved conversation replay';
@@ -46,13 +50,16 @@ export function RunsListPage({ view = 'launch' }: { view?: 'launch' | 'results' 
       setLoading(true);
       setError(null);
       try {
-        const [next, activeRuns] = await Promise.all([
-          listExecutionRunSummaries(userId, projectId, { limit: RESULTS_PAGE_SIZE + 1, offset: page * RESULTS_PAGE_SIZE, status: statusFilter }),
-          listExecutionRunSummaries(userId, projectId, { limit: 1, offset: 0, status: 'active' }).catch(() => null),
-        ]);
+        const pageRequest = listExecutionRunSummaries(userId, projectId, { limit: RESULTS_PAGE_SIZE + 1, offset: page * RESULTS_PAGE_SIZE, status: statusFilter });
+        const activeRequest = listExecutionRunSummaries(userId, projectId, { limit: 1, offset: 0, status: 'active' }).catch(() => null);
+        const next = await pageRequest;
         if (!active) return;
         setRuns(next.slice(0, RESULTS_PAGE_SIZE));
         setHasNext(next.length > RESULTS_PAGE_SIZE);
+        setLoading(false);
+        // Render the page immediately; the auxiliary polling probe may be slow.
+        const activeRuns = await activeRequest;
+        if (!active) return;
         setHasActiveRuns(activeRuns === null || [...next, ...activeRuns].some((run) => run.status === 'queued' || run.status === 'running'));
       } catch (err) {
         if (!active) return;
@@ -74,15 +81,16 @@ export function RunsListPage({ view = 'launch' }: { view?: 'launch' | 'results' 
 
     async function poll() {
       try {
-        const [next, activeRuns] = await Promise.all([
-          listExecutionRunSummaries(userId, projectId, { limit: RESULTS_PAGE_SIZE + 1, offset: page * RESULTS_PAGE_SIZE, status: statusFilter }),
-          listExecutionRunSummaries(userId, projectId, { limit: 1, offset: 0, status: 'active' }).catch(() => null),
-        ]);
+        const pageRequest = listExecutionRunSummaries(userId, projectId, { limit: RESULTS_PAGE_SIZE + 1, offset: page * RESULTS_PAGE_SIZE, status: statusFilter });
+        const activeRequest = listExecutionRunSummaries(userId, projectId, { limit: 1, offset: 0, status: 'active' }).catch(() => null);
+        const next = await pageRequest;
         if (!active) return;
         setRuns(next.slice(0, RESULTS_PAGE_SIZE));
         setHasNext(next.length > RESULTS_PAGE_SIZE);
-        setHasActiveRuns(activeRuns === null || [...next, ...activeRuns].some((run) => run.status === 'queued' || run.status === 'running'));
         setError(null);
+        const activeRuns = await activeRequest;
+        if (!active) return;
+        setHasActiveRuns(activeRuns === null || [...next, ...activeRuns].some((run) => run.status === 'queued' || run.status === 'running'));
         if (activeRuns === null || [...next, ...activeRuns].some((run) => run.status === 'queued' || run.status === 'running')) {
           timer = setTimeout(() => void poll(), 1500);
         }
