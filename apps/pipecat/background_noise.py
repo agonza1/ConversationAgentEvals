@@ -55,7 +55,7 @@ class ClockedNoiseTrack:
                 await self.observe(mixed, self.mixer.rate, pending[4] if pending else 0)
                 if pending:
                     pending[1] += len(clean)
-                    pending[2].extend(mixed[:len(clean)])
+                    pending[2].extend(mixed)  # retain the complete frame accepted by the target
                     if pending[1] == len(pending[0]):
                         # The last frame must play before the speech-end boundary.
                         await asyncio.sleep(.02)

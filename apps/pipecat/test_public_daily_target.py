@@ -57,6 +57,25 @@ def test_daily_noise_uses_one_clock_for_target_listener_and_caller_evidence():
     asyncio.run(run_test())
 
 
+def test_daily_caller_evidence_includes_the_final_padded_microphone_frame():
+    from background_noise import ClockedNoiseTrack, pcm_wav, read_wav
+
+    async def run_test():
+        target = []
+        async def send(audio, rate): target.append(audio)
+        async def observe(*_): pass
+        pcm = b'\xe8\x03' * 600  # 25 ms: the target receives two complete 20 ms frames.
+        track = ClockedNoiseTrack(pcm_wav(pcm), {'seed': 7, 'snr_db': 10}, send=send, observe=observe)
+        track.start()
+        try:
+            sent = await track.play(pcm, 1)
+            assert read_wav(sent)[1] == b''.join(target[:2])
+            assert len(read_wav(sent)[1]) == 960 * 2
+        finally:
+            await track.close()
+    asyncio.run(run_test())
+
+
 def test_public_target_timeout_matches_execution_api_limit():
     caller_text = 'Please update my billing address.'
 
