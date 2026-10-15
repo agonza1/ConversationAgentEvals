@@ -147,7 +147,7 @@ for (const surface of ['Eval', 'Run analysis'] as const) {
         await expect(page.getByRole('alert').filter({ hasText: 'Synthetic ASSERT review failed.' })).toBeVisible();
       }
       await expect(page.getByLabel(surface === 'Eval' ? 'Report brief' : 'Resolution evidence details'))
-        .toContainText(surface === 'Eval' ? 'Score: 50' : '50/100');
+        .toContainText(surface === 'Eval' ? 'Diagnostic score (not verified resolution): 50' : '50/100');
       expect(judgeCalls()).toBe(1);
     });
   }

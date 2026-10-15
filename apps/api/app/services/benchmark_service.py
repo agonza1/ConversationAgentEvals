@@ -655,6 +655,25 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, A
         'recommendations': _recommendations(assert_fields['completed_actions'], assert_fields['forbidden_action_hits'], scenario),
         **assert_fields['web_result_fields'],
     }
+    report['evaluation_scope'] = {
+        'schema': 'cae-evaluation-scope-v1',
+        'input_source': 'vcon' if isinstance(payload.get('vcon'), dict) else 'transcript',
+        'artifact_presence': {
+            'transcript': bool(transcript.strip()),
+            'action_trace': _scope_artifact_present(payload.get('action_trace')),
+            'final_state': _scope_artifact_present(payload.get('final_state')),
+        },
+        'synthetic': vcon_intake.get('synthetic') if vcon_intake else None,
+        'trust': 'source-reported; not independently authenticated',
+        'score_meaning': 'Diagnostic evidence matching, not a verified resolution percentage.',
+        'semantic_review_required': report.get('semantic_review_required', True),
+    }
+    if report.get('semantic_review_required'):
+        guidance = 'Request semantic review of the supplied evidence; heuristic matches do not verify policy or execution.'
+        if not report['evaluation_scope']['artifact_presence']['action_trace'] and not report['evaluation_scope']['artifact_presence']['final_state']:
+            guidance += ' No tool/action trace or resulting state was supplied; operational completion remains unverified.'
+        report['recommendations'] = [*report['recommendations'], guidance] if report['forbidden_action_hits'] else [guidance, *report['recommendations']]
+        report['suggested_fixes'] = [guidance, *report.get('suggested_fixes', [])]
     report['run_lifecycle'] = _run_lifecycle(
         lifecycle_context=lifecycle_context,
         logical_run_id=logical_run_id,
@@ -1910,6 +1929,16 @@ def _group_call_item_count(value: dict[str, Any], *keys: str) -> int:
     return total
 
 
+def _scope_artifact_present(value: Any) -> bool:
+    """Empty JSON and scalars are not structured tool/state evidence."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return False
+    return isinstance(value, (dict, list)) and bool(value)
+
+
 def _artifact_present(value: Any) -> bool:
     if isinstance(value, str):
         return bool(value.strip())
@@ -2083,6 +2112,7 @@ def _vcon_analysis(report: dict[str, Any]) -> dict[str, Any]:
         'provider',
         'run_metadata',
         'evidence_audit_summary',
+        'evaluation_scope',
         'simulation_validation',
         'overall_score',
         'verdict',

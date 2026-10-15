@@ -29,13 +29,13 @@ test('benchmark report includes a share-ready brief', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Simulate scenario' }).click();
 
-  await expect(page.getByRole('heading', { name: /pass|needs_review/i })).toBeVisible();
+  await expect(page.getByLabel('Evaluation evidence summary')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Report brief' })).toBeVisible();
 
   const brief = page.getByLabel('Report brief');
   await expect(brief).toContainText('Scenario:');
   await expect(brief).toContainText('Verdict:');
-  await expect(brief).toContainText('Score:');
+  await expect(brief).toContainText('Diagnostic score (not verified resolution):');
   await expect(brief).toContainText('Regression:');
   await expect(brief).toContainText('Suite coverage:');
   await expect(brief).toContainText('Primary risk:');
@@ -261,17 +261,10 @@ test('benchmark report marks complete suite coverage as ready for release review
   await page.getByRole('button', { name: 'Simulate scenario' }).click();
 
   await expect(page.getByLabel('Saved runs and e2e validation')).toContainText('4/4 suite scenarios covered (100%); full suite covered.');
-  await expect(page.getByLabel('Operator action plan')).toContainText('Ready for release review');
-  await expect(page.getByLabel('Operator action plan')).toContainText('No blocking failure category was reported for this scenario.');
-  await expect(page.getByLabel('Report brief')).toContainText(
-    'Primary risk: No blocking failure category was reported for this scenario.',
-  );
-  await expect(page.getByLabel('Operator action plan')).toContainText(
-    'Save this run as the baseline, then compare the next prompt or model change against it.',
-  );
-  await expect(page.getByLabel('Report brief')).toContainText(
-    'Next step: Save this run as the baseline, then compare the next prompt or model change against it.',
-  );
+  await expect(page.getByLabel('Operator action plan')).toContainText('Needs operator review');
+  await expect(page.getByLabel('Operator action plan')).not.toContainText('Ready for release review');
+  await expect(page.getByLabel('Evaluation evidence summary')).toContainText('Verification not established');
+  await expect(page.getByLabel('Report brief')).toContainText('Evidence coverage: Coverage not established');
   await expect(page.getByRole('button', { name: 'Open next uncovered scenario' })).toHaveCount(0);
 });
 
@@ -897,7 +890,7 @@ test(`benchmark runner shows suite simulation summary (${verdict})`, async ({ pa
   await page.getByRole('button', { name: 'Save suite runs' }).click();
   await expect(page.getByText('Saved 2 suite runs to call-center-demo.')).toBeVisible();
 
-  await expect(page.getByRole('heading', { name: /^(pass|needs_review|fail)$/i })).toBeVisible();
+  await expect(page.getByLabel('Evaluation evidence summary')).toBeVisible();
 });
 }
 

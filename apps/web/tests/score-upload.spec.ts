@@ -86,6 +86,7 @@ test('eval page uploads vCon and loads sample call-center evidence', async ({ pa
   await expect(page.getByText(/Loaded sample transcript: Billing Address Change/)).toBeVisible();
   await page.getByRole('button', { name: 'Evaluate evidence' }).click();
   await expect(page.getByText('Benchmark report', { exact: true })).toBeVisible();
+  await page.getByLabel('Evaluation diagnostics').locator('summary').click();
   await expect(page.getByLabel('Transcript scoring note')).toContainText('Task completion and Final state are not shown');
   await expect(page.getByLabel('Task completion score')).toHaveCount(0);
   await expect(page.getByLabel('Final state score')).toHaveCount(0);
@@ -98,6 +99,7 @@ test('eval page uploads vCon and loads sample call-center evidence', async ({ pa
   await page.getByRole('button', { name: 'Load full sample (measure Task/Final)' }).click();
   await expect(page.getByText(/Loaded synthetic vCon: Billing Address Change/)).toBeVisible();
   await page.getByRole('button', { name: 'Evaluate evidence' }).click();
+  await page.getByLabel('Evaluation diagnostics').locator('summary').click();
   await expect(page.getByLabel('Task completion score')).toBeVisible();
   await expect(page.getByLabel('Final state score')).toBeVisible();
   await expect(page.getByLabel('Task completion score')).not.toContainText('n/a');
@@ -111,6 +113,7 @@ test('eval page uploads vCon and loads sample call-center evidence', async ({ pa
   await page.getByLabel('Upload vCon or transcript file').setInputFiles(exportedPath!);
   await expect(page.getByText(/Synthetic vCon\. state observed/)).toBeVisible();
   await page.getByRole('button', { name: 'Evaluate evidence' }).click();
+  await page.getByLabel('Evaluation diagnostics').locator('summary').click();
   await expect(page.getByLabel('Task completion score')).toContainText('100');
   await expect(page.getByLabel('Final state score')).toContainText('100');
 
@@ -122,7 +125,8 @@ test('eval page uploads vCon and loads sample call-center evidence', async ({ pa
   await page.getByLabel('Evidence transcript').fill('hello this transcript has none of the required call-center actions');
   await page.getByRole('button', { name: 'Evaluate evidence' }).click();
   await expect(page.getByText('Benchmark report', { exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: /needs_review/i })).toBeVisible();
+  await expect(page.getByLabel('Evaluation evidence summary')).toContainText('Evaluator: needs review');
+  await page.getByLabel('Evaluation diagnostics').locator('summary').click();
   const requiredActionsTile = page.getByLabel('Required actions score');
   await expect(requiredActionsTile).toBeVisible();
   await expect(requiredActionsTile).toContainText('0');

@@ -410,6 +410,7 @@ def build_benchmark_vcon(payload: dict[str, Any], transcript: str, report: dict[
             'body': {'context': context, 'evaluator': 'assert-boundary', 'assert_version': '0.3.0',
                      'score': report.get('overall_score'), 'verdict': report.get('verdict'),
                      'scoring_mode': report.get('scoring_mode'), 'contract': report.get('scenario_contract'),
+                     'evaluation_scope': deepcopy(report.get('evaluation_scope', {})),
                      'evidence_citations': report.get('evidence_citations', []),
                      'semantic_review': 'separate; rerun results may vary'},
         })
