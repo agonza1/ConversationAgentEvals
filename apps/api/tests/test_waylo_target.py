@@ -158,7 +158,8 @@ def test_transcript_pagination_beyond_embedded_500_and_optional_scopes():
 
 @pytest.mark.parametrize('source,value', [
     ('agent_version', None), ('agent_version', []), ('agent_version', {'config': None}),
-    ('agent_version', {'config': []}), ('items', [None]), ('events', [None]), ('events', [{'id': None}]),
+    ('agent_version', {'config': []}), ('items', [None]), ('items', [{'quantity': 5}]),
+    ('events', [None]), ('events', [{'id': None}]),
 ])
 def test_malformed_optional_sources_are_unavailable_not_projection_crashes(source, value):
     def handler(request):
@@ -247,10 +248,12 @@ def test_valid_session_clocks_and_unended_sessions_remain_supported(created, end
     ('parentIdempotencyKey', []), ('parentIdempotencyKey', {}),
     ('idempotencyKey', []), ('idempotencyKey', {}), ('category', []),
     ('name', []), ('subject', {}), ('code', []), ('occurredAt', {}),
+    ('severity', []), ('severity', {}), ('severity', False), ('severity', 1),
     ('createdAt', []), ('seq', []), ('seq', True),
 ])
 def test_malformed_optional_event_fields_stay_unavailable_without_losing_transcript(field, value):
     event = native_event(1, 'result', **{field: value}) if field != 'name' else native_event(1, value)
+    event['payload'].update(status='success', result={'products': ['White Potatoes']})
     def handler(request):
         if request.url.path.endswith('/transcripts'):
             return httpx.Response(200, json=[transcript(1)])
@@ -270,6 +273,73 @@ def test_malformed_optional_event_fields_stay_unavailable_without_losing_transcr
             assert validate_ietf_vcon(exported['vcon'])['valid']
             assert decode_evidence(exported['vcon'])['tool_events'] == []
             assert exported['coverage']['agent_execution']['status'] == 'unknown'
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize('field,value', [
+    ('rawText', None), ('rawText', []), ('rawText', {}), ('rawText', 5), ('rawText', False),
+    ('unit', []), ('unit', {}), ('unit', 5), ('quantity', []), ('quantity', {}),
+    ('quantity', '5'), ('quantity', True), ('quantity', 0), ('quantity', -1),
+    ('position', []), ('position', {}), ('position', True), ('position', 0),
+])
+def test_malformed_optional_items_preserve_transcripts_and_events_with_unknown_outcome(field, value):
+    item = {'position': 1, 'rawText': 'White Potatoes', 'quantity': 5, 'unit': 'bags', field: value}
+    event = native_event(1, 'result', payload={'tool_invocation_id': 'invocation-1',
+                                             'status': 'success', 'result': {'products': ['White Potatoes']}})
+    def handler(request):
+        if request.url.path.endswith('/transcripts'):
+            return httpx.Response(200, json=[transcript(1), transcript(2, 'agent')])
+        if request.url.path.endswith('/events'):
+            return httpx.Response(200, json=[event])
+        if request.url.path.endswith('/items'):
+            return httpx.Response(200, json=[item])
+        if '/versions/' in request.url.path:
+            return httpx.Response(200, json={'config': {}})
+        return httpx.Response(200, json=session(eventCount=1))
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            capture = await WayloClient(TARGET, client=http).capture(S)
+            assert set(capture['unavailable']) == {'items'} and 'items' not in capture
+            assert len(capture['transcripts']) == 2 and capture['events'] == [event]
+            exported = project_capture(capture, test_expectations={'expected_requests': [
+                {'product_name': 'White Potatoes', 'quantity': 5, 'unit': 'bags'}]})
+            assert validate_ietf_vcon(exported['vcon'])['valid']
+            assert len(exported['vcon']['dialog']) == 2
+            profile = decode_evidence(exported['vcon'])
+            assert profile['tool_events'][0]['status'] == 'success'
+            assert profile['context']['diagnostics']['business_outcome']['status'] == 'unknown'
+            assert exported['evaluation_submitted'] is False
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize('item', [
+    {'position': 1, 'rawText': 'White Potatoes', 'quantity': 5, 'unit': 'bags'},
+    {'position': 1, 'rawText': 'White Potatoes', 'quantity': 1.5, 'unit': 'kg'},
+    {'position': 1, 'rawText': 'White Potatoes', 'quantity': None, 'unit': None},
+    {'rawText': 'White Potatoes'},
+    {'rawText': 'White Potatoes', 'quantity': 10 ** 400},
+])
+def test_valid_item_fields_remain_native_evidence(item):
+    def handler(request):
+        path = request.url.path
+        if path.endswith('/transcripts'):
+            return httpx.Response(200, json=[transcript(1)])
+        if path.endswith('/items'):
+            return httpx.Response(200, json=[item])
+        if path.endswith('/events'):
+            return httpx.Response(200, json=[])
+        if '/versions/' in path:
+            return httpx.Response(200, json={'config': {}})
+        return httpx.Response(200, json=session())
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            capture = await WayloClient(TARGET, client=http).capture(S)
+            assert capture['items'] == [item] and capture['unavailable'] == {}
+            exported = project_capture(capture, test_expectations={'expected_requests': [
+                {'product_name': 'White Potatoes', 'quantity': 5, 'unit': 'bags'}]})
+            assert validate_ietf_vcon(exported['vcon'])['valid']
+            profile = decode_evidence(exported['vcon'])
+            assert profile['state_snapshots'][-1]['state']['request_list'] == [item]
     asyncio.run(exercise())
 
 

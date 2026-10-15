@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import uuid
 from copy import deepcopy
 from typing import Any
@@ -210,12 +211,23 @@ class WayloClient:
                     raise WayloError(f'Invalid Waylo {name} response.')
                 if name in {'events', 'items'} and any(not isinstance(entry, dict) for entry in value):
                     raise WayloError(f'Invalid Waylo {name} entries.')
+                if name == 'items' and any(
+                        not isinstance(entry.get('rawText'), str)
+                        or (entry.get('unit') is not None and not isinstance(entry['unit'], str))
+                        or (entry.get('quantity') is not None and (
+                            type(entry['quantity']) not in {int, float}
+                            or (type(entry['quantity']) is float and not math.isfinite(entry['quantity']))
+                            or entry['quantity'] < 1))
+                        or (entry.get('position') is not None and (
+                            type(entry['position']) is not int or entry['position'] < 1))
+                        for entry in value):
+                    raise WayloError('Invalid Waylo item fields; native items are unavailable.')
                 if name == 'events' and any(not isinstance(entry.get('id'), str) or not entry['id'] for entry in value):
                     raise WayloError('Invalid Waylo event identity.')
                 if name == 'events' and any(
                         any(entry.get(field) is not None and not isinstance(entry[field], str)
                             for field in ('parentIdempotencyKey', 'idempotencyKey', 'category', 'name',
-                                          'subject', 'code', 'occurredAt', 'createdAt'))
+                                          'subject', 'severity', 'code', 'occurredAt', 'createdAt'))
                         or (entry.get('seq') is not None and type(entry['seq']) is not int)
                         for entry in value):
                     raise WayloError('Invalid Waylo event fields; native events are unavailable.')
