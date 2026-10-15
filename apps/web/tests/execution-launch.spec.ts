@@ -230,8 +230,10 @@ test('an active voice queue cannot be launched twice from the same page', async 
   const posts = await mockReviewedVoiceSuite(page, { active: true });
   await page.goto('/runs?suite_id=reviewed-assert-suite&run_scope=suite&agent_id=voice-custom');
   const launch = page.getByRole('region', { name: 'Launch agent run' });
+  await expect(launch.getByRole('button', { name: 'Run 3 voice tests' })).toHaveAttribute('aria-busy', 'false');
   await launch.getByRole('button', { name: 'Run 3 voice tests' }).click();
   await expect(launch.getByRole('button', { name: 'Evaluation running...' })).toBeDisabled();
+  await expect(launch.getByRole('button', { name: 'Evaluation running...' })).toHaveAttribute('aria-busy', 'true');
   expect(posts).toHaveLength(1);
 });
 

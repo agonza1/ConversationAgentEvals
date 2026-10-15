@@ -212,12 +212,14 @@ test('automatically selected saved Waylo target launches with the voice executor
   await page.goto('/runs?suite_id=waylo-mike-notes&scenario_id=mike-five-bags');
   await expect(page.getByLabel('Execution agent target')).toHaveValue('waylo-memory-fixture');
   await expect(page.getByRole('button', { name: 'Run 1 voice test', exact: true })).toBeDisabled();
+  await expect(page.getByText('Connect Waylo above to enable this run.', { exact: true })).toBeVisible();
   await page.getByLabel('Waylo email').fill('fixture@example.test');
   await page.getByLabel('Waylo password').fill('synthetic-password-not-a-real-secret');
   await page.getByLabel('Confirm temporary Waylo sign-in').check();
   fixture.allowLogin();
   await page.getByRole('button', { name: 'Connect Waylo', exact: true }).click();
   await expect(page.getByText(/Connected to Mike fixture/)).toBeVisible();
+  await expect(page.getByText('Connect Waylo above to enable this run.', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Run 1 voice test', exact: true }).click();
   await expect.poll(() => fixture.requests.filter((request) => request.path === '/api/execution/runs' && request.method === 'POST').length).toBe(1);
   const run = fixture.requests.find((request) => request.path === '/api/execution/runs' && request.method === 'POST');
