@@ -439,6 +439,10 @@ def test_saved_assert_review_persists_versioned_evidence_snapshot_and_reuses_it(
     run_id, conversation_id = saved['execution_run_id'], saved['conversation_id']
     conversation = execution_run_store.get_conversation(run_id, conversation_id)
     assert conversation['judge_reviews'][0]['judge_result']['provenance'] == provenance
+    snapshot = conversation['judge_reviews'][0]['deterministic_snapshot']
+    assert saved['deterministic_snapshot'] == snapshot
+    assert snapshot['verdict'] == report['verdict'] and snapshot['score'] == report['overall_score']
+    assert len(snapshot['evidence_sha256']) == 64
     assert conversation['verdict'] == report['verdict']
     route = f'/api/assert/runs/{run_id}/conversations/{conversation_id}'
     freshness = p.client.get(route + f"/reviews/{saved['review_id']}/status", params={'user_id': 'owner'})
@@ -446,6 +450,7 @@ def test_saved_assert_review_persists_versioned_evidence_snapshot_and_reuses_it(
     repeated = p.judge(report)
     assert repeated.status_code == 200 and repeated.json()['reused'] is True
     assert repeated.json()['judge_result']['provenance'] == provenance
+    assert repeated.json()['deterministic_snapshot'] == snapshot
     assert len(p.calls) == 1 and p.spent() == 10
 
 

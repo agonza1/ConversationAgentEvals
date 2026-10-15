@@ -273,6 +273,12 @@ export interface JudgeProposedEvaluation {
   remaining_gaps: string[];
 }
 
+export interface DeterministicEvaluationSnapshot {
+  verdict?: string | null;
+  score?: number | null;
+  evidence_sha256?: string | null;
+}
+
 export interface JudgeReviewRecord {
   review_id: string;
   status: 'pending_confirmation' | 'applied' | 'superseded';
@@ -285,6 +291,7 @@ export interface JudgeReviewRecord {
   evidence_citations?: string[];
   judge_result?: LlmJudgeResult | null;
   output_sha256?: string | null;
+  deterministic_snapshot?: DeterministicEvaluationSnapshot | null;
 }
 
 export interface EvaluationAdjudication {
@@ -299,11 +306,7 @@ export interface EvaluationAdjudication {
   evidence_citations?: string[];
   judge_result?: LlmJudgeResult | null;
   output_sha256?: string | null;
-  deterministic_snapshot?: {
-    verdict?: string | null;
-    score?: number | null;
-    evidence_sha256?: string | null;
-  };
+  deterministic_snapshot?: DeterministicEvaluationSnapshot | null;
 }
 
 export interface LlmJudgeResponse {
@@ -323,6 +326,7 @@ export interface LlmJudgeResponse {
   prompt_preview?: string | null;
   latency_ms?: number | null;
   review_id?: string | null;
+  deterministic_snapshot?: DeterministicEvaluationSnapshot | null;
   block_reason?: 'provider' | 'budget' | 'provider_error' | 'evidence' | null;
   engine?: string | null;
   assert_version?: string | null;

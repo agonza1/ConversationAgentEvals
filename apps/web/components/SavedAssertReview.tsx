@@ -4,9 +4,8 @@ import type { AssertReviewView } from '@/lib/assertReview';
 import type { AssertReviewFreshness } from '@/lib/execution';
 import { AssertEvidenceReport } from './AssertEvidenceReport';
 
-export function SavedAssertReview({ review, freshness, onRetry, onApply, automaticVerdict, automaticScore }: {
+export function SavedAssertReview({ review, freshness, onRetry, onApply }: {
   review: AssertReviewView; freshness: AssertReviewFreshness | null; onRetry: () => void; onApply: () => void;
-  automaticVerdict?: string | null; automaticScore?: number | null;
 }) {
   const label = freshness?.status === 'current' ? 'Current' : freshness?.status === 'stale' ? 'Stale'
     : freshness?.status === 'cannot_verify' ? 'Cannot verify' : 'Checking freshness…';
@@ -17,7 +16,7 @@ export function SavedAssertReview({ review, freshness, onRetry, onApply, automat
       {freshness?.status === 'cannot_verify' ? <button type="button" className="secondary-link" onClick={onRetry}>Check freshness again</button> : null}
       {freshness?.status === 'stale' ? <a href="#assert-review-action">Review changed evidence</a> : null}
     </div>
-    <AssertEvidenceReport key={review.id} review={review} automaticVerdict={automaticVerdict} automaticScore={automaticScore}>
+    <AssertEvidenceReport key={review.id} review={review}>
       {review.proposal && review.status === 'pending_confirmation' ? <button type="button" className="primary-cta"
         disabled={freshness?.status !== 'current'} onClick={onApply}>Apply proposed evaluation</button> : null}
     </AssertEvidenceReport>

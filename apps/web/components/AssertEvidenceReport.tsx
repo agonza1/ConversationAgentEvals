@@ -7,13 +7,15 @@ import styles from './AssertEvidenceReport.module.css';
 const humanize = (value: string | null | undefined) => value
   ? value.replaceAll('_', ' ').replace(/\b\w/, (letter) => letter.toUpperCase()) : 'Not reported';
 
-export function AssertEvidenceReport({ review, automaticVerdict, automaticScore, technical, children }: {
+export function AssertEvidenceReport({ review, automaticVerdict: fallbackVerdict, automaticScore: fallbackScore, technical, children }: {
   review: AssertReviewView;
   automaticVerdict?: string | null;
   automaticScore?: number | null;
   technical?: ReactNode;
   children?: ReactNode;
 }) {
+  const automaticVerdict = review.automaticSnapshot ? review.automaticSnapshot.verdict : fallbackVerdict;
+  const automaticScore = review.automaticSnapshot ? review.automaticSnapshot.score : fallbackScore;
   const [activeMessage, setActiveMessage] = useState<string | null>(null);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [allReferences, setAllReferences] = useState(false);

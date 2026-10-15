@@ -41,6 +41,15 @@ export interface AssertReviewView {
   evidenceSnapshotAvailable: boolean;
   evidenceDetailsStatus: 'complete' | 'limited' | 'legacy' | 'invalid';
   evidenceDetailsMessage: string | null;
+  automaticSnapshot: { verdict: string | null; score: number | null } | null;
+}
+
+function automaticSnapshot(value: unknown): AssertReviewView['automaticSnapshot'] {
+  const snapshot = object(value);
+  const verdict = snapshot.verdict === 'pass' || snapshot.verdict === 'needs_review'
+    || snapshot.verdict === 'fail' || snapshot.verdict === 'failed' ? snapshot.verdict : null;
+  const score = typeof snapshot.score === 'number' && Number.isFinite(snapshot.score) ? snapshot.score : null;
+  return verdict !== null || score !== null ? { verdict, score } : null;
 }
 
 const messageId = (value: unknown): string | null => {
@@ -192,6 +201,7 @@ function normalizeReview(value: unknown, allowLive: boolean): AssertReviewView |
     evidenceSnapshotAvailable: snapshotAvailable,
     evidenceDetailsStatus: limited ? 'limited' : legacyEvidence ? 'legacy' : snapshotAvailable ? 'complete' : 'invalid',
     evidenceDetailsMessage: text(provenance.evidence_details_message),
+    automaticSnapshot: automaticSnapshot(review.deterministic_snapshot),
     agrees: typeof result.agrees === 'boolean' ? result.agrees : null,
     nextAction: text(result.next_action),
     latencyMs: typeof review.latency_ms === 'number' && Number.isFinite(review.latency_ms) && review.latency_ms >= 0 ? review.latency_ms : null,

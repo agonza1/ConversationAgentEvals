@@ -140,6 +140,7 @@ async function checkAssertJudgeRouting(
         contentType: 'application/json',
         body: JSON.stringify({
           status: 'ready',
+          ...(evidenceLevel === 'black_box' ? { deterministic_snapshot: { verdict: 'needs_review', score: 45 } } : {}),
           required_plan: 'starter',
           credits: 10,
           engine: 'assert',
@@ -226,6 +227,11 @@ async function checkAssertJudgeRouting(
   await page.getByRole('button', { name: 'Review with LLM judge' }).click();
 
   const result = page.getByLabel('Saved ASSERT assessment');
+  if (evidenceLevel === 'black_box') {
+    const report = result.getByLabel('ASSERT evidence report', { exact: true });
+    await expect(report.getByText('Automatic', { exact: true }).locator('..')).toContainText(/Needs review/i);
+    await expect(report.getByText('Automatic criteria score', { exact: true }).locator('..')).toContainText('45/100');
+  }
   await result.getByText('Semantic rationale', { exact: true }).click();
   await result.locator('summary').filter({ hasText: /^All checks/ }).click();
   await result.getByText('Selected review proposal', { exact: true }).click();

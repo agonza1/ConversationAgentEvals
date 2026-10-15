@@ -100,6 +100,32 @@ def test_tool_indices_are_native_and_not_reassigned_to_conversation_messages():
     assert metadata['evidence_coverage']['tool_trace'] is True
 
 
+@pytest.mark.parametrize('citation_shape', ['highlights', 'native'])
+def test_conversation_quote_echoed_in_native_tool_output_is_ambiguous(citation_shape):
+    conversation = _conversation()
+    quote = conversation['turns'][1]['text']
+    conversation['action_trace'] = [{'action': 'booking_receipt', 'after_turn_index': 2,
+                                     'tool_result': quote}]
+    inference = build_assert_inference_row(run={}, conversation=conversation)
+    verdict = {'highlights': f'1. <cite id="2" description="Booking">{quote}</cite>'}
+    if citation_shape == 'native':
+        verdict = {'citations': [{'index': 1, 'description': 'Booking', 'parts': [{
+            'quoted_text': quote, 'claimed_message_index': '2', 'matched_message_index': '2',
+            'message_id': 'event:1', 'position': [0, len(quote)],
+            'resolution': {'status': 'resolved', 'method': 'exact'},
+        }]}]}
+    native = Transcript(metadata=TranscriptMetadata(kind='scenario', test_case_id='native',
+                                                    behavior='test', target='test', tester_model='test'),
+                        events=[TranscriptEvent.model_validate(event) for event in inference['events']])
+    assert sum(quote in message.content for _, message in native.collect_messages_with_ids('target')) == 2
+    metadata = report.build_evidence_report(inference, {'verdict': verdict}, conversation)
+    assert metadata['evidence_details_status'] == 'complete'
+    assert [message['role'] for message in metadata['evidence_messages']] == ['user', 'assistant']
+    part = metadata['evidence_references'][0]['parts'][0]
+    assert part['quote'] == quote and part['status'] == 'ambiguous'
+    assert 'message_id' not in part
+
+
 @pytest.mark.parametrize('mutation,expected', [
     ({'resolution': {'status': 'ambiguous', 'detail': 'Native ambiguity'}}, 'ambiguous'),
     ({'resolution': {'status': 'unresolved', 'detail': 'Native quote mismatch'}}, 'unresolved'),

@@ -12,8 +12,14 @@ const staleQuote = 'Your appointment is pending clinician approval.';
 const repeatedQuote = 'Please send the confirmation.';
 const rawMarker = 'SYNTHETIC_RAW_OUTPUT_NOT_A_REPORT';
 
-function makeReview(id: string, options: { legacy?: boolean; quote?: string; createdAt?: string; citationWarning?: boolean } = {}) {
+type AutomaticSnapshot = { verdict: 'pass' | 'needs_review' | 'fail'; score: number };
+
+function makeReview(id: string, options: { legacy?: boolean; quote?: string; createdAt?: string;
+  citationWarning?: boolean; automaticSnapshot?: AutomaticSnapshot | null } = {}) {
   const quote = options.quote ?? bookingQuote;
+  const snapshot: AutomaticSnapshot | null = options.automaticSnapshot === undefined
+    ? options.legacy ? null : { verdict: 'needs_review', score: 100 }
+    : options.automaticSnapshot;
   const provenance = {
     engine: 'assert', assert_version: '0.3.0', judge_status: 'ok', evidence_level: 'black_box',
     dimensions: { unverified_operational_outcome: true, unsupported_operational_claim: false, policy_violation: false },
@@ -34,6 +40,7 @@ function makeReview(id: string, options: { legacy?: boolean; quote?: string; cre
     review_id: id, status: 'pending_confirmation', provider: 'assert-ai',
     created_at: options.createdAt ?? '2026-10-14T13:00:00Z',
     model: 'chatgpt_plan/gpt-6-luna', latency_ms: 2345,
+    ...(snapshot ? { deterministic_snapshot: snapshot } : {}),
     evidence_citations: options.legacy
       ? [`{"description":"Historical booking claim","quoted_text":"${quote}","fixture":"${rawMarker}","truncated":`]
       : ['Booking claim — the appointment outcome is not independently confirmed.'],
@@ -73,7 +80,7 @@ function automaticReport() {
     evidence: ['The supplied transcript satisfied the automatic criteria.'], recommendations: [] };
 }
 
-function savedRun(reviews: Review[]) {
+function savedRun(reviews: Review[], appliedReview?: Review) {
   return {
     execution_run_id: runId, status: 'needs_review', mode: 'text_callable', suite_id: suiteId,
     scenario_ids: [scenarioId], user_id: 'evidence-report-user', project_id: 'evidence-report-project',
@@ -89,15 +96,19 @@ function savedRun(reviews: Review[]) {
       action_trace: [], final_state: {}, evaluation_findings: { missing_actions: [] },
       metrics_summary: { verdict: 'needs_review', score: 100, turn_count: 2, interruption_count: 0 },
       judge_reviews: reviews,
+      ...(appliedReview ? { evaluation_adjudication: { ...appliedReview, source: 'llm_judge', status: 'applied',
+        applied_at: '2026-10-13T14:00:00Z', applied_by_user_id: 'evidence-report-user' } } : {}),
     }],
     created_at: '2026-10-14T12:00:00Z', updated_at: '2026-10-14T13:00:00Z',
   };
 }
 
-async function mockApi(page: Page, options: { reviews?: Review[]; judgeError?: boolean; citationWarning?: boolean } = {}) {
+async function mockApi(page: Page, options: { reviews?: Review[]; appliedReview?: Review;
+  judgeError?: boolean; citationWarning?: boolean } = {}) {
   const writes: string[] = [];
   const freshnessRequests: string[] = [];
-  const current = makeReview('review-current', { citationWarning: options.citationWarning });
+  const current = makeReview('review-current', { citationWarning: options.citationWarning,
+    automaticSnapshot: { verdict: 'pass', score: 100 } });
   const reviewResponse = { ...current, status: 'ready', engine: 'assert', required_plan: 'starter', credits: 10,
     message: 'Synthetic ASSERT assessment completed.', execution_run_id: runId, conversation_id: conversationId,
     judge_result: { ...current.judge_result, agrees: false }, // Eval's automatic result is pass, unlike the saved run.
@@ -118,12 +129,12 @@ async function mockApi(page: Page, options: { reviews?: Review[]; judgeError?: b
       const reviewId = pathname.split('/reviews/')[1].split('/')[0];
       freshnessRequests.push(reviewId);
       return route.fulfill({ json: { execution_run_id: runId, conversation_id: conversationId, review_id: reviewId,
-        status: reviewId === 'review-stale' ? 'stale' : reviewId === 'review-legacy' ? 'cannot_verify' : 'current',
-        reason_code: 'synthetic_fixture', message: reviewId === 'review-stale'
+        status: ['review-stale', 'review-older-applied'].includes(reviewId) ? 'stale' : reviewId === 'review-legacy' ? 'cannot_verify' : 'current',
+        reason_code: 'synthetic_fixture', message: ['review-stale', 'review-older-applied'].includes(reviewId)
           ? 'The retained review does not match the current evidence.' : reviewId === 'review-legacy'
             ? 'This historical review lacks a verifiable input fingerprint.' : 'Saved judging inputs match.' } });
     }
-    if (pathname === `/api/execution/runs/${runId}`) return route.fulfill({ json: savedRun(options.reviews ?? []) });
+    if (pathname === `/api/execution/runs/${runId}`) return route.fulfill({ json: savedRun(options.reviews ?? [], options.appliedReview) });
     if (pathname === '/api/product/config') return route.fulfill({ json: {
       pricing: [], usage_rules: [], auth: { enabled: false, providers: [] }, llm_judge_status: 'enabled',
       assert_judge: { ready: true, enabled: true, engine: 'assert', model: 'chatgpt_plan/gpt-6-luna', message: 'Synthetic ASSERT ready.' },
@@ -322,6 +333,36 @@ test('saved selection replaces the entire evidence mapping and preserves freshne
   await expect(report).not.toContainText(staleQuote);
   await expect(apply).toBeEnabled();
   expect(api.freshnessRequests).toEqual(expect.arrayContaining(['review-current', 'review-stale', 'review-legacy']));
+  expect(api.writes).toHaveLength(0);
+});
+
+test('each selected saved review uses only its own automatic snapshot, not another applied review or current run', async ({ page }) => {
+  const newer = makeReview('review-current', { automaticSnapshot: { verdict: 'needs_review', score: 100 } });
+  const older = makeReview('review-older-applied', { createdAt: '2026-10-13T13:00:00Z',
+    automaticSnapshot: { verdict: 'fail', score: 25 } });
+  older.status = 'applied';
+  older.judge_result.agrees = false;
+  const legacy = makeReview('review-legacy', { legacy: true, createdAt: '2026-10-12T13:00:00Z', automaticSnapshot: null });
+  const api = await mockApi(page, { reviews: [newer, older, legacy], appliedReview: older });
+  await page.goto(`/runs/${runId}`);
+  const report = evidenceReport(page);
+  const automatic = report.getByText('Automatic', { exact: true }).locator('..');
+  const score = report.getByText('Automatic criteria score', { exact: true }).locator('..');
+  await expect(page.getByLabel('Saved ASSERT review')).toHaveValue('review-current');
+  await expect(automatic).toContainText(/Needs review/i);
+  await expect(automatic).not.toContainText('Fail');
+  await expect(score).toContainText('100/100');
+  await expect(score).not.toContainText('25/100');
+  await page.getByLabel('Saved ASSERT review').selectOption('review-older-applied');
+  await expect(automatic).toContainText('Fail');
+  await expect(score).toContainText('25/100');
+  await page.getByLabel('Saved ASSERT review').selectOption('review-legacy');
+  await expect(automatic).toContainText('Not reported');
+  await expect(report.getByText('Automatic criteria score', { exact: true })).toHaveCount(0);
+  await expect(report).not.toContainText('100/100');
+  await expect(report).not.toContainText('25/100');
+  expect(api.judgeCalls()).toBe(0);
+  expect(api.applyCalls()).toBe(0);
   expect(api.writes).toHaveLength(0);
 });
 

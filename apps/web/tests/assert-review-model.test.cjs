@@ -198,3 +198,52 @@ test('evidence metadata never expands the technical allowlist or supplies freshn
  assert.equal(view.freshness,undefined);assert.equal(view.canApply,undefined);
  assert.equal(view.status,'pending_confirmation');
 });
+
+test('each selected historical review retains its own automatic snapshot rather than a current or applied result',()=>{
+ const earlier=evidenceReview(),later=evidenceReview();
+ earlier.review_id='judge-review-earlier';earlier.created_at='2026-10-10T12:00:00Z';earlier.deterministic_snapshot={verdict:'fail',score:0};
+ later.review_id='judge-review-later';later.created_at='2026-10-11T12:00:00Z';later.deterministic_snapshot={verdict:'needs_review',score:75.5};
+ for(const raw of [earlier,later]) {
+  raw.verdict='pass';raw.score=100;
+  raw.evaluation_adjudication={deterministic_snapshot:{verdict:'pass',score:100}};
+ }
+ const history=sortedAssertReviews([earlier,later]);
+ assert.deepEqual(history.map(review=>[review.id,review.automaticSnapshot]),[
+  ['judge-review-later',{verdict:'needs_review',score:75.5}],
+  ['judge-review-earlier',{verdict:'fail',score:0}],
+ ]);
+ assert.deepEqual(normalizeAssertReview(earlier).automaticSnapshot,{verdict:'fail',score:0});
+});
+
+test('missing, null or malformed automatic snapshots do not borrow the proposal, current score or applied snapshot',()=>{
+ for(const snapshot of [undefined,null,false,0,'{"verdict":"pass","score":100}',[],{},
+  {verdict:'PASS',score:'0'},{verdict:'unknown',score:false},{verdict:null,score:null}]) {
+  const raw=evidenceReview();raw.deterministic_snapshot=snapshot;raw.verdict='pass';raw.score=100;
+  raw.evaluation_adjudication={deterministic_snapshot:{verdict:'pass',score:100}};
+  raw.judge_result.proposed_evaluation={verdict:'pass',summary:'Semantic proposal',corrected_findings:[],remaining_gaps:[]};
+  assert.equal(normalizeAssertReview(raw).automaticSnapshot,null);
+ }
+});
+
+test('snapshot validation preserves a known verdict or finite score independently, without numeric coercion',()=>{
+ for(const verdict of ['pass','needs_review','fail','failed']) {
+  for(const score of [undefined,null,false,'0',NaN,Infinity,-Infinity]) {
+   const raw=evidenceReview();raw.deterministic_snapshot={verdict,score};
+   assert.deepEqual(normalizeAssertReview(raw).automaticSnapshot,{verdict,score:null});
+  }
+ }
+ for(const verdict of [undefined,null,'unknown','PASS',false,0]) {
+  const raw=evidenceReview();raw.deterministic_snapshot={verdict,score:0};
+  assert.deepEqual(normalizeAssertReview(raw).automaticSnapshot,{verdict:null,score:0});
+ }
+});
+
+test('live ASSERT results use the actual saved snapshot returned by the response when present',()=>{
+ const raw=evidenceReview();raw.status='ready';delete raw.created_at;
+ raw.deterministic_snapshot={verdict:'needs_review',score:50,evidence_sha256:'a'.repeat(64)};
+ raw.verdict='pass';raw.score=100;
+ const view=buildAssertReportView(raw);
+ assert.deepEqual(view.automaticSnapshot,{verdict:'needs_review',score:50});
+ assert.ok(!('evidence_sha256' in view.automaticSnapshot));
+ delete raw.deterministic_snapshot;assert.equal(buildAssertReportView(raw).automaticSnapshot,null);
+});

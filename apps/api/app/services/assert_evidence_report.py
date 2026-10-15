@@ -60,6 +60,13 @@ def build_evidence_report(
         )
         entries = transcript.collect_messages_with_ids('target')
         index_to_id = {str(index): message_id for index, (message_id, _) in enumerate(entries, start=1)}
+        # A quote echoed in native tool evidence is not unique merely because
+        # the UI only offers conversation-message jump targets. Reuse ASSERT's
+        # actual renderer for all canonical sources; do not invent tool text.
+        canonical_sources = [{'id': message_id, 'text': message.content}
+                             for message_id, message in entries]
+        if sum(len(row['text']) for row in canonical_sources) > MAX_SNAPSHOT_CHARS:
+            raise ValueError('The rendered evidence snapshot exceeds the evidence display limit.')
         messages = []
         for event_index, event in enumerate(events):
             edit = event.get('edit') or {}
@@ -81,7 +88,7 @@ def build_evidence_report(
         by_id = {message['id']: message for message in messages}
         for reference in references:
             reference['parts'] = [
-                _verified_part(part, messages, by_id, index_to_id) for part in reference['parts']
+                _verified_part(part, canonical_sources, by_id, index_to_id) for part in reference['parts']
             ]
         result['evidence_messages'] = messages
         result['evidence_references'] = references
@@ -159,7 +166,7 @@ def _quote_parts(quote: str) -> list[str]:
 
 
 def _verified_part(
-    part: dict[str, Any], messages: list[dict[str, str]], by_id: dict[str, dict[str, str]],
+    part: dict[str, Any], canonical_sources: list[dict[str, str]], by_id: dict[str, dict[str, str]],
     index_to_id: dict[str, str],
 ) -> dict[str, str]:
     quote = part.get('quoted_text', part.get('quote', ''))
@@ -196,7 +203,7 @@ def _verified_part(
     if not result['quote']:
         return unresolved('No exact quoted text was retained.')
     occurrences = []
-    for message in messages:
+    for message in canonical_sources:
         offset = 0
         while len(occurrences) < 2:
             found = message['text'].find(result['quote'], offset)

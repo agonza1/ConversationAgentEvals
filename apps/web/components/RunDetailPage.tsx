@@ -415,7 +415,7 @@ function MetricDetail({
   const liveReview = judge?.review_id && judge.judge_result?.provenance?.engine === 'assert'
     && !persisted.some((review) => review.review_id === judge.review_id)
     ? [{ review_id: judge.review_id, status: 'pending_confirmation', created_at: '', model: judge.model,
-         provider: judge.provider, latency_ms: judge.latency_ms,
+         provider: judge.provider, latency_ms: judge.latency_ms, deterministic_snapshot: judge.deterministic_snapshot,
          judge_result: judge.judge_result, evidence_citations: judge.evidence_citations }] : [];
   const exportChoices = sortedAssertReviews([...persisted, ...liveReview]);
   const selectedReview = exportChoices.find((review) => review.id === exportReviewId) || exportChoices[0] || null;
@@ -625,8 +625,6 @@ function MetricDetail({
             {exportError ? <p className="resolution-judge-error" role="alert">{exportError}</p> : null}
           </div>
           {selectedReview ? <SavedAssertReview review={selectedReview} freshness={selectedFreshness}
-            automaticVerdict={adjudication?.deterministic_snapshot?.verdict || deterministicVerdict}
-            automaticScore={adjudication?.deterministic_snapshot?.score ?? summary?.score ?? conversation.score}
             onRetry={() => setFreshnessAttempt((attempt) => attempt + 1)}
             onApply={() => {
               if (selectedFreshness?.status !== 'current' || !selectedReview.proposal) return;
@@ -639,8 +637,8 @@ function MetricDetail({
           {judge && !selectedReview ? (
             <JudgeResult
               judge={judge}
-              automaticVerdict={adjudication?.deterministic_snapshot?.verdict || deterministicVerdict}
-              automaticScore={adjudication?.deterministic_snapshot?.score ?? summary?.score ?? conversation.score}
+              automaticVerdict={deterministicVerdict}
+              automaticScore={summary?.score ?? conversation.score}
               showPrompt={showJudgePrompt}
               onTogglePrompt={() => setShowJudgePrompt((current) => !current)}
               onRequestApply={() => {
