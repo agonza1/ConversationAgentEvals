@@ -174,7 +174,7 @@ def run_signalwire_holyguacamole_call(
     repo_root = Path(__file__).resolve().parents[4]
     artifact_dir.mkdir(parents=True, exist_ok=True)
     runtime = ReferenceRuntimeConfig()
-    if not runtime.kokoro_base_url:
+    if runtime.speech.tts_provider == 'kokoro' and not runtime.kokoro_base_url:
         raise RuntimeError(
             'Holy Guacamole SignalWire execution uses CAE tester media and requires '
             'KOKORO_BASE_URL.'
@@ -198,7 +198,7 @@ def run_signalwire_holyguacamole_call(
         try:
             caller_audio = media_services.synthesize(
                 caller_text,
-                voice=runtime.kokoro_tester_voice,
+                voice=runtime.speech.tester_voice,
             )
             break
         except Exception as exc:  # noqa: BLE001 - normalize the existing media boundary
@@ -259,6 +259,7 @@ def run_signalwire_holyguacamole_call(
         'SIGNALWIRE_HOLYGUACAMOLE_CONVERSATION_ID': conversation_id,
         'SIGNALWIRE_HOLYGUACAMOLE_MAX_EXCHANGES': str(max_exchanges),
         'SIGNALWIRE_HOLYGUACAMOLE_SCENARIO_JSON': json.dumps(scenario or {}),
+        'SIGNALWIRE_HOLYGUACAMOLE_SPEECH_JSON': runtime.speech.model_dump_json(),
     }
     if tester_model_name:
         env['SIGNALWIRE_HOLYGUACAMOLE_TESTER_MODEL_NAME'] = tester_model_name
@@ -314,15 +315,15 @@ def run_signalwire_holyguacamole_call(
     transcript_payload.update({
         'caller_text': caller_text,
         'caller_text_verified': True,
-        'caller_text_source': 'cae_kokoro_tts',
+        'caller_text_source': f'cae_{runtime.speech.tts_provider}_tts',
     })
     result['transcript'] = transcript_payload
     tester_payload = result.get('tester') if isinstance(result.get('tester'), dict) else {}
     tester_payload.update({
-        'media_source': 'cae_kokoro_tts',
+        'media_source': f'cae_{runtime.speech.tts_provider}_tts',
         'caller_text_verified': True,
         'caller_audio_sha256': caller_audio_sha256,
-        'caller_voice': runtime.kokoro_tester_voice,
+        'caller_voice': runtime.speech.tester_voice,
     })
     result['tester'] = tester_payload
     transcript_turns: list[TranscriptionTurn] = []
@@ -401,7 +402,7 @@ def run_signalwire_holyguacamole_call(
                 frame_metadata={
                     'target_url': DEFAULT_SIGNALWIRE_TARGET_URL,
                     'caller_text_source': (
-                        'cae_kokoro_tts'
+                        f'cae_{runtime.speech.tts_provider}_tts'
                         if exchange_index == 1
                         else 'pipecat_reference_tester_turn'
                     ),
@@ -462,7 +463,7 @@ def run_signalwire_holyguacamole_call(
                 evidence_role='tester',
                 frame_metadata={
                     'target_url': DEFAULT_SIGNALWIRE_TARGET_URL,
-                    'caller_text_source': 'cae_kokoro_tts',
+                    'caller_text_source': f'cae_{runtime.speech.tts_provider}_tts',
                     'exchange': 1,
                     'caller_audio_uri': str(caller_audio_path),
                 },

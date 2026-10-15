@@ -5061,7 +5061,7 @@ export function BenchmarkRunner({
           </label>
         ) : null}
 
-        {selectedScoreAgent?.target === 'builtin_sample_voice' ? (
+        {['builtin_sample_voice', 'pipecat_public_demo', 'signalwire_holy_guacamole', 'waylo'].includes(selectedScoreAgent?.target ?? '') ? (
           <SpeechProviderSummary />
         ) : null}
 

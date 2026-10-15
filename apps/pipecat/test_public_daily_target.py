@@ -482,7 +482,7 @@ def test_continuous_public_recording_matches_live_mix_even_on_failure(monkeypatc
 def test_public_duplex_reuses_received_audio_text_for_next_tester_turn(monkeypatch):
     observed: dict[str, object] = {}
 
-    async def fake_graph(input_frame, _llm_processor, *, voice, speed=1.0):
+    async def fake_graph(input_frame, _llm_processor, *, voice, speed=1.0, speech=None):
         observed['tester_input_type'] = type(input_frame).__name__
         observed['tester_input_text'] = input_frame.text
         observed['voice'] = voice
@@ -604,7 +604,7 @@ def test_public_target_reports_tester_audio_synthesis_stage(monkeypatch):
 
     with pytest.raises(
         PublicDailyTargetError,
-        match='tester audio synthesis failed; verify Kokoro is reachable',
+        match='tester audio synthesis failed; check the selected TTS provider',
     ):
         asyncio.run(run_public_daily_target(
             PublicDailyTargetRequest(caller_text='Please update my billing address.'),

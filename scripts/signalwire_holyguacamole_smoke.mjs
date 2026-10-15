@@ -658,6 +658,8 @@ async function generateTesterFollowup(args, targetAudioWavBase64, history, turnP
       history,
       target_audio_wav_base64: targetAudioWavBase64,
       model_name: args.testerModelName,
+      speech: process.env.SIGNALWIRE_HOLYGUACAMOLE_SPEECH_JSON
+        ? JSON.parse(process.env.SIGNALWIRE_HOLYGUACAMOLE_SPEECH_JSON) : null,
     }),
     signal: AbortSignal.timeout(Math.max(1, timeoutMs)),
   });

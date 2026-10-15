@@ -47,6 +47,7 @@ def run_public_pipecat_call(
     try:
         request_payload = {
             'caller_text': caller_text,
+            'speech': runtime.speech.model_dump(),
             'agent': public_agent,
             'timeout_seconds': timeout_seconds,
             'scenario': scenario or {'id': 'public-pipecat', 'goal': caller_text},

@@ -778,7 +778,7 @@ def _reference_voice_preflight() -> dict[str, Any]:
 
 @router.get('/speech-settings')
 def execution_speech_settings():
-    return {'selection': speech_selection().model_dump(), 'scope': 'builtin_sample_voice',
+    return {'selection': speech_selection().model_dump(), 'scope': 'tester_tts_and_builtin_speech',
             'credentials': 'server_environment', 'defaults': {
                 'deepgram': {'stt_model': 'nova-3', 'tts_model': 'aura-2', 'tester_voice': 'aura-2-asteria-en', 'target_voice': 'aura-2-orion-en'},
                 'cartesia': {'stt_model': 'ink-2', 'tts_model': 'sonic-3.6', 'tester_voice': '', 'target_voice': ''},

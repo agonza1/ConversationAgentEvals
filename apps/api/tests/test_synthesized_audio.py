@@ -160,6 +160,33 @@ def test_finalized_streaming_audio_remains_compatible_with_noise_condition():
     assert measurement['signal_rms_pcm16'] > 0
 
 
+def _deepgram_streaming_wav():
+    return _replace_u32(_replace_u32(_wav(), 4, 0x7fff0024), 40, 0x7fff0000)
+
+
+def test_deepgram_streaming_marker_pair_is_finalized_without_changing_pcm():
+    audio = _deepgram_streaming_wav()
+    fixed = finalize_tts_wav(audio)
+    assert fixed == _wav()
+    assert read_wav(fixed) == (24000, PCM)
+    assert finalize_tts_wav(fixed) == fixed
+    # Controlled fixture intake must continue rejecting unfinalized sentinels.
+    with pytest.raises(waylo_livekit.WayloError):
+        read_wav(audio)
+
+
+@pytest.mark.parametrize('audio', [
+    _replace_u32(_wav(), 4, 0x7fff0024),
+    _replace_u32(_wav(), 40, 0x7fff0000),
+    _replace_u32(_deepgram_streaming_wav(), 40, 0xffffffff),
+    _deepgram_streaming_wav()[:-1],
+    _deepgram_streaming_wav()[:44],
+])
+def test_deepgram_marker_must_be_paired_and_have_complete_nonempty_frames(audio):
+    with pytest.raises(ValueError):
+        finalize_tts_wav(audio)
+
+
 @pytest.mark.parametrize('audio', [
     b'', b'not wav', b'RIFF\xff\xff\xff\xffWAVE',
     _wav(pcm=b''), _wav()[:-2], _wav()[:-1],
