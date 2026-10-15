@@ -25,7 +25,8 @@ export function AssertEvidenceReport({ review, automaticVerdict, automaticScore,
   const sameDisplayedVerdict = automaticVerdict && proposal
     ? comparableVerdict(automaticVerdict) === comparableVerdict(proposal) : null;
   const flagged = review.dimensions.filter((dimension) => dimension.outcome === 'Flagged');
-  const flaggedBehaviorCount = review.behaviors.filter((behavior) => behavior.outcome === 'Flagged').length;
+  const flaggedBehaviors = review.behaviors.filter((behavior) => behavior.outcome === 'Flagged');
+  const flaggedBehaviorCount = flaggedBehaviors.length;
   const hasFlags = flagged.length > 0 || flaggedBehaviorCount > 0;
   const tone = outcomeUnverified || proposal === 'needs_review' || (proposal === 'pass' && hasFlags) ? 'review'
     : proposal === 'fail' ? 'fail' : proposal === 'pass' ? 'clear' : 'unknown';
@@ -96,12 +97,16 @@ export function AssertEvidenceReport({ review, automaticVerdict, automaticScore,
       <strong>Citation warnings</strong><p>{review.evidenceDetailsMessage}</p>
     </aside> : null}
 
-    {outcomeUnverified || flagged.length ? <section className={styles.findings} aria-label="What needs attention">
+    {hasFlags ? <section className={styles.findings} aria-label="What needs attention">
       <h4>What needs attention</h4>
       {flagged.map((dimension) => <article key={dimension.name}>
         <span className={styles.issueMarker} aria-hidden="true">!</span>
         <div><strong>{dimension.name === 'unverified_operational_outcome' ? 'A claimed outcome has no matching proof' : humanize(dimension.name)}</strong>
           <p>{dimension.justification || 'Inspect the recorded evidence for this finding.'}</p></div>
+      </article>)}
+      {flaggedBehaviors.map((behavior, index) => <article key={`behavior-${index}`}>
+        <span className={styles.issueMarker} aria-hidden="true">!</span>
+        <div><strong>{humanize(behavior.name)}</strong><p>{behavior.reasoning || 'This behavior was flagged in the recorded assessment.'}</p></div>
       </article>)}
     </section> : <p className={styles.summary}>{review.proposal?.summary || review.rationale || 'The recorded review has no summary.'}</p>}
 

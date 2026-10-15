@@ -268,6 +268,26 @@ test('an inconsistent saved pass proposal never hides recorded policy flags behi
   expect(api.writes).toHaveLength(0);
 });
 
+test('a behavior-only finding is visible without opening the collapsed check breakdown', async ({ page }) => {
+  const review = makeReview('review-current');
+  review.judge_result.provenance.dimensions.unverified_operational_outcome = false;
+  const behaviorReason = 'Synthetic behavior finding: the required escalation step was ignored.';
+  review.judge_result.provenance.node_judgments[0].violated = true;
+  review.judge_result.provenance.node_judgments[0].reasoning = behaviorReason;
+  const api = await mockApi(page, { reviews: [review] });
+  await page.goto(`/runs/${runId}`);
+  const report = evidenceReport(page);
+  await expect(report.getByRole('heading', { name: 'Issues flagged', exact: true })).toBeVisible();
+  await expect(details(report, 'All checks')).toHaveJSProperty('open', false);
+  const attention = report.getByLabel('What needs attention', { exact: true });
+  await expect(attention).toBeVisible();
+  await expect(attention.getByText(behaviorReason, { exact: true })).toBeVisible();
+  await expect(report).not.toHaveAttribute('data-outcome', 'clear');
+  expect(api.judgeCalls()).toBe(0);
+  expect(api.applyCalls()).toBe(0);
+  expect(api.writes).toHaveLength(0);
+});
+
 test('saved selection replaces the entire evidence mapping and preserves freshness/application gates', async ({ page }) => {
   const inconsistentAgreement = makeReview('review-current');
   // A historical scalar may disagree with the actual displayed verdicts. It
