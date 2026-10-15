@@ -591,6 +591,16 @@ export async function testAccConnection(baseUrl: string): Promise<AccConnectionS
   );
 }
 
+export type ExecutionRunSummary = Pick<ExecutionRunRecord,
+  'execution_run_id' | 'agent_name' | 'agent_id' | 'mode' | 'status' | 'tester_id' | 'executor_id' | 'updated_at'
+> & { conversations: { score?: number | null }[] };
+
+export async function listExecutionRunSummaries(userId: string, projectId: string, page: { limit: number; offset: number; status: string }): Promise<ExecutionRunSummary[]> {
+  const params = new URLSearchParams({ user_id: userId, project_id: projectId, limit: String(page.limit), offset: String(page.offset), summary: 'true' });
+  if (page.status !== 'all') params.set('status', page.status);
+  return handleJson(await fetch(`${getApiBase()}/api/execution/runs?${params}`, { cache: 'no-store' }));
+}
+
 export async function listExecutionRuns(userId: string, projectId?: string): Promise<ExecutionRunRecord[]> {
   const params = new URLSearchParams({ user_id: userId });
   if (projectId) params.set('project_id', projectId);

@@ -64,6 +64,8 @@ For structured Kokoro voice turns with both recorded synthesis input and receive
 
 A successful CLI exit is insufficient: CAE checks the matching conversation ID, `judge_status`, declared dimensions, strict booleans, allowed ordinal/N/A values, justifications, exact taxonomy-node coverage, narrative and JSON structure before retaining a successful result.
 
+ASSERT 0.3 can mark a taxonomy node explicitly `relevant: false`, with null `violated` and `confidence` values. CAE retains that non-applicability without treating it as a violation, a corrected finding, or proof that a required behavior passed. Relevant nodes still require a strict boolean judgment and supported confidence label; null judgments without explicit non-relevance remain invalid.
+
 ## Frozen contracts and versioned identity
 
 Every new evaluation retains `evaluation_contract_snapshot`: schema version, spec identity, exact contract, resolved preset contents and a SHA-256 digest. Judging, freshness, export and confirmed apply use this snapshot, never the latest mutable catalog. A new contract produces a distinct evaluation ID; old reviews do not silently change meaning.

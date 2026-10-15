@@ -231,11 +231,17 @@ def list_runs(
     user_id: str = Query(...),
     project_id: str | None = Query(default=None),
     status: str | None = Query(default=None),
+    limit: int | None = Query(default=None, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    summary: bool = Query(default=False),
 ):
     return execution_run_store.list_execution_runs(
         user_id=user_id,
         project_id=project_id,
         status=status,
+        limit=limit,
+        offset=offset,
+        summary=summary,
     )
 
 

@@ -120,8 +120,8 @@ test('Results shows project-wide saved evaluations and exports all displayed his
   await expect(page.getByLabel('Required action checklist')).toContainText('verify_identity');
   await expect(page.getByLabel('Required action checklist')).not.toContainText('UNRELATED_ACTION');
   await expect(page.getByLabel('Report brief')).not.toContainText('Default case');
-  await expect(page.getByRole('button', { name: 'Retry run', exact: true })).toHaveCount(6);
-  for (const button of await page.getByRole('button', { name: 'Retry run', exact: true }).all()) await expect(button).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Retry run', exact: true, includeHidden: true })).toHaveCount(6);
+  for (const button of await page.getByRole('button', { name: 'Retry run', exact: true, includeHidden: true }).all()) await expect(button).toBeDisabled();
   // A retired scenario in an otherwise active suite must not fall back either.
   await page.getByRole('button', { name: 'Load run', exact: true }).nth(4).click();
   await expect(page.getByLabel('Report brief')).toContainText('Retained case 4');
@@ -213,9 +213,10 @@ test('project suite history exports the visible scope and compares only the same
   await page.getByRole('button', { name: 'Load run', exact: true }).first().click();
   await expect(page.getByLabel('Report brief')).toContainText('Suite coverage: 2/2');
   await expect(page.getByLabel('Report brief')).not.toContainText('Next uncovered');
-  const retry = page.getByRole('button', { name: 'Retry run', exact: true });
+  const retry = page.getByRole('button', { name: 'Retry run', exact: true, includeHidden: true });
   await expect(retry.first()).toBeEnabled();
   await expect(retry.nth(1)).toBeDisabled();
+  await page.locator('.results-evidence-details').first().locator('summary').click();
   await retry.first().click();
   await expect.poll(() => retries.length).toBe(1);
   expect(retries[0]).toMatchObject({ suite_id: 'a', scenario_id: 'active-case', transcript: 'Retained valid transcript' });

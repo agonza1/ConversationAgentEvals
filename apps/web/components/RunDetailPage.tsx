@@ -6,6 +6,7 @@ import { ApiAwareLink } from '@/components/ApiAwareLink';
 import { LiveRunFeedback } from '@/components/LiveRunFeedback';
 import { EvidenceTimeline } from '@/components/EvidenceTimeline';
 import { SavedAssertReview } from '@/components/SavedAssertReview';
+import { AssertReviewProgress } from '@/components/AssertReviewProgress';
 import { sortedAssertReviews } from '@/lib/assertReview';
 import { DesignResults } from '@/components/DesignResults';
 import { SiteNav } from '@/components/SiteNav';
@@ -611,7 +612,7 @@ function MetricDetail({
                   ? 'Run LLM review again'
                   : 'Review with LLM judge'}
           </button>
-          <span role="status">{judgeReadiness?.message || 'ASSERT readiness could not be checked.'}</span>
+          {isJudging ? <AssertReviewProgress /> : <span role="status">{judgeReadiness?.message || 'ASSERT readiness could not be checked.'}</span>}
           <button type="button" className="secondary-link" onClick={() => {
             void getAssertJudgeReadiness().then(setJudgeReadiness).catch(() => setJudgeReadiness(null));
           }}>Refresh judge readiness</button>

@@ -115,6 +115,8 @@ def list_benchmark_suite_runs(
     project_id: str | None = None,
     suite_id: str | None = None,
     status: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
     query = db.query(BenchmarkSuiteRunRecord).filter(BenchmarkSuiteRunRecord.user_id == user_id)
     if project_id is not None:
@@ -122,8 +124,11 @@ def list_benchmark_suite_runs(
     if suite_id is not None:
         query = query.filter(BenchmarkSuiteRunRecord.suite_id == suite_id)
     if status is not None:
-        query = query.filter(BenchmarkSuiteRunRecord.status == status)
-    records = query.order_by(BenchmarkSuiteRunRecord.updated_at.desc(), BenchmarkSuiteRunRecord.created_at.desc()).all()
+        query = query.filter(BenchmarkSuiteRunRecord.status.in_(['queued', 'running']) if status == 'active' else BenchmarkSuiteRunRecord.status == status)
+    query = query.order_by(BenchmarkSuiteRunRecord.updated_at.desc(), BenchmarkSuiteRunRecord.created_at.desc(), BenchmarkSuiteRunRecord.id.desc()).offset(offset)
+    if limit is not None:
+        query = query.limit(limit)
+    records = query.all()
     return [serialize_benchmark_suite_run(record) for record in records]
 
 
