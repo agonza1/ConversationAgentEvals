@@ -156,20 +156,14 @@ test('benchmark report counts the current unsaved run in suite coverage', async 
   await expect(page.getByLabel('Report brief')).toContainText(
     'Suite coverage: 1/4 suite scenarios covered (25%); 3 missing: Angry Outage Escalation, Interruption and Correction Handling, +1 more. Next: Angry Outage Escalation. Outside suite: Legacy Escalation.',
   );
-  await expect(page.getByLabel('Operator action plan')).toContainText('Keep moving through uncovered scenarios');
-  await expect(page.getByLabel('Operator action plan')).toContainText(
-    'Run Angry Outage Escalation next to keep suite coverage moving before release review.',
-  );
-  await expect(page.getByRole('button', { name: 'Open Angry Outage Escalation' })).toBeVisible();
-  await expect(page.getByLabel('Report brief')).toContainText(
-    'Primary risk: 3 suite scenarios still need fresh coverage before release review.',
-  );
-  await expect(page.getByLabel('Report brief')).toContainText(
-    'Next step: Run Angry Outage Escalation next to keep suite coverage moving before release review.',
-  );
+  // Coverage counts remain available, but a legacy report with no evidence
+  // metadata is not promoted to release readiness by its score/pass label.
+  await expect(page.getByLabel('Operator action plan')).toContainText('Needs operator review');
+  await expect(page.getByLabel('Evaluation evidence summary')).toContainText('Coverage not established');
+  await expect(page.getByLabel('Report brief')).toContainText('Evidence status: Verification not established');
 });
 
-test('benchmark report marks complete suite coverage as ready for release review', async ({ page }) => {
+test('complete suite coverage does not promote a legacy score with unknown evidence to release readiness', async ({ page }) => {
   await page.addInitScript(() => {
     window.localStorage.setItem('conversation-evals-demo-user', 'demo-user');
     window.localStorage.setItem('conversation-evals-demo-project', 'qa-project');
