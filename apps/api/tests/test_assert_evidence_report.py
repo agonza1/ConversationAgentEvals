@@ -1,0 +1,294 @@
+"""Exact evidence display links and speaker labels; no provider/model calls."""
+from copy import deepcopy
+
+import pytest
+
+from app.integrations.assert_runtime import Transcript, TranscriptEvent, TranscriptMetadata
+from app.services import assert_evidence_report as report
+from app.services.assert_transcript_adapter import _parse_transcript, build_assert_inference_row
+from app.services.benchmark_service import get_suite
+
+
+def _conversation():
+    return {
+        'conversation_id': 'evidence', 'scenario_id': 'correction',
+        'turns': [{'speaker': 'caller', 'text': 'I meant afternoon, not morning.'},
+                  {'speaker': 'agent', 'text': 'Your afternoon booking is confirmed.'}],
+    }
+
+
+def _metadata(citation=None, *, conversation=None, verdict=None):
+    conversation = conversation or _conversation()
+    inference = build_assert_inference_row(run={}, conversation=conversation)
+    return report.build_evidence_report(inference, {'verdict': verdict or {
+        'citations': [citation or {'index': 1, 'description': 'Correction', 'parts': [{
+            'quoted_text': 'I meant afternoon, not morning.', 'claimed_message_index': '1',
+            'matched_message_index': '1', 'message_id': 'event:0', 'position': [0, 31],
+            'resolution': {'status': 'resolved', 'method': 'exact'},
+        }]}],
+    }}, conversation)
+
+
+def test_actual_eleven_line_starter_sample_keeps_six_assistant_turns():
+    scenario = next(row for row in get_suite('call-center-voice-ai')['scenarios']
+                    if row['id'] == 'interruption-correction-handling')
+    sample = scenario['sample_transcript']
+    assert len(sample.splitlines()) == 11
+    parsed = _parse_transcript(sample)
+    assert [role for role, _ in parsed].count('user') == 5
+    assert [role for role, _ in parsed].count('assistant') == 6
+    assert parsed[1] == ('assistant', 'Go ahead. I heard the correction and I will use the updated request.')
+    assert parsed[2] == ('user', 'Sorry to interrupt — I meant afternoon, not morning.')
+    assert parsed[-1][1].startswith('All set — The corrected afternoon appointment is confirmed')
+    inference = build_assert_inference_row(run={}, conversation={'transcript': sample})
+    assert len(inference['events']) == 11
+    assert [event['edit']['message']['role'] for event in inference['events']] == [role for role, _ in parsed]
+
+
+@pytest.mark.parametrize('label,role', [
+    ('Agent (starter sample agent)', 'assistant'), ('aGeNt Taylor', 'assistant'),
+    ('Taylor (assistant)', 'assistant'), ('[00:01.250] Caller Jane', 'user'),
+    ('00:01:22 — ASSISTANT (Support)', 'assistant'), ('Tester_A', 'user'),
+    ('Customer-Pat', 'user'), ('Patient (new patient)', 'user'),
+    ('AI', 'assistant'), ('Taylor (AI)', 'assistant'),
+    ('Human', 'user'), ('Learner', 'user'), ('Pat (human)', 'user'), ('Taylor (learner)', 'user'),
+])
+def test_bounded_named_and_timestamped_speaker_labels(label, role):
+    assert _parse_transcript(f'{label}: Exact words.\ncontinued line') == [(role, 'Exact words.\ncontinued line')]
+
+
+def test_unknown_labels_and_preamble_are_retained_without_inventing_tools():
+    value = 'Imported note\nLocation: lobby\nCaller: First line\nAgency: unknown label\nTool: not a receipt\nAgent: Reply\nUsername: unknown label'
+    assert _parse_transcript(value) == [
+        ('system', '[Unstructured CAE transcript evidence]\nImported note\nLocation: lobby'),
+        ('user', 'First line\nAgency: unknown label\nTool: not a receipt'),
+        ('assistant', 'Reply\nUsername: unknown label'),
+    ]
+    overlong = 'Agent (' + 'x' * 100 + '): not a bounded role label'
+    assert _parse_transcript(overlong) == [('system', '[Unstructured CAE transcript evidence]\n' + overlong)]
+
+
+@pytest.mark.parametrize('label', [
+    'AI-generated summary', 'AI summary', 'AI_generated notes', 'AI (summary)',
+    'Human resources', 'Human summary', 'Learner summary', 'Learner_notes',
+])
+@pytest.mark.parametrize('prefix,role', [('', None), ('Agent: Actual spoken reply.\n', 'assistant'),
+                                      ('Caller: Actual spoken reply.\n', 'user')])
+def test_generic_role_notes_are_unstructured_not_spoken_turns(label, prefix, role):
+    metadata = f'{label}: A generated outcome claim.'
+    parsed = _parse_transcript(prefix + metadata + '\nCaller: Actual caller reply.')
+    expected = ([(role, 'Actual spoken reply.')] if prefix else []) + [
+        ('system', '[Unstructured CAE transcript evidence]\n' + metadata),
+        ('user', 'Actual caller reply.'),
+    ]
+    assert parsed == expected
+    inference = build_assert_inference_row(run={}, conversation={'transcript': prefix + metadata})
+    spoken = [event['edit']['message']['content'] for event in inference['events']
+              if event['edit'].get('message', {}).get('role') == 'assistant']
+    assert spoken == (['Actual spoken reply.'] if role == 'assistant' else [])
+
+
+def test_exact_native_quote_links_only_to_canonical_event_snapshot():
+    metadata = _metadata()
+    assert metadata['evidence_details_status'] == 'complete'
+    assert metadata['transcript_adapter_version'] == 'cae-assert-evidence-v4'
+    assert metadata['evidence_messages'][0] == {
+        'id': 'event:0', 'role': 'user', 'text': 'I meant afternoon, not morning.',
+    }
+    assert metadata['evidence_references'][0]['parts'] == [{
+        'quote': 'I meant afternoon, not morning.', 'status': 'matched', 'message_id': 'event:0',
+    }]
+    assert metadata['evidence_coverage'] == {'transcript': True, 'tool_trace': False, 'final_state': False}
+
+
+def test_tool_indices_are_native_and_not_reassigned_to_conversation_messages():
+    conversation = _conversation()
+    conversation['action_trace'] = [{'action': 'lookup', 'before_turn_index': 2,
+                                     'tool_result': 'Tool-only exact quote'}]
+    inference = build_assert_inference_row(run={}, conversation=conversation)
+    native = Transcript(metadata=TranscriptMetadata(kind='scenario', test_case_id='native',
+                                                    behavior='test', target='test', tester_model='test'),
+                        events=[TranscriptEvent.model_validate(event) for event in inference['events']])
+    _, indices = native.format_transcript_xml('target', skip_system=False)
+    assert indices == {'1': 'event:0', '2': 'event:1', '3': 'event:2'}
+    metadata = report.build_evidence_report(inference, {'verdict': {'highlights':
+        '1. <cite id="3" description="Agent">Your afternoon booking is confirmed.</cite>\n'
+        '2. <cite id="2" description="Tool">Tool-only exact quote</cite>'}}, conversation)
+    assert [message['id'] for message in metadata['evidence_messages']] == ['event:0', 'event:2']
+    assert metadata['evidence_references'][0]['parts'][0]['message_id'] == 'event:2'
+    tool_part = metadata['evidence_references'][1]['parts'][0]
+    assert tool_part['status'] == 'unresolved' and 'message_id' not in tool_part
+    assert 'tool evidence' in tool_part['detail']
+    assert metadata['evidence_coverage']['tool_trace'] is True
+
+
+@pytest.mark.parametrize('citation_shape', ['highlights', 'native'])
+def test_conversation_quote_echoed_in_native_tool_output_is_ambiguous(citation_shape):
+    conversation = _conversation()
+    quote = conversation['turns'][1]['text']
+    conversation['action_trace'] = [{'action': 'booking_receipt', 'after_turn_index': 2,
+                                     'tool_result': quote}]
+    inference = build_assert_inference_row(run={}, conversation=conversation)
+    verdict = {'highlights': f'1. <cite id="2" description="Booking">{quote}</cite>'}
+    if citation_shape == 'native':
+        verdict = {'citations': [{'index': 1, 'description': 'Booking', 'parts': [{
+            'quoted_text': quote, 'claimed_message_index': '2', 'matched_message_index': '2',
+            'message_id': 'event:1', 'position': [0, len(quote)],
+            'resolution': {'status': 'resolved', 'method': 'exact'},
+        }]}]}
+    native = Transcript(metadata=TranscriptMetadata(kind='scenario', test_case_id='native',
+                                                    behavior='test', target='test', tester_model='test'),
+                        events=[TranscriptEvent.model_validate(event) for event in inference['events']])
+    assert sum(quote in message.content for _, message in native.collect_messages_with_ids('target')) == 2
+    metadata = report.build_evidence_report(inference, {'verdict': verdict}, conversation)
+    assert metadata['evidence_details_status'] == 'complete'
+    assert [message['role'] for message in metadata['evidence_messages']] == ['user', 'assistant']
+    part = metadata['evidence_references'][0]['parts'][0]
+    assert part['quote'] == quote and part['status'] == 'ambiguous'
+    assert 'message_id' not in part
+
+
+@pytest.mark.parametrize('mutation,expected', [
+    ({'resolution': {'status': 'ambiguous', 'detail': 'Native ambiguity'}}, 'ambiguous'),
+    ({'resolution': {'status': 'unresolved', 'detail': 'Native quote mismatch'}}, 'unresolved'),
+    ({'resolution': {'status': 'resolved', 'method': 'conservative_fuzzy'}}, 'unresolved'),
+    ({'position': [1, 31]}, 'unresolved'), ({'message_id': 'event:1'}, 'unresolved'),
+    ({'message_id': 'https://example.invalid/private'}, 'unresolved'),
+    ({'message_id': '../../private.json'}, 'unresolved'),
+    ({'matched_message_index': '2'}, 'unresolved'), ({'claimed_message_index': '999'}, 'unresolved'),
+    ({'quoted_text': 'afternoonish'}, 'unresolved'), ({'quoted_text': ''}, 'unresolved'),
+])
+def test_native_warnings_invalid_indices_and_approximate_quotes_do_not_link(mutation, expected):
+    citation = {'index': 8, 'description': 'Native', 'parts': [{
+        'quoted_text': 'I meant afternoon, not morning.', 'claimed_message_index': '1',
+        'matched_message_index': '1', 'message_id': 'event:0', 'position': [0, 31],
+        'resolution': {'status': 'resolved', 'method': 'exact'}, **mutation,
+    }]}
+    part = _metadata(citation)['evidence_references'][0]['parts'][0]
+    assert part['status'] == expected and 'message_id' not in part and part['detail']
+
+
+@pytest.mark.parametrize('texts', [['That works.', 'That works.'], ['That works. That works.', 'Reply'], ['aaaa', 'Reply']])
+def test_repeated_or_overlapping_quotes_are_ambiguous_not_arbitrarily_linked(texts):
+    conversation = _conversation()
+    for turn, text in zip(conversation['turns'], texts):
+        turn['text'] = text
+    quote = 'aa' if texts[0] == 'aaaa' else 'That works.'
+    metadata = _metadata(conversation=conversation, verdict={'highlights': f'1. <cite id="1" description="Repeated">{quote}</cite>'})
+    part = metadata['evidence_references'][0]['parts'][0]
+    assert part['status'] == 'ambiguous' and 'message_id' not in part
+
+
+def test_long_full_quotes_and_parts_are_lossless_not_compatibility_truncated():
+    quote = ('Full exact evidence. ' * 60).strip()
+    conversation = _conversation()
+    conversation['turns'][0]['text'] = quote
+    metadata = _metadata(conversation=conversation, verdict={'highlights':
+        f'1. <cite id="1" description="Long quote">{quote}</cite>'})
+    assert metadata['evidence_messages'][0]['text'] == quote
+    assert metadata['evidence_references'][0]['parts'][0]['quote'] == quote.strip()
+    assert metadata['evidence_references'][0]['parts'][0]['status'] == 'matched'
+
+
+def test_native_warnings_and_unstructured_legacy_text_remain_visible_unlinked():
+    metadata = _metadata(verdict={'highlights': 'Unstructured legacy quote',
+                                 'citation_warnings': ['missing_referenced_citation:3']})
+    assert 'missing_referenced_citation:3' in metadata['evidence_details_message']
+    part = metadata['evidence_references'][0]['parts'][0]
+    assert part['quote'] == 'Unstructured legacy quote' and part['status'] == 'unresolved'
+    assert 'message_id' not in part
+
+
+@pytest.mark.parametrize('limit', ['MAX_EVENTS', 'MAX_SNAPSHOT_CHARS', 'MAX_REFERENCE_CHARS', 'MAX_REFERENCES', 'MAX_PARTS'])
+def test_metadata_limits_withhold_partial_snapshots_without_clipping_or_mutation(monkeypatch, limit):
+    monkeypatch.setattr(report, limit, 0)
+    conversation = _conversation()
+    original = deepcopy(conversation)
+    metadata = _metadata(conversation=conversation)
+    assert metadata['evidence_details_status'] == 'limited'
+    assert metadata['evidence_messages'] == [] and metadata['evidence_references'] == []
+    assert 'unchanged' in metadata['evidence_details_message']
+    assert conversation == original
+
+
+def test_coverage_tracks_recorded_state_not_a_model_claim_or_bookkeeping_state():
+    conversation = _conversation()
+    conversation['final_state'] = {'outcome': 'conversation_only_evidence_recorded'}
+    assert _metadata(conversation=conversation)['evidence_coverage']['final_state'] is False
+    conversation['final_state'] = {'refill_request': 'queued'}
+    assert _metadata(conversation=conversation)['evidence_coverage']['final_state'] is True
+    conversation['final_state'] = {}
+    conversation['unstructured_final_state_evidence'] = 'Reported state, not an execution receipt'
+    assert _metadata(conversation=conversation)['evidence_coverage']['final_state'] is True
+
+
+@pytest.mark.parametrize('value', [None, '', ' ', '\t\r\n', [], {}, 0, True])
+def test_unavailable_unstructured_final_state_is_not_claimed_as_judge_evidence(value):
+    conversation = _conversation()
+    conversation['final_state'] = {}
+    conversation['unstructured_final_state_evidence'] = value
+    metadata = _metadata(conversation=conversation)
+    assert metadata['evidence_coverage']['final_state'] is False
+
+
+@pytest.mark.parametrize('value', ['Reported state', ['Reported state'], [{'phase': 'pending'}, 'unverified']])
+def test_unstructured_state_coverage_matches_canonical_judge_emission(value):
+    conversation = _conversation()
+    conversation['unstructured_final_state_evidence'] = value
+    inference = build_assert_inference_row(run={}, conversation=conversation)
+    assert any(event['edit'].get('tool_name') == 'cae_unverified_final_state_evidence'
+               for event in inference['events'])
+    metadata = report.build_evidence_report(inference, {'verdict': {}}, conversation)
+    assert metadata['evidence_coverage']['final_state'] is True
+    assert inference['dimensions']['evidence_level'] == 'black_box'
+
+
+@pytest.mark.parametrize('conversation,expected', [
+    ({'turns': [{'speaker': 'observer', 'text': 'Not attributed speech.'}],
+      'final_state': {'phase': 'pending'}}, False),
+    ({'turns': [{'speaker': 'observer', 'text': 'Not attributed speech.'}],
+      'action_trace': [{'tool_name': 'lookup', 'result': 'No match'}]}, False),
+    ({'turns': [{'speaker': 'observer', 'text': 'Not attributed speech.'}],
+      'transcript': 'Caller: Actual fallback transcript.'}, True),
+    ({'turns': [{'speaker': 'agent', 'text': 42}]}, True),
+    ({'error': 'Transport failed before any conversation.'}, False),
+    ({'transcript': 'Unstructured imported conversation note.'}, True),
+])
+def test_transcript_coverage_tracks_emitted_messages_not_saved_turn_text(conversation, expected):
+    inference = build_assert_inference_row(run={}, conversation=conversation)
+    metadata = report.build_evidence_report(inference, {'verdict': {}}, conversation)
+    assert metadata['evidence_coverage']['transcript'] is expected
+
+
+@pytest.mark.parametrize('action,expected', [({}, True), ({'tool_name': 'lookup'}, True),
+                                           (None, False), ('lookup', False), ([], False)])
+def test_tool_coverage_tracks_all_and_only_emitted_agent_trace_records(action, expected):
+    conversation = _conversation()
+    conversation['action_trace'] = [action]
+    metadata = _metadata(conversation=conversation)
+    assert metadata['evidence_coverage'] == {'transcript': True, 'tool_trace': expected, 'final_state': False}
+
+
+def test_coverage_never_borrows_source_records_absent_from_canonical_target_view():
+    conversation = _conversation()
+    conversation['action_trace'] = [{'tool_name': 'cae_final_state_snapshot'}]
+    conversation['final_state'] = {'phase': 'pending'}
+    inference = build_assert_inference_row(run={}, conversation=conversation)
+    for event in inference['events']:
+        event['view'] = ['combined']
+    metadata = report.build_evidence_report(inference, {'verdict': {}}, conversation)
+    assert metadata['evidence_coverage'] == {'transcript': False, 'tool_trace': False, 'final_state': False}
+
+
+def test_state_and_voice_annotation_tools_do_not_claim_an_agent_execution_trace():
+    conversation = _conversation()
+    conversation['final_state'] = {'phase': 'pending'}
+    conversation['turns'][1]['frame_metadata'] = {
+        'source': 'target_kokoro_audio', 'source_text': conversation['turns'][1]['text'],
+        'asr_receipt': conversation['turns'][1]['text'],
+    }
+    inference = build_assert_inference_row(run={}, conversation=conversation)
+    assert any(event['edit'].get('tool_name') == 'cae_voice_turn_evidence_observation'
+               for event in inference['events'])
+    metadata = report.build_evidence_report(inference, {'verdict': {}}, conversation)
+    assert metadata['evidence_coverage'] == {'transcript': True, 'tool_trace': False, 'final_state': True}

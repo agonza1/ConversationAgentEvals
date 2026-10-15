@@ -7,16 +7,17 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiAwareLink } from './ApiAwareLink';
 import { EvidenceTimeline } from './EvidenceTimeline';
 import { AssertReviewProgress } from './AssertReviewProgress';
+import { AssertEvidenceReport } from './AssertEvidenceReport';
 import { DesignResults } from './DesignResults';
 import { OpenAIConnectionPanel } from './OpenAIConnectionSettings';
 import { useOpenAIConnection, type OpenAIProviderStatus } from './useOpenAIConnection';
 import { LiveRunFeedback, type LiveRunEvent } from './LiveRunFeedback';
 import { SpeechProviderSummary } from './SpeechProviderSettings';
 import { apiErrorMessage } from '@/lib/apiError';
+import { buildAssertReportView, sortedAssertReviews } from '@/lib/assertReview';
 import { WayloConnection, useWayloConnection } from './WayloConnection';
 import { wayloExecutionHeaders, type WayloTargetConnection } from '@/lib/wayloConnection';
 import { wayloRunBudgetError } from '@/lib/wayloRunBudget';
-import { sortedAssertReviews } from '@/lib/assertReview';
 import { evaluationEvidence } from '@/lib/evaluationEvidence';
 import { EvidenceEvaluationFlow, EvaluationEvidenceSummary } from './EvaluationEvidenceSummary';
 import { getApiBase, listProductProjects, requestBenchmarkJudge, type ProductProjectOption, type AssertJudgeReadiness, type ConversationRecord } from '@/lib/execution';
@@ -1414,18 +1415,13 @@ function formatJudgeSpend(spendControl: JudgeGate['spend_control']) {
   const remaining = spendControl.remaining_daily_credits;
   const spent = spendControl.spent_daily_credits;
   const limit = spendControl.daily_credit_limit;
-  const provider = spendControl.provider ?? 'judge provider';
-  const providerStatus = spendControl.provider_configured ? 'configured' : 'not configured';
-  const spentLabel = spent === undefined ? '' : ` ${spent} spent;`;
-
-  return `${estimated} credits estimated;${spentLabel} ${remaining ?? 'unknown'} of ${limit ?? 'unknown'} daily credits remaining; ${provider} ${providerStatus}.`;
+  const spentLabel = spent === undefined ? '' : ` ${spent} daily units used;`;
+  return `CAE review budget: ${estimated} units estimated;${spentLabel} ${remaining ?? 'unknown'} of ${limit ?? 'unknown'} daily units remaining. Local CAE limit—not provider billing or ChatGPT-plan balance.`;
 }
 
 function judgeBannerTitle(judgeGate: JudgeGate) {
   if (judgeGate.status === 'ready') {
-    if (judgeGate.judge_result?.agrees === true) return 'LLM judge agrees';
-    if (judgeGate.judge_result?.agrees === false) return 'LLM judge disagrees';
-    return 'LLM judge complete';
+    return 'Review recorded';
   }
   if (judgeGate.block_reason === 'budget') return 'Judge budget exhausted';
   if (judgeGate.block_reason === 'provider_error') return 'Judge provider error';
@@ -2335,6 +2331,7 @@ export function BenchmarkRunner({
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
   const [judgeGate, setJudgeGate] = useState<JudgeGate | null>(null);
+  const visualJudge = useMemo(() => judgeGate ? buildAssertReportView(judgeGate) : null, [judgeGate]);
   const [isJudging, setIsJudging] = useState(false);
   const judgeSequence = useRef(0);
   useEffect(() => {
@@ -4684,95 +4681,25 @@ export function BenchmarkRunner({
         {runError ? <p style={{ color: 'var(--error-text)', margin: 0 }}>{runError}</p> : null}
         {saveMessage ? <p style={{ color: 'var(--muted)', margin: 0 }}>{saveMessage}</p> : null}
         {judgeGate ? (
-          <div
-            aria-label="LLM judge result"
-            style={{
-              border: `1px solid ${judgeGate.status === 'ready' ? 'var(--success-border)' : 'var(--error-border)'}`,
-              background: judgeGate.status === 'ready' ? 'var(--success-bg)' : 'var(--error-bg)',
-              color: judgeGate.status === 'ready' ? 'var(--success-text)' : 'var(--error-text)',
-              borderRadius: 8,
-              padding: 12,
-              display: 'grid',
-              gap: 8,
-            }}
-          >
-            <div>
-              <strong>{judgeBannerTitle(judgeGate)}:</strong> {judgeGate.message}
-            </div>
-            {(judgeGate.provider || judgeGate.model || judgeGate.latency_ms != null) ? (
-              <p style={{ margin: 0, color: 'inherit', fontSize: 13 }}>
-                {[
-                  judgeGate.provider ? `Provider: ${judgeGate.provider}` : null,
-                  judgeGate.model ? `Model: ${judgeGate.model}` : null,
-                  judgeGate.latency_ms != null ? `${judgeGate.latency_ms} ms` : null,
-                ]
-                  .filter(Boolean)
-                  .join(' · ')}
-              </p>
-            ) : null}
-            {judgeGate.judge_result?.rationale ? (
-              <p style={{ margin: 0, color: 'inherit' }}>
-                <strong>Rationale:</strong> {judgeGate.judge_result.rationale}
-              </p>
-            ) : null}
-            {judgeGate.judge_result?.next_action ? (
-              <p style={{ margin: 0, color: 'inherit' }}>
-                <strong>Next action:</strong> {judgeGate.judge_result.next_action}
-              </p>
-            ) : null}
-            {!judgeGate.judge_result?.rationale && judgeGate.judge_output ? (
-              <p style={{ margin: 0, color: 'inherit', whiteSpace: 'pre-wrap' }}>{judgeGate.judge_output}</p>
-            ) : null}
-            {formatJudgeSpend(judgeGate.spend_control) ? (
-              <p style={{ margin: 0, color: 'inherit', fontSize: 13 }}>{formatJudgeSpend(judgeGate.spend_control)}</p>
-            ) : null}
-            {judgeGate.evidence_citations.length ? (
-              <div>
-                <p style={{ margin: '0 0 4px', fontSize: 13, fontWeight: 700 }}>Citations sent to judge</p>
-                <ul style={{ margin: 0, paddingLeft: 18 }}>
-                  {judgeGate.evidence_citations.map((citation) => (
-                    <li key={citation} style={{ fontSize: 13 }}>{citation}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            {judgeGate.prompt_preview ? (
-              <div>
-                <button
-                  type="button"
-                  onClick={() => setShowJudgePrompt((current) => !current)}
-                  style={{
-                    border: 0,
-                    padding: 0,
-                    background: 'transparent',
-                    color: 'inherit',
-                    textDecoration: 'underline',
-                    cursor: 'pointer',
-                    fontSize: 13,
-                    fontWeight: 700,
-                  }}
-                >
-                  {showJudgePrompt ? 'Hide what the judge saw' : 'What the judge saw'}
-                </button>
-                {showJudgePrompt ? (
-                  <pre
-                    style={{
-                      margin: '8px 0 0',
-                      padding: 10,
-                      borderRadius: 6,
-                      background: 'rgba(0,0,0,0.06)',
-                      color: 'inherit',
-                      whiteSpace: 'pre-wrap',
-                      fontSize: 12,
-                      maxHeight: 280,
-                      overflow: 'auto',
-                    }}
-                  >
-                    {judgeGate.prompt_preview}
-                  </pre>
-                ) : null}
-              </div>
-            ) : null}
+          <div aria-label="LLM judge result">
+            {visualJudge ? <AssertEvidenceReport key={visualJudge.id} review={visualJudge}
+              automaticVerdict={report?.verdict || report?.overall}
+              automaticScore={report?.overall_score ?? report?.score}
+              technical={<>
+                <p>{judgeGate.message}</p>
+                {formatJudgeSpend(judgeGate.spend_control) ? <p>{formatJudgeSpend(judgeGate.spend_control)}</p> : null}
+                {judgeGate.prompt_preview ? <div>
+                  <button type="button" className="secondary-link" onClick={() => setShowJudgePrompt((current) => !current)}>
+                    {showJudgePrompt ? 'Hide what the judge saw' : 'What the judge saw'}
+                  </button>
+                  {showJudgePrompt ? <pre>{judgeGate.prompt_preview}</pre> : null}
+                </div> : null}
+              </>} /> : <div role="status" style={{
+                border: '1px solid var(--error-border)', background: 'var(--error-bg)',
+                color: 'var(--error-text)', borderRadius: 8, padding: 12,
+              }}>
+                <strong>{judgeBannerTitle(judgeGate)}:</strong> {judgeGate.message}
+              </div>}
           </div>
         ) : null}
       </form>

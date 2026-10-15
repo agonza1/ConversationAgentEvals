@@ -27,7 +27,10 @@ from app.integrations.assert_runtime import (
 
 from app.services.evaluation_contract import content_hash
 from app.services.assert_taxonomy_adapter import build_assert_taxonomy
-from app.services.assert_transcript_adapter import build_assert_inference_row, _identifier, _json_text
+from app.services.assert_transcript_adapter import (
+    TRANSCRIPT_ADAPTER_VERSION, build_assert_inference_row, _identifier, _json_text,
+)
+from app.services.assert_evidence_report import build_evidence_report
 from app.services.judge_budget import (
     _judge_spend_control,
     _refund_judge_credits,
@@ -41,7 +44,7 @@ DEFAULT_ASSERT_JUDGE_CREDITS = 10
 DEFAULT_ASSERT_JUDGE_MAX_CONCURRENT = 2
 DEFAULT_ASSERT_JUDGE_MAX_N = 1
 FINGERPRINT_VERSION = 3
-ADAPTER_VERSION = 'cae-assert-evidence-v3'
+ADAPTER_VERSION = TRANSCRIPT_ADAPTER_VERSION
 AGGREGATION_VERSION = 'cae-assert-observability-v2'
 
 _ASSERT_JUDGE_SLOT_LOCK = Lock()
@@ -247,6 +250,7 @@ def run_upstream_assert_judge(
                 ),
                 'node_judgments': deepcopy(score['verdict']['node_judgments']),
                 'multi_judge': deepcopy(score.get('multi_judge')),
+                **build_evidence_report(inference, score, conversation),
             }
             response = {
                 'status': 'ready',

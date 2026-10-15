@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from assert_ai.config import load_runtime_context, parse_judge_dimensions
+from assert_ai.core.judge_citations import CITE_XML_PATTERN
 from assert_ai.core.judge import (
     BUILT_IN_DIMENSIONS,
     infer_judge_status,
@@ -168,6 +169,7 @@ def judge_preset(name: str) -> dict[str, Any]:
 
 __all__ = [
     'AddMessageEdit',
+    'CITE_XML_PATTERN',
     'AssertRuntimeUnavailable',
     'BUILT_IN_DIMENSIONS',
     'EXPECTED_ASSERT_VERSION',

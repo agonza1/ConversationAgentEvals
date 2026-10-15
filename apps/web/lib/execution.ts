@@ -268,6 +268,25 @@ export interface AssertJudgeProvenance {
   artifacts?: Record<string, string>;
   input_fingerprint?: string;
   score_sha256?: string;
+  transcript_adapter_version?: string;
+  evidence_messages?: Array<{ id: string; role: string; text: string }>;
+  evidence_references?: Array<{
+    index: string | number;
+    description: string;
+    parts: Array<{
+      quote: string;
+      status: 'matched' | 'ambiguous' | 'unresolved';
+      message_id?: string;
+      detail?: string;
+    }>;
+  }>;
+  evidence_coverage?: {
+    transcript: boolean;
+    tool_trace: boolean;
+    final_state: boolean;
+  };
+  evidence_details_status?: 'complete' | 'limited';
+  evidence_details_message?: string;
 }
 
 export interface JudgeProposedEvaluation {
@@ -275,6 +294,12 @@ export interface JudgeProposedEvaluation {
   summary: string;
   corrected_findings: string[];
   remaining_gaps: string[];
+}
+
+export interface DeterministicEvaluationSnapshot {
+  verdict?: string | null;
+  score?: number | null;
+  evidence_sha256?: string | null;
 }
 
 export interface JudgeReviewRecord {
@@ -289,6 +314,7 @@ export interface JudgeReviewRecord {
   evidence_citations?: string[];
   judge_result?: LlmJudgeResult | null;
   output_sha256?: string | null;
+  deterministic_snapshot?: DeterministicEvaluationSnapshot | null;
 }
 
 export interface EvaluationAdjudication {
@@ -303,11 +329,7 @@ export interface EvaluationAdjudication {
   evidence_citations?: string[];
   judge_result?: LlmJudgeResult | null;
   output_sha256?: string | null;
-  deterministic_snapshot?: {
-    verdict?: string | null;
-    score?: number | null;
-    evidence_sha256?: string | null;
-  };
+  deterministic_snapshot?: DeterministicEvaluationSnapshot | null;
 }
 
 export interface LlmJudgeResponse {
@@ -327,6 +349,7 @@ export interface LlmJudgeResponse {
   prompt_preview?: string | null;
   latency_ms?: number | null;
   review_id?: string | null;
+  deterministic_snapshot?: DeterministicEvaluationSnapshot | null;
   block_reason?: 'provider' | 'budget' | 'provider_error' | 'evidence' | null;
   engine?: string | null;
   assert_version?: string | null;

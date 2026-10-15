@@ -50,11 +50,12 @@ def test_current_status_is_safe_exact_identity_and_read_only(saved):
     assert saved==original
 
 
-def test_previous_voice_evidence_adapter_is_stale_and_cannot_be_applied(saved):
+@pytest.mark.parametrize('previous_adapter', ['cae-assert-evidence-v2', 'cae-assert-evidence-v3'])
+def test_previous_voice_evidence_adapter_is_stale_and_cannot_be_applied(saved, previous_adapter):
     review = saved[2]
     configuration = review['judge_result']['provenance']['configuration']
-    assert configuration['adapter_version'] == 'cae-assert-evidence-v3'
-    configuration['adapter_version'] = 'cae-assert-evidence-v2'
+    assert configuration['adapter_version'] == 'cae-assert-evidence-v4'
+    configuration['adapter_version'] = previous_adapter
     original = deepcopy(saved)
     response = status(saved)
     assert response.json()['status'] == 'stale'
