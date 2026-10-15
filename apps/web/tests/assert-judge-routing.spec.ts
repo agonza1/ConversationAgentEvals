@@ -227,12 +227,16 @@ async function checkAssertJudgeRouting(
 
   const result = page.getByLabel('Saved ASSERT assessment');
   await result.getByText('Semantic rationale', { exact: true }).click();
+  await result.locator('summary').filter({ hasText: /^All checks/ }).click();
   await result.getByText('Selected review proposal', { exact: true }).click();
-  await expect(result).toContainText('openai/gpt-4.1-mini');
+  const technical = result.getByText('Technical details', { exact: true }).locator('..');
+  await technical.locator('summary').click();
+  await expect(technical.getByText('openai/gpt-4.1-mini', { exact: true })).toBeVisible();
   await expect(result).toContainText('Refund execution cannot be verified from this evidence.');
   await expect(result).toContainText('No refund tool result or final-state receipt was recorded.');
-  await expect(result).toContainText(`ASSERT 0.3.0 · ${evidenceLabel}`);
-  await expect(result).toContainText('unverified operational outcome');
+  await expect(technical).toContainText('ASSERT 0.3.0');
+  await expect(result.getByLabel('ASSERT evaluation details')).toContainText(evidenceLabel);
+  await expect(result).toContainText(/unverified operational outcome/i);
   await expect(result).toContainText('Flagged');
   if (evidenceLevel !== 'black_box') {
     await expect(result).not.toContainText('Transcript-only evidence');

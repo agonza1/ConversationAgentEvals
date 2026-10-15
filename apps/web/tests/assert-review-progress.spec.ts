@@ -132,7 +132,10 @@ for (const surface of ['Eval', 'Run analysis'] as const) {
       } finally { release(); }
       await expect(progress).toHaveCount(0);
       if (outcome === 'success') {
-        await expect(page.getByLabel('LLM judge result')).toContainText('Synthetic ASSERT review completed.');
+        const result = page.getByLabel('LLM judge result');
+        await expect(result.getByLabel('ASSERT evidence report', { exact: true })).toBeVisible();
+        await result.getByText('Technical details', { exact: true }).click();
+        await expect(result.getByText('Synthetic ASSERT review completed.', { exact: true })).toBeVisible();
       } else if (surface === 'Eval') {
         await expect(page.getByLabel('LLM judge result')).toContainText('Synthetic ASSERT review failed.');
       } else {

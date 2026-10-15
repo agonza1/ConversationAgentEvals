@@ -16,6 +16,12 @@ from app.integrations.assert_runtime import (
 _USER_SPEAKERS = {'user', 'caller', 'customer', 'patient', 'learner', 'tester', 'human'}
 _ASSISTANT_SPEAKERS = {'agent', 'assistant', 'target', 'bot', 'ai'}
 _RECORDED_TTS_SOURCES = {'tester_kokoro_audio', 'target_kokoro_audio'}
+TRANSCRIPT_ADAPTER_VERSION = 'cae-assert-evidence-v4'
+_TRANSCRIPT_LINE = re.compile(
+    r'^\s*(?:(?:\[(?:\d{1,2}:)?\d{1,2}:\d{2}(?:[.,]\d{1,3})?\]'
+    r'|(?:\d{1,2}:)?\d{1,2}:\d{2}(?:[.,]\d{1,3})?)\s*[-–—]?\s*)?'
+    r'([A-Za-z][^:\r\n]{0,95}):[ \t]*(.*)$'
+)
 
 
 def build_assert_inference_row(
@@ -281,17 +287,18 @@ def _parse_transcript(value: str) -> list[tuple[str, str]]:
     def flush() -> None:
         nonlocal role, lines
         text = '\n'.join(lines).strip()
-        if role and text:
-            messages.append((role, text))
+        if text:
+            messages.append((role or 'system', text if role else
+                             '[Unstructured CAE transcript evidence]\n' + text))
         role, lines = None, []
 
     for line in value.splitlines():
-        match = re.match(r'^\s*([A-Za-z][A-Za-z _-]{0,30})\s*:\s*(.*)$', line)
+        match = _TRANSCRIPT_LINE.match(line)
         next_role = _role(match.group(1)) if match else None
         if next_role:
             flush()
             role, lines = next_role, [match.group(2)]
-        elif role:
+        else:
             lines.append(line)
     flush()
     if not messages and value.strip():
@@ -301,9 +308,18 @@ def _parse_transcript(value: str) -> list[tuple[str, str]]:
 
 def _role(value: str) -> str | None:
     speaker = value.strip().lower()
-    if speaker in _USER_SPEAKERS or speaker.startswith(('user', 'caller', 'customer', 'patient', 'tester')):
+    # Require an actual role token, not prefixes such as "agency" or "username".
+    # Keep bounded names and descriptive labels, including starter sample labels.
+    if len(speaker) > 96:
+        return None
+    named_suffix = re.fullmatch(r'[^():\r\n]{1,64}\s+\(([a-z]+)\)', speaker)
+    if named_suffix and named_suffix.group(1) in _USER_SPEAKERS | _ASSISTANT_SPEAKERS:
+        speaker = named_suffix.group(1)
+    token = re.match(r'^([a-z]+)(?:$|[\s(_-])', speaker)
+    speaker = token.group(1) if token else speaker
+    if speaker in _USER_SPEAKERS:
         return 'user'
-    if speaker in _ASSISTANT_SPEAKERS or speaker.startswith(('agent', 'assistant', 'target', 'bot')):
+    if speaker in _ASSISTANT_SPEAKERS:
         return 'assistant'
     return None
 

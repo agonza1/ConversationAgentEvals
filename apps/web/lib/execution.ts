@@ -245,6 +245,25 @@ export interface AssertJudgeProvenance {
   artifacts?: Record<string, string>;
   input_fingerprint?: string;
   score_sha256?: string;
+  transcript_adapter_version?: string;
+  evidence_messages?: Array<{ id: string; role: string; text: string }>;
+  evidence_references?: Array<{
+    index: string | number;
+    description: string;
+    parts: Array<{
+      quote: string;
+      status: 'matched' | 'ambiguous' | 'unresolved';
+      message_id?: string;
+      detail?: string;
+    }>;
+  }>;
+  evidence_coverage?: {
+    transcript: boolean;
+    tool_trace: boolean;
+    final_state: boolean;
+  };
+  evidence_details_status?: 'complete' | 'limited';
+  evidence_details_message?: string;
 }
 
 export interface JudgeProposedEvaluation {

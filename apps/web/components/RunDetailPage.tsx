@@ -7,7 +7,8 @@ import { LiveRunFeedback } from '@/components/LiveRunFeedback';
 import { EvidenceTimeline } from '@/components/EvidenceTimeline';
 import { SavedAssertReview } from '@/components/SavedAssertReview';
 import { AssertReviewProgress } from '@/components/AssertReviewProgress';
-import { sortedAssertReviews } from '@/lib/assertReview';
+import { AssertEvidenceReport } from '@/components/AssertEvidenceReport';
+import { buildAssertReportView, sortedAssertReviews } from '@/lib/assertReview';
 import { DesignResults } from '@/components/DesignResults';
 import { SiteNav } from '@/components/SiteNav';
 import {
@@ -414,6 +415,7 @@ function MetricDetail({
   const liveReview = judge?.review_id && judge.judge_result?.provenance?.engine === 'assert'
     && !persisted.some((review) => review.review_id === judge.review_id)
     ? [{ review_id: judge.review_id, status: 'pending_confirmation', created_at: '', model: judge.model,
+         provider: judge.provider, latency_ms: judge.latency_ms,
          judge_result: judge.judge_result, evidence_citations: judge.evidence_citations }] : [];
   const exportChoices = sortedAssertReviews([...persisted, ...liveReview]);
   const selectedReview = exportChoices.find((review) => review.id === exportReviewId) || exportChoices[0] || null;
@@ -623,6 +625,8 @@ function MetricDetail({
             {exportError ? <p className="resolution-judge-error" role="alert">{exportError}</p> : null}
           </div>
           {selectedReview ? <SavedAssertReview review={selectedReview} freshness={selectedFreshness}
+            automaticVerdict={adjudication?.deterministic_snapshot?.verdict || deterministicVerdict}
+            automaticScore={adjudication?.deterministic_snapshot?.score ?? summary?.score ?? conversation.score}
             onRetry={() => setFreshnessAttempt((attempt) => attempt + 1)}
             onApply={() => {
               if (selectedFreshness?.status !== 'current' || !selectedReview.proposal) return;
@@ -635,6 +639,8 @@ function MetricDetail({
           {judge && !selectedReview ? (
             <JudgeResult
               judge={judge}
+              automaticVerdict={adjudication?.deterministic_snapshot?.verdict || deterministicVerdict}
+              automaticScore={adjudication?.deterministic_snapshot?.score ?? summary?.score ?? conversation.score}
               showPrompt={showJudgePrompt}
               onTogglePrompt={() => setShowJudgePrompt((current) => !current)}
               onRequestApply={() => {
@@ -978,160 +984,40 @@ function ConversationFlow({
   );
 }
 
-function JudgeResult({
-  judge,
-  showPrompt,
-  onTogglePrompt,
-  onRequestApply,
-}: {
+function JudgeResult({ judge, showPrompt, onTogglePrompt, onRequestApply, automaticVerdict, automaticScore }: {
   judge: LlmJudgeResponse;
   showPrompt: boolean;
   onTogglePrompt: () => void;
   onRequestApply: () => void;
+  automaticVerdict?: string | null;
+  automaticScore?: number | null;
 }) {
-  const agrees = judge.judge_result?.agrees;
-  const assertProvenance = judge.judge_result?.provenance?.engine === 'assert'
-    ? judge.judge_result.provenance
-    : null;
-  const title = judge.status === 'blocked'
-    ? 'LLM judge unavailable'
-    : agrees === true
-      ? 'Agrees with the deterministic verdict'
-      : agrees === false
-        ? 'Disagrees with the deterministic verdict'
-        : 'LLM review complete';
-  const remaining = judge.spend_control?.remaining_daily_credits;
-
-  return (
-    <div className={`resolution-judge-result is-${judge.status}`} aria-label="LLM judge result" role="status">
-      <strong>{title}</strong>
-      <p>{judge.message}</p>
-      {judge.provider || judge.model || judge.latency_ms != null ? (
-        <p className="resolution-judge-meta">
-          {[
-            judge.provider ? `Provider: ${judge.provider}` : null,
-            judge.model ? `Model: ${judge.model}` : null,
-            judge.latency_ms != null ? `${judge.latency_ms} ms` : null,
-            remaining != null ? `${remaining} daily credits remaining` : null,
-          ].filter(Boolean).join(' · ')}
-        </p>
-      ) : null}
-      {judge.judge_result?.rationale ? (
-        <p><b>Rationale:</b> {judge.judge_result.rationale}</p>
-      ) : null}
-      {judge.judge_result?.next_action ? (
-        <p><b>Next action:</b> {judge.judge_result.next_action}</p>
-      ) : null}
-      {assertProvenance ? <AssertDimensionResults provenance={assertProvenance} /> : null}
-      {judge.judge_result?.proposed_evaluation ? (
-        <div className="resolution-judge-proposal">
-          <p>
-            <b>Proposed evaluation:</b>{' '}
-            {formatRuntimeId(judge.judge_result.proposed_evaluation.verdict)}
-          </p>
-          <p>{judge.judge_result.proposed_evaluation.summary}</p>
-          {judge.judge_result.proposed_evaluation.corrected_findings.length ? (
-            <>
-              <p><b>Corrected findings</b></p>
-              <ul>
-                {judge.judge_result.proposed_evaluation.corrected_findings.map((finding) => (
-                  <li key={finding}>{finding}</li>
-                ))}
-              </ul>
-            </>
-          ) : null}
-          {judge.judge_result.proposed_evaluation.remaining_gaps.length ? (
-            <>
-              <p><b>Remaining gaps</b></p>
-              <ul>
-                {judge.judge_result.proposed_evaluation.remaining_gaps.map((gap) => (
-                  <li key={gap}>{gap}</li>
-                ))}
-              </ul>
-            </>
-          ) : null}
-          {judge.review_id ? (
-            <button type="button" className="primary-cta" onClick={onRequestApply}>
-              Apply proposed evaluation
-            </button>
-          ) : (
-            <p>Run this review again to create an auditable proposal that can be applied.</p>
-          )}
-        </div>
-      ) : null}
-      {!judge.judge_result?.rationale && judge.judge_output ? (
-        <p className="resolution-judge-output">{judge.judge_output}</p>
-      ) : null}
-      {judge.evidence_citations.length ? (
-        <div>
-          <p><b>Evidence reviewed</b></p>
-          <ul>
-            {judge.evidence_citations.map((citation) => <li key={citation}>{citation}</li>)}
-          </ul>
-        </div>
-      ) : null}
-      {judge.block_reason === 'provider' ? (
-        <p><ApiAwareLink href="/settings">Connect OpenAI in Settings</ApiAwareLink>, then try again.</p>
-      ) : null}
-      {judge.prompt_preview ? (
-        <div>
-          <button type="button" className="resolution-judge-prompt-toggle" onClick={onTogglePrompt}>
+  const review = buildAssertReportView(judge);
+  return <div aria-label="LLM judge result">
+    {review ? <AssertEvidenceReport key={review.id} review={review}
+      automaticVerdict={automaticVerdict} automaticScore={automaticScore}
+      technical={<>
+        <p>{judge.message}</p>
+        {judge.spend_control ? <p>CAE review budget: {judge.spend_control.estimated_credits ?? judge.credits} units for this review
+          {judge.spend_control.remaining_daily_credits != null ? `; ${judge.spend_control.remaining_daily_credits} daily units remaining` : ''}.
+          This is a local CAE limit, not provider billing or ChatGPT-plan balance.</p> : null}
+        {judge.prompt_preview ? <div>
+          <button type="button" className="secondary-link" onClick={onTogglePrompt}>
             {showPrompt ? 'Hide what the judge saw' : 'What the judge saw'}
           </button>
           {showPrompt ? <pre>{judge.prompt_preview}</pre> : null}
-        </div>
-      ) : null}
-    </div>
-  );
+        </div> : null}
+      </>}>
+        {judge.review_id && review.proposal ? <button type="button" className="primary-cta"
+          onClick={onRequestApply}>Apply proposed evaluation</button> : null}
+      </AssertEvidenceReport> : <div className={`resolution-judge-result is-${judge.status}`} role="status">
+        <strong>{judge.status === 'blocked' ? 'LLM judge unavailable' : 'Review unavailable'}</strong>
+        <p>{judge.message}</p>
+        {judge.block_reason === 'provider' ? <p><ApiAwareLink href="/settings">Connect a judge in Settings</ApiAwareLink>, then try again.</p> : null}
+      </div>}
+  </div>;
 }
 
-function AssertDimensionResults({
-  provenance,
-}: {
-  provenance: NonNullable<NonNullable<LlmJudgeResponse['judge_result']>['provenance']>;
-}) {
-  const dimensions = Object.entries(provenance.dimensions || {});
-  const evidenceLabel = provenance.evidence_level === 'gray_box'
-    ? 'Trace-backed evidence'
-    : provenance.evidence_level === 'partial_structured'
-      ? 'Partially structured evidence'
-      : provenance.evidence_level === 'black_box'
-        ? 'Transcript-only evidence'
-        : 'Evidence level unavailable';
-
-  return (
-    <section className="assert-dimension-results" aria-label="ASSERT evaluation details">
-      <p className="resolution-judge-meta">
-        {[
-          provenance.assert_version ? `ASSERT ${provenance.assert_version}` : 'ASSERT',
-          evidenceLabel,
-        ].join(' · ')}
-      </p>
-      {dimensions.length ? (
-        <ul>
-          {dimensions.map(([name, value]) => {
-            const applicable = provenance.dimension_applicability?.[name] !== false;
-            const displayValue = applicable
-              ? value === true
-                ? 'Flagged'
-                : value === false
-                  ? 'Clear'
-                  : String(value)
-              : 'Not applicable';
-            return (
-              <li key={name}>
-                <b>{formatRuntimeId(name)}:</b> {displayValue}
-                {provenance.dimension_justifications?.[name]
-                  ? ` — ${provenance.dimension_justifications[name]}`
-                  : ''}
-              </li>
-            );
-          })}
-        </ul>
-      ) : null}
-    </section>
-  );
-}
 
 function AppliedAdjudication({
   adjudication,

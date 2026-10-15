@@ -382,6 +382,73 @@ def test_interruption_sample_non_relevant_nodes_save_and_reuse_review(assert_pip
     assert len(p.calls) == 1 and p.spent() == 10
 
 
+@pytest.mark.parametrize('limited', [False, True])
+def test_saved_assert_review_persists_versioned_evidence_snapshot_and_reuses_it(
+    assert_pipeline, monkeypatch, limited,
+):
+    from pathlib import Path
+    import yaml
+    from app.services import upstream_assert_judge, assert_evidence_report
+
+    p = assert_pipeline
+    scenario = next(row for row in benchmark_service.get_suite('call-center-voice-ai')['scenarios']
+                    if row['id'] == 'interruption-correction-handling')
+    transcript = scenario['sample_transcript']
+    first_reply = transcript.splitlines()[1].split(': ', 1)[1]
+    full_reply = first_reply + (' Additional exact evidence.' * 30)
+    report = p.evaluate(scenario_id=scenario['id'], transcript=transcript.replace(first_reply, full_reply))
+    original_run = upstream_assert_judge.subprocess.run
+    raw_scores = []
+
+    def exact_evidence_output(command, **kwargs):
+        completed = original_run(command, **kwargs)
+        config = yaml.safe_load(Path(command[command.index('--config') + 1]).read_text())
+        score_path = Path(config['pipeline']['judge']['save_dir']) / 'scores.jsonl'
+        score = json.loads(score_path.read_text())
+        score['verdict']['citations'] = [{'index': 1, 'description': 'Exact assistant reply', 'parts': [{
+            'quoted_text': full_reply, 'message_id': 'event:1', 'claimed_message_index': '2',
+            'matched_message_index': '2', 'position': [0, len(full_reply)],
+            'resolution': {'status': 'resolved', 'method': 'exact'},
+        }]}]
+        raw_scores.append(deepcopy(score))
+        score_path.write_text(json.dumps(score) + '\n')
+        return completed
+
+    monkeypatch.setattr(upstream_assert_judge.subprocess, 'run', exact_evidence_output)
+    if limited:
+        monkeypatch.setattr(assert_evidence_report, 'MAX_SNAPSHOT_CHARS', 0)
+    response = p.judge(report)
+    assert response.status_code == 200, response.text
+    saved = response.json()
+    assert saved['status'] == 'ready'
+    assert json.loads(saved['judge_output']) == raw_scores[0]
+    provenance = saved['judge_result']['provenance']
+    assert provenance['transcript_adapter_version'] == 'cae-assert-evidence-v4'
+    assert provenance['configuration']['adapter_version'] == 'cae-assert-evidence-v4'
+    assert provenance['evidence_coverage'] == {'transcript': True, 'tool_trace': False, 'final_state': False}
+    if limited:
+        assert provenance['evidence_details_status'] == 'limited'
+        assert provenance['evidence_messages'] == provenance['evidence_references'] == []
+    else:
+        assert provenance['evidence_details_status'] == 'complete'
+        assert len(provenance['evidence_messages']) == 11
+        assert sum(row['role'] == 'assistant' for row in provenance['evidence_messages']) == 6
+        assert provenance['evidence_messages'][1] == {'id': 'event:1', 'role': 'assistant', 'text': full_reply}
+        assert provenance['evidence_references'][0]['parts'] == [
+            {'quote': full_reply, 'status': 'matched', 'message_id': 'event:1'}]
+    run_id, conversation_id = saved['execution_run_id'], saved['conversation_id']
+    conversation = execution_run_store.get_conversation(run_id, conversation_id)
+    assert conversation['judge_reviews'][0]['judge_result']['provenance'] == provenance
+    assert conversation['verdict'] == report['verdict']
+    route = f'/api/assert/runs/{run_id}/conversations/{conversation_id}'
+    freshness = p.client.get(route + f"/reviews/{saved['review_id']}/status", params={'user_id': 'owner'})
+    assert freshness.status_code == 200 and freshness.json()['status'] == 'current'
+    repeated = p.judge(report)
+    assert repeated.status_code == 200 and repeated.json()['reused'] is True
+    assert repeated.json()['judge_result']['provenance'] == provenance
+    assert len(p.calls) == 1 and p.spent() == 10
+
+
 def test_uploaded_vcon_preserves_structured_evidence_and_uses_assert(assert_pipeline):
     p = assert_pipeline
     sample = p.client.get('/api/benchmarks/evidence/sample-vcon', params={
