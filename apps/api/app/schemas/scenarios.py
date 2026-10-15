@@ -18,6 +18,10 @@ class ScenarioCreateRequest(BaseModel):
     description: str | None = None
     required_actions: list[str] | None = Field(default=None, max_length=100)
     forbidden_actions: list[str] | None = Field(default=None, max_length=100)
+    evidence_requirements: list[Literal['transcript', 'action_trace', 'final_state', 'vcon', 'final_state_or_action_trace']] | None = Field(default=None, max_length=5)
+    requirements: str | None = Field(default=None, max_length=30000)
+    permissible_behavior: str | None = Field(default=None, max_length=10000)
+    caller_steps: list[str] | None = Field(default=None, min_length=1, max_length=8)
 
     @model_validator(mode='after')
     def require_core_fields(self) -> 'ScenarioCreateRequest':
@@ -39,6 +43,10 @@ class ScenarioCreateRequest(BaseModel):
                 raise ValueError('spoken_opener must be non-blank when supplied')
         if self.title is not None:
             self.title = self.title.strip() or None
+        if self.caller_steps is not None:
+            if any(not step.strip() or len(step) > 2000 for step in self.caller_steps):
+                raise ValueError('Caller steps must be non-blank and at most 2000 characters.')
+            self.caller_steps = [step.strip() for step in self.caller_steps]
         for key in ('required_actions', 'forbidden_actions'):
             values = getattr(self, key)
             if values is not None:

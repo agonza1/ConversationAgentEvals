@@ -17,6 +17,7 @@ test('quick case separates tester instructions from the exact spoken opening', a
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(scenario) });
   });
   await page.goto('/scenarios?create=1');
+  await page.getByRole('button', { name: 'Use detailed editor' }).click();
   await page.getByLabel('Title (optional)').fill('Steven information only');
   await page.getByLabel('User prompt / persona').fill(directions);
   await page.getByLabel('Spoken opening line').fill(opener);
