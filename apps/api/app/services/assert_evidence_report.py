@@ -36,8 +36,9 @@ def build_evidence_report(
             ),
             'tool_trace': any(isinstance(action, dict) and bool(action)
                               for action in conversation.get('action_trace') or []),
-            'final_state': _structured_final_state(conversation) is not None or bool(
-                conversation.get('unstructured_final_state_evidence')),
+            'final_state': _structured_final_state(conversation) is not None or (
+                isinstance(conversation.get('unstructured_final_state_evidence'), str)
+                and bool(conversation['unstructured_final_state_evidence'].strip())),
         },
     }
     try:

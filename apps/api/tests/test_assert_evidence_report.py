@@ -198,3 +198,12 @@ def test_coverage_tracks_recorded_state_not_a_model_claim_or_bookkeeping_state()
     conversation['final_state'] = {}
     conversation['unstructured_final_state_evidence'] = 'Reported state, not an execution receipt'
     assert _metadata(conversation=conversation)['evidence_coverage']['final_state'] is True
+
+
+@pytest.mark.parametrize('value', [None, '', ' ', '\t\r\n', [], {}, 0, True])
+def test_unavailable_unstructured_final_state_is_not_claimed_as_judge_evidence(value):
+    conversation = _conversation()
+    conversation['final_state'] = {}
+    conversation['unstructured_final_state_evidence'] = value
+    metadata = _metadata(conversation=conversation)
+    assert metadata['evidence_coverage']['final_state'] is False
