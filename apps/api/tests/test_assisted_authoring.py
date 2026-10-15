@@ -163,6 +163,7 @@ def test_quick_case_retains_reviewed_evidence_and_policy_across_reload(tmp_path,
             'required_actions': ['Repeat the latest time'], 'forbidden_actions': ['Invent booking success'],
             'evidence_requirements': ['transcript', 'final_state_or_action_trace'],
             'requirements': 'No booking claims without evidence.', 'permissible_behavior': 'May collect requests only.',
+            'caller_steps': ['Use 3 PM, not morning.', 'Confirm afternoon.'],
         })
         assert response.status_code == 200, response.text
         record = response.json()
@@ -173,6 +174,10 @@ def test_quick_case_retains_reviewed_evidence_and_policy_across_reload(tmp_path,
             assert item['evidence_requirements'] == ['transcript', 'final_state_or_action_trace']
             assert item['requirements'] == 'No booking claims without evidence.'
             assert item['permissible_behavior'] == 'May collect requests only.'
+            assert item['caller_steps'] == ['Use 3 PM, not morning.', 'Confirm afternoon.']
+        from app.services.execution_runner import _scenario_user_opener
+        assert _scenario_user_opener(contract) == 'Use 3 PM, not morning.'
+        assert benchmark_service._simulated_user_opener(contract) == 'Use 3 PM, not morning.'
         from app.services.design_enforcement import evaluate_design
         checks = evaluate_design(contract, {}, 'The requested time is 3 PM.')
         assert any(check['status'] == 'insufficient_evidence' for check in checks['evidence_requirement_results'])

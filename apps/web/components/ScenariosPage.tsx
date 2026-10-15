@@ -136,6 +136,7 @@ async function createScenario(payload: {
   evidence_requirements?: string[];
   requirements?: string;
   permissible_behavior?: string;
+  caller_steps?: string[];
 }): Promise<ScenarioRecord> {
   const value = await handleJson<unknown>(
     await fetch(`${getApiBase()}/api/scenarios`, {
@@ -225,7 +226,7 @@ export function ScenariosPage() {
   const [manualCreate, setManualCreate] = useState(false);
   const [authoringSession, setAuthoringSession] = useState(0);
   const [variation, setVariation] = useState<AuthoringContext | null>(null);
-  const [manualContext, setManualContext] = useState<Pick<ReturnType<typeof quickCaseFromDraft>, 'evidence_requirements' | 'requirements' | 'permissible_behavior'> | null>(null);
+  const [manualContext, setManualContext] = useState<(Pick<ReturnType<typeof quickCaseFromDraft>, 'evidence_requirements' | 'requirements' | 'permissible_behavior'> & { caller_steps?: string[] }) | null>(null);
   const [title, setTitle] = useState('');
   const [simulatedUserPrompt, setSimulatedUserPrompt] = useState('');
   const [expectedOutput, setExpectedOutput] = useState('');
@@ -366,7 +367,7 @@ export function ScenariosPage() {
       setExpectedOutput(next.expected_output); setDescription(next.description);
       setRequiredActions(next.required_actions.join('\n')); setForbiddenActions(next.forbidden_actions.join('\n'));
       setMirrorPrompt(false);
-      setManualContext({ evidence_requirements: next.evidence_requirements, requirements: next.requirements, permissible_behavior: next.permissible_behavior });
+      setManualContext({ evidence_requirements: next.evidence_requirements, requirements: next.requirements, permissible_behavior: next.permissible_behavior, caller_steps: next.caller_steps });
     }
     setManualCreate(true);
   }
@@ -474,7 +475,7 @@ export function ScenariosPage() {
                 <p>{manualContext.permissible_behavior}</p><p>Required evidence: {manualContext.evidence_requirements.join(', ')}</p><p>{manualContext.requirements}</p>
               </details> : null}
               <label htmlFor="scenario-title"><span>Title (optional)</span><input id="scenario-title" value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Account lockout handoff" /></label>
-              <label htmlFor="scenario-prompt"><span>User prompt / persona</span><textarea id="scenario-prompt" required rows={6} value={simulatedUserPrompt} onChange={(event) => setSimulatedUserPrompt(event.target.value)} placeholder="Describe the user’s situation and request…" /></label>
+              <label htmlFor="scenario-prompt"><span>User prompt / persona</span><textarea id="scenario-prompt" required rows={6} value={simulatedUserPrompt} onChange={(event) => { setSimulatedUserPrompt(event.target.value); setManualContext((current) => current ? { ...current, caller_steps: undefined } : null); }} placeholder="Describe the user’s situation and request…" /></label>
               <label htmlFor="scenario-expected"><span>Expected outcome</span><textarea id="scenario-expected" required rows={5} value={expectedOutput} onChange={(event) => setExpectedOutput(event.target.value)} placeholder="What the agent should do or say…" /></label>
               <label htmlFor="scenario-required"><span>Required behaviors (one per line)</span><textarea id="scenario-required" required rows={4} value={requiredActions} onChange={(event) => setRequiredActions(event.target.value)} placeholder="Offer housing options within the caller’s budget" /></label>
               <label htmlFor="scenario-forbidden"><span>Forbidden behaviors (one per line, optional)</span><textarea id="scenario-forbidden" rows={4} value={forbiddenActions} onChange={(event) => setForbiddenActions(event.target.value)} placeholder="Execute a house sale\nHandle payments" /></label>

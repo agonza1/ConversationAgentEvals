@@ -98,7 +98,7 @@ def create_user_scenario(payload: dict[str, Any]) -> dict[str, Any]:
             'updated_at': now,
             'required_actions': payload.get('required_actions'),
             'forbidden_actions': payload.get('forbidden_actions'),
-            **{key: deepcopy(payload[key]) for key in ('evidence_requirements', 'requirements', 'permissible_behavior')
+            **{key: deepcopy(payload[key]) for key in ('evidence_requirements', 'requirements', 'permissible_behavior', 'caller_steps')
                if payload.get(key) is not None},
         }
     )
@@ -252,7 +252,7 @@ def _to_catalog_scenario(raw: dict[str, Any]) -> dict[str, Any]:
         'source': _optional_text(raw, 'source') or 'user_created',
         'created_at': _optional_text(raw, 'created_at') or datetime.now(UTC).isoformat(),
         'updated_at': _optional_text(raw, 'updated_at') or datetime.now(UTC).isoformat(),
-        **{key: deepcopy(raw[key]) for key in ('evidence_requirements', 'requirements', 'permissible_behavior')
+        **{key: deepcopy(raw[key]) for key in ('evidence_requirements', 'requirements', 'permissible_behavior', 'caller_steps')
            if raw.get(key) is not None},
     }
 
@@ -275,7 +275,7 @@ def _public_scenario(record: dict[str, Any]) -> dict[str, Any]:
         'source': record.get('source') or 'user_created',
         'created_at': record.get('created_at'),
         'updated_at': record.get('updated_at'),
-        **{key: deepcopy(record[key]) for key in ('evidence_requirements', 'requirements', 'permissible_behavior')
+        **{key: deepcopy(record[key]) for key in ('evidence_requirements', 'requirements', 'permissible_behavior', 'caller_steps')
            if record.get(key) is not None},
     }
 

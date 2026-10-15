@@ -49,6 +49,7 @@ export function quickCaseFromDraft(spec: EditableAssertSpec) {
     evidence_requirements: spec.evidence_requirements || ['transcript'],
     requirements: spec.requirements || '',
     permissible_behavior: spec.permissible_behavior || '',
+    caller_steps: [...item.steps],
   };
 }
 

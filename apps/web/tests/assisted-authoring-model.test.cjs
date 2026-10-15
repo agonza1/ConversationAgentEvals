@@ -19,7 +19,7 @@ function draft() { return { title: 'Corrections', objective: 'Follow the latest 
 test('quick-case conversion retains approved caller steps, rule descriptions and evidence, not a rewritten scenario', () => {
   assert.deepEqual(quickCaseFromDraft(draft()), { title: 'Correction', simulated_user_prompt: 'Use 3 PM.\nConfirm afternoon.',
     expected_output: 'Repeat 3 PM.', description: 'Follow the latest caller request.', required_actions: ['Use the corrected time.'],
-    forbidden_actions: ['Do not invent completion.'], evidence_requirements: ['transcript', 'final_state_or_action_trace'], requirements: 'Source policy', permissible_behavior: 'Collect requests only.' });
+    forbidden_actions: ['Do not invent completion.'], evidence_requirements: ['transcript', 'final_state_or_action_trace'], requirements: 'Source policy', permissible_behavior: 'Collect requests only.', caller_steps: ['Use 3 PM.', 'Confirm afternoon.'] });
 });
 test('approval creates a new snapshot without mutating the draft or weakening case/rule identities', () => {
   const original = draft(); const approved = approvedAuthoringSpec(original);

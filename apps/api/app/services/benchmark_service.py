@@ -1880,6 +1880,8 @@ def _scenario_contract(scenario: BenchmarkScenario) -> dict[str, Any]:
                 'requirements', 'permissible_behavior', 'evidence_requirements', 'deterministic_checks', 'generation_provenance', 'behavior_preset', 'scenario_preset', 'required_order'):
         if key in scenario:
             contract[key] = deepcopy(scenario[key])
+    if scenario.get('source') == 'user_created' and scenario.get('caller_steps'):
+        contract['source'] = 'user_created'
     return contract
 
 
@@ -3155,7 +3157,7 @@ def _simulated_transcript(scenario: BenchmarkScenario, agent_profile: str, inclu
 
 
 def _simulated_user_opener(scenario: BenchmarkScenario) -> str:
-    if scenario.get('evaluation_spec_ref') and scenario.get('caller_steps'):
+    if (scenario.get('evaluation_spec_ref') or scenario.get('source') == 'user_created') and scenario.get('caller_steps'):
         from app.services.execution_runner import _scenario_user_opener
         return _scenario_user_opener(scenario)
     openers = {
