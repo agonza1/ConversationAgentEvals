@@ -72,3 +72,10 @@ test('legacy overall verdict aliases preserve explicit failures', () => {
   const view = evaluationEvidence({ overall: 'FAIL', transcript: 'Agent: Forbidden behavior.', action_trace: [], final_state: {} });
   assert.equal(view.failed, true); assert.equal(view.headline, 'Evaluation reported a failure');
 });
+
+test('structured call and conversation source labels do not collapse to transcript', () => {
+  for (const [source, label] of Object.entries({ call: 'Structured call input', group_call: 'Group call input', groupCall: 'Group call input', conversation: 'Structured conversation input' })) {
+    assert.equal(evaluationEvidence({ evaluation_scope: { input_source: source }, scoring_mode: 'transcript' }).sourceLabel, label);
+    assert.equal(evaluationEvidence({ vcon_export: { source_format: source } }).sourceLabel, label);
+  }
+});

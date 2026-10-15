@@ -168,7 +168,8 @@ test('structured synthetic sample exposes its limitations, and opting out remove
   const next = await evaluate(page);
   expect(next.evaluation_scope.input_source).toBe('transcript');
   expect(next.evaluation_scope.artifact_presence.action_trace).toBe(false);
-  await expect(page.getByLabel('Evaluation evidence summary')).toContainText('Outcome unverified');
+  await expect(page.getByLabel('Evaluation evidence summary')).toContainText('Synthetic evidence — not a verified real-world outcome');
+  await expect(page.getByLabel('Evaluation evidence summary')).toContainText('Transcript only');
   await expect(page.getByLabel('Evaluation evidence summary')).not.toContainText('Imported vCon');
 });
 

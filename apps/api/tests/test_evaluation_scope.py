@@ -10,7 +10,7 @@ from app.services.vcon_evidence import build_benchmark_vcon
 def sample():
     scenario = get_suite('call-center-voice-ai')['scenarios'][0]
     return {'suite_id': 'call-center-voice-ai', 'scenario_id': scenario['id'],
-            'transcript': scenario['sample_transcript']}
+            'transcript': scenario['sample_transcript'] + '\nAgent: End of conversation.'}
 
 
 def test_perfect_transcript_score_has_explicit_unverified_execution_scope():
@@ -84,6 +84,30 @@ def test_generated_simulations_are_synthetic_in_report_and_all_vcon_analyses(who
 def test_arbitrary_request_metadata_cannot_claim_internal_simulation_provenance():
     report = run_scenario({**sample(), 'synthetic': True}, persist_artifacts=False)
     assert report['evaluation_scope']['synthetic'] is None
+
+
+def test_catalog_transcript_fixture_is_verified_server_side_and_survives_export():
+    payload = sample()
+    payload['transcript'] = get_suite(payload['suite_id'])['scenarios'][0]['sample_transcript']
+    report = run_scenario(payload, persist_artifacts=False)
+    assert report['evaluation_scope']['synthetic'] is True
+    assert report['evaluation_scope']['synthetic_basis'] == 'exact_catalog_transcript_match'
+    assert report['ietf_vcon_export']['attachments'][-1]['body']['synthetic'] is True
+    assert report['vcon_analysis']['body']['evaluation_scope']['synthetic'] is True
+    # Re-evaluating against different criteria must not erase known fixture content.
+    payload['scenario_id'] = 'interruption-correction-handling'
+    assert run_scenario(payload, persist_artifacts=False)['evaluation_scope']['synthetic'] is True
+
+
+@pytest.mark.parametrize('source', ['call', 'group_call', 'groupCall', 'conversation'])
+def test_structured_conversation_source_is_consistent_in_scope_and_export(source):
+    payload = sample()
+    del payload['transcript']
+    payload[source] = {'messages': [{'speaker': 'Caller', 'text': 'Please help with my address.'}]}
+    report = run_scenario(payload, persist_artifacts=False)
+    assert report['evaluation_scope']['input_source'] == source
+    assert report['vcon_export']['source_format'] == source
+    assert report['ietf_vcon_export']['analysis'][-1]['body']['evaluation_scope']['input_source'] == source
 
 
 @pytest.mark.parametrize('failure', ['missing_action', 'final_state', 'forbidden_action'])

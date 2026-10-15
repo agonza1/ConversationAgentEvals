@@ -86,6 +86,7 @@ test('eval page uploads vCon and loads sample call-center evidence', async ({ pa
   await expect(page.getByText(/Loaded sample transcript: Billing Address Change/)).toBeVisible();
   await page.getByRole('button', { name: 'Evaluate evidence' }).click();
   await expect(page.getByText('Benchmark report', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Evaluation evidence summary')).toContainText('Synthetic evidence — not a verified real-world outcome');
   await page.getByLabel('Evaluation diagnostics').locator('summary').click();
   await expect(page.getByLabel('Transcript scoring note')).toContainText('Task completion and Final state are not shown');
   await expect(page.getByLabel('Task completion score')).toHaveCount(0);

@@ -46,7 +46,9 @@ export function evaluationEvidence(value: unknown) {
       : 'Evidence coverage is incomplete or was not recorded. A high score cannot establish successful execution.';
   const rawScore = report.overall_score ?? report.score;
   const score = typeof rawScore === 'number' && Number.isFinite(rawScore) ? rawScore : null;
-  const sourceLabel = imported ? 'Imported vCon' : scope.input_source === 'transcript' || report.scoring_mode === 'transcript' ? 'Transcript input' : 'Input source not recorded';
+  const sourceFormat = scope.input_source ?? source.source_format;
+  const sourceNames: Record<string, string> = { call: 'Structured call input', group_call: 'Group call input', groupCall: 'Group call input', conversation: 'Structured conversation input', transcript: 'Transcript input' };
+  const sourceLabel = imported ? 'Imported vCon' : typeof sourceFormat === 'string' && sourceNames[sourceFormat] ? sourceNames[sourceFormat] : report.scoring_mode === 'transcript' ? 'Transcript input' : 'Input source not recorded';
   return { transcript, trace, state, structured, transcriptOnly, imported, synthetic, failed, reviewRequired, headline, explanation, score,
     sourceLabel: synthetic ? `Synthetic · ${sourceLabel}` : sourceLabel,
     coverageLabel: transcriptOnly ? 'Transcript only' : structured ? 'Structured evidence supplied' : 'Coverage not established',
