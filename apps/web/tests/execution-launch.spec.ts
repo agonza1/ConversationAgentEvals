@@ -907,7 +907,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect(launch.getByLabel('Execution conversations')).toContainText(/pass/i, { timeout: 8000 });
   await page.goto('/results?api_base=http%3A%2F%2Fapi.example.test');
   const recentRun = page
-    .getByRole('region', { name: 'Recent runs' })
+    .getByRole('region', { name: 'Agent tests' })
     .locator('a[href="/runs/exec-ui-demo?api_base=http%3A%2F%2Fapi.example.test"]');
   await expect(recentRun).toHaveCount(1);
   await expect(recentRun).toContainText('completed', { timeout: 8000 });
