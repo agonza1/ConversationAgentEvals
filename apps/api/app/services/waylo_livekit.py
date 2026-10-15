@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable
 
-from app.services.waylo_target import WayloClient, WayloError, clean_native, project_capture
+from app.services.waylo_target import WayloClient, WayloError, clean_native, project_capture, validate_items
 from app.services.live_audio_monitor import LiveAudioMonitor
 
 
@@ -381,12 +381,13 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
         except Exception:
             monitor_unavailable()
     after_items = []
+    item_read_errors = {}
     prepared = {}
     pending_response = None
     steps = scenario.get('caller_steps')
     if local_evidence is not None:
         local_evidence.update(peer=peer, turns=turns, audio_tracks=audio_tracks,
-                              after_items=after_items, references={})
+                              after_items=after_items, item_read_errors=item_read_errors, references={})
 
     def audio_track(path, track_id, parties, audio, rate, start_ms=None):
         audio_tracks.append({'uri': str(path.resolve()), 'track_id': track_id, 'parties': parties,
@@ -441,9 +442,11 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
             bootstrap = await client.bootstrap(correlation_id)
             if local_evidence is not None:
                 local_evidence['bootstrap'] = bootstrap
-            before = await client.request('GET', f'sessions/{bootstrap["sessionId"]}/items')
-            if not isinstance(before, list):
-                raise WayloError('Waylo pre-call items were not a list.')
+            try:
+                before = validate_items(await client.request('GET', f'sessions/{bootstrap["sessionId"]}/items'))
+            except WayloError:
+                before = None
+                item_read_errors['items_before'] = 'Pre-call items unavailable or invalid; no before snapshot retained.'
             before = clean_native(before, client.redaction_values)
             if local_evidence is not None:
                 local_evidence['before'] = before
@@ -558,12 +561,11 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                 # Do not delay a scheduled interruption with an HTTP read.
                 if index + 1 != barge_turn:
                     try:
-                        items = await client.request('GET', f'sessions/{bootstrap["sessionId"]}/items')
-                        if isinstance(items, list):
-                            after_items.append({'turn_id': f'caller-{index}', 'items': clean_native(items, client.redaction_values),
-                                                'observed_at': datetime.now(UTC).isoformat()})
+                        items = validate_items(await client.request('GET', f'sessions/{bootstrap["sessionId"]}/items'))
+                        after_items.append({'turn_id': f'caller-{index}', 'items': clean_native(items, client.redaction_values),
+                                            'observed_at': datetime.now(UTC).isoformat()})
                     except WayloError:
-                        pass  # Final capture reports unavailable state, not synthetic success.
+                        item_read_errors[f'items_after_caller-{index}'] = 'Per-turn items unavailable or invalid; no snapshot retained for this read.'
     except asyncio.CancelledError:
         error = 'Waylo call cancelled; partial local audio retained.'
         raise
@@ -630,6 +632,7 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                          turn_credentials.get('credential', ''), turn_credentials.get('username', ''))
         # Scrub every evidence channel, including opaque strings in backend
         # before/after snapshots and native source, not only RTC events.
+        capture.setdefault('unavailable', {}).update(item_read_errors)
         capture = clean_native(capture, secret_values)
         before = clean_native(before, secret_values)
         after_items = clean_native(after_items, secret_values)
@@ -689,6 +692,7 @@ def _local_partial_result(state: dict, *, target: dict, scenario: dict, suite_id
         'session': {'id': bootstrap['sessionId'], 'createdAt': peer.origin_utc,
                     'metadata_source': 'cae_local_bootstrap_identity'},
         'transcripts': [], 'unavailable': {key: error for key in ('session', 'transcripts', 'events', 'items', 'agent_version')}}
+    capture['unavailable'].update(state.get('item_read_errors', {}))
     # Peer events include unsanitized remote transcription revisions. Retain only
     # typed local media/timing observations, never raw strings or unknown keys.
     allowed = {'tester.audio.sent', 'target.audio.received', 'latency.observation', 'tester.barge_in_scheduled'}
