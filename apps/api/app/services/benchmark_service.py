@@ -1884,8 +1884,6 @@ def _scenario_contract(scenario: BenchmarkScenario) -> dict[str, Any]:
                 'requirements', 'permissible_behavior', 'evidence_requirements', 'deterministic_checks', 'generation_provenance', 'behavior_preset', 'scenario_preset', 'required_order', 'waylo_test'):
         if key in scenario:
             contract[key] = deepcopy(scenario[key])
-    if scenario.get('source') == 'user_created' and scenario.get('caller_steps'):
-        contract['source'] = 'user_created'
     return contract
 
 
