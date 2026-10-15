@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
 import json
+import os
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -9,6 +11,37 @@ from app.models.entities import BenchmarkSuiteRunRecord, ProductProject, Product
 from app.services import execution_run_store
 
 client = TestClient(app)
+
+
+def test_warm_execution_history_does_not_walk_saved_run_directories(monkeypatch, tmp_path):
+    monkeypatch.setattr(execution_run_store, 'RUNS_DIR', tmp_path)
+    monkeypatch.setattr(execution_run_store, '_RUNS', {})
+
+    def save(run_id, score):
+        folder = tmp_path / run_id
+        folder.mkdir()
+        (folder / 'run.json').write_text(json.dumps({
+            'execution_run_id': run_id, 'user_id': 'history-user', 'project_id': 'history-project',
+            'updated_at': run_id, 'status': 'completed',
+            'conversations': [{'score': score, 'transcript': 'Full retained evidence'}],
+        }), encoding='utf-8')
+
+    save('run-01', 70)
+    save('run-02', 90)
+    params = dict(user_id='history-user', project_id='history-project', summary=True, limit=1)
+    assert execution_run_store.list_execution_runs(**params)[0]['execution_run_id'] == 'run-02'
+    scandir = os.scandir
+
+    def root_only_scan(path):
+        assert Path(path).parent != tmp_path, 'Warm history must not enter each retained run directory'
+        return scandir(path)
+
+    monkeypatch.setattr(os, 'scandir', root_only_scan)
+    assert execution_run_store.list_execution_runs(**params)[0]['conversations'] == [{'score': 90}]
+    # Discovery remains live: another process can add a saved snapshot.
+    save('run-03', 100)
+    assert execution_run_store.list_execution_runs(**params)[0]['execution_run_id'] == 'run-03'
+    assert execution_run_store.get_execution_run('run-03')['conversations'][0]['transcript'] == 'Full retained evidence'
 
 
 def test_execution_pages_filter_before_slice_and_keep_evidence_in_detail(monkeypatch, tmp_path):
