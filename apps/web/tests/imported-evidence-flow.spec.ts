@@ -8,6 +8,8 @@ async function setup(page: Page, request: APIRequestContext, full = false) {
   const vcon = await sample.json();
   if (!full) {
     vcon.attachments = [];
+    // Model a distinct external conversation, not the exact catalog fixture.
+    vcon.dialog.find((item: { body?: unknown }) => typeof item.body === 'string').body += ' This is a separately recorded conversation.';
     vcon.analysis = [{ type: 'report', body: { score: 100, action_trace: [{ status: 'success' }], final_state: { complete: true } } }];
   }
   let executions = 0, judges = 0;

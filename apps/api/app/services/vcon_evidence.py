@@ -396,7 +396,11 @@ def build_benchmark_vcon(payload: dict[str, Any], transcript: str, report: dict[
     context = {key: report.get(key) or payload.get(key) for key in
                ('suite_id', 'scenario_id', 'scenario_contract_sha256', 'suite_contract_manifest_sha256')}
     if existing_body:
-        body = existing_body  # preserve input source attribution and synthetic marker
+        body = existing_body  # preserve input source attribution
+        if synthetic is True:
+            # Known catalog fixture content cannot lose its warning by being
+            # wrapped in an imported profile that claims otherwise.
+            body['synthetic'] = True
     else:
         body = evidence_body(action_trace=payload.get('action_trace'), observed_actions=payload.get('observed_actions'),
                              final_state=payload.get('final_state'), context=context, synthetic=synthetic)

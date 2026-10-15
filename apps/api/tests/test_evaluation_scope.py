@@ -99,6 +99,25 @@ def test_catalog_transcript_fixture_is_verified_server_side_and_survives_export(
     assert run_scenario(payload, persist_artifacts=False)['evaluation_scope']['synthetic'] is True
 
 
+@pytest.mark.parametrize('source', ['conversation', 'call', 'group_call', 'groupCall', 'vcon', 'vcon_profile_false'])
+def test_catalog_fixture_cannot_lose_warning_by_changing_carrier(source):
+    payload = sample()
+    transcript = get_suite(payload['suite_id'])['scenarios'][0]['sample_transcript']
+    del payload['transcript']
+    if source.startswith('vcon'):
+        vcon = build_benchmark_vcon(payload, transcript, synthetic=False)
+        if source == 'vcon':
+            vcon['attachments'] = []
+        payload['vcon'] = vcon
+    else:
+        payload[source] = {'messages': [{'speaker': line.split(':', 1)[0], 'text': line.split(':', 1)[1].strip()}
+            for line in transcript.splitlines() if ':' in line]}
+    report = run_scenario(payload, persist_artifacts=False)
+    assert report['evaluation_scope']['synthetic'] is True
+    assert report['evaluation_scope']['synthetic_basis'] == 'exact_catalog_transcript_match'
+    assert report['ietf_vcon_export']['attachments'][-1]['body']['synthetic'] is True
+
+
 @pytest.mark.parametrize('source', ['call', 'group_call', 'groupCall', 'conversation'])
 def test_structured_conversation_source_is_consistent_in_scope_and_export(source):
     payload = sample()

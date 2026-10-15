@@ -658,7 +658,7 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True, synthetic: boo
     input_source = 'vcon' if isinstance(payload.get('vcon'), dict) else _structured_dialog_from_payload(payload)[0]
     # Verify fixture content server-side rather than trusting a client synthetic flag.
     # This also retains the warning when a fixture is checked against another scenario.
-    catalog_sample_match = input_source == 'transcript' and any(
+    catalog_sample_match = any(
         transcript.strip() == str(item.get('sample_transcript') or _simulated_transcript(item, 'starter sample agent', False)).strip()
         for item in _SCENARIOS_BY_ID.values()
     ) and bool(transcript.strip())
@@ -670,7 +670,7 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True, synthetic: boo
             'action_trace': _scope_artifact_present(payload.get('action_trace')),
             'final_state': _scope_artifact_present(payload.get('final_state')),
         },
-        'synthetic': vcon_intake.get('synthetic') if vcon_intake.get('profile') else True if catalog_sample_match else synthetic,
+        'synthetic': True if catalog_sample_match else vcon_intake.get('synthetic') if vcon_intake.get('profile') else synthetic,
         'synthetic_basis': 'exact_catalog_transcript_match' if catalog_sample_match else None,
         'trust': 'source-reported; not independently authenticated',
         'score_meaning': 'Diagnostic evidence matching, not a verified resolution percentage.',
