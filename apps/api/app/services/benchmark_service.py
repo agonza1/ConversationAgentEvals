@@ -546,7 +546,7 @@ def _run_lifecycle(
     return lifecycle
 
 
-def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, Any]:
+def run_scenario(request: Any, *, persist_artifacts: bool = True, synthetic: bool | None = None) -> dict[str, Any]:
     run_started_at = datetime.now(UTC).isoformat()
     payload = _payload_to_dict(request)
     payload, _ = normalize_assert_payload(payload)
@@ -655,6 +655,35 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, A
         'recommendations': _recommendations(assert_fields['completed_actions'], assert_fields['forbidden_action_hits'], scenario),
         **assert_fields['web_result_fields'],
     }
+    input_source = 'vcon' if isinstance(payload.get('vcon'), dict) else _structured_dialog_from_payload(payload)[0]
+    # Verify fixture content server-side rather than trusting a client synthetic flag.
+    # This also retains the warning when a fixture is checked against another scenario.
+    catalog_sample_match = any(
+        transcript.strip() == str(item.get('sample_transcript') or _simulated_transcript(item, 'starter sample agent', False)).strip()
+        for item in _SCENARIOS_BY_ID.values()
+    ) and bool(transcript.strip())
+    report['evaluation_scope'] = {
+        'schema': 'cae-evaluation-scope-v1',
+        'input_source': input_source,
+        'artifact_presence': {
+            'transcript': bool(transcript.strip()),
+            'action_trace': _scope_artifact_present(payload.get('action_trace')),
+            'final_state': _scope_artifact_present(payload.get('final_state'), business_state=True),
+        },
+        'synthetic': True if catalog_sample_match else vcon_intake.get('synthetic') if vcon_intake.get('profile') else synthetic,
+        'synthetic_basis': 'exact_catalog_transcript_match' if catalog_sample_match else None,
+        'trust': 'source-reported; not independently authenticated',
+        'score_meaning': 'Diagnostic evidence matching, not a verified resolution percentage.',
+        'semantic_review_required': report.get('semantic_review_required', True),
+    }
+    if report.get('semantic_review_required'):
+        guidance = 'Request semantic review of the supplied evidence; heuristic matches do not verify policy or execution.'
+        if not report['evaluation_scope']['artifact_presence']['action_trace'] and not report['evaluation_scope']['artifact_presence']['final_state']:
+            guidance += ' No tool/action trace or resulting state was supplied; operational completion remains unverified.'
+        concrete_remediation = report['verdict'] == 'fail' or bool(report['missing_actions'] or report['forbidden_action_hits'] or report.get('hard_check_failures'))
+        report['recommendations'] = [*report['recommendations'], guidance] if concrete_remediation else [guidance, *report['recommendations']]
+        fixes = report.get('suggested_fixes', [])
+        report['suggested_fixes'] = [*fixes, guidance] if concrete_remediation else [guidance, *fixes]
     report['run_lifecycle'] = _run_lifecycle(
         lifecycle_context=lifecycle_context,
         logical_run_id=logical_run_id,
@@ -669,7 +698,7 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, A
     report['assert_lab_report'] = _assert_lab_report(report)
     report['vcon_analysis'] = _vcon_analysis(report)
     report['vcon_export'] = _vcon_export(payload, transcript, report['vcon_analysis'])
-    report['ietf_vcon_export'] = build_benchmark_vcon(export_payload, transcript, report)
+    report['ietf_vcon_export'] = build_benchmark_vcon(export_payload, transcript, report, synthetic=report['evaluation_scope']['synthetic'])
     report['transcript'] = transcript
     return report
 
@@ -1236,7 +1265,7 @@ def simulate_scenario(request: Any) -> dict[str, Any]:
             **_perturbation_payload(payload),
             **_run_metadata_payload(payload),
             **_run_lifecycle_payload(payload),
-        }
+        }, synthetic=True,
     )
     benchmark_report['simulation_validation'] = simulation_validation
     benchmark_report['ietf_vcon_export'] = build_benchmark_vcon(
@@ -1910,6 +1939,18 @@ def _group_call_item_count(value: dict[str, Any], *keys: str) -> int:
     return total
 
 
+def _scope_artifact_present(value: Any, *, business_state: bool = False) -> bool:
+    """Empty JSON and scalars are not structured tool/state evidence."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return False
+    if business_state and isinstance(value, dict) and value.get('outcome') in {'conversation_only_evidence_recorded', 'reference_conversation_captured'}:
+        return False
+    return isinstance(value, (dict, list)) and bool(value)
+
+
 def _artifact_present(value: Any) -> bool:
     if isinstance(value, str):
         return bool(value.strip())
@@ -2083,6 +2124,7 @@ def _vcon_analysis(report: dict[str, Any]) -> dict[str, Any]:
         'provider',
         'run_metadata',
         'evidence_audit_summary',
+        'evaluation_scope',
         'simulation_validation',
         'overall_score',
         'verdict',

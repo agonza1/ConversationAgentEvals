@@ -18,6 +18,8 @@ import { buildAssertReportView, sortedAssertReviews } from '@/lib/assertReview';
 import { WayloConnection, useWayloConnection } from './WayloConnection';
 import { wayloExecutionHeaders, type WayloTargetConnection } from '@/lib/wayloConnection';
 import { wayloRunBudgetError } from '@/lib/wayloRunBudget';
+import { evaluationEvidence } from '@/lib/evaluationEvidence';
+import { EvidenceEvaluationFlow, EvaluationEvidenceSummary } from './EvaluationEvidenceSummary';
 import { getApiBase, listProductProjects, requestBenchmarkJudge, type ProductProjectOption, type AssertJudgeReadiness, type ConversationRecord } from '@/lib/execution';
 
 type JsonRecord = Record<string, unknown>;
@@ -66,6 +68,8 @@ interface BenchmarkScenario {
 
 interface BenchmarkReport {
   semantic_review_required?: boolean;
+  evaluation_scope?: JsonRecord;
+  vcon_intake_summary?: JsonRecord;
   heuristic_verdict?: string;
   run_id?: string;
   suite_id?: string;
@@ -1972,6 +1976,7 @@ function formatReportBrief(
 ) {
   const verdict = report.verdict ?? report.overall ?? 'complete';
   const score = report.score ?? report.overall_score ?? 'n/a';
+  const coverage = evaluationEvidence(report);
   const scenario = report.scenario_title ?? fallbackScenarioTitle ?? 'Selected scenario';
   const suiteFingerprint = report.suite_contract_manifest_sha256 ? report.suite_contract_manifest_sha256.slice(0, 12) : 'Not captured';
   const contractFingerprint = report.scenario_contract_sha256 ? report.scenario_contract_sha256.slice(0, 12) : 'Not captured';
@@ -1991,7 +1996,11 @@ function formatReportBrief(
   return [
     `Scenario: ${scenario}`,
     `Verdict: ${verdict}`,
-    `Score: ${score}`,
+    `Evidence status: ${coverage.headline}`,
+    `Evidence source: ${coverage.sourceLabel}`,
+    `Evidence coverage: ${coverage.coverageLabel}`,
+    `Limitations: ${coverage.explanation}`,
+    `Diagnostic score (not verified resolution): ${score}`,
     `Suite contract manifest: ${suiteFingerprint}`,
     `Scenario contract: ${contractFingerprint}`,
     `Failure categories: ${failureCategories}`,
@@ -2012,20 +2021,19 @@ function reportActionPlan(
   suiteCoverage?: ScenarioCoverageSummary | null,
 ) {
   const verdict = (report.verdict ?? report.overall ?? '').toLowerCase();
-  const score = report.score ?? report.overall_score;
   const validationMissingActions = report.simulation_validation?.missing_required_actions ?? [];
   const missingActionHints = [
     ...(report.missing_actions ?? []),
     ...validationMissingActions.map((action) => `Add explicit tool/action execution for: ${action}`),
   ];
   const missingCount = missingActionHints.length;
-  const forbiddenCount = (report.forbidden_actions_observed?.length ?? report.forbidden_action_hits?.length) ?? 0;
   const failureCategory = report.failure_categories?.[0]?.replace(/_/g, ' ') ?? null;
   const failureCategories = report.failure_categories?.length
     ? report.failure_categories.map((category) => category.replace(/_/g, ' ')).join(', ')
     : null;
   const suggestedFix = report.suggested_fixes?.[0] ?? report.recommendations?.[0] ?? null;
-  const isPass = verdict === 'pass' || (typeof score === 'number' && score >= 80 && missingCount === 0 && forbiddenCount === 0);
+  const coverage = evaluationEvidence(report);
+  const isPass = verdict === 'pass' && !coverage.reviewRequired && coverage.structured && !coverage.synthetic;
   const uncoveredCount = suiteCoverage?.missing_scenarios?.length ?? suiteCoverage?.missing_scenario_ids?.length ?? 0;
   const nextCoverageScenario = suiteCoverage?.recommended_next_scenario?.title ?? suiteCoverage?.recommended_next_scenario?.id ?? null;
   const hasCoverageGap = isPass && suiteCoverage?.coverage_status !== 'complete' && uncoveredCount > 0;
@@ -2033,17 +2041,19 @@ function reportActionPlan(
   const headline = hasCoverageGap
     ? 'Keep moving through uncovered scenarios'
     : isPass
-      ? 'Ready for release review'
+      ? 'Review the supplied evidence before release'
       : 'Needs operator review';
   const primaryRisk = isPass
     ? hasCoverageGap
       ? `${uncoveredCount} suite scenario${uncoveredCount === 1 ? '' : 's'} still need fresh coverage before release review.`
       : 'No blocking failure category was reported for this scenario.'
-    : failureCategory ?? (missingCount ? `${missingCount} required action${missingCount === 1 ? '' : 's'} missing` : 'Benchmark evidence needs review');
+    : coverage.transcriptOnly && !coverage.failed ? coverage.explanation : failureCategory ?? (missingCount ? `${missingCount} required action${missingCount === 1 ? '' : 's'} missing` : 'Benchmark evidence needs review');
   const nextStep = isPass
     ? hasCoverageGap && nextCoverageScenario
       ? `Run ${nextCoverageScenario} next to keep suite coverage moving before release review.`
       : 'Save this run as the baseline, then compare the next prompt or model change against it.'
+    : coverage.transcriptOnly && !coverage.failed
+      ? 'Request LLM review for conversational behavior; supply tool results or resulting state to assess operational completion.'
     : missingCount > 1
       ? `Complete the remaining ${missingCount} required actions (next: ${report.missing_actions?.[0] ?? 'see checklist'}).`
       : suggestedFix ?? 'Fix the highest-risk failure, regenerate evidence, and rerun this scenario before release.';
@@ -2294,6 +2304,9 @@ export function BenchmarkRunner({
   const [productConfig, setProductConfig] = useState<ProductConfig | null>(null);
   const judgeRequestId = useRef<string | undefined>(undefined);
   useEffect(() => { judgeRequestId.current = undefined; }, [report?.run_id]);
+  useEffect(() => {
+    if (view === 'score' && report?.run_id) document.getElementById('evidence-evaluation-result')?.focus();
+  }, [report?.run_id, view]);
   const [savedPage, setSavedPage] = useState(0);
   const [suitePage, setSuitePage] = useState(0);
   const [savedHasNext, setSavedHasNext] = useState(false);
@@ -2320,6 +2333,12 @@ export function BenchmarkRunner({
   const [judgeGate, setJudgeGate] = useState<JudgeGate | null>(null);
   const visualJudge = useMemo(() => judgeGate ? buildAssertReportView(judgeGate) : null, [judgeGate]);
   const [isJudging, setIsJudging] = useState(false);
+  const judgeSequence = useRef(0);
+  useEffect(() => {
+    judgeSequence.current += 1;
+    setIsJudging(false);
+    setJudgeGate(null);
+  }, [report?.run_id]);
   const [showJudgePrompt, setShowJudgePrompt] = useState(false);
   const openAIConnection = useOpenAIConnection(view !== 'history');
   const { provider: openaiProvider, message: openaiProviderMessage,
@@ -2446,9 +2465,14 @@ export function BenchmarkRunner({
 
   function onSelectContract(kind: 'suite' | 'scenario', value: string) {
     evidenceRequestRef.current += 1;
-    preserveScoreEvidenceRef.current = false;
-    clearStructuredEvidenceFields();
-    setUploadMessage(null);
+    const keepSuppliedEvidence = view === 'score' && Boolean(transcript.trim() || vconEvidence.trim());
+    preserveScoreEvidenceRef.current = keepSuppliedEvidence;
+    if (!keepSuppliedEvidence) {
+      clearStructuredEvidenceFields();
+      setUploadMessage(null);
+    }
+    setReport(null); setJudgeGate(null);
+    setSaveMessage(keepSuppliedEvidence ? 'Evaluation criteria changed. Your supplied evidence was kept; evaluate again. Source-bound vCons still require a matching recorded contract.' : null);
     if (kind === 'suite') setSelectedSuiteId(value);
     else setSelectedScenarioId(value);
   }
@@ -2527,6 +2551,7 @@ export function BenchmarkRunner({
 
   function onToggleStructuredEvidence(checked: boolean) {
     setIncludeStructuredEvidence(checked);
+    setReport(null); setJudgeGate(null);
   }
 
   async function onUploadEvidenceFile(file: File | null) {
@@ -2987,7 +3012,7 @@ export function BenchmarkRunner({
     }
 
     const preloadSample = view !== 'score' || shouldPreloadSampleEvidence();
-    if (view === 'score' && !preloadSample && preserveScoreEvidenceRef.current) return;
+    if (view === 'score' && preserveScoreEvidenceRef.current) return;
     setTranscript(preloadSample ? selectedScenario.sample_transcript ?? '' : '');
     // /eval scores the transcript by default. Do not preload sample action/final-state traces —
     // they complete every required action and keep scores at 100 after transcript edits.
@@ -3206,12 +3231,14 @@ export function BenchmarkRunner({
 
   async function onJudge() {
     if (!report) return;
+    const requestSequence = ++judgeSequence.current;
     setIsJudging(true);
     setShowJudgePrompt(false);
     try {
       if (!report.run_id) throw new Error('Evaluate and retain this evidence before requesting an ASSERT review.');
       if (judgeGate?.status === 'ready') judgeRequestId.current = crypto.randomUUID();
       const next = await requestBenchmarkJudge({ user_id: userId, benchmark_run_id: report.run_id, request_id: judgeRequestId.current });
+      if (requestSequence !== judgeSequence.current) return;
       setJudgeGate(next);
       if (next.status === 'ready') {
         setReport((current) =>
@@ -3238,6 +3265,7 @@ export function BenchmarkRunner({
       }
       await refreshAuditTrail();
     } catch (err) {
+      if (requestSequence !== judgeSequence.current) return;
       setJudgeGate({
         status: 'blocked',
         required_plan: 'starter',
@@ -3247,7 +3275,7 @@ export function BenchmarkRunner({
         block_reason: 'provider_error',
       });
     } finally {
-      setIsJudging(false);
+      if (requestSequence === judgeSequence.current) setIsJudging(false);
       void fetchProductConfig().then(setProductConfig).catch(() => undefined);
     }
   }
@@ -3575,6 +3603,7 @@ export function BenchmarkRunner({
     setIsRunning(true);
     setRunError(null);
     setReport(null);
+    setJudgeGate(null);
     setSuiteSimulation(null);
     setCopyMessage(null);
 
@@ -4040,7 +4069,7 @@ export function BenchmarkRunner({
     productConfig?.assert_judge?.ready === true;
 
   return (
-    <section style={{ display: 'grid', gap: 20 }}>
+    <section className={view === 'score' ? 'evidence-evaluation-workspace' : undefined} style={{ display: 'grid', gap: 20 }}>
       {view === 'all' ? <OpenAIConnectionPanel connection={{ ...openAIConnection, connect: onConnectOpenAI }} /> : null}
 
       {view === 'all' ? <section className="first-run-panel" aria-label="First run checklist">
@@ -4089,6 +4118,7 @@ export function BenchmarkRunner({
         className="card"
         style={{ padding: 24, display: 'grid', gap: 18 }}
       >
+        {view === 'score' ? <EvidenceEvaluationFlow loaded={hasTranscriptEvidence} evaluated={Boolean(report)} review={judgeGate ?? report?.llm_judge} judging={isJudging} /> : null}
         {loadError ? (
           <div style={{ border: '1px solid var(--error-border)', background: 'var(--error-bg)', color: 'var(--error-text)', borderRadius: 8, padding: 12, display: 'grid', gap: 8 }}>
             <span>{loadError}</span>
@@ -4481,7 +4511,7 @@ export function BenchmarkRunner({
               <summary>Structured and channel evidence (optional)</summary>
               <p>
                 {view === 'score'
-                  ? 'Hidden by default from Evaluate on this page. Sample transcript scoring ignores these unless you opt in below — otherwise leftover tool traces can keep every score at 100.'
+                  ? 'Include source tool results and resulting state when available. These records support execution checks; they are not independently authenticated. No missing evidence is filled from a scenario sample.'
                   : 'Expand when you have tool traces, final-state data, voice/group-call artifacts, or a full vCon record.'}
               </p>
               {view === 'score' ? (
@@ -4499,28 +4529,28 @@ export function BenchmarkRunner({
                 </label>
               ) : null}
               <div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', gap: 16 }}>
                   <label style={{ display: 'grid', gap: 8 }}>
                     <span style={{ fontWeight: 700 }}>Action/tool trace</span>
-                    <textarea value={actionTrace} onChange={(event) => setActionTrace(event.target.value)} rows={7} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
+                    <textarea value={actionTrace} onChange={(event) => { setActionTrace(event.target.value); setReport(null); setJudgeGate(null); }} rows={7} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
                   </label>
                   <label style={{ display: 'grid', gap: 8 }}>
                     <span style={{ fontWeight: 700 }}>Final observed state</span>
-                    <textarea value={finalState} onChange={(event) => setFinalState(event.target.value)} rows={7} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
+                    <textarea value={finalState} onChange={(event) => { setFinalState(event.target.value); setReport(null); setJudgeGate(null); }} rows={7} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
                   </label>
                 </div>
                 <label style={{ display: 'grid', gap: 8 }}>
                   <span style={{ fontWeight: 700 }}>Voice call evidence</span>
-                  <textarea value={callEvidence} onChange={(event) => setCallEvidence(event.target.value)} rows={7} placeholder='{"turns":[{"speaker":"Caller","body":"I need a human."},{"speaker":"Agent","body":"I created a ticket and escalated you."}],"metrics":{"durationMs":92000,"avgLatencyMs":340}}' style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
+                  <textarea value={callEvidence} onChange={(event) => { setCallEvidence(event.target.value); setReport(null); setJudgeGate(null); }} rows={7} placeholder='{"turns":[{"speaker":"Caller","body":"I need a human."},{"speaker":"Agent","body":"I created a ticket and escalated you."}],"metrics":{"durationMs":92000,"avgLatencyMs":340}}' style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
                 </label>
                 <label style={{ display: 'grid', gap: 8 }}>
                   <span style={{ fontWeight: 700 }}>Group call evidence</span>
-                  <textarea value={groupCall} onChange={(event) => setGroupCall(event.target.value)} rows={7} placeholder='{"messages":[{"speaker":"Patient","text":"I need a refill"}],"decisions":["Route to clinician review"]}' style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
+                  <textarea value={groupCall} onChange={(event) => { setGroupCall(event.target.value); setReport(null); setJudgeGate(null); }} rows={7} placeholder='{"messages":[{"speaker":"Patient","text":"I need a refill"}],"decisions":["Route to clinician review"]}' style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
                 </label>
                 <label style={{ display: 'grid', gap: 8 }}>
                   <span style={{ fontWeight: 700 }}>vCon record</span>
                   <small>Preferred: IETF vCon draft-ietf-vcon-vcon-core-04 (vCon format 0.4.0). Recording dialogs need an HTTPS URL and base64url SHA-512 content hash.</small>
-                  <textarea value={vconEvidence} onChange={(event) => setVconEvidence(event.target.value)} rows={7} placeholder='{"vcon":"0.4.0","uuid":"...","created_at":"2026-09-26T10:00:00Z","parties":[{"name":"Caller","type":"person"}],"dialog":[{"type":"text","parties":[0],"mediatype":"text/plain","body":"I need a human.","encoding":"none"}]}' style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
+                  <textarea value={vconEvidence} onChange={(event) => { setVconEvidence(event.target.value); setReport(null); setJudgeGate(null); }} rows={7} placeholder='{"vcon":"0.4.0","uuid":"...","created_at":"2026-09-26T10:00:00Z","parties":[{"name":"Caller","type":"person"}],"dialog":[{"type":"text","parties":[0],"mediatype":"text/plain","body":"I need a human.","encoding":"none"}]}' style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
                 </label>
               </div>
             </details>
@@ -4608,6 +4638,7 @@ export function BenchmarkRunner({
             Save run
           </button>
             <div
+              id="evidence-judge-controls"
               aria-label="LLM judge controls"
               style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}
             >
@@ -5420,10 +5451,11 @@ export function BenchmarkRunner({
 
       {report ? (
         <section className="card" style={{ padding: 24, display: 'grid', gap: 18 }}>
+          <EvaluationEvidenceSummary report={report} review={judgeGate ?? report.llm_judge} judging={isJudging} />
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
             <div>
               <p style={{ margin: '0 0 6px', color: 'var(--muted)' }}>Benchmark report</p>
-              <h2 style={{ margin: 0, fontSize: 28, textTransform: 'capitalize' }}>{verdict ?? 'Complete'}</h2>
+              <h3 style={{ margin: 0 }}>Evidence details and diagnostics</h3>
             </div>
             <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
               <button
@@ -5440,12 +5472,12 @@ export function BenchmarkRunner({
               >
                 Download report JSON
               </button>
-              {score !== undefined ? (
-                <div style={{ fontSize: 40, fontWeight: 900, color: scoreColor(score) }}>{score}</div>
-              ) : null}
+              {view === 'score' ? <a className="secondary-link" href="#evidence-judge-controls">Review these findings</a> : null}
             </div>
           </div>
 
+          <details aria-label="Evaluation diagnostics"><summary>Diagnostic score and check matches · not verified resolution</summary>
+          <p>Diagnostic score: {score ?? 'not reported'}. Matching language is not proof of successful business actions. Evaluator verdict: {verdict ?? 'not recorded'}.</p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
             <ScoreTile label="Required actions" score={report.required_action_score} />
             {report.score_components && 'rubric' in report.score_components ? (
@@ -5462,7 +5494,7 @@ export function BenchmarkRunner({
           {report.scoring_mode === 'transcript' ? (
             <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13, lineHeight: 1.45 }} aria-label="Transcript scoring note">
               Transcript-only mode: Task completion and Final state are not shown (not measured — not counted as 100).
-              Include structured evidence or load the full sample to measure them.
+              Supply actual tool results or resulting state to assess execution. Synthetic samples demonstrate the UI, not a real outcome.
             </p>
           ) : null}
           {report.score_components && Object.keys(report.score_components).length ? (
@@ -5484,7 +5516,7 @@ export function BenchmarkRunner({
                   Required action checklist
                 </p>
                 <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13 }}>
-                  Observed in this evidence vs still missing.
+                  Diagnostic matches, not verified completed actions. A matched phrase can be a claim; an unmatched phrase is not proof that an action failed.
                 </p>
               </div>
               <ul style={{ margin: 0, paddingLeft: 0, listStyle: 'none', display: 'grid', gap: 6 }}>
@@ -5498,7 +5530,7 @@ export function BenchmarkRunner({
                   const missing = (report.missing_actions ?? []).some(
                     (item) => item.toLowerCase() === action.toLowerCase(),
                   );
-                  const status = completed ? 'observed' : missing || report.missing_actions?.length ? 'missing' : 'unknown';
+                  const status = completed ? 'matched' : missing || report.missing_actions?.length ? 'unmatched' : 'unknown';
                   return (
                     <li
                       key={action}
@@ -5508,14 +5540,14 @@ export function BenchmarkRunner({
                         alignItems: 'flex-start',
                         fontSize: 14,
                         lineHeight: 1.4,
-                        color: status === 'missing' ? 'var(--error-text)' : 'var(--text)',
+                        color: 'var(--text)',
                       }}
                     >
                       <span aria-hidden="true" style={{ fontWeight: 900, minWidth: 16 }}>
-                        {status === 'observed' ? '✓' : status === 'missing' ? '✗' : '·'}
+                        {status === 'matched' ? '≈' : '·'}
                       </span>
                       <span>
-                        <strong>{status === 'observed' ? 'Observed' : status === 'missing' ? 'Missing' : 'Unchecked'}:</strong> {action}
+                        <strong>{status === 'matched' ? 'Matched check' : status === 'unmatched' ? 'No match found' : 'Unchecked'}:</strong> {action}
                       </span>
                     </li>
                   );
@@ -5524,6 +5556,7 @@ export function BenchmarkRunner({
             </section>
           ) : null}
 
+          </details>
           {actionPlan ? (
             <section
               aria-label="Operator action plan"
@@ -5679,7 +5712,7 @@ export function BenchmarkRunner({
           <EvidenceTimeline vcon={report.ietf_vcon_export} />
           <DesignResults findings={report as unknown as Record<string, unknown>} />
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))', gap: 16 }}>
             <ReportList title="Failure categories" items={report.failure_categories} empty="No failure categories reported." />
             <ReportList title="Missing actions" items={report.missing_actions} empty="No missing required actions reported." />
             <ReportList title="Forbidden actions observed" items={report.forbidden_actions_observed} empty="No forbidden actions observed." />
@@ -6258,7 +6291,7 @@ function ScoreTile({ label, score }: { label: string; score?: number | null }) {
   return (
     <div aria-label={`${label} score`} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14 }}>
       <p style={{ margin: '0 0 6px', color: 'var(--muted)', fontSize: 13 }}>{label}</p>
-      <p style={{ margin: 0, fontSize: 24, fontWeight: 900, color: hasScore ? scoreColor(score) : 'var(--muted)' }}>
+      <p style={{ margin: 0, fontSize: 24, fontWeight: 900, color: hasScore ? 'var(--text)' : 'var(--muted)' }}>
         {hasScore ? score : 'n/a'}
       </p>
       {!hasScore ? (

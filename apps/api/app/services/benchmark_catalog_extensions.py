@@ -282,7 +282,7 @@ def register_builtin_benchmark_extensions() -> None:
                     **benchmark_service._perturbation_payload(payload),
                     **benchmark_service._run_metadata_payload(payload),
                     **benchmark_service._run_lifecycle_payload(payload),
-                }
+                }, synthetic=True,
             )
             benchmark_report['simulation_validation'] = simulation_validation
             benchmark_report['vcon_analysis'] = benchmark_service._vcon_analysis(benchmark_report)
