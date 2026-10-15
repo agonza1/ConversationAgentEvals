@@ -53,3 +53,7 @@ jobs:
         env:
           PLAYWRIGHT_REUSE_EXISTING_SERVER: "0"
         run: npm exec --workspace apps/web -- playwright test tests/workspace-navigation.spec.ts tests/product-flow.spec.ts tests/spec-generation-settings.spec.ts tests/chatgpt-judge-settings.spec.ts tests/settings-layout.spec.ts tests/speech-settings.spec.ts tests/results-pagination.spec.ts tests/assert-review-progress.spec.ts tests/run-detail-layout.spec.ts tests/waylo-connection.spec.ts tests/execution-launch.spec.ts tests/scenario-spoken-opener.spec.ts tests/waylo-reporting.spec.ts tests/waylo-live-listening.spec.ts tests/assisted-authoring.spec.ts tests/imported-evidence-flow.spec.ts tests/score-upload.spec.ts --config playwright.config.ts --workers=1
+      - name: Verify live listener ownership, fallback and recorded playback
+        env:
+          PLAYWRIGHT_REUSE_EXISTING_SERVER: "0"
+        run: npm exec --workspace apps/web -- playwright test tests/runs-analysis.spec.ts --grep "listening falls back|WebRTC|HTTP fallback|playback pauses|completed replay|continuous .* call playback" --config playwright.config.ts --workers=1

@@ -1,18 +1,22 @@
 'use client';
 
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { useEffect, useMemo, useState } from 'react';
 
 import { ResultsPagination, RESULTS_PAGE_SIZE } from '@/components/ResultsPagination';
 import { SiteNav } from '@/components/SiteNav';
 import { ApiAwareLink } from '@/components/ApiAwareLink';
-import { BenchmarkRunner } from '@/components/BenchmarkRunner';
 import {
   demoProjectId,
   demoUserId,
   ExecutionRunSummary,
   listExecutionRunSummaries,
 } from '@/lib/execution';
+
+const BenchmarkRunner = dynamic(() => import('@/components/BenchmarkRunner').then((module) => module.BenchmarkRunner), {
+  loading: () => <p className="scenarios-muted" role="status">Loading evaluation tools…</p>,
+});
 
 function testerLabel(testerId?: ExecutionRunSummary['tester_id']) {
   if (testerId === 'fixture_replay') return 'saved conversation replay';
@@ -30,7 +34,6 @@ export function RunsListPage({ view = 'launch' }: { view?: 'launch' | 'results' 
   const [statusFilter, setStatusFilter] = useState('all');
   const [page, setPage] = useState(0);
   const [hasNext, setHasNext] = useState(false);
-  const [hasActiveRuns, setHasActiveRuns] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const userId = useMemo(() => demoUserId(), []);
   const projectId = useMemo(() => demoProjectId(), []);
@@ -42,63 +45,93 @@ export function RunsListPage({ view = 'launch' }: { view?: 'launch' | 'results' 
   useEffect(() => {
     if (view !== 'results' || source !== 'agents') { setLoading(false); return; }
     let active = true;
-    async function load() {
-      setLoading(true);
-      setError(null);
+    let pageTimer: ReturnType<typeof setTimeout> | undefined;
+    let probeTimer: ReturnType<typeof setTimeout> | undefined;
+    let pagePending = false;
+    let probePending = false;
+    let pageHasActiveRuns = false;
+    let probeHasResolved = false;
+    let finalRefresh = false;
+    // Unknown presence is conservative until the first probe responds.
+    let projectHasActiveRuns = true;
+    const hasActive = (rows: ExecutionRunSummary[]) => rows.some((run) => run.status === 'queued' || run.status === 'running');
+
+    function queuePage(delay = 1500) {
+      if (!active || pagePending || pageTimer || (!pageHasActiveRuns && !projectHasActiveRuns && !finalRefresh)) return;
+      pageTimer = setTimeout(() => { pageTimer = undefined; void loadPage(); }, delay);
+    }
+
+    function queueProbe(delay = 1500) {
+      if (!active || probePending || probeTimer || (!pageHasActiveRuns && !projectHasActiveRuns)) return;
+      probeTimer = setTimeout(() => { probeTimer = undefined; void probeActiveRuns(); }, delay);
+    }
+
+    async function loadPage(initial = false) {
+      pagePending = true;
+      const completingRefresh = finalRefresh;
+      finalRefresh = false;
+      let delay = 1500;
+      if (initial) { setLoading(true); setError(null); }
       try {
-        const [next, activeRuns] = await Promise.all([
-          listExecutionRunSummaries(userId, projectId, { limit: RESULTS_PAGE_SIZE + 1, offset: page * RESULTS_PAGE_SIZE, status: statusFilter }),
-          listExecutionRunSummaries(userId, projectId, { limit: 1, offset: 0, status: 'active' }).catch(() => null),
-        ]);
+        const next = await listExecutionRunSummaries(userId, projectId, { limit: RESULTS_PAGE_SIZE + 1, offset: page * RESULTS_PAGE_SIZE, status: statusFilter });
         if (!active) return;
         setRuns(next.slice(0, RESULTS_PAGE_SIZE));
         setHasNext(next.length > RESULTS_PAGE_SIZE);
-        setHasActiveRuns(activeRuns === null || [...next, ...activeRuns].some((run) => run.status === 'queued' || run.status === 'running'));
+        setError(null);
+        pageHasActiveRuns = hasActive(next);
       } catch (err) {
         if (!active) return;
         setError(err instanceof Error ? err.message : 'Could not load runs');
+        if (completingRefresh) finalRefresh = true;
+        delay = 3000;
       } finally {
-        if (active) setLoading(false);
+        pagePending = false;
+        if (active) {
+          if (initial) setLoading(false);
+          queuePage(delay);
+          queueProbe();
+        }
       }
     }
-    void load();
+
+    async function probeActiveRuns() {
+      probePending = true;
+      let delay = 1500;
+      try {
+        const rows = await listExecutionRunSummaries(userId, projectId, { limit: 1, offset: 0, status: 'active' });
+        if (!active) return;
+        const nextHasActive = hasActive(rows);
+        // A run outside this page can move into it when it completes. Fetch a
+        // final snapshot after that transition, including if a page is in flight.
+        if (probeHasResolved && projectHasActiveRuns && !nextHasActive) finalRefresh = true;
+        projectHasActiveRuns = nextHasActive;
+        probeHasResolved = true;
+      } catch {
+        if (!active) return;
+        projectHasActiveRuns = true;
+        delay = 3000;
+      } finally {
+        probePending = false;
+        if (active) {
+          if (!pageHasActiveRuns && !projectHasActiveRuns && !finalRefresh && pageTimer) {
+            clearTimeout(pageTimer);
+            pageTimer = undefined;
+          }
+          queuePage();
+          queueProbe(delay);
+        }
+      }
+    }
+
+    // A slow/hung presence probe must not hold back rows or page refreshes.
+    void loadPage(true);
+    void probeActiveRuns();
     return () => {
       active = false;
+      if (pageTimer) clearTimeout(pageTimer);
+      if (probeTimer) clearTimeout(probeTimer);
     };
   }, [page, projectId, refreshKey, source, statusFilter, userId, view]);
-
-  useEffect(() => {
-    if (view !== 'results' || source !== 'agents' || !hasActiveRuns) return undefined;
-    let active = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    async function poll() {
-      try {
-        const [next, activeRuns] = await Promise.all([
-          listExecutionRunSummaries(userId, projectId, { limit: RESULTS_PAGE_SIZE + 1, offset: page * RESULTS_PAGE_SIZE, status: statusFilter }),
-          listExecutionRunSummaries(userId, projectId, { limit: 1, offset: 0, status: 'active' }).catch(() => null),
-        ]);
-        if (!active) return;
-        setRuns(next.slice(0, RESULTS_PAGE_SIZE));
-        setHasNext(next.length > RESULTS_PAGE_SIZE);
-        setHasActiveRuns(activeRuns === null || [...next, ...activeRuns].some((run) => run.status === 'queued' || run.status === 'running'));
-        setError(null);
-        if (activeRuns === null || [...next, ...activeRuns].some((run) => run.status === 'queued' || run.status === 'running')) {
-          timer = setTimeout(() => void poll(), 1500);
-        }
-      } catch (err) {
-        if (!active) return;
-        setError(err instanceof Error ? err.message : 'Could not refresh active runs');
-        timer = setTimeout(() => void poll(), 3000);
-      }
-    }
-
-    timer = setTimeout(() => void poll(), 1500);
-    return () => {
-      active = false;
-      if (timer) clearTimeout(timer);
-    };
-  }, [hasActiveRuns, page, projectId, source, statusFilter, userId, view]);
 
 
   return (
