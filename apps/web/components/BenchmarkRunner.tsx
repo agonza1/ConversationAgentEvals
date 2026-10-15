@@ -4526,7 +4526,7 @@ export function BenchmarkRunner({
                 </label>
               ) : null}
               <div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', gap: 16 }}>
                   <label style={{ display: 'grid', gap: 8 }}>
                     <span style={{ fontWeight: 700 }}>Action/tool trace</span>
                     <textarea value={actionTrace} onChange={(event) => { setActionTrace(event.target.value); setReport(null); setJudgeGate(null); }} rows={7} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 12, resize: 'vertical', lineHeight: 1.45 }} />
@@ -5779,7 +5779,7 @@ export function BenchmarkRunner({
           <EvidenceTimeline vcon={report.ietf_vcon_export} />
           <DesignResults findings={report as unknown as Record<string, unknown>} />
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))', gap: 16 }}>
             <ReportList title="Failure categories" items={report.failure_categories} empty="No failure categories reported." />
             <ReportList title="Missing actions" items={report.missing_actions} empty="No missing required actions reported." />
             <ReportList title="Forbidden actions observed" items={report.forbidden_actions_observed} empty="No forbidden actions observed." />

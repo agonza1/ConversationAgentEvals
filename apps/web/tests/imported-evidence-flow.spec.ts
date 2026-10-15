@@ -125,6 +125,9 @@ for (const width of [1280, 390, 320]) test(`evidence-first result and flow stay 
   const control = page.getByLabel('Evaluation diagnostics').locator('summary');
   await control.focus(); await page.keyboard.press('Enter');
   await expect(page.getByLabel('Evaluation diagnostics')).toHaveAttribute('open', '');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+  await page.getByText('Structured and channel evidence (optional)', { exact: true }).click();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
   if (process.env.CAE_EVIDENCE_SCREENSHOTS) {
     await page.getByLabel('Evaluation evidence summary').screenshot({ path: `${process.env.CAE_EVIDENCE_SCREENSHOTS}/evidence-summary-${width}.png` });
     await page.getByLabel('Imported evidence evaluation flow').screenshot({ path: `${process.env.CAE_EVIDENCE_SCREENSHOTS}/evidence-flow-${width}.png` });

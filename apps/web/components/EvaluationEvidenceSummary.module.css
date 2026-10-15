@@ -11,6 +11,7 @@
 .coverage dt { font-size: 13px; color: var(--muted); }
 .coverage dd { margin: 7px 0; font-weight: 700; overflow-wrap: anywhere; }
 .coverage small, .note { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.coverage dd small { display: block; margin-top: 8px; font-weight: 400; }
 .flow { display: grid; gap: 16px; border-bottom: 1px solid var(--border); padding-bottom: 20px; }
 .flow p { color: var(--muted); margin: 4px 0 0; font-size: 14px; }
 .flow ol { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; list-style: none; margin: 0; padding: 0; }

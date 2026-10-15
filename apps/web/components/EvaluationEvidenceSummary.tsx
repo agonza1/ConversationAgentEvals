@@ -10,10 +10,10 @@ export function EvaluationEvidenceSummary({ report, review, judging = false }: {
       <span className={summary.failed ? styles.failure : styles.badge}>Evaluator: {summary.verdictLabel}</span></header>
     <p className={styles.explanation}>{summary.explanation}</p>
     <dl className={styles.coverage}>
-      <div><dt>Conversation</dt><dd>{label(summary.transcript)}</dd><small>What participants said</small></div>
-      <div><dt>Tool / action trace</dt><dd>{label(summary.trace)}</dd><small>Requests and reported results</small></div>
-      <div><dt>Resulting state</dt><dd>{label(summary.state)}</dd><small>Recorded backend outcome</small></div>
-      <div><dt>LLM judgment</dt><dd>{reviewEvidenceStatus(review, judging)}</dd><small>Separate review, not execution proof</small></div>
+      <div><dt>Conversation</dt><dd>{label(summary.transcript)}<small>What participants said</small></dd></div>
+      <div><dt>Tool / action trace</dt><dd>{label(summary.trace)}<small>Requests and reported results</small></dd></div>
+      <div><dt>Resulting state</dt><dd>{label(summary.state)}<small>Recorded backend outcome</small></dd></div>
+      <div><dt>LLM judgment</dt><dd>{reviewEvidenceStatus(review, judging)}<small>Separate review, not execution proof</small></dd></div>
     </dl>
     <p className={styles.note}>Missing evidence means unverified, not automatically failed. Imported scores and analyses are historical, not proof of execution.</p>
   </section>;
