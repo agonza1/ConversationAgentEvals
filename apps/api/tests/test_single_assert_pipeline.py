@@ -337,6 +337,51 @@ def test_uploaded_transcript_and_live_review_share_assert_and_dedupe(assert_pipe
     assert len(execution_run_store.get_conversation(run_id, conv_id)['judge_reviews']) == 1
 
 
+def test_interruption_sample_non_relevant_nodes_save_and_reuse_review(assert_pipeline, monkeypatch):
+    """Real benchmark->ASSERT->saved-review flow; only provider output is synthetic."""
+    from pathlib import Path
+    import yaml
+    from app.services import upstream_assert_judge
+
+    p = assert_pipeline
+    scenario = next(row for row in benchmark_service.get_suite('call-center-voice-ai')['scenarios']
+                    if row['id'] == 'interruption-correction-handling')
+    report = p.evaluate(scenario_id=scenario['id'], transcript=scenario['sample_transcript'])
+    assert report['verdict'] == 'needs_review'
+    original_run = upstream_assert_judge.subprocess.run
+
+    def native_non_relevant_output(command, **kwargs):
+        completed = original_run(command, **kwargs)
+        config = yaml.safe_load(Path(command[command.index('--config') + 1]).read_text())
+        scores = Path(config['pipeline']['judge']['save_dir']) / 'scores.jsonl'
+        score = json.loads(scores.read_text())
+        for node in score['verdict']['node_judgments']:
+            node.update(relevant=False, violated=None, confidence=None, evidence_turns=[])
+        scores.write_text(json.dumps(score) + '\n')
+        return completed
+
+    monkeypatch.setattr(upstream_assert_judge.subprocess, 'run', native_non_relevant_output)
+    result = p.judge(report)
+    assert result.status_code == 200, result.text
+    saved = result.json()
+    assert saved['status'] == 'ready' and saved['review_id']
+    assert saved['judge_result']['proposed_evaluation']['verdict'] == 'needs_review'
+    assert saved['judge_result']['proposed_evaluation']['corrected_findings'] == []
+    run_id, conversation_id = saved['execution_run_id'], saved['conversation_id']
+    conversation = execution_run_store.get_conversation(run_id, conversation_id)
+    assert conversation['verdict'] == report['verdict']
+    assert conversation['score'] == report['overall_score']
+    assert all(node['violated'] is None for node in
+               conversation['judge_reviews'][0]['judge_result']['provenance']['node_judgments'])
+    route = f'/api/assert/runs/{run_id}/conversations/{conversation_id}'
+    freshness = p.client.get(route + f"/reviews/{saved['review_id']}/status", params={'user_id': 'owner'})
+    assert freshness.status_code == 200 and freshness.json()['status'] == 'current'
+    repeated = p.judge(report)
+    assert repeated.status_code == 200 and repeated.json()['reused'] is True
+    assert repeated.json()['review_id'] == saved['review_id']
+    assert len(p.calls) == 1 and p.spent() == 10
+
+
 def test_uploaded_vcon_preserves_structured_evidence_and_uses_assert(assert_pipeline):
     p = assert_pipeline
     sample = p.client.get('/api/benchmarks/evidence/sample-vcon', params={

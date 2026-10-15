@@ -6,6 +6,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiAwareLink } from './ApiAwareLink';
 import { EvidenceTimeline } from './EvidenceTimeline';
+import { AssertReviewProgress } from './AssertReviewProgress';
 import { DesignResults } from './DesignResults';
 import { OpenAIConnectionPanel } from './OpenAIConnectionSettings';
 import { useOpenAIConnection, type OpenAIProviderStatus } from './useOpenAIConnection';
@@ -4588,9 +4589,9 @@ export function BenchmarkRunner({
               >
                 {isJudging ? 'Requesting ASSERT review…' : judgeGate?.status === 'ready' ? 'Run a new ASSERT review' : 'Request LLM judge'}
               </button>
-              <span style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.4 }}>
+              {!isJudging ? <span style={{ color: 'var(--muted)', fontSize: 12, lineHeight: 1.4 }}>
                 {productConfig?.assert_judge?.message || 'Checking ASSERT judge configuration…'}
-              </span>
+              </span> : null}
               <button type="button" className="secondary-link" onClick={() => {
                 void fetchProductConfig().then(setProductConfig).catch(() => setProductConfig(null));
               }}>Refresh judge readiness</button>
@@ -4601,6 +4602,8 @@ export function BenchmarkRunner({
               ) : null}
             </div>
         </div>
+
+        {isJudging ? <AssertReviewProgress /> : null}
 
         {view === 'score' && openaiProviderMessage ? (
           <p style={{ margin: 0, color: 'var(--muted)', fontSize: 13 }}>{openaiProviderMessage}</p>
@@ -5411,7 +5414,7 @@ export function BenchmarkRunner({
         <button type="button" className="secondary-link" disabled={!judgeProviderReady || isJudging} onClick={() => void onJudge()}>
           {isJudging ? 'Requesting ASSERT review…' : 'Request LLM judge'}
         </button>
-        <p>{productConfig?.assert_judge?.message || 'Checking ASSERT judge configuration…'}</p>
+        {isJudging ? <AssertReviewProgress /> : <p>{productConfig?.assert_judge?.message || 'Checking ASSERT judge configuration…'}</p>}
         <button type="button" className="secondary-link" onClick={() => {
           void fetchProductConfig().then(setProductConfig).catch(() => setProductConfig(null));
         }}>Refresh judge readiness</button>

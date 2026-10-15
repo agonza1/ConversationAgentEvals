@@ -1,0 +1,53 @@
+.card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  min-width: 0;
+  padding: 14px 18px;
+  border: 1px solid #41434d;
+  border-radius: 14px;
+  background: #272930;
+  color: #faf9ff;
+}
+
+.illustration {
+  display: block;
+  width: 100px;
+  height: auto;
+  flex: 0 0 100px;
+}
+
+.copy { min-width: 0; }
+.copy strong { font-size: 14px; font-weight: 750; letter-spacing: -.01em; }
+.copy p { margin: 5px 0 0; color: #d0ceda; font-size: 12px; line-height: 1.6; }
+.dots { color: #24d4c1; }
+
+.buddy { animation: float 3.6s ease-in-out infinite; }
+.reply { animation: float 3.6s ease-in-out -1.8s infinite; }
+.lens { transform-origin: 78px 59px; animation: inspect 4.8s ease-in-out infinite; }
+.eyes { transform-box: fill-box; transform-origin: center; animation: blink 7s ease-in-out infinite; }
+
+@keyframes float {
+  0%, 100% { transform: translateY(1px); }
+  50% { transform: translateY(-3px); }
+}
+
+@keyframes inspect {
+  0%, 100% { transform: translate(1px, 0) rotate(3deg); }
+  50% { transform: translate(-3px, -1px) rotate(-6deg); }
+}
+
+@keyframes blink {
+  0%, 43%, 47%, 100% { transform: scaleY(1); }
+  45% { transform: scaleY(.15); }
+}
+
+@media (max-width: 480px) {
+  .card { padding: 12px; gap: 10px; }
+  .illustration { width: 76px; flex-basis: 76px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card * { animation: none; }
+}
