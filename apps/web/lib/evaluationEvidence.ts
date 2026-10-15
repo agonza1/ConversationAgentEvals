@@ -18,6 +18,7 @@ export function evaluationEvidence(value: unknown) {
   const presence = (name: string, raw: unknown): EvidencePresence => {
     if (typeof artifact[name] === 'boolean') return artifact[name] ? 'present' : 'missing';
     if (typeof audit[`${name}_present`] === 'boolean') return audit[`${name}_present`] ? 'present' : 'missing';
+    if (name === 'transcript' && typeof raw === 'string') return raw.trim() ? 'present' : 'missing';
     if (raw !== undefined && raw !== null) return present(raw) ? 'present' : 'missing';
     return 'unknown';
   };

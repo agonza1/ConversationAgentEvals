@@ -2467,9 +2467,14 @@ export function BenchmarkRunner({
 
   function onSelectContract(kind: 'suite' | 'scenario', value: string) {
     evidenceRequestRef.current += 1;
-    preserveScoreEvidenceRef.current = false;
-    clearStructuredEvidenceFields();
-    setUploadMessage(null);
+    const keepSuppliedEvidence = view === 'score' && Boolean(transcript.trim() || vconEvidence.trim());
+    preserveScoreEvidenceRef.current = keepSuppliedEvidence;
+    if (!keepSuppliedEvidence) {
+      clearStructuredEvidenceFields();
+      setUploadMessage(null);
+    }
+    setReport(null); setJudgeGate(null);
+    setSaveMessage(keepSuppliedEvidence ? 'Evaluation criteria changed. Your supplied evidence was kept; evaluate again. Source-bound vCons still require a matching recorded contract.' : null);
     if (kind === 'suite') setSelectedSuiteId(value);
     else setSelectedScenarioId(value);
   }
@@ -3009,7 +3014,7 @@ export function BenchmarkRunner({
     }
 
     const preloadSample = view !== 'score' || shouldPreloadSampleEvidence();
-    if (view === 'score' && !preloadSample && preserveScoreEvidenceRef.current) return;
+    if (view === 'score' && preserveScoreEvidenceRef.current) return;
     setTranscript(preloadSample ? selectedScenario.sample_transcript ?? '' : '');
     // /eval scores the transcript by default. Do not preload sample action/final-state traces —
     // they complete every required action and keep scores at 100 after transcript edits.

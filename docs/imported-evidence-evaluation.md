@@ -1,5 +1,7 @@
 # Evaluate existing conversation evidence
 
+Changing scenario criteria keeps supplied conversation evidence and clears its result/review; it does not replace the conversation with a scenario sample, including on a `sample=1` deep link after manual input. Existing source-bound contract validation still applies.
+
 The `/eval` flow does not initiate a target call: import/paste evidence, explicitly evaluate against a scenario, optionally request an ASSERT LLM review. Importing, typing, selecting a scenario and deterministic evaluation never implicitly request a model judgment.
 
 The primary result describes evidence coverage and verification limits. A transcript-only 100 remains an unverified operational outcome. Built-in phrase/action and keyword/rubric scores remain available under **Diagnostic score and check matches**, with original numeric fields unchanged for compatibility. Phrase matches are not completed backend actions; unmatched phrases are not proof an action failed. High scores never override a needs-review verdict in the operator plan.

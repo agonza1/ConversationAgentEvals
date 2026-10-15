@@ -60,3 +60,9 @@ test('judge status distinguishes pending, failed, absent and separate completion
 test('non-finite scores never appear as meaningful diagnostic values', () => {
   for (const score of [NaN, Infinity, '100', null]) assert.equal(evaluationEvidence({ score }).score, null);
 });
+test('a plain transcript is text even when its content happens to be valid JSON', () => {
+  for (const transcript of ['100', 'false', '[]']) {
+    const view = evaluationEvidence({ transcript, action_trace: [], final_state: {} });
+    assert.equal(view.transcript, 'present'); assert.equal(view.headline, 'Outcome unverified');
+  }
+});

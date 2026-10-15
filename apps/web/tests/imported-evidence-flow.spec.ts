@@ -63,6 +63,33 @@ test('an imported transcript-only vCon scores 100 without claiming verified comp
   expect(calls.executions()).toBe(0); expect(calls.judges()).toBe(0);
 });
 
+test('changing the scenario retains the imported conversation and source instead of loading another sample', async ({ page, request }) => {
+  const calls = await setup(page, request);
+  const original = await page.getByLabel('Evidence transcript').inputValue();
+  await evaluate(page);
+  await page.getByLabel('Evaluation scenario', { exact: true }).selectOption('interruption-correction-handling');
+  await expect(page.getByLabel('Evidence transcript')).toHaveValue(original);
+  await expect(page.getByLabel('Include structured evidence in Evaluate')).toBeChecked();
+  await expect(page.getByLabel('Evaluation evidence summary')).toHaveCount(0);
+  const report = await evaluate(page);
+  expect(report.scenario_id).toBe('interruption-correction-handling');
+  expect(report.evaluation_scope.input_source).toBe('vcon');
+  expect(calls.executions()).toBe(0); expect(calls.judges()).toBe(0);
+});
+
+test('a sample deep link cannot overwrite pasted evidence when the operator changes criteria', async ({ page, request }) => {
+  await setup(page, request);
+  await page.goto('/eval?suite_id=call-center-voice-ai&scenario_id=billing-address-change&sample=1');
+  await expect(page.getByLabel('Evaluation scenario', { exact: true })).toBeEnabled();
+  const transcript = 'Caller: I need assistance with an unusual request.\nAgent: Please explain the issue.';
+  await page.getByLabel('Evidence transcript').fill(transcript);
+  await page.getByLabel('Evaluation scenario', { exact: true }).selectOption('angry-outage-escalation');
+  await expect(page.getByLabel('Evidence transcript')).toHaveValue(transcript);
+  const report = await evaluate(page);
+  expect(report.evaluation_scope.input_source).toBe('transcript');
+  expect(report.evaluation_scope.artifact_presence.action_trace).toBe(false);
+});
+
 test('a separate successful judge review does not manufacture tool evidence or promote the verdict', async ({ page, request }) => {
   const calls = await setup(page, request);
   await page.route('**/api/assert/benchmarks/*/judge', (route) => route.fulfill({ json: {
