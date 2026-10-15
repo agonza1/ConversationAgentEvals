@@ -10,9 +10,7 @@ import json
 import re
 from typing import Any
 
-from assert_ai.core.judge_citations import CITE_XML_PATTERN
-
-from app.integrations.assert_runtime import Transcript, TranscriptEvent, TranscriptMetadata
+from app.integrations.assert_runtime import CITE_XML_PATTERN, Transcript, TranscriptEvent, TranscriptMetadata
 from app.services.assert_transcript_adapter import TRANSCRIPT_ADAPTER_VERSION, _structured_final_state
 
 MAX_EVENTS = 2_000
