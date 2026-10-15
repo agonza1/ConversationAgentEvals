@@ -2479,6 +2479,19 @@ select {
   padding: 16px;
 }
 
+/* Native select/file controls must not set the min-content width of /eval. */
+.evidence-evaluation-workspace { min-width: 0; grid-template-columns: minmax(0, 1fr); }
+.evidence-evaluation-workspace > *,
+.evidence-evaluation-workspace label { min-width: 0; }
+.evidence-evaluation-workspace select,
+.evidence-evaluation-workspace textarea { min-width: 0; max-width: 100%; width: 100%; }
+.evidence-evaluation-workspace input { min-width: 0; max-width: 100%; }
+@media (max-width: 480px) {
+  .evidence-evaluation-workspace .score-upload-actions { grid-template-columns: minmax(0, 1fr); }
+  .evidence-evaluation-workspace .validation-grid { grid-template-columns: minmax(0, 1fr); }
+  .evidence-evaluation-workspace button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+}
+
 .score-upload-copy h2 {
   margin: 4px 0 0;
   font-size: 22px;

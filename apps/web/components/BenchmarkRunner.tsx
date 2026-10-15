@@ -4066,7 +4066,7 @@ export function BenchmarkRunner({
     productConfig?.assert_judge?.ready === true;
 
   return (
-    <section style={{ display: 'grid', gap: 20 }}>
+    <section className={view === 'score' ? 'evidence-evaluation-workspace' : undefined} style={{ display: 'grid', gap: 20 }}>
       {view === 'all' ? <OpenAIConnectionPanel connection={{ ...openAIConnection, connect: onConnectOpenAI }} /> : null}
 
       {view === 'all' ? <section className="first-run-panel" aria-label="First run checklist">
@@ -6358,7 +6358,7 @@ function ScoreTile({ label, score }: { label: string; score?: number | null }) {
   return (
     <div aria-label={`${label} score`} style={{ border: '1px solid var(--border)', borderRadius: 8, padding: 14 }}>
       <p style={{ margin: '0 0 6px', color: 'var(--muted)', fontSize: 13 }}>{label}</p>
-      <p style={{ margin: 0, fontSize: 24, fontWeight: 900, color: hasScore ? scoreColor(score) : 'var(--muted)' }}>
+      <p style={{ margin: 0, fontSize: 24, fontWeight: 900, color: hasScore ? 'var(--text)' : 'var(--muted)' }}>
         {hasScore ? score : 'n/a'}
       </p>
       {!hasScore ? (

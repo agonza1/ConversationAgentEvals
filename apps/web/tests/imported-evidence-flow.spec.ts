@@ -117,7 +117,11 @@ for (const width of [1280, 390, 320]) test(`evidence-first result and flow stay 
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await setup(page, request); await evaluate(page);
   await expect(page.getByRole('heading', { name: 'Outcome unverified', exact: true })).toBeVisible();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+  const overflow = await page.evaluate(() => [...document.querySelectorAll('body *')].flatMap((element) => {
+    const box = element.getBoundingClientRect();
+    return box.right > window.innerWidth + 1 && box.width > 0 ? [{ tag: element.tagName, className: element.className, text: element.textContent?.slice(0, 65), right: box.right, width: box.width, parent: element.parentElement?.getAttribute('aria-label'), columns: getComputedStyle(element).gridTemplateColumns }] : [];
+  }).sort((a, b) => b.right - a.right).slice(0, 18));
+  expect(await page.evaluate(() => document.documentElement.scrollWidth), JSON.stringify(overflow)).toBeLessThanOrEqual(width);
   const control = page.getByLabel('Evaluation diagnostics').locator('summary');
   await control.focus(); await page.keyboard.press('Enter');
   await expect(page.getByLabel('Evaluation diagnostics')).toHaveAttribute('open', '');
