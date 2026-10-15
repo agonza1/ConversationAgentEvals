@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
-async function createReviewedManualCase(page: import('@playwright/test').Page, url = '/specs/new') {
-  await page.goto(url);
+async function createReviewedManualCase(page: import('@playwright/test').Page, url = '/specs/new?editor=manual') {
+  await page.goto(`${url}${url.includes('?') ? '&' : '?'}editor=manual`);
   await page.getByLabel('Success checks', { exact: true }).fill('Read back the corrected address');
   await page.getByLabel('Failure / forbidden checks', { exact: true }).fill('Claim an update without evidence');
   await page.getByLabel('Permissible behavior boundary').fill('Read back the address; do not change account state.');
@@ -33,7 +33,7 @@ test('manual duplicate and slug-colliding labels retain distinct editable rule i
       spec: { ...savedBody.spec, id: 'duplicate-rules', version: 1 }, yaml: 'suite: duplicate-rules',
     }) });
   });
-  await page.goto('/specs/new');
+  await page.goto('/specs/new?editor=manual');
   await page.getByText('Advanced · templates, custom generation, scoring and YAML', { exact: true }).click();
   await page.getByLabel('Success checks', { exact: true }).fill('Check policy\nCheck policy\nCheck policy!\nCheck policy-2');
   await page.getByLabel(/^Behavior definition 1:/).fill('Check the budget policy.');
@@ -67,7 +67,7 @@ test('manual colliding cases edit independently and rule renames preserve their 
       spec: { ...savedBody.spec, id: 'manual-cases', version: 1 }, yaml: 'suite: manual-cases',
     }) });
   });
-  await page.goto('/specs/new');
+  await page.goto('/specs/new?editor=manual');
   await page.getByText('Advanced · templates, custom generation, scoring and YAML', { exact: true }).click();
   await page.getByLabel('Product requirements / policy').fill('Offer options.');
   await page.getByLabel('Success checks', { exact: true }).fill('Offer options');
@@ -126,7 +126,7 @@ test('review, generate cases, edit, save, and publish an exact version; unsaved 
     expect(route.request().postDataJSON()).toMatchObject({ version: 2, confirm: true });
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ suite_id: 'spec-suite-test', version: 2, scenario_ids: ['normal', 'boundary', 'adversarial'], scenario_count: 3 }) });
   });
-  await page.goto('/specs/new');
+  await page.goto('/specs/new?editor=manual');
   await page.getByText('Advanced · templates, custom generation, scoring and YAML', { exact: true }).click();
   await page.getByLabel('Product requirements / policy').fill('Offer options. Never handle payments.');
   await page.getByLabel('Permissible behavior boundary').fill('Discuss options and prices, but cannot collect money.');
@@ -163,7 +163,7 @@ test('late generated cases cannot overwrite edits made while the model is respon
     await pending;
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ scenarios: [], provider: 'fake', model: 'fake', engine: 'cae_configured_llm' }) });
   });
-  await page.goto('/specs/new');
+  await page.goto('/specs/new?editor=manual');
   await page.getByText('Advanced · templates, custom generation, scoring and YAML', { exact: true }).click();
   await page.getByLabel('Permissible behavior boundary').fill('Explain choices only.');
   await page.getByLabel('Success checks', { exact: true }).fill('Offer options');
@@ -209,7 +209,7 @@ test('ASSERT caller drafts preserve multiline openings, colon titles and per-cas
       suite_id: 'spec-suite-native', scenario_ids: ['native-0', 'native-1', 'native-2', 'manual'], scenario_count: 4,
     }) });
   });
-  await page.goto('/specs/new');
+  await page.goto('/specs/new?editor=manual');
   await page.getByText('Advanced · templates, custom generation, scoring and YAML', { exact: true }).click();
   await expect(page.getByLabel('Case generator')).toHaveValue('assert');
   await page.getByLabel('Success checks', { exact: true }).fill('Verify identity');
@@ -247,7 +247,7 @@ test('CAE custom case generation remains an explicit alternative', async ({ page
       scenarios: [], engine: 'cae_configured_llm', provider: 'fixture', model: 'fixture',
     }) });
   });
-  await page.goto('/specs/new');
+  await page.goto('/specs/new?editor=manual');
   await page.getByText('Advanced · templates, custom generation, scoring and YAML', { exact: true }).click();
   await page.getByLabel('Case generator').selectOption('cae_configured_llm');
   await page.getByLabel('Success checks', { exact: true }).fill('Verify identity');
@@ -258,7 +258,7 @@ test('CAE custom case generation remains an explicit alternative', async ({ page
 });
 
 test('manual design publishes through the real API and appears with rules in the scenario catalog', async ({ page }) => {
-  await page.goto('/specs/new');
+  await page.goto('/specs/new?editor=manual');
   await page.getByText('Advanced · templates, custom generation, scoring and YAML', { exact: true }).click();
   const title = `Housing boundary ${Date.now()}`;
   await page.getByLabel('Title', { exact: true }).fill(title);
@@ -457,7 +457,7 @@ test('behavior selection shows bounded generation and distinguishes uncovered ru
       }],
     }) });
   });
-  await page.goto('/specs/new');
+  await page.goto('/specs/new?editor=manual');
   await page.getByLabel('Permissible behavior boundary').fill('Follow the reviewed rules.');
   await page.getByLabel('Success checks', { exact: true }).fill('Rule 1\nRule 2\nRule 3\nRule 4\nRule 5\nRule 6\nRule 7');
   for (let index = 1; index <= 6; index += 1) await page.getByRole('checkbox', { name: `Rule ${index}`, exact: true }).check();
@@ -490,7 +490,7 @@ test('custom rule suggestions require an explicit review action before ASSERT ge
       }],
     }) });
   });
-  await page.goto('/specs/new');
+  await page.goto('/specs/new?editor=manual');
   await page.getByLabel('Permissible behavior boundary').fill('Verify identity before account changes.');
   await page.getByText('Advanced · templates, custom generation, scoring and YAML', { exact: true }).click();
   await page.getByRole('button', { name: 'Generate draft checks/scenarios', exact: true }).click();

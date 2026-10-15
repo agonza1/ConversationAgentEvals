@@ -152,7 +152,7 @@ test('spec editor generates draft checks, requires approval, previews YAML, and 
     });
   });
 
-  await page.goto('/specs/new?api_base=http%3A%2F%2Fapi.example.test');
+  await page.goto('/specs/new?editor=manual&api_base=http%3A%2F%2Fapi.example.test');
   await page.getByText('Advanced · templates, custom generation, scoring and YAML', { exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Create a test set' })).toBeVisible();
   await expect(page.getByText('Tests · create a test set')).toBeVisible();
@@ -184,7 +184,7 @@ test('evaluation guidance labels distinguish suggestions from enforced runtime c
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ valid: false, errors: [], warnings: [], normalized: spec, yaml: 'suite: conversation-agent-quality-gate\n', json_preview: {}, export_filename: 'conversation-agent-quality-gate.eval_config.yaml', assert_validator: 'assert-ai', assert_validated: true }) });
   });
 
-  await page.goto('/specs/new?api_base=http%3A%2F%2Fapi.example.test');
+  await page.goto('/specs/new?editor=manual&api_base=http%3A%2F%2Fapi.example.test');
   await page.getByText('Advanced · templates, custom generation, scoring and YAML', { exact: true }).click();
   await expect(page.getByLabel('Scenario guidance')).toBeVisible();
   await expect(page.getByLabel('Scenario examples')).toBeVisible();
@@ -225,7 +225,7 @@ test('loading and previewing a rich template preserves structured fields', async
     });
   });
 
-  await page.goto('/specs/new?api_base=http%3A%2F%2Fapi.example.test');
+  await page.goto('/specs/new?editor=manual&api_base=http%3A%2F%2Fapi.example.test');
   await page.getByText('Advanced · templates, custom generation, scoring and YAML', { exact: true }).click();
   await page.getByLabel('Template').selectOption('rich');
   await expect.poll(() => previewed).not.toBeNull();
@@ -266,7 +266,7 @@ test('deleting a check does not transfer removed metadata to the surviving check
     });
   });
 
-  await page.goto('/specs/new?api_base=http%3A%2F%2Fapi.example.test');
+  await page.goto('/specs/new?editor=manual&api_base=http%3A%2F%2Fapi.example.test');
   await page.getByText('Advanced · templates, custom generation, scoring and YAML', { exact: true }).click();
   await page.getByLabel('Template').selectOption('metadata');
   await page.getByLabel('Success checks').fill('Keep me');
@@ -291,7 +291,7 @@ test('save completion does not overwrite edits made while the request is in flig
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'stale-save', version: 1, user_id: body.user_id, project_id: body.project_id, created_at: '2026-07-18T20:00:00Z', updated_at: '2026-07-18T20:00:00Z', spec: { ...body.spec, id: 'stale-save', version: 1 }, yaml: 'suite: stale-save\n' }) });
   });
 
-  await page.goto('/specs/new?api_base=http%3A%2F%2Fapi.example.test');
+  await page.goto('/specs/new?editor=manual&api_base=http%3A%2F%2Fapi.example.test');
   await page.getByText('Advanced · templates, custom generation, scoring and YAML', { exact: true }).click();
   // A visible server-rendered button is not proof that its handler has hydrated.
   await expect(page.getByText('Valid preview', { exact: true })).toBeVisible();
