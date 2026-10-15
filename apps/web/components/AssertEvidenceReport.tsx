@@ -21,6 +21,9 @@ export function AssertEvidenceReport({ review, automaticVerdict, automaticScore,
   const outcomeUnverified = review.dimensions.some((dimension) =>
     dimension.name === 'unverified_operational_outcome' && dimension.outcome === 'Flagged');
   const proposal = review.proposal?.verdict;
+  const comparableVerdict = (value: string) => value.trim().toLowerCase() === 'failed' ? 'fail' : value.trim().toLowerCase();
+  const sameDisplayedVerdict = automaticVerdict && proposal
+    ? comparableVerdict(automaticVerdict) === comparableVerdict(proposal) : null;
   const flagged = review.dimensions.filter((dimension) => dimension.outcome === 'Flagged');
   const flaggedBehaviorCount = review.behaviors.filter((behavior) => behavior.outcome === 'Flagged').length;
   const hasFlags = flagged.length > 0 || flaggedBehaviorCount > 0;
@@ -61,11 +64,12 @@ export function AssertEvidenceReport({ review, automaticVerdict, automaticScore,
       <div><dt>Automatic</dt><dd>{humanize(automaticVerdict)}</dd></div>
       <div><dt>ASSERT proposal</dt><dd>{humanize(proposal)}</dd></div>
       <div><dt>Application</dt><dd>{review.status === 'applied' ? 'Applied'
-        : review.status === 'superseded' ? 'Superseded' : 'Not applied'}</dd></div>
+        : review.status === 'superseded' ? 'Superseded'
+          : ['pending_confirmation', 'completed'].includes(review.status) ? 'Not applied' : 'Not recorded'}</dd></div>
     </dl>
     <p className={styles.footnote}>Criteria score—not a resolution percentage.
-      {review.agrees === true ? ' Both assessments have the same verdict; this is not independent proof of completion.'
-        : review.agrees === false ? ' ASSERT proposes a different verdict. The automatic result stays preserved.' : ''}</p>
+      {sameDisplayedVerdict === true ? ' Both assessments have the same verdict; this is not independent proof of completion.'
+        : sameDisplayedVerdict === false ? ' ASSERT proposes a different verdict. The automatic result stays preserved.' : ''}</p>
 
     <section className={styles.coverage} aria-label="Evidence coverage">
       {([
@@ -149,7 +153,7 @@ export function AssertEvidenceReport({ review, automaticVerdict, automaticScore,
 
     {review.rationale ? <details className={styles.details}><summary>Semantic rationale</summary><p>{review.rationale}</p></details> : null}
     <details className={styles.details}>
-      <summary>All checks <span>{flaggedBehaviorCount} flagged · {review.behaviors.length} behaviors</span></summary>
+      <summary>All checks <span>{flagged.length} flagged {flagged.length === 1 ? 'dimension' : 'dimensions'} · {flaggedBehaviorCount}/{review.behaviors.length} flagged behaviors</span></summary>
       <section aria-label="ASSERT evaluation details"><h4>Recorded dimensions</h4>
         <p className={styles.footnote}>{review.evidenceLabel}</p>
         {review.dimensions.length ? review.dimensions.map((dimension) => <article className={styles.check} key={dimension.name}>
@@ -182,6 +186,7 @@ export function AssertEvidenceReport({ review, automaticVerdict, automaticScore,
         <div><dt>Recorded</dt><dd>{review.dateLabel}</dd></div>
         <div><dt>Review time</dt><dd>{review.latencyMs === null ? 'Not recorded' : `${(review.latencyMs / 1000).toFixed(1)} seconds`}</dd></div>
         <div><dt>Transcript adapter</dt><dd>{review.adapterVersion || 'Not recorded'}</dd></div>
+        <div><dt>Recorded agreement</dt><dd>{review.agrees === null ? 'Not recorded' : review.agrees ? 'Agrees' : 'Disagrees'}</dd></div>
         {review.technical.filter((entry) => entry.value !== null && !['ASSERT version', 'Judge model', 'Transcript adapter'].includes(entry.label))
           .map((entry) => <div key={entry.label}><dt>{entry.label}</dt><dd>{entry.value}</dd></div>)}
       </dl>

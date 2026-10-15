@@ -38,7 +38,7 @@ function makeReview(id: string, options: { legacy?: boolean; quote?: string; cre
       ? [`{"description":"Historical booking claim","quoted_text":"${quote}","fixture":"${rawMarker}","truncated":`]
       : ['Booking claim — the appointment outcome is not independently confirmed.'],
     judge_result: {
-      agrees: false, rationale: 'A conversational claim is not a verified booking outcome.',
+      agrees: true, rationale: 'A conversational claim is not a verified booking outcome.',
       next_action: 'Check the booking receipt before treating the outcome as resolved.',
       raw_output: options.legacy ? `{"fixture":"${rawMarker}","verdict":` : `{"fixture":"${rawMarker}"}`,
       proposed_evaluation: { verdict: 'needs_review', summary: 'The appointment outcome remains unverified.',
@@ -100,6 +100,7 @@ async function mockApi(page: Page, options: { reviews?: Review[]; judgeError?: b
   const current = makeReview('review-current', { citationWarning: options.citationWarning });
   const reviewResponse = { ...current, status: 'ready', engine: 'assert', required_plan: 'starter', credits: 10,
     message: 'Synthetic ASSERT assessment completed.', execution_run_id: runId, conversation_id: conversationId,
+    judge_result: { ...current.judge_result, agrees: false }, // Eval's automatic result is pass, unlike the saved run.
     spend_control: { estimated_credits: 10, daily_credit_limit: 100, daily_credit_spent: 10 } };
   await page.addInitScript(() => {
     localStorage.setItem('conversation-evals-demo-user', 'evidence-report-user');
@@ -207,6 +208,11 @@ test('Eval explains an unverified outcome separately from a 100-point automatic 
   expect(api.writes).toHaveLength(2);
   if (process.env.CAE_ASSERT_EVIDENCE_SCREENSHOTS) {
     await report.screenshot({ path: path.join(process.env.CAE_ASSERT_EVIDENCE_SCREENSHOTS, 'assert-evidence-desktop.png') });
+    await report.evaluate((element) => element.scrollIntoView({ block: 'start' }));
+    const bounds = await report.boundingBox();
+    if (!bounds) throw new Error('ASSERT report bounds unavailable for the overview screenshot.');
+    await page.screenshot({ path: path.join(process.env.CAE_ASSERT_EVIDENCE_SCREENSHOTS, 'assert-evidence-overview.png'),
+      clip: { x: bounds.x, y: bounds.y, width: bounds.width, height: Math.min(650, bounds.height) } });
   }
 });
 
@@ -232,6 +238,8 @@ test('saved Run report distinguishes a 100-point needs-review outcome and suppor
   await expect(page.getByLabel('Resolution evidence details')).toContainText('100/100');
   await expect(report.getByText('Automatic', { exact: true }).locator('..')).toContainText(/needs review/i);
   await expect(report).toContainText('Not applied');
+  await expect(report).toContainText('same verdict');
+  await expect(report).not.toContainText('different verdict');
   await checkCoverage(report);
   await jumpWithKeyboard(page, report);
   await expect(page.getByLabel('Review freshness')).toContainText('Current');
@@ -242,6 +250,7 @@ test('saved Run report distinguishes a 100-point needs-review outcome and suppor
 test('an inconsistent saved pass proposal never hides recorded policy flags behind a clear headline', async ({ page }) => {
   const review = makeReview('review-current');
   review.judge_result.proposed_evaluation.verdict = 'pass';
+  review.judge_result.agrees = false;
   review.judge_result.proposed_evaluation.summary = 'Synthetic historical pass proposal retained unchanged.';
   review.judge_result.provenance.dimensions.unverified_operational_outcome = false;
   review.judge_result.provenance.dimensions.policy_violation = true;
@@ -260,8 +269,12 @@ test('an inconsistent saved pass proposal never hides recorded policy flags behi
 });
 
 test('saved selection replaces the entire evidence mapping and preserves freshness/application gates', async ({ page }) => {
+  const inconsistentAgreement = makeReview('review-current');
+  // A historical scalar may disagree with the actual displayed verdicts. It
+  // must not make the report claim these identical verdicts are different.
+  inconsistentAgreement.judge_result.agrees = false;
   const api = await mockApi(page, { reviews: [
-    makeReview('review-current'),
+    inconsistentAgreement,
     makeReview('review-stale', { quote: staleQuote, createdAt: '2026-10-13T13:00:00Z' }),
     makeReview('review-legacy', { legacy: true, createdAt: '2026-10-12T13:00:00Z' }),
   ] });
@@ -269,6 +282,8 @@ test('saved selection replaces the entire evidence mapping and preserves freshne
   const report = evidenceReport(page);
   const apply = page.getByRole('button', { name: 'Apply proposed evaluation', exact: true });
   await expect(page.getByLabel('Saved ASSERT review')).toHaveValue('review-current');
+  await expect(report).toContainText('same verdict');
+  await expect(report).not.toContainText('different verdict');
   await expect(apply).toBeEnabled();
   await jumpWithKeyboard(page, report);
   await page.getByLabel('Saved ASSERT review').selectOption('review-stale');
