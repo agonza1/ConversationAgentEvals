@@ -29,6 +29,7 @@ def run_public_pipecat_call(
     scenario: dict[str, Any] | None = None,
     max_exchanges: int = 1,
     tester_model_name: str | None = None,
+    tester_noise: dict[str, Any] | None = None,
     event_observer: Any | None = None,
     public_agent: str = DEFAULT_PUBLIC_AGENT,
     config: ReferenceRuntimeConfig | None = None,
@@ -53,6 +54,7 @@ def run_public_pipecat_call(
             'tester_model_name': tester_model_name,
             'execution_run_id': execution_run_id,
             'session_id': conversation_id,
+            **({'tester_noise': tester_noise} if tester_noise else {}),
         }
         with request_client.stream(
             'POST',

@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import io
+import wave
 import os
 import subprocess
 from dataclasses import replace
@@ -161,6 +163,7 @@ def run_signalwire_holyguacamole_call(
     scenario: dict[str, Any] | None = None,
     max_exchanges: int = 1,
     tester_model_name: str | None = None,
+    tester_noise: dict[str, Any] | None = None,
     target_url: str = DEFAULT_SIGNALWIRE_TARGET_URL,
 ) -> dict[str, Any]:
     if os.getenv(SIGNALWIRE_PUBLIC_GATE_ENV, '').strip().lower() not in {'1', 'true', 'yes'}:
@@ -263,6 +266,13 @@ def run_signalwire_holyguacamole_call(
         env['SIGNALWIRE_HOLYGUACAMOLE_EXECUTION_RUN_ID'] = execution_run_id
     if live_publisher_id:
         env['SIGNALWIRE_HOLYGUACAMOLE_LIVE_PUBLISHER_ID'] = live_publisher_id
+    if tester_noise:
+        from app.services.waylo_audio_conditions import ContinuousNoise, pcm_wav
+        mixer = ContinuousNoise(caller_audio, **tester_noise)
+        noise_path = caller_audio_dir / f'{conversation_id}-environment.wav'
+        noise_path.write_bytes(pcm_wav(mixer.mix(b'\0' * mixer.rate * 2 * 20), mixer.rate))
+        env['SIGNALWIRE_HOLYGUACAMOLE_NOISE_WAV'] = str(noise_path)
+        env['SIGNALWIRE_HOLYGUACAMOLE_NOISE_PROFILE'] = json.dumps({**mixer.metadata(), 'loop_seconds': 20})
     try:
         completed = subprocess.run(
             command,
@@ -360,7 +370,7 @@ def run_signalwire_holyguacamole_call(
             exchange_caller_text = str(exchange.get('caller_text') or '').strip()
             if not exchange_caller_text:
                 continue
-            if exchange_index == 1:
+            if exchange_index == 1 and not tester_noise:
                 exchange_caller_path = caller_audio_path
             else:
                 try:
@@ -512,20 +522,28 @@ def run_signalwire_holyguacamole_call(
     result['transcript'] = transcript_payload
     result_path.write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
 
-    audio_bytes = target_audio_path.read_bytes()
+    conversation_audio = (result.get('artifacts') or {}).get('conversation_audio')
+    recorded_path = repo_root / conversation_audio if conversation_audio else target_audio_path
+    audio_bytes = recorded_path.read_bytes()
+    duration_ms = (result.get('media') or {}).get('target_audio_duration_ms')
+    if conversation_audio:
+        with wave.open(io.BytesIO(audio_bytes), 'rb') as reader:
+            duration_ms = round(reader.getnframes() / reader.getframerate() * 1000)
     recording = AudioRecordingHandle(
-        uri=str(target_audio_path),
-        mime_type=str((result.get('artifacts') or {}).get('target_audio_mime') or 'audio/webm'),
-        sha256=str((result.get('artifacts') or {}).get('target_audio_sha256') or ''),
+        uri=str(recorded_path),
+        mime_type='audio/wav' if conversation_audio else str((result.get('artifacts') or {}).get('target_audio_mime') or 'audio/webm'),
+        sha256=hashlib.sha256(audio_bytes).hexdigest(),
         sha512=base64.urlsafe_b64encode(
             hashlib.sha512(audio_bytes).digest()
         ).decode('ascii').rstrip('='),
-        duration_ms=(result.get('media') or {}).get('target_audio_duration_ms'),
+        duration_ms=duration_ms,
         bytes_captured=len(audio_bytes),
         transport='signalwire_webrtc',
         metadata={
             'transport': 'signalwire_webrtc',
-            'scope': 'remote_target_webrtc_capture',
+            'target_audio_uri': str(target_audio_path),
+            'scope': 'continuous_duplex' if conversation_audio else 'remote_target_webrtc_capture',
+            **({'background_noise': (result.get('tester') or {}).get('background_noise')} if tester_noise else {}),
             'caller_audio_uri': str(repo_root / str((result.get('artifacts') or {}).get('caller_audio') or '')),
             'cae_caller_audio_uri': str(caller_audio_path),
             'cae_caller_audio_sha256': caller_audio_sha256,

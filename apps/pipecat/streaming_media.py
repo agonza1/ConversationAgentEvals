@@ -415,6 +415,7 @@ class StreamingMediaBridge(FrameProcessor):
         target_sample_rate: int = 16000,
         end_type: type[Frame] | None = None,
         trailing_silence_secs: float = 0.65,
+        noise_condition: dict | None = None,
     ) -> None:
         super().__init__(name=f"{participant}_media_bridge")
         self.participant = participant
@@ -423,6 +424,9 @@ class StreamingMediaBridge(FrameProcessor):
         self.target_sample_rate = target_sample_rate
         self.end_type = end_type
         self.trailing_silence_secs = trailing_silence_secs
+        self.noise_condition = noise_condition
+        self.noise_track = None
+        self._noise_pending = bytearray()
         self.audio = bytearray()
         self.sample_rate = 24000
         self.channels = 1
@@ -455,6 +459,8 @@ class StreamingMediaBridge(FrameProcessor):
         await self.push_frame(frame, direction)
 
     async def cleanup(self) -> None:
+        if self.noise_track is not None:
+            await self.noise_track.close()
         if self._worker_task is not None:
             self._worker_task.cancel()
             await asyncio.gather(self._worker_task, return_exceptions=True)
@@ -513,6 +519,7 @@ class StreamingMediaBridge(FrameProcessor):
             self.first_audio_at = None
             self.audio_ended_at = None
             self._converted_pending = bytearray()
+            self._noise_pending = bytearray()
             self._turn_active = True
         if self.first_audio_at is None:
             self.first_audio_at = time.time()
@@ -526,6 +533,31 @@ class StreamingMediaBridge(FrameProcessor):
                 )
         self.sample_rate = frame.sample_rate
         self.channels = frame.num_channels
+        if self.noise_condition:
+            from background_noise import ClockedNoiseTrack, pcm_wav, read_wav
+            clean = resample_pcm16(pcm16_to_mono(frame.audio, frame.num_channels), frame.sample_rate, 24000)
+            self.sample_rate, self.channels = 24000, 1
+            self._noise_pending.extend(clean)
+            if self.noise_track is None:
+                if not any(self._noise_pending):
+                    return  # Leading TTS silence is valid; wait for calibration speech.
+                async def send(audio, rate):
+                    await self.push_frame(InputAudioRawFrame(resample_pcm16(audio, rate, self.target_sample_rate), self.target_sample_rate, 1), direction)
+
+                async def observe(audio, rate, _turn_pair):
+                    await self.audio_callback(audio, rate, 1)
+
+                self.noise_track = ClockedNoiseTrack(pcm_wav(bytes(self._noise_pending), 24000), self.noise_condition, send=send, observe=observe)
+                self.noise_track.mixer.profile['level_reference'] = 'first_caller_tts_audio_rms'
+                self.noise_track.start()
+            size = 24000 // 50 * 2
+            complete = len(self._noise_pending) // size * size
+            if complete:
+                mixed = await self.noise_track.play(bytes(self._noise_pending[:complete]))
+                del self._noise_pending[:complete]
+                self.audio.extend(read_wav(mixed)[1])
+                self.audio_ended_at = time.time()
+            return
         self.audio.extend(frame.audio)
         await self.audio_callback(frame.audio, frame.sample_rate, frame.num_channels)
         mono = pcm16_to_mono(frame.audio, frame.num_channels)
@@ -544,6 +576,20 @@ class StreamingMediaBridge(FrameProcessor):
         self.audio_ended_at = time.time()
 
     async def _finish_turn(self, frame: Frame, direction: FrameDirection) -> None:
+        if self.noise_track is not None:
+            if self._noise_pending:
+                from background_noise import read_wav
+                mixed = await self.noise_track.play(bytes(self._noise_pending).ljust(24000 // 50 * 2, b'\0'))
+                self.audio.extend(read_wav(mixed)[1])
+                self._noise_pending.clear()
+                self.audio_ended_at = time.time()
+            if isinstance(frame, EndFrame):
+                await self.noise_track.close()
+            else:
+                await self.noise_track.play(b'\0' * round(24000 * 2 * self.trailing_silence_secs))
+            self._turn_active = False
+            await self.push_frame(frame, direction)
+            return
         frame_bytes = self.target_sample_rate * 2 // 50
         if self._converted_pending:
             self._converted_pending.extend(

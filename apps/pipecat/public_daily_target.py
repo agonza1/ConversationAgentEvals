@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from pipecat.frames.frames import (
     EndFrame,
+    OutputAudioRawFrame,
     OutputTransportMessageUrgentFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
@@ -45,6 +46,7 @@ class PublicDailyTargetRequest(BaseModel):
     caller_text: str = Field(min_length=1, max_length=2_000)
     agent: str = Field(default=DEFAULT_PUBLIC_AGENT, min_length=1, max_length=120)
     timeout_seconds: int = Field(default=90, ge=30, le=300)
+    tester_noise: dict[str, Any] | None = None
 
 
 class PublicDailyDuplexRequest(PublicDailyTargetRequest):
@@ -308,19 +310,23 @@ async def _play_caller_turn(
         f'Caller is speaking in exchange {turn_pair}.',
         turn_pair=turn_pair,
     )
-    await run.publish_caller_audio(turn_pair, caller_text, caller_wav)
+    if run.noise_track is None:
+        await run.publish_caller_audio(turn_pair, caller_text, caller_wav)
     evidence = run.evidence
     evidence.caller_audio_sent_at = time.perf_counter()
     # Capture before playback so a target that barges in is retained.
     evidence.capture_response_audio = True
-    sent = await pace_pcm(
-        task,
-        caller_pcm,
-        sample_rate,
-        channels,
-        audio_frame_callback=audio_frame_callback,
-        turn_pair=turn_pair,
-    )
+    if run.noise_track is not None:
+        if channels != 1 or sample_rate != run.noise_track.mixer.rate:
+            raise PublicDailyTargetError('Caller audio format changed during the noise test.')
+        run.caller_sent_wav = await run.noise_track.play(caller_pcm, turn_pair)
+        await run.publish_caller_audio(turn_pair, caller_text, run.caller_sent_wav)
+        sent = (len(caller_pcm) + sample_rate // 50 * 2 - 1) // (sample_rate // 50 * 2)
+    else:
+        sent = await pace_pcm(
+            task, caller_pcm, sample_rate, channels,
+            audio_frame_callback=audio_frame_callback, turn_pair=turn_pair,
+        )
     evidence.caller_audio_ended_at = time.perf_counter()
     return sent
 
@@ -433,6 +439,18 @@ async def run_public_daily_duplex(
         enable_turn_tracking=False,
         params=PipelineParams(audio_in_sample_rate=16_000, audio_out_sample_rate=caller_rate),
     )
+    if request.tester_noise:
+        from background_noise import ClockedNoiseTrack
+
+        async def send_noise(audio, rate):
+            await task.queue_frame(OutputAudioRawFrame(audio, rate, 1))
+
+        async def observe_noise(audio, rate, turn_pair):
+            if audio_frame_callback is not None:
+                await audio_frame_callback('tester_to_target', audio, rate, 1, turn_pair)
+
+        run.noise_track = ClockedNoiseTrack(caller_wav, request.tester_noise, send=send_noise, observe=observe_noise,
+            max_seconds=request.timeout_seconds + 120)
 
     async def capture_participant(participant: dict[str, Any]) -> None:
         participant_id = str(participant.get('id') or '').strip()
@@ -586,6 +604,8 @@ async def run_public_daily_duplex(
             timeout=20,
             timeout_message='Public Pipecat Daily room connection timed out.',
         )
+        if run.noise_track is not None:
+            run.noise_track.start()
         await _wait_for_event_or_error(
             evidence.target_joined,
             evidence,
@@ -692,7 +712,7 @@ async def run_public_daily_duplex(
                 _complete_received_exchange(
                     run, rtc_asr_base_url=rtc_asr_base_url, turn_pair=turn_pair,
                     caller_source=current_text, caller_text=caller_transcript,
-                    caller_wav=current_wav, caller_audio_frames=sent,
+                    caller_wav=run.caller_sent_wav or current_wav, caller_audio_frames=sent,
                 ),
                 session_deadline=session_deadline,
                 timeout_message='Public Pipecat received-audio ASR exceeded the run timeout.',
@@ -722,6 +742,8 @@ async def run_public_daily_duplex(
                     f'Public Pipecat tester graph returned no caller media for turn {turn_pair + 1}.'
                 )
     finally:
+        if run.noise_track is not None:
+            await run.noise_track.close()
         await task.queue_frame(EndFrame())
         try:
             await asyncio.wait_for(runner_task, timeout=15)
@@ -730,6 +752,8 @@ async def run_public_daily_duplex(
             runner_task.cancel()
 
     try:
+        if run.noise_track is not None and run.noise_track.error:
+            raise PublicDailyTargetError('Continuous caller microphone failed during the call.')
         return run.build_result(
             connection={
                 'connected': evidence.connected.is_set(),
@@ -748,6 +772,7 @@ async def run_public_daily_duplex(
                 'target_media': 'current_run_daily_webrtc',
                 'target_transcript': 'rtc_asr_received_audio',
                 'target_reported_text': 'rtvi',
+                **({'background_noise': run.noise_track.mixer.metadata()} if run.noise_track else {}),
             },
         )
     except RuntimeError as exc:

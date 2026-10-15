@@ -29,6 +29,57 @@ class FinalFrame(TranscriptionFrame):
     pass
 
 
+def test_caller_bridge_sends_same_noisy_audio_to_listener_and_target_through_gaps():
+    async def run():
+        published, inputs = [], []
+        async def publish(audio, rate, channels): published.append((audio, rate, channels))
+        bridge = StreamingMediaBridge(participant='tester', audio_callback=publish,
+            end_type=TurnEndFrame, trailing_silence_secs=.02,
+            noise_condition={'noise_type': 'office', 'snr_db': 10, 'seed': 7})
+        async def push(frame, direction): inputs.append(frame)
+        bridge.push_frame = push
+        clean = b'\xe8\x03' * 960
+        try:
+            await bridge.process_frame(OutputAudioRawFrame(clean, 24000, 1), FrameDirection.DOWNSTREAM)
+            await asyncio.wait_for(bridge.process_frame(TurnEndFrame(), FrameDirection.DOWNSTREAM), 2)
+            before = len(published)
+            async with asyncio.timeout(2):
+                while len(published) < before + 3: await asyncio.sleep(.005)
+            assert bytes(bridge.audio) != clean
+            assert len(bridge.audio) == len(clean)
+            assert all(any(audio) and rate == 24000 and channels == 1 for audio, rate, channels in published)
+            target_frames = [frame for frame in inputs if isinstance(frame, InputAudioRawFrame)]
+            assert len(target_frames) == len(published)
+            for target, (audio, _, _) in zip(target_frames, published):
+                assert target.audio == resample_pcm16(audio, 24000, 16000)
+            assert any(isinstance(frame, TurnEndFrame) for frame in inputs)
+        finally:
+            await bridge.cleanup()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('leading_silence', [False, True])
+def test_noise_bridge_buffers_partial_tts_frames_and_pads_only_at_turn_end(leading_silence):
+    async def run():
+        published = []
+        async def publish(audio, rate, channels): published.append(audio)
+        bridge = StreamingMediaBridge(participant='tester', audio_callback=publish,
+            end_type=TurnEndFrame, trailing_silence_secs=.02,
+            noise_condition={'noise_type': 'white', 'snr_db': 10, 'seed': 7})
+        async def push(*_): pass
+        bridge.push_frame = push
+        try:
+            for index in range(3):
+                audio = bytes(480) if leading_silence and index == 0 else b'\xe8\x03' * 240
+                await bridge.process_frame(OutputAudioRawFrame(audio, 24000, 1), FrameDirection.DOWNSTREAM)
+            await asyncio.wait_for(bridge.process_frame(TurnEndFrame(), FrameDirection.DOWNSTREAM), 2)
+            assert len(bridge.audio) == 960 * 2  # 30 ms speech + one 10 ms final pad
+            assert bytes(bridge.audio) == b''.join(published[:2])
+        finally:
+            await bridge.cleanup()
+    asyncio.run(run())
+
+
 def _wav_header(*, sample_rate: int = 24000, channels: int = 1, data_size: int = 4) -> bytes:
     byte_rate = sample_rate * channels * 2
     block_align = channels * 2

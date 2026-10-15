@@ -613,6 +613,7 @@ class _ReferenceSession:
     termination_reason: str | None = None
     closed: bool = False
     recording: AudioRecordingHandle | None = None
+    background_noise: dict[str, Any] | None = None
 
 
 class ReferencePipecatAgentTransport:
@@ -738,6 +739,7 @@ class ReferencePipecatAgentTransport:
         max_turn_pairs: int,
         total_timeout_seconds: float,
         billing_simulation: bool = False,
+        tester_noise: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Run the primary two-agent session while audio remains inside Pipecat."""
         state = self._require(session_id)
@@ -747,6 +749,7 @@ class ReferencePipecatAgentTransport:
             'execution_run_id': state.execution_run_id or session_id,
             'scenario': scenario,
             'billing_simulation': billing_simulation,
+            **({'tester_noise': tester_noise} if tester_noise else {}),
             'tester_model_name': self.config.tester_llm_model,
             'target_model_name': self.config.llm_model,
             'llm_provider': llm_runtime.get('provider') or self.completion.provider_id,
@@ -811,6 +814,9 @@ class ReferencePipecatAgentTransport:
 
         if completed is None:
             raise ReferenceRuntimeError('Pipecat duplex stream ended without completion evidence.')
+        if completed.get('conversation_audio_wav_base64'):
+            state.recording_wavs = [base64.b64decode(completed['conversation_audio_wav_base64'], validate=True)]
+            state.background_noise = completed.get('background_noise') or {}
         state.remote_graphs = completed.get('graphs') if isinstance(completed.get('graphs'), dict) else {}
         if state.remote_graphs:
             self.graphs = state.remote_graphs
@@ -1183,7 +1189,8 @@ class ReferencePipecatAgentTransport:
             ).decode('ascii').rstrip('='),
             bytes_captured=len(payload),
             duration_ms=None,
-            metadata={'source': 'current_run', 'segments': len(state.recording_wavs), 'synthetic_local_media': True},
+            metadata={'source': 'current_run', 'segments': len(state.recording_wavs), 'synthetic_local_media': True,
+                **({'scope': 'continuous_duplex', 'background_noise': state.background_noise} if state.background_noise is not None else {})},
         )
         return state.recording
 

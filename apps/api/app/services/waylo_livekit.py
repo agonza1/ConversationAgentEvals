@@ -108,6 +108,8 @@ class LiveKitVoicePeer:
         self.error = None
         self.monitor = None
         self.monitor_turn_pair = 1
+        self.noise_mixer = None
+        self.continuous_caller = None
 
         def text_stream(reader, participant_identity):
             task = asyncio.create_task(self._read_transcription(reader, participant_identity))
@@ -153,10 +155,11 @@ class LiveKitVoicePeer:
     def now_ms(self):
         return round((time.monotonic() - self.origin) * 1000, 3)
 
-    def _monitor_audio(self, direction, pcm, rate):
+    def _monitor_audio(self, direction, pcm, rate, *, media_activity=True):
         if self.monitor:
             try:
-                self.monitor.add(direction, pcm, sample_rate=rate, turn_pair=self.monitor_turn_pair)
+                self.monitor.add(direction, pcm, sample_rate=rate, turn_pair=self.monitor_turn_pair,
+                    **({'media_activity': False} if not media_activity else {}))
             except Exception:
                 # Optional monitoring must not falsify delivery or stop capture.
                 self.monitor.disable()
@@ -206,7 +209,26 @@ class LiveKitVoicePeer:
         await self.room.connect(bootstrap['livekitUrl'], bootstrap['participantToken'], options=options)
         if self.room.name != bootstrap['roomName']:
             raise WayloError('Connected LiveKit room does not match the Waylo bootstrap.')
+        if self.noise_mixer is not None:
+            from app.services.continuous_caller_audio import ContinuousCallerAudio
+            rate = self.noise_mixer.rate
+            self.source = rtc.AudioSource(rate, 1)
+            self.track = rtc.LocalAudioTrack.create_audio_track('cae-controlled-caller', self.source)
+            await self.room.local_participant.publish_track(self.track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE))
+            self.continuous_caller = ContinuousCallerAudio(source=self.source, mixer=self.noise_mixer,
+                make_frame=lambda pcm: rtc.AudioFrame(pcm, rate, 1, len(pcm) // 2),
+                on_audio=lambda pcm, sr: self._monitor_audio('tester_to_target', pcm, sr,
+                    media_activity=self.continuous_caller.speech_activity),
+                on_error=lambda error: setattr(self, 'error', error), now_ms=self.now_ms,
+                path=self.noise_artifact_dir / 'caller-continuous-sent.wav')
+            self.continuous_caller.start()
         await asyncio.wait_for(self.ready.wait(), 20)
+
+    def configure_noise(self, audio: bytes, condition: dict, artifact_dir: Path):
+        from app.services.waylo_audio_conditions import ContinuousNoise
+        self.noise_mixer = ContinuousNoise(audio, snr_db=condition['snr_db'], seed=condition['seed'],
+            noise_type=condition.get('noise_type', 'white'), recording_sha256=condition.get('recording_sha256'))
+        self.noise_artifact_dir = artifact_dir
 
     async def _receive(self, track):
         stream = self.rtc.AudioStream(track, sample_rate=24000, num_channels=1)
@@ -233,6 +255,8 @@ class LiveKitVoicePeer:
             await stream.aclose()
 
     async def send(self, audio: bytes, *, turn_id: str, reference: str, artifact_dir: Path):
+        if getattr(self, 'continuous_caller', None) is not None:
+            return await self._send_continuous(audio, turn_id=turn_id, reference=reference, artifact_dir=artifact_dir)
         self.transcript_turn_id = turn_id
         self.monitor_turn_pair = int(turn_id.split('-')[-1])
         rate, pcm = read_wav(audio)
@@ -277,6 +301,46 @@ class LiveKitVoicePeer:
             raise WayloError('Tester audio send failed; accepted samples were retained for review.')
         return observation, sent_wav
 
+    async def _send_continuous(self, audio: bytes, *, turn_id: str, reference: str, artifact_dir: Path):
+        self.transcript_turn_id = turn_id
+        self.monitor_turn_pair = int(turn_id.split('-')[-1])
+        rate, pcm = read_wav(audio)
+        if rate != self.noise_mixer.rate:
+            raise WayloError('Tester sample rate changed within the call.')
+        speech = self.continuous_caller.enqueue(pcm)
+        frame_samples = rate // 50
+        intended_samples = (len(pcm) // 2 + frame_samples - 1) // frame_samples * frame_samples
+        failure = True
+        try:
+            await asyncio.shield(speech.done)
+            failure = False
+        except asyncio.CancelledError:
+            speech.done.cancel()
+            # Stop the only writer before finalizing the partial utterance WAV.
+            await self.continuous_caller.close()
+            raise
+        except Exception:
+            pass
+        finally:
+            sent_wav = pcm_wav(bytes(speech.accepted), rate)
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            (artifact_dir / f'{turn_id}-sent.wav').write_bytes(sent_wav)
+            observation = {'event_id': f'{turn_id}/sent', 'event_type': 'tester.audio.sent', 'source': 'livekit.AudioSource',
+                'turn_id': turn_id, 'reference_text': reference, 'sample_rate_hz': rate, 'channels': 1,
+                'intended_samples': intended_samples, 'accepted_samples': len(speech.accepted) // 2,
+                'source_speech_samples': len(pcm) // 2,
+                'audio_sha256': hashlib.sha256(sent_wav).hexdigest(), 'started_at_ms': speech.started_ms,
+                'ended_at_ms': speech.ended_ms if speech.ended_ms is not None else self.now_ms(),
+                'clock_origin': 'cae_monotonic_since_transport_creation', 'clock_origin_utc': self.origin_utc,
+                'duration_ms': len(speech.accepted) / (rate * 2) * 1000,
+                'delivery': 'partial_or_unconfirmed' if failure else 'local_queue_drained', 'peer_receipt': 'unknown',
+                'clipped_or_dropped_at_peer': 'unknown', 'audio_condition': self.noise_mixer.metadata(),
+                'overlap_with_observed_target_speech': time.monotonic() - self.last_speech < .2}
+            self.events.append(observation)
+        if failure:
+            raise WayloError('Tester audio send failed; accepted samples were retained for review.')
+        return observation, sent_wav
+
     async def wait_response(self, previous_speech: int, *, timeout: float = 25):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -288,6 +352,11 @@ class LiveKitVoicePeer:
         raise WayloError('Target response speech/silence boundary was not observed before timeout.')
 
     async def close(self):
+        if getattr(self, 'continuous_caller', None) is not None:
+            await self.continuous_caller.close()
+            self.events.append({'event_id': 'caller/background-noise', 'event_type': 'tester.background_noise.sent',
+                'source': 'livekit.AudioSource', 'audio_condition': self.continuous_caller.metadata(),
+                'clock_origin': 'cae_monotonic_since_transport_creation', 'clock_origin_utc': self.origin_utc})
         for task in self.tasks:
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
@@ -439,6 +508,11 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                 preset = current.get('presetId') if isinstance(current, dict) else None
                 if preset in {'item_capture_assistant', 'catalog_order_assistant'}:
                     raise WayloError('Mike test contract conflicts with the active preset. Use a disposable catalog-aware notes-only agent; no call started.')
+            first_audio, first_condition = audio if isinstance(audio, tuple) else (audio, {})
+            if first_condition.get('kind') == 'noise':
+                if not hasattr(peer, 'configure_noise'):
+                    raise WayloError('This voice transport does not support continuous background noise; no call started.')
+                peer.configure_noise(first_audio, first_condition, artifact_dir)
             bootstrap = await client.bootstrap(correlation_id)
             if local_evidence is not None:
                 local_evidence['bootstrap'] = bootstrap
@@ -486,7 +560,7 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                     raise WayloError('Tester sample rate changed within the call.')
                 observation, sent_wav = await peer.send(audio_bytes, turn_id=turn_id, reference=utterance,
                                                         artifact_dir=artifact_dir)
-                observation['audio_condition'] = audio_condition
+                observation['audio_condition'] = {**audio_condition, **observation.get('audio_condition', {})}
                 audio_track(artifact_dir / f'{turn_id}-sent.wav', turn_id, [0], sent_wav, rate,
                             observation.get('started_at_ms'))
                 safe_utterance = safe_text(utterance)
@@ -577,6 +651,18 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
             await asyncio.wait_for(peer.close(), 10)
         except Exception:
             error = error or 'LiveKit cleanup failed; capture needs review.'
+        continuous = getattr(peer, 'continuous_caller', None)
+        if continuous is not None and continuous.error:
+            error = error or continuous.error
+        if continuous is not None and continuous.accepted_samples:
+            # A whole-call caller track replaces its turn slices in fallback
+            # playback; the individual sent WAVs remain available for ASR audit.
+            audio_tracks[:] = [track for track in audio_tracks if track.get('parties') != [0]]
+            audio_tracks.append({'uri': str(continuous.path.resolve()), 'track_id': 'caller-continuous',
+                'parties': [0], 'mime_type': 'audio/wav',
+                'duration_ms': continuous.accepted_samples / continuous.mixer.rate * 1000,
+                'start_ms': continuous.started_ms, 'clock_origin': 'cae_monotonic_since_transport_creation',
+                'clock_origin_utc': peer.origin_utc, 'audio_condition': continuous.metadata()})
         if monitor:
             wav, metadata = await monitor.finish(partial=bool(error))
             if wav:
@@ -586,6 +672,8 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                 metadata.update(audio_tracks=audio_tracks,
                     start_ms=round((monitor.recording.origin - peer.origin) * 1000, 3),
                     clock_origin='cae_monotonic_since_transport_creation', clock_origin_utc=peer.origin_utc)
+                if continuous is not None:
+                    metadata['background_noise'] = continuous.metadata()
                 recording = {'uri': str(path.resolve()), 'recording_url': str(path.resolve()),
                     'mime_type': 'audio/wav', 'sha256': hashlib.sha256(wav).hexdigest(),
                     'duration_ms': metadata['duration_ms'], 'bytes_captured': len(wav),
@@ -721,6 +809,8 @@ def _local_partial_result(state: dict, *, target: dict, scenario: dict, suite_id
     # returns a turn observation. Include those exact adapter-owned WAVs too.
     retained = {track['uri'] for track in tracks}
     for path in artifact_dir.glob('caller-*-sent.wav'):
+        if any(track.get('track_id') == 'caller-continuous' for track in tracks):
+            break
         number = path.stem.removeprefix('caller-').removesuffix('-sent')
         if not number.isdigit() or int(number) < 1 or str(path.resolve()) in retained:
             continue

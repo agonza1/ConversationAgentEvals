@@ -108,10 +108,12 @@ test('synthetic noise is opt-in and included only when enabled for a Waylo call'
   const fixture = await openConnectedRun(page, 1);
   const noise = page.getByRole('checkbox', { name: 'Add background noise', exact: true });
   await expect(noise).not.toBeChecked();
-  await expect(noise).toHaveAccessibleDescription('Tester only · White noise (synthetic) · 20 dB SNR');
+  await expect(noise).toHaveAccessibleDescription('Whole call · White noise (synthetic) · 20 dB SNR');
   const audioDetails = page.locator('.run-noise-details');
   await expect(audioDetails.getByText(/random seed/)).toBeHidden();
   await audioDetails.getByText('Audio details', { exact: true }).click();
+  await expect(audioDetails).toContainText('including pauses and target speech');
+  await expect(audioDetails).toContainText('calibrated to the first caller audio');
   await expect(audioDetails.getByText(/Scenario audio conditions still apply when off/)).toBeVisible();
   await expect(noise).not.toBeChecked();
   await noise.press('Space');

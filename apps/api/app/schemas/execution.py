@@ -140,8 +140,10 @@ class ExecutionRunCreateRequest(BaseModel):
             raise ValueError('text_callable mode requires tester_id=scenario_simulator')
         elif self.executor_id not in {'local_async_runner', 'acc_browser_webrtc', 'acc_sip', 'acc_phone'}:
             raise ValueError('text_callable mode requires a text or ACC executor')
-        if self.tester_noise is not None and self.executor_id != 'waylo_livekit':
-            raise ValueError('Tester background noise is currently supported only for Waylo LiveKit calls.')
+        if self.tester_noise is not None and self.executor_id not in {
+            'waylo_livekit', 'cae_local_audio_loop', 'pipecat_public_daily', 'signalwire_public_webrtc',
+        }:
+            raise ValueError('Tester background noise requires a live voice test (not text or replay).')
         return self
 
 

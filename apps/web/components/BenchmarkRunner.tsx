@@ -3816,7 +3816,7 @@ export function BenchmarkRunner({
           ? 'signalwire-ai-agent'
           : executionModelName || DEFAULT_EXECUTION_MODEL;
       const queued = await createExecutionRun({
-        tester_noise: wayloAgent && testerNoiseEnabled ? { noise_type: testerNoiseType, snr_db: testerNoiseSnr } : undefined,
+        tester_noise: (wayloAgent || sampleVoiceAgent || publicPipecatAgent || signalwireAgent) && testerNoiseEnabled ? { noise_type: testerNoiseType, snr_db: testerNoiseSnr } : undefined,
         suite_id: suiteForRun,
         scenario_ids: scenarioIds,
         mode: runMode,
@@ -4972,7 +4972,7 @@ export function BenchmarkRunner({
                   />
                 </label>
               ) : null}
-              {selectedScoreAgent?.target === 'waylo' ? (
+              {['builtin_sample_voice', 'pipecat_public_demo', 'signalwire_holy_guacamole', 'waylo'].includes(selectedScoreAgent?.target || '') ? (
                 <div className="run-noise-option">
                   <label className="run-noise-toggle">
                     <span>Background noise</span>
@@ -4984,7 +4984,7 @@ export function BenchmarkRunner({
                       onChange={(event) => setTesterNoiseEnabled(event.target.checked)}
                     />
                   </label>
-                  <p id="run-noise-description">Tester only · {TESTER_NOISE_LABELS[testerNoiseType]} · {testerNoiseSnr} dB SNR</p>
+                  <p id="run-noise-description">Whole call · {TESTER_NOISE_LABELS[testerNoiseType]} · {testerNoiseSnr} dB SNR</p>
                   {testerNoiseEnabled ? <div className="run-noise-settings">
                     <label>
                       <span>Environment</span>
@@ -5011,9 +5011,9 @@ export function BenchmarkRunner({
                   </div> : null}
                   <details className="run-noise-details">
                     <summary>Audio details</summary>
-                    <p>Office, café, and traffic use recorded ambience. Noise is mixed into tester speech only; it pauses between turns.
+                    <p>Office, café, and traffic use recorded ambience. Noise stays on the caller microphone throughout the call, including pauses and target speech.
                       Type, level, random seed, and recording fingerprint are saved for repeatability. Lower SNR means louder noise.
-                      Scenario audio conditions still apply when off.</p>
+                      Level is calibrated to the first caller audio and stays fixed. Scenario audio conditions still apply when off.</p>
                   </details>
                 </div>
               ) : null}

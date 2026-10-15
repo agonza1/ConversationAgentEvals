@@ -7,6 +7,7 @@ import path from 'node:path';
 import process from 'node:process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { ContinuousMicrophone, CallAudioCapture } from './continuous_microphone.mjs';
 
 const require = createRequire(import.meta.url);
 const { SignalWire } = require('@signalwire/js');
@@ -145,6 +146,8 @@ class CaeLiveAudioPublisher {
     this.flushTimer = null;
     this.pending = Promise.resolve();
     this.error = null;
+    this.callCapture = null;
+    this.pendingMediaKeys = new Set();
   }
   get configured() { return Boolean(this.baseUrl && this.token && this.executionRunId); }
   async request(pathname, body) {
@@ -182,11 +185,26 @@ class CaeLiveAudioPublisher {
       }, 90);
     }
   }
-  scheduleFlush() {
-    if (!this.queue.length || !this.publisherId) return this.pending;
+  scheduleFlush(final = false) {
+    if ((!this.queue.length && !this.callCapture) || !this.publisherId) return this.pending;
     const queued = this.queue.splice(0);
     this.pending = this.pending.then(async () => {
       if (!this.publisherId) return;
+      if (this.callCapture) {
+        for (const frame of queued) {
+          if (frame.turnPair > 0) this.pendingMediaKeys.add(`${this.sessionId}:${frame.turnPair}:${frame.direction}`);
+        }
+        const audio = pcm16ToBuffer(this.callCapture.render(final));
+        if (audio.length) {
+          await this.request('/outbound-voice/broadcast/audio', {
+            execution_run_id: this.executionRunId, publisher_id: this.publisherId,
+            direction: 'target_to_tester', turn_pair: 1, sample_rate: OUTBOUND_SAMPLE_RATE, channels: 1,
+            listener_media_keys: [...this.pendingMediaKeys], pcm16_base64: audio.toString('base64'),
+          });
+          this.pendingMediaKeys.clear();
+        }
+        return;
+      }
       const batches = [];
       for (const frame of queued) {
         const previous = batches.at(-1);
@@ -226,7 +244,7 @@ class CaeLiveAudioPublisher {
   async close() {
     if (this.flushTimer !== null) clearTimeout(this.flushTimer);
     this.flushTimer = null;
-    await this.scheduleFlush();
+    await this.scheduleFlush(true);
     await this.pending;
     if (!this.publisherId) return;
     const publisherId = this.publisherId;
@@ -434,7 +452,8 @@ async function waitUntil(predicate, timeoutMs, label, intervalMs = 25) {
 }
 
 class RemoteAudioMonitor {
-  constructor(livePublisher) {
+  constructor(livePublisher, callCapture = null) {
+    this.callCapture = callCapture;
     this.livePublisher = livePublisher;
     this.sink = null;
     this.sampleRate = null;
@@ -457,6 +476,7 @@ class RemoteAudioMonitor {
     const receivedAt = Date.now();
     const samples = downmixPcm16(data.samples, data.channelCount || 1);
     const sampleRate = data.sampleRate || OUTBOUND_SAMPLE_RATE;
+    this.callCapture?.add('target_to_tester', samples, sampleRate);
     if (!this.firstFrameAt) this.firstFrameAt = receivedAt;
     this.sampleRate = sampleRate;
     const pcm = pcm16ToBuffer(samples);
@@ -573,7 +593,7 @@ class RemoteAudioMonitor {
   }
 }
 
-async function playPcm(source, wavBuffer, turnPair, livePublisher) {
+async function playPcm(source, wavBuffer, turnPair, livePublisher, noiseTrack = null) {
   const { samples } = parsePcmWav(wavBuffer);
   const playback = {
     source: 'server_side_pcm_track',
@@ -585,6 +605,15 @@ async function playPcm(source, wavBuffer, turnPair, livePublisher) {
     ended: false,
     sample_rate: OUTBOUND_SAMPLE_RATE,
   };
+  if (noiseTrack) {
+    playback.first_outbound_sample_epoch_ms = Date.now();
+    const played = await noiseTrack.play(samples, turnPair);
+    playback.sent_wav = createPcmWav([pcm16ToBuffer(played)], OUTBOUND_SAMPLE_RATE);
+    playback.ended_epoch_ms = Date.now();
+    playback.ended = true;
+    playback.duration_ms = playback.ended_epoch_ms - playback.started_epoch_ms;
+    return playback;
+  }
   for (let offset = 0; offset < samples.length; offset += FRAME_SAMPLE_COUNT) {
     const frame = new Int16Array(FRAME_SAMPLE_COUNT);
     frame.set(samples.subarray(offset, offset + FRAME_SAMPLE_COUNT));
@@ -780,7 +809,11 @@ async function runSmoke(args) {
   const livePublisher = new CaeLiveAudioPublisher(args);
   const audioSource = new wrtc.nonstandard.RTCAudioSource();
   const audioTrack = audioSource.createTrack();
-  const remoteMonitor = new RemoteAudioMonitor(livePublisher);
+  const noisePath = process.env.SIGNALWIRE_HOLYGUACAMOLE_NOISE_WAV;
+  const callCapture = noisePath ? new CallAudioCapture() : null;
+  livePublisher.callCapture = callCapture;
+  const remoteMonitor = new RemoteAudioMonitor(livePublisher, callCapture);
+  let noiseTrack = null;
   const subscriptions = [];
   const responseAudios = [];
   let greetingAudio = null;
@@ -791,6 +824,19 @@ async function runSmoke(args) {
     const callerAudio = await synthesizeCallerAudio(args, runDir, remaining());
     const firstCallerWav = await fs.readFile(callerAudio.path);
     parsePcmWav(firstCallerWav);
+    if (noisePath) {
+      const noise = parsePcmWav(await fs.readFile(noisePath)).samples;
+      noiseTrack = new ContinuousMicrophone({
+        noise,
+        snrDb: JSON.parse(process.env.SIGNALWIRE_HOLYGUACAMOLE_NOISE_PROFILE || '{}').snr_db_requested,
+        send: (samples) => audioSource.onData({ samples, sampleRate: OUTBOUND_SAMPLE_RATE, bitsPerSample: 16, channelCount: 1, numberOfFrames: samples.length }),
+        observe: (samples, turnPair) => {
+          callCapture.add('tester_to_target', samples, OUTBOUND_SAMPLE_RATE);
+          livePublisher.enqueue({ direction: 'tester_to_target', turnPair, sampleRate: OUTBOUND_SAMPLE_RATE, pcm16Base64: pcm16ToBuffer(samples).toString('base64') });
+        },
+      });
+      result.tester.background_noise = JSON.parse(process.env.SIGNALWIRE_HOLYGUACAMOLE_NOISE_PROFILE || '{}');
+    }
     result.tester.media_source = callerAudio.source;
     result.tester.caller_text_verified = callerAudio.callerTextVerified === true;
     result.artifacts.caller_audio = relativeToRepo(callerAudio.path);
@@ -855,6 +901,7 @@ async function runSmoke(args) {
       result.call_events.push({ kind: 'user_event', event: event?.params ?? event, t_ms: Date.now() - startedMs });
     }));
     await waitForObservable(call.status$, (status) => status === 'connected', Math.min(20000, remaining()), 'SignalWire call connection');
+    noiseTrack?.start();
     const callConnectedAt = Date.now();
     result.connection.call_connected = true;
     result.latency_metrics.sdk_connected_to_call_connected_ms = callConnectedAt - dialStartedAt;
@@ -876,7 +923,9 @@ async function runSmoke(args) {
     let priorTargetText = '';
     for (let turnPair = 1; turnPair <= args.maxExchanges; turnPair += 1) {
       const capture = remoteMonitor.arm(turnPair);
-      const playback = await playPcm(audioSource, callerWav, turnPair, livePublisher);
+      const playback = await playPcm(audioSource, callerWav, turnPair, livePublisher, noiseTrack);
+      const sentWav = playback.sent_wav || callerWav;
+      delete playback.sent_wav;
       if (turnPair === 1) result.tester.caller_audio_playback = playback;
       else result.tester[`caller_audio_playback_turn_${turnPair}`] = playback;
       result.connection.caller_audio_played = true;
@@ -891,7 +940,7 @@ async function runSmoke(args) {
         turn_pair: turnPair,
         caller_text: callerText,
         caller_audio_source: turnPair === 1 ? result.artifacts.caller_audio : 'reference-tester/turn',
-        ...(turnPair > 1 ? { caller_audio_wav_base64: callerWav.toString('base64') } : {}),
+        ...(turnPair > 1 || noiseTrack ? { caller_audio_wav_base64: sentWav.toString('base64') } : {}),
         agent_text: '',
         target_response_audio_turn: turnPair,
         target_response_latency_ms: latencyMs,
@@ -920,6 +969,14 @@ async function runSmoke(args) {
     result.reason = redact(error instanceof Error ? error.message : String(error));
     deriveTranscript(result, args);
   } finally {
+    if (noiseTrack) {
+      await noiseTrack.close();
+      Object.assign(result.tester.background_noise, noiseTrack.calibration || {}, { clipped_samples: noiseTrack.clipped });
+      if (noiseTrack.error) {
+        result.status = 'blocked';
+        result.reason = 'Continuous caller microphone failed during the call.';
+      }
+    }
     result.timestamps.completed_at = nowIso();
     result.latency_metrics.total_run_ms = Date.now() - startedMs;
     try { if (call) await call.hangup(); } catch {}
@@ -928,6 +985,11 @@ async function runSmoke(args) {
     remoteMonitor.stop();
     audioTrack.stop();
     await livePublisher.close();
+    if (callCapture) {
+      const conversationPath = path.join(runDir, 'conversation-continuous.wav');
+      await fs.writeFile(conversationPath, createPcmWav([pcm16ToBuffer(callCapture.pcm())], OUTBOUND_SAMPLE_RATE));
+      result.artifacts.conversation_audio = relativeToRepo(conversationPath);
+    }
     if (livePublisher.error) result.connection.cae_live_broadcast_error = livePublisher.error;
     await writeArtifacts(result, runDir, responseAudios, greetingAudio);
   }

@@ -89,7 +89,7 @@ def test_selected_rules_hash_detects_catalog_changes(capture, monkeypatch):
 
 @pytest.mark.parametrize('noise', [None, *({'snr_db': 20, 'seed': 7, 'noise_type': kind}
     for kind in ['white', 'office', 'cafe', 'traffic'])])
-def test_noise_changes_actual_sent_audio_with_retained_seed(monkeypatch, noise):
+def test_noise_is_configured_for_continuous_transport_not_premixed_per_turn(monkeypatch, noise):
     source = pcm_wav(b'\x00\x10' * 2400, 24000)
     scenario = {'id': 'case', 'goal': 'Information only', 'caller_steps': ['Exact opener']}
     frozen = freeze_contract(scenario, suite_id='suite', scenario_id='case')
@@ -102,7 +102,9 @@ def test_noise_changes_actual_sent_audio_with_retained_seed(monkeypatch, noise):
         assert await kw['next_utterance']([], 1) == 'Exact opener'
         audio, metadata = await kw['synthesize']('Exact opener', 1)
         if noise:
-            assert audio != source and metadata['seed'] == 8
+            assert audio == source and metadata['seed'] == 7
+            assert metadata['playback'] == 'continuous'
+            assert metadata['scope'] == 'continuous_caller_track'
             assert metadata['snr_db_requested'] == 20
             assert metadata['noise_type'] == noise['noise_type']
             if noise['noise_type'] != 'white':
@@ -126,8 +128,20 @@ def test_bad_noise_fails_closed(value):
 
 
 def test_noise_rejected_for_unsupported_transport():
-    with pytest.raises(ValidationError, match='only for Waylo'):
+    with pytest.raises(ValidationError, match='live voice test'):
         ExecutionRunCreateRequest(tester_noise={'seed': 1})
+
+
+@pytest.mark.parametrize('executor,transport', [
+    ('cae_local_audio_loop', 'pipecat_small_webrtc'),
+    ('pipecat_public_daily', 'pipecat_daily_webrtc'),
+    ('signalwire_public_webrtc', 'signalwire_webrtc'),
+    ('waylo_livekit', 'waylo_livekit'),
+])
+def test_noise_available_for_every_live_voice_executor(executor, transport):
+    payload = ExecutionRunCreateRequest(mode='pipecat_webrtc', executor_id=executor,
+        audio_transport=transport, tester_noise={'seed': 7, 'noise_type': 'office', 'snr_db': 10})
+    assert payload.tester_noise.model_dump() == {'seed': 7, 'noise_type': 'office', 'snr_db': 10}
 
 
 def test_completed_capture_retains_launch_contract_without_grading(capture, monkeypatch):

@@ -807,6 +807,19 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
             raise ValueError('Waylo audio plan requires caller steps.')
         scenario = {**scenario, 'caller_steps': steps}
 
+    call_audio_condition = deepcopy(scenario.get('waylo_test', {}).get('audio_condition', {}))
+    if payload.tester_noise is not None:
+        expected_recording = (call_audio_condition.get('recording_sha256')
+            if call_audio_condition.get('noise_type') == payload.tester_noise.noise_type else None)
+        call_audio_condition = {'kind': 'noise', **payload.tester_noise.model_dump(), 'recording_sha256': expected_recording}
+    if call_audio_condition.get('kind') == 'noise':
+        from app.services.waylo_audio_conditions import noise_profile
+        profile = noise_profile(call_audio_condition.get('noise_type', 'white'))
+        if call_audio_condition.get('recording_sha256') and call_audio_condition['recording_sha256'] != profile.get('recording_sha256'):
+            raise ValueError('Background recording changed since this run was queued.')
+        call_audio_condition = {**call_audio_condition, **profile, 'scope': 'continuous_caller_track',
+            'playback': 'continuous', 'level_reference': 'first_caller_utterance_rms',
+            'snr_db_requested': call_audio_condition['snr_db']}
     media = ReferenceMediaServices(config)
 
     async def wording(turns, index):
@@ -827,12 +840,7 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
         return text
 
     async def synthesis(text, index):
-        condition = scenario.get('waylo_test', {}).get('audio_condition', {})
-        if payload.tester_noise is not None:
-            expected_recording = (condition.get('recording_sha256')
-                if condition.get('noise_type') == payload.tester_noise.noise_type else None)
-            condition = {'kind': 'noise', **payload.tester_noise.model_dump(),
-                'recording_sha256': expected_recording}
+        condition = call_audio_condition
         if fixture_audio:
             if index > len(fixture_audio):
                 raise ValueError('Waylo controlled audio plan exhausted; no synthesized substitution.')
@@ -847,10 +855,10 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
             audio = await asyncio.to_thread(media.synthesize, text, voice=voice)
             source = {'synthetic_voice': voice}
         if condition.get('kind') == 'noise':
-            from app.services.waylo_audio_conditions import add_noise
-            audio, measurements = add_noise(audio, snr_db=condition['snr_db'], seed=condition['seed'] + index,
-                noise_type=condition.get('noise_type', 'white'), recording_sha256=condition.get('recording_sha256'))
-            return audio, {**source, **condition, **measurements}
+            # Keep speech clean here. The single RTC publisher mixes a continuous
+            # noise bed through greeting, waits, speech and target replies.
+            return audio, {**source, **condition, 'playback': 'continuous',
+                           'scope': 'continuous_caller_track', 'level_reference': 'first_caller_utterance_rms'}
         return audio, {**condition, **source}
 
     try:
@@ -906,6 +914,7 @@ def _execute_public_pipecat_daily(
         scenario=scenario,
         max_exchanges=payload.max_exchanges,
         tester_model_name=payload.tester_model_name,
+        **({'tester_noise': payload.tester_noise.model_dump()} if payload.tester_noise else {}),
         event_observer=event_observer,
     )
     transcription = result['transcription_turns']
@@ -1084,6 +1093,7 @@ def _execute_signalwire_holyguacamole_webrtc(
         scenario=scenario,
         max_exchanges=payload.max_exchanges,
         tester_model_name=payload.tester_model_name,
+        **({'tester_noise': payload.tester_noise.model_dump()} if payload.tester_noise else {}),
     )
     transcription = result['transcription_turns']
     recording = result['recording_handle']
@@ -1856,6 +1866,10 @@ def _selected_waylo_scenario(payload, suite_id: str, scenario_id: str) -> dict[s
         scenario['waylo_test'] = {**scenario.get('waylo_test', {}),
             'audio_condition': {'kind': 'noise', **payload.tester_noise.model_dump(), **profile},
             'condition': profile['condition'], 'audio_condition_source': 'operator_override'}
+    condition = scenario.get('waylo_test', {}).get('audio_condition', {})
+    if condition.get('kind') == 'noise':
+        scenario['waylo_test']['audio_condition'] = {**condition, 'playback': 'continuous',
+            'scope': 'continuous_caller_track', 'level_reference': 'first_caller_utterance_rms'}
     return scenario
 
 
@@ -2003,6 +2017,7 @@ async def _execute_pipecat_webrtc(
             scenario=scenario,
             max_turn_pairs=payload.max_exchanges,
             total_timeout_seconds=payload.duplex_timeout_seconds,
+            **({'tester_noise': payload.tester_noise.model_dump()} if payload.tester_noise else {}),
             **({'billing_simulation': True} if (suite_id, scenario_id) == (BILLING_SUITE, BILLING_SCENARIO) else {}),
         )
     except Exception:
