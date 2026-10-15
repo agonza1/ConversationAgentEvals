@@ -3,6 +3,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const net = require('node:net');
 const crypto = require('node:crypto');
+const { wayloDevOrigins } = require('./waylo-dev-origins');
 
 const root = path.resolve(__dirname, '..');
 const envPath = path.join(root, '.env');
@@ -153,6 +154,7 @@ async function main() {
     API_PORT: String(apiPort),
     API_BASE_URL: apiBaseUrl,
     PIPECAT_SERVICE_URL: pipecatServiceUrl,
+    CAE_WAYLO_ALLOWED_ORIGINS: wayloDevOrigins(webPort, process.env.CAE_WAYLO_ALLOWED_ORIGINS),
   });
 
   start('pipecat', 'npm', ['run', 'dev:pipecat'], root, {

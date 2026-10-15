@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from statistics import median
+from math import isfinite
 from typing import Any
 
 from app.schemas.execution import ConversationMetricsSummary, LatencyStats, TimelineEvent
@@ -59,7 +60,7 @@ def _latency_stats(values: list[float]) -> LatencyStats:
 def _mark_latency_ms(mark: dict[str, Any]) -> float | None:
     for key in ('latency_ms', 'duration_ms', 'ms', 'elapsed_ms'):
         value = mark.get(key)
-        if isinstance(value, (int, float)):
+        if type(value) in {int, float} and isfinite(value) and value >= 0:
             return float(value)
     return None
 
@@ -85,19 +86,16 @@ def _interruption_count(*, turns: list[Any], latency_marks: list[dict[str, Any]]
 
 def _build_timeline(*, turns: list[Any], latency_marks: list[dict[str, Any]]) -> list[TimelineEvent]:
     events: list[TimelineEvent] = []
-    cursor_ms = 0.0
     for index, mark in enumerate(latency_marks or []):
         latency_ms = _mark_latency_ms(mark)
         label = str(mark.get('label') or mark.get('name') or mark.get('type') or f'mark-{index + 1}')
         kind = str(mark.get('kind') or mark.get('type') or 'mark')
         t_ms = mark.get('t_ms')
-        if not isinstance(t_ms, (int, float)):
-            t_ms = cursor_ms
-        if isinstance(latency_ms, (int, float)):
-            cursor_ms = float(t_ms) + float(latency_ms)
+        if type(t_ms) not in {int, float} or not isfinite(t_ms) or t_ms < 0:
+            t_ms = None
         events.append(
             TimelineEvent(
-                t_ms=float(t_ms),
+                t_ms=float(t_ms) if t_ms is not None else None,
                 label=label,
                 latency_ms=latency_ms,
                 kind=kind,
@@ -116,14 +114,13 @@ def _build_timeline(*, turns: list[Any], latency_marks: list[dict[str, Any]]) ->
             text = str(getattr(turn, 'text', None) or getattr(turn, 'speaker', None) or f'turn-{index + 1}')
             latency_ms = getattr(turn, 'latency_ms', None)
             speaker = getattr(turn, 'speaker', None) or 'turn'
-        span = float(latency_ms) if isinstance(latency_ms, (int, float)) else 400.0
+        span = float(latency_ms) if type(latency_ms) in {int, float} and isfinite(latency_ms) and latency_ms >= 0 else None
         events.append(
             TimelineEvent(
-                t_ms=cursor_ms,
+                t_ms=None,  # Turn order is known; elapsed clock time is not.
                 label=f'{speaker}: {text[:48]}',
                 latency_ms=span,
                 kind='turn',
             )
         )
-        cursor_ms += span
     return events

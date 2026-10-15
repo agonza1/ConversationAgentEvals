@@ -183,6 +183,7 @@ def test_quick_case_retains_reviewed_evidence_and_policy_across_reload(tmp_path,
             'evidence_requirements': ['transcript', 'final_state_or_action_trace'],
             'requirements': 'No booking claims without evidence.', 'permissible_behavior': 'May collect requests only.',
             'caller_steps': ['Use 3 PM, not morning.', 'Confirm afternoon.'],
+            'spoken_opener': 'Use 3 PM, not morning.',
         })
         assert response.status_code == 200, response.text
         record = response.json()
@@ -194,7 +195,10 @@ def test_quick_case_retains_reviewed_evidence_and_policy_across_reload(tmp_path,
             assert item['requirements'] == 'No booking claims without evidence.'
             assert item['permissible_behavior'] == 'May collect requests only.'
             assert item['caller_steps'] == ['Use 3 PM, not morning.', 'Confirm afternoon.']
+            assert item['spoken_opener'] == 'Use 3 PM, not morning.'
         from app.services.execution_runner import _scenario_user_opener
+        from app.services.scenario_caller import scenario_spoken_opener
+        assert scenario_spoken_opener(contract) == 'Use 3 PM, not morning.'
         assert _scenario_user_opener(contract) == 'Use 3 PM, not morning.'
         assert benchmark_service._simulated_user_opener(contract) == 'Use 3 PM, not morning.'
         from app.services.design_enforcement import evaluate_design

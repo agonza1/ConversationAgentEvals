@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.services.assert_trace import parse_action_trace
-from app.services.vcon_interop import IETF_VCON_VERSION, is_vcon_timestamp, vcon_dialog_errors, vcon_dialog_turns
+from app.services.vcon_interop import IETF_VCON_VERSION, is_vcon_timestamp, normalize_vcon_sha512, vcon_dialog_errors, vcon_dialog_turns
 
 PROFILE = 'cae-execution-evidence-v1'
 PURPOSE = 'CAE execution evidence'
@@ -370,6 +370,7 @@ def build_benchmark_vcon(payload: dict[str, Any], transcript: str, report: dict[
         exported = deepcopy(original)
         exported.setdefault('dialog', [])
         exported.setdefault('updated_at', datetime.now(UTC).isoformat())
+        decode_evidence(exported)  # reject malformed input before export normalization
     else:
         dialog = []
         parties: list[dict[str, str]] = []
@@ -386,6 +387,11 @@ def build_benchmark_vcon(payload: dict[str, Any], transcript: str, report: dict[
         exported = {'vcon': IETF_VCON_VERSION, 'uuid': str(uuid.uuid4()),
                     'created_at': timestamp, 'updated_at': timestamp, 'parties': parties or [{'name': 'CAE'}],
                     'dialog': dialog, 'analysis': []}
+    if not exported['dialog']:
+        exported['dialog'].append({'type': 'recording', 'parties': list(range(len(exported['parties'])))})
+    for item in exported['dialog']:
+        if item.get('type') == 'recording' and isinstance(item.get('content_hash'), str):
+            item['content_hash'] = normalize_vcon_sha512(item['content_hash'])
     existing_body = decode_evidence(exported)
     context = {key: report.get(key) or payload.get(key) for key in
                ('suite_id', 'scenario_id', 'scenario_contract_sha256', 'suite_contract_manifest_sha256')}

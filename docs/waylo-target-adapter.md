@@ -1,0 +1,292 @@
+# Waylo targets and evidence
+
+## Review rules and controlled noise
+
+New CAE Waylo runs freeze the selected scenario rules when queued and keep them
+with the completed capture. Capturing is not grading: ASSERT review remains a
+separate, manually requested step, and its proposal still needs confirmation.
+Legacy captures without a versioned contract offer **Use these rules for review**:
+inspect the current scenario rules and setup before saving them. This records an
+operator-selected current contract, not a recovered historical one, and makes no
+model call. Existing contracts or grades cannot be overwritten by this recovery.
+
+The Run controls include **Add synthetic background noise**, off by default.
+It adds seeded white noise at 20 dB signal-to-noise ratio to actual tester audio,
+including controlled audio fixtures. The generated seed is retained in the run
+request and per-turn media evidence for repeatability. Existing scenario-specific
+audio conditions still apply when this additional control is off; noise is never
+applied twice. It does not simulate all real-world environments or agent-side audio.
+
+Caller ASR comparisons require both nonempty tester reference text and a captured
+Waylo caller transcript. Zero edits is a valid text comparison, not proof of agent
+speech accuracy or lossless delivery. Missing or ambiguous pairs stay unmeasured.
+No deliberate barge-in means interruption handling is **Not tested**, even when
+Waylo labels all captured agent turns uninterrupted. Test setup is not evidence:
+a successful empty catalog lookup does not exercise an injected lookup-error case.
+
+Review hardening: fixed audio plans must match the selected scenario, use default
+sequential realtime controls, and contain complete mono PCM16 WAVs with one sample
+rate. Unsupported delay/event/acceleration/plan-barge controls are rejected before
+a remote session is created. Fixed scripted TTS is also prepared and validated
+before bootstrap. A greeting already speaking must finish before caller audio.
+
+Completed Kokoro TTS responses are finalized before transport preflight: only
+known streaming RIFF/data length markers are replaced with the observed PCM byte
+counts. Samples, rate, channels and metadata are unchanged. Finite truncated
+lengths, empty/incomplete frames and unsupported audio are rejected; controlled
+uploaded fixtures retain their original strict validation.
+
+Controlled interruptions retain a single overlapping response window, including
+the original response tail. The window names all caller turns it overlaps;
+individual response attribution and interruption handling remain unknown rather
+than assigning old speech to the next reply. If the next caller turn is outside
+the exchange cap, no interruption is scheduled: the final response and backend
+observation follow the normal sequential path.
+
+Provider `endedAt` is not a worker-flush acknowledgement. Run exports explicitly
+remain provisional. In Targets → Import existing human call → **Refresh a finished
+CAE tester run instead**, enter its session UUID, CAE run ID and conversation ID.
+This uses the current tab's authorization, checks recorded target/user/session
+correlation, and replaces the existing run export and inference row under the same
+vCon UUID. It preserves local RTC media and tester references, updates provider
+transcripts/tools/items, invalidates stale scores/reviews, and never evaluates
+automatically. Repeating an unchanged refresh does not duplicate evidence.
+
+If final provider capture fails after the RTC call, CAE retains local turns,
+recordings, timing observations and session/run identity in a partial, refreshable
+vCon. Missing provider transcripts, tools, items and configuration are unavailable,
+not empty successful observations. A prior successful capture is retained if a
+later polling read fails. Local RTC text is labelled separately from provider
+finals. Reconnect and use the same refresh flow to recover provider evidence;
+the original execution failure remains recorded and no review runs automatically.
+Session creation timestamps must be usable, timezone-aware values; a present end
+timestamp must be valid too. Malformed mandatory fields reject import safely.
+Unexpected native projection failures also retain a local-only partial export,
+without importing invalid provider state or fabricating replacement timestamps.
+
+Expiry, disconnect and account switching stop the active RTC task and retain a
+local-only partial export under the original session identity. This path performs
+no provider reads and does not retrieve revoked tokens. It omits unfiltered remote
+transcription events while retaining sanitized turns, typed timing/sample metadata,
+recordings and track manifests. Reconnect before refreshing provider evidence.
+
+The sign-in agent UUID is editable, including while editing a saved target.
+Connect to the changed UUID before saving. Signing in to a different UUID from
+the Run page does not silently retarget the saved target or authorize the old one.
+
+Refresh conservatively refuses fewer usable caller or agent transcript entries
+than the saved native, visible or original RTC dialogue. Rejection leaves the
+saved capture, tools, state and reviews untouched: retry after provider writes,
+or review the retained RTC evidence manually. Native ASR merges may also trigger
+this refusal. Segment counts are only a non-regression safeguard, not proof of
+transcript completeness or audio alignment; accepted captures remain provisional.
+
+Previously fetched optional sources must remain available too: a transient tools,
+items or configuration read failure cannot replace the saved evidence. Refresh
+also refuses a missing previously recorded final read-back or truncated native
+event journal. Successful item corrections or deletions remain valid observations;
+sources that have never been available remain explicitly unknown.
+
+Waylo is one reusable **Targets** adapter. Mike is a saved Waylo agent configuration
+and a catalog-aware notes contract, not a new target type. Existing Waylo transcript
+examples are unchanged and remain transcript-only.
+
+## Configure
+
+Add a voice target, select **Waylo agent (LiveKit)**, and provide:
+
+- API base URL, including any deployment API prefix (HTTPS except local development).
+- Workspace UUID and Waylo agent UUID.
+- Opaque credential reference, e.g. `waylo-staging`. Administrators provision the
+  bearer key in `CAE_HTTP_TARGET_SECRET_WAYLO_STAGING`; do not paste keys into forms.
+
+Alternatively select **Temporary local sign-in** and **Connect Waylo** in Targets.
+CAE displays the operator-approved Waylo API origin before asking for consent.
+The password is forwarded once to Waylo's `/auth/login`, never saved, and cleared
+from the form. CAE verifies `/auth/me` and the selected agent, then fills its workspace
+UUID automatically. A platform administrator must explicitly supply the owning
+tenant UUID; its target uses Waylo's `/admin/tenants/{tenantId}` API mount.
+
+The Waylo access JWT stays only in one API process's memory, until its actual expiry
+or 15 minutes, whichever comes first. No refresh cookie is retained or replayed.
+The browser holds an opaque control proof only in JavaScript memory: never in a
+cookie, localStorage, sessionStorage, a URL, or a saved target. A full reload requires
+reconnecting. Saved targets contain only public identifiers and
+`auth_type=waylo_browser_session`, not a credential reference. There is no silent
+fallback to an environment key. Imported capture, readiness and run queueing require
+the originating browser's proof and local same-origin control headers. Credentials
+are rechecked on HTTP retries and during RTC; disconnect, expiry and successful
+reconnect cancel active calls. Queueing reserves call/cleanup/capture time for each
+selected scenario and rejects runs longer than the available token lifetime. Start
+with one controlled Mike case, not the entire suite. The run UI explains and blocks
+suite scopes or iteration counts that exceed the 15-minute ceiling or the shown
+remaining access; the API still makes the authoritative admission check. This does
+not renew or extend access. The ten-case Mike suite cannot fit the temporary grant
+even at the minimum session timeout; use a provisioned server credential for it.
+
+Temporary sign-in is a **local, single-API-worker preview**, not general-purpose
+multi-user OAuth. `CAE_WAYLO_API_BASE_URL` must match an operator-provisioned
+`CAE_WAYLO_ALLOWED_API_ORIGINS` HTTPS origin. UI origins must be explicitly ported
+loopback URLs in `CAE_WAYLO_ALLOWED_ORIGINS`. Open CAE through its same-origin API
+proxy, not an external `api_base` override. A restart loses all connections; a tab
+crash/reload loses its proof, while an already-started call remains bounded by its
+timeout and server token expiry. Use **Disconnect Waylo** before leaving to revoke
+an active call immediately. A sign-in does not launch a call or submit evaluation.
+Dashboard authority is revalidated by Waylo on each operation: being able to read
+an agent does not prove permission to start calls or read native events. Missing
+permissions/evidence remain explicit errors or unknown coverage.
+
+Use `sessions:create` for web calls, `sessions:read` and `transcripts:read` for capture,
+with access to the session's workspace. Native `/events` requires workspace admin
+access. Historical `/agents/{id}/versions/{version}` additionally needs `agents:read`.
+Capture remains usable with partial permissions; missing optional data is reported,
+not replaced by fabricated tool success or business state. API redirects are not followed.
+
+The normal Run agent flow starts `POST /sessions/web` with a deterministic
+`Idempotency-Key`, then joins the **returned LiveKit room** using the pinned Python
+RTC SDK. Relay-only TURN information is honored. There is no text-call fallback.
+Caller speech uses CAE's existing tester/TTS; fixed reference cases are not paraphrased.
+Free-form scenarios use the existing adaptive tester for subsequent utterances.
+Caller provenance is recorded per conversation. Scripts, controlled audio fixtures
+and exact single-turn openers do not claim an unused tester LLM. Adaptive model
+identity is recorded only when invoked, and ASSERT exports prefer each conversation's
+source so a mixed suite cannot attribute scripted turns to another case's model.
+Tester audio accepted by AudioSource and target audio received by AudioStream are
+retained as separate WAV artifacts, including accepted samples on a failed send.
+Waylo audio also publishes to CAE's existing receive-only listener WebRTC bus,
+using the same clocked duplex mixer as the public Pipecat demo. Live listening
+does not wait for a completed turn and never joins the provider room from the
+browser. Its continuous recording preserves local pauses and overlap; raw
+accepted caller and received target WAVs remain separately available.
+Monitoring is optional: failure leaves the target call running and switches the
+UI to a red, explicitly delayed HTTP turn fallback. See
+[shared monitoring semantics](execution-audio-webrtc.md#shared-live-listening-and-replay).
+
+**Calls capture only. Evaluation is always manual**, even if a client sends
+`evaluate=true`. Use the existing vCon download and Eval intake / saved ASSERT review.
+No benchmark evaluation is queued by creating a Waylo call or capturing a session.
+
+For an existing human call, enter its session UUID in the saved target's inline
+capture control. This reads metadata, **all cursor-paginated transcript pages**,
+native events and `/items`, and downloads a portable vCon for manual upload in Eval.
+The capture endpoint is `POST /api/agents/{target_id}/capture` with `{"session_id":"UUID"}`.
+This is explicitly an operator-declared human-call import, not an AI tester reference.
+Automated executions instead record `source_call_kind=cae_ai_tester` with real sent audio.
+
+## Coverage, mapping and honest limits
+
+Each export contains the standard `cae-execution-evidence-v1` profile and a sanitized
+ancillary native-source attachment. Raw source is not automatically scoreable.
+
+| Area | Mapped observations | Unknown unless actually captured/proven |
+| --- | --- | --- |
+| Conversation experience | Actual accepted/received audio, local send timing, transport lifecycle | Target playback acknowledgements, target interruption handling, exact continuity/silence semantics, provider metric units |
+| Speech boundary | Reference utterance, actual sent WAV hash/samples, local queue drainage, available RTC partial/final segments, complete durable user transcripts | Peer delivery acknowledgement, authoritative cross-clock alignment, whether a discrepancy is ASR error or peer packet loss |
+| Agent execution | `payload.tool_invocation_id` correlation, transcript parent keys, explicit args/results/status/code, reported retry/turn/policy fields | Omitted/truncated payloads, absent associations/policy decisions; accepting a request is not durable success |
+| Business outcome | Read-only backend request-list before/after/final snapshots, controlled expected-list diagnostic | Semantic catalog resolution, spoken confirmation alignment, durable catalog-product association |
+
+Native `occurredAt` uses Waylo worker UTC, `createdAt` is API storage UTC. Tester
+timing is explicitly milliseconds since transport creation, with a UTC anchor.
+RTC transcription timestamps are preserved with **unknown native units/clock**:
+the SDK shape alone does not establish the worker's convention. Native turn metric
+payloads remain unscored except worker-reported `interrupted` and `e2e_latency`
+(seconds mapped to milliseconds), whose semantics were verified in worker source. Independent
+worker/client clocks are never subtracted to manufacture latency.
+
+Tool requests are `requested`; results are successful only with an explicit
+`payload.status=success` and result data. `UPSTREAM_ACCEPTED` and
+`DELIVERY_UNCONFIRMED` stay unknown. Orphan results are preserved natively but not
+assigned invented invocation IDs. The worker emits call `payload.args`, result
+`payload.result`, and `payload.tool_invocation_id`; `parentIdempotencyKey` links the
+active user transcript, not a tool request. Size-limited argument/result previews
+remain explicitly incomplete. Both modern `lk.transcription` text streams and the
+legacy RTC transcript event are supported; neither proves remote audio delivery.
+
+Order-aligned one-to-one WER and product/quantity/unit comparisons are diagnostics,
+not grades. Split/merged ASR utterances stay unaligned/unknown. Local clipping is
+distinct from unknown remote loss; downstream interpretation requires tool/backend
+comparison. Partial coverage is shown separately, and missing interruption evidence
+is shown as **unknown**, never a measured zero. No verified resolution is claimed.
+
+Export identity is deterministic by CAE target + provider session. Native IDs and
+tool parent keys preserve turn/invocation correlation where present. Refresh rereads
+the entire paginated transcript (never detail's 500-message preview). Late flushes
+update the revision of the same vCon UUID, without append-only duplicate exports.
+The adapter samples after disconnect, but a stable response does not prove all future
+updates have arrived; refresh again for late writes. Size/sequence errors reject
+truncated capture rather than asserting completeness.
+
+Credentials, participant tokens, TURN data, auth headers, signed URLs and opaque
+strings containing known credentials are redacted/excluded. Bootstrap credentials
+remain memory-only. Local WAVs remain in CAE independently of portable export.
+Default downloads are metadata-only: recording placeholders retain dialog indices,
+and analysis explicitly reports captured/included/omitted tracks, byte counts and
+`audio_opt_in_required`. The existing owner-checked conversation download route
+accepts `include_audio=true` for up to **20 MB of decoded audio in total**, not per
+track. It includes the correctly aligned continuous duplex recording once when
+available; otherwise it includes all retained caller/greeting/reply tracks. Older
+Waylo runs recover the adapter's exact known turn filenames, not arbitrary files.
+An incomplete or failed continuous mix never suppresses later raw turn capture:
+the raw tracks are selected, the partial mix is explicitly reported as excluded,
+and complete-call coverage remains unestablished. Unknown raw-track offsets are
+not stitched into an invented timeline.
+An oversized or unavailable selected track fails the whole opt-in request; no
+silent truncation or partial success is returned. Neither export reads remote
+URLs, arbitrary paths, or credentials. The native capture and structured execution
+profile retain their independent **2 MB** bounds; audio is not counted against them.
+
+New exports use `sha512-<base64url digest>` as defined by
+[vCon core-04](https://datatracker.ietf.org/doc/html/draft-ietf-vcon-vcon-core-04#section-2.2),
+and attachments reference a valid dialog. Intake deliberately accepts old CAE bare
+SHA-512 digests/missing attachment references; re-export normalizes these fields.
+Inline hashes are checked against decoded media. Known dialog duration uses seconds.
+Start is included only for a known timestamp or an explicitly paired local monotonic
+offset/UTC anchor; provider and observer clocks are never subtracted or synthesized.
+An empty capture has a recording placeholder, not invented speech or a false call
+failure. Missing media and unknown clocks remain explicitly unestablished.
+
+## Mike fixtures and contract
+
+The `waylo-mike-notes` suite includes five-bags/pack-size, ambiguity, missing/discontinued,
+lookup failure, quantity/unit correction, interrupted list, order boundary and confusable
+entity cases. Additional confusable variants apply seeded white noise at 20 dB requested
+SNR or an operator-selected synthetic voice via `WAYLO_TEST_ACCENT_VOICE`.
+Only those conditions are tested; clean TTS is not evidence of general accent/noise robustness.
+
+Fixture catalog data is **synthetic setup**, not fetched production catalog evidence.
+Configure an isolated notes-only test agent and equivalent catalog before live tests;
+inject lookup failure in that fixture environment. The adapter does not alter Waylo
+catalogs, presets, credentials, or orders. A controlled `audio_plan_path` can instead
+reference existing local `AccAudioPlan` fixtures under CAE's approved artifact/example
+roots; each fixture needs `metadata.reference_text` and can pin `sha256`.
+There is no silent TTS substitution when recorded fixtures are exhausted.
+
+The contract requires focused `search_documents`, catalog-supported matches,
+clarification before ambiguous capture, exclusion of unavailable/discontinued items,
+canonical name confirmation while preserving caller quantity/unit, brief paced
+acknowledgements, note corrections and a backend-based final read-back. Creating,
+submitting or modifying orders is forbidden. Five **bags** stays five bags regardless
+of a 10 kg catalog pack size. Success reconciles requests, lookup trace, notes and speech.
+
+Check the **effective configuration before judging**. The session API hides its
+internal configuration snapshot. Capture retrieves its exact historical agent version
+when authorized, never substitutes today's mutable agent configuration. Versioned
+persona alone cannot prove worker baseline/preset rules. Known `item_capture_assistant`
+no-catalog rules override the persona and conflict with Mike. Mike calls are blocked
+for that preset and `catalog_order_assistant`; a generic Waylo target is not limited
+to Mike. Unknown effective rules remain needs review, not compliance failure.
+
+Waylo items contain position, raw text, quantity and unit; positions are mutable list
+coordinates, not product IDs. Preserve catalog lookup results separately in the trace.
+Never claim backend canonical-product association or an order transaction from notes.
+
+Source contracts inspected at Waylo application commit
+`a3848b558188f77523d99324c811ac1cb0a709b2`:
+[sessions](https://github.com/conversational-wayloai/application/blob/a3848b558188f77523d99324c811ac1cb0a709b2/packages/api/src/modules/sessions/sessions.controller.ts),
+[transcripts](https://github.com/conversational-wayloai/application/blob/a3848b558188f77523d99324c811ac1cb0a709b2/packages/api/src/modules/transcripts/transcripts.controller.ts),
+[items](https://github.com/conversational-wayloai/application/blob/a3848b558188f77523d99324c811ac1cb0a709b2/packages/api/src/common/dto/session-item.response.ts),
+[Item Capture preset](https://github.com/conversational-wayloai/application/blob/a3848b558188f77523d99324c811ac1cb0a709b2/packages/api/src/modules/presets/item-capture-assistant.ts).
+Worker telemetry inspected at commit `615d2b78c4e4cf6fb48b930fe42ddf1508dc321c`:
+[handlers](https://github.com/conversational-wayloai/agent/blob/615d2b78c4e4cf6fb48b930fe42ddf1508dc321c/src/waylo_agent/events/handlers.py).
+Transport: [LiveKit raw tracks](https://docs.livekit.io/transport/media/raw-tracks/),
+[text streams](https://docs.livekit.io/agents/multimodality/text/).

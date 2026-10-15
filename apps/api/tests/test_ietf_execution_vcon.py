@@ -82,7 +82,7 @@ def test_ietf_execution_vcon_uses_spoken_text_and_keeps_asr_as_analysis():
         'parties': [0, 1],
         'mediatype': 'audio/wav',
         'url': 'https://evidence.example.test/runs/exec-1.wav',
-        'content_hash': SHA512_BASE64URL,
+        'content_hash': 'sha512-' + SHA512_BASE64URL,
         'duration': 2.5,
     }
     transcript_turns = exported['analysis'][0]['body']['turns']

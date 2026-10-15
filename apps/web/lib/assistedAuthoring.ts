@@ -52,6 +52,7 @@ export function quickCaseFromDraft(spec: EditableAssertSpec) {
   return {
     title: item.title,
     simulated_user_prompt: [item.persona, ...(item.steps || [])].filter(Boolean).join('\n'),
+    spoken_opener: item.steps[0].trim(),
     expected_output: item.expected_outcome,
     description: spec.objective,
     required_actions: spec.required_behaviors.map((rule) => rule.description || rule.label),

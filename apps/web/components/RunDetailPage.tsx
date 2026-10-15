@@ -27,6 +27,8 @@ import {
   requestLlmJudge,
   getAssertJudgeReadiness,
   AssertJudgeReadiness,
+  wayloReviewContract,
+  WayloReviewContract,
 } from '@/lib/execution';
 
 type MetricKey = 'audio_interruption' | 'word_error_rate' | 'latency' | 'call_resolution';
@@ -150,13 +152,13 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
           <section className="metric-summary-grid" aria-label="Metric summaries">
             <MetricTile
               title="Interruption Detection"
-              value={`${summary.interruptionCount}`}
-              detail="sample count across conversations"
+              value={run.executor_id === 'waylo_livekit' ? wayloInterruptionSummary(run.conversations).value : `${summary.interruptionCount}`}
+              detail={run.executor_id === 'waylo_livekit' ? wayloInterruptionSummary(run.conversations).detail : 'sample count across conversations'}
               selected={metric === 'audio_interruption'}
               onClick={() => setMetric('audio_interruption')}
             />
             <MetricTile
-              title={run.mode === 'pipecat_webrtc'
+              title={run.executor_id === 'waylo_livekit' ? 'Observed target response latency' : run.mode === 'pipecat_webrtc'
                 ? 'End-to-end target response latency'
                 : summary.targetSpecific
                   ? 'Target Response Latency'
@@ -173,12 +175,16 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
             />
             {run.mode !== 'text_callable' ? (
               <MetricTile
-                title="Word Error Rate"
+                title={run.executor_id === 'waylo_livekit' ? 'Caller ASR comparison' : 'Word Error Rate'}
                 value={summary.wordErrorRate
-                  ? formatWerPercent(summary.wordErrorRate.percent)
-                  : 'n/a'}
+                  ? run.executor_id === 'waylo_livekit'
+                    ? `${summary.wordErrorRate.errors} / ${summary.wordErrorRate.referenceWords}`
+                    : formatWerPercent(summary.wordErrorRate.percent)
+                  : run.executor_id === 'waylo_livekit' ? 'Not measured' : 'n/a'}
                 detail={summary.wordErrorRate
-                  ? `${summary.wordErrorRate.errors} errors / ${summary.wordErrorRate.referenceWords} reference words`
+                  ? run.executor_id === 'waylo_livekit'
+                    ? `word edits · tester text vs Waylo caller ASR · provisional, not agent speech accuracy`
+                    : `${summary.wordErrorRate.errors} errors / ${summary.wordErrorRate.referenceWords} reference words`
                   : 'Source text and ASR receipt not captured'}
                 selected={metric === 'word_error_rate'}
                 onClick={() => setMetric('word_error_rate')}
@@ -232,6 +238,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
                   turns={conversation?.turns || []}
                   latencyMarks={conversation?.latency_marks || []}
                   firstByteEvidence={conversation?.mode === 'pipecat_webrtc'}
+                  wayloCapture={run.executor_id === 'waylo_livekit'}
                 />
               ) : null}
             </section>
@@ -239,6 +246,19 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
             <section className="card runs-transcript" id="run-transcript" aria-label="Transcript">
               <p className="eyebrow">Transcript</p>
               <h2>{conversation?.scenario_title || conversation?.scenario_id || 'Conversation'}</h2>
+              {conversation?.evidence_coverage ? (
+                <section aria-label="Waylo evidence coverage">
+                  <p>Capture only — evaluation submission is manual. Missing observations remain unknown, not a pass or a failure.</p>
+                  {conversation.configuration_check ? <p role="note">Configuration: {conversation.configuration_check.reason}</p> : null}
+                  <dl>{Object.entries(conversation.evidence_coverage).map(([area, coverage]) => (
+                    <div key={area}><dt>{coverageAreaLabel(area)}</dt><dd>
+                      {coverage.status} · needs review.
+                      {coverage.observed?.length ? <> Captured: {coverage.observed.join(', ').replaceAll('_', ' ')}.</> : null}
+                      {' '}Missing or unverified: {coverage.missing.join(', ').replaceAll('_', ' ')}.
+                    </dd></div>
+                  ))}</dl>
+                </section>
+              ) : null}
               {run.mode === 'pipecat_webrtc' ? (
                 <LiveRunFeedback
                   key={conversation?.conversation_id || 'no-conversation'}
@@ -259,6 +279,9 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
                     <li key={`${turn.turn_index}-${turn.speaker}`} data-speaker={turnLane(turn)}>
                       <div className={styles.speaker}><strong>{turn.speaker || 'speaker'}</strong><span>Turn {turn.turn_index}</span></div>
                       <p>{spokenTurnText(turn) || '—'}</p>
+                      {turn.frame_metadata?.transcript_source === 'waylo_final_transcript' ? (
+                        <small>{stringValue(turn.frame_metadata.text_source_label) || 'Waylo final transcript'} · not independently audio-aligned</small>
+                      ) : null}
                       {turn.frame_metadata?.transcript_source === 'rtc_asr_received_audio' ? (
                         <>
                           <small>Received audio transcript (rtc-asr)</small>
@@ -278,7 +301,7 @@ export function RunDetailPage({ executionRunId }: { executionRunId: string }) {
             {conversation?.ietf_vcon_export ? (
               <p>
                 <a href={`${getApiBase()}/api/execution/runs/${encodeURIComponent(executionRunId)}/conversations/${encodeURIComponent(conversation.conversation_id)}/vcon?user_id=${encodeURIComponent(userId)}`}>Download vCon evidence</a>
-                {conversation.recording ? <> · <a href={`${getApiBase()}/api/execution/runs/${encodeURIComponent(executionRunId)}/conversations/${encodeURIComponent(conversation.conversation_id)}/vcon?user_id=${encodeURIComponent(userId)}&include_audio=true`}>Include local recording (up to 20 MB)</a></> : null}
+                {conversation.recording || conversation.audio_session?.transport === 'waylo_livekit' ? <> · <a href={`${getApiBase()}/api/execution/runs/${encodeURIComponent(executionRunId)}/conversations/${encodeURIComponent(conversation.conversation_id)}/vcon?user_id=${encodeURIComponent(userId)}&include_audio=true`}>Include local recording (up to 20 MB)</a></> : null}
               </p>
             ) : null}
           </div>
@@ -393,6 +416,9 @@ function MetricDetail({
     return () => { active = false; };
   }, [run.execution_run_id, conversation?.conversation_id]);
   const [judgeError, setJudgeError] = useState<string | null>(null);
+  const [contractDraft, setContractDraft] = useState<WayloReviewContract | null>(null);
+  const [contractError, setContractError] = useState<string | null>(null);
+  const [preparingContract, setPreparingContract] = useState(false);
   const [isJudging, setIsJudging] = useState(false);
   const [showJudgePrompt, setShowJudgePrompt] = useState(false);
   const [reviewToApply, setReviewToApply] = useState<LlmJudgeResponse | null>(null);
@@ -421,10 +447,25 @@ function MetricDetail({
     && !['queued', 'running'].includes(run.status)
     && !['queued', 'running'].includes(conversation.status),
   );
+  const needsWayloContract = run.executor_id === 'waylo_livekit'
+    && !conversation?.evaluation_findings?.evaluation_contract_snapshot
+    && !conversation?.evaluation_contract_snapshot;
+  const contractConversationId = conversation?.conversation_id;
+  useEffect(() => {
+    let active = true;
+    setContractDraft(null); setContractError(null);
+    if (!needsWayloContract || !conversationIsTerminal || !contractConversationId) return;
+    void wayloReviewContract({ executionRunId: run.execution_run_id,
+      conversationId: contractConversationId, userId: run.user_id || userId }).then((value) => {
+        if (!value.snapshot?.sha256 || !value.snapshot?.contract) throw new Error('The scenario rules could not be loaded.');
+        if (active) setContractDraft(value);
+      }).catch((err) => { if (active) setContractError(err instanceof Error ? err.message : 'Review rules unavailable.'); });
+    return () => { active = false; };
+  }, [needsWayloContract, conversationIsTerminal, run.execution_run_id, contractConversationId, run.user_id, userId]);
   const canJudge = Boolean(
     conversationIsTerminal
     && deterministicVerdict
-    && judgeReadiness?.ready,
+    && judgeReadiness?.ready && !needsWayloContract,
   );
 
   useEffect(() => {
@@ -450,7 +491,7 @@ function MetricDetail({
       userId, conversationIsTerminal, freshnessAttempt]);
 
   async function onJudge() {
-    if (!conversation || !canJudge || isJudging) return;
+    if (!conversation || !canJudge || needsWayloContract || isJudging) return;
     setJudgeError(null);
     setJudge(null);
     setIsJudging(true);
@@ -568,19 +609,19 @@ function MetricDetail({
         ) : null}
         <section className="resolution-judge" aria-label="LLM judge">
           <div>
-            <p className="eyebrow">LLM second opinion</p>
-            <h3>Review the deterministic verdict</h3>
+            <p className="eyebrow">{isWayloCaptureOnly(conversation) ? 'ASSERT review' : 'LLM second opinion'}</p>
+            <h3>{isWayloCaptureOnly(conversation) ? 'Review captured conversation' : 'Review the deterministic verdict'}</h3>
           </div>
           <button
             type="button"
             className="secondary-link"
             id="assert-review-action"
-            disabled={isJudging || !canJudge}
+            disabled={isJudging || !canJudge || needsWayloContract}
             onClick={() => void onJudge()}
           >
             {isJudging
               ? 'Reviewing evidence…'
-              : !canJudge
+              : needsWayloContract ? 'Save review rules first' : !canJudge
                 ? conversationIsTerminal
                   ? !deterministicVerdict ? 'Unavailable without evaluator verdict' : 'ASSERT judge unavailable'
                   : 'Available after run completes'
@@ -588,7 +629,31 @@ function MetricDetail({
                   ? 'Run LLM review again'
                   : 'Review with LLM judge'}
           </button>
-          {isJudging ? <AssertReviewProgress /> : <span role="status">{judgeReadiness?.message || 'ASSERT readiness could not be checked.'}</span>}
+          {isJudging ? <AssertReviewProgress /> : <span role="status">{needsWayloContract
+            ? 'This capture has no saved rules. Review and save the current scenario rules below; no model is called.'
+            : judgeReadiness?.message || 'ASSERT readiness could not be checked.'}</span>}
+          {needsWayloContract ? <section aria-label="Select review rules">
+            {contractDraft ? <>
+              <h4>{String(contractDraft.snapshot.contract.title || conversation.scenario_title || 'Scenario rules')}</h4>
+              <p>{String(contractDraft.snapshot.contract.goal || contractDraft.snapshot.contract.expected_final_state || '')}</p>
+              <details><summary>Review required and forbidden behaviors</summary>
+                <p>Required: {JSON.stringify(contractDraft.snapshot.contract.required_actions || [])}</p>
+                <p>Forbidden: {JSON.stringify(contractDraft.snapshot.contract.forbidden_actions || [])}</p>
+                <p>Test setup: {String(asRecord(contractDraft.snapshot.contract.waylo_test).setup || 'None specified')}</p>
+              </details>
+              <p>These are the current rules, not a recovered historical contract. Saving them does not change the call evidence or grade it.</p>
+              <button type="button" disabled={preparingContract} onClick={async () => {
+                setPreparingContract(true); setContractError(null);
+                try {
+                  const updated = await wayloReviewContract({ executionRunId: run.execution_run_id,
+                    conversationId: conversation.conversation_id, userId: run.user_id || userId }, contractDraft.snapshot.sha256);
+                  onRunUpdated(updated);
+                } catch (err) { setContractError(err instanceof Error ? err.message : 'Could not save review rules.'); }
+                finally { setPreparingContract(false); }
+              }}>{preparingContract ? 'Saving rules…' : 'Use these rules for review'}</button>
+            </> : <p>{contractError ? 'Review rules could not be loaded.' : 'Loading the selected scenario rules…'}</p>}
+            {contractError ? <p role="alert">{contractError}</p> : null}
+          </section> : null}
           <button type="button" className="secondary-link" onClick={() => {
             void getAssertJudgeReadiness().then(setJudgeReadiness).catch(() => setJudgeReadiness(null));
           }}>Refresh judge readiness</button>
@@ -704,10 +769,12 @@ function MetricDetail({
     const wordErrorRate = aggregateWordErrorRates(turns.map((item) => item.result));
     return (
       <div className="runs-detail-copy">
-        <h2>Word Error Rate</h2>
+        <h2>{run.executor_id === 'waylo_livekit' ? 'Caller ASR comparison' : 'Word Error Rate'}</h2>
         <p className="latency-definition">
           <strong>Source text → received ASR transcript.</strong>{' '}
-          Public-demo source text is target-reported, not independently verified ground truth.{' '}
+          {run.executor_id === 'waylo_livekit'
+            ? 'Exact tester text compared with Waylo’s final caller transcript, provisionally paired by turn order. Agent speech accuracy is not measured: there is no independent reference transcript for that side. This is not an accepted grade or proof that all audio was delivered. '
+            : 'Public-demo source text is target-reported, not independently verified ground truth. '}
           Lower is better. This measures the speech path&apos;s transcription fidelity, not whether the agent gave
           a semantically correct answer.
         </p>
@@ -755,8 +822,9 @@ function MetricDetail({
           </>
         ) : (
           <p>
-            WER is unavailable because this conversation does not contain both source text and received ASR
-            receipt for any voice turn.
+            {run.executor_id === 'waylo_livekit'
+              ? String(asRecord(conversation.evidence_diagnostics?.speech_boundary).reason || 'Provisional WER is unknown: no uniquely aligned tester reference and Waylo final ASR turns.')
+              : 'WER is unavailable because this conversation does not contain both source text and received ASR receipt for any voice turn.'}
           </p>
         )}
         <p className="resolution-note">
@@ -772,6 +840,12 @@ function MetricDetail({
   }
 
   if (metric === 'audio_interruption') {
+    if (run.executor_id === 'waylo_livekit') {
+      return <div className="runs-detail-copy">
+        <h2>Interruption handling</h2>
+        <p>{wayloInterruptionSummary([conversation]).detail}</p>
+      </div>;
+    }
     return (
       <div className="runs-detail-copy">
         <h2>Interruption Detection</h2>
@@ -787,6 +861,24 @@ function MetricDetail({
     .map((mark) => ({ mark, ms: markLatencyMs(mark) }))
     .filter((item): item is { mark: Record<string, unknown>; ms: number } => item.ms != null);
   const latency = latencyStats(measuredMarks.map((item) => item.ms));
+  if (run.executor_id === 'waylo_livekit') {
+    const worker = asRecord(conversation.evidence_diagnostics?.response_latency).worker_observations;
+    const workerMarks = Array.isArray(worker) ? worker.map(asRecord) : [];
+    return <div className="runs-detail-copy">
+      <h2>Observed target response latency</h2>
+      <p>Local caller audio queue drained → first remote frame received above RMS 150.
+        {' '}CAE monotonic transport clock; milliseconds. This is an observer speech-onset heuristic, not browser playback delay or target-internal processing time.</p>
+      <p>{latency.count ? `count ${latency.count} · avg ${fmtMs(latency.avg_ms)} · p90 ${fmtMs(latency.p90_ms)}` : 'Observer response timing is unknown.'}</p>
+      <ul aria-label="Observer latency observations">{measuredMarks.map(({ mark, ms }, index) =>
+        <li key={String(mark.event_id || index)}>{String(mark.turn_id || `response ${index + 1}`)}: {fmtMs(ms)}</li>)}</ul>
+      <h3>Native worker diagnostics — separate clock and boundary</h3>
+      <p>Waylo worker-reported LiveKit turn e2e_latency, converted from seconds to milliseconds.
+        {' '}Do not add or average these with observer latency; the boundaries differ.</p>
+      {workerMarks.length ? <ul aria-label="Worker latency observations">{workerMarks.map((mark, index) =>
+        <li key={String(mark.event_id || index)}>Turn {String(mark.turn_index || mark.turn_id || index + 1)}: {fmtMs(Number(mark.value_ms))} · {String(mark.clock_origin || 'clock unknown')}</li>)}</ul>
+        : <p>Native worker timing is unknown.</p>}
+    </div>;
+  }
   if (conversation.mode === 'pipecat_webrtc' && !evidence.marks.length) {
     return (
       <div className="runs-detail-copy">
@@ -860,12 +952,59 @@ function ConversationFlow({
   turns,
   latencyMarks,
   firstByteEvidence,
+  wayloCapture = false,
 }: {
   turns: ConversationTurn[];
   latencyMarks: Array<Record<string, unknown>>;
   firstByteEvidence: boolean;
+  wayloCapture?: boolean;
 }) {
   if (!turns.length) return null;
+  // Waylo capture does not currently provide a complete, audio-aligned turn
+  // clock. Do not invent timed bars from word counts or attach caller latency
+  // to an unrelated greeting by the target turn's ordinal position.
+  if (wayloCapture) {
+    return (
+      <section className="conversation-flow" aria-label="Waylo conversation turn sequence">
+        <p className="eyebrow">Conversation flow</p>
+        <h3>Tester and target turns</h3>
+        <p>Ordered evidence, not an elapsed-time timeline. Speech durations are shown only when observed;
+          response waits require a uniquely identified caller turn.</p>
+        <ol className="conversation-flow-turns" aria-label="Conversation turn sequence">
+          {turns.map((turn) => {
+            const lane = turnLane(turn);
+            const metadata = turn.frame_metadata || {};
+            const durationMs = observedTurnAudioDurationMs(turn);
+            const responseIds = Array.isArray(metadata.response_to_turn_ids)
+              ? [...new Set(metadata.response_to_turn_ids.filter((id): id is string => typeof id === 'string' && Boolean(id)))]
+              : [];
+            const correlatedMarks = lane === 'agent' && !metadata.greeting
+              && !metadata.overlapping_response_window && responseIds.length === 1
+              ? latencyMarks.filter((mark) => isWayloObserverMark(mark)
+                && mark.turn_id === responseIds[0] && markLatencyMs(mark) != null)
+              : [];
+            const responseMs = correlatedMarks.length === 1 ? markLatencyMs(correlatedMarks[0]) : null;
+            return (
+              <li key={`flow-${turn.turn_index}`} data-speaker={lane}>
+                <span>{turn.turn_index}</span>
+                <strong>{lane === 'caller' ? 'Caller' : 'Agent'}</strong>
+                <p>{spokenTurnText(turn) || 'No transcript text.'}</p>
+                <small>
+                  {durationMs == null ? 'Speech duration unknown' : `Observed speech duration: ${fmtDuration(durationMs)}`}
+                  {lane === 'agent' ? metadata.greeting
+                    ? ' · Greeting; no caller response latency'
+                    : responseMs != null
+                      ? ` · Observed response to ${responseIds[0]}: ${fmtMs(responseMs)}`
+                      : ' · Individual response timing unknown'
+                    : ''}
+                </small>
+              </li>
+            );
+          })}
+        </ol>
+      </section>
+    );
+  }
   const candidateMarks = firstByteEvidence
     ? latencyMarks.filter(isTargetFirstAudioByteMark)
     : latencyMarks;
@@ -1202,6 +1341,9 @@ function aggregateRunMetrics(run: ExecutionRunRecord | null) {
   const usesSpeechEndMetric = conversations.some((item) => (
     responseLatencyEvidence(item).marks.some(isSpeechEndToFirstAudiblePcmMark)
   ));
+  const usesWayloObserverMetric = conversations.some((item) => (
+    responseLatencyEvidence(item).marks.some(isWayloObserverMark)
+  ));
   const voiceTargetSpecific = conversations.length > 0 && conversations.every(
     (item) => item.mode === 'pipecat_webrtc',
   );
@@ -1233,20 +1375,28 @@ function aggregateRunMetrics(run: ExecutionRunRecord | null) {
     p90Latency: measuredLatency.p90_ms,
     targetSpecific,
     usesSpeechEndMetric,
-    latencyDefinition: usesSpeechEndMetric
+    latencyDefinition: usesWayloObserverMetric
+      ? 'Local caller queue drained → received target speech (RMS > 150)'
+      : usesSpeechEndMetric
       ? 'Tester speech end → first target audio received at tester'
       : voiceTargetSpecific
         ? 'first audible byte'
         : targetSpecific
           ? 'target response'
           : 'captured latency',
-    resolutionRate: conversations.length
-      ? (resolutionCounts.verified / conversations.length) * 100
+    resolutionRate: conversations.length > resolutionCounts.not_evaluated
+      ? (resolutionCounts.verified / (conversations.length - resolutionCounts.not_evaluated)) * 100
       : null,
     resolutionDetail,
     latencyBars,
     wordErrorRate,
   };
+}
+
+function isWayloCaptureOnly(conversation: ConversationRecord) {
+  return !conversation.evaluation_adjudication && conversation.audio_session?.transport === 'waylo_livekit'
+    && (conversation.evaluation_findings?.scoring_mode === 'capture_only'
+      || !Object.keys(conversation.evaluation_findings || {}).length);
 }
 
 function resolutionEvidence(conversation: ConversationRecord) {
@@ -1255,7 +1405,7 @@ function resolutionEvidence(conversation: ConversationRecord) {
   const rawVerdict = String(
     proposed?.verdict || summary?.verdict || conversation.verdict || '',
   ).trim().toLowerCase();
-  const state: ResolutionState = rawVerdict === 'pass' || (!rawVerdict && summary?.call_resolution_success === 100)
+  let state: ResolutionState = rawVerdict === 'pass' || (!rawVerdict && summary?.call_resolution_success === 100)
     ? 'verified'
     : rawVerdict === 'fail' || rawVerdict === 'failed' || conversation.status === 'failed'
       ? 'failed'
@@ -1268,6 +1418,8 @@ function resolutionEvidence(conversation: ConversationRecord) {
     failed: 'Failed',
     not_evaluated: 'Not evaluated',
   };
+  const captureOnly = isWayloCaptureOnly(conversation);
+  if (captureOnly && state !== 'failed') state = 'not_evaluated';
   const descriptions: Record<ResolutionState, string> = {
     verified: 'The evaluator returned a pass verdict and counted this conversation as a verified resolution.',
     unverified: 'The evaluator found useful evidence but could not prove the required outcome.',
@@ -1277,6 +1429,9 @@ function resolutionEvidence(conversation: ConversationRecord) {
   if (proposed) {
     descriptions[state] = `A user confirmed the LLM adjudication: ${proposed.summary}`;
   }
+  if (captureOnly && state !== 'failed') descriptions[state] = conversation.judge_reviews?.length
+    ? 'An ASSERT review is saved, but its proposal has not been accepted. Confirm it to update this result.'
+    : 'The call was captured, but no scenario evaluation has run. ASSERT must compare the conversation, tool results and backend notes with the selected rules.';
   const finalState = conversation.final_state || {};
   const runtime = asRecord(finalState.runtime_provenance);
   const finalComplete = typeof finalState.complete === 'boolean' ? finalState.complete : null;
@@ -1308,7 +1463,7 @@ function resolutionEvidence(conversation: ConversationRecord) {
     score: typeof evaluationScore === 'number'
       ? `${Math.round(evaluationScore)}/100`
       : 'Not reported',
-    verdict: rawVerdict ? formatRuntimeId(rawVerdict) : 'Not reported',
+    verdict: captureOnly && state !== 'failed' ? 'Awaiting review' : rawVerdict ? formatRuntimeId(rawVerdict) : 'Not reported',
     finalState: finalComplete === true ? 'Complete' : finalComplete === false ? 'Not complete' : 'Not reported',
     termination: terminationReason ? formatRuntimeId(terminationReason) : 'Not reported',
     actionEvidence: actionCount ? `${actionCount} recorded` : 'None recorded',
@@ -1334,7 +1489,7 @@ function EvaluationBasisHelp({
       tabIndex={0}
       aria-describedby={tooltipId}
     >
-      <span>{adjudicated ? 'Confirmed LLM adjudication' : 'Automatic rule-based evaluation'}</span>
+      <span>{adjudicated ? 'Confirmed LLM adjudication' : isWayloCaptureOnly(conversation) ? 'Capture only — not graded' : 'Automatic rule-based evaluation'}</span>
       <span className="evaluation-basis-help-icon" aria-hidden="true">i</span>
       <span className="evaluation-basis-tooltip" id={tooltipId} role="tooltip">
         <strong>{details.heading}</strong>
@@ -1346,6 +1501,12 @@ function EvaluationBasisHelp({
 }
 
 function evaluationBasisDetails(conversation: ConversationRecord, adjudicated: boolean) {
+  if (isWayloCaptureOnly(conversation)) return {
+    heading: 'Not yet evaluated', lines: [
+      'Transcript, tool results and backend notes were captured; no rule-based score was assigned.',
+      'ASSERT review compares that evidence with the saved scenario rules. You must confirm its proposal before it changes the result.',
+    ],
+  };
   if (adjudicated) {
     return {
       heading: 'How this evaluation was determined',
@@ -1451,6 +1612,23 @@ function formatScoreNumber(value: number) {
 }
 
 function automaticResolutionGaps(conversation: ConversationRecord) {
+  if (isWayloCaptureOnly(conversation)) {
+    const findings = asRecord(conversation.evaluation_findings);
+    const snapshot = asRecord(findings.evaluation_contract_snapshot || conversation.evaluation_contract_snapshot);
+    const rules = asRecord(snapshot.contract);
+    const items = conversation.final_state?.request_list;
+    const reasons = [snapshot.sha256
+      ? 'Review rules are saved; an ASSERT review has not been accepted.'
+      : 'No review rules were saved with this run. Select the rules below before requesting ASSERT review.',
+      `Available evidence: ${conversation.turns?.length || 0} transcript turns, ${conversation.action_trace?.length || 0} tool records${Array.isArray(items) ? `, ${items.length} items in the final notes` : '; final notes not captured'}.`];
+    if (typeof rules.goal === 'string') reasons.push(`Required outcome: ${rules.goal}`);
+    if (conversation.scenario_id === 'mike-lookup-failure'
+      && !conversation.action_trace?.some((entry) => entry.name === 'search_documents'
+        && ['error', 'failed', 'failure'].includes(String(entry.status)))) {
+      reasons.push('This case requires a lookup error, but none was recorded. A successful lookup with no matching product does not test lookup-failure handling.');
+    }
+    return reasons;
+  }
   const summary = conversation.metrics_summary;
   const rawVerdict = String(summary?.verdict || conversation.verdict || '').trim().toLowerCase();
   const state: ResolutionState = rawVerdict === 'pass'
@@ -1606,12 +1784,39 @@ function isTargetResponseMark(mark: Record<string, unknown>) {
 }
 
 function isTargetFirstAudioByteMark(mark: Record<string, unknown>) {
-  return isEndToEndTargetResponseMark(mark)
+  return isWayloObserverMark(mark) || isEndToEndTargetResponseMark(mark)
     || mark.kind === 'target_first_audio_byte'
     || mark.kind === 'speech_end_to_first_audible_byte'
     || mark.kind === 'speech_end_to_first_audible_pcm'
     || mark.response_metric === 'speech_end_to_first_audible_byte'
     || mark.response_metric === 'target_time_to_first_audio_byte';
+}
+
+function isWayloObserverMark(mark: Record<string, unknown>) {
+  return mark.kind === 'cae_livekit_queue_end_to_received_speech';
+}
+
+function coverageAreaLabel(area: string) {
+  const labels: Record<string, string> = {
+    conversation_experience: 'Conversation · experience',
+    speech_boundary: 'Comprehension · speech boundary',
+    agent_execution: 'Conduct · execution',
+    business_outcome: 'Completion · business outcome',
+  };
+  return labels[area] || area.replaceAll('_', ' ');
+}
+
+function wayloInterruptionSummary(conversations: ConversationRecord[]) {
+  const reports = conversations.map((item) => asRecord(item.evidence_diagnostics?.interruption));
+  const yes = reports.reduce((sum, item) => sum + Number(item.reported_true || 0), 0);
+  const no = reports.reduce((sum, item) => sum + Number(item.reported_false || 0), 0);
+  const attempts = reports.reduce((sum, item) => sum + Number(item.controlled_attempts || 0), 0);
+  const unknown = reports.filter((item) => item.status !== 'observed').length;
+  return { value: attempts ? 'Needs review' : yes + no ? 'Not tested' : 'Not measured',
+    detail: `${attempts ? `${attempts} deliberate barge-in attempts; handling still needs review.` : yes + no ? 'No deliberate barge-in was attempted.' : 'No interruption-handling result was captured.'} ${yes + no
+      ? yes ? `Waylo flagged ${yes} agent turns as interrupted; this alone does not prove correct handling.`
+        : `Waylo reported uninterrupted speech in ${no} agent turns; that is not a barge-in test.`
+      : 'Interruption telemetry was not captured.'}${unknown && yes + no ? ` ${unknown} conversations have no telemetry.` : ''}` };
 }
 
 function isEndToEndTargetResponseMark(mark: Record<string, unknown>) {
@@ -1742,7 +1947,17 @@ type WordErrorRateResult = {
 };
 
 function conversationWordErrorRates(conversation: ConversationRecord) {
-  return (conversation.turns || []).flatMap((turn) => {
+  const boundary = asRecord(conversation.evidence_diagnostics?.speech_boundary);
+  // The diagnostic is kept separate from recorded turns/grades. Only uniquely
+  // order-aligned comparisons supplied by capture are shown, never fuzzy matched.
+  const diagnosticTurns: ConversationTurn[] = Array.isArray(boundary.comparisons)
+    ? boundary.comparisons.map(asRecord).filter((row) => row.alignment === 'ordered_one_to_one_provisional'
+      && stringValue(row.reference_text) && stringValue(row.target_asr_final))
+      .map((row, index) => ({ turn_index: index + 1, speaker: 'Caller', direction: 'tester_to_target',
+        frame_metadata: { source_text: row.reference_text, asr_receipt: row.target_asr_final,
+          source_text_label: 'Tester reference (provisional alignment)', asr_receipt_label: 'Waylo final ASR' } }))
+    : [];
+  return (conversation.evidence_diagnostics ? diagnosticTurns : conversation.turns || []).flatMap((turn) => {
     const metadata = turn.frame_metadata || {};
     const reference = stringValue(metadata.source_text) || stringValue(metadata.llm_output);
     const hypothesis = typeof metadata.asr_receipt === 'string'
@@ -1861,6 +2076,21 @@ function turnAudioDurationMs(turn: ConversationTurn) {
   }
   const words = spokenTurnText(turn).trim().split(/\s+/).filter(Boolean).length;
   return Math.min(12_000, Math.max(700, (words / 2.6) * 1000));
+}
+
+function observedTurnAudioDurationMs(turn: ConversationTurn): number | null {
+  const metadata = turn.frame_metadata || {};
+  const explicitDuration = metadata.duration_ms;
+  if (typeof explicitDuration === 'number' && Number.isFinite(explicitDuration) && explicitDuration >= 0) return explicitDuration;
+  const bytes = metadata.bytes;
+  const sampleRate = metadata.sample_rate;
+  const channels = metadata.channels ?? 1;
+  if (typeof bytes === 'number' && Number.isFinite(bytes) && bytes > 0
+    && typeof sampleRate === 'number' && Number.isFinite(sampleRate) && sampleRate > 0
+    && typeof channels === 'number' && Number.isFinite(channels) && channels > 0) {
+    return (bytes / (sampleRate * channels * 2)) * 1000;
+  }
+  return null;
 }
 
 function markLatencyMs(mark: unknown): number | null {

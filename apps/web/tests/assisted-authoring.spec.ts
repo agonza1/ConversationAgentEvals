@@ -203,6 +203,7 @@ test('failed generation preserves the draft and manual fallback needs no generat
   await page.getByRole('button', { name: 'Create scenario', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Selected scenario' })).toBeVisible();
   expect(state.created().caller_steps).toEqual(['Please use 3 PM, not the earlier time.', 'If asked, confirm afternoon.']);
+  expect(state.created().spoken_opener).toBe('Please use 3 PM, not the earlier time.');
   expect(state.created().evidence_requirements).toEqual(['transcript', 'final_state_or_action_trace']);
 });
 
@@ -366,6 +367,7 @@ test('detailed edits retain a reviewed spoken opening separately from caller bac
   await page.getByRole('button', { name: 'Create scenario', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Selected scenario' })).toBeVisible();
   expect(state.created().caller_steps).toEqual(['Use 4 PM instead of 3 PM.', 'If asked, confirm afternoon.']);
+  expect(state.created().spoken_opener).toBe('Use 4 PM instead of 3 PM.');
   expect(state.created().simulated_user_prompt).toContain('A caller who prefers concise replies.');
 });
 

@@ -311,6 +311,9 @@ _SUITES: tuple[BenchmarkSuite, ...] = (
     },
 )
 
+from app.services.waylo_mike_cases import WAYLO_MIKE_SUITE
+
+_SUITES = (*_SUITES, WAYLO_MIKE_SUITE)
 _SUITES_BY_ID = {suite['id']: suite for suite in _SUITES}
 _SCENARIOS_BY_ID = {
     (suite['id'], scenario['id']): scenario for suite in _SUITES for scenario in suite['scenarios']
@@ -362,6 +365,7 @@ def list_suites() -> list[BenchmarkSuite]:
                         'goal': scenario.get('goal'),
                         'description': scenario.get('description'),
                         'simulated_user_prompt': scenario.get('simulated_user_prompt') or scenario.get('prompt'),
+                        'spoken_opener': scenario.get('spoken_opener'),
                         'expected_output': scenario.get('expected_output') or scenario.get('expected_final_state'),
                     }
                     for scenario in scenarios
@@ -1876,8 +1880,8 @@ def _scenario_contract(scenario: BenchmarkScenario) -> dict[str, Any]:
         'expected_final_state': scenario['expected_final_state'],
         'rubric': deepcopy(scenario['rubric']),
     }
-    for key in ('evaluation_spec_ref', 'behaviors', 'action_checklist', 'target_behavior_id', 'variant', 'caller_steps',
-                'requirements', 'permissible_behavior', 'evidence_requirements', 'deterministic_checks', 'generation_provenance', 'behavior_preset', 'scenario_preset', 'required_order'):
+    for key in ('spoken_opener', 'evaluation_spec_ref', 'behaviors', 'action_checklist', 'target_behavior_id', 'variant', 'caller_steps',
+                'requirements', 'permissible_behavior', 'evidence_requirements', 'deterministic_checks', 'generation_provenance', 'behavior_preset', 'scenario_preset', 'required_order', 'waylo_test'):
         if key in scenario:
             contract[key] = deepcopy(scenario[key])
     if scenario.get('source') == 'user_created' and scenario.get('caller_steps'):
@@ -3157,9 +3161,9 @@ def _simulated_transcript(scenario: BenchmarkScenario, agent_profile: str, inclu
 
 
 def _simulated_user_opener(scenario: BenchmarkScenario) -> str:
-    if (scenario.get('evaluation_spec_ref') or scenario.get('source') == 'user_created') and scenario.get('caller_steps'):
-        from app.services.execution_runner import _scenario_user_opener
-        return _scenario_user_opener(scenario)
+    from app.services.scenario_caller import scenario_spoken_opener
+    if scenario.get('spoken_opener') or scenario.get('caller_steps'):
+        return scenario_spoken_opener(scenario, include_sample=False)
     openers = {
         'billing-address-change': 'Hi, I moved recently and need to update my billing address before the next invoice.',
         'angry-outage-escalation': 'My internet has gone down twice this week, and I need this fixed.',
@@ -3177,18 +3181,7 @@ def _simulated_user_opener(scenario: BenchmarkScenario) -> str:
     if scenario_id in openers:
         return openers[scenario_id]
 
-    persona = str(scenario.get('persona') or '').strip()
-    if persona:
-        lowered = persona.lower()
-        if ' who ' in lowered:
-            _, request = re.split(r'\bwho\b', persona, maxsplit=1, flags=re.IGNORECASE)
-            request = request.strip().rstrip('.')
-            request = re.sub(r'\bwants\b', 'want', request, flags=re.IGNORECASE)
-            request = re.sub(r'\bexpects\b', 'need', request, flags=re.IGNORECASE)
-            return f'Hi, I {request}.'
-        return f'Hi — {persona}'
-    goal = str(scenario.get('goal') or '').strip()
-    return f'Hi, I need help{": " + goal if goal else "."}'
+    return scenario_spoken_opener(scenario, include_sample=False)
 
 
 def _simulated_agent_turn(action: str, scenario: BenchmarkScenario | None = None) -> str:
