@@ -537,17 +537,19 @@ class StreamingMediaBridge(FrameProcessor):
             from background_noise import ClockedNoiseTrack, pcm_wav, read_wav
             clean = resample_pcm16(pcm16_to_mono(frame.audio, frame.num_channels), frame.sample_rate, 24000)
             self.sample_rate, self.channels = 24000, 1
+            self._noise_pending.extend(clean)
             if self.noise_track is None:
+                if not any(self._noise_pending):
+                    return  # Leading TTS silence is valid; wait for calibration speech.
                 async def send(audio, rate):
                     await self.push_frame(InputAudioRawFrame(resample_pcm16(audio, rate, self.target_sample_rate), self.target_sample_rate, 1), direction)
 
                 async def observe(audio, rate, _turn_pair):
                     await self.audio_callback(audio, rate, 1)
 
-                self.noise_track = ClockedNoiseTrack(pcm_wav(clean, 24000), self.noise_condition, send=send, observe=observe)
-                self.noise_track.mixer.profile['level_reference'] = 'first_caller_tts_chunk_rms'
+                self.noise_track = ClockedNoiseTrack(pcm_wav(bytes(self._noise_pending), 24000), self.noise_condition, send=send, observe=observe)
+                self.noise_track.mixer.profile['level_reference'] = 'first_caller_tts_audio_rms'
                 self.noise_track.start()
-            self._noise_pending.extend(clean)
             size = 24000 // 50 * 2
             complete = len(self._noise_pending) // size * size
             if complete:

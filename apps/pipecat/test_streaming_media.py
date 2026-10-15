@@ -58,7 +58,8 @@ def test_caller_bridge_sends_same_noisy_audio_to_listener_and_target_through_gap
     asyncio.run(run())
 
 
-def test_noise_bridge_buffers_partial_tts_frames_and_pads_only_at_turn_end():
+@pytest.mark.parametrize('leading_silence', [False, True])
+def test_noise_bridge_buffers_partial_tts_frames_and_pads_only_at_turn_end(leading_silence):
     async def run():
         published = []
         async def publish(audio, rate, channels): published.append(audio)
@@ -68,8 +69,9 @@ def test_noise_bridge_buffers_partial_tts_frames_and_pads_only_at_turn_end():
         async def push(*_): pass
         bridge.push_frame = push
         try:
-            for _ in range(3):
-                await bridge.process_frame(OutputAudioRawFrame(b'\xe8\x03' * 240, 24000, 1), FrameDirection.DOWNSTREAM)
+            for index in range(3):
+                audio = bytes(480) if leading_silence and index == 0 else b'\xe8\x03' * 240
+                await bridge.process_frame(OutputAudioRawFrame(audio, 24000, 1), FrameDirection.DOWNSTREAM)
             await asyncio.wait_for(bridge.process_frame(TurnEndFrame(), FrameDirection.DOWNSTREAM), 2)
             assert len(bridge.audio) == 960 * 2  # 30 ms speech + one 10 ms final pad
             assert bytes(bridge.audio) == b''.join(published[:2])
