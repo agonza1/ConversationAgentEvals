@@ -26,6 +26,37 @@ from public_daily_target import (
 )
 
 
+def test_daily_noise_uses_one_clock_for_target_listener_and_caller_evidence():
+    from background_noise import ClockedNoiseTrack, pcm_wav, read_wav
+
+    async def run_test():
+        events, target, listener = [], [], []
+        async def event_callback(event): events.append(event)
+        run = outbound_voice.OutboundVoiceRunContext(
+            outbound_voice.OutboundVoiceTargetDescriptor('demo', 'demo', 'daily', 'demo'),
+            event_callback=event_callback)
+        pcm = b'\xe8\x03' * 960
+        wav = pcm_wav(pcm, 24000)
+        async def send(audio, rate): target.append(audio)
+        async def observe(audio, rate, turn): listener.append(audio)
+        run.noise_track = ClockedNoiseTrack(wav, {'seed': 7, 'snr_db': 10}, send=send, observe=observe)
+        run.noise_track.start()
+        try:
+            count = await _play_caller_turn(run, None, turn_pair=1, caller_text='Hello', caller_wav=wav,
+                caller_pcm=pcm, sample_rate=24000, channels=1, audio_frame_callback=None)
+            assert count == 2
+            assert read_wav(run.caller_sent_wav)[1] != pcm
+            assert base64.b64decode(events[-1]['audio_wav_base64']) == run.caller_sent_wav
+            before = len(target)
+            async with asyncio.timeout(2):
+                while len(target) < before + 3: await asyncio.sleep(.005)
+            assert target == listener
+            assert all(any(frame) for frame in target)
+        finally:
+            await run.noise_track.close()
+    asyncio.run(run_test())
+
+
 def test_public_target_timeout_matches_execution_api_limit():
     caller_text = 'Please update my billing address.'
 

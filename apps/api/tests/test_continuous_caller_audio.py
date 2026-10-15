@@ -13,8 +13,8 @@ from app.services.waylo_audio_conditions import ContinuousNoise
 from app.services.waylo_livekit import LiveKitVoicePeer, pcm_wav, read_wav
 
 
-def reference(rate=24000):
-    samples = np.round(3000 * np.sin(np.arange(rate) * 2 * np.pi * 440 / rate)).astype('<i2')
+def reference(rate=24000, seconds=1):
+    samples = np.round(3000 * np.sin(np.arange(round(rate * seconds)) * 2 * np.pi * 440 / rate)).astype('<i2')
     return pcm_wav(samples.tobytes(), rate)
 
 
@@ -47,6 +47,28 @@ def test_snr_is_calibrated_once_not_gated_or_recalibrated_by_later_turns():
     assert mixer.gain == gain
 
 
+@pytest.mark.parametrize('kind', ['office', 'cafe', 'traffic'])
+@pytest.mark.parametrize('seed', [7, 42])
+@pytest.mark.parametrize('seconds', [.1, 1, 21])
+def test_actual_recorded_first_turn_snr_uses_seeded_window_including_wraparound(kind, seed, seconds):
+    audio = reference(seconds=seconds)
+    mixer = ContinuousNoise(audio, snr_db=10, seed=seed, noise_type=kind)
+    clean = np.frombuffer(read_wav(audio)[1], dtype='<i2').astype(float)
+    sent = np.frombuffer(mixer.mix(read_wav(audio)[1]), dtype='<i2').astype(float)
+    measured = 10 * math.log10(np.mean(clean ** 2) / np.mean((sent - clean) ** 2))
+    assert measured == pytest.approx(10, abs=.03)
+    assert mixer.metadata()['noise_calibration_samples'] == len(clean)
+    gain = mixer.gain
+    mixer.mix(bytes(960)); assert mixer.gain == gain
+
+
+def test_silent_seeded_recording_window_is_rejected_before_bootstrap(monkeypatch):
+    from app.services import waylo_audio_conditions as noise
+    monkeypatch.setattr(noise, '_recording', lambda *args: np.zeros(480000))
+    with pytest.raises(ValueError, match='calibration window'):
+        ContinuousNoise(reference(), snr_db=10, seed=7, noise_type='office')
+
+
 class Source:
     def __init__(self, fail_at=None):
         self.frames = []; self.fail_at = fail_at; self.target_speaking = False
@@ -75,20 +97,26 @@ def stream_at(path, source=None, kind='white'):
     return stream, source, observed, errors
 
 
+async def wait_for_frames(source, count):
+    async with asyncio.timeout(2):
+        while len(source.frames) < count:
+            await asyncio.sleep(.005)
+
+
 @pytest.mark.parametrize('kind', ['white', 'office', 'cafe', 'traffic'])
 def test_noise_published_through_greeting_turn_gaps_and_target_speech(tmp_path, kind):
     async def run():
         stream, source, observed, errors = stream_at(tmp_path / 'continuous.wav', kind=kind)
         stream.start()
-        await asyncio.sleep(.055)  # greeting / no caller utterance yet
+        await wait_for_frames(source, 2)  # greeting / no caller utterance yet
         before = len(source.frames)
         first = stream.enqueue(b'\x00\x08' * 960)
         await asyncio.wait_for(first.done, 1)
         source.target_speaking = True
-        await asyncio.sleep(.065)  # target response, noise must not stop
+        await wait_for_frames(source, len(source.frames) + 3)  # target response
         source.target_speaking = False
         gap = len(source.frames)
-        await asyncio.sleep(.045)  # between turns / tester planning
+        await wait_for_frames(source, gap + 2)  # between turns / tester planning
         second = stream.enqueue(b'\x00\x04' * 600)
         await asyncio.wait_for(second.done, 1)
         await stream.close()
@@ -145,7 +173,7 @@ def test_cancelled_send_stops_publisher_and_finalizes_partial_utterance(tmp_path
         stream.start()
         sender = asyncio.create_task(LiveKitVoicePeer._send_continuous(peer, reference(),
             turn_id='caller-1', reference='fictional caller', artifact_dir=tmp_path))
-        await asyncio.sleep(.055)
+        await wait_for_frames(source, 3)
         sender.cancel()
         with pytest.raises(asyncio.CancelledError): await sender
         assert stream.task.done()
@@ -194,7 +222,7 @@ def test_real_peer_publishes_one_mic_track_and_records_noise_with_target_audio(t
         peer.monitor = monitor
         await monitor.start()  # No provider/listener endpoints are configured.
         await peer.connect({'livekitUrl': 'unused', 'participantToken': 'dummy', 'roomName': 'fake-room'})
-        await asyncio.sleep(.045)
+        await wait_for_frames(peer.source, 2)
         assert monitor.keys == set()  # ambience must not mark caller speech as heard
         receipt, sent = await peer.send(pcm_wav(b'\x00\x08' * 600), turn_id='caller-1', reference='hello', artifact_dir=tmp_path)
         assert 'None:1:tester_to_target' in monitor.keys
@@ -202,7 +230,7 @@ def test_real_peer_publishes_one_mic_track_and_records_noise_with_target_audio(t
         target = b'\x00\x04' * 480
         peer._monitor_audio('target_to_tester', target, 24000)
         before = len(peer.source.frames)
-        await asyncio.sleep(.065)
+        await wait_for_frames(peer.source, before + 3)
         await peer.close()
         wav, metadata = await monitor.finish()
         assert len(peer.room.local_participant.published) == 1

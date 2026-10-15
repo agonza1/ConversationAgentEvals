@@ -1,5 +1,25 @@
 import { expect, test, type Page } from '@playwright/test';
 
+for (const [agent, executor] of [
+  ['voice-custom', 'cae_local_audio_loop'],
+  ['public-pipecat', 'pipecat_public_daily'],
+  ['public-signalwire', 'signalwire_public_webrtc'],
+] as const) {
+  test(`background noise is available for ${executor}, not only Waylo`, async ({ page }) => {
+    const posts = await mockReviewedVoiceSuite(page, { caseCount: 1 });
+    await page.goto(`/runs?suite_id=reviewed-assert-suite&run_scope=suite&agent_id=${agent}`);
+    const launch = page.getByRole('region', { name: 'Launch agent run' });
+    const noise = launch.getByRole('checkbox', { name: 'Add background noise', exact: true });
+    await expect(noise).not.toBeChecked();
+    await noise.check();
+    await launch.getByLabel('Background noise environment').selectOption('cafe');
+    await launch.getByLabel('Background noise level').selectOption('10');
+    await launch.getByRole('button', { name: /^Run 1 voice test$/ }).click();
+    await expect.poll(() => posts.length).toBe(1);
+    expect(posts[0]).toMatchObject({ executor_id: executor, tester_noise: { noise_type: 'cafe', snr_db: 10 } });
+  });
+}
+
 async function mockReviewedVoiceSuite(page: Page, options: { caseCount?: number; ready?: boolean; resultCases?: boolean; active?: boolean; publicMedia?: 'pipecat_daily_webrtc' | 'signalwire_webrtc' } = {}) {
   const scenarios = Array.from({ length: options.caseCount ?? 3 }, (_, index) => ({
     id: `assert-case-${index + 1}`, title: `Address correction ${index + 1}`,
@@ -835,7 +855,7 @@ test('launch evaluation streams conversations into the live list', async ({ page
   await expect(launch.getByLabel('Maximum exchanges')).toBeEnabled();
   await expect(launch.getByLabel('Selected run scope')).toContainText('Billing Address Change');
   await expect(launch.getByLabel('Execution tester')).toContainText('Scenario user (AI)');
-  await expect(launch.getByLabel('Execution runner')).toContainText(/local async runner/i);
+  await expect(launch.getByLabel('Execution runner')).toContainText('Text conversation');
   await expect(launch.getByLabel('Execution project')).toHaveValue('proj-shared-call-center');
   await launch.getByLabel('Execution project').selectOption('proj-personal-call-center');
   await expect(launch.getByLabel('Execution project')).toHaveValue('proj-personal-call-center');

@@ -415,6 +415,7 @@ class StreamingMediaBridge(FrameProcessor):
         target_sample_rate: int = 16000,
         end_type: type[Frame] | None = None,
         trailing_silence_secs: float = 0.65,
+        noise_condition: dict | None = None,
     ) -> None:
         super().__init__(name=f"{participant}_media_bridge")
         self.participant = participant
@@ -423,6 +424,8 @@ class StreamingMediaBridge(FrameProcessor):
         self.target_sample_rate = target_sample_rate
         self.end_type = end_type
         self.trailing_silence_secs = trailing_silence_secs
+        self.noise_condition = noise_condition
+        self.noise_track = None
         self.audio = bytearray()
         self.sample_rate = 24000
         self.channels = 1
@@ -455,6 +458,8 @@ class StreamingMediaBridge(FrameProcessor):
         await self.push_frame(frame, direction)
 
     async def cleanup(self) -> None:
+        if self.noise_track is not None:
+            await self.noise_track.close()
         if self._worker_task is not None:
             self._worker_task.cancel()
             await asyncio.gather(self._worker_task, return_exceptions=True)
@@ -526,6 +531,24 @@ class StreamingMediaBridge(FrameProcessor):
                 )
         self.sample_rate = frame.sample_rate
         self.channels = frame.num_channels
+        if self.noise_condition:
+            from background_noise import ClockedNoiseTrack, pcm_wav, read_wav
+            clean = resample_pcm16(pcm16_to_mono(frame.audio, frame.num_channels), frame.sample_rate, 24000)
+            self.sample_rate, self.channels = 24000, 1
+            if self.noise_track is None:
+                async def send(audio, rate):
+                    await self.push_frame(InputAudioRawFrame(resample_pcm16(audio, rate, self.target_sample_rate), self.target_sample_rate, 1), direction)
+
+                async def observe(audio, rate, _turn_pair):
+                    await self.audio_callback(audio, rate, 1)
+
+                self.noise_track = ClockedNoiseTrack(pcm_wav(clean, 24000), self.noise_condition, send=send, observe=observe)
+                self.noise_track.mixer.profile['level_reference'] = 'first_caller_tts_chunk_rms'
+                self.noise_track.start()
+            mixed = await self.noise_track.play(clean)
+            self.audio.extend(read_wav(mixed)[1])
+            self.audio_ended_at = time.time()
+            return
         self.audio.extend(frame.audio)
         await self.audio_callback(frame.audio, frame.sample_rate, frame.num_channels)
         mono = pcm16_to_mono(frame.audio, frame.num_channels)
@@ -544,6 +567,14 @@ class StreamingMediaBridge(FrameProcessor):
         self.audio_ended_at = time.time()
 
     async def _finish_turn(self, frame: Frame, direction: FrameDirection) -> None:
+        if self.noise_track is not None:
+            if isinstance(frame, EndFrame):
+                await self.noise_track.close()
+            else:
+                await self.noise_track.play(b'\0' * round(24000 * 2 * self.trailing_silence_secs))
+            self._turn_active = False
+            await self.push_frame(frame, direction)
+            return
         frame_bytes = self.target_sample_rate * 2 // 50
         if self._converted_pending:
             self._converted_pending.extend(

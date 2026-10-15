@@ -340,6 +340,7 @@ class PublicPipecatRunRequest(BaseModel):
     caller_text: str = Field(min_length=1, max_length=2_000)
     agent: str = Field(default='10-gradium', min_length=1, max_length=120)
     timeout_seconds: int = Field(default=90, ge=30, le=300)
+    tester_noise: dict[str, Any] | None = None
 
 
 class PublicPipecatDuplexRequest(PublicPipecatRunRequest):
@@ -366,6 +367,7 @@ class ReferenceDuplexRunRequest(BaseModel):
     target_voice: str = KOKORO_TARGET_VOICE
     speech: dict[str, Any] | None = None
     billing_simulation: bool = False
+    tester_noise: dict[str, Any] | None = None
 
     @model_validator(mode='after')
     def validate_distinct_voices(self) -> 'ReferenceDuplexRunRequest':
@@ -652,6 +654,8 @@ if PIPECAT_RUNTIME_AVAILABLE:
         ):
             super().__init__(name='target_llm')
             self.billing_simulation = billing_simulation
+            self.asr_source = self.asr_receipt = None
+            self.closing = False
             self.history = history
             self.model_name = model_name
             self.client = client
@@ -668,6 +672,11 @@ if PIPECAT_RUNTIME_AVAILABLE:
             if not isinstance(frame, _TargetTranscriptFrame):
                 await self.push_frame(frame, direction)
                 return
+            if self.closing:
+                return  # A final ambient ASR flush must not start another agent turn.
+            if self.asr_source is not None:
+                from copy import copy
+                self.asr_receipt = copy(self.asr_source)
             history = '\n'.join(f'{item.get("speaker")}: {item.get("text")}' for item in self.history)
             if self.billing_simulation is not None:
                 await _complete_billing_turn(self, frame.text, history, direction)
@@ -1116,12 +1125,23 @@ class _StreamingDuplexSession:
         self.kokoro_client = httpx.AsyncClient(timeout=90, limits=limits)
         self.runner_task: asyncio.Task[None] | None = None
         self.closed = False
+        self.noise_recording = None
+        self.noise_recording_task = None
+        if payload.tester_noise:
+            from continuous_audio import ContinuousDuplexAudio
+            self.noise_recording = ContinuousDuplexAudio(max_seconds=payload.total_timeout_seconds + 10)
 
         async def publish_caller(audio: bytes, sample_rate: int, channels: int) -> None:
-            self.bus.publish_chunk(audio, sample_rate=sample_rate, channels=channels)
+            if self.noise_recording is not None:
+                self.noise_recording.add('tester_to_target', audio, sample_rate=sample_rate, channels=channels)
+            else:
+                self.bus.publish_chunk(audio, sample_rate=sample_rate, channels=channels)
 
         async def publish_target(audio: bytes, sample_rate: int, channels: int) -> None:
-            self.bus.publish_chunk(audio, sample_rate=sample_rate, channels=channels)
+            if self.noise_recording is not None:
+                self.noise_recording.add('target_to_tester', audio, sample_rate=sample_rate, channels=channels)
+            else:
+                self.bus.publish_chunk(audio, sample_rate=sample_rate, channels=channels)
 
         async def announce_caller(event: dict[str, Any]) -> None:
             listener_media_key = self.bus.mark_audio_started(
@@ -1174,6 +1194,7 @@ class _StreamingDuplexSession:
             audio_callback=publish_caller,
             first_audio_callback=announce_caller,
             end_type=_TesterSpeechEndFrame,
+            noise_condition=payload.tester_noise,
         )
         self.target_asr = build_asr(self.speech,
             base_url=RTC_ASR_BASE_URL,
@@ -1189,6 +1210,8 @@ class _StreamingDuplexSession:
             client=self.llm_client,
             billing_simulation=self.billing_simulation,
         )
+        if payload.tester_noise:
+            self.target_llm.asr_source = self.target_asr
         self.target_tts = build_tts(self.speech,
             base_url=KOKORO_BASE_URL,
             voice=payload.target_voice,
@@ -1249,6 +1272,17 @@ class _StreamingDuplexSession:
 
     async def start(self) -> None:
         if self.runner_task is None:
+            if self.noise_recording is not None:
+                async def pump():
+                    recording = self.noise_recording
+                    step = recording.sample_rate // 50
+                    while True:
+                        end = recording.ready_sample()
+                        while recording.rendered + step <= end:
+                            self.bus.publish_chunk(recording.render(recording.rendered + step), sample_rate=recording.sample_rate, channels=1)
+                            await asyncio.sleep(0)
+                        await asyncio.sleep(.02)
+                self.noise_recording_task = asyncio.create_task(pump())
             runner = PipelineRunner(handle_sigint=False, handle_sigterm=False)
             self.runner_task = asyncio.create_task(runner.run(self.task))
             await asyncio.sleep(0)
@@ -1280,10 +1314,11 @@ class _StreamingDuplexSession:
                 f'Persistent Pipecat pipeline ended before the turn completed: {exception}'
             )
         turn_complete.result()
+        target_asr = self.target_llm.asr_receipt or self.target_asr
         required = {
             'tester LLM text': self.tester_llm.text,
             'tester TTS audio': self.caller_tts.audio,
-            'target ASR transcript': self.target_asr.transcript,
+            'target ASR transcript': target_asr.transcript,
             'target LLM text': self.target_llm.text,
             'target TTS audio': self.target_tts.audio,
             'tester ASR transcript': self.tester_asr.transcript,
@@ -1296,7 +1331,7 @@ class _StreamingDuplexSession:
             )
         if (
             self.caller_bridge.audio_ended_at is None
-            or self.target_asr.speech_ended_at is None
+            or target_asr.speech_ended_at is None
             or self.target_bridge.first_audio_at is None
             or self.target_bridge.audio_ended_at is None
         ):
@@ -1310,8 +1345,8 @@ class _StreamingDuplexSession:
         )
         return _StreamingExchangeResult(
             tester_llm=self.tester_llm,
-            caller_tts=self.caller_tts,
-            target_asr=self.target_asr,
+            caller_tts=self.caller_bridge if self.payload.tester_noise else self.caller_tts,
+            target_asr=target_asr,
             target_llm=self.target_llm,
             target_tts=self.target_tts,
             tester_asr=self.tester_asr,
@@ -1329,11 +1364,20 @@ class _StreamingDuplexSession:
         if self.closed:
             return
         self.closed = True
+        self.target_llm.closing = True
         try:
             if self.runner_task is not None and not self.runner_task.done():
                 await self.task.queue_frame(EndFrame())
                 await asyncio.wait_for(self.runner_task, timeout=10)
         finally:
+            if self.caller_bridge.noise_track is not None:
+                await self.caller_bridge.noise_track.close()
+            if self.noise_recording_task is not None:
+                self.noise_recording_task.cancel()
+                await asyncio.gather(self.noise_recording_task, return_exceptions=True)
+                end = max(self.noise_recording.cursors.values(), default=0)
+                if end > self.noise_recording.rendered:
+                    self.bus.publish_chunk(self.noise_recording.render(end), sample_rate=self.noise_recording.sample_rate, channels=1)
             if self.runner_task is not None and not self.runner_task.done():
                 self.runner_task.cancel()
                 await asyncio.gather(self.runner_task, return_exceptions=True)
@@ -1486,6 +1530,7 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                     'asr_protocol': getattr(result.target_asr, 'protocol', 'local-stt.v1'),
                     'asr_interim_count': len(result.target_asr.interims),
                     'asr_timing': result.target_asr.server_timing,
+                    **({'background_noise': session_holder['session'].caller_bridge.noise_track.mixer.metadata()} if payload.tester_noise else {}),
                 })
                 frame_evidence.append(tester_frame)
                 tester_wav = _pcm_to_wav(
@@ -1725,6 +1770,9 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                 if terminal_event is not None and getattr(session, 'billing_simulation', None) is not None:
                     terminal_event['billing_simulation'] = session.billing_simulation.evidence()
                 await session.close()
+                if getattr(session, 'noise_recording', None) is not None and terminal_event is not None:
+                    terminal_event['conversation_audio_wav_base64'] = base64.b64encode(session.noise_recording.wav()).decode('ascii')
+                    terminal_event['background_noise'] = session.caller_bridge.noise_track.mixer.metadata() if session.caller_bridge.noise_track else {}
         except Exception as exc:
             if terminal_event is None:
                 raise
@@ -1937,7 +1985,7 @@ async def _public_pipecat_duplex_events(
         if bus is None:
             return
         listener_media_key = f'{bus.session_id}:{turn_pair}:{direction}'
-        if listener_media_key not in marked_listener_audio:
+        if turn_pair > 0 and listener_media_key not in marked_listener_audio:
             bus.mark_audio_started(turn_pair=turn_pair, direction=direction)
             marked_listener_audio.add(listener_media_key)
 
@@ -2004,6 +2052,7 @@ async def _public_pipecat_duplex_events(
                     agent=payload.agent,
                     timeout_seconds=payload.timeout_seconds,
                     max_turn_pairs=payload.max_turn_pairs,
+                    tester_noise=payload.tester_noise,
                 ),
                 kokoro_base_url=KOKORO_BASE_URL,
                 kokoro_model=KOKORO_MODEL,
@@ -2014,6 +2063,8 @@ async def _public_pipecat_duplex_events(
                 audio_frame_callback=publish_audio_frame,
             )
             result['media'].update(await finish_recording(partial=False))
+            if payload.tester_noise:
+                result['media']['recording_metadata']['background_noise'] = result.get('provenance', {}).get('background_noise', {})
             await publish({'type': 'complete', 'result': result})
         except (ImportError, ModuleNotFoundError):
             await finish_recording(partial=True)

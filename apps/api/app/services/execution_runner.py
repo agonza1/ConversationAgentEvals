@@ -914,6 +914,7 @@ def _execute_public_pipecat_daily(
         scenario=scenario,
         max_exchanges=payload.max_exchanges,
         tester_model_name=payload.tester_model_name,
+        **({'tester_noise': payload.tester_noise.model_dump()} if payload.tester_noise else {}),
         event_observer=event_observer,
     )
     transcription = result['transcription_turns']
@@ -1092,6 +1093,7 @@ def _execute_signalwire_holyguacamole_webrtc(
         scenario=scenario,
         max_exchanges=payload.max_exchanges,
         tester_model_name=payload.tester_model_name,
+        **({'tester_noise': payload.tester_noise.model_dump()} if payload.tester_noise else {}),
     )
     transcription = result['transcription_turns']
     recording = result['recording_handle']
@@ -2015,6 +2017,7 @@ async def _execute_pipecat_webrtc(
             scenario=scenario,
             max_turn_pairs=payload.max_exchanges,
             total_timeout_seconds=payload.duplex_timeout_seconds,
+            **({'tester_noise': payload.tester_noise.model_dump()} if payload.tester_noise else {}),
             **({'billing_simulation': True} if (suite_id, scenario_id) == (BILLING_SUITE, BILLING_SCENARIO) else {}),
         )
     except Exception:

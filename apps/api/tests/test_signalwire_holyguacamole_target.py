@@ -31,6 +31,48 @@ def _stub_existing_cae_tester_media(monkeypatch):
     )
 
 
+def test_signalwire_noise_reaches_microphone_and_retains_continuous_evidence(tmp_path, monkeypatch):
+    from app.services.waylo_audio_conditions import pcm_wav, read_wav
+    from types import SimpleNamespace
+    import hashlib
+
+    clean = pcm_wav(b'\xe8\x03' * 2400)
+    sent = pcm_wav(b'\x4c\x04' * 2400)
+    continuous = tmp_path / 'continuous.wav'
+    continuous.write_bytes(pcm_wav(b'\xb0\x04' * 4800))
+    response = tmp_path / 'response.wav'
+    response.write_bytes(clean)
+    result_path = tmp_path / 'result.json'
+    monkeypatch.setenv(signalwire_target.SIGNALWIRE_PUBLIC_GATE_ENV, '1')
+    monkeypatch.setattr(signalwire_target.ReferenceMediaServices, 'synthesize', lambda *_args, **_kwargs: clean)
+    monkeypatch.setattr(signalwire_target.ReferenceMediaServices, 'transcribe', lambda *_args: 'Updated.')
+
+    def fake_call(_command, **kwargs):
+        env = kwargs['env']
+        noise = Path(env['SIGNALWIRE_HOLYGUACAMOLE_NOISE_WAV']).read_bytes()
+        assert any(read_wav(noise)[1])
+        profile = json.loads(env['SIGNALWIRE_HOLYGUACAMOLE_NOISE_PROFILE'])
+        assert profile['noise_type'] == 'office' and profile['seed'] == 7
+        result_path.write_text(json.dumps({
+            'status': 'pass', 'tester': {'background_noise': profile},
+            'exchanges': [{'caller_text': 'Hello', 'caller_audio_wav_base64': base64.b64encode(sent).decode()}],
+            'artifacts': {'target_audio': str(response), 'target_audio_mime': 'audio/wav',
+                'conversation_audio': str(continuous), 'target_response_audio_turns': [{'path': str(response)}]},
+        }))
+        return SimpleNamespace(stdout=json.dumps({'result_path': str(result_path)}), stderr='', returncode=0)
+
+    monkeypatch.setattr(signalwire_target.subprocess, 'run', fake_call)
+    result = run_signalwire_holyguacamole_call(caller_text='Hello', artifact_dir=tmp_path / 'artifacts',
+        conversation_id='noise-test', timeout_seconds=30,
+        tester_noise={'noise_type': 'office', 'snr_db': 10, 'seed': 7})
+    recording = result['recording_handle']
+    assert recording.uri == str(continuous) and recording.mime_type == 'audio/wav'
+    assert recording.sha256 == hashlib.sha256(continuous.read_bytes()).hexdigest()
+    assert recording.duration_ms == 200
+    assert recording.metadata['scope'] == 'continuous_duplex'
+    assert Path(recording.metadata['caller_audio_turn_uris'][0]).read_bytes() == sent
+
+
 def test_signalwire_target_requires_explicit_public_gate(tmp_path, monkeypatch):
     monkeypatch.delenv(signalwire_target.SIGNALWIRE_PUBLIC_GATE_ENV, raising=False)
     with pytest.raises(RuntimeError, match='CAE_ENABLE_SIGNALWIRE_HOLYGUACAMOLE'):
@@ -506,7 +548,7 @@ def test_signalwire_smoke_uses_direct_webrtc_and_audible_latency():
     assert 'supplied audio file (speech text unverified)' in script
     assert 'remote_audio_after_caller_seen' in script
     assert '/reference-tester/turn' in script
-    assert "caller_audio_wav_base64: callerWav.toString('base64')" in script
+    assert "caller_audio_wav_base64: sentWav.toString('base64')" in script
     assert '--max-exchanges must be 1 or 2.' in script
     assert 'POST_CALLER_GRACE_MS = 300' in script
     assert 'capture.candidateOnsetAt ??= receivedAt' in script

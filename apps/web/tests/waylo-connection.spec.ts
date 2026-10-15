@@ -113,7 +113,7 @@ test('synthetic noise is opt-in and included only when enabled for a Waylo call'
   await expect(audioDetails.getByText(/random seed/)).toBeHidden();
   await audioDetails.getByText('Audio details', { exact: true }).click();
   await expect(audioDetails).toContainText('including pauses and target speech');
-  await expect(audioDetails).toContainText('calibrated to the first caller utterance');
+  await expect(audioDetails).toContainText('calibrated to the first caller audio');
   await expect(audioDetails.getByText(/Scenario audio conditions still apply when off/)).toBeVisible();
   await expect(noise).not.toBeChecked();
   await noise.press('Space');

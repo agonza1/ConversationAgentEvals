@@ -104,6 +104,8 @@ class OutboundVoiceRunContext:
     target_wavs: list[bytes] = field(default_factory=list)
     turns: list[dict[str, Any]] = field(default_factory=list)
     exchanges: list[dict[str, Any]] = field(default_factory=list)
+    noise_track: Any = None
+    caller_sent_wav: bytes | None = None
 
     async def report_phase(self, phase: str, text: str, *, turn_pair: int = 0) -> None:
         phase_key = f'{turn_pair}:{phase}'

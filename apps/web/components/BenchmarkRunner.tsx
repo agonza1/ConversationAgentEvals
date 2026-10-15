@@ -3816,7 +3816,7 @@ export function BenchmarkRunner({
           ? 'signalwire-ai-agent'
           : executionModelName || DEFAULT_EXECUTION_MODEL;
       const queued = await createExecutionRun({
-        tester_noise: wayloAgent && testerNoiseEnabled ? { noise_type: testerNoiseType, snr_db: testerNoiseSnr } : undefined,
+        tester_noise: (wayloAgent || sampleVoiceAgent || publicPipecatAgent || signalwireAgent) && testerNoiseEnabled ? { noise_type: testerNoiseType, snr_db: testerNoiseSnr } : undefined,
         suite_id: suiteForRun,
         scenario_ids: scenarioIds,
         mode: runMode,
@@ -4972,7 +4972,7 @@ export function BenchmarkRunner({
                   />
                 </label>
               ) : null}
-              {selectedScoreAgent?.target === 'waylo' ? (
+              {['builtin_sample_voice', 'pipecat_public_demo', 'signalwire_holy_guacamole', 'waylo'].includes(selectedScoreAgent?.target || '') ? (
                 <div className="run-noise-option">
                   <label className="run-noise-toggle">
                     <span>Background noise</span>
@@ -5013,7 +5013,7 @@ export function BenchmarkRunner({
                     <summary>Audio details</summary>
                     <p>Office, café, and traffic use recorded ambience. Noise stays on the caller microphone throughout the call, including pauses and target speech.
                       Type, level, random seed, and recording fingerprint are saved for repeatability. Lower SNR means louder noise.
-                      Level is calibrated to the first caller utterance and stays fixed. Scenario audio conditions still apply when off.</p>
+                      Level is calibrated to the first caller audio and stays fixed. Scenario audio conditions still apply when off.</p>
                   </details>
                 </div>
               ) : null}

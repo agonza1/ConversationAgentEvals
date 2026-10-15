@@ -3,14 +3,37 @@ import math
 import random
 import hashlib
 import json
+import io
+import wave
 from array import array
 from functools import lru_cache
 from pathlib import Path
 
-from app.services.waylo_livekit import pcm_wav, read_wav
+def pcm_wav(pcm: bytes, rate: int = 24000) -> bytes:
+    output = io.BytesIO()
+    with wave.open(output, 'wb') as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(rate)
+        writer.writeframes(pcm)
+    return output.getvalue()
+
+
+def read_wav(audio: bytes):
+    with wave.open(io.BytesIO(audio), 'rb') as reader:
+        if (len(audio) > 10_000_000 or reader.getcomptype() != 'NONE'
+                or reader.getsampwidth() != 2 or reader.getnchannels() != 1
+                or reader.getframerate() not in {16000, 24000, 48000}):
+            raise ValueError('Background noise requires mono PCM16 WAV at 16, 24 or 48 kHz.')
+        pcm = reader.readframes(reader.getnframes())
+        if not pcm or len(pcm) != reader.getnframes() * 2:
+            raise ValueError('Background noise requires complete nonempty PCM audio.')
+        return reader.getframerate(), pcm
 
 
 _ASSETS = Path(__file__).resolve().parents[1] / 'assets' / 'background-noise'
+if not _ASSETS.exists():  # Standalone Pipecat worker image.
+    _ASSETS = Path(__file__).resolve().parent / 'background-noise'
 
 
 def noise_profile(noise_type: str = 'white') -> dict:
@@ -110,11 +133,28 @@ class ContinuousNoise:
         self.generator = random.Random(seed)
         self.recording = None if noise_type == 'white' else _recording(noise_type, self.rate, profile['recording_sha256'])
         self.position = self.generator.randrange(len(self.recording)) if self.recording is not None else 0
-        noise_rms = math.sqrt(float((self.recording ** 2).mean())) if self.recording is not None else 1.0
+        if self.recording is None:
+            calibration = random.Random(seed)  # preserve the playback PRNG state
+            power = sum(calibration.gauss(0, 1) ** 2 for _ in samples)
+        else:
+            import numpy as np
+            # Whole loops plus at most two slices: exact seeded window RMS,
+            # bounded memory even when the utterance is longer than the asset.
+            cycles, tail = divmod(len(samples), len(self.recording))
+            power = cycles * float(np.dot(self.recording, self.recording))
+            first = min(tail, len(self.recording) - self.position)
+            segment = self.recording[self.position:self.position + first]
+            power += float(np.dot(segment, segment))
+            segment = self.recording[:tail - first]
+            power += float(np.dot(segment, segment))
+        noise_rms = math.sqrt(power / len(samples))
+        if not noise_rms:
+            raise ValueError('The seeded calibration window contains no audible background noise.')
         self.gain = signal_rms / (10 ** (snr_db / 20)) / noise_rms
         self.samples = self.clipped = 0
         self.profile = {**profile, 'scope': 'continuous_caller_track', 'seed': seed,
             'snr_db_requested': snr_db, 'level_reference': 'first_caller_utterance_rms',
+            'noise_calibration': 'seeded_reference_window', 'noise_calibration_samples': len(samples),
             'signal_rms_pcm16': signal_rms, 'noise_rms_pcm16': noise_rms * self.gain,
             'recording_offset_samples': self.position if self.recording is not None else None}
 

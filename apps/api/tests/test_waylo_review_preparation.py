@@ -128,8 +128,20 @@ def test_bad_noise_fails_closed(value):
 
 
 def test_noise_rejected_for_unsupported_transport():
-    with pytest.raises(ValidationError, match='only for Waylo'):
+    with pytest.raises(ValidationError, match='live voice test'):
         ExecutionRunCreateRequest(tester_noise={'seed': 1})
+
+
+@pytest.mark.parametrize('executor,transport', [
+    ('cae_local_audio_loop', 'pipecat_small_webrtc'),
+    ('pipecat_public_daily', 'pipecat_daily_webrtc'),
+    ('signalwire_public_webrtc', 'signalwire_webrtc'),
+    ('waylo_livekit', 'waylo_livekit'),
+])
+def test_noise_available_for_every_live_voice_executor(executor, transport):
+    payload = ExecutionRunCreateRequest(mode='pipecat_webrtc', executor_id=executor,
+        audio_transport=transport, tester_noise={'seed': 7, 'noise_type': 'office', 'snr_db': 10})
+    assert payload.tester_noise.model_dump() == {'seed': 7, 'noise_type': 'office', 'snr_db': 10}
 
 
 def test_completed_capture_retains_launch_contract_without_grading(capture, monkeypatch):
