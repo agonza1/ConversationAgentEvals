@@ -24,6 +24,7 @@ ExecutionRunStatus = Literal['queued', 'running', 'completed', 'needs_review', '
 
 class TesterNoiseCondition(BaseModel):
     model_config = ConfigDict(extra='forbid')
+    noise_type: Literal['white', 'office', 'cafe', 'traffic'] = 'white'
     snr_db: float = Field(default=20, ge=-5, le=40, allow_inf_nan=False)
     seed: int = Field(default_factory=lambda: secrets.randbits(32), ge=0, le=4294967295)
 
@@ -140,7 +141,7 @@ class ExecutionRunCreateRequest(BaseModel):
         elif self.executor_id not in {'local_async_runner', 'acc_browser_webrtc', 'acc_sip', 'acc_phone'}:
             raise ValueError('text_callable mode requires a text or ACC executor')
         if self.tester_noise is not None and self.executor_id != 'waylo_livekit':
-            raise ValueError('Synthetic tester noise is currently supported only for Waylo LiveKit calls.')
+            raise ValueError('Tester background noise is currently supported only for Waylo LiveKit calls.')
         return self
 
 

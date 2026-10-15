@@ -106,11 +106,11 @@ test('temporary grant supports small whole suites that fit its capture budget', 
 
 test('synthetic noise is opt-in and included only when enabled for a Waylo call', async ({ page }) => {
   const fixture = await openConnectedRun(page, 1);
-  const noise = page.getByRole('checkbox', { name: 'Add synthetic background noise' });
+  const noise = page.getByRole('checkbox', { name: 'Add background noise', exact: true });
   await expect(noise).not.toBeChecked();
-  await expect(noise).toHaveAccessibleDescription('Tester only · White noise · 20 dB SNR');
+  await expect(noise).toHaveAccessibleDescription('Tester only · White noise (synthetic) · 20 dB SNR');
   const audioDetails = page.locator('.run-noise-details');
-  await expect(audioDetails.getByText(/The random seed/)).toBeHidden();
+  await expect(audioDetails.getByText(/random seed/)).toBeHidden();
   await audioDetails.getByText('Audio details', { exact: true }).click();
   await expect(audioDetails.getByText(/Scenario audio conditions still apply when off/)).toBeVisible();
   await expect(noise).not.toBeChecked();
@@ -118,12 +118,39 @@ test('synthetic noise is opt-in and included only when enabled for a Waylo call'
   await expect(noise).toBeChecked();
   await noise.press('Space');
   await expect(noise).not.toBeChecked();
-  await page.getByText('Synthetic background noise', { exact: true }).click();
+  await page.getByText('Background noise', { exact: true }).click();
   await expect(noise).toBeChecked();
   await page.getByRole('button', { name: 'Run 1 voice test', exact: true }).click();
   await expect.poll(() => fixture.requests.filter((item) => item.path === '/api/execution/runs' && item.method === 'POST').length).toBe(1);
-  expect(fixture.requests.find((item) => item.path === '/api/execution/runs' && item.method === 'POST')?.body?.tester_noise).toEqual({ snr_db: 20 });
+  expect(fixture.requests.find((item) => item.path === '/api/execution/runs' && item.method === 'POST')?.body?.tester_noise).toEqual({ noise_type: 'white', snr_db: 20 });
 });
+
+for (const noiseType of ['office', 'cafe', 'traffic']) {
+  test(`recorded ${noiseType} background and level reach the launch request only when enabled`, async ({ page }) => {
+    const fixture = await openConnectedRun(page, 1);
+    const noise = page.getByRole('checkbox', { name: 'Add background noise', exact: true });
+    await noise.check();
+    await page.getByLabel('Background noise environment').selectOption(noiseType);
+    await page.getByLabel('Background noise level').selectOption('5');
+    const preview = page.locator('.run-noise-preview audio');
+    await expect(preview).toHaveAttribute('src', `/api/execution/noise-presets/${noiseType}/audio`);
+    await expect(preview).toHaveAttribute('preload', 'none');
+    await expect(preview).not.toHaveAttribute('autoplay');
+    await noise.uncheck();
+    await expect(preview).toHaveCount(0);
+    await expect(page.getByLabel('Background noise environment')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Run 1 voice test', exact: true }).click();
+    await expect.poll(() => fixture.requests.filter((item) => item.path === '/api/execution/runs' && item.method === 'POST').length).toBe(1);
+    expect(fixture.requests.find((item) => item.path === '/api/execution/runs' && item.method === 'POST')?.body).not.toHaveProperty('tester_noise');
+    await noise.check();
+    await expect(page.getByLabel('Background noise environment')).toHaveValue(noiseType);
+    await expect(page.getByLabel('Background noise level')).toHaveValue('5');
+    await page.getByRole('button', { name: 'Run 1 voice test', exact: true }).click();
+    await expect.poll(() => fixture.requests.filter((item) => item.path === '/api/execution/runs' && item.method === 'POST').length).toBe(2);
+    expect(fixture.requests.filter((item) => item.path === '/api/execution/runs' && item.method === 'POST')[1]?.body?.tester_noise)
+      .toEqual({ noise_type: noiseType, snr_db: 5 });
+  });
+}
 
 test('idle time reduces the usable grant budget without extending temporary access', async ({ page }) => {
   await page.clock.install();

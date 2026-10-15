@@ -1,0 +1,44 @@
+{
+  "office": {
+    "title": "Office Ambience.wav",
+    "author": "DiArchangeli",
+    "source": "https://freesound.org/people/DiArchangeli/sounds/108695/",
+    "download": "https://cdn.freesound.org/previews/108/108695_1779874-hq.mp3",
+    "license": "CC0-1.0",
+    "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "excerpt_seconds": [
+      5,
+      25
+    ],
+    "sha256": "767e99261fd256b867aa19d4c1df37e5b74ff23fe3992a58af4cabb4ce18ff06",
+    "source_sha256": "4a435d6792c0ac29e6ee0b5e8511c8de1b3405c76bfc303852df7e463b779ec6"
+  },
+  "cafe": {
+    "title": "Coffee shop ambience (remastered)",
+    "author": "C_Rogers; original by waweee",
+    "source": "https://freesound.org/people/C_Rogers/sounds/453074/",
+    "download": "https://cdn.freesound.org/previews/453/453074_3569783-hq.mp3",
+    "license": "CC0-1.0",
+    "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "excerpt_seconds": [
+      5,
+      25
+    ],
+    "sha256": "9071790250a20d6a713e955ad5d2806e199cdbabf0d1a4cb2989c470eba4adb0",
+    "source_sha256": "f72f1bfbbab6bbe51ed72bce1c3e791bda49534605426f7a6d9b3005585ca794"
+  },
+  "traffic": {
+    "title": "Chicago Traffic",
+    "author": "craigsmith",
+    "source": "https://freesound.org/people/craigsmith/sounds/817138/",
+    "download": "https://cdn.freesound.org/previews/817/817138_2524442-hq.mp3",
+    "license": "CC0-1.0",
+    "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "excerpt_seconds": [
+      5,
+      25
+    ],
+    "sha256": "34f31ad766d21517a2208acf7f95dc2db78be35f0aee222250f4a5046941c37d",
+    "source_sha256": "1c76a9c99fa145eea2f2f16192472d6259aa8c06850f651a58ac3d4036873d16"
+  }
+}
