@@ -19,6 +19,7 @@ from app.services.vcon_interop import (
     IETF_VCON_VENDOR,
     IETF_VCON_VERSION,
     is_vcon_timestamp,
+    normalize_vcon_sha512,
     is_vcon_sha512 as _is_sha512_base64url,
     vcon_dialog_errors,
 )
@@ -184,6 +185,10 @@ def build_ietf_execution_vcon(
     recording_dialog, recording_status = _portable_recording_dialog(recording)
     if recording_dialog:
         dialog.append(recording_dialog)
+    if not dialog:
+        # A standards-defined placeholder anchors evidence with no captured dialog.
+        # Never fabricate spoken text, clock origins, or a failed call disposition.
+        dialog.append({'type': 'recording', 'parties': [0, 1]})
 
     dialog_indexes = list(range(len(dialog)))
     analysis: list[dict[str, Any]] = [{
@@ -255,6 +260,7 @@ def ietf_vcon_summary(vcon_export: dict[str, Any] | None) -> dict[str, Any]:
     dialog = vcon_export.get('dialog') if isinstance(vcon_export, dict) else []
     recording_available = any(
         isinstance(item, dict) and item.get('type') == 'recording'
+        and (item.get('body') or item.get('url'))
         for item in dialog if isinstance(dialog, list)
     )
     return {
@@ -291,10 +297,27 @@ def validate_ietf_vcon(vcon_export: Any) -> dict[str, Any]:
     parties = vcon_export.get('parties')
     if not isinstance(parties, list) or not parties:
         errors.append('parties must contain at least one participant')
-    errors.extend(vcon_dialog_errors(vcon_export.get('dialog')))
+    dialogs = vcon_export.get('dialog')
+    errors.extend(vcon_dialog_errors(dialogs, allow_legacy_hash=False))
+    attachments = vcon_export.get('attachments', [])
+    if not isinstance(attachments, list):
+        errors.append('attachments must be an array')
+        attachments = []
+    for index, attachment in enumerate(attachments):
+        if not isinstance(attachment, dict):
+            errors.append(f'attachments[{index}] must be an object')
+            continue
+        if not is_vcon_timestamp(attachment.get('start')):
+            errors.append(f'attachments[{index}] start must be an RFC 3339 timestamp')
+        reference = attachment.get('dialog')
+        if type(reference) is not int or not isinstance(dialogs, list) or not 0 <= reference < len(dialogs):
+            errors.append(f'attachments[{index}] dialog must reference a dialog object')
+        reference = attachment.get('party')
+        if type(reference) is not int or not isinstance(parties, list) or not 0 <= reference < len(parties):
+            errors.append(f'attachments[{index}] party must reference a participant')
     analysis = vcon_export.get('analysis')
-    if not isinstance(analysis, list) or not analysis:
-        errors.append('analysis must contain CAE provenance')
+    if analysis is not None and not isinstance(analysis, list):
+        errors.append('analysis must be an array')
     return {'valid': not errors, 'errors': errors}
 
 
@@ -404,7 +427,7 @@ def _portable_recording_dialog(
                 'content hash.'
             ),
         }
-    content_hash = digest
+    content_hash = normalize_vcon_sha512(digest)
     metadata = media.get('metadata')
     scope = str(metadata.get('scope') or '') if isinstance(metadata, dict) else ''
     parties = [1] if 'target' in scope else [0] if 'caller' in scope else [0, 1]

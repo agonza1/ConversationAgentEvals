@@ -15,7 +15,7 @@ from typing import Any, Literal
 from urllib.parse import urlsplit
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
@@ -196,8 +196,15 @@ def execution_reference_stream(
 def create_execution_run(
     payload: ExecutionRunCreateRequest,
     background_tasks: BackgroundTasks,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    from app.services.agent_store import get_agent
+    from app.routes.agents import _browser_waylo_lease
+    from app.services.waylo_connection import bind_run, WayloConnectionError
+    agent = get_agent(payload.agent_id) if payload.agent_id else None
+    lease = _browser_waylo_lease(request, agent) if agent else None
+    queued = None
     try:
         payload = payload.model_copy(update={
             'product_project_id': resolve_execution_product_project_id(
@@ -208,8 +215,12 @@ def create_execution_run(
             ),
         })
         payload = prepare_execution_reference_models(payload)
-        queued = start_execution_run(payload, preflight=True)
-    except (ValueError, ReferenceRuntimeError) as exc:
+        queued = start_execution_run(payload, preflight=True, **({'waylo_lease': lease} if lease else {}))
+        if lease:
+            bind_run(queued['execution_run_id'], lease)
+    except (ValueError, ReferenceRuntimeError, WayloConnectionError) as exc:
+        if queued:
+            execution_run_store.mark_execution_run_failed(queued['execution_run_id'], str(exc))
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     background_tasks.add_task(execute_execution_run, queued['execution_run_id'], payload)
     return queued
@@ -239,7 +250,10 @@ def get_run(execution_run_id: str, user_id: str = Query(...)):
     run = execution_run_store.get_execution_run(execution_run_id)
     if run is None or run.get('user_id') != user_id:
         raise HTTPException(status_code=404, detail='Execution run not found.')
-    return run
+    # Presentation-only projection: internal store snapshots remain byte-for-
+    # byte authoritative for capture/review optimistic concurrency checks.
+    from app.services.waylo_reporting import present_run
+    return present_run(run)
 
 
 @router.get('/runs/{execution_run_id}/conversations/{conversation_id}')
@@ -577,29 +591,18 @@ def download_conversation_vcon(
     exported = deepcopy((conversation or {}).get('ietf_vcon_export'))
     if not isinstance(exported, dict):
         raise HTTPException(status_code=404, detail='Portable conversation evidence not found.')
-    if include_audio:
-        recording = (conversation or {}).get('recording') or {}
-        uri = str(recording.get('uri') or recording.get('recording_url') or '')
-        root = (execution_run_store.RUNS_DIR / execution_run_id).resolve()
-        path = Path(uri).resolve() if uri and '://' not in uri and not uri.startswith('/api/') else None
-        if path is None or not path.is_relative_to(root) or not path.is_file():
-            raise HTTPException(status_code=422, detail='No local recording available for inline export; use the default export for portable remote media.')
-        limit = 20 * 1024 * 1024
-        with path.open('rb') as stream:
-            audio = stream.read(limit + 1)
-        if len(audio) > limit:
-            raise HTTPException(status_code=413, detail='Inline recording exceeds the 20 MB limit.')
-        metadata = recording.get('metadata') or {}
-        scope = str(metadata.get('scope') or '')
-        item = {'type': 'recording', 'parties': [1] if 'target' in scope else [0] if 'caller' in scope else [0, 1],
-                'mediatype': str(recording.get('mime_type') or 'audio/wav'), 'encoding': 'base64url',
-                'body': base64.urlsafe_b64encode(audio).decode('ascii').rstrip('='),
-                'content_hash': base64.urlsafe_b64encode(hashlib.sha512(audio).digest()).decode('ascii').rstrip('=')}
-        exported.setdefault('dialog', []).append(item)
-        for analysis in exported.get('analysis') or []:
-            if analysis.get('schema') == 'cae-execution-evidence-v1':
-                analysis['body']['recording'] = {'status': 'inline', 'dialog': len(exported['dialog']) - 1}
-    return JSONResponse(exported, headers={'Content-Disposition': 'attachment; filename="conversation.vcon"'})
+    from app.services.vcon_media import MediaExportError, export_conversation_media
+    from app.services.execution_vcon import validate_ietf_vcon
+    try:
+        exported = export_conversation_media(exported, conversation or {},
+            execution_run_store.RUNS_DIR / execution_run_id, include_audio=include_audio)
+    except MediaExportError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from None
+    validation = validate_ietf_vcon(exported)
+    if not validation['valid']:
+        raise HTTPException(422, 'Portable conversation evidence failed validation: ' + '; '.join(validation['errors']))
+    return JSONResponse(exported, headers={'Content-Disposition': 'attachment; filename="conversation.vcon"',
+                                          'Cache-Control': 'no-store, private'})
 
 
 def _listener_run_or_403(token: str) -> tuple[dict[str, Any], dict[str, Any]]:

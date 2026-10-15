@@ -410,6 +410,7 @@ class OutboundVoiceBroadcastAudioRequest(BaseModel):
     sample_rate: int = Field(ge=8000, le=96000)
     channels: int = Field(default=1, ge=1, le=2)
     pcm16_base64: str = Field(min_length=1, max_length=1_500_000)
+    listener_media_keys: list[str] | None = Field(default=None, max_length=202)
 
 
 class OutboundVoiceBroadcastCloseRequest(BaseModel):
@@ -2089,10 +2090,13 @@ async def outbound_voice_broadcast_audio(
         raise HTTPException(status_code=422, detail='pcm16_base64 is invalid.') from exc
     if not audio or len(audio) % (payload.channels * 2) != 0:
         raise HTTPException(status_code=422, detail='PCM16 audio is empty or frame-alignment is invalid.')
-    listener_media_key = (
+    keys = payload.listener_media_keys if payload.listener_media_keys is not None else [
         f'{broadcast.session_id}:{payload.turn_pair}:{payload.direction}'
-    )
-    broadcast.mark_audio_started(listener_media_key)
+    ]
+    if any(not key.startswith(f'{broadcast.session_id}:') or len(key) > 400 for key in keys):
+        raise HTTPException(status_code=422, detail='Listener media keys do not match this session.')
+    for key in keys:
+        broadcast.mark_audio_started(key)
     broadcast.publish(audio, sample_rate=payload.sample_rate, channels=payload.channels)
     return {'status': 'published', 'bytes': len(audio)}
 

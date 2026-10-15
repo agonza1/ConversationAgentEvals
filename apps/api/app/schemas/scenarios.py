@@ -12,6 +12,7 @@ class ScenarioCreateRequest(BaseModel):
     simulated_user_prompt: str | None = None
     simulatedUserPrompt: str | None = None
     prompt: str | None = None
+    spoken_opener: str | None = Field(default=None, max_length=4000)
     expected_output: str | None = None
     expectedOutput: str | None = None
     description: str | None = None
@@ -32,6 +33,10 @@ class ScenarioCreateRequest(BaseModel):
         self.simulated_user_prompt = prompt
         self.expected_output = expected
         self.description = description
+        if self.spoken_opener is not None:
+            self.spoken_opener = self.spoken_opener.strip()
+            if not self.spoken_opener:
+                raise ValueError('spoken_opener must be non-blank when supplied')
         if self.title is not None:
             self.title = self.title.strip() or None
         for key in ('required_actions', 'forbidden_actions'):
@@ -52,6 +57,7 @@ class ScenarioRecord(BaseModel):
     type: Literal['scenario'] = 'scenario'
     description: str
     simulated_user_prompt: str
+    spoken_opener: str | None = None
     expected_output: str
     persona: str | None = None
     goal: str | None = None

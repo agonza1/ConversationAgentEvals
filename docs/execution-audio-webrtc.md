@@ -21,6 +21,32 @@ A transport is not a target, and replayed evidence is not a new agent target. Ta
 registered under `/targets`; runs launch from `/runs` and persist snapshots under
 `artifacts/execution-runs/{id}/`.
 
+## Shared live listening and replay
+
+Configured Waylo LiveKit calls now reuse the public Pipecat demo's
+`ContinuousDuplexAudio` mixer and the existing authenticated CAE listener bus.
+The browser uses the same **Listen to live WebRTC**, **Stop live WebRTC**, and
+read-only listener-link controls. It receives a mixed audio track; it does not
+join the provider's room, receive provider tokens, or request a microphone.
+
+Caller PCM is paced in 20 ms accepted local frames; received target PCM is
+captured concurrently. The mixer preserves observed pauses, greetings and
+overlap on the local monotonic media clock. The same committed PCM powers live
+monitoring and the continuous WAV used for recorded playback/pause/resume.
+This establishes local handoff/receipt evidence, not remote playback confirmation
+or the listener browser's own network-quality measurements.
+
+Monitoring uses bounded 100 ms batches and a one-second maximum pending queue.
+A failed or lagging monitor is explicitly reported to the shared UI, which
+switches to the red **HTTP fallback** status. The call and raw evidence capture
+continue independently; fallback plays completed turn captures and is not
+continuous low-latency listening. Partial mixed recordings are labelled partial,
+and portable exports retain raw-track recovery rather than claiming completeness.
+
+The common listener surface can be reused by audio adapters that expose PCM.
+It cannot create live audio for text-only endpoints, saved transcript imports,
+or unimplemented browser/SIP transports. Those capability gaps stay explicit.
+
 ## Public API (unified naming)
 
 | Field | Value | Notes |

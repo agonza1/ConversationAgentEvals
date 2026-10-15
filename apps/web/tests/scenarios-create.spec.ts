@@ -15,6 +15,7 @@ test('scenarios page can create and view a scenario', async ({ page }) => {
 
   await page.getByPlaceholder('Account lockout handoff').fill('Account access issue');
   await page.getByPlaceholder('Describe the user’s situation and request…').fill(prompt);
+  await page.getByLabel('Spoken opening line').fill('Hi, I cannot log into my account after changing my password.');
   await page.getByPlaceholder('What the agent should do or say…').fill(expected);
   await page.getByLabel('Required behaviors (one per line)').fill('Collect customer details\nRoute to account support');
   await page.getByLabel('Forbidden behaviors (one per line, optional)').fill('Reveal passwords');
@@ -24,6 +25,7 @@ test('scenarios page can create and view a scenario', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Account access issue' })).toBeVisible();
   const selectedScenario = page.getByLabel('Selected scenario');
   await expect(selectedScenario.getByText('User persona / starting prompt')).toBeVisible();
+  await expect(selectedScenario.getByText('Hi, I cannot log into my account after changing my password.')).toBeVisible();
   await expect(selectedScenario.getByText(prompt).first()).toBeVisible();
   await expect(selectedScenario.getByText('Expected final state')).toBeVisible();
   await expect(selectedScenario.getByText(expected)).toBeVisible();

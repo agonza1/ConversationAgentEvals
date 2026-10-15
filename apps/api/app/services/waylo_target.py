@@ -1,0 +1,418 @@
+"""Waylo's public API adapter. No dashboard/session credentials enter evidence.
+
+Contract inspected at application a3848b558188f77523d99324c811ac1cb0a709b2.
+Calls are captured, never automatically submitted for evaluation.
+"""
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import math
+import uuid
+from copy import deepcopy
+from typing import Any
+from urllib.parse import urlsplit
+
+import httpx
+
+from app.services.target_secrets import resolve_http_target_secret
+from app.services.vcon_evidence import MAX_EVENTS, MAX_PROFILE_BYTES, PURPOSE, attach_evidence, evidence_body, redact
+from app.services.execution_vcon import build_ietf_execution_vcon
+from app.services.vcon_interop import is_vcon_timestamp
+
+
+class WayloError(ValueError):
+    """Safe boundary error: deliberately excludes response bodies and URLs."""
+
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
+
+
+def _validate_session_timestamps(session: dict) -> None:
+    if (not is_vcon_timestamp(session.get('createdAt'))
+            or (session.get('endedAt') is not None and not is_vcon_timestamp(session['endedAt']))):
+        raise WayloError('Invalid Waylo session timestamps; capture is incomplete.')
+
+
+def api_url(value: str) -> str:
+    try:
+        parsed = urlsplit(value)
+        # urlsplit defers port validation until this property is accessed.
+        parsed.port
+    except ValueError:
+        raise ValueError('Waylo API base must have a valid host and port.') from None
+    if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
+        raise ValueError('Waylo API base must be an absolute HTTP(S) URL.')
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError('Waylo API base cannot contain credentials, query parameters or fragments.')
+    if parsed.scheme == 'http' and parsed.hostname not in {'localhost', '127.0.0.1', '::1', 'host.docker.internal'}:
+        raise ValueError('Remote Waylo APIs require HTTPS.')
+    return value.rstrip('/')
+
+
+def clean_native(value: Any, secret_values: tuple[str, ...] = ()) -> Any:
+    """Additional provider-safe redaction, including strings and signed URLs.
+
+Native payloads are untrusted and can contain arbitrary tool auth conventions.
+Opaque secret values are removed even when placed under an innocuous key.
+Entries whose keys contain a supplied secret are dropped, avoiding key collisions.
+"""
+    if isinstance(value, dict):
+        return {k: clean_native(v, secret_values) for k, v in redact(value).items()
+                if str(k).lower() not in {'headers', 'participantidentity', 'roomname', 'turn',
+                                          'livekiturl', 'endpoint', 'endpointurl', 'url', 'uri'}
+                and not any(secret and secret in str(k) for secret in secret_values)}
+    if isinstance(value, list):
+        return [clean_native(v, secret_values) for v in value]
+    if isinstance(value, str):
+        if value.lstrip().startswith(('{', '[')):
+            try:
+                return json.dumps(clean_native(json.loads(value), secret_values), sort_keys=True)
+            except ValueError:
+                pass
+        for secret in secret_values:
+            if secret:
+                value = value.replace(secret, '[redacted]')
+        # Never export bearer strings or potentially authenticated links in opaque fields.
+        if 'bearer ' in value.lower() or '://' in value:
+            return '[redacted credential or URL]'
+    return value
+
+
+class WayloClient:
+    def __init__(self, target: dict, *, client: httpx.AsyncClient | None = None, credential_lease=None):
+        self.target = target
+        connection = target['connection']
+        self.base = api_url(connection['endpoint_url'])
+        self.workspace = str(uuid.UUID(connection['workspace_id']))
+        self.agent = str(uuid.UUID(connection['waylo_agent_id']))
+        self.credential_lease = credential_lease
+        if connection.get('auth_type') == 'waylo_browser_session':
+            if credential_lease is None:
+                raise WayloError('Connect Waylo in this browser before using this temporary target.')
+            from app.services.waylo_connection import authorize_lease_target
+            authorize_lease_target(credential_lease, target)
+            credential_lease.check()
+            self._secret = None  # Never cache an access token outside its revocable memory grant.
+        else:
+            if credential_lease is not None:
+                raise WayloError('Temporary credentials cannot replace a server credential reference.')
+            self._secret = resolve_http_target_secret(connection['secret_ref'])
+        self.client = client or httpx.AsyncClient(timeout=connection.get('timeout_ms', 15000) / 1000,
+                                                 follow_redirects=False, trust_env=credential_lease is None)
+        self._owns_client = client is None
+
+    @property
+    def redaction_values(self) -> tuple[str, ...]:
+        return (self.credential_lease.token(),) if self.credential_lease else (self._secret,)
+
+    async def close(self):
+        if self._owns_client:
+            await self.client.aclose()
+
+    async def request(self, method: str, path: str, **kwargs):
+        extra_headers = kwargs.pop('headers', {})
+        # The ONLY retried write has a provider-supported idempotency key.
+        for attempt in range(3):
+            # Resolve again for retries; disconnect/expiry must not reuse a cached token.
+            secret = self.credential_lease.token() if self.credential_lease else self._secret
+            headers = {**extra_headers, 'Authorization': f'Bearer {secret}', 'Accept': 'application/json'}
+            if self.credential_lease:
+                self.client.cookies.clear()
+            try:
+                response = await self.client.request(method, f'{self.base}/{path}', headers=headers, **kwargs)
+            except httpx.TransportError:
+                if attempt < 2 and (method == 'GET' or 'Idempotency-Key' in headers):
+                    await asyncio.sleep(.2 * (attempt + 1))
+                    continue
+                raise WayloError('Waylo API transport failed; no response body or credential was retained.') from None
+            finally:
+                if self.credential_lease:
+                    self.client.cookies.clear()
+            if self.credential_lease:
+                self.credential_lease.check()
+                if response.status_code == 401:
+                    self.credential_lease.revoke()
+                    raise WayloError('Waylo connection expired or was revoked. Connect again.', 401)
+            if response.status_code in {429, 502, 503, 504} and attempt < 2 and (method == 'GET' or 'Idempotency-Key' in headers):
+                await asyncio.sleep(.2 * (attempt + 1))
+                continue
+            if not 200 <= response.status_code < 300:
+                raise WayloError(f'Waylo API returned HTTP {response.status_code}.', response.status_code)
+            if len(response.content) > MAX_PROFILE_BYTES:
+                raise WayloError('Waylo response exceeds the capture limit; capture is incomplete.')
+            try:
+                return response.json()
+            except ValueError:
+                raise WayloError('Waylo API returned invalid JSON.') from None
+
+    async def bootstrap(self, correlation_id: str):
+        key = str(uuid.uuid5(uuid.NAMESPACE_URL, f'cae-waylo/{self.target["id"]}/{correlation_id}'))
+        result = await self.request('POST', 'sessions/web', headers={'Idempotency-Key': key}, json={
+            'workspaceId': self.workspace, 'agentId': self.agent,
+            'metadata': {'cae': {'origin': 'cae_ai_tester', 'target_id': self.target['id'],
+                                 'correlation_id': correlation_id}},
+        })
+        if not isinstance(result, dict) or result.get('workspaceId') != self.workspace:
+            raise WayloError('Waylo bootstrap returned an unexpected workspace.')
+        uuid.UUID(str(result.get('sessionId')))
+        for field in ('livekitUrl', 'participantToken', 'roomName'):
+            if not isinstance(result.get(field), str) or not result[field]:
+                raise WayloError('Waylo bootstrap omitted required LiveKit connection data.')
+        parsed = urlsplit(result['livekitUrl'])
+        if parsed.scheme not in {'ws', 'wss'} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise WayloError('Waylo bootstrap returned an invalid LiveKit URL.')
+        if parsed.scheme == 'ws' and parsed.hostname not in {'localhost', '127.0.0.1', '::1', 'host.docker.internal'}:
+            raise WayloError('Remote LiveKit transport requires WSS.')
+        return result  # Memory-only. NEVER serialize this response.
+
+    async def capture(self, session_id: str, *, origin: str = 'imported_human_call'):
+        session_id = str(uuid.UUID(session_id))
+        session = await self.request('GET', f'sessions/{session_id}')
+        if not isinstance(session, dict) or session.get('id') != session_id or session.get('workspaceId') != self.workspace or session.get('agentId') != self.agent:
+            raise WayloError('Session does not belong to this configured Waylo target/workspace.')
+        _validate_session_timestamps(session)
+        transcripts, cursor, highest, seen = [], None, 0, set()
+        while True:
+            page = await self.request('GET', f'sessions/{session_id}/transcripts',
+                                      params={'limit': 500, **({'cursor': cursor} if cursor else {})})
+            if not isinstance(page, list) or len(page) > 500:
+                raise WayloError('Invalid Waylo transcript page; complete capture cannot be established.')
+            for line in page:
+                if not isinstance(line, dict) or type(line.get('seq')) is not int or line['seq'] != highest + 1:
+                    raise WayloError('Transcript sequence is incomplete or repeated.')
+                if (not isinstance(line.get('role'), str) or not isinstance(line.get('text'), str)
+                        or not isinstance(line.get('id'), str)
+                        or (line.get('idempotencyKey') is not None and not isinstance(line['idempotencyKey'], str))
+                        or any(line.get(field) is not None and not isinstance(line[field], str)
+                               for field in ('startedAt', 'endedAt'))):
+                    raise WayloError('Invalid Waylo transcript fields; capture is incomplete.')
+                identity = str(uuid.UUID(str(line.get('id'))))
+                if identity in seen:
+                    raise WayloError('Repeated transcript cursor; capture aborted.')
+                seen.add(identity)
+                highest, cursor = line['seq'], identity
+                transcripts.append(line)
+                if len(transcripts) > MAX_EVENTS:
+                    raise WayloError('Transcript exceeds capture limit; refusing a truncated export.')
+            if len(page) < 500:
+                break
+        optional, unavailable = {}, {}
+        version = session.get('agentVersion')
+        paths = {'events': f'sessions/{session_id}/events', 'items': f'sessions/{session_id}/items'}
+        if type(version) is int and version > 0:
+            paths['agent_version'] = f'agents/{self.agent}/versions/{version}'
+        for name, path in paths.items():
+            try:
+                value = await self.request('GET', path)
+                if name in {'events', 'items'} and not isinstance(value, list):
+                    raise WayloError(f'Invalid Waylo {name} response.')
+                if name in {'events', 'items'} and any(not isinstance(entry, dict) for entry in value):
+                    raise WayloError(f'Invalid Waylo {name} entries.')
+                if name == 'items' and any(
+                        not isinstance(entry.get('rawText'), str)
+                        or (entry.get('unit') is not None and not isinstance(entry['unit'], str))
+                        or (entry.get('quantity') is not None and (
+                            type(entry['quantity']) not in {int, float}
+                            or (type(entry['quantity']) is float and not math.isfinite(entry['quantity']))
+                            or entry['quantity'] < 1))
+                        or (entry.get('position') is not None and (
+                            type(entry['position']) is not int or entry['position'] < 1))
+                        for entry in value):
+                    raise WayloError('Invalid Waylo item fields; native items are unavailable.')
+                if name == 'events' and any(not isinstance(entry.get('id'), str) or not entry['id'] for entry in value):
+                    raise WayloError('Invalid Waylo event identity.')
+                if name == 'events' and any(
+                        any(entry.get(field) is not None and not isinstance(entry[field], str)
+                            for field in ('parentIdempotencyKey', 'idempotencyKey', 'category', 'name',
+                                          'subject', 'severity', 'code', 'occurredAt', 'createdAt'))
+                        or (entry.get('seq') is not None and type(entry['seq']) is not int)
+                        for entry in value):
+                    raise WayloError('Invalid Waylo event fields; native events are unavailable.')
+                if name == 'events' and (len(value) > MAX_EVENTS or len(value) != session.get('eventCount')):
+                    raise WayloError('Native event count changed or exceeds capture limit; refresh required.')
+                if name == 'agent_version' and (not isinstance(value, dict)
+                        or ('config' in value and not isinstance(value['config'], dict))):
+                    raise WayloError('Invalid Waylo agent version response.')
+                optional[name] = value
+            except WayloError as exc:
+                unavailable[name] = str(exc)
+        # Discard detail's preview. Only the paginated endpoint is authoritative.
+        session = {k: v for k, v in session.items() if k != 'transcript'}
+        captured = {'target_id': self.target['id'], 'origin': origin, 'session': session,
+                    'transcripts': transcripts, **optional, 'unavailable': unavailable}
+        return clean_native(captured, self.redaction_values)
+
+
+def project_capture(capture: dict, *, voice_events: list[dict] | None = None,
+                    before_items: list[dict] | None = None, scenario_id: str = 'waylo-capture',
+                    suite_id: str = 'waylo', media_dialogs: list[dict] | None = None,
+                    test_expectations: dict | None = None, after_items: list[dict] | None = None,
+                    media_capture: dict | None = None,
+                    rtc_turns: list[dict] | None = None,
+                    execution_run_id: str | None = None, conversation_id: str | None = None) -> dict:
+    """Map only typed observations. Free-form events remain ancillary evidence."""
+    capture = clean_native(deepcopy(capture))
+    session = capture['session']
+    _validate_session_timestamps(session)
+    target_id, session_id = capture['target_id'], session['id']
+    identity = f'{target_id}/{session_id}'
+    tools, native_voice = [], []
+    def invocation(event):
+        payload = event.get('payload') if isinstance(event.get('payload'), dict) else {}
+        value = payload.get('tool_invocation_id')
+        return value if isinstance(value, str) and value else None
+    # Worker parent keys reference TRANSCRIPTS, not tool requests. Invocation
+    # identity lives inside payload.tool_invocation_id (agent 615d2b78).
+    calls = {invocation(e): e for e in capture.get('events', [])
+             if e.get('category') == 'tool' and e.get('name') == 'call' and invocation(e)}
+    transcript_by_key = {t.get('idempotencyKey'): t for t in capture['transcripts']}
+    for e in capture.get('events', []):
+        payload = e.get('payload') if isinstance(e.get('payload'), dict) else {}
+        common = {'event_id': f'{identity}/event/{e["id"]}', 'source': 'waylo.native_event',
+                  'timestamp': e.get('occurredAt'), 'clock_origin': 'waylo_worker_utc',
+                  'session_id': session_id, 'target_id': target_id, 'native_sequence': e.get('seq')}
+        turn = transcript_by_key.get(e.get('parentIdempotencyKey'))
+        if turn:
+            common.update(turn_id=f'{identity}/transcript/{turn["id"]}', turn_index=turn['seq'],
+                          transcript_id=turn['id'])
+        if e.get('category') == 'tool' and e.get('name') in {'call', 'result'}:
+            call_key = invocation(e) or (e.get('idempotencyKey') if e['name'] == 'call' else None)
+            parent = calls.get(call_key, {})
+            name = e.get('subject') or parent.get('subject')
+            if not name or not call_key:
+                continue  # No invented invocation identity for orphan results.
+            parent_payload = parent.get('payload') if isinstance(parent.get('payload'), dict) else {}
+            arguments = payload.get('args', parent_payload.get('args'))
+            code = e.get('code')
+            # No code/severity is not proof of tool success. The native API does
+            # not constrain payload schemas. Require an explicit result status.
+            status = 'requested' if e['name'] == 'call' else (
+                'error' if e.get('severity') == 'error' or code in {
+                    'INVALID_ARGUMENTS', 'ARGUMENTS_TOO_LARGE', 'API_UNAVAILABLE',
+                    'REQUEST_REJECTED', 'RESPONSE_TOO_LARGE', 'MALFORMED_RESPONSE'}
+                else 'unknown' if code in {'DELIVERY_UNCONFIRMED', 'UPSTREAM_ACCEPTED'}
+                else 'error' if payload.get('status') == 'error'
+                else 'cancelled' if payload.get('status') == 'cancelled'
+                else 'success' if payload.get('status') == 'success' and 'result' in payload else 'unknown')
+            tool = {**common, 'sequence': len(tools) + 1, 'event_type': f'tool_call.{"requested" if e["name"] == "call" else "result"}',
+                    'call_id': f'{identity}/tool/{call_key}', 'name': name,
+                    'arguments': arguments if isinstance(arguments, dict) else {},
+                    'result': payload.get('result'), 'status': status, 'code': code,
+                    'arguments_captured': isinstance(arguments, dict) and '[omitted:' not in json.dumps(arguments),
+                    'result_captured': 'result' in payload and '[truncated]' not in json.dumps(payload.get('result'))}
+            duration = payload.get('duration_ms')
+            if type(duration) in {float, int} and 0 <= duration < 1_000_000:
+                tool.update(duration_ms=duration, duration_unit='ms', duration_clock='waylo_worker_wall_clock')
+            for field in ('turn_id', 'retry_of', 'policy_decision'):
+                if isinstance(payload.get(field), str):
+                    tool[field] = payload[field]
+            tools.append(tool)
+        elif e.get('category') == 'turn' and e.get('name') == 'metrics':
+            native_voice.append({**common, 'event_type': 'turn.metrics', 'attributes': payload,
+                                 'scoreable': False, 'reason': 'Native metric units/clock semantics are not contracted.'})
+            if e.get('subject') == 'agent' and type(payload.get('interrupted')) is bool:
+                native_voice.append({**common, 'event_id': common['event_id'] + '/interruption',
+                    'event_type': 'playback.interruption_observed', 'interrupted': payload['interrupted'],
+                    'source': 'waylo.agent.turn_metrics', 'scope': 'Reported agent speech interruption; cause not independently proven.'})
+            latency = payload.get('e2e_latency')
+            if e.get('subject') == 'agent' and type(latency) in {int, float} and 0 <= latency < 1000:
+                native_voice.append({**common, 'event_id': common['event_id'] + '/latency',
+                    'event_type': 'latency.observation', 'value_ms': round(latency * 1000, 3), 'unit': 'ms',
+                    'source': 'waylo.agent.turn_metrics', 'definition': 'Worker-reported LiveKit turn e2e_latency, not tester-observed network latency.'})
+    voice = [*native_voice, *(voice_events or [])]
+    from app.services.waylo_assessment import assess_speech, compare_notes
+    expectations = test_expectations or {}
+    diagnostics = {'speech_boundary': assess_speech(capture, voice, expectations.get('expected_entities_by_turn')),
+                   'business_outcome': compare_notes(capture.get('items'), expectations.get('expected_requests'))}
+    snapshots = []
+    if before_items is not None:
+        snapshots.append({'snapshot_id': f'{identity}/before', 'phase': 'before',
+                          'source': 'waylo.sessions.items', 'state': {'request_list': before_items}})
+    for index, observation in enumerate(after_items or []):
+        snapshots.append({'snapshot_id': f'{identity}/after/{index}', 'phase': 'after',
+                          'source': 'waylo.sessions.items', 'state': {'request_list': observation['items']},
+                          'turn_id': observation['turn_id'], 'observed_at': observation['observed_at'],
+                          'clock_origin': 'cae_client_utc_readback'})
+    if isinstance(capture.get('items'), list):
+        phase = 'final' if session.get('endedAt') else 'after'
+        snapshots.append({'snapshot_id': f'{identity}/{phase}', 'phase': phase,
+                          'source': 'waylo.sessions.items', 'state': {'request_list': capture['items']},
+                          'canonical_product_association': 'not_recorded_by_waylo'})
+    config = capture.get('agent_version', {}).get('config', {})
+    config_status = 'needs_review'
+    config_reason = 'Internal effective session snapshot is not public; versioned persona alone does not prove preset rules.'
+    if config.get('presetId') == 'item_capture_assistant':
+        config_reason = 'Item Capture preset forbids catalog lookup and overrides persona; Mike catalog contract conflicts.'
+    from app.services.waylo_reporting import observed_coverage
+    coverage = observed_coverage(tools=tools, voice=voice, snapshots=snapshots,
+        diagnostics=diagnostics, media_dialogs=media_dialogs, expectations=expectations)
+    turns = [{'speaker': 'Caller' if t.get('role') == 'user' else 'Agent', 'text': t.get('text', ''),
+              'turn_index': t['seq']} for t in capture['transcripts'] if t.get('role') in {'user', 'agent'}]
+    if rtc_turns is not None:
+        turns = clean_native(deepcopy(rtc_turns))
+    vcon = build_ietf_execution_vcon(conversation_id=conversation_id or session_id,
+        execution_run_id=execution_run_id or f'waylo-{session_id}',
+        suite_id=suite_id, scenario_id=scenario_id, scenario_title='Waylo session capture', mode='waylo_livekit',
+        turns=turns, recording=None, created_at=session['createdAt'], updated_at=session.get('endedAt') or session['createdAt'])
+    vcon['uuid'] = str(uuid.uuid5(uuid.NAMESPACE_URL, f'cae-waylo/{identity}'))
+    vcon['parties'][0]['type'] = 'human' if capture['origin'] == 'imported_human_call' else 'bot'
+    vcon['analysis'][0]['body']['capture_method'] = (
+        'cae_local_rtc_reference_and_remote_transcription_not_provider_finals' if rtc_turns is not None
+        else 'waylo_final_transcript_not_tts_reference')
+    from app.services.vcon_interop import is_vcon_timestamp
+    from datetime import datetime
+    native_lines = [t for t in capture['transcripts'] if t.get('role') in {'user', 'agent'} and str(t.get('text') or '').strip()]
+    for index, line in enumerate(native_lines):
+        started, ended = line.get('startedAt'), line.get('endedAt')
+        if not is_vcon_timestamp(started):
+            continue
+        vcon['dialog'][index]['start'] = started
+        timing = {'clock_origin': 'waylo_provider_utc', 'source': 'waylo.transcripts.startedAt', 'duration_unit': 's'}
+        if is_vcon_timestamp(ended):
+            duration = (datetime.fromisoformat(ended.replace('Z', '+00:00')) - datetime.fromisoformat(started.replace('Z', '+00:00'))).total_seconds()
+            if duration >= 0:
+                vcon['dialog'][index]['duration'] = duration
+                timing['source'] = 'waylo.transcripts.startedAt/endedAt'
+        vcon['analysis'][0]['body']['turns'][index]['timing'] = timing
+    vcon['dialog'].extend(media_dialogs or [])
+    from app.services.vcon_interop import normalize_vcon_sha512
+    for dialog in vcon['dialog']:
+        if dialog.get('type') == 'recording' and isinstance(dialog.get('content_hash'), str):
+            dialog['content_hash'] = normalize_vcon_sha512(dialog['content_hash'])
+    # The profile/native capture bounds are independent of opt-in media payloads.
+    from app.services.vcon_media import recording_manifest
+    media_manifest = recording_manifest(vcon['dialog'])
+    if media_manifest['included_tracks'] or media_capture:
+        vcon['analysis'][1]['body']['recording'] = clean_native(media_capture) if media_capture else media_manifest
+    context = {'target_id': target_id, 'session_id': session_id, 'source_format': 'waylo-session-v1',
+               'source_call_kind': capture['origin'], 'suite_id': suite_id, 'scenario_id': scenario_id,
+               'evaluation_submission': 'manual', 'coverage': coverage,
+               'execution_run_id': execution_run_id or f'waylo-{session_id}',
+               'conversation_id': conversation_id or session_id,
+               'capture_completeness': 'partial' if capture.get('capture_error') else 'provisional',
+               **({'capture_error': capture['capture_error']} if capture.get('capture_error') else {}),
+               'capture_refresh': 'Refresh this CAE run capture after provider writes; endedAt is not a worker-flush acknowledgement.' if execution_run_id else 'Reimport the session to include later provider writes.',
+               'diagnostics': diagnostics, 'test_expectations': expectations,
+               'effective_configuration': {'status': config_status, 'reason': config_reason,
+                                            'agent_version': session.get('agentVersion')}}
+    body = evidence_body(state_snapshots=snapshots, voice_events=voice, context=context)
+    body['tool_events'] = tools
+    vcon = attach_evidence(vcon, body)
+    # Reuse the structured profile's exporter reference, not a mutable display brand.
+    exporter_party = next(a['party'] for a in vcon['attachments'] if a.get('purpose') == PURPOSE)
+    vcon['attachments'].append({'type': 'ancillary', 'purpose': 'Waylo native source evidence', 'party': exporter_party,
+                                'start': vcon['updated_at'], 'dialog': 0,
+                                'mediatype': 'application/json', 'encoding': 'json', 'body': capture})
+    # Revision describes native + mapped evidence, never wall-clock export time.
+    revision = hashlib.sha256(json.dumps(vcon, sort_keys=True, separators=(',', ':'), default=str).encode()).hexdigest()
+    if len(json.dumps(capture, default=str).encode()) > MAX_PROFILE_BYTES:
+        raise WayloError('Waylo evidence exceeds export limit; refusing a truncated export.')
+    from app.services.execution_vcon import validate_ietf_vcon
+    validation = validate_ietf_vcon(vcon)
+    if not validation['valid']:
+        raise WayloError('Waylo vCon failed portable validation: ' + ', '.join(validation['errors']))
+    return {'vcon': vcon, 'coverage': coverage, 'revision': revision,
+            'configuration_check': context['effective_configuration'], 'evaluation_submitted': False}

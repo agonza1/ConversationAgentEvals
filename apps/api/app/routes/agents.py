@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+import uuid
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request as WebRequest
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.schemas.agents import AgentCreateRequest, AgentTarget, AgentUpdateRequest
 from app.services import agent_store
@@ -14,6 +16,89 @@ from app.services.target_secrets import resolve_http_target_secret
 
 
 router = APIRouter(prefix='/api/agents', tags=['agents'])
+
+
+class WayloCaptureRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    session_id: uuid.UUID
+    execution_run_id: str | None = Field(default=None, pattern=r'^[A-Za-z0-9_-]{1,100}$')
+    conversation_id: str | None = Field(default=None, pattern=r'^[A-Za-z0-9_-]{1,150}$')
+    user_id: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @model_validator(mode='after')
+    def refresh_identity(self):
+        if any((self.execution_run_id, self.conversation_id, self.user_id)) and not all((self.execution_run_id, self.conversation_id, self.user_id)):
+            raise ValueError('Run refresh requires execution_run_id, conversation_id and user_id together.')
+        return self
+
+
+@router.post('/{agent_id}/capture')
+async def capture_waylo_session(agent_id: str, payload: WayloCaptureRequest, request: WebRequest):
+    """Read-only provider capture. Repeated captures refresh one stable vCon UUID.
+
+    This route deliberately has no evaluator, benchmark submission or billing hook.
+    """
+    from app.services.waylo_target import WayloClient, WayloError, project_capture
+    agent = agent_store.get_agent(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail='Agent not found.')
+    if agent['target'] != 'waylo':
+        raise HTTPException(status_code=400, detail='Session capture requires a Waylo target.')
+    client = None
+    try:
+        lease = _browser_waylo_lease(request, agent)
+        previous = None
+        if payload.execution_run_id:
+            from app.services import execution_run_store as runs
+            run = runs.get_execution_run(payload.execution_run_id)
+            previous = runs.get_conversation(payload.execution_run_id, payload.conversation_id) if run else None
+            if not run or run.get('user_id') != payload.user_id or run.get('agent_id') != agent_id or not previous:
+                raise HTTPException(404, 'Waylo execution conversation not found.')
+            if run.get('status') in {'queued', 'running'} or previous.get('status') in {'queued', 'running'}:
+                raise HTTPException(409, 'Wait for the CAE run to finish before refreshing evidence.')
+            from app.services.vcon_evidence import decode_evidence
+            profile = decode_evidence(previous.get('ietf_vcon_export') or {})
+            if not profile:
+                raise HTTPException(409, 'No recorded Waylo capture is available to refresh.')
+            context = profile['context']
+            if (context.get('target_id') != agent_id or context.get('session_id') != str(payload.session_id)
+                    or context.get('source_call_kind') != 'cae_ai_tester'):
+                raise HTTPException(409, 'Session does not match the recorded CAE tester conversation.')
+            # Do not read a changed target/workspace under an old run identity.
+            snapshot = (run.get('execution_snapshot') or {}).get('agent') or {}
+            saved = snapshot.get('connection') or {}
+            if any(saved.get(k) != agent['connection'].get(k) for k in ('endpoint_url', 'workspace_id', 'waylo_agent_id', 'auth_type')):
+                raise HTTPException(409, 'Waylo target configuration changed; restore the recorded target before refreshing.')
+        client = WayloClient(agent, credential_lease=lease)
+        captured = await client.capture(str(payload.session_id), **({'origin': 'cae_ai_tester'} if previous else {}))
+        metadata = captured['session'].get('metadata') or {}
+        cae_metadata = metadata.get('cae') if isinstance(metadata, dict) else None
+        if previous:
+            if (not isinstance(cae_metadata, dict) or cae_metadata.get('origin') != 'cae_ai_tester'
+                    or cae_metadata.get('correlation_id') != f'{payload.execution_run_id}/{payload.conversation_id}'):
+                raise HTTPException(409, 'Provider session correlation does not match the CAE run.')
+            before = next((s['state']['request_list'] for s in profile['state_snapshots'] if s['phase'] == 'before'), None)
+            after = [{'turn_id': s['turn_id'], 'items': s['state']['request_list'], 'observed_at': s['observed_at']}
+                     for s in profile['state_snapshots'] if s['phase'] == 'after' and 'turn_id' in s]
+            exported = project_capture(captured, execution_run_id=payload.execution_run_id,
+                conversation_id=payload.conversation_id, suite_id=previous['suite_id'], scenario_id=previous['scenario_id'],
+                voice_events=[e for e in profile['voice_events'] if e.get('source') not in {'waylo.native_event', 'waylo.agent.turn_metrics'}],
+                media_dialogs=[d for d in previous['ietf_vcon_export'].get('dialog', []) if d.get('type') == 'recording'],
+                media_capture=next((a.get('body', {}).get('recording') for a in previous['ietf_vcon_export'].get('analysis', [])
+                                    if a.get('schema') == 'cae-execution-evidence-v1'), None),
+                before_items=before, after_items=after, test_expectations=context.get('test_expectations'))
+            runs.refresh_waylo_evidence(payload.execution_run_id, previous, captured, exported)
+            return {**exported, 'refreshed_execution_run_id': payload.execution_run_id}
+        if isinstance(cae_metadata, dict) and cae_metadata.get('origin') == 'cae_ai_tester':
+            raise HTTPException(status_code=409, detail='This is a CAE tester session. Use its run export; do not label it as an imported human call.')
+        # Do not relabel existing human calls as tester reference calls based on
+        # arbitrary customer metadata. Only the execution runner creates AI provenance.
+        return project_capture(captured)
+    except (WayloError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    finally:
+        if client:
+            await client.close()
 
 
 @router.get('')
@@ -39,11 +124,24 @@ def list_agent_options():
 
 
 @router.get('/{agent_id}/readiness')
-def get_agent_readiness(agent_id: str):
+def get_agent_readiness(agent_id: str, request: WebRequest):
     agent = agent_store.get_agent(agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail='Agent not found.')
-    return _readiness_for_agent(agent)
+    lease = _browser_waylo_lease(request, agent)
+    return _readiness_for_agent(agent, browser_connected=lease is not None)
+
+
+def _browser_waylo_lease(request: WebRequest, agent: dict):
+    if agent.get('target') != 'waylo' or agent.get('connection', {}).get('auth_type') != 'waylo_browser_session':
+        return None
+    from app.routes.waylo_connection import local_control
+    from app.services.waylo_connection import authorize, WayloConnectionError
+    local_control(request)
+    try:
+        return authorize(request.headers.get('x-cae-waylo-session', ''), agent)
+    except WayloConnectionError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from None
 
 
 @router.get('/{agent_id}')
@@ -77,6 +175,7 @@ def delete_agent(agent_id: str):
 
 
 _TARGET_OPTIONS: tuple[AgentTarget, ...] = (
+    'waylo',
     'http_endpoint',
     'openai_codex',
     'mock_agent',
@@ -89,6 +188,7 @@ _TARGET_OPTIONS: tuple[AgentTarget, ...] = (
 )
 
 _TARGET_LABELS: dict[AgentTarget, str] = {
+    'waylo': 'Waylo agent (LiveKit)',
     'http_endpoint': 'HTTP JSON chat endpoint',
     'openai_codex': 'Connected OpenAI prompt agent',
     'mock_agent': 'Built-in sample text agent',
@@ -103,6 +203,7 @@ _TARGET_LABELS: dict[AgentTarget, str] = {
 }
 
 _TARGET_CHANNELS: dict[AgentTarget, str] = {
+    'waylo': 'voice',
     'http_endpoint': 'text',
     'openai_codex': 'text',
     'mock_agent': 'text',
@@ -117,6 +218,7 @@ _TARGET_CHANNELS: dict[AgentTarget, str] = {
 }
 
 _TARGET_GROUPS: dict[AgentTarget, str] = {
+    'waylo': 'live_connection',
     'http_endpoint': 'live_connection',
     'openai_codex': 'live_connection',
     'mock_agent': 'built_in_sample',
@@ -131,6 +233,7 @@ _TARGET_GROUPS: dict[AgentTarget, str] = {
 }
 
 _CONNECTION_REQUIREMENTS: dict[AgentTarget, tuple[str, ...]] = {
+    'waylo': ('endpoint_url', 'workspace_id', 'waylo_agent_id'),
     'http_endpoint': ('endpoint_url',),
     'pipecat_public_demo': ('endpoint_url',),
     'signalwire_holy_guacamole': ('endpoint_url',),
@@ -142,6 +245,7 @@ _CONNECTION_REQUIREMENTS: dict[AgentTarget, tuple[str, ...]] = {
 _COMPATIBLE_TARGETS_BY_TESTER: dict[str, tuple[AgentTarget, ...]] = {
     'scenario_simulator': ('http_endpoint', 'openai_codex', 'mock_agent'),
     'pipecat_tester': (
+        'waylo',
         'builtin_sample_voice',
         'pipecat_public_demo',
         'signalwire_holy_guacamole',
@@ -153,6 +257,7 @@ _COMPATIBLE_TARGETS_BY_TESTER: dict[str, tuple[AgentTarget, ...]] = {
 }
 
 _COMPATIBLE_TARGETS_BY_EXECUTOR: dict[str, tuple[AgentTarget, ...]] = {
+    'waylo_livekit': ('waylo',),
     'local_async_runner': ('http_endpoint', 'openai_codex', 'mock_agent'),
     'cae_local_audio_loop': ('builtin_sample_voice',),
     'pipecat_public_daily': ('pipecat_public_demo',),
@@ -188,6 +293,8 @@ _TESTER_OPTIONS: tuple[dict[str, object], ...] = (
 )
 
 _EXECUTOR_OPTIONS: tuple[dict[str, object], ...] = (
+    {'id': 'waylo_livekit', 'label': 'Waylo LiveKit', 'channel': 'voice', 'available': True,
+     'description': 'Starts a Waylo web session, sends real caller audio and captures evidence; evaluation is manual.'},
     {
         'id': 'local_async_runner',
         'label': 'Local async runner',
@@ -299,6 +406,10 @@ def _target_option(target: AgentTarget) -> dict[str, object]:
             else None
         ),
         'requires_connection': list(_CONNECTION_REQUIREMENTS.get(target, ())),
+        **({'authentication_options': [
+            {'auth_type': 'waylo_browser_session', 'requires_connection': [], 'local_only': True},
+            {'auth_type': 'bearer_secret', 'requires_connection': ['secret_ref']},
+        ]} if target == 'waylo' else {}),
         'defaults': defaults.model_dump(mode='json'),
     }
 
@@ -323,7 +434,7 @@ def _executor_options() -> list[dict[str, object]]:
     ]
 
 
-def _readiness_for_agent(agent: dict) -> dict[str, object]:
+def _readiness_for_agent(agent: dict, *, browser_connected: bool = False) -> dict[str, object]:
     target = str(agent.get('target') or '')
     connection = agent.get('connection') if isinstance(agent.get('connection'), dict) else {}
     option = _target_option(target) if target in _TARGET_OPTIONS else None
@@ -350,7 +461,11 @@ def _readiness_for_agent(agent: dict) -> dict[str, object]:
     )
 
     auth_type = str(connection.get('auth_type') or 'none')
-    if target == 'http_endpoint' and auth_type != 'none':
+    if target == 'waylo' and auth_type == 'waylo_browser_session':
+        add_check('temporary_connection', browser_connected,
+                  'Temporary Waylo connection is active in this browser.' if browser_connected
+                  else 'Connect Waylo in this browser; temporary credentials are never saved.')
+    elif target in {'http_endpoint', 'waylo'} and auth_type != 'none':
         secret_ref = str(connection.get('secret_ref') or '').strip()
         if not secret_ref:
             add_check('credential_reference', False, 'Authenticated HTTP targets require a credential ID.')
@@ -375,6 +490,11 @@ def _readiness_for_agent(agent: dict) -> dict[str, object]:
                 else f'{SIGNALWIRE_PUBLIC_GATE_ENV}=1 is required before queueing public SignalWire execution.'
             ),
         )
+        add_check(*_signalwire_caller_tts_readiness())
+    if target == 'waylo':
+        import importlib.util
+        add_check('livekit_sdk', importlib.util.find_spec('livekit') is not None,
+                  'LiveKit SDK must be installed; permissions are verified when capturing/starting the session.')
         add_check(*_signalwire_caller_tts_readiness())
 
     executable = all(item['ok'] for item in checks)

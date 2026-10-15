@@ -155,6 +155,32 @@ test('runs analysis page shows metric tiles and transcript', async ({ page }) =>
   await expect(page.getByLabel('Transcript')).not.toContainText('I can help with that.');
 });
 
+test('refreshed Waylo analysis distinguishes provider finals from preserved RTC references', async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem('conversation-evals-demo-user', 'demo-user'));
+  const conversation = {
+    ...runFixture.conversations[0], mode: 'pipecat_webrtc', metrics_summary: null, timeline: [],
+    turns: [
+      { turn_index: 4, speaker: 'Caller', text: 'Corrected provider caller receipt',
+        frame_metadata: { transcript_source: 'waylo_final_transcript', text_source_label: 'Target ASR receipt (Waylo)' } },
+      { turn_index: 5, speaker: 'Agent', text: 'Late target final wording',
+        frame_metadata: { transcript_source: 'waylo_final_transcript', text_source_label: 'Target-reported final transcript (Waylo)' } },
+    ],
+    rtc_turns: runFixture.conversations[0].turns,
+    transcript: 'Caller: Corrected provider caller receipt\nAgent: Late target final wording',
+  };
+  await page.route('**/api/**', (route) => route.fulfill({ json: new URL(route.request().url()).pathname === '/api/execution/runs/exec-demo123'
+    ? { ...runFixture, mode: 'pipecat_webrtc', executor_id: 'waylo_livekit', conversations: [conversation] } : [] }));
+  await page.goto('/runs/exec-demo123');
+  const transcript = page.getByLabel('Transcript', { exact: true });
+  await expect(transcript).toContainText('Corrected provider caller receipt');
+  await expect(transcript).toContainText('Late target final wording');
+  await expect(transcript).toContainText('Target ASR receipt (Waylo)');
+  await expect(transcript).toContainText('Target-reported final transcript (Waylo)');
+  await expect(transcript).toContainText('not independently audio-aligned');
+  await expect(transcript).not.toContainText('I want to cancel today.');
+  await expect(transcript).not.toContainText('I can help you with that.');
+});
+
 test('public demo distinguishes received audio from reported text in analysis and listener captions', async ({ page }) => {
   await page.addInitScript(() => window.localStorage.setItem('conversation-evals-demo-user', 'demo-user'));
   const metadata = {
