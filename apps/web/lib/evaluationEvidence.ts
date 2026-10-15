@@ -1,3 +1,4 @@
+import { operationalVerification } from './operationalVerification';
 type RecordValue = Record<string, unknown>;
 const object = (value: unknown): RecordValue => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as RecordValue : {};
 const present = (value: unknown): boolean => {
@@ -34,12 +35,16 @@ export function evaluationEvidence(value: unknown) {
   const verdict = typeof recordedVerdict === 'string' ? recordedVerdict.toLowerCase() : '';
   const failed = verdict === 'fail' || verdict === 'failed' || verdict === 'error';
   const reviewRequired = report.semantic_review_required === true || scope.semantic_review_required === true || verdict === 'needs_review';
+  const operational = operationalVerification(report.operational_verification);
   const headline = failed ? 'Evaluation reported a failure'
+    : operational.verified ? 'Verified'
     : synthetic ? 'Synthetic evidence — not a verified real-world outcome'
       : transcriptOnly ? 'Outcome unverified'
         : verdict === 'pass' && !reviewRequired && structured ? 'Checks passed on supplied evidence'
           : reviewRequired ? 'Review required' : 'Verification not established';
-  const explanation = transcriptOnly
+  const explanation = operational.verified && !failed
+    ? 'The billing outcome was verified from tool results and stored state. Conversation and policy evaluation are separate. No real account was changed.'
+    : transcriptOnly
     ? 'The conversation can be assessed, but no tool/action trace or resulting state was supplied. Spoken confirmations do not prove a backend change.'
     : structured
       ? 'Structured evidence was supplied. A tool request is not a successful result; check returned status and resulting state. Source reports are not independently authenticated.'
@@ -50,7 +55,7 @@ export function evaluationEvidence(value: unknown) {
   const sourceNames: Record<string, string> = { call: 'Structured call input', group_call: 'Group call input', groupCall: 'Group call input', conversation: 'Structured conversation input', transcript: 'Transcript input' };
   const sourceLabel = imported ? 'Imported vCon' : typeof sourceFormat === 'string' && sourceNames[sourceFormat] ? sourceNames[sourceFormat] : report.scoring_mode === 'transcript' ? 'Transcript input' : 'Input source not recorded';
   return { transcript, trace, state, structured, transcriptOnly, imported, synthetic, failed, reviewRequired, headline, explanation, score,
-    sourceLabel: synthetic ? `Synthetic · ${sourceLabel}` : sourceLabel,
+    sourceLabel: operational.available ? `Simulation · ${sourceLabel}` : synthetic ? `Synthetic · ${sourceLabel}` : sourceLabel,
     coverageLabel: transcriptOnly ? 'Transcript only' : structured ? 'Structured evidence supplied' : 'Coverage not established',
     verdictLabel: verdict ? verdict.replaceAll('_', ' ') : 'not recorded',
   };

@@ -546,7 +546,8 @@ def _run_lifecycle(
     return lifecycle
 
 
-def run_scenario(request: Any, *, persist_artifacts: bool = True, synthetic: bool | None = None) -> dict[str, Any]:
+def run_scenario(request: Any, *, persist_artifacts: bool = True, synthetic: bool | None = None,
+                 billing_simulation: Any = None) -> dict[str, Any]:
     run_started_at = datetime.now(UTC).isoformat()
     payload = _payload_to_dict(request)
     payload, _ = normalize_assert_payload(payload)
@@ -568,6 +569,14 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True, synthetic: boo
     scenario = _SCENARIOS_BY_ID.get((suite_id, scenario_id))
     if not suite or not scenario:
         raise ValueError(f'Unknown benchmark scenario: {suite_id}/{scenario_id}')
+
+    if billing_simulation is not None:
+        from app.services.billing_address_simulation import BillingSimulation, SUITE, SCENARIO
+        if (not isinstance(billing_simulation, BillingSimulation) or (suite_id, scenario_id) != (SUITE, SCENARIO)
+                or export_payload.get('action_trace') != billing_simulation.action_trace()
+                or payload.get('final_state') != billing_simulation.final_state()):
+            raise ValueError('Billing simulation requires matching execution evidence for the built-in billing scenario')
+        synthetic = True
 
     transcript = _conversation_text(payload)
     run_metadata = _run_metadata(payload)
@@ -693,6 +702,9 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True, synthetic: boo
         failure_categories=report.get('failure_categories'),
     )
     report['run_status'] = report['run_lifecycle']['status']
+    # Internal execution path only: imported flags/analysis cannot opt into this.
+    if billing_simulation is not None:
+        report['operational_verification'] = billing_simulation.assessment()
     if persist_artifacts:
         _attach_canonical_assert_artifact(report)
     report['assert_lab_report'] = _assert_lab_report(report)
@@ -2126,6 +2138,7 @@ def _vcon_analysis(report: dict[str, Any]) -> dict[str, Any]:
         'evidence_audit_summary',
         'evaluation_scope',
         'simulation_validation',
+        'operational_verification',
         'overall_score',
         'verdict',
         'task_completion_score',

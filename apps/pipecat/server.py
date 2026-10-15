@@ -17,6 +17,13 @@ from typing import Any, AsyncIterator, Awaitable, Callable, Literal
 from urllib.parse import quote
 
 import httpx
+try:
+    from billing_address_simulation import BillingSimulation, CALLER_BRIEF, TOOL_INSTRUCTIONS, MAX_CALLS_PER_TURN, parse_control
+except ModuleNotFoundError:
+    # Source checkout; the worker Dockerfile copies this stdlib-only module.
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'api'))
+    from app.services.billing_address_simulation import BillingSimulation, CALLER_BRIEF, TOOL_INSTRUCTIONS, MAX_CALLS_PER_TURN, parse_control
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -358,9 +365,12 @@ class ReferenceDuplexRunRequest(BaseModel):
     tester_voice: str = KOKORO_TESTER_VOICE
     target_voice: str = KOKORO_TARGET_VOICE
     speech: dict[str, Any] | None = None
+    billing_simulation: bool = False
 
     @model_validator(mode='after')
     def validate_distinct_voices(self) -> 'ReferenceDuplexRunRequest':
+        if self.billing_simulation and self.scenario.get('id') != 'billing-address-change':
+            raise ValueError('Billing simulation only supports Billing Address Change')
         from speech_configuration import SpeechSelection, deployment_speech_selection
         if self.speech is None:
             defaults = deployment_speech_selection()
@@ -611,6 +621,7 @@ if PIPECAT_RUNTIME_AVAILABLE:
                 f'Scenario title: {self.scenario.get("title") or self.scenario.get("id")}\n'
                 f'Caller persona: {self.scenario.get("persona") or "Not provided."}\n'
                 f'Caller goal: {self.scenario.get("goal") or "Not provided."}\n'
+                f'Fictional customer brief: {self.scenario.get("billing_simulation_caller_brief") or "Not provided."}\n'
                 f'Caller-side case instructions (adapt naturally): {json.dumps(self.scenario.get("caller_steps") or [], ensure_ascii=False)}\n'
                 f'Required behaviors to probe: {", ".join(map(str, self.scenario.get("required_actions") or []))}\n'
                 f'Forbidden behaviors to challenge: {", ".join(map(str, self.scenario.get("forbidden_actions") or []))}\n'
@@ -637,8 +648,10 @@ if PIPECAT_RUNTIME_AVAILABLE:
             model_name: str,
             *,
             client: httpx.AsyncClient,
+            billing_simulation: BillingSimulation | None = None,
         ):
             super().__init__(name='target_llm')
+            self.billing_simulation = billing_simulation
             self.history = history
             self.model_name = model_name
             self.client = client
@@ -656,6 +669,9 @@ if PIPECAT_RUNTIME_AVAILABLE:
                 await self.push_frame(frame, direction)
                 return
             history = '\n'.join(f'{item.get("speaker")}: {item.get("text")}' for item in self.history)
+            if self.billing_simulation is not None:
+                await _complete_billing_turn(self, frame.text, history, direction)
+                return
             prompt = (
                 'You are the CAE built-in generalist voice agent. Speak naturally and conversationally. '
                 'Be direct: default to one sentence and no more than 20 words. '
@@ -674,6 +690,56 @@ if PIPECAT_RUNTIME_AVAILABLE:
                 text_frame_type=_TargetSpeechFrame,
                 end_frame=_TargetLlmEndFrame(),
             )
+
+
+    async def _complete_billing_turn(processor: Any, caller_text: str, history: str, direction: FrameDirection) -> None:
+        """Buffer the small control envelope: tool requests must never reach TTS."""
+        simulation = processor.billing_simulation
+        simulation.caller(caller_text)
+        feedback: list[dict[str, Any]] = []
+        started = time.perf_counter()
+        processor.text = ''
+        processor.ttft_ms = processor.provider_ttft_ms = processor.total_ms = None
+        await processor.start_processing_metrics()
+        await processor.start_ttfb_metrics()
+        try:
+            for _ in range(MAX_CALLS_PER_TURN + 2):
+                response = await processor.client.post(
+                    f'{API_BASE_URL}/api/execution/reference/complete',
+                    json={'model_name': processor.model_name, 'prompt': (
+                        TOOL_INSTRUCTIONS + f'\nConversation:\n{history}\nCaller: {caller_text}\n'
+                        + 'Recent tool results: ' + json.dumps([
+                            e for e in simulation.events if e['type'] == 'tool'
+                        ][-8:]) + '\nControl feedback: ' + json.dumps(feedback)
+                    )},
+                    headers={'x-cae-reference-token': REFERENCE_AGENT_INTERNAL_TOKEN},
+                )
+                response.raise_for_status()
+                completion = response.json()
+                try:
+                    control = parse_control(completion.get('text') or '')
+                except (ValueError, TypeError):
+                    feedback.append({'error': 'Return one valid speech or tool_call JSON object, no markdown.'})
+                    if len(feedback) > 1:
+                        raise ValueError('Billing agent returned invalid control JSON twice')
+                    continue
+                if control['type'] == 'tool_call':
+                    simulation.execute(control['name'], control['arguments'])
+                    continue
+                processor.text = control['text'].strip()
+                simulation.speak(processor.text)
+                processor.ttft_ms = round((time.perf_counter() - started) * 1000, 3)
+                processor.provider_ttft_ms = completion.get('ttft_ms')
+                await processor.stop_ttfb_metrics()
+                await processor.push_frame(_TargetLlmStartFrame(), direction)
+                await processor.push_frame(_TargetSpeechFrame(processor.text), direction)
+                await processor.push_frame(_TargetLlmEndFrame(), direction)
+                return
+            raise ValueError('Billing agent exhausted its bounded control loop')
+        finally:
+            processor.total_ms = round((time.perf_counter() - started) * 1000, 3)
+            await processor.stop_ttfb_metrics()
+            await processor.stop_processing_metrics()
 
 
     async def _stream_reference_completion(
@@ -1039,6 +1105,7 @@ class _StreamingDuplexSession:
         self.payload = payload
         self.bus = bus
         self.history = history
+        self.billing_simulation = BillingSimulation(payload.execution_run_id, payload.session_id) if payload.billing_simulation else None
         self.event_callback = event_callback
         from speech_providers import SpeechSelection, deployment_speech_selection, build_asr, build_tts
         self.speech = SpeechSelection.model_validate(payload.speech) if payload.speech else deployment_speech_selection()
@@ -1085,7 +1152,7 @@ class _StreamingDuplexSession:
             })
 
         self.tester_llm = _StreamingTesterLlmProcessor(
-            scenario=payload.scenario,
+            scenario={**payload.scenario, **({'billing_simulation_caller_brief': CALLER_BRIEF} if self.billing_simulation else {})},
             history=history,
             max_turn_pairs=payload.max_turn_pairs,
             model_name=payload.tester_model_name or REFERENCE_LLM_MODEL,
@@ -1120,6 +1187,7 @@ class _StreamingDuplexSession:
             history,
             payload.target_model_name or REFERENCE_LLM_MODEL,
             client=self.llm_client,
+            billing_simulation=self.billing_simulation,
         )
         self.target_tts = build_tts(self.speech,
             base_url=KOKORO_BASE_URL,
@@ -1654,6 +1722,8 @@ async def _reference_duplex_events(payload: ReferenceDuplexRunRequest) -> AsyncI
                 await asyncio.gather(exchange_task, return_exceptions=True)
             session = session_holder.get('session')
             if session is not None:
+                if terminal_event is not None and getattr(session, 'billing_simulation', None) is not None:
+                    terminal_event['billing_simulation'] = session.billing_simulation.evidence()
                 await session.close()
         except Exception as exc:
             if terminal_event is None:

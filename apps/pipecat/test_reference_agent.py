@@ -17,6 +17,82 @@ import pytest
 import server
 
 
+def test_billing_control_executes_tools_and_only_sends_speech_to_tts():
+    from server import BillingSimulation
+    CODE, CUSTOMER_NAME = '246810', 'Jordan Lee'
+    import json
+    import httpx
+
+    requests = []
+    address = {'street': '214 Maple Street', 'unit': 'Apartment 5B', 'city': 'Austin', 'region': 'Texas', 'postal_code': '78704'}
+    controls = [
+        '```bad json```',  # One bounded correction, never spoken.
+        json.dumps({'type': 'tool_call', 'name': 'verify_customer', 'arguments': {'full_name': CUSTOMER_NAME, 'verification_code': CODE}}),
+        json.dumps({'type': 'speech', 'text': 'What is your new billing address?'}),
+        json.dumps({'type': 'tool_call', 'name': 'prepare_address', 'arguments': address}),
+        json.dumps({'type': 'speech', 'text': ', '.join(address.values()) + '. Is that correct?'}),
+        json.dumps({'type': 'tool_call', 'name': 'commit_address', 'arguments': {'proposal_id': 'control-session:proposal:2'}}),
+        json.dumps({'type': 'tool_call', 'name': 'read_address', 'arguments': {}}),
+        json.dumps({'type': 'speech', 'text': 'Updated. Your next invoice will use this address; the amount is unchanged.'}),
+    ]
+    async def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={'text': controls.pop(0), 'ttft_ms': 10})
+
+    class Processor:
+        model_name = 'existing-small-model'
+        billing_simulation = BillingSimulation('exec-control', 'control-session')
+        frames = []
+        async def start_processing_metrics(self): pass
+        async def start_ttfb_metrics(self): pass
+        async def stop_processing_metrics(self): pass
+        async def stop_ttfb_metrics(self): pass
+        async def push_frame(self, frame, direction): self.frames.append(frame)
+
+    async def run():
+        processor = Processor()
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            processor.client = client
+            await server._complete_billing_turn(processor, f'I am {CUSTOMER_NAME}, code {CODE}.', '', server.FrameDirection.DOWNSTREAM)
+            await server._complete_billing_turn(processor, ', '.join(address.values()), '', server.FrameDirection.DOWNSTREAM)
+            await server._complete_billing_turn(processor, "Yes, that's correct.", '', server.FrameDirection.DOWNSTREAM)
+        return processor
+
+    processor = asyncio.run(run())
+    assert processor.billing_simulation.verified is True
+    speech = [frame.text for frame in processor.frames if isinstance(frame, server._TargetSpeechFrame)]
+    assert speech == ['What is your new billing address?', ', '.join(address.values()) + '. Is that correct?',
+                      'Updated. Your next invoice will use this address; the amount is unchanged.']
+    assert len(processor.frames) == 9
+    assert all(request['model_name'] == 'existing-small-model' for request in requests)
+    assert all('246810' not in request['prompt'].split('Conversation:')[0] for request in requests)
+    assert processor.billing_simulation.assessment()['label'] == 'Verified'
+
+
+def test_billing_control_aborts_invalid_json_without_speaking():
+    from server import BillingSimulation
+    import httpx
+    async def run():
+        target = server._StreamingTargetLlmProcessor([], 'fake', client=None, billing_simulation=BillingSimulation('e', 's'))
+        frames = []
+        async def push(frame, _direction): frames.append(frame)
+        target.push_frame = push
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _req: httpx.Response(200, json={'text': 'I updated it!'}))) as client:
+            target.client = client
+            with pytest.raises(ValueError, match='invalid control JSON twice'):
+                await server._complete_billing_turn(target, 'Please update my address', '', server.FrameDirection.DOWNSTREAM)
+        assert frames == []
+        assert target.billing_simulation.version == 0
+    asyncio.run(run())
+
+
+def test_billing_backend_is_off_by_default_and_scoped_to_billing():
+    payload = server.ReferenceDuplexRunRequest(session_id='s', execution_run_id='e', scenario={'id': 'other'})
+    assert payload.billing_simulation is False
+    with pytest.raises(ValueError, match='only supports Billing'):
+        server.ReferenceDuplexRunRequest(session_id='s', execution_run_id='e', scenario={'id': 'other'}, billing_simulation=True)
+
+
 def test_browser_mdns_ice_candidate_uses_configured_host_gateway(monkeypatch):
     monkeypatch.setattr(server, 'BROWSER_ICE_HOST_OVERRIDE', 'host.docker.internal')
 

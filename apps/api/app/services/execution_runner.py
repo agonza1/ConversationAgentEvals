@@ -40,6 +40,7 @@ from app.services.acc_realtime_target import (
 from app.services.agentic_contact_center_example import build_benchmark_run_request, normalize_acc_run
 from app.services.benchmark_catalog_extensions import register_builtin_benchmark_extensions
 from app.services.benchmark_service import get_suite, run_scenario, simulate_scenario
+from app.services.billing_address_simulation import SUITE as BILLING_SUITE, SCENARIO as BILLING_SCENARIO, replay_evidence
 from app.services.execution_vcon import (
     build_execution_vcon,
     build_ietf_execution_vcon,
@@ -102,6 +103,7 @@ EVALUATION_FINDING_KEYS = (
     'scenario_contract', 'scenario_contract_sha256', 'evaluation_contract_snapshot',
     'evidence_assessment', 'semantic_review_required', 'heuristic_verdict',
     'expected_final_state',
+    'operational_verification',
 )
 
 
@@ -505,6 +507,9 @@ def _run_one_conversation(
             verdict=result.get('verdict'),
             score=result.get('score'),
         )
+        operational = (result.get('evaluation_report') or {}).get('operational_verification') or {}
+        if operational.get('status') == 'verified' and result.get('verdict') not in {'fail', 'failed'}:
+            metrics_summary.call_resolution_success = 100.0
         current = execution_run_store.get_conversation(execution_run_id, conversation_id) or {}
         verdict = result.get('verdict')
         status = (
@@ -1998,6 +2003,7 @@ async def _execute_pipecat_webrtc(
             scenario=scenario,
             max_turn_pairs=payload.max_exchanges,
             total_timeout_seconds=payload.duplex_timeout_seconds,
+            **({'billing_simulation': True} if (suite_id, scenario_id) == (BILLING_SUITE, BILLING_SCENARIO) else {}),
         )
     except Exception:
         # A failed case must close its own session before the sequential queue
@@ -2069,17 +2075,24 @@ async def _execute_pipecat_webrtc(
         'evidence_scope': 'current_run_only',
     }
     report: dict[str, Any] = {}
+    simulation = None
+    proof = tester_result.get('proof') or {}
+    if (suite_id, scenario_id) == (BILLING_SUITE, BILLING_SCENARIO) and proof.get('billing_simulation') is not None:
+        simulation = replay_evidence(proof['billing_simulation'], execution_run_id=execution_run_id, session_id=session_id)
+        current_final_state = simulation.final_state()
+    action_trace = simulation.action_trace() if simulation else []
     if payload.evaluate and not tester_failed:
         report = run_scenario(
             BenchmarkRunRequest(
                 suite_id=suite_id,
                 scenario_id=scenario_id,
                 transcript=transcript,
-                action_trace=[],
+                action_trace=action_trace,
                 final_state=current_final_state,
                 user_id=payload.user_id,
                 project_id=payload.project_id,
-            )
+            ),
+            **({'synthetic': True, 'billing_simulation': simulation} if simulation else {}),
         )
     if tester_failed:
         verdict = 'fail' if tester_status == 'failed' else 'needs_review'
@@ -2133,9 +2146,11 @@ async def _execute_pipecat_webrtc(
     return {
         'turns': turns,
         'transcript': transcript,
-        'action_trace': [],
+        'action_trace': action_trace,
+        'synthetic': simulation is not None,
         'final_state': {
             **current_final_state,
+            **({'simulation_evidence': simulation.evidence()} if simulation else {}),
             'audio_transport': transport.transport_id,
             'tester_termination_reason': tester_result.get('termination_reason'),
             'tester_error': tester_error,

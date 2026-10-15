@@ -6,11 +6,39 @@ const Module = require('node:module');
 const path = require('node:path');
 const filename = path.resolve('apps/web/lib/evaluationEvidence.ts');
 const compiled = ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
-const loaded = new Module(filename, module); loaded._compile(compiled, filename);
+const helperName = path.resolve('apps/web/lib/operationalVerification.ts');
+const helper = new Module(helperName, module);
+helper._compile(ts.transpileModule(fs.readFileSync(helperName, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, helperName);
+const loaded = new Module(filename, module);
+const originalRequire = loaded.require.bind(loaded);
+loaded.require = name => name === './operationalVerification' ? helper.exports : originalRequire(name);
+loaded._compile(compiled, filename);
 const { evaluationEvidence, reviewEvidenceStatus } = loaded.exports;
 const transcriptReport = () => ({ verdict: 'needs_review', overall_score: 100, semantic_review_required: true,
   scoring_mode: 'transcript', action_trace: '', final_state: {}, transcript: 'Agent: Your address was updated.',
   evidence_audit_summary: { transcript_present: true, action_trace_present: false, final_state_present: false } });
+
+const operational = () => ({ schema: 'cae-billing-simulation-v1', context: 'simulation', status: 'verified',
+  checks: { identity_verified: true, address_committed: true, stored_address_matches_request: true,
+    update_read_back: true, invoice_effect_explained: true }, tool_calls: 4, receipt_id: 's:billing-update:1' });
+
+test('verified is the result and simulation is context, while policy review stays separate', () => {
+  const view = evaluationEvidence({ verdict: 'needs_review', semantic_review_required: true,
+    evaluation_scope: { synthetic: true }, operational_verification: operational() });
+  assert.equal(view.headline, 'Verified'); assert.match(view.sourceLabel, /Simulation/);
+  assert.equal(view.reviewRequired, true); assert.match(view.explanation, /separate/);
+});
+test('simulation flags, failed checks or missing receipts cannot promote an outcome', () => {
+  const missing = operational(); missing.receipt_id = '';
+  assert.equal(helper.exports.operationalVerification(missing).verified, false);
+  for (const key of Object.keys(operational().checks)) {
+    const value = operational(); value.checks[key] = false;
+    assert.equal(helper.exports.operationalVerification(value).verified, false);
+  }
+  assert.equal(helper.exports.operationalVerification({ status: 'verified', simulation: true }).verified, false);
+  const view = evaluationEvidence({ verdict: 'fail', operational_verification: operational() });
+  assert.equal(view.headline, 'Evaluation reported a failure');
+});
 
 test('a perfect transcript score is not verified execution and exports do not imply imported evidence', () => {
   const report = transcriptReport(); report.ietf_vcon_export = { attachments: [{ body: { tool_events: ['invented'] } }] };

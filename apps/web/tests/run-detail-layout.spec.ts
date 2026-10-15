@@ -17,6 +17,41 @@ const fixture = {
   conversations: [conversation('booking', 'Book an appointment', 'Please book a Tuesday appointment.'), conversation('reschedule', 'Reschedule an appointment', 'Can I move my visit to Tuesday?')],
 };
 
+for (const width of [1440, 390]) {
+  test(`verified billing outcome keeps simulation separate at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 1000 });
+    const billing = { ...conversation('billing-address-change', 'Billing Address Change', 'Please update my billing address.'),
+      turns: [
+        { turn_index: 1, speaker: 'caller', text: 'Jordan Lee, verification code two four six eight one zero. Please update my billing address.' },
+        { turn_index: 2, speaker: 'agent', text: 'What is your new billing address?' },
+        { turn_index: 3, speaker: 'caller', text: '214 Maple Street, Apartment 5B, Austin, Texas 78704.' },
+        { turn_index: 4, speaker: 'agent', text: '214 Maple Street, Apartment 5B, Austin, Texas 78704. Is that correct?' },
+        { turn_index: 5, speaker: 'caller', text: "Yes, that's correct." },
+        { turn_index: 6, speaker: 'agent', text: 'Updated. Your next invoice will use this address; the amount is unchanged.' },
+      ],
+      action_trace: ['verify_customer', 'prepare_address', 'commit_address', 'read_address'].map(name => ({ name, status: 'success', result: { ok: true } })),
+      final_state: { complete: true, simulation: true },
+      evaluation_findings: { semantic_review_required: true, operational_verification: {
+        schema: 'cae-billing-simulation-v1', context: 'simulation', status: 'verified', tool_calls: 4,
+        receipt_id: 'exec-layout-billing:billing-update:1', checks: { identity_verified: true,
+          address_committed: true, stored_address_matches_request: true, update_read_back: true, invoice_effect_explained: true },
+      } },
+    };
+    await page.route('**/api/**', route => route.fulfill({ json: route.request().url().includes('/runs/exec-layout')
+      ? { ...fixture, agent_name: 'Built-in generalist voice agent', conversations: [billing] } : {} }));
+    await page.goto('/runs/exec-layout');
+    await page.getByRole('button', { name: /Verified Resolution Rate/ }).click();
+    await expect(page.getByLabel('Resolution verification status').locator('strong')).toHaveText('Verified');
+    const proof = page.getByRole('region', { name: 'Billing simulation evidence' });
+    await expect(proof.getByRole('heading', { name: 'Simulation', exact: true })).toBeVisible();
+    await expect(proof).toContainText('No real account was changed.');
+    await expect(proof).toContainText('Conversation and policy evaluation: Needs Review');
+    await expect(proof.getByRole('listitem')).toHaveCount(5);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: test.info().outputPath(`billing-simulation-${width}.png`), fullPage: true });
+  });
+}
+
 for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
   test(`run workspace selects conversations and metrics without overflow at ${viewport.width}px`, async ({ page }) => {
     await page.setViewportSize(viewport);

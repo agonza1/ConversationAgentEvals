@@ -737,6 +737,7 @@ class ReferencePipecatAgentTransport:
         scenario: dict[str, Any],
         max_turn_pairs: int,
         total_timeout_seconds: float,
+        billing_simulation: bool = False,
     ) -> dict[str, Any]:
         """Run the primary two-agent session while audio remains inside Pipecat."""
         state = self._require(session_id)
@@ -745,6 +746,7 @@ class ReferencePipecatAgentTransport:
             'session_id': session_id,
             'execution_run_id': state.execution_run_id or session_id,
             'scenario': scenario,
+            'billing_simulation': billing_simulation,
             'tester_model_name': self.config.tester_llm_model,
             'target_model_name': self.config.llm_model,
             'llm_provider': llm_runtime.get('provider') or self.completion.provider_id,

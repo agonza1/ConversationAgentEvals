@@ -5084,7 +5084,7 @@ export function BenchmarkRunner({
               {selectedScoreAgent.target === 'http_endpoint'
                 ? `POSTs to ${selectedScoreAgent.connection?.endpoint_url || 'the configured endpoint'}; black-box response evidence only.`
                 : selectedScoreAgent.target === 'builtin_sample_voice'
-                  ? 'Runs a separate Pipecat target through the configured STT, LLM, and TTS providers. Evaluation uses current-run audio and transcripts.'
+                  ? 'Runs a separate Pipecat target through the configured STT, LLM, and TTS providers. Billing Address Change includes simulated account tools, update receipts and stored-state checks; no real account is changed. Other cases use current-run audio and transcripts.'
                   : selectedScoreAgent.target === 'pipecat_public_demo'
                     ? 'Runs the selected scenario through direct Daily WebRTC and captures current-run audio, transcript, latency, evaluation, and vCon evidence without a browser.'
                    : selectedScoreAgent.target === 'signalwire_holy_guacamole'

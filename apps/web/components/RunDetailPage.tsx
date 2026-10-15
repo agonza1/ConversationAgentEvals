@@ -10,6 +10,7 @@ import { AssertReviewProgress } from '@/components/AssertReviewProgress';
 import { AssertEvidenceReport } from '@/components/AssertEvidenceReport';
 import { buildAssertReportView, sortedAssertReviews } from '@/lib/assertReview';
 import { DesignResults } from '@/components/DesignResults';
+import { operationalVerification } from '@/lib/operationalVerification';
 import { SiteNav } from '@/components/SiteNav';
 import styles from './RunDetailPage.module.css';
 import {
@@ -565,6 +566,7 @@ function MetricDetail({
 
   if (metric === 'call_resolution') {
     const evidence = resolutionEvidence(conversation);
+    const operational = operationalVerification(conversation.evaluation_findings?.operational_verification);
     const adjudication = conversation.evaluation_adjudication;
     const appliedProposal = adjudication?.judge_result?.proposed_evaluation;
     return (
@@ -579,8 +581,17 @@ function MetricDetail({
           aria-label="Resolution verification status"
         >
           <span>Resolution status</span>
-          <strong>{evidence.label}{evidence.verdict !== 'Not reported' ? ` · ${evidence.verdict}` : ''}</strong>
+          <strong>{evidence.label}{!operational.verified && evidence.verdict !== 'Not reported' ? ` · ${evidence.verdict}` : ''}</strong>
         </div>
+        {operational.available ? (
+          <section className="resolution-gaps" aria-label="Billing simulation evidence">
+            <h3>Simulation</h3>
+            <p>Real tool execution against a fictional, per-call billing account. No real account was changed.</p>
+            <ul>{operational.keys.map(key => <li key={key}>{operational.checks[key] === true ? '✓' : '○'} {formatRuntimeId(key)}</li>)}</ul>
+            {operational.receipt ? <p>Receipt: <code>{operational.receipt}</code> · {operational.toolCalls} tool calls</p> : null}
+            <p>Conversation and policy evaluation: {evidence.verdict}. This is separate from billing outcome verification.</p>
+          </section>
+        ) : null}
         <dl className="resolution-facts" aria-label="Resolution evidence details">
           <div><dt>Evaluation score</dt><dd>{evidence.score}</dd></div>
           <div>
@@ -1303,6 +1314,8 @@ function resolutionEvidence(conversation: ConversationRecord) {
     not_evaluated: 'Not evaluated',
   };
   const captureOnly = isWayloCaptureOnly(conversation);
+  const operational = operationalVerification(conversation.evaluation_findings?.operational_verification);
+  if (!proposed && operational.verified && state !== 'failed') state = 'verified';
   if (captureOnly && state !== 'failed') state = 'not_evaluated';
   const descriptions: Record<ResolutionState, string> = {
     verified: 'The evaluator returned a pass verdict and counted this conversation as a verified resolution.',
@@ -1310,6 +1323,8 @@ function resolutionEvidence(conversation: ConversationRecord) {
     failed: 'The run failed or the evaluator returned a failure verdict.',
     not_evaluated: 'No resolution verdict is available for this conversation.',
   };
+  if (!proposed && operational.verified && state === 'verified') descriptions.verified =
+    'The billing outcome was verified from successful tool results, caller confirmation and the stored address. Simulation describes the backend, not a weaker test result.';
   if (proposed) {
     descriptions[state] = `A user confirmed the LLM adjudication: ${proposed.summary}`;
   }
@@ -1328,7 +1343,7 @@ function resolutionEvidence(conversation: ConversationRecord) {
   const liveToolExecution = typeof runtime.live_tool_execution === 'boolean'
     ? runtime.live_tool_execution
     : null;
-  const gaps = proposed
+  const gaps = operational.verified && state === 'verified' ? [] : proposed
     ? proposed.remaining_gaps.map(asSentence)
     : automaticResolutionGaps(conversation);
   if (proposed && (state === 'unverified' || state === 'failed')) {
@@ -1378,7 +1393,7 @@ function EvaluationBasisHelp({
       <span className="evaluation-basis-tooltip" id={tooltipId} role="tooltip">
         <strong>{details.heading}</strong>
         {details.lines.map((line) => <span key={line}>{line}</span>)}
-        <span>The evaluation score is not a resolution percentage. The verified rate counts pass verdicts only.</span>
+        <span>The evaluation score is not a resolution percentage. Verified outcomes require a pass verdict or a validated operational result.</span>
       </span>
     </span>
   );
