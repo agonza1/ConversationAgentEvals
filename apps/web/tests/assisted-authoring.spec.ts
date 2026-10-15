@@ -184,7 +184,7 @@ test('variation reuses explicitly shown existing context with zero typing and do
 });
 
 test('failed generation preserves the draft and manual fallback needs no generation connection', async ({ page }) => {
-  await setup(page);
+  const state = await setup(page);
   await page.goto('/scenarios?create=1');
   await page.getByRole('button', { name: 'Appointment changes', exact: true }).click();
   await page.getByRole('button', { name: 'Draft my case' }).click();
@@ -195,8 +195,12 @@ test('failed generation preserves the draft and manual fallback needs no generat
   await expect(page.getByRole('region', { name: 'Assisted test builder' }).getByRole('alert')).toContainText('No generation connection.');
   await expect(page.getByRole('heading', { name: 'Latest requested time' })).toBeVisible();
   await page.getByRole('button', { name: 'Use detailed editor' }).click();
-  await expect(page.getByLabel('User prompt / persona', { exact: true })).toHaveValue(/Please use 3 PM/);
+  await expect(page.getByRole('textbox', { name: 'User prompt / persona', exact: true })).toHaveValue(/Please use 3 PM/);
   await expect(page.getByRole('textbox', { name: 'Expected outcome', exact: true })).toHaveValue('Confirm 3 PM without claiming a booking.');
+  await page.getByRole('button', { name: 'Create scenario', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Selected scenario' })).toBeVisible();
+  expect(state.created().caller_steps).toEqual(['Please use 3 PM, not the earlier time.', 'If asked, confirm afternoon.']);
+  expect(state.created().evidence_requirements).toEqual(['transcript', 'final_state_or_action_trace']);
 });
 
 test('cancelled late generation cannot replace the active draft or write anything', async ({ page }) => {
@@ -263,7 +267,7 @@ test('fresh quick-case creation clears previous assisted policy instead of silen
   await expect(page.getByRole('textbox', { name: 'What would you like to test?' })).toBeEmpty();
   await expect(page.getByText(/Using context:/)).toHaveCount(0);
   await page.getByRole('button', { name: 'Use detailed editor' }).click();
-  await expect(page.getByLabel('User prompt / persona', { exact: true })).toBeEmpty();
+  await expect(page.getByRole('textbox', { name: 'User prompt / persona', exact: true })).toBeEmpty();
   await expect(page.getByText('Retained draft policy and evidence requirements')).toHaveCount(0);
 });
 
