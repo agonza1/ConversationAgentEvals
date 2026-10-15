@@ -341,7 +341,7 @@ async def run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, s
             await asyncio.gather(call, return_exceptions=True)
             if not local_evidence.get('bootstrap'):
                 raise
-            return _revoked_local_result(local_evidence, target=target, scenario=scenario, suite_id=suite_id,
+            return _local_partial_result(local_evidence, target=target, scenario=scenario, suite_id=suite_id,
                 artifact_dir=artifact_dir, execution_run_id=execution_run_id, conversation_id=conversation_id)
         return await call
     finally:
@@ -636,7 +636,8 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
         media_events = clean_native(peer.events, secret_values)
         for event in media_events:
             event.update(target_id=target['id'], session_id=bootstrap['sessionId'])
-        exported = project_capture(capture, voice_events=media_events, before_items=before,
+        try:
+            exported = project_capture(capture, voice_events=media_events, before_items=before,
                                    suite_id=suite_id, scenario_id=scenario['id'], media_dialogs=media_dialogs,
                                    test_expectations=scenario.get('waylo_test'), after_items=after_items,
                                    execution_run_id=execution_run_id, conversation_id=conversation_id,
@@ -646,6 +647,18 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                                        'omitted_tracks': 1 if recording else len(audio_tracks),
                                        'media_scope': 'continuous_duplex' if recording else 'captured_tracks_only',
                                        'reason': 'audio_opt_in_required' if recording or audio_tracks else 'media_unavailable'})
+        except Exception:
+            # A malformed/oversized native source must not erase the completed
+            # RTC call. Keep only sanitized local evidence, not invalid native
+            # fields or provider-derived state that could break projection again.
+            safe_references = {event['turn_id']: event['reference_text'] for event in media_events
+                if isinstance(event.get('turn_id'), str) and isinstance(event.get('reference_text'), str)}
+            return _local_partial_result({'bootstrap': bootstrap, 'peer': peer,
+                'turns': clean_native(turns, secret_values), 'audio_tracks': audio_tracks,
+                'recording': recording, 'after_items': [], 'references': safe_references},
+                target=target, scenario=scenario, suite_id=suite_id, artifact_dir=artifact_dir,
+                execution_run_id=execution_run_id, conversation_id=conversation_id,
+                error='Waylo provider evidence could not be projected; partial local RTC evidence retained. Reconnect and refresh this run.')
         # Native finals remain receipts, not the tester's intended utterance. Both are retained.
         transcript = '\n'.join(f'{"Caller" if line["role"] == "user" else "Agent"}: {line["text"]}'
                                for line in capture['transcripts'])
@@ -664,13 +677,14 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
         await client.close()
 
 
-def _revoked_local_result(state: dict, *, target: dict, scenario: dict, suite_id: str,
-                          artifact_dir: Path, execution_run_id: str | None, conversation_id: str | None) -> dict:
+def _local_partial_result(state: dict, *, target: dict, scenario: dict, suite_id: str,
+                          artifact_dir: Path, execution_run_id: str | None, conversation_id: str | None,
+                          error: str | None = None) -> dict:
     """No credential access, HTTP, or unfiltered native text after revocation."""
     bootstrap, peer = state['bootstrap'], state['peer']
     turn_auth = bootstrap.get('turn') or {}
     secrets = (bootstrap.get('participantToken', ''), turn_auth.get('credential', ''), turn_auth.get('username', ''))
-    error = 'Waylo authorization ended; partial local RTC evidence retained. Reconnect to refresh provider evidence.'
+    error = error or 'Waylo authorization ended; partial local RTC evidence retained. Reconnect to refresh provider evidence.'
     capture = {'target_id': target['id'], 'origin': 'cae_ai_tester', 'capture_error': error,
         'session': {'id': bootstrap['sessionId'], 'createdAt': peer.origin_utc,
                     'metadata_source': 'cae_local_bootstrap_identity'},

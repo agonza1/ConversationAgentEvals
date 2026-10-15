@@ -59,6 +59,10 @@ not empty successful observations. A prior successful capture is retained if a
 later polling read fails. Local RTC text is labelled separately from provider
 finals. Reconnect and use the same refresh flow to recover provider evidence;
 the original execution failure remains recorded and no review runs automatically.
+Session creation timestamps must be usable, timezone-aware values; a present end
+timestamp must be valid too. Malformed mandatory fields reject import safely.
+Unexpected native projection failures also retain a local-only partial export,
+without importing invalid provider state or fabricating replacement timestamps.
 
 Expiry, disconnect and account switching stop the active RTC task and retain a
 local-only partial export under the original session identity. This path performs

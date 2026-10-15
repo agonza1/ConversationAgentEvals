@@ -209,6 +209,40 @@ def test_malformed_transcript_projection_fields_fail_with_safe_capture_error(fie
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize('field,value', [
+    ('createdAt', '__missing__'), ('createdAt', None), ('createdAt', ''), ('createdAt', 'bad'),
+    ('createdAt', []), ('createdAt', {}), ('createdAt', '2026-10-09T12:00:00'),
+    ('endedAt', ''), ('endedAt', 'bad'), ('endedAt', []), ('endedAt', {}),
+])
+def test_session_timestamps_rejected_before_transcript_reads_or_projection(field, value):
+    detail = session()
+    if value == '__missing__':
+        detail.pop(field)
+    else:
+        detail[field] = value
+    requests = []
+    def handler(request):
+        requests.append(request.url.path)
+        return httpx.Response(200, json=detail)
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            with pytest.raises(WayloError, match='session timestamps'):
+                await WayloClient(TARGET, client=http).capture(S)
+    asyncio.run(exercise())
+    assert requests == [f'/api/sessions/{S}']
+    with pytest.raises(WayloError, match='session timestamps'):
+        project_capture(captured(session=detail))
+
+
+@pytest.mark.parametrize('created,ended', [
+    ('2026-10-09T12:00:00Z', None),
+    ('2026-10-09T08:00:00-04:00', '2026-10-09T08:01:00-04:00'),
+])
+def test_valid_session_clocks_and_unended_sessions_remain_supported(created, ended):
+    value = captured(session=session(createdAt=created, endedAt=ended))
+    assert validate_ietf_vcon(project_capture(value)['vcon'])['valid']
+
+
 def test_revision_idempotence_and_late_append_same_vcon_identity():
     source = captured()
     one, two = project_capture(source), project_capture(source)
@@ -455,7 +489,7 @@ def test_interrupted_list_checks_initial_quantity_and_later_correction_separatel
 
 
 @pytest.mark.parametrize('scripted_exchanges', [1, 2])
-@pytest.mark.parametrize('capture_failure', [None, 'session', 'transcripts', 'late', 'revoked', 'revoked_during_send'])
+@pytest.mark.parametrize('capture_failure', [None, 'session', 'transcripts', 'late', 'revoked', 'revoked_during_send', 'missing_created', 'bad_tool_name'])
 def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp_path, monkeypatch, scripted_exchanges, capture_failure):
     revoked = False
     class Client:
@@ -480,6 +514,12 @@ def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp
                 if capture_failure == 'transcripts':
                     raise RuntimeError('unsafe upstream private provider-secret turn-credential turn-username')
                 raise WayloError('Waylo API unavailable.', status=503)
+            if capture_failure == 'missing_created':
+                detail = session()
+                detail.pop('createdAt')
+                return captured(session=detail)
+            if capture_failure == 'bad_tool_name':
+                return captured(events=[native_event(1, ['invalid'])])
             return captured(origin=origin, opaque='private turn-credential')
         async def close(self):
             self.calls.append('close')

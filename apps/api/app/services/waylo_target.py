@@ -18,6 +18,7 @@ import httpx
 from app.services.target_secrets import resolve_http_target_secret
 from app.services.vcon_evidence import MAX_EVENTS, MAX_PROFILE_BYTES, PURPOSE, attach_evidence, evidence_body, redact
 from app.services.execution_vcon import build_ietf_execution_vcon
+from app.services.vcon_interop import is_vcon_timestamp
 
 
 class WayloError(ValueError):
@@ -26,6 +27,12 @@ class WayloError(ValueError):
     def __init__(self, message: str, status: int | None = None):
         super().__init__(message)
         self.status = status
+
+
+def _validate_session_timestamps(session: dict) -> None:
+    if (not is_vcon_timestamp(session.get('createdAt'))
+            or (session.get('endedAt') is not None and not is_vcon_timestamp(session['endedAt']))):
+        raise WayloError('Invalid Waylo session timestamps; capture is incomplete.')
 
 
 def api_url(value: str) -> str:
@@ -165,6 +172,7 @@ class WayloClient:
         session = await self.request('GET', f'sessions/{session_id}')
         if not isinstance(session, dict) or session.get('id') != session_id or session.get('workspaceId') != self.workspace or session.get('agentId') != self.agent:
             raise WayloError('Session does not belong to this configured Waylo target/workspace.')
+        _validate_session_timestamps(session)
         transcripts, cursor, highest, seen = [], None, 0, set()
         while True:
             page = await self.request('GET', f'sessions/{session_id}/transcripts',
@@ -229,6 +237,7 @@ def project_capture(capture: dict, *, voice_events: list[dict] | None = None,
     """Map only typed observations. Free-form events remain ancillary evidence."""
     capture = clean_native(deepcopy(capture))
     session = capture['session']
+    _validate_session_timestamps(session)
     target_id, session_id = capture['target_id'], session['id']
     identity = f'{target_id}/{session_id}'
     tools, native_voice = [], []

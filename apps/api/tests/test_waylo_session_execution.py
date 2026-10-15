@@ -194,6 +194,21 @@ def test_target_authentication_change_cannot_fall_back_to_server_key(connected, 
         execution_runner.start_execution_run(ExecutionRunCreateRequest.model_validate(run_payload()), waylo_lease=lease)
 
 
+@pytest.mark.parametrize('field,value', [('createdAt', None), ('createdAt', []), ('endedAt', 'bad')])
+def test_malformed_session_clock_import_returns_safe_400_not_500(connected, monkeypatch, field, value):
+    from test_waylo_target import captured, S
+    _, proof, http = connected
+    native = captured(target_id=TARGET['id'])
+    native['session'][field] = value
+    async def capture(self, *args, **kwargs):
+        return native
+    monkeypatch.setattr(WayloClient, 'capture', capture)
+    response = http.post(f'/api/agents/{TARGET["id"]}/capture', json={'session_id': S},
+        headers={**HEADERS, 'X-CAE-Waylo-Session': proof})
+    assert response.status_code == 400
+    assert response.json()['detail'] == 'Invalid Waylo session timestamps; capture is incomplete.'
+
+
 def test_disconnect_cancels_active_rtc_and_closes_client(connected, monkeypatch, tmp_path):
     from app.services import waylo_livekit
     _, proof, _ = connected
