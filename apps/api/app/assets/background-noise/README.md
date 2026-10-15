@@ -21,10 +21,14 @@ ffmpeg -i source.mp3 -ss 5 -t 20 -ac 1 -ar 24000 \
 
 The low-pass filter allows safe playback at 16 kHz. Short fades reduce loop-boundary
 clicks. The mixer chooses a seeded offset, loops the excerpt as needed, and scales
-it to the requested signal-to-noise ratio against each tester utterance. It records
+it once to the requested signal-to-noise ratio against the first caller utterance. It records
 the actual recording hash, offset, seed, RMS levels, and clipping count alongside
 the sent-audio evidence. The recording hash is also frozen in the queued contract;
 an incompatible recording is rejected instead of silently changing the test.
 
-Noise is added to tester speech only. It does not continue through the target's
-responses or the silence between turns. White noise remains a generated baseline.
+One continuous caller microphone stream carries the noise during the greeting,
+caller speech, target responses, and silence between turns. Its gain stays fixed;
+SNR is a calibration reference, not an instantaneous ratio during silence. The
+same accepted mixed PCM feeds the live monitor and recording. A bounded raw caller
+WAV retains the complete outgoing track if monitoring fails. White noise remains
+a seeded generated baseline. Neither preset type restarts at a turn boundary.

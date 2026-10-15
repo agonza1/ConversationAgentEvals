@@ -85,3 +85,54 @@ def add_noise(audio: bytes, *, snr_db: float, seed: int, noise_type: str = 'whit
     return pcm_wav(output.tobytes(), rate), {**profile, 'snr_db_requested': snr_db,
         'seed': seed, 'clipped_samples': clipped, 'signal_rms_pcm16': rms,
         'noise_rms_pcm16': noise_rms * gain}
+
+
+class ContinuousNoise:
+    """One seeded ambience cursor and fixed gain for the entire caller track.
+
+    Calibrate once from the first caller WAV, not from silence or target speech.
+    Chunk boundaries and later turn lengths do not restart or gate the noise.
+    """
+    def __init__(self, reference_audio: bytes, *, snr_db: float, seed: int,
+                 noise_type: str = 'white', recording_sha256: str | None = None):
+        if type(seed) is not int or not 0 <= seed <= 4294967295:
+            raise ValueError('Continuous noise seed must be a uint32 integer.')
+        if not math.isfinite(snr_db) or not -5 <= snr_db <= 40:
+            raise ValueError('Controlled noise SNR must be between -5 and 40 dB.')
+        self.rate, reference = read_wav(reference_audio)
+        samples = array('h', reference)
+        signal_rms = math.sqrt(sum(s * s for s in samples) / len(samples))
+        if not signal_rms:
+            raise ValueError('Continuous noise requires audible caller audio for calibration.')
+        profile = noise_profile(noise_type)
+        if recording_sha256 and recording_sha256 != profile.get('recording_sha256'):
+            raise ValueError('Background recording changed since this run was queued.')
+        self.generator = random.Random(seed)
+        self.recording = None if noise_type == 'white' else _recording(noise_type, self.rate, profile['recording_sha256'])
+        self.position = self.generator.randrange(len(self.recording)) if self.recording is not None else 0
+        noise_rms = math.sqrt(float((self.recording ** 2).mean())) if self.recording is not None else 1.0
+        self.gain = signal_rms / (10 ** (snr_db / 20)) / noise_rms
+        self.samples = self.clipped = 0
+        self.profile = {**profile, 'scope': 'continuous_caller_track', 'seed': seed,
+            'snr_db_requested': snr_db, 'level_reference': 'first_caller_utterance_rms',
+            'signal_rms_pcm16': signal_rms, 'noise_rms_pcm16': noise_rms * self.gain,
+            'recording_offset_samples': self.position if self.recording is not None else None}
+
+    def mix(self, pcm: bytes) -> bytes:
+        if len(pcm) % 2:
+            raise ValueError('PCM16 frames require complete samples.')
+        output = array('h')
+        for sample in array('h', pcm):
+            if self.recording is None:
+                noise = self.generator.gauss(0, 1)
+            else:
+                noise = self.recording[self.position]
+                self.position = (self.position + 1) % len(self.recording)
+            value = round(sample + noise * self.gain)
+            self.clipped += int(value < -32768 or value > 32767)
+            output.append(max(-32768, min(32767, value)))
+        self.samples += len(output)
+        return output.tobytes()
+
+    def metadata(self) -> dict:
+        return {**self.profile, 'generated_samples': self.samples, 'clipped_samples': self.clipped}

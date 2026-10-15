@@ -89,7 +89,7 @@ def test_selected_rules_hash_detects_catalog_changes(capture, monkeypatch):
 
 @pytest.mark.parametrize('noise', [None, *({'snr_db': 20, 'seed': 7, 'noise_type': kind}
     for kind in ['white', 'office', 'cafe', 'traffic'])])
-def test_noise_changes_actual_sent_audio_with_retained_seed(monkeypatch, noise):
+def test_noise_is_configured_for_continuous_transport_not_premixed_per_turn(monkeypatch, noise):
     source = pcm_wav(b'\x00\x10' * 2400, 24000)
     scenario = {'id': 'case', 'goal': 'Information only', 'caller_steps': ['Exact opener']}
     frozen = freeze_contract(scenario, suite_id='suite', scenario_id='case')
@@ -102,7 +102,9 @@ def test_noise_changes_actual_sent_audio_with_retained_seed(monkeypatch, noise):
         assert await kw['next_utterance']([], 1) == 'Exact opener'
         audio, metadata = await kw['synthesize']('Exact opener', 1)
         if noise:
-            assert audio != source and metadata['seed'] == 8
+            assert audio == source and metadata['seed'] == 7
+            assert metadata['playback'] == 'continuous'
+            assert metadata['scope'] == 'continuous_caller_track'
             assert metadata['snr_db_requested'] == 20
             assert metadata['noise_type'] == noise['noise_type']
             if noise['noise_type'] != 'white':
