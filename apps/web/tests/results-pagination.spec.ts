@@ -1,5 +1,97 @@
 import { expect, test } from '@playwright/test';
 
+test('agent results render before a slow active-run probe finishes', async ({ page }) => {
+  let release = () => {};
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  let probeFinished = false;
+  await page.route('**/api/execution/runs?*', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get('status') === 'active') {
+      await pending;
+      probeFinished = true;
+      await route.fulfill({ json: [] });
+      return;
+    }
+    await route.fulfill({ json: [{ execution_run_id: 'fast-result', agent_name: 'Ready immediately',
+      status: 'completed', updated_at: '2026-10-15T12:00:00Z', conversations: [{ score: 85 }] }] });
+  });
+  try {
+    await page.goto('/results');
+    await expect(page.getByRole('link', { name: /Ready immediately/ })).toBeVisible();
+    await expect(page.getByText('Score 85', { exact: true })).toBeVisible();
+    await expect(page.getByText('Loading runs…', { exact: true })).toHaveCount(0);
+    expect(probeFinished).toBe(false);
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: 'wait' });
+  }
+});
+
+test('active rows keep refreshing while the presence probe is pending', async ({ page }) => {
+  let release = () => {};
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  let pages = 0;
+  let probes = 0;
+  await page.route('**/api/execution/runs?*', async (route) => {
+    if (new URL(route.request().url()).searchParams.get('status') === 'active') {
+      probes += 1;
+      await pending;
+      await route.fulfill({ json: [] });
+      return;
+    }
+    pages += 1;
+    await route.fulfill({ json: [{ execution_run_id: 'refreshing-result', agent_name: 'Refreshing agent',
+      status: pages >= 3 ? 'completed' : 'running', updated_at: '2026-10-15T12:00:00Z',
+      conversations: [{ score: Math.min(100, pages * 35) }] }] });
+  });
+  try {
+    await page.goto('/results');
+    const row = page.getByRole('link', { name: /Refreshing agent/ });
+    await expect(row).toContainText('Score 35');
+    await expect(row).toContainText('Score 70');
+    await expect(row).toContainText('completed');
+    await expect(row).toContainText('Score 100');
+    expect(probes).toBe(1); // The pending probe isn't duplicated on every page refresh.
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: 'wait' });
+  }
+});
+
+test('a completed off-page run gets a final refresh after an older page response', async ({ page }) => {
+  let pageStarted = () => {};
+  let releasePage = () => {};
+  const secondPage = new Promise<void>((resolve) => { pageStarted = resolve; });
+  const completed = new Promise<void>((resolve) => { releasePage = resolve; });
+  let pages = 0;
+  let probes = 0;
+  await page.route('**/api/execution/runs?*', async (route) => {
+    if (new URL(route.request().url()).searchParams.get('status') === 'active') {
+      probes += 1;
+      if (probes > 1) {
+        await secondPage;
+        await route.fulfill({ json: [] });
+        releasePage();
+      } else {
+        await route.fulfill({ json: [{ status: 'running' }] });
+      }
+      return;
+    }
+    pages += 1;
+    if (pages === 2) { pageStarted(); await completed; }
+    await route.fulfill({ json: [{ execution_run_id: pages > 2 ? 'newly-completed' : 'older-result',
+      agent_name: pages > 2 ? 'Newly completed agent' : 'Older agent', status: 'completed',
+      updated_at: '2026-10-15T12:00:00Z', conversations: [{ score: 100 }] }] });
+  });
+  try {
+    await page.goto('/results');
+    await expect(page.getByRole('link', { name: /Newly completed agent/ })).toBeVisible();
+  } finally {
+    pageStarted(); releasePage();
+    await page.unrouteAll({ behavior: 'wait' });
+  }
+});
+
 test('results fetch bounded summaries, page forward, and reset server filters', async ({ page }) => {
   const requests: URL[] = [];
   await page.route('**/api/execution/runs?*', async (route) => {
