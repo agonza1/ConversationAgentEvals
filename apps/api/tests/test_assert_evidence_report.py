@@ -258,3 +258,37 @@ def test_transcript_coverage_tracks_emitted_messages_not_saved_turn_text(convers
     inference = build_assert_inference_row(run={}, conversation=conversation)
     metadata = report.build_evidence_report(inference, {'verdict': {}}, conversation)
     assert metadata['evidence_coverage']['transcript'] is expected
+
+
+@pytest.mark.parametrize('action,expected', [({}, True), ({'tool_name': 'lookup'}, True),
+                                           (None, False), ('lookup', False), ([], False)])
+def test_tool_coverage_tracks_all_and_only_emitted_agent_trace_records(action, expected):
+    conversation = _conversation()
+    conversation['action_trace'] = [action]
+    metadata = _metadata(conversation=conversation)
+    assert metadata['evidence_coverage'] == {'transcript': True, 'tool_trace': expected, 'final_state': False}
+
+
+def test_coverage_never_borrows_source_records_absent_from_canonical_target_view():
+    conversation = _conversation()
+    conversation['action_trace'] = [{'tool_name': 'cae_final_state_snapshot'}]
+    conversation['final_state'] = {'phase': 'pending'}
+    inference = build_assert_inference_row(run={}, conversation=conversation)
+    for event in inference['events']:
+        event['view'] = ['combined']
+    metadata = report.build_evidence_report(inference, {'verdict': {}}, conversation)
+    assert metadata['evidence_coverage'] == {'transcript': False, 'tool_trace': False, 'final_state': False}
+
+
+def test_state_and_voice_annotation_tools_do_not_claim_an_agent_execution_trace():
+    conversation = _conversation()
+    conversation['final_state'] = {'phase': 'pending'}
+    conversation['turns'][1]['frame_metadata'] = {
+        'source': 'target_kokoro_audio', 'source_text': conversation['turns'][1]['text'],
+        'asr_receipt': conversation['turns'][1]['text'],
+    }
+    inference = build_assert_inference_row(run={}, conversation=conversation)
+    assert any(event['edit'].get('tool_name') == 'cae_voice_turn_evidence_observation'
+               for event in inference['events'])
+    metadata = report.build_evidence_report(inference, {'verdict': {}}, conversation)
+    assert metadata['evidence_coverage'] == {'transcript': True, 'tool_trace': False, 'final_state': True}

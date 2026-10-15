@@ -11,9 +11,7 @@ import re
 from typing import Any
 
 from app.integrations.assert_runtime import CITE_XML_PATTERN, Transcript, TranscriptEvent, TranscriptMetadata
-from app.services.assert_transcript_adapter import (
-    TRANSCRIPT_ADAPTER_VERSION, _has_unstructured_final_state_evidence, _structured_final_state,
-)
+from app.services.assert_transcript_adapter import TRANSCRIPT_ADAPTER_VERSION
 
 MAX_EVENTS = 2_000
 MAX_SNAPSHOT_CHARS = 512_000
@@ -23,25 +21,33 @@ MAX_PARTS = 512
 _EVENT_ID = re.compile(r'event:(?:0|[1-9]\d{0,5})\Z')
 
 
-def _has_transcript_evidence(inference: dict[str, Any]) -> bool:
-    """Count only message evidence actually emitted to the judge's target view."""
+def _emitted_evidence_coverage(inference: dict[str, Any]) -> dict[str, bool]:
+    """Measure supplied evidence from canonical events, not a second source parser."""
+    coverage = {'transcript': False, 'tool_trace': False, 'final_state': False}
     events = inference.get('events')
     if not isinstance(events, list):
-        return False
+        return coverage
     for event in events:
         if not isinstance(event, dict) or not isinstance(event.get('view'), list) or 'target' not in event['view']:
             continue
-        raw = event.get('raw')
-        if isinstance(raw, dict) and 'cae_execution_error' in raw:
-            continue
+        raw = event.get('raw') if isinstance(event.get('raw'), dict) else {}
         edit = event.get('edit')
-        if not isinstance(edit, dict) or edit.get('type') != 'add_message':
+        if not isinstance(edit, dict):
             continue
-        message = edit.get('message')
-        text = message.get('content') if isinstance(message, dict) else None
-        if isinstance(text, str) and text.strip():
-            return True
-    return False
+        if edit.get('type') == 'tool_call':
+            # Annotation/state tool events are not an agent execution trace.
+            coverage['tool_trace'] |= isinstance(raw.get('cae_action'), dict)
+            coverage['final_state'] |= (
+                edit.get('tool_name') == 'cae_final_state_snapshot' and 'cae_final_state' in raw
+            ) or (
+                edit.get('tool_name') == 'cae_unverified_final_state_evidence'
+                and 'cae_unstructured_final_state_evidence' in raw
+            )
+        elif edit.get('type') == 'add_message' and 'cae_execution_error' not in raw:
+            message = edit.get('message')
+            text = message.get('content') if isinstance(message, dict) else None
+            coverage['transcript'] |= isinstance(text, str) and bool(text.strip())
+    return coverage
 
 
 def build_evidence_report(
@@ -52,13 +58,7 @@ def build_evidence_report(
         'transcript_adapter_version': TRANSCRIPT_ADAPTER_VERSION,
         'evidence_messages': [], 'evidence_references': [],
         'evidence_details_status': 'complete',
-        'evidence_coverage': {
-            'transcript': _has_transcript_evidence(inference),
-            'tool_trace': any(isinstance(action, dict) and bool(action)
-                              for action in conversation.get('action_trace') or []),
-            'final_state': _structured_final_state(conversation) is not None
-            or _has_unstructured_final_state_evidence(conversation.get('unstructured_final_state_evidence')),
-        },
+        'evidence_coverage': _emitted_evidence_coverage(inference),
     }
     try:
         events = inference.get('events')
