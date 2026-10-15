@@ -30,7 +30,8 @@ export function evaluationEvidence(value: unknown) {
   // A generated ietf_vcon_export is not evidence that an original vCon was imported.
   const imported = scope.input_source === 'vcon' || Object.keys(intake).length > 0 || source.source_format === 'vcon';
   const synthetic = scope.synthetic === true || intake.synthetic === true;
-  const verdict = typeof report.verdict === 'string' ? report.verdict.toLowerCase() : '';
+  const recordedVerdict = report.verdict ?? report.overall;
+  const verdict = typeof recordedVerdict === 'string' ? recordedVerdict.toLowerCase() : '';
   const failed = verdict === 'fail' || verdict === 'failed' || verdict === 'error';
   const reviewRequired = report.semantic_review_required === true || scope.semantic_review_required === true || verdict === 'needs_review';
   const headline = failed ? 'Evaluation reported a failure'

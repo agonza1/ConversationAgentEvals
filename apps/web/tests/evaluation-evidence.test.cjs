@@ -66,3 +66,7 @@ test('a plain transcript is text even when its content happens to be valid JSON'
     assert.equal(view.transcript, 'present'); assert.equal(view.headline, 'Outcome unverified');
   }
 });
+test('legacy overall verdict aliases preserve explicit failures', () => {
+  const view = evaluationEvidence({ overall: 'FAIL', transcript: 'Agent: Forbidden behavior.', action_trace: [], final_state: {} });
+  assert.equal(view.failed, true); assert.equal(view.headline, 'Evaluation reported a failure');
+});
