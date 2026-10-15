@@ -181,7 +181,7 @@ def test_quick_case_retains_reviewed_evidence_and_policy_across_reload(tmp_path,
             'expected_output': 'Confirm the corrected request.', 'description': 'Follow the latest request.',
             'required_actions': ['Repeat the latest time'], 'forbidden_actions': ['Invent booking success'],
             'evidence_requirements': ['transcript', 'final_state_or_action_trace'],
-            'requirements': 'No booking claims without evidence.', 'permissible_behavior': 'May collect requests only.',
+            'requirements': 'Target role: Request collection assistant\n\nNo booking claims without evidence.', 'permissible_behavior': 'May collect requests only.',
             'caller_steps': ['Use 3 PM, not morning.', 'Confirm afternoon.'],
             'spoken_opener': 'Use 3 PM, not morning.',
         })
@@ -192,7 +192,7 @@ def test_quick_case_retains_reviewed_evidence_and_policy_across_reload(tmp_path,
         contract = benchmark_service.get_scenario_contract('user-scenarios', record['id'])['scenario_contract']
         for item in (record, retained, contract):
             assert item['evidence_requirements'] == ['transcript', 'final_state_or_action_trace']
-            assert item['requirements'] == 'No booking claims without evidence.'
+            assert item['requirements'] == 'Target role: Request collection assistant\n\nNo booking claims without evidence.'
             assert item['permissible_behavior'] == 'May collect requests only.'
             assert item['caller_steps'] == ['Use 3 PM, not morning.', 'Confirm afternoon.']
             assert item['spoken_opener'] == 'Use 3 PM, not morning.'

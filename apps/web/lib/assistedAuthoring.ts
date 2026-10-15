@@ -40,27 +40,33 @@ export function approvedAuthoringSpec(spec: EditableAssertSpec): EditableAssertS
   return { ...spec, generated_content_status: 'approved',
     required_behaviors: spec.required_behaviors.map((item) => ({ ...item, draft: false })),
     forbidden_behaviors: spec.forbidden_behaviors.map((item) => ({ ...item, draft: false })),
-    scenarios: spec.scenarios.map((item) => ({ ...item, draft: false })),
+    scenarios: spec.scenarios.map((item) => ({ ...item, steps: normalizedCallerSteps(item.steps), draft: false })),
     deterministic_checks: (spec.deterministic_checks || []).map((item) => ({ ...item, draft: false })),
   };
+}
+
+export function normalizedCallerSteps(steps: string[] | undefined): string[] {
+  return (steps || []).map((step) => step.trim()).filter(Boolean);
 }
 
 export function quickCaseFromDraft(spec: EditableAssertSpec) {
   if (spec.scenarios.length !== 1 || !spec.required_behaviors.length) throw new Error('A quick case needs exactly one caller case and at least one check.');
   const item = spec.scenarios[0];
-  if (!item.steps?.[0]?.trim() || !item.expected_outcome?.trim()) throw new Error('Review the caller opening and expected outcome before creating the case.');
+  const steps = normalizedCallerSteps(item.steps);
+  if (!steps.length || !item.expected_outcome?.trim()) throw new Error('Review the caller opening and expected outcome before creating the case.');
+  if (steps.length > 8 || steps.some((step) => step.length > 2000)) throw new Error('Use up to eight caller instructions, each at most 2000 characters.');
   return {
     title: item.title,
-    simulated_user_prompt: [item.persona, ...(item.steps || [])].filter(Boolean).join('\n'),
-    spoken_opener: item.steps[0].trim(),
+    simulated_user_prompt: [item.persona, ...steps].filter(Boolean).join('\n'),
+    spoken_opener: steps[0],
     expected_output: item.expected_outcome,
     description: spec.objective,
     required_actions: spec.required_behaviors.map((rule) => rule.description || rule.label),
     forbidden_actions: spec.forbidden_behaviors.map((rule) => rule.description || rule.label),
     evidence_requirements: spec.evidence_requirements || ['transcript'],
-    requirements: spec.requirements || '',
+    requirements: [spec.role?.trim() ? `Target role: ${spec.role.trim()}` : '', spec.requirements || ''].filter(Boolean).join('\n\n'),
     permissible_behavior: spec.permissible_behavior || '',
-    caller_steps: [...item.steps],
+    caller_steps: steps,
   };
 }
 

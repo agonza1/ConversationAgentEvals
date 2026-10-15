@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { ApiAwareLink } from '@/components/ApiAwareLink';
 import { AssistedTestBuilder } from '@/components/AssistedTestBuilder';
-import { quickCaseFromDraft, type AuthoringContext } from '@/lib/assistedAuthoring';
+import { normalizedCallerSteps, quickCaseFromDraft, type AuthoringContext } from '@/lib/assistedAuthoring';
 import type { EditableAssertSpec } from '@/lib/types';
 import { getApiBase } from '@/lib/execution';
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
@@ -325,17 +325,18 @@ export function ScenariosPage() {
     setError(null);
     setSaveMessage(null);
     try {
+      const callerSteps = manualContext?.caller_steps ? normalizedCallerSteps(manualContext.caller_steps) : undefined;
       const created = await createScenario({
         title: title.trim() || undefined,
         simulated_user_prompt: manualContext?.caller_steps
-          ? [simulatedUserPrompt.trim(), ...manualContext.caller_steps].filter(Boolean).join('\n')
+          ? [simulatedUserPrompt.trim(), ...(callerSteps || [])].filter(Boolean).join('\n')
           : simulatedUserPrompt.trim(),
-        spoken_opener: manualContext?.caller_steps ? manualContext.caller_steps[0].trim() : spokenOpener.trim(),
+        spoken_opener: manualContext?.caller_steps ? callerSteps?.[0] || '' : spokenOpener.trim(),
         expected_output: expectedOutput.trim(),
         description: description.trim(),
         required_actions: stringList(requiredActions),
         forbidden_actions: stringList(forbiddenActions),
-        ...(manualContext || {}),
+        ...(manualContext ? { ...manualContext, caller_steps: callerSteps } : {}),
       });
       preferredSelectionRef.current = scenarioKey('user-scenarios', created.id);
       setMode('view');
@@ -522,7 +523,9 @@ export function ScenariosPage() {
                       `Required: ${selected.scenario.required_actions.join('; ')}`,
                       `Forbidden: ${selected.scenario.forbidden_actions.join('; ')}`,
                       `Allowed assistance: ${selected.scenario.permissible_behavior}`,
-                      `Policy context: ${selected.scenario.policy_context || selected.scenario.requirements}`,
+                      `Required evidence: ${selected.scenario.evidence_requirements.join('; ')}`,
+                      `Policy context: ${selected.scenario.policy_context}`,
+                      `Source requirements: ${selected.scenario.requirements}`,
                     ].join('\n') }); setManualCreate(false); setMode('create'); setError(null);
                   }}>Make a variation</button>
                   <Link className="primary-link" href={scenarioHref('/runs', selected.scenario)}>Test an agent</Link>

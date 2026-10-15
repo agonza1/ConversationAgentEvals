@@ -28,6 +28,17 @@ test('approval creates a new snapshot without mutating the draft or weakening ca
   assert.equal(original.generated_content_status, 'draft'); assert.equal(original.scenarios[0].draft, true);
   assert.equal(approved.scenarios[0].behavior_id, 'latest');
 });
+
+test('quick-case role and blank-line edits survive conversion without changing the source draft', () => {
+  const value = draft(); value.role = 'Reviewed scheduling assistant';
+  value.scenarios[0].steps = ['  ', ' Use 4 PM. ', '', ' Confirm afternoon. ', ''];
+  const quick = quickCaseFromDraft(value);
+  assert.equal(quick.requirements, 'Target role: Reviewed scheduling assistant\n\nSource policy');
+  assert.equal(quick.spoken_opener, 'Use 4 PM.');
+  assert.deepEqual(quick.caller_steps, ['Use 4 PM.', 'Confirm afternoon.']);
+  assert.deepEqual(approvedAuthoringSpec(value).scenarios[0].steps, quick.caller_steps);
+  assert.equal(value.scenarios[0].steps.length, 5);
+});
 test('quick cases reject missing caller steps or more than one case', () => {
   const value = draft(); value.scenarios[0].steps = [];
   assert.throws(() => quickCaseFromDraft(value), /caller opening/);

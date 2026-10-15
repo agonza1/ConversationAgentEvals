@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ApiAwareLink } from './ApiAwareLink';
 import type { EditableAssertSpec } from '@/lib/types';
-import { AUTHORING_CONTEXT_LIMIT, authoringChanges, prepareAuthoringContext, requestAuthoringDraft, type AuthoringContext, type AuthoringDraft, type AuthoringScope } from '@/lib/assistedAuthoring';
+import { AUTHORING_CONTEXT_LIMIT, authoringChanges, normalizedCallerSteps, prepareAuthoringContext, requestAuthoringDraft, type AuthoringContext, type AuthoringDraft, type AuthoringScope } from '@/lib/assistedAuthoring';
 import styles from './AssistedTestBuilder.module.css';
 
 const starters = [
@@ -44,7 +44,10 @@ export function AssistedTestBuilder({ scope, context, initialRequest = '', onApp
     || JSON.stringify(draft.context) !== JSON.stringify(sourceContext)));
   const validDraft = Boolean(spec && spec.title.trim().length >= 3 && spec.role.trim().length >= 3 && spec.objective.trim().length >= 10 && spec.permissible_behavior?.trim()
     && spec.required_behaviors.length && [...spec.required_behaviors, ...spec.forbidden_behaviors].every((rule) => rule.label.trim())
-    && spec.scenarios.length && spec.scenarios.every((item) => item.steps?.[0]?.trim() && item.expected_outcome?.trim()));
+    && spec.scenarios.length && spec.scenarios.every((item) => {
+      const steps = normalizedCallerSteps(item.steps);
+      return steps.length > 0 && steps.length <= 8 && steps.every((step) => step.length <= 2000) && item.expected_outcome?.trim();
+    }));
 
   useEffect(() => () => { active.current?.controller.abort(); active.current = null; }, []);
 
@@ -85,7 +88,7 @@ export function AssistedTestBuilder({ scope, context, initialRequest = '', onApp
   async function approve() {
     if (!spec || !validDraft || !contextApproved || busy || outdated || questions.length || accepting.current) return;
     accepting.current = true; setSaving(true); setError(null);
-    try { await onApprove(spec); }
+    try { await onApprove({ ...spec, scenarios: spec.scenarios.map((item) => ({ ...item, steps: normalizedCallerSteps(item.steps) })) }); }
     catch (err) { setError(err instanceof Error ? err.message : 'Could not save. Your draft is still here.'); }
     finally { accepting.current = false; setSaving(false); }
   }

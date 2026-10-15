@@ -78,12 +78,13 @@ test('quick case explicitly saves exactly what was reviewed, including evidence 
   await page.getByRole('button', { name: 'Billing address', exact: true }).click();
   await page.getByRole('button', { name: 'Draft my case' }).click();
   await page.getByText('Edit this case', { exact: true }).click();
-  await page.getByRole('textbox', { name: 'Caller instructions', exact: true }).fill('Use 4 PM, not 3 PM.\nConfirm afternoon.');
+  await page.getByRole('textbox', { name: 'Caller instructions', exact: true }).fill('\n  Use 4 PM, not 3 PM.\n\nConfirm afternoon.\n');
   await page.getByRole('textbox', { name: 'Expected outcome', exact: true }).fill('Confirm 4 PM without inventing a booking.');
   expect(state.writes).toHaveLength(1);
   await page.getByRole('button', { name: 'Approve and create case' }).click();
   await expect(page.getByRole('region', { name: 'Selected scenario' }).getByRole('heading', { name: 'normal time correction' })).toBeVisible();
   expect(state.created()).toMatchObject({ simulated_user_prompt: 'A caller\nUse 4 PM, not 3 PM.\nConfirm afternoon.', expected_output: 'Confirm 4 PM without inventing a booking.',
+    spoken_opener: 'Use 4 PM, not 3 PM.', caller_steps: ['Use 4 PM, not 3 PM.', 'Confirm afternoon.'],
     required_actions: ['Repeat the final time.'], forbidden_actions: ['Do not claim an unconfirmed booking.'], evidence_requirements: ['transcript', 'final_state_or_action_trace'] });
   expect(state.writes).toEqual(['/api/specs/assist', '/api/scenarios']);
   await expect(page.getByRole('link', { name: 'Test an agent', exact: true })).toHaveAttribute('href', /api_base=/);
@@ -363,7 +364,7 @@ test('detailed edits retain a reviewed spoken opening separately from caller bac
   await page.getByRole('textbox', { name: 'Caller profile / background', exact: true }).fill('A caller who prefers concise replies.');
   const steps = page.getByRole('textbox', { name: 'Caller instructions (first line is spoken)', exact: true });
   await expect(steps).toHaveValue('Please use 3 PM, not the earlier time.\nIf asked, confirm afternoon.');
-  await steps.fill('Use 4 PM instead of 3 PM.\nIf asked, confirm afternoon.');
+  await steps.fill('\nUse 4 PM instead of 3 PM.\n\nIf asked, confirm afternoon.\n');
   await page.getByRole('button', { name: 'Create scenario', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Selected scenario' })).toBeVisible();
   expect(state.created().caller_steps).toEqual(['Use 4 PM instead of 3 PM.', 'If asked, confirm afternoon.']);
@@ -376,6 +377,9 @@ test('variation context includes every published caller follow-up, not just its 
   await page.route('**/api/benchmarks/suites', (route) => route.fulfill({ json: [{ id: 'published', title: 'Published tests', scenarios: [{
     id: 'multi-step', title: 'Repeated correction', simulated_user_prompt: 'Use 3 PM.', caller_steps: ['Use 3 PM.', 'If the agent asks, correct this to 4 PM.', 'If the agent resists, explain the calendar conflict.'],
     required_actions: ['Confirm final time'], forbidden_actions: [], expected_output: 'Confirm the latest request.',
+    behaviors: [{ id: 'latest-time', kind: 'required', label: 'Confirm final time', description: 'Repeat the corrected time.' }],
+    requirements: 'Original policy excerpt: collect requests only. Clarification q1: Do not book? Answer: Yes.',
+    evidence_requirements: ['transcript', 'action_trace', 'final_state', 'vcon'],
   }] }] }));
   await page.goto('/scenarios');
   await page.getByRole('button', { name: 'Make a variation', exact: true }).click();
@@ -383,6 +387,21 @@ test('variation context includes every published caller follow-up, not just its 
   await expect(page.getByRole('heading', { name: 'Latest requested time' })).toBeVisible();
   expect(state.requests[0].context.text).toContain('If the agent asks, correct this to 4 PM.');
   expect(state.requests[0].context.text).toContain('If the agent resists, explain the calendar conflict.');
+  expect(state.requests[0].context.text).toContain('Required evidence: transcript; action_trace; final_state; vcon');
+  expect(state.requests[0].context.text).toContain('Policy context: required: Confirm final time [latest-time]');
+  expect(state.requests[0].context.text).toContain('Original policy excerpt: collect requests only. Clarification q1: Do not book? Answer: Yes.');
+});
+
+test('quick-case approval retains the edited role as evaluation requirements', async ({ page }) => {
+  const state = await setup(page);
+  await page.goto('/scenarios?create=1');
+  await page.getByRole('button', { name: 'Appointment changes', exact: true }).click();
+  await page.getByRole('button', { name: 'Draft my case' }).click();
+  await page.getByText('Edit title, role, task and boundary', { exact: true }).click();
+  await page.getByRole('textbox', { name: 'Agent role', exact: true }).fill('Request collection assistant');
+  await page.getByRole('button', { name: 'Approve and create case' }).click();
+  await expect(page.getByRole('region', { name: 'Selected scenario' })).toBeVisible();
+  expect(state.created().requirements).toBe('Target role: Request collection assistant\n\nUse the latest time.');
 });
 
 test('oversized source uses a visible editable excerpt only after explicit confirmation', async ({ page }) => {
