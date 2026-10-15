@@ -51,6 +51,7 @@ def test_actual_eleven_line_starter_sample_keeps_six_assistant_turns():
     ('00:01:22 — ASSISTANT (Support)', 'assistant'), ('Tester_A', 'user'),
     ('Customer-Pat', 'user'), ('Patient (new patient)', 'user'),
     ('AI', 'assistant'), ('Taylor (AI)', 'assistant'),
+    ('Human', 'user'), ('Learner', 'user'), ('Pat (human)', 'user'), ('Taylor (learner)', 'user'),
 ])
 def test_bounded_named_and_timestamped_speaker_labels(label, role):
     assert _parse_transcript(f'{label}: Exact words.\ncontinued line') == [(role, 'Exact words.\ncontinued line')]
@@ -67,12 +68,16 @@ def test_unknown_labels_and_preamble_are_retained_without_inventing_tools():
     assert _parse_transcript(overlong) == [('system', '[Unstructured CAE transcript evidence]\n' + overlong)]
 
 
-@pytest.mark.parametrize('label', ['AI-generated summary', 'AI summary', 'AI_generated notes', 'AI (summary)'])
-@pytest.mark.parametrize('prefix', ['', 'Agent: Actual spoken reply.\n'])
-def test_generated_ai_notes_are_unstructured_not_assistant_speech(label, prefix):
+@pytest.mark.parametrize('label', [
+    'AI-generated summary', 'AI summary', 'AI_generated notes', 'AI (summary)',
+    'Human resources', 'Human summary', 'Learner summary', 'Learner_notes',
+])
+@pytest.mark.parametrize('prefix,role', [('', None), ('Agent: Actual spoken reply.\n', 'assistant'),
+                                      ('Caller: Actual spoken reply.\n', 'user')])
+def test_generic_role_notes_are_unstructured_not_spoken_turns(label, prefix, role):
     metadata = f'{label}: A generated outcome claim.'
     parsed = _parse_transcript(prefix + metadata + '\nCaller: Actual caller reply.')
-    expected = ([('assistant', 'Actual spoken reply.')] if prefix else []) + [
+    expected = ([(role, 'Actual spoken reply.')] if prefix else []) + [
         ('system', '[Unstructured CAE transcript evidence]\n' + metadata),
         ('user', 'Actual caller reply.'),
     ]
@@ -80,7 +85,7 @@ def test_generated_ai_notes_are_unstructured_not_assistant_speech(label, prefix)
     inference = build_assert_inference_row(run={}, conversation={'transcript': prefix + metadata})
     spoken = [event['edit']['message']['content'] for event in inference['events']
               if event['edit'].get('message', {}).get('role') == 'assistant']
-    assert spoken == (['Actual spoken reply.'] if prefix else [])
+    assert spoken == (['Actual spoken reply.'] if role == 'assistant' else [])
 
 
 def test_exact_native_quote_links_only_to_canonical_event_snapshot():

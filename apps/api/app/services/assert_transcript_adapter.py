@@ -15,6 +15,8 @@ from app.integrations.assert_runtime import (
 
 _USER_SPEAKERS = {'user', 'caller', 'customer', 'patient', 'learner', 'tester', 'human'}
 _ASSISTANT_SPEAKERS = {'agent', 'assistant', 'target', 'bot', 'ai'}
+_EXACT_SPEAKER_ROLES = {'ai': 'assistant', 'human': 'user', 'learner': 'user'}
+_AMBIGUOUS_GENERIC_LABEL = re.compile(r'^(?:ai|human|learner)(?:$|[\s(_-])', re.IGNORECASE)
 _RECORDED_TTS_SOURCES = {'tester_kokoro_audio', 'target_kokoro_audio'}
 TRANSCRIPT_ADAPTER_VERSION = 'cae-assert-evidence-v4'
 _TRANSCRIPT_LINE = re.compile(
@@ -298,7 +300,7 @@ def _parse_transcript(value: str) -> list[tuple[str, str]]:
         if next_role:
             flush()
             role, lines = next_role, [match.group(2)]
-        elif match and re.match(r'^ai(?:$|[\s(_-])', match.group(1).strip(), re.IGNORECASE):
+        elif match and _AMBIGUOUS_GENERIC_LABEL.match(match.group(1).strip()):
             # Generated summaries/metadata are not spoken turns, even when
             # placed after an assistant message. Preserve them separately.
             flush()
@@ -320,11 +322,11 @@ def _role(value: str) -> str | None:
     named_suffix = re.fullmatch(r'[^():\r\n]{1,64}\s+\(([a-z]+)\)', speaker)
     if named_suffix and named_suffix.group(1) in _USER_SPEAKERS | _ASSISTANT_SPEAKERS:
         speaker = named_suffix.group(1)
-    if speaker == 'ai':
-        return 'assistant'
+    if speaker in _EXACT_SPEAKER_ROLES:
+        return _EXACT_SPEAKER_ROLES[speaker]
     token = re.match(r'^([a-z]+)(?:$|[\s(_-])', speaker)
     speaker = token.group(1) if token else speaker
-    if speaker == 'ai':
+    if speaker in _EXACT_SPEAKER_ROLES:
         return None
     if speaker in _USER_SPEAKERS:
         return 'user'
