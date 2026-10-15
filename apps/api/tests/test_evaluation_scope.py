@@ -35,6 +35,7 @@ def test_imported_vcon_historical_perfect_analysis_is_not_execution_evidence():
                                                  'action_trace': [{'status': 'success'}]}}]
     report = run_scenario({'suite_id': payload['suite_id'], 'scenario_id': payload['scenario_id'], 'vcon': vcon}, persist_artifacts=False)
     assert report['evaluation_scope']['input_source'] == 'vcon'
+    assert report['evaluation_scope']['synthetic'] is None  # no recognized source marker
     assert report['evaluation_scope']['artifact_presence'] == {'transcript': True, 'action_trace': False, 'final_state': False}
     assert report['overall_score'] == 100 and report['verdict'] == 'needs_review'
     assert not report['action_trace'] and not report['final_state']

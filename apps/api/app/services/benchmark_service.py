@@ -663,7 +663,7 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True) -> dict[str, A
             'action_trace': _scope_artifact_present(payload.get('action_trace')),
             'final_state': _scope_artifact_present(payload.get('final_state')),
         },
-        'synthetic': vcon_intake.get('synthetic') if vcon_intake else None,
+        'synthetic': vcon_intake.get('synthetic') if vcon_intake.get('profile') else None,
         'trust': 'source-reported; not independently authenticated',
         'score_meaning': 'Diagnostic evidence matching, not a verified resolution percentage.',
         'semantic_review_required': report.get('semantic_review_required', True),
