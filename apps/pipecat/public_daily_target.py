@@ -751,6 +751,8 @@ async def run_public_daily_duplex(
             runner_task.cancel()
 
     try:
+        if run.noise_track is not None and run.noise_track.error:
+            raise PublicDailyTargetError('Continuous caller microphone failed during the call.')
         return run.build_result(
             connection={
                 'connected': evidence.connected.is_set(),

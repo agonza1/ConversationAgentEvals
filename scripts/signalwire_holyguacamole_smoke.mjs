@@ -971,6 +971,10 @@ async function runSmoke(args) {
     if (noiseTrack) {
       await noiseTrack.close();
       result.tester.background_noise.clipped_samples = noiseTrack.clipped;
+      if (noiseTrack.error) {
+        result.status = 'blocked';
+        result.reason = 'Continuous caller microphone failed during the call.';
+      }
     }
     result.timestamps.completed_at = nowIso();
     result.latency_metrics.total_run_ms = Date.now() - startedMs;

@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ContinuousMicrophone, CallAudioCapture } from './continuous_microphone.mjs';
+import fs from 'node:fs';
+import vm from 'node:vm';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -64,4 +66,32 @@ test('failure never publishes rejected microphone PCM', async () => {
   await assert.rejects(pending, /offline send failure/);
   assert.deepEqual(observed, []);
   await mic.close();
+});
+
+test('SignalWire publishes one mixed track without marking idle noise as caller speech', async () => {
+  const source = fs.readFileSync(new URL('./signalwire_holyguacamole_smoke.mjs', import.meta.url), 'utf8');
+  const start = source.indexOf('class CaeLiveAudioPublisher');
+  const end = source.indexOf('\nfunction baseResult', start);
+  const context = { Buffer, Set, OUTBOUND_SAMPLE_RATE: 48000,
+    pcm16ToBuffer: (samples) => Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength),
+    redact: String };
+  vm.createContext(context);
+  vm.runInContext(`${source.slice(start, end)}\nglobalThis.Publisher = CaeLiveAudioPublisher;`, context);
+  const publisher = new context.Publisher({ livePublishExecutionRunId: 'run', livePublishSessionId: 'session', livePublishPublisherId: 'publisher' });
+  publisher.callCapture = new CallAudioCapture();
+  publisher.callCapture.add('tester_to_target', new Int16Array(480).fill(50), 48000);
+  publisher.callCapture.add('target_to_tester', new Int16Array(480).fill(150), 48000);
+  const posts = [];
+  publisher.request = async (path, body) => posts.push({ path, body });
+  publisher.queue = [
+    { direction: 'tester_to_target', turnPair: 0 },
+    { direction: 'target_to_tester', turnPair: 1 },
+  ];
+  await publisher.scheduleFlush(true);
+  assert.equal(posts.length, 1);
+  assert.deepEqual(Array.from(posts[0].body.listener_media_keys), ['session:1:target_to_tester']);
+  const sent = Buffer.from(posts[0].body.pcm16_base64, 'base64');
+  const recorded = publisher.callCapture.pcm();
+  assert.deepEqual(sent, Buffer.from(recorded.buffer));
+  assert.ok(recorded.some((sample) => sample === 200));
 });

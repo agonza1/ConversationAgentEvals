@@ -1383,6 +1383,8 @@ class _StreamingDuplexSession:
                 await asyncio.gather(self.runner_task, return_exceptions=True)
             await self.llm_client.aclose()
             await self.kokoro_client.aclose()
+            if self.caller_bridge.noise_track is not None and self.caller_bridge.noise_track.error:
+                raise RuntimeError('Continuous caller microphone failed during the call.')
 
 
 async def _run_streaming_exchange(
