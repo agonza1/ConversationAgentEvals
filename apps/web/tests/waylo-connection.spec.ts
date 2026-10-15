@@ -10,10 +10,11 @@ async function fixtureApis(page: Page, admin = false, initialAgents: Record<stri
   const agents: Record<string, unknown>[] = [...initialAgents];
   const requests: Array<{ path: string; method: string; headers: Record<string, string>; body?: Record<string, unknown> }> = [];
   let allowLogin: (() => void) | undefined;
+  let connectedAgent = agentId;
   const loginGate = new Promise<void>((resolve) => { allowLogin = resolve; });
   const status = () => ({ connected: true, expires_at: new Date(Date.now() + 900_000).toISOString(),
     endpoint_url: admin ? `${endpoint}/admin/tenants/${tenantId}` : endpoint,
-    workspace_id: workspaceId, waylo_agent_id: agentId, agent_name: 'Mike fixture' });
+    workspace_id: workspaceId, waylo_agent_id: connectedAgent, agent_name: 'Mike fixture' });
   await page.route('**/api/**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -22,10 +23,14 @@ async function fixtureApis(page: Page, admin = false, initialAgents: Record<stri
     requests.push({ path, method, headers: request.headers(), body });
     let value: unknown = {};
     if (path === '/api/waylo/connection/config') value = { endpoint_url: endpoint };
-    else if (path === '/api/waylo/connection/connect') { await loginGate; value = { ...status(), session_proof: proof }; }
+    else if (path === '/api/waylo/connection/connect') { await loginGate; connectedAgent = String(body?.waylo_agent_id || agentId); value = { ...status(), session_proof: proof }; }
     else if (path === '/api/waylo/connection/status') value = status();
     else if (path === '/api/waylo/connection/disconnect') value = { connected: false };
     else if (path === '/api/agents' && method === 'POST') { const agent = { id: 'waylo-memory-fixture', ...body, metadata: {} }; agents.push(agent); value = agent; }
+    else if (path.startsWith('/api/agents/') && method === 'PATCH') {
+      const agent = agents.find((item) => item.id === path.split('/').pop());
+      Object.assign(agent || {}, body); value = agent;
+    }
     else if (path === '/api/agents') value = { agents };
     else if (path.endsWith('/capture')) value = { vcon: { vcon: '0.4.0', uuid: workspaceId, parties: [], dialog: [] } };
     else if (path === '/api/benchmarks/suites') value = [{ id: 'waylo-mike-notes', title: 'Waylo Mike notes', scenarios: Array.from({ length: caseCount }, (_, index) => ({ id: index ? `case-${index}` : 'mike-five-bags', title: index ? `Case ${index}` : 'Five bags, not catalog pack size', caller_steps: ['Please note five bags of white potatoes.', 'Read back my notes.'] })) }];
@@ -210,6 +215,58 @@ test('automatically selected saved Waylo target launches with the voice executor
   expect(run?.body).toMatchObject({ agent_id: 'waylo-memory-fixture', mode: 'pipecat_webrtc', tester_id: 'pipecat_tester', executor_id: 'waylo_livekit', evaluate: false });
   expect(JSON.stringify(run?.body)).not.toContain(proof);
   await expect(page.getByText('Waylo connection control requires a local browser request.', { exact: true })).toHaveCount(0);
+});
+
+test('saved target agent UUID is editable and requires matching reconnect before saving', async ({ page }) => {
+  const replacement = '33333333-3333-4333-8333-333333333333';
+  const fixture = await fixtureApis(page, false, [{
+    id: 'waylo-memory-fixture', name: 'Mike fixture', target: 'waylo', channel: 'voice', metadata: {},
+    connection: { endpoint_url: endpoint, workspace_id: workspaceId, waylo_agent_id: agentId, auth_type: 'waylo_browser_session' },
+  }]);
+  await page.goto('/targets');
+  await page.getByRole('button', { name: 'Actions for Mike fixture' }).click();
+  await page.getByRole('menuitem', { name: 'Edit', exact: true }).click();
+  const modal = page.getByRole('dialog');
+  const uuid = modal.getByLabel('Waylo sign-in agent UUID');
+  await expect(uuid).toBeEditable();
+  await uuid.fill('');
+  await expect(uuid).toHaveValue('');
+  await uuid.fill('not-a-uuid');
+  await expect(uuid).toHaveAttribute('aria-invalid', 'true');
+  await expect(modal.getByRole('button', { name: 'Connect Waylo', exact: true })).toBeDisabled();
+  await uuid.fill(replacement);
+  await expect(modal.getByLabel('Waylo agent UUID', { exact: true })).toHaveValue(replacement);
+  await expect(modal.getByRole('button', { name: 'Save changes', exact: true })).toBeDisabled();
+  await modal.getByLabel('Waylo email').fill('fixture@example.test');
+  await modal.getByLabel('Waylo password').fill('synthetic-password');
+  await modal.getByLabel('Confirm temporary Waylo sign-in').check();
+  fixture.allowLogin();
+  await modal.getByRole('button', { name: 'Connect Waylo', exact: true }).click();
+  await expect(modal.getByRole('button', { name: 'Save changes', exact: true })).toBeEnabled();
+  await modal.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect(modal).toHaveCount(0);
+  const saved = fixture.requests.find((item) => item.method === 'PATCH');
+  expect(saved?.body?.connection).toMatchObject({ workspace_id: workspaceId, waylo_agent_id: replacement });
+  expect(saved?.headers['x-cae-waylo-session']).toBe(proof);
+  expect(JSON.stringify(saved?.body)).not.toMatch(/synthetic-password|fixture-private-proof/);
+  expect(fixture.requests.filter((item) => item.path === '/api/execution/runs' && item.method === 'POST')).toHaveLength(0);
+});
+
+test('editing a saved run connection does not silently retarget or launch the old agent', async ({ page }) => {
+  const fixture = await fixtureApis(page, false, [{
+    id: 'waylo-memory-fixture', name: 'Mike fixture', target: 'waylo', channel: 'voice', metadata: {},
+    connection: { endpoint_url: endpoint, workspace_id: workspaceId, waylo_agent_id: agentId, auth_type: 'waylo_browser_session' },
+  }]);
+  await page.goto('/runs?agent_id=waylo-memory-fixture&suite_id=waylo-mike-notes&scenario_id=mike-five-bags');
+  await page.getByLabel('Waylo sign-in agent UUID').fill('33333333-3333-4333-8333-333333333333');
+  await page.getByLabel('Waylo email').fill('fixture@example.test');
+  await page.getByLabel('Waylo password').fill('synthetic-password');
+  await page.getByLabel('Confirm temporary Waylo sign-in').check();
+  fixture.allowLogin();
+  await page.getByRole('button', { name: 'Connect Waylo', exact: true }).click();
+  await expect(page.getByText(/This saved target is unchanged/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Run 1 voice test', exact: true })).toBeDisabled();
+  expect(fixture.requests.filter((item) => item.method === 'PATCH' || (item.path === '/api/execution/runs' && item.method === 'POST'))).toHaveLength(0);
 });
 
 test('explicit platform-admin tenant connection retains its safe mount and disconnects without persisting proof', async ({ page }) => {

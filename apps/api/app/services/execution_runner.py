@@ -559,6 +559,7 @@ def _run_one_conversation(
             timeline=timeline,
             recording=result.get('recording'),
             vcon_export=result.get('vcon_export'),
+            local_audio_tracks=result.get('local_audio_tracks') or [],
             vcon_export_summary=result.get('vcon_export_summary'),
             ietf_vcon_export=ietf_vcon_export,
             ietf_vcon_export_summary=ietf_vcon_summary(ietf_vcon_export),

@@ -60,6 +60,16 @@ later polling read fails. Local RTC text is labelled separately from provider
 finals. Reconnect and use the same refresh flow to recover provider evidence;
 the original execution failure remains recorded and no review runs automatically.
 
+Expiry, disconnect and account switching stop the active RTC task and retain a
+local-only partial export under the original session identity. This path performs
+no provider reads and does not retrieve revoked tokens. It omits unfiltered remote
+transcription events while retaining sanitized turns, typed timing/sample metadata,
+recordings and track manifests. Reconnect before refreshing provider evidence.
+
+The sign-in agent UUID is editable, including while editing a saved target.
+Connect to the changed UUID before saving. Signing in to a different UUID from
+the Run page does not silently retarget the saved target or authorize the old one.
+
 Refresh conservatively refuses fewer usable caller or agent transcript entries
 than the saved native, visible or original RTC dialogue. Rejection leaves the
 saved capture, tools, state and reviews untouched: retry after provider writes,

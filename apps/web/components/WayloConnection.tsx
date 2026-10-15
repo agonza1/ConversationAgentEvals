@@ -24,10 +24,11 @@ export function WayloConnectionStatus({ connection }: { connection: WayloTargetC
   </div>;
 }
 
-export function WayloConnection({ connection, agentId, onConnected, onEndpoint, compact = false }: {
+export function WayloConnection({ connection, agentId, onConnected, onAgentChange, onEndpoint, compact = false }: {
   connection?: WayloTargetConnection;
   agentId?: string;
   onConnected?: (info: WayloConnectionInfo) => void;
+  onAgentChange?: (agentId: string) => void;
   onEndpoint?: (endpoint: string) => void;
   compact?: boolean;
 }) {
@@ -49,6 +50,9 @@ export function WayloConnection({ connection, agentId, onConnected, onEndpoint, 
   const seenConnection = useRef(false);
   const endpointCallback = useRef(onEndpoint);
   endpointCallback.current = onEndpoint;
+  const validAgent = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestedAgent.trim());
+  const differentAgent = Boolean(connection?.waylo_agent_id
+    && requestedAgent.trim().toLowerCase() !== connection.waylo_agent_id.trim().toLowerCase());
 
   useEffect(() => {
     let mounted = true;
@@ -60,7 +64,8 @@ export function WayloConnection({ connection, agentId, onConnected, onEndpoint, 
     return () => { mounted = false; };
   }, []);
   useEffect(() => {
-    setRequestedAgent(agentId || connection?.waylo_agent_id || WAYLO_MIKE_AGENT_ID);
+    const selectedAgent = agentId || connection?.waylo_agent_id;
+    if (selectedAgent) setRequestedAgent(selectedAgent);
   }, [agentId, connection?.waylo_agent_id]);
   useEffect(() => {
     if (active) seenConnection.current = true;
@@ -79,7 +84,7 @@ export function WayloConnection({ connection, agentId, onConnected, onEndpoint, 
   }, [connection?.endpoint_url, connection?.workspace_id, connection?.waylo_agent_id]);
 
   async function connect() {
-    if (!confirmed || !endpoint || !email.trim() || !passwordInput.current?.value || !requestedAgent.trim()) return;
+    if (!confirmed || !endpoint || !email.trim() || !passwordInput.current?.value || !validAgent) return;
     setBusy(true); setMessage('');
     try {
       const pending = connectWaylo({ email: email.trim(), password: passwordInput.current.value,
@@ -90,7 +95,9 @@ export function WayloConnection({ connection, agentId, onConnected, onEndpoint, 
       const info = await pending;
       onConnected?.(info);
       setConfirmed(false);
-      setMessage('Connected for this browser tab only. Starting a call still requires your explicit launch.');
+      setMessage(differentAgent && !onConnected
+        ? 'Connected to the requested agent in this tab. This saved target is unchanged; edit its agent UUID in Targets and save before running it.'
+        : 'Connected for this browser tab only. Starting a call still requires your explicit launch.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Waylo connection failed.');
     } finally {
@@ -125,10 +132,15 @@ export function WayloConnection({ connection, agentId, onConnected, onEndpoint, 
     </> : <div className="waylo-connection-fields">
       <label><span>Waylo email</span><input type="email" aria-label="Waylo email" autoComplete="off" value={email} onChange={(event) => setEmail(event.target.value)} disabled={busy} /></label>
       <label><span>Waylo password</span><input type="password" aria-label="Waylo password" autoComplete="off" ref={passwordRef} onChange={(event) => setHasPassword(Boolean(event.target.value))} disabled={busy || !endpoint} /></label>
-      <label><span>Agent UUID to connect</span><input aria-label="Waylo sign-in agent UUID" value={requestedAgent} disabled={busy || Boolean(connection?.workspace_id)} onChange={(event) => setRequestedAgent(event.target.value)} /></label>
+      <label><span>Agent UUID to connect</span><input aria-label="Waylo sign-in agent UUID" aria-invalid={Boolean(requestedAgent.trim()) && !validAgent} value={requestedAgent} disabled={busy} onChange={(event) => {
+        setRequestedAgent(event.target.value); onAgentChange?.(event.target.value);
+        setConfirmed(false); setMessage('');
+      }} /></label>
+      {!validAgent && requestedAgent.trim() ? <p>Enter the agent UUID, not its dashboard URL.</p> : null}
+      {differentAgent && !onConnected ? <p>Signing in to another agent does not change this saved target. Edit its agent UUID in Targets before running it.</p> : null}
       <label><span>Owning tenant UUID (platform administrators only, optional)</span><input aria-label="Waylo sign-in tenant UUID" value={tenant} onChange={(event) => setTenant(event.target.value)} disabled={busy} /></label>
       <label className="waylo-consent"><input type="checkbox" aria-label="Confirm temporary Waylo sign-in" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} disabled={busy} /><span>I agree to send my sign-in credentials once to Waylo through local CAE and retain a temporary connection in memory.</span></label>
-      <button type="button" className="primary-link" disabled={busy || !endpoint || !confirmed || !hasPassword || !email.trim() || !requestedAgent.trim()} onClick={() => void connect()}>{busy ? 'Connecting…' : 'Connect Waylo'}</button>
+      <button type="button" className="primary-link" disabled={busy || !endpoint || !confirmed || !hasPassword || !email.trim() || !validAgent} onClick={() => void connect()}>{busy ? 'Connecting…' : 'Connect Waylo'}</button>
     </div>}
   </>;
 

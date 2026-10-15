@@ -174,6 +174,12 @@ class WayloClient:
             for line in page:
                 if not isinstance(line, dict) or type(line.get('seq')) is not int or line['seq'] != highest + 1:
                     raise WayloError('Transcript sequence is incomplete or repeated.')
+                if (not isinstance(line.get('role'), str) or not isinstance(line.get('text'), str)
+                        or not isinstance(line.get('id'), str)
+                        or (line.get('idempotencyKey') is not None and not isinstance(line['idempotencyKey'], str))
+                        or any(line.get(field) is not None and not isinstance(line[field], str)
+                               for field in ('startedAt', 'endedAt'))):
+                    raise WayloError('Invalid Waylo transcript fields; capture is incomplete.')
                 identity = str(uuid.UUID(str(line.get('id'))))
                 if identity in seen:
                     raise WayloError('Repeated transcript cursor; capture aborted.')

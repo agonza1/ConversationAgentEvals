@@ -657,6 +657,7 @@ function AgentFormModal({
               }}><option value="waylo_browser_session">Temporary local sign-in</option><option value="bearer_secret">Provisioned server credential</option></select></label>
               {wayloAuthType === 'waylo_browser_session' ? <WayloConnection
                 agentId={wayloAgentId || undefined}
+                onAgentChange={setWayloAgentId}
                 connection={{ endpoint_url: endpointUrl, workspace_id: workspaceId, waylo_agent_id: wayloAgentId, auth_type: wayloAuthType }}
                 onEndpoint={(endpoint) => { if (!workspaceId) setEndpointUrl(endpoint); }}
                 onConnected={(info) => { setEndpointUrl(info.endpoint_url); setWorkspaceId(info.workspace_id); setWayloAgentId(info.waylo_agent_id); if (!name.trim()) setName(info.agent_name); }}

@@ -193,6 +193,22 @@ def test_incomplete_or_wrong_target_capture_fails_closed(mode):
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize('field,value', [
+    ('role', []), ('role', None), ('text', {}), ('text', None),
+    ('idempotencyKey', []), ('idempotencyKey', {}), ('startedAt', []), ('endedAt', {}),
+])
+def test_malformed_transcript_projection_fields_fail_with_safe_capture_error(field, value):
+    line = transcript(1)
+    line[field] = value
+    def handler(request):
+        return httpx.Response(200, json=[line] if request.url.path.endswith('/transcripts') else session())
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            with pytest.raises(WayloError, match='Invalid Waylo transcript fields'):
+                await WayloClient(TARGET, client=http).capture(S)
+    asyncio.run(exercise())
+
+
 def test_revision_idempotence_and_late_append_same_vcon_identity():
     source = captured()
     one, two = project_capture(source), project_capture(source)
@@ -439,11 +455,15 @@ def test_interrupted_list_checks_initial_quantity_and_later_correction_separatel
 
 
 @pytest.mark.parametrize('scripted_exchanges', [1, 2])
-@pytest.mark.parametrize('capture_failure', [None, 'session', 'transcripts', 'late'])
+@pytest.mark.parametrize('capture_failure', [None, 'session', 'transcripts', 'late', 'revoked', 'revoked_during_send'])
 def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp_path, monkeypatch, scripted_exchanges, capture_failure):
+    revoked = False
     class Client:
         _secret = 'provider-secret'
-        redaction_values = ('provider-secret',)
+        @property
+        def redaction_values(self):
+            assert not revoked, 'Never retrieve an expired/revoked provider token.'
+            return ('provider-secret',)
         agent = A
         calls = []
         async def bootstrap(self, correlation_id):
@@ -454,6 +474,7 @@ def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp
             self.calls.append(path)
             return [{'rawText': 'opaque provider-secret private turn-credential turn-username', 'quantity': 1}]
         async def capture(self, session_id, origin):
+            assert not revoked, 'Never read the provider after authorization ends.'
             self.calls.append('capture')
             if capture_failure in {'session', 'transcripts'} or (capture_failure == 'late' and self.calls.count('capture') > 1):
                 if capture_failure == 'transcripts':
@@ -477,16 +498,27 @@ def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp
         def now_ms(self):
             return 1000
         async def wait_response(self, previous, timeout=25):
+            nonlocal revoked
+            if capture_failure == 'revoked' and previous:
+                self.remote_pcm.extend(b'\x02\x10' * 120)
+                revoked = True
+                self.events.append({'event_type': 'transcription.final', 'text': 'provider-secret private turn-credential'})
+                await asyncio.sleep(10)
             self.speech_count += 1
             self.remote_pcm.extend(b'\x00\x10' * 480)
             self.segments[('remote', 'agent-text')] = 'I have noted five bags of White Potatoes. provider-secret private turn-credential turn-username'
         async def send(self, audio, *, turn_id, reference, artifact_dir):
+            nonlocal revoked
             event = {'event_id': f'{turn_id}/sent', 'event_type': 'tester.audio.sent', 'source': 'livekit.AudioSource',
                      'turn_id': turn_id, 'reference_text': reference, 'duration_ms': 20,
                      'intended_samples': 480, 'accepted_samples': 480, 'audio_sha256': 'digest',
                      'ended_at_ms': 100, 'overlap_with_observed_target_speech': False}
             self.events.append(event)
             artifact_dir.mkdir(parents=True, exist_ok=True)
+            (artifact_dir / f'{turn_id}-sent.wav').write_bytes(audio)
+            if capture_failure == 'revoked_during_send':
+                revoked = True
+                await asyncio.sleep(10)
             return event, audio
     if capture_failure:
         from app.services import waylo_livekit
@@ -509,13 +541,22 @@ def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp
         return pcm_wav(b'\x00\x10' * 480)
     observer_events = []
     client = Client()
+    class Lease:
+        def check(self):
+            from app.services.waylo_connection import WayloConnectionError
+            if revoked:
+                raise WayloConnectionError('Waylo authorization ended.')
     result = asyncio.run(run_waylo_call(target=TARGET, correlation_id='run/conversation',
         scenario={'id': 'case', 'caller_steps': ['five bags of white potatoes'] * scripted_exchanges},
         suite_id='waylo-mike-notes', artifact_dir=tmp_path, max_exchanges=3, timeout_seconds=30,
-        next_utterance=wording, synthesize=synthesize, client=client, peer=Peer(), event_observer=observer_events.append))
+        next_utterance=wording, synthesize=synthesize, client=client, peer=Peer(), event_observer=observer_events.append,
+        credential_lease=Lease() if capture_failure and capture_failure.startswith('revoked') else None))
     assert result['verdict'] == ('failed' if capture_failure else 'needs_review')
     assert result['score'] is None and result['evaluation_report'] == {}
-    assert [e['speaker'] for e in observer_events] == ['Agent'] + ['Caller', 'Agent'] * scripted_exchanges + (['Conversation'] if capture_failure else [])
+    expected_speakers = (['Agent', 'Conversation'] if capture_failure == 'revoked_during_send' else
+        ['Agent', 'Caller', 'Conversation'] if capture_failure == 'revoked' else
+        ['Agent'] + ['Caller', 'Agent'] * scripted_exchanges + (['Conversation'] if capture_failure else []))
+    assert [e['speaker'] for e in observer_events] == expected_speakers
     assert all(isinstance(e['audio'], bytes) for e in observer_events)
     assert 'provider-secret' not in repr(observer_events)
     assert 'private' not in repr(observer_events)
@@ -531,8 +572,10 @@ def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp
     assert client.calls.count('bootstrap') == 1
     assert client.calls[-1] == 'close'
     if capture_failure:
-        assert len(result['turns']) == 1 + scripted_exchanges * 2
-        assert len(result['local_audio_tracks']) == 1 + scripted_exchanges * 2
+        expected_turns = (1 if capture_failure == 'revoked_during_send' else
+                          2 if capture_failure == 'revoked' else 1 + scripted_exchanges * 2)
+        assert len(result['turns']) == expected_turns
+        assert len(result['local_audio_tracks']) == (2 if capture_failure == 'revoked_during_send' else expected_turns)
         assert result['audio_session']['session_id'] == S
         assert 'local RTC evidence retained' in result['final_state']['tester_error']
         assert profile['context']['capture_completeness'] == 'partial'
@@ -541,14 +584,20 @@ def test_real_call_orchestration_captures_manual_evidence_and_playable_turns(tmp
         assert result['recording']['transport'] == 'waylo_livekit'
         assert (tmp_path / 'conversation-continuous.wav').read_bytes() == pcm_wav(b'\x00\x10' * 480)
         assert result['recording']['metadata']['audio_tracks'] == result['local_audio_tracks']
+        if capture_failure.startswith('revoked'):
+            assert result['local_audio_tracks'][-1]['track_id'] == 'target-aggregate-partial'
+            if capture_failure == 'revoked':
+                assert read_wav((tmp_path / 'agent-received.wav').read_bytes())[1].endswith(b'\x02\x10' * 120)
+            assert not any(call == 'capture' for call in client.calls)
         assert profile['context']['coverage']['agent_execution']['status'] == 'unknown'
-        native = result['waylo_capture']
+        native = next(a['body'] for a in result['ietf_vcon_export']['attachments'] if a.get('purpose') == 'Waylo native source evidence')
         if capture_failure != 'late':
             assert not any(snapshot['phase'] == 'final' for snapshot in profile['state_snapshots'])
             assert native['transcripts'] == [] and 'items' not in native and 'events' not in native
             assert set(native['unavailable']) == {'session', 'transcripts', 'items', 'events', 'agent_version'}
             assert 'local_rtc' in result['ietf_vcon_export']['analysis'][0]['body']['capture_method']
-            assert result['ietf_vcon_export']['dialog'][1]['body'] == 'five bags of white potatoes'
+            if capture_failure != 'revoked_during_send':
+                assert result['ietf_vcon_export']['dialog'][1]['body'] == 'five bags of white potatoes'
         else:
             assert native['transcripts'] == captured()['transcripts']
             assert native['items'] == []

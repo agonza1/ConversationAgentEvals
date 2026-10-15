@@ -306,6 +306,7 @@ async def run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, s
     client = client or WayloClient(target, credential_lease=credential_lease)
     call = None
     guard = None
+    local_evidence = {}
     try:
         if credential_lease is None:
             return await _run_waylo_call(target=target, correlation_id=correlation_id, scenario=scenario,
@@ -323,12 +324,25 @@ async def run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, s
             scenario=scenario, suite_id=suite_id, artifact_dir=artifact_dir, max_exchanges=max_exchanges,
             timeout_seconds=timeout_seconds, next_utterance=next_utterance, synthesize=synthesize,
             event_observer=event_observer, peer=peer, client=client,
-            execution_run_id=execution_run_id, conversation_id=conversation_id, monitor_runtime=monitor_runtime))
+            execution_run_id=execution_run_id, conversation_id=conversation_id, monitor_runtime=monitor_runtime,
+            local_evidence=local_evidence))
         guard = asyncio.create_task(monitor_authorization())
         await asyncio.wait((call, guard), return_when=asyncio.FIRST_COMPLETED)
-        if guard.done():
-            await guard  # Safe expiration/revocation error; RTC is cancelled below.
-        credential_lease.check()
+        from app.services.waylo_connection import WayloConnectionError
+        try:
+            if guard.done():
+                await guard
+            credential_lease.check()
+        except WayloConnectionError:
+            # Stop transport first. Finalize ONLY already-sanitized local data;
+            # never read the provider or retrieve a token after revocation.
+            if not call.done():
+                call.cancel()
+            await asyncio.gather(call, return_exceptions=True)
+            if not local_evidence.get('bootstrap'):
+                raise
+            return _revoked_local_result(local_evidence, target=target, scenario=scenario, suite_id=suite_id,
+                artifact_dir=artifact_dir, execution_run_id=execution_run_id, conversation_id=conversation_id)
         return await call
     finally:
         for task in (call, guard):
@@ -345,7 +359,7 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                           event_observer: Callable | None,
                           peer: LiveKitVoicePeer | None, client: WayloClient,
                           execution_run_id: str | None = None, conversation_id: str | None = None,
-                          monitor_runtime=None):
+                          monitor_runtime=None, local_evidence: dict | None = None):
     peer = peer or LiveKitVoicePeer()
     bootstrap, before, capture, media_dialogs, turns = None, None, None, [], []
     error = None
@@ -370,6 +384,9 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
     prepared = {}
     pending_response = None
     steps = scenario.get('caller_steps')
+    if local_evidence is not None:
+        local_evidence.update(peer=peer, turns=turns, audio_tracks=audio_tracks,
+                              after_items=after_items, references={})
 
     def audio_track(path, track_id, parties, audio, rate, start_ms=None):
         audio_tracks.append({'uri': str(path.resolve()), 'track_id': track_id, 'parties': parties,
@@ -422,9 +439,14 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                 if preset in {'item_capture_assistant', 'catalog_order_assistant'}:
                     raise WayloError('Mike test contract conflicts with the active preset. Use a disposable catalog-aware notes-only agent; no call started.')
             bootstrap = await client.bootstrap(correlation_id)
+            if local_evidence is not None:
+                local_evidence['bootstrap'] = bootstrap
             before = await client.request('GET', f'sessions/{bootstrap["sessionId"]}/items')
             if not isinstance(before, list):
                 raise WayloError('Waylo pre-call items were not a list.')
+            before = clean_native(before, client.redaction_values)
+            if local_evidence is not None:
+                local_evidence['before'] = before
             await peer.connect(bootstrap)
             # Let an optional greeting finish before the first controlled caller turn.
             try:
@@ -465,6 +487,8 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                 audio_track(artifact_dir / f'{turn_id}-sent.wav', turn_id, [0], sent_wav, rate,
                             observation.get('started_at_ms'))
                 safe_utterance = safe_text(utterance)
+                if local_evidence is not None:
+                    local_evidence['references'][turn_id] = safe_utterance
                 if event_observer:
                     event_observer({'speaker': 'Caller', 'text': safe_utterance, 'audio': sent_wav,
                                     'direction': 'tester_to_target', 'llm_output': safe_utterance,
@@ -536,7 +560,7 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                     try:
                         items = await client.request('GET', f'sessions/{bootstrap["sessionId"]}/items')
                         if isinstance(items, list):
-                            after_items.append({'turn_id': f'caller-{index}', 'items': items,
+                            after_items.append({'turn_id': f'caller-{index}', 'items': clean_native(items, client.redaction_values),
                                                 'observed_at': datetime.now(UTC).isoformat()})
                     except WayloError:
                         pass  # Final capture reports unavailable state, not synthetic success.
@@ -564,6 +588,8 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                     'mime_type': 'audio/wav', 'sha256': hashlib.sha256(wav).hexdigest(),
                     'duration_ms': metadata['duration_ms'], 'bytes_captured': len(wav),
                     'transport': 'waylo_livekit', 'metadata': metadata}
+                if local_evidence is not None:
+                    local_evidence['recording'] = recording
                 if event_observer:
                     event_observer({'speaker': 'Conversation', 'text': 'Continuous local call recording.',
                                     'audio': wav, 'frame_metadata': {
@@ -636,3 +662,76 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                 'audio_session': {'transport': 'waylo_livekit', 'session_id': bootstrap['sessionId']}}
     finally:
         await client.close()
+
+
+def _revoked_local_result(state: dict, *, target: dict, scenario: dict, suite_id: str,
+                          artifact_dir: Path, execution_run_id: str | None, conversation_id: str | None) -> dict:
+    """No credential access, HTTP, or unfiltered native text after revocation."""
+    bootstrap, peer = state['bootstrap'], state['peer']
+    turn_auth = bootstrap.get('turn') or {}
+    secrets = (bootstrap.get('participantToken', ''), turn_auth.get('credential', ''), turn_auth.get('username', ''))
+    error = 'Waylo authorization ended; partial local RTC evidence retained. Reconnect to refresh provider evidence.'
+    capture = {'target_id': target['id'], 'origin': 'cae_ai_tester', 'capture_error': error,
+        'session': {'id': bootstrap['sessionId'], 'createdAt': peer.origin_utc,
+                    'metadata_source': 'cae_local_bootstrap_identity'},
+        'transcripts': [], 'unavailable': {key: error for key in ('session', 'transcripts', 'events', 'items', 'agent_version')}}
+    # Peer events include unsanitized remote transcription revisions. Retain only
+    # typed local media/timing observations, never raw strings or unknown keys.
+    allowed = {'tester.audio.sent', 'target.audio.received', 'latency.observation', 'tester.barge_in_scheduled'}
+    numeric = {'duration_ms', 'started_at_ms', 'ended_at_ms', 'intended_samples', 'accepted_samples',
+               'sample_rate_hz', 'channels', 'observer_end_ms', 'value_ms', 'timestamp_ms'}
+    events = []
+    for index, event in enumerate(peer.events):
+        if event.get('event_type') not in allowed:
+            continue
+        safe = {'event_id': f'local-rtc/{index}', 'event_type': event['event_type'],
+                'source': 'cae_local_rtc_partial', 'target_id': target['id'], 'session_id': bootstrap['sessionId'],
+                'clock_origin': 'cae_monotonic_since_transport_creation'}
+        safe.update({key: value for key, value in event.items() if key in numeric and type(value) in {int, float}})
+        # Caller IDs come from our own accepted, already-redacted reference map.
+        turn_id = event.get('turn_id')
+        if isinstance(turn_id, str) and turn_id in state['references']:
+            safe.update(turn_id=turn_id, reference_text=state['references'][turn_id])
+        events.append(safe)
+    turns = clean_native(state['turns'], secrets)
+    recording = state.get('recording')
+    tracks = list(state['audio_tracks'])
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    received_path = artifact_dir / 'agent-received.wav'
+    received_path.write_bytes(pcm_wav(bytes(peer.remote_pcm)))
+    # send() can retain accepted caller samples in its finally block before it
+    # returns a turn observation. Include those exact adapter-owned WAVs too.
+    retained = {track['uri'] for track in tracks}
+    for path in artifact_dir.glob('caller-*-sent.wav'):
+        number = path.stem.removeprefix('caller-').removesuffix('-sent')
+        if not number.isdigit() or int(number) < 1 or str(path.resolve()) in retained:
+            continue
+        try:
+            rate, pcm = read_wav(path.read_bytes())
+        except WayloError:
+            continue
+        tracks.append({'uri': str(path.resolve()), 'track_id': f'caller-{number}',
+                       'parties': [0], 'mime_type': 'audio/wav', 'duration_ms': len(pcm) / (rate * 2) * 1000})
+    if peer.remote_pcm and (not recording or (recording.get('metadata') or {}).get('partial')):
+        # Cancellation can occur before the in-flight agent turn is segmented.
+        # Retain all received target samples without duplicating its old slices
+        # or claiming individual-turn attribution/clock alignment.
+        tracks = [track for track in tracks if track.get('parties') == [0]] + [{
+            'uri': str(received_path.resolve()), 'track_id': 'target-aggregate-partial',
+            'parties': [1], 'mime_type': 'audio/wav', 'duration_ms': len(peer.remote_pcm) / 48}]
+        if recording:
+            recording = {**recording, 'metadata': {**recording.get('metadata', {}), 'audio_tracks': tracks}}
+    exported = project_capture(clean_native(capture, secrets), rtc_turns=turns,
+        voice_events=clean_native(events, secrets), before_items=clean_native(state.get('before'), secrets),
+        after_items=clean_native(state['after_items'], secrets), suite_id=suite_id, scenario_id=scenario['id'],
+        test_expectations=scenario.get('waylo_test'), execution_run_id=execution_run_id, conversation_id=conversation_id,
+        media_capture={'status': 'retained_locally' if recording or tracks else 'not_captured',
+                       'media_scope': 'partial_local_rtc', 'included_tracks': 0,
+                       'omitted_tracks': 1 if recording else len(tracks), 'reason': 'audio_opt_in_required'})
+    return {'turns': turns, 'transcript': '\n'.join(f'{turn["speaker"]}: {turn["text"]}' for turn in turns),
+        'ietf_vcon_export': exported['vcon'], 'evidence_coverage': exported['coverage'],
+        'configuration_check': exported['configuration_check'], 'action_trace': [],
+        'final_state': {'evidence_scope': 'waylo_capture', 'tester_error': error},
+        'verdict': 'failed', 'score': None, 'latency_marks': [], 'evaluation_report': {},
+        'recording': recording, 'local_audio_tracks': tracks,
+        'audio_session': {'transport': 'waylo_livekit', 'session_id': bootstrap['sessionId']}}
