@@ -754,8 +754,6 @@ def _persist_unlocked(run: dict[str, Any]) -> None:
 
 def _load_from_disk(execution_run_id: str) -> dict[str, Any] | None:
     path = RUNS_DIR / execution_run_id / 'run.json'
-    if not path.exists():
-        return None
     try:
         payload = json.loads(path.read_text(encoding='utf-8'))
     except (OSError, json.JSONDecodeError):
@@ -767,8 +765,11 @@ def _hydrate_from_disk() -> None:
     if not RUNS_DIR.exists():
         return
     with _LOCK:
-        for path in RUNS_DIR.glob('*/run.json'):
-            execution_run_id = path.parent.name
+        # Discover run IDs in one directory read. A recursive glob enters every
+        # saved run directory even when its snapshot is already in memory; this
+        # dominates list latency on Docker/Windows bind mounts.
+        for path in RUNS_DIR.iterdir():
+            execution_run_id = path.name
             if execution_run_id in _RUNS:
                 continue
             loaded = _load_from_disk(execution_run_id)
