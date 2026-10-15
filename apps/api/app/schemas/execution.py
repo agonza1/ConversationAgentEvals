@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Literal
+import secrets
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -21,6 +22,12 @@ ConversationStatus = Literal['queued', 'running', 'completed', 'needs_review', '
 ExecutionRunStatus = Literal['queued', 'running', 'completed', 'needs_review', 'failed']
 
 
+class TesterNoiseCondition(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    snr_db: float = Field(default=20, ge=-5, le=40, allow_inf_nan=False)
+    seed: int = Field(default_factory=lambda: secrets.randbits(32), ge=0, le=4294967295)
+
+
 class ExecutionRunCreateRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
@@ -38,6 +45,7 @@ class ExecutionRunCreateRequest(BaseModel):
     text_callable: TextCallableId = 'mock_agent'
     voice_fixture_path: str | None = None
     audio_plan_path: str | None = None
+    tester_noise: TesterNoiseCondition | None = None
     agent_id: str | None = None
     model_name: str | None = Field(default=None, min_length=1)
     tester_id: TesterId = 'scenario_simulator'
@@ -131,6 +139,8 @@ class ExecutionRunCreateRequest(BaseModel):
             raise ValueError('text_callable mode requires tester_id=scenario_simulator')
         elif self.executor_id not in {'local_async_runner', 'acc_browser_webrtc', 'acc_sip', 'acc_phone'}:
             raise ValueError('text_callable mode requires a text or ACC executor')
+        if self.tester_noise is not None and self.executor_id != 'waylo_livekit':
+            raise ValueError('Synthetic tester noise is currently supported only for Waylo LiveKit calls.')
         return self
 
 

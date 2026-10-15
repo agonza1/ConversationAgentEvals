@@ -1,5 +1,29 @@
 # Waylo targets and evidence
 
+## Review rules and controlled noise
+
+New CAE Waylo runs freeze the selected scenario rules when queued and keep them
+with the completed capture. Capturing is not grading: ASSERT review remains a
+separate, manually requested step, and its proposal still needs confirmation.
+Legacy captures without a versioned contract offer **Use these rules for review**:
+inspect the current scenario rules and setup before saving them. This records an
+operator-selected current contract, not a recovered historical one, and makes no
+model call. Existing contracts or grades cannot be overwritten by this recovery.
+
+The Run controls include **Add synthetic background noise**, off by default.
+It adds seeded white noise at 20 dB signal-to-noise ratio to actual tester audio,
+including controlled audio fixtures. The generated seed is retained in the run
+request and per-turn media evidence for repeatability. Existing scenario-specific
+audio conditions still apply when this additional control is off; noise is never
+applied twice. It does not simulate all real-world environments or agent-side audio.
+
+Caller ASR comparisons require both nonempty tester reference text and a captured
+Waylo caller transcript. Zero edits is a valid text comparison, not proof of agent
+speech accuracy or lossless delivery. Missing or ambiguous pairs stay unmeasured.
+No deliberate barge-in means interruption handling is **Not tested**, even when
+Waylo labels all captured agent turns uninterrupted. Test setup is not evidence:
+a successful empty catalog lookup does not exercise an injected lookup-error case.
+
 Review hardening: fixed audio plans must match the selected scenario, use default
 sequential realtime controls, and contain complete mono PCM16 WAVs with one sample
 rate. Unsupported delay/event/acceleration/plan-barge controls are rejected before

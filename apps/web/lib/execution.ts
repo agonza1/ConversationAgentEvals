@@ -1,6 +1,19 @@
 import { apiErrorMessage } from './apiError';
 import { wayloExecutionHeaders, wayloRequestHeaders, type WayloTargetConnection } from './wayloConnection';
 
+export type WayloReviewContract = { snapshot: { sha256: string; contract: Record<string, unknown> }; source: string };
+type ReviewContractInput = { executionRunId: string; conversationId: string; userId: string };
+export function wayloReviewContract(input: ReviewContractInput): Promise<WayloReviewContract>;
+export function wayloReviewContract(input: ReviewContractInput, sha256: string): Promise<ExecutionRunRecord>;
+export async function wayloReviewContract(input: ReviewContractInput, sha256?: string): Promise<WayloReviewContract | ExecutionRunRecord> {
+  const url = `${getApiBase()}/api/assert/runs/${encodeURIComponent(input.executionRunId)}/conversations/${encodeURIComponent(input.conversationId)}/review-contract`;
+  const response = await fetch(sha256 ? url : `${url}?user_id=${encodeURIComponent(input.userId)}`, sha256 ? {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: input.userId, contract_sha256: sha256 }),
+  } : { cache: 'no-store' });
+  return handleJson<WayloReviewContract | ExecutionRunRecord>(response);
+}
+
 export type ExecutionMode = 'text_callable' | 'voice_fixture' | 'pipecat_webrtc';
 export type AudioTransportId =
   | 'waylo_livekit'
@@ -158,6 +171,7 @@ export interface ConversationRecord {
   action_trace?: Array<Record<string, unknown>>;
   final_state?: Record<string, unknown>;
   evaluation_findings?: Record<string, unknown>;
+  evaluation_contract_snapshot?: Record<string, unknown>;
   judge_reviews?: JudgeReviewRecord[];
   evaluation_adjudication?: EvaluationAdjudication | null;
   recording?: Record<string, unknown> | null;

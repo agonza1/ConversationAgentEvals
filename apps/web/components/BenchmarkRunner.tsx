@@ -1032,6 +1032,7 @@ interface ExecutionRunRecord {
 }
 
 async function createExecutionRun(payload: {
+  tester_noise?: { snr_db: number };
   suite_id: string;
   scenario_ids: string[];
   mode: 'text_callable' | 'voice_fixture' | 'pipecat_webrtc';
@@ -2338,6 +2339,7 @@ export function BenchmarkRunner({
   const [executionIterations, setExecutionIterations] = useState(1);
   const [executionMaxExchanges, setExecutionMaxExchanges] = useState<number | ''>(3);
   const [executionDuplexTimeoutSeconds, setExecutionDuplexTimeoutSeconds] = useState(120);
+  const [testerNoiseEnabled, setTesterNoiseEnabled] = useState(false);
   const [executionTesterId, setExecutionTesterId] = useState<'scenario_simulator' | 'fixture_replay' | 'pipecat_tester'>('scenario_simulator');
   const [executionExecutorId, setExecutionExecutorId] = useState<NonNullable<ExecutionRunRecord['executor_id']>>('local_async_runner');
   const [executionRun, setExecutionRun] = useState<ExecutionRunRecord | null>(null);
@@ -3781,6 +3783,7 @@ export function BenchmarkRunner({
           ? 'signalwire-ai-agent'
           : executionModelName || DEFAULT_EXECUTION_MODEL;
       const queued = await createExecutionRun({
+        tester_noise: wayloAgent && testerNoiseEnabled ? { snr_db: 20 } : undefined,
         suite_id: suiteForRun,
         scenario_ids: scenarioIds,
         mode: runMode,
@@ -5000,6 +5003,13 @@ export function BenchmarkRunner({
                       Math.max(30, Math.min(300, Number(event.target.value) || 120)),
                     )}
                   />
+                </label>
+              ) : null}
+              {selectedScoreAgent?.target === 'waylo' ? (
+                <label>
+                  <span><input type="checkbox" checked={testerNoiseEnabled}
+                    onChange={(event) => setTesterNoiseEnabled(event.target.checked)} /> Add synthetic background noise</span>
+                  <small>Tester audio only · white noise at 20 dB SNR. The random seed is saved for repeatability. Scenario audio conditions still apply when off.</small>
                 </label>
               ) : null}
             </div>

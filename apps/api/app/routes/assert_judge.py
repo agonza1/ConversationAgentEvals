@@ -42,6 +42,58 @@ class AssertExecutionJudgeRequest(BaseModel):
     request_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r'^[A-Za-z0-9._-]+$')
 
 
+class WayloReviewContractRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    user_id: str = Field(min_length=1)
+    contract_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+
+def _waylo_contract_draft(execution_run_id, conversation_id, user_id, db):
+    from app.services.execution_runner import _scenario_definition
+    from app.services.evaluation_contract import freeze_contract
+    from app.services.benchmark_catalog_extensions import register_builtin_benchmark_extensions
+    run = execution_run_store.get_execution_run(execution_run_id)
+    if run is None or run.get('user_id') != user_id or not execution_project_accessible(
+            db=db, user_id=user_id, project_id=run.get('project_id'), product_project_id=run.get('product_project_id')):
+        raise HTTPException(404, 'Execution run not found.')
+    row = next((item for item in _saved_objects(run.get('conversations')) if item.get('conversation_id') == conversation_id), None)
+    if row is None:
+        raise HTTPException(404, 'Conversation not found.')
+    if (run.get('executor_id') != 'waylo_livekit' or run.get('status') in {'queued', 'running'}
+            or row.get('status') in {'queued', 'running'}):
+        raise HTTPException(409, 'Select review rules after the Waylo capture completes.')
+    register_builtin_benchmark_extensions()
+    try:
+        scenario = _scenario_definition(row['suite_id'], row['scenario_id'])
+        snapshot = freeze_contract({'scenario_contract': scenario}, suite_id=row['suite_id'], scenario_id=row['scenario_id'])
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(409, 'The selected scenario rules are unavailable. Restore or select the scenario before reviewing.') from exc
+    return snapshot
+
+
+@router.get('/runs/{execution_run_id}/conversations/{conversation_id}/review-contract')
+def preview_waylo_review_contract(execution_run_id: str, conversation_id: str, user_id: str = Query(min_length=1),
+                                 db: Session = Depends(get_db)):
+    snapshot = _waylo_contract_draft(execution_run_id, conversation_id, user_id, db)
+    return JSONResponse({'snapshot': snapshot, 'source': 'current_scenario_not_historical'},
+                        headers={'Cache-Control': 'private, no-store'})
+
+
+@router.post('/runs/{execution_run_id}/conversations/{conversation_id}/review-contract')
+def select_waylo_review_contract(execution_run_id: str, conversation_id: str, payload: WayloReviewContractRequest,
+                                db: Session = Depends(get_db)):
+    snapshot = _waylo_contract_draft(execution_run_id, conversation_id, payload.user_id, db)
+    if snapshot['sha256'] != payload.contract_sha256:
+        raise HTTPException(409, 'Scenario rules changed. Refresh and review them before saving.')
+    try:
+        return execution_run_store.prepare_waylo_review_contract(execution_run_id, conversation_id,
+            user_id=payload.user_id, snapshot=snapshot)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc).strip("'")) from exc
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 def _product_plan(
     db: Session,
     *,

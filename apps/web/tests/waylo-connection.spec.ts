@@ -99,6 +99,16 @@ test('temporary grant supports small whole suites that fit its capture budget', 
   expect(request?.body?.scenario_ids).toEqual(['mike-five-bags', 'case-1', 'case-2']);
 });
 
+test('synthetic noise is opt-in and included only when enabled for a Waylo call', async ({ page }) => {
+  const fixture = await openConnectedRun(page, 1);
+  const noise = page.getByRole('checkbox', { name: 'Add synthetic background noise' });
+  await expect(noise).not.toBeChecked();
+  await noise.check();
+  await page.getByRole('button', { name: 'Run 1 voice test', exact: true }).click();
+  await expect.poll(() => fixture.requests.filter((item) => item.path === '/api/execution/runs' && item.method === 'POST').length).toBe(1);
+  expect(fixture.requests.find((item) => item.path === '/api/execution/runs' && item.method === 'POST')?.body?.tester_noise).toEqual({ snr_db: 20 });
+});
+
 test('idle time reduces the usable grant budget without extending temporary access', async ({ page }) => {
   await page.clock.install();
   await openConnectedRun(page, 1);

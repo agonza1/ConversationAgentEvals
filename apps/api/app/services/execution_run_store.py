@@ -323,6 +323,11 @@ def refresh_waylo_evidence(execution_run_id: str, expected: dict, captured: dict
         profile = decode_evidence(exported['vcon'])
         final = next((s['state'] for s in profile['state_snapshots'] if s['phase'] == 'final'), {})
         execution_failed = row.get('status') == 'failed' or bool(row.get('error'))
+        old_findings = row.get('evaluation_findings') or {}
+        retained_rules = {key: deepcopy(old_findings[key]) for key in
+                          ('evaluation_contract_snapshot', 'contract_selection') if key in old_findings}
+        if retained_rules:
+            retained_rules.update(scoring_mode='capture_only', semantic_review_required=True)
         row.update(ietf_vcon_export=exported['vcon'], ietf_vcon_export_summary=ietf_vcon_summary(exported['vcon']),
             rtc_turns=deepcopy(row['rtc_turns'] if 'rtc_turns' in row else row.get('turns') or []), turns=turns,
             timeline=[],  # Old derived dialogue labels cannot be aligned to corrected/split native turns.
@@ -330,7 +335,7 @@ def refresh_waylo_evidence(execution_run_id: str, expected: dict, captured: dict
             action_trace=latest_tool_events(profile['tool_events']), final_state={**{k: v for k, v in row.get('final_state', {}).items() if k == 'tester_error'}, **final},
             state_snapshots=profile['state_snapshots'], evidence_coverage=exported['coverage'],
             configuration_check=exported['configuration_check'],
-            vcon_export=None, vcon_export_summary=None, evaluation_findings={}, evaluation_adjudication=None,
+            vcon_export=None, vcon_export_summary=None, evaluation_findings=retained_rules, evaluation_adjudication=None,
             metrics_summary=None, verdict='failed' if execution_failed else 'needs_review', score=None,
             status='failed' if execution_failed else 'needs_review')
         for review in row.get('judge_reviews', []):
@@ -442,6 +447,37 @@ def complete_execution_run(
         progress_phase='completed' if status != 'failed' else 'failed',
         completed=True,
     )
+
+
+def prepare_waylo_review_contract(execution_run_id: str, conversation_id: str, *,
+                                  user_id: str, snapshot: dict) -> dict:
+    """Explicit operator selection for legacy capture-only runs, never a historic backfill or grade."""
+    from app.services.evaluation_contract import recorded_contract
+    recorded_contract({'evaluation_contract_snapshot': snapshot})
+    with _LOCK:
+        run = _get_run_unlocked(execution_run_id)
+        if run is None or run.get('user_id') != user_id:
+            raise KeyError('Execution run not found.')
+        row = _find_conversation_unlocked(run, conversation_id)
+        if row is None:
+            raise KeyError('Conversation not found.')
+        if (run.get('executor_id') != 'waylo_livekit'
+                or run.get('status') in {'queued', 'running'} or row.get('status') in {'queued', 'running'}):
+            raise ValueError('Review rules can only be selected for a completed Waylo capture.')
+        findings = row.get('evaluation_findings') or {}
+        if snapshot['contract'].get('id') != row.get('scenario_id'):
+            raise ValueError('Review rules do not match this conversation scenario.')
+        if (findings.get('evaluation_contract_snapshot') is not None or row.get('evaluation_contract_snapshot') is not None
+                or row.get('judge_reviews') or row.get('evaluation_adjudication')
+                or findings.get('overall_score') is not None or row.get('score') is not None
+                or (row.get('metrics_summary') or {}).get('score') is not None):
+            raise ValueError('Existing rules or evaluations cannot be replaced by this capture-only preparation.')
+        row['evaluation_findings'] = {**findings, 'scoring_mode': 'capture_only',
+            'semantic_review_required': True, 'evaluation_contract_snapshot': deepcopy(snapshot),
+            'contract_selection': {'source': 'operator_selected_current_scenario', 'selected_at': _now()}}
+        run['updated_at'] = _now()
+        _persist_unlocked(run)
+        return deepcopy(run)
 
 
 def record_judge_review(

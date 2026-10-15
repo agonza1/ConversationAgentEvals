@@ -53,7 +53,7 @@ test('Waylo reporting separates observer/worker latency, provisional WER, native
   await page.goto('/runs/exec-steven-reporting');
   const observerTile = page.getByRole('button', { name: /Observed target response latency 2504ms/ });
   await expect(observerTile).toContainText('2 responses across the suite');
-  await expect(page.getByRole('button', { name: /Interruption Detection 0 true \/ 3 false/ })).toContainText('handling not tested');
+  await expect(page.getByRole('button', { name: /Interruption Detection Not tested/ })).toContainText('No deliberate barge-in');
   const coverage = page.getByLabel('Waylo evidence coverage');
   for (const name of ['Conversation · experience', 'Comprehension · speech boundary', 'Conduct · execution', 'Completion · business outcome']) {
     await expect(coverage).toContainText(name);
@@ -64,11 +64,11 @@ test('Waylo reporting separates observer/worker latency, provisional WER, native
   await expect(page.getByLabel('Observer latency observations')).toContainText('caller-1: 1910ms');
   await expect(page.getByLabel('Worker latency observations')).toContainText('1652ms');
   await expect(page.getByLabel('Metric detail')).toContainText('Do not add or average');
-  await page.getByRole('button', { name: /Provisional caller WER 25%/ }).click();
+  await page.getByRole('button', { name: /Caller ASR comparison 1 \/ 4/ }).click();
   await expect(page.getByLabel('Metric detail')).toContainText('not an accepted grade');
   await expect(page.getByLabel('Per-turn word error rates')).toContainText('Waylo final ASR');
-  await page.getByRole('button', { name: /Interruption Detection 0 true \/ 3 false/ }).click();
-  await expect(page.getByLabel('Metric detail')).toContainText('Handling: not tested');
+  await page.getByRole('button', { name: /Interruption Detection Not tested/ }).click();
+  await expect(page.getByLabel('Metric detail')).toContainText('that is not a barge-in test');
 });
 
 test('Waylo missing flags and unaligned speech stay unknown rather than zero', async ({ page }) => {
@@ -81,8 +81,8 @@ test('Waylo missing flags and unaligned speech stay unknown rather than zero', a
   await page.addInitScript(() => localStorage.setItem('conversation-evals-demo-user', 'demo-user'));
   await page.route('**/api/**', (route) => route.fulfill({ json: route.request().url().includes('/runs/exec-steven-reporting') ? run : {} }));
   await page.goto('/runs/exec-steven-reporting');
-  await expect(page.getByRole('button', { name: /Interruption Detection unknown/ })).toContainText('No native interruption flags');
-  await page.getByRole('button', { name: /Provisional caller WER n\/a/ }).click();
+  await expect(page.getByRole('button', { name: /Interruption Detection Not measured/ })).toContainText('telemetry was not captured');
+  await page.getByRole('button', { name: /Caller ASR comparison Not measured/ }).click();
   await expect(page.getByLabel('Metric detail')).toContainText('Provisional WER is unknown');
   await page.getByRole('button', { name: /Observed target response latency n\/a/ }).click();
   await expect(page.getByLabel('Metric detail')).toContainText('Observer response timing is unknown');
@@ -122,4 +122,57 @@ test('Waylo turn sequence does not invent a clock or shift caller latency onto g
   await expect(rows.nth(4)).toContainText('Speech duration unknown · Observed response to caller-2: 3098ms');
   await expect(rows.nth(5)).toContainText('Individual response timing unknown');
   await expect(rows.nth(6)).toContainText('Individual response timing unknown');
+});
+
+test('zero caller edits are scoped to available references; missing ASR is not zero', async ({ page }) => {
+  const run = fixture();
+  const pair = run.conversations[0].evidence_diagnostics.speech_boundary.comparisons[0];
+  pair.target_asr_final = pair.reference_text;
+  await page.route('**/api/**', route => route.fulfill({ json: route.request().url().includes('/runs/exec-steven-reporting') ? run : {} }));
+  await page.goto('/runs/exec-steven-reporting');
+  await page.getByRole('button', { name: /Caller ASR comparison 0 \/ 4/ }).click();
+  await expect(page.getByLabel('Metric detail')).toContainText('Agent speech accuracy is not measured');
+  pair.target_asr_final = '';
+  await page.reload();
+  await expect(page.getByRole('button', { name: /Caller ASR comparison Not measured/ })).toBeVisible();
+});
+
+test('legacy Waylo review requires explicit current-rule selection, not a silent backfill or model call', async ({ page }) => {
+  const run = fixture();
+  const row = run.conversations[0];
+  Object.assign(row, { scenario_id: 'mike-lookup-failure', evaluation_findings: {},
+    final_state: { request_list: [] }, action_trace: [{ name: 'search_documents', status: 'success' }] });
+  const snapshot = { sha256: 'a'.repeat(64), contract: { title: 'Lookup failure', goal: 'No invented product after tool error',
+    required_actions: ['search_documents'], forbidden_actions: ['create_order'], waylo_test: { setup: 'Inject API_UNAVAILABLE' } } };
+  let saves = 0; let judges = 0;
+  await page.route('**/api/**', route => {
+    const url = new URL(route.request().url()); const method = route.request().method();
+    if (url.pathname.endsWith('/readiness')) return route.fulfill({ json: { ready: true, message: 'ASSERT ready' } });
+    if (url.pathname.endsWith('/review-contract')) {
+      if (method === 'POST') {
+        saves++;
+        expect(route.request().postDataJSON().contract_sha256).toBe(snapshot.sha256);
+        Object.assign(row, { evaluation_findings: { scoring_mode: 'capture_only', evaluation_contract_snapshot: snapshot } });
+        return route.fulfill({ json: run });
+      }
+      return route.fulfill({ json: { snapshot, source: 'current_scenario_not_historical' } });
+    }
+    if (url.pathname.endsWith('/judge')) {
+      judges++;
+      return route.fulfill({ json: { status: 'ready', judge_result: { agrees: true }, message: 'Fixture review completed', evidence_citations: [] } });
+    }
+    return route.fulfill({ json: url.pathname.includes('/runs/exec-steven-reporting') ? run : {} });
+  });
+  await page.goto('/runs/exec-steven-reporting');
+  await page.getByRole('button', { name: /Verified Resolution Rate n\/a/ }).click();
+  await expect(page.getByLabel('Resolution explanation')).toContainText('no scenario evaluation has run');
+  await expect(page.getByLabel('Resolution explanation')).toContainText('requires a lookup error, but none was recorded');
+  await expect(page.getByRole('button', { name: 'Save review rules first' })).toBeDisabled();
+  await expect(page.getByLabel('Select review rules')).toContainText('not a recovered historical contract');
+  expect(saves).toBe(0); expect(judges).toBe(0);
+  await page.getByRole('button', { name: 'Use these rules for review' }).click();
+  await expect(page.getByRole('button', { name: 'Review with LLM judge' })).toBeEnabled();
+  expect(saves).toBe(1); expect(judges).toBe(0);
+  await page.getByRole('button', { name: 'Review with LLM judge' }).click();
+  await expect.poll(() => judges).toBe(1);
 });

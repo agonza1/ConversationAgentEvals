@@ -298,6 +298,27 @@ def test_late_provider_write_refresh_replaces_run_export_without_duplicate(conne
     assert len(execution_run_store.get_execution_run(run_id)['conversations']) == 1
 
 
+def test_refresh_keeps_selected_rules_while_superseding_old_review(connected, monkeypatch):
+    from app.schemas.execution import ConversationRecord
+    from app.services.evaluation_contract import freeze_contract, recorded_contract
+    from app.services.waylo_target import project_capture
+    _, _, run_id, conv_id, native = finished_waylo_run(connected, monkeypatch)
+    original = execution_run_store.get_conversation(run_id, conv_id)
+    rules = freeze_contract({'id': original['scenario_id'], 'goal': 'Notes only'})
+    original['evaluation_findings'] = {'evaluation_contract_snapshot': rules,
+        'contract_selection': {'source': 'operator_selected_current_scenario'}, 'overall_score': 100}
+    execution_run_store.upsert_conversation(run_id, ConversationRecord.model_validate(original))
+    expected = execution_run_store.get_conversation(run_id, conv_id)
+    native['items'] = [{'position': 1, 'rawText': 'Five bags', 'quantity': 5, 'unit': 'bags'}]
+    execution_run_store.refresh_waylo_evidence(run_id, expected, native,
+        project_capture(native, execution_run_id=run_id, conversation_id=conv_id))
+    refreshed = execution_run_store.get_conversation(run_id, conv_id)
+    assert recorded_contract(refreshed)['_snapshot_sha256'] == rules['sha256']
+    assert refreshed['evaluation_findings']['scoring_mode'] == 'capture_only'
+    assert 'overall_score' not in refreshed['evaluation_findings']
+    assert all(review['status'] == 'superseded' for review in refreshed.get('judge_reviews', []))
+
+
 def test_changed_refreshes_keep_original_rtc_provenance_and_latest_assert_dialogue(connected, monkeypatch, tmp_path):
     from app.services.waylo_target import project_capture
     from app.services.assert_transcript_adapter import build_assert_inference_row

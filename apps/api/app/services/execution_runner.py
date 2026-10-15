@@ -5,6 +5,7 @@ import json
 import os
 import time
 import uuid
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -29,6 +30,7 @@ from app.services.signalwire_holyguacamole_target import (
 )
 from app.services.agent_store import get_agent
 from app.services.execution_metrics import build_metrics_and_timeline
+from app.services.evaluation_contract import freeze_contract
 from app.services.acc_realtime_target import (
     AccAudioFixture,
     AccAudioFixtureScheduler,
@@ -227,6 +229,10 @@ def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool =
             'request': resolved.model_dump(mode='json'),
             'agent': agent,
             'provenance': provenance.model_dump(mode='json'),
+            **({'evaluation_contracts': {
+                ident: freeze_contract({'scenario_contract': _selected_waylo_scenario(resolved, resolved.suite_id, ident)},
+                    suite_id=resolved.suite_id, scenario_id=ident)
+                for ident in scenario_ids}} if target == 'waylo' else {}),
         },
         progress=ExecutionRunProgress(
             phase='queued',
@@ -440,6 +446,9 @@ def _run_one_conversation(
     )
 
     try:
+        saved_run = execution_run_store.get_execution_run(execution_run_id) or {}
+        execution_snapshot = saved_run.get('execution_snapshot') or {}
+        contract_snapshot = (execution_snapshot.get('evaluation_contracts') or {}).get(scenario_id)
         if payload.mode == 'text_callable':
             result = _execute_text_callable(
                 suite_id,
@@ -452,7 +461,8 @@ def _run_one_conversation(
             result = asyncio.run(_execute_waylo(
                 execution_run_id=execution_run_id, conversation_id=conversation_id,
                 suite_id=suite_id, scenario_id=scenario_id, payload=payload,
-                agent_snapshot=agent_snapshot, event_observer=publish))
+                agent_snapshot=agent_snapshot, event_observer=publish,
+                scenario_snapshot=contract_snapshot))
         elif payload.mode == 'pipecat_webrtc' and payload.executor_id == 'pipecat_public_daily':
             result = _execute_public_pipecat_daily(
                 execution_run_id=execution_run_id,
@@ -484,6 +494,11 @@ def _run_one_conversation(
             )
         else:
             result = asyncio.run(_execute_voice_fixture(suite_id, scenario_id, payload))
+        if payload.executor_id == 'waylo_livekit':
+            result['evaluation_report'] = {
+                'scoring_mode': 'capture_only', 'semantic_review_required': True,
+                **({'evaluation_contract_snapshot': contract_snapshot} if contract_snapshot else {}),
+            }
         metrics_summary, timeline = build_metrics_and_timeline(
             turns=result['turns'],
             latency_marks=result.get('latency_marks') or [],
@@ -734,7 +749,7 @@ def _execution_model_name(payload: ExecutionRunCreateRequest, *, target: str) ->
 
 
 async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenario_id,
-                         payload, agent_snapshot, event_observer):
+                         payload, agent_snapshot, event_observer, scenario_snapshot=None):
     from app.services.waylo_livekit import run_waylo_call
     from app.services.waylo_livekit import read_wav
     from app.services.waylo_target import WayloClient
@@ -742,7 +757,11 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
     from app.services.vcon_evidence import decode_evidence, latest_tool_events
     target = agent_snapshot or get_agent(payload.agent_id)
     lease = run_lease(execution_run_id, target) if target['connection'].get('auth_type') == 'waylo_browser_session' else None
-    scenario = _scenario_definition(suite_id, scenario_id)
+    if scenario_snapshot:
+        from app.services.evaluation_contract import recorded_contract
+        scenario = recorded_contract({'evaluation_contract_snapshot': scenario_snapshot})
+    else:
+        scenario = _selected_waylo_scenario(payload, suite_id, scenario_id)
     model = payload.tester_model_name or default_reference_model_name()
     # The first caller utterance is an exact scenario opener, not an LLM request.
     # A one-exchange transport smoke test must not require an unrelated LLM login.
@@ -802,22 +821,27 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
         return text
 
     async def synthesis(text, index):
+        condition = scenario.get('waylo_test', {}).get('audio_condition', {})
+        if payload.tester_noise is not None:
+            condition = {'kind': 'noise', **payload.tester_noise.model_dump()}
         if fixture_audio:
             if index > len(fixture_audio):
                 raise ValueError('Waylo controlled audio plan exhausted; no synthesized substitution.')
-            return fixture_audio[index - 1]
-        condition = scenario.get('waylo_test', {}).get('audio_condition', {})
-        voice = config.kokoro_tester_voice
-        if condition.get('kind') == 'accent_voice':
-            voice = os.getenv('WAYLO_TEST_ACCENT_VOICE', '').strip()
-            if not voice:
-                raise ValueError('Accent case requires WAYLO_TEST_ACCENT_VOICE or a controlled audio plan; no call started.')
-        audio = await asyncio.to_thread(media.synthesize, text, voice=voice)
+            audio = fixture_audio[index - 1]
+            source = {'source': 'controlled_audio_fixture'}
+        else:
+            voice = config.kokoro_tester_voice
+            if condition.get('kind') == 'accent_voice':
+                voice = os.getenv('WAYLO_TEST_ACCENT_VOICE', '').strip()
+                if not voice:
+                    raise ValueError('Accent case requires WAYLO_TEST_ACCENT_VOICE or a controlled audio plan; no call started.')
+            audio = await asyncio.to_thread(media.synthesize, text, voice=voice)
+            source = {'synthetic_voice': voice}
         if condition.get('kind') == 'noise':
             from app.services.waylo_audio_conditions import add_noise
             audio, measurements = add_noise(audio, snr_db=condition['snr_db'], seed=condition['seed'] + index)
-            return audio, {**condition, **measurements}
-        return audio, {**condition, 'synthetic_voice': voice}
+            return audio, {**source, **condition, **measurements}
+        return audio, {**condition, **source}
 
     try:
         result = await run_waylo_call(target=target, correlation_id=f'{execution_run_id}/{conversation_id}',
@@ -1812,6 +1836,15 @@ def _execute_openai_codex_text_agent(
         'score': report.get('overall_score'),
         'evaluation_report': report,
     }
+
+
+def _selected_waylo_scenario(payload, suite_id: str, scenario_id: str) -> dict[str, Any]:
+    scenario = deepcopy(_scenario_definition(suite_id, scenario_id))
+    if payload.tester_noise is not None:
+        scenario['waylo_test'] = {**scenario.get('waylo_test', {}),
+            'audio_condition': {'kind': 'noise', **payload.tester_noise.model_dump()},
+            'condition': 'seeded_white_noise', 'audio_condition_source': 'operator_override'}
+    return scenario
 
 
 def _scenario_definition(suite_id: str, scenario_id: str) -> dict[str, Any]:
