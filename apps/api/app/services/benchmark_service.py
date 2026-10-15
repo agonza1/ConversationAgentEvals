@@ -672,8 +672,10 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True, synthetic: boo
         guidance = 'Request semantic review of the supplied evidence; heuristic matches do not verify policy or execution.'
         if not report['evaluation_scope']['artifact_presence']['action_trace'] and not report['evaluation_scope']['artifact_presence']['final_state']:
             guidance += ' No tool/action trace or resulting state was supplied; operational completion remains unverified.'
-        report['recommendations'] = [*report['recommendations'], guidance] if report['forbidden_action_hits'] else [guidance, *report['recommendations']]
-        report['suggested_fixes'] = [guidance, *report.get('suggested_fixes', [])]
+        concrete_remediation = report['verdict'] == 'fail' or bool(report['missing_actions'] or report['forbidden_action_hits'] or report.get('hard_check_failures'))
+        report['recommendations'] = [*report['recommendations'], guidance] if concrete_remediation else [guidance, *report['recommendations']]
+        fixes = report.get('suggested_fixes', [])
+        report['suggested_fixes'] = [*fixes, guidance] if concrete_remediation else [guidance, *fixes]
     report['run_lifecycle'] = _run_lifecycle(
         lifecycle_context=lifecycle_context,
         logical_run_id=logical_run_id,

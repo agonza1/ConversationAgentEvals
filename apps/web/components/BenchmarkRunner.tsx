@@ -2001,6 +2001,7 @@ function formatReportBrief(
     `Scenario: ${scenario}`,
     `Verdict: ${verdict}`,
     `Evidence status: ${coverage.headline}`,
+    `Evidence source: ${coverage.sourceLabel}`,
     `Evidence coverage: ${coverage.coverageLabel}`,
     `Limitations: ${coverage.explanation}`,
     `Diagnostic score (not verified resolution): ${score}`,

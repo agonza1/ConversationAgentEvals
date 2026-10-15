@@ -121,6 +121,23 @@ test('a separate successful judge review does not manufacture tool evidence or p
   expect(calls.executions()).toBe(0); expect(calls.judges()).toBe(1);
 });
 
+test('copying a failed synthetic report preserves its provenance', async ({ page, request }) => {
+  await page.addInitScript(() => Object.defineProperty(navigator, 'clipboard', { configurable: true,
+    value: { writeText: async (text: string) => { (window as unknown as { copiedBrief: string }).copiedBrief = text; } } }));
+  await setup(page, request, true);
+  await page.route('**/api/benchmarks/run', (route) => route.fulfill({ json: {
+    run_id: 'synthetic-failure-fixture', suite_id: 'call-center-voice-ai', scenario_id: 'billing-address-change',
+    verdict: 'fail', overall_score: 0, transcript: 'Agent: Fixture claim.',
+    evaluation_scope: { input_source: 'vcon', synthetic: true,
+      artifact_presence: { transcript: true, action_trace: false, final_state: false } },
+  } }));
+  await evaluate(page);
+  await page.getByRole('button', { name: 'Copy brief', exact: true }).click();
+  const brief = await page.evaluate(() => (window as unknown as { copiedBrief: string }).copiedBrief);
+  expect(brief).toContain('Evidence status: Evaluation reported a failure');
+  expect(brief).toContain('Evidence source: Synthetic · Imported vCon');
+});
+
 test('a late judge response cannot attach to edited evidence', async ({ page, request }) => {
   await setup(page, request);
   let release!: () => void;

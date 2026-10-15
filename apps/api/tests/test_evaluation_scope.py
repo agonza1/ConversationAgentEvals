@@ -86,6 +86,26 @@ def test_arbitrary_request_metadata_cannot_claim_internal_simulation_provenance(
     assert report['evaluation_scope']['synthetic'] is None
 
 
+@pytest.mark.parametrize('failure', ['missing_action', 'final_state', 'forbidden_action'])
+def test_concrete_remediation_stays_before_generic_semantic_review(failure):
+    payload = sample()
+    scenario = get_suite(payload['suite_id'])['scenarios'][0]
+    payload.update(action_trace=deepcopy(scenario['sample_action_trace']), final_state=deepcopy(scenario['sample_final_state']))
+    if failure == 'missing_action':
+        payload['final_state']['missing_actions'] = [scenario['required_actions'][-1]]
+    elif failure == 'final_state':
+        payload['final_state'] = {'complete': False}
+    else:
+        payload['action_trace'].append({'action': scenario['forbidden_actions'][0], 'status': 'success'})
+    report = run_scenario(payload, persist_artifacts=False)
+    assert report['semantic_review_required'] is True
+    assert report['verdict'] == 'fail' or report['missing_actions'] or report['forbidden_action_hits'] or report['hard_check_failures']
+    if failure == 'missing_action':
+        assert len(report['missing_actions']) == 1
+    assert not report['suggested_fixes'][0].startswith('Request semantic review')
+    assert report['suggested_fixes'][-1].startswith('Request semantic review')
+
+
 @pytest.mark.parametrize('include_failure', [False, True])
 def test_optional_scenario_simulations_keep_synthetic_scope_and_export_marker(include_failure):
     from app.services import benchmark_service
