@@ -35,6 +35,36 @@ def test_console_persists_selection_without_credentials(monkeypatch):
     assert ReferenceRuntimeConfig().speech == cloud_selection()
 
 
+def test_external_tester_cloud_tts_runs_in_worker_not_api():
+    import base64
+    import io
+    import wave
+    output = io.BytesIO()
+    with wave.open(output, 'wb') as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(24000)
+        wav.writeframes(b'\x01\x00' * 2400)
+    audio = output.getvalue()
+    config = settings.SpeechSelection(tts_provider='deepgram', tts_model='aura-2',
+        tester_voice='aura-2-asteria-en', target_voice='aura-2-orion-en')
+    requests = []
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json={'audio_wav_base64': base64.b64encode(audio).decode()})
+    media = ReferenceMediaServices(ReferenceRuntimeConfig(speech=config, pipecat_service_url='http://worker',
+        internal_token='worker-test-token', kokoro_base_url=''), client=httpx.Client(transport=httpx.MockTransport(respond)))
+    assert media.synthesize('Hello') == audio
+    assert len(requests) == 1
+    request = requests[0]
+    assert str(request.url) == 'http://worker/reference-tester/synthesize'
+    payload = json.loads(request.content)
+    assert payload['speech'] == config.model_dump()
+    assert payload['voice'] == config.tester_voice
+    assert request.headers['x-cae-reference-token'] == 'worker-test-token'
+    assert 'DEEPGRAM_API_KEY' not in request.content.decode()
+
+
 @pytest.mark.parametrize('update', [
     {'stt_provider': 'unknown'}, {'tts_provider': 'unknown'}, {'target_voice': 'caller-id'},
     {'stt_model': 'https://untrusted'}, {'api_key': 'untrusted'}, {'cartesia_version': 'latest'},

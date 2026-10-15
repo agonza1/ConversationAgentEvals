@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from app.services.word_error_rate import calculate_word_error_rate, normalize_words
+from app.services.waylo_consent import approval_integrity
 
 
 _NUMBERS = {0: 'zero', 1: 'one', 2: 'two', 3: 'three', 4: 'four', 5: 'five',
@@ -23,13 +24,15 @@ def entities(text: str, expected: dict) -> dict:
 def assess_speech(capture: dict, voice_events: list[dict], expected_by_turn: list[list[dict]] | None = None) -> dict:
     references = [e for e in voice_events if e.get('event_type') == 'tester.audio.sent']
     receipts = [t for t in capture['transcripts'] if t.get('role') == 'user']
+    consent = approval_integrity(references, receipts)
     comparisons = []
     # No forced alignment when ASR splits/merges utterances. Order-aligned WER
     # is diagnostic only: independent clocks and lack of peer ACK prohibit a
     # causal attribution of recognition vs network loss from this alone.
     if not references or len(references) != len(receipts):
         return {'status': 'unknown', 'reason': 'ASR utterances do not uniquely align with sent reference turns.',
-                'reference_turns': len(references), 'receipt_turns': len(receipts), 'comparisons': []}
+                'reference_turns': len(references), 'receipt_turns': len(receipts), 'comparisons': [],
+                'approval_integrity': consent}
     for index, (reference, receipt) in enumerate(zip(references, receipts, strict=True)):
         wer = calculate_word_error_rate(reference['reference_text'], receipt['text'])
         expected = (expected_by_turn or [])[index] if index < len(expected_by_turn or []) else []
@@ -52,7 +55,7 @@ def assess_speech(capture: dict, voice_events: list[dict], expected_by_turn: lis
             'local_playout': 'drained' if reference.get('delivery') == 'local_queue_drained' else 'unconfirmed',
             'receiver_drop': 'unknown', 'asr_error_vs_peer_loss': 'needs_review',
             'agent_interpretation': 'requires_tool_and_backend_comparison'})
-    return {'status': 'needs_review', 'comparisons': comparisons}
+    return {'status': 'needs_review', 'comparisons': comparisons, 'approval_integrity': consent}
 
 
 def compare_notes(actual: list[dict] | None, expected: list[dict] | None) -> dict:

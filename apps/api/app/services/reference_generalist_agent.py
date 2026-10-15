@@ -455,11 +455,25 @@ class ReferenceMediaServices:
         }
 
     def synthesize(self, text: str, *, voice: str | None = None) -> bytes:
+        selected = self.config.speech
+        if selected.tts_provider != 'kokoro':
+            response = self.client.post(
+                f'{self.config.pipecat_service_url}/reference-tester/synthesize',
+                headers={'x-cae-reference-token': self.config.internal_token},
+                json={'text': text, 'speech': selected.model_dump(), 'voice': voice or selected.tester_voice},
+            )
+            if response.status_code >= 400:
+                raise ReferenceRuntimeError(f'{selected.tts_provider} tester speech synthesis failed; check voice readiness.')
+            try:
+                audio = base64.b64decode(response.json()['audio_wav_base64'], validate=True)
+                return finalize_tts_wav(audio)
+            except (ValueError, KeyError, TypeError):
+                raise ReferenceRuntimeError('Tester speech runtime returned invalid audio.') from None
         response = self.client.post(
             f'{self.config.kokoro_base_url}/v1/audio/speech',
             json={
-                'model': self.config.kokoro_model,
-                'voice': voice or self.config.kokoro_tester_voice,
+                'model': selected.tts_model,
+                'voice': voice or selected.tester_voice,
                 'input': text,
                 'response_format': 'wav',
                 'stream': False,
@@ -556,6 +570,7 @@ class ReferencePipecatTesterGraphRenderer:
                 base64.b64encode(previous_audio).decode('ascii') if previous_audio else None
             ),
             'model_name': self.transport.config.tester_llm_model,
+            'speech': self.transport.config.speech.model_dump(),
         }
         response = await asyncio.to_thread(
             self.transport.media.client.post,
@@ -577,7 +592,7 @@ class ReferencePipecatTesterGraphRenderer:
         except Exception as exc:  # noqa: BLE001
             raise ReferenceRuntimeError('Pipecat tester graph returned invalid audio.') from exc
         processors = (result.get('pipeline') or {}).get('processors')
-        if not text or not audio or processors != ['rtc-asr', 'llm', 'kokoro']:
+        if not text or not audio or processors != ['rtc-asr', 'llm', self.transport.config.speech.tts_provider]:
             raise ReferenceRuntimeError('Pipecat tester graph returned incomplete pipeline evidence.')
         self._rendered[text] = audio
         return text

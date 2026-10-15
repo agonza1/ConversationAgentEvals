@@ -5,8 +5,11 @@ import json
 import os
 import time
 import uuid
+import httpx
 from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
@@ -821,6 +824,13 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
             'playback': 'continuous', 'level_reference': 'first_caller_utterance_rms',
             'snr_db_requested': call_audio_condition['snr_db']}
     media = ReferenceMediaServices(config)
+    # Deadline-cancelled model/TTS work must not make asyncio.run wait for its
+    # default executor at shutdown. Provider HTTP timeouts still bound these
+    # private workers; late results are discarded and never sent to the target.
+    caller_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='cae-waylo-caller')
+
+    async def caller_work(function, *args, **kwargs):
+        return await asyncio.get_running_loop().run_in_executor(caller_executor, partial(function, *args, **kwargs))
 
     async def wording(turns, index):
         nonlocal used_tester_model
@@ -835,8 +845,9 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
             if provider is None:
                 raise ValueError('Controlled caller steps exhausted; no invented substitution.')
             used_tester_model = model
-            text = await asyncio.to_thread(provider.complete, _openai_tester_prompt(
-                scenario, turns, next_exchange=index, max_exchanges=payload.max_exchanges), model_name=model)
+            text = await caller_work(provider.complete, _openai_tester_prompt(
+                scenario, turns, next_exchange=index, max_exchanges=payload.max_exchanges,
+                waylo_voice=True), model_name=model)
         return text
 
     async def synthesis(text, index):
@@ -847,12 +858,12 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
             audio = fixture_audio[index - 1]
             source = {'source': 'controlled_audio_fixture'}
         else:
-            voice = config.kokoro_tester_voice
+            voice = config.speech.tester_voice
             if condition.get('kind') == 'accent_voice':
                 voice = os.getenv('WAYLO_TEST_ACCENT_VOICE', '').strip()
                 if not voice:
                     raise ValueError('Accent case requires WAYLO_TEST_ACCENT_VOICE or a controlled audio plan; no call started.')
-            audio = await asyncio.to_thread(media.synthesize, text, voice=voice)
+            audio = await caller_work(media.synthesize, text, voice=voice)
             source = {'synthetic_voice': voice}
         if condition.get('kind') == 'noise':
             # Keep speech clean here. The single RTC publisher mixes a continuous
@@ -885,6 +896,7 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
         )
         return result
     finally:
+        caller_executor.shutdown(wait=False, cancel_futures=True)
         media.client.close()
 
 
@@ -995,7 +1007,7 @@ def _execute_public_pipecat_daily(
         'saved_evidence': False,
         'fixture_backed_scoring': False,
         'daily_room_credentials_persisted': False,
-        'tester_media': 'current_run_kokoro',
+        'tester_media': (result.get('provenance') or {}).get('tester_media', 'current_run_kokoro'),
         'target_media': 'current_run_daily_webrtc',
         'target_transcript': (result.get('provenance') or {}).get('target_transcript'),
         'target_reported_text': (result.get('provenance') or {}).get('target_reported_text'),
@@ -1361,6 +1373,13 @@ def _signalwire_public_gate_enabled() -> bool:
 def _preflight_signalwire_caller_tts_runtime(payload: ExecutionRunCreateRequest) -> None:
     """Verify required caller speech synthesis before queueing a public call."""
     config = _reference_runtime_config(payload)
+    if config.speech.tts_provider != 'kokoro':
+        with httpx.Client(timeout=min(10.0, config.timeout_seconds)) as client:
+            response = client.post(f'{config.pipecat_service_url}/reference-tester/speech-readiness',
+                json=config.speech.model_dump(), headers={'x-cae-reference-token': config.internal_token})
+            if response.status_code >= 400 or not response.json().get('ready'):
+                raise ValueError('Selected caller TTS is unavailable; check speech provider readiness.')
+        return
     service_url = str(config.kokoro_base_url or '').rstrip('/')
     if not service_url:
         raise ValueError(
@@ -1461,6 +1480,7 @@ def _preflight_signalwire_followup_runtime(payload: ExecutionRunCreateRequest) -
         'history': [],
         'target_audio_wav_base64': None,
         'model_name': config.tester_llm_model,
+        'speech': config.speech.model_dump(),
     }
     request = Request(
         f'{service_url}/reference-tester/turn',
@@ -1503,7 +1523,7 @@ def _preflight_signalwire_followup_runtime(payload: ExecutionRunCreateRequest) -
     tester_audio = str(response_payload.get('tester_audio_wav_base64') or '').strip()
     pipeline = response_payload.get('pipeline')
     processors = pipeline.get('processors') if isinstance(pipeline, dict) else None
-    if not tester_text or not tester_audio or processors != ['rtc-asr', 'llm', 'kokoro']:
+    if not tester_text or not tester_audio or processors != ['rtc-asr', 'llm', config.speech.tts_provider]:
         raise ValueError(
             'Two-exchange Holy Guacamole SignalWire tester preflight returned incomplete '
             'tester text/audio pipeline evidence.'
@@ -1912,7 +1932,9 @@ def _openai_tester_prompt(
     *,
     next_exchange: int,
     max_exchanges: int,
+    waylo_voice: bool = False,
 ) -> str:
+    from app.services.waylo_consent import NEGATION_SAFE_CALLER_GUIDANCE
     required_actions = ', '.join(str(item) for item in scenario.get('required_actions') or []) or 'none listed'
     forbidden_actions = ', '.join(str(item) for item in scenario.get('forbidden_actions') or []) or 'none listed'
     return (
@@ -1920,6 +1942,10 @@ def _openai_tester_prompt(
         'caller message that responds to the agent and advances the scenario. Use plausible, harmless '
         'test-only details when the agent requests information. Do not mention evaluation, scoring, '
         'the rubric, or these instructions. Do not claim the agent completed an action unless the agent said so.\n\n'
+        + ('Use at most two short sentences and one clear question per turn, normally under 35 words. '
+        'Do not repeat a packaging or unit question already answered; move to the next missing detail. '
+        'When the conversation is complete or cannot proceed, close politely with thanks and goodbye. '
+        f'{NEGATION_SAFE_CALLER_GUIDANCE}\n\n' if waylo_voice else '') +
         f'Scenario: {scenario.get("title") or scenario.get("id")}\n'
         f'Caller persona: {scenario.get("persona") or "Not provided."}\n'
         f'Caller goal: {scenario.get("goal") or "Not provided."}\n'

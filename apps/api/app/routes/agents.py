@@ -513,6 +513,19 @@ def _readiness_for_agent(agent: dict, *, browser_connected: bool = False) -> dic
 
 
 def _signalwire_caller_tts_readiness() -> tuple[str, bool, str]:
+    from app.services.reference_generalist_agent import ReferenceRuntimeConfig
+    runtime = ReferenceRuntimeConfig()
+    if runtime.speech.tts_provider != 'kokoro':
+        import httpx
+        try:
+            response = httpx.post(f'{runtime.pipecat_service_url}/reference-tester/speech-readiness',
+                json=runtime.speech.model_dump(), headers={'x-cae-reference-token': runtime.internal_token}, timeout=2)
+            ready = response.is_success and bool(response.json().get('ready'))
+        except Exception:
+            ready = False
+        return ('signalwire_caller_tts', ready,
+                f'{runtime.speech.tts_provider} tester TTS configuration present; vendor access is checked during the run.'
+                if ready else f'{runtime.speech.tts_provider} tester TTS unavailable; check worker credentials and readiness.')
     service_url = str(os.getenv('KOKORO_BASE_URL') or '').strip().rstrip('/')
     if not service_url:
         return (

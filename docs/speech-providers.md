@@ -1,11 +1,14 @@
-# Speech providers for built-in voice evaluations
+# Speech providers for voice evaluations
 
 In **Settings → Speech · STT / TTS**, choose STT and TTS independently,
 enter model/voice IDs, then **Save speech settings**. Run agent displays a
 read-only summary linking back to Settings; its dependency preflight checks
 readiness before queueing. Saving a selection does not start a call or verify
 provider access, credits or health. Choices apply deployment-wide to new
-**built-in two-agent voice runs**, including the ASSERT case queue.
+**built-in two-agent voice runs**, including the ASSERT case queue. TTS also
+controls generated tester speech for Waylo, Public Daily and SignalWire,
+including follow-up turns. Choose **Local · Kokoro** or **Cloud · Deepgram**
+under TTS to switch the caller; no remote target reconfiguration is needed.
 
 | Stage | Local default | Deepgram | Cartesia |
 | --- | --- | --- | --- |
@@ -72,8 +75,13 @@ is recognized audio; LLM text is never substituted for a transcript.
 
 ## Scope
 
-Public Daily, SignalWire, ACC/SIP and other remote targets keep their existing
-media configuration. These options do not reconfigure remote voice agents.
+Public Daily, SignalWire and Waylo use the selected TTS for generated caller
+audio. Their received-audio transcription remains on local rtc-asr; the STT
+selector only changes built-in runs. Remote agents keep their own voices and
+uploaded caller audio fixtures are unchanged. Unsupported adapters (such as
+ACC/SIP) keep their existing configuration. Cloud keys remain worker-side;
+tester text is sent to that provider and may incur charges. A provider failure
+stops synthesis rather than falling back silently to another provider.
 Offline tests verify the vendor protocols and PCM routing, not cloud latency.
 
 ## Official protocol references

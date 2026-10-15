@@ -144,6 +144,7 @@ def test_public_target_client_persists_current_run_media_without_room_credential
     assert observed['url'] == 'http://pipecat.test/public-pipecat/duplex'
     assert observed['headers'] == {'x-cae-reference-token': 'internal-only'}
     assert observed['json'] == {
+        'speech': ReferenceRuntimeConfig().speech.model_dump(),
         'caller_text': 'What is Pipecat?',
         'agent': '10-gradium',
         'timeout_seconds': 60,

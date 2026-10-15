@@ -381,6 +381,7 @@ async def run_public_daily_target(
     kokoro_model: str,
     kokoro_voice: str,
     rtc_asr_base_url: str = '',
+    speech: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return await run_public_daily_duplex(
         PublicDailyDuplexRequest(**request.model_dump(), max_turn_pairs=1),
@@ -388,6 +389,7 @@ async def run_public_daily_target(
         kokoro_model=kokoro_model,
         kokoro_voice=kokoro_voice,
         rtc_asr_base_url=rtc_asr_base_url,
+        speech=speech,
     )
 
 
@@ -401,6 +403,7 @@ async def run_public_daily_duplex(
     next_turn: NextTurnCallback | None = None,
     event_callback: EventCallback | None = None,
     audio_frame_callback: AudioFrameCallback | None = None,
+    speech: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run a bounded multi-turn evaluation in one public Daily room.
 
@@ -411,15 +414,16 @@ async def run_public_daily_duplex(
     side's current-run evidence is available.
     """
     try:
-        caller_wav = await _synthesize_caller(
-            request.caller_text,
-            kokoro_base_url=kokoro_base_url,
-            model=kokoro_model,
-            voice=kokoro_voice,
-        )
+        if speech is not None:
+            from tester_speech import synthesize_tester, tester_selection
+            caller_wav = await synthesize_tester(request.caller_text, tester_selection(speech), kokoro_url=kokoro_base_url)
+        else:
+            caller_wav = await _synthesize_caller(
+                request.caller_text, kokoro_base_url=kokoro_base_url,
+                model=kokoro_model, voice=kokoro_voice)
     except Exception as exc:
         raise PublicDailyTargetError(
-            'Public Pipecat tester audio synthesis failed; verify Kokoro is reachable.'
+            'Public Pipecat tester audio synthesis failed; check the selected TTS provider in Settings.'
         ) from exc
     caller_pcm, caller_rate, caller_channels = wav_to_pcm(caller_wav)
     adapter = PublicDailyTargetAdapter(request.agent)
@@ -768,7 +772,8 @@ async def run_public_daily_duplex(
                 'headless_browser': False,
                 'daily_room_credentials_persisted': False,
                 'fixture_backed': False,
-                'tester_media': 'current_run_kokoro',
+                'tester_media': f'current_run_{speech["tts_provider"]}' if speech else 'current_run_kokoro',
+                **({'tester_speech': speech} if speech else {}),
                 'target_media': 'current_run_daily_webrtc',
                 'target_transcript': 'rtc_asr_received_audio',
                 'target_reported_text': 'rtvi',
