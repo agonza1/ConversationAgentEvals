@@ -110,6 +110,22 @@ def test_structured_conversation_source_is_consistent_in_scope_and_export(source
     assert report['ietf_vcon_export']['analysis'][-1]['body']['evaluation_scope']['input_source'] == source
 
 
+@pytest.mark.parametrize('external_vcon', [False, True])
+def test_unknown_synthetic_provenance_survives_export_and_reimport(external_vcon):
+    payload = sample()
+    if external_vcon:
+        vcon = build_benchmark_vcon(payload, payload['transcript'])
+        vcon['attachments'] = []
+        payload = {'suite_id': payload['suite_id'], 'scenario_id': payload['scenario_id'], 'vcon': vcon}
+    report = run_scenario(payload, persist_artifacts=False)
+    assert report['evaluation_scope']['synthetic'] is None
+    exported = report['ietf_vcon_export']
+    assert exported['attachments'][-1]['body']['synthetic'] is None
+    imported = run_scenario({'suite_id': payload['suite_id'], 'scenario_id': payload['scenario_id'], 'vcon': exported}, persist_artifacts=False)
+    assert imported['evaluation_scope']['synthetic'] is None
+    assert imported['ietf_vcon_export']['attachments'][-1]['body']['synthetic'] is None
+
+
 @pytest.mark.parametrize('failure', ['missing_action', 'final_state', 'forbidden_action'])
 def test_concrete_remediation_stays_before_generic_semantic_review(failure):
     payload = sample()

@@ -143,7 +143,7 @@ def capture_voice_events(turns: list[Any], live_events: list[Any], latency_marks
 def evidence_body(*, action_trace: Any = None, observed_actions: list[str] | None = None,
                   final_state: Any = None, voice_events: list[Any] | None = None,
                   state_snapshots: list[dict[str, Any]] | None = None,
-                  context: dict[str, Any] | None = None, synthetic: bool = False) -> dict[str, Any]:
+                  context: dict[str, Any] | None = None, synthetic: bool | None = False) -> dict[str, Any]:
     context = context or {}
     source = 'synthetic_fixture' if synthetic else 'reported_observation'
     state = final_state if isinstance(final_state, dict) else {}
@@ -241,7 +241,7 @@ def decode_evidence(vcon: dict[str, Any]) -> dict[str, Any] | None:
         for field in ('tool_events', 'state_snapshots', 'voice_events', 'observed_actions', 'redactions'):
             if not isinstance(body.get(field), list) or len(body[field]) > MAX_EVENTS:
                 raise ValueError(f'Invalid CAE evidence {field}')
-        if not isinstance(body.get('context'), dict) or not isinstance(body.get('synthetic'), bool):
+        if not isinstance(body.get('context'), dict) or 'synthetic' not in body or (body['synthetic'] is not None and not isinstance(body['synthetic'], bool)):
             raise ValueError('Invalid CAE evidence context or synthetic marker')
         if any(not isinstance(path, str) for path in body['redactions']):
             raise ValueError('Redaction paths must be strings')
@@ -337,7 +337,7 @@ def intake_vcon(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]
                 raise ValueError(f'Conflicting {key} evidence: supplied value differs from the vCon')
         if not explicit and value and (body or key != 'transcript'):
             normalized[key] = deepcopy(value)
-    summary = {'profile': PROFILE if body else None, 'synthetic': bool(body and body['synthetic']),
+    summary = {'profile': PROFILE if body else None, 'synthetic': body['synthetic'] if body else None,
                'tool_events': len(body['tool_events']) if body else 0,
                'state_snapshots': len(body['state_snapshots']) if body else 0,
                'voice_events': len(body['voice_events']) if body else 0,
@@ -363,7 +363,7 @@ def latest_tool_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def build_benchmark_vcon(payload: dict[str, Any], transcript: str, report: dict[str, Any] | None = None,
-                         *, synthetic: bool = False) -> dict[str, Any]:
+                         *, synthetic: bool | None = False) -> dict[str, Any]:
     report = report or {}
     original = payload.get('vcon')
     if isinstance(original, dict) and original.get('vcon') == IETF_VCON_VERSION:

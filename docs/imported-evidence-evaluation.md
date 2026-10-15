@@ -13,3 +13,5 @@ Tool/action traces and resulting state are labelled **supplied**, not independen
 Editing supplied evidence invalidates its current result/review display. A late review response cannot attach to a different report. The source review may finish remotely; cancellation of browser waiting is not cancellation of provider work. Existing saved results remain readable with conservative fallbacks.
 
 Regression fixtures are synthetic; no vendor/voice/model calls are made by validation. This PR does not deploy or restart the local preview and is separate from the speaker-parser/ASSERT detailed-report changes in #175.
+
+The execution-evidence profile's `synthetic` marker accepts `true`, `false`, or explicit `null` (unknown). Existing Boolean markers remain valid; an unknown marker stays unknown through export/re-import rather than becoming a non-synthetic assertion. Exact server-side matches to canonical catalog transcript fixtures are labelled synthetic with the basis `exact_catalog_transcript_match`, even when checked against different criteria. That content match does not authenticate an external source.

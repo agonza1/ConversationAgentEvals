@@ -698,7 +698,7 @@ def run_scenario(request: Any, *, persist_artifacts: bool = True, synthetic: boo
     report['assert_lab_report'] = _assert_lab_report(report)
     report['vcon_analysis'] = _vcon_analysis(report)
     report['vcon_export'] = _vcon_export(payload, transcript, report['vcon_analysis'])
-    report['ietf_vcon_export'] = build_benchmark_vcon(export_payload, transcript, report, synthetic=report['evaluation_scope']['synthetic'] is True)
+    report['ietf_vcon_export'] = build_benchmark_vcon(export_payload, transcript, report, synthetic=report['evaluation_scope']['synthetic'])
     report['transcript'] = transcript
     return report
 
