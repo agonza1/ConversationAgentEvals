@@ -243,6 +243,36 @@ def test_valid_session_clocks_and_unended_sessions_remain_supported(created, end
     assert validate_ietf_vcon(project_capture(value)['vcon'])['valid']
 
 
+@pytest.mark.parametrize('field,value', [
+    ('parentIdempotencyKey', []), ('parentIdempotencyKey', {}),
+    ('idempotencyKey', []), ('idempotencyKey', {}), ('category', []),
+    ('name', []), ('subject', {}), ('code', []), ('occurredAt', {}),
+    ('createdAt', []), ('seq', []), ('seq', True),
+])
+def test_malformed_optional_event_fields_stay_unavailable_without_losing_transcript(field, value):
+    event = native_event(1, 'result', **{field: value}) if field != 'name' else native_event(1, value)
+    def handler(request):
+        if request.url.path.endswith('/transcripts'):
+            return httpx.Response(200, json=[transcript(1)])
+        if request.url.path.endswith('/events'):
+            return httpx.Response(200, json=[event])
+        if request.url.path.endswith('/items'):
+            return httpx.Response(200, json=[])
+        if '/versions/' in request.url.path:
+            return httpx.Response(200, json={'config': {}})
+        return httpx.Response(200, json=session(eventCount=1))
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            capture = await WayloClient(TARGET, client=http).capture(S)
+            assert 'events' not in capture and 'events' in capture['unavailable']
+            assert capture['transcripts'] == [transcript(1)] and capture['items'] == []
+            exported = project_capture(capture)
+            assert validate_ietf_vcon(exported['vcon'])['valid']
+            assert decode_evidence(exported['vcon'])['tool_events'] == []
+            assert exported['coverage']['agent_execution']['status'] == 'unknown'
+    asyncio.run(exercise())
+
+
 def test_revision_idempotence_and_late_append_same_vcon_identity():
     source = captured()
     one, two = project_capture(source), project_capture(source)

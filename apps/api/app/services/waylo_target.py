@@ -212,6 +212,13 @@ class WayloClient:
                     raise WayloError(f'Invalid Waylo {name} entries.')
                 if name == 'events' and any(not isinstance(entry.get('id'), str) or not entry['id'] for entry in value):
                     raise WayloError('Invalid Waylo event identity.')
+                if name == 'events' and any(
+                        any(entry.get(field) is not None and not isinstance(entry[field], str)
+                            for field in ('parentIdempotencyKey', 'idempotencyKey', 'category', 'name',
+                                          'subject', 'code', 'occurredAt', 'createdAt'))
+                        or (entry.get('seq') is not None and type(entry['seq']) is not int)
+                        for entry in value):
+                    raise WayloError('Invalid Waylo event fields; native events are unavailable.')
                 if name == 'events' and (len(value) > MAX_EVENTS or len(value) != session.get('eventCount')):
                     raise WayloError('Native event count changed or exceeds capture limit; refresh required.')
                 if name == 'agent_version' and (not isinstance(value, dict)
