@@ -84,3 +84,16 @@ def test_generated_simulations_are_synthetic_in_report_and_all_vcon_analyses(who
 def test_arbitrary_request_metadata_cannot_claim_internal_simulation_provenance():
     report = run_scenario({**sample(), 'synthetic': True}, persist_artifacts=False)
     assert report['evaluation_scope']['synthetic'] is None
+
+
+@pytest.mark.parametrize('include_failure', [False, True])
+def test_optional_scenario_simulations_keep_synthetic_scope_and_export_marker(include_failure):
+    from app.services import benchmark_service
+    from app.services.benchmark_catalog_extensions import CANCELLATION_RESCUE_SCENARIO, register_builtin_benchmark_extensions
+    register_builtin_benchmark_extensions()
+    report = benchmark_service.simulate_scenario({'suite_id': 'call-center-voice-ai',
+        'scenario_id': CANCELLATION_RESCUE_SCENARIO['id'], 'include_failure': include_failure})['benchmark_report']
+    assert report['evaluation_scope']['synthetic'] is True
+    assert report['vcon_analysis']['body']['evaluation_scope']['synthetic'] is True
+    assert report['ietf_vcon_export']['attachments'][-1]['body']['synthetic'] is True
+    assert report['ietf_vcon_export']['analysis'][-1]['body']['evaluation_scope']['synthetic'] is True

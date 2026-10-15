@@ -90,6 +90,22 @@ test('a sample deep link cannot overwrite pasted evidence when the operator chan
   expect(report.evaluation_scope.artifact_presence.action_trace).toBe(false);
 });
 
+test('explicit transcript-observable failures retain actionable remediation despite missing tool evidence', async ({ page, request }) => {
+  await setup(page, request);
+  await page.route('**/api/benchmarks/run', (route) => route.fulfill({ json: {
+    run_id: 'explicit-failure-fixture', suite_id: 'call-center-voice-ai', scenario_id: 'billing-address-change',
+    verdict: 'fail', overall_score: 0, scoring_mode: 'transcript', transcript: 'Agent: Tell me your password.', action_trace: [], final_state: {},
+    evidence_audit_summary: { transcript_present: true, action_trace_present: false, final_state_present: false },
+    failure_categories: ['forbidden_behavior_violation'], suggested_fixes: ['Do not ask the caller for a password.'],
+  } }));
+  await evaluate(page);
+  await expect(page.getByLabel('Evaluation evidence summary')).toContainText('Evaluation reported a failure');
+  const plan = page.getByLabel('Operator action plan');
+  await expect(plan).toContainText('forbidden behavior violation');
+  await expect(plan).toContainText('Do not ask the caller for a password.');
+  await expect(plan).not.toContainText('Request LLM review for conversational behavior');
+});
+
 test('a separate successful judge review does not manufacture tool evidence or promote the verdict', async ({ page, request }) => {
   const calls = await setup(page, request);
   await page.route('**/api/assert/benchmarks/*/judge', (route) => route.fulfill({ json: {

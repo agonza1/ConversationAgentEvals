@@ -2050,12 +2050,12 @@ function reportActionPlan(
     ? hasCoverageGap
       ? `${uncoveredCount} suite scenario${uncoveredCount === 1 ? '' : 's'} still need fresh coverage before release review.`
       : 'No blocking failure category was reported for this scenario.'
-    : coverage.transcriptOnly ? coverage.explanation : failureCategory ?? (missingCount ? `${missingCount} required action${missingCount === 1 ? '' : 's'} missing` : 'Benchmark evidence needs review');
+    : coverage.transcriptOnly && !coverage.failed ? coverage.explanation : failureCategory ?? (missingCount ? `${missingCount} required action${missingCount === 1 ? '' : 's'} missing` : 'Benchmark evidence needs review');
   const nextStep = isPass
     ? hasCoverageGap && nextCoverageScenario
       ? `Run ${nextCoverageScenario} next to keep suite coverage moving before release review.`
       : 'Save this run as the baseline, then compare the next prompt or model change against it.'
-    : coverage.transcriptOnly
+    : coverage.transcriptOnly && !coverage.failed
       ? 'Request LLM review for conversational behavior; supply tool results or resulting state to assess operational completion.'
     : missingCount > 1
       ? `Complete the remaining ${missingCount} required actions (next: ${report.missing_actions?.[0] ?? 'see checklist'}).`
