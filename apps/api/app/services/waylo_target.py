@@ -29,7 +29,12 @@ class WayloError(ValueError):
 
 
 def api_url(value: str) -> str:
-    parsed = urlsplit(value)
+    try:
+        parsed = urlsplit(value)
+        # urlsplit defers port validation until this property is accessed.
+        parsed.port
+    except ValueError:
+        raise ValueError('Waylo API base must have a valid host and port.') from None
     if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
         raise ValueError('Waylo API base must be an absolute HTTP(S) URL.')
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
@@ -44,22 +49,24 @@ def clean_native(value: Any, secret_values: tuple[str, ...] = ()) -> Any:
 
 Native payloads are untrusted and can contain arbitrary tool auth conventions.
 Opaque secret values are removed even when placed under an innocuous key.
+Entries whose keys contain a supplied secret are dropped, avoiding key collisions.
 """
     if isinstance(value, dict):
         return {k: clean_native(v, secret_values) for k, v in redact(value).items()
                 if str(k).lower() not in {'headers', 'participantidentity', 'roomname', 'turn',
-                                          'livekiturl', 'endpoint', 'endpointurl', 'url', 'uri'}}
+                                          'livekiturl', 'endpoint', 'endpointurl', 'url', 'uri'}
+                and not any(secret and secret in str(k) for secret in secret_values)}
     if isinstance(value, list):
         return [clean_native(v, secret_values) for v in value]
     if isinstance(value, str):
-        for secret in secret_values:
-            if secret:
-                value = value.replace(secret, '[redacted]')
         if value.lstrip().startswith(('{', '[')):
             try:
                 return json.dumps(clean_native(json.loads(value), secret_values), sort_keys=True)
             except ValueError:
                 pass
+        for secret in secret_values:
+            if secret:
+                value = value.replace(secret, '[redacted]')
         # Never export bearer strings or potentially authenticated links in opaque fields.
         if 'bearer ' in value.lower() or '://' in value:
             return '[redacted credential or URL]'

@@ -15,7 +15,7 @@ from app.main import app  # Bootstrap built-in catalog extensions as production 
 from app.services import agent_store, execution_runner
 from app.services.execution_vcon import validate_ietf_vcon
 from app.services.vcon_evidence import PURPOSE, decode_evidence, intake_vcon
-from app.services.waylo_target import WayloClient, WayloError, clean_native, project_capture
+from app.services.waylo_target import WayloClient, WayloError, api_url, clean_native, project_capture
 from app.services.waylo_livekit import LiveKitVoicePeer, pcm_wav, read_wav, run_waylo_call
 from app.services.waylo_mike_cases import WAYLO_MIKE_SUITE
 
@@ -80,6 +80,30 @@ def test_other_target_cannot_store_waylo_configuration():
     target.update(target='http_endpoint', channel='text')
     with pytest.raises(ValueError):
         AgentCreateRequest.model_validate(target)
+
+
+@pytest.mark.parametrize('port', ['bad', '-1', '65536', '443:80'])
+def test_invalid_url_ports_rejected_before_saving_target(port):
+    endpoint = f'https://waylo.test:{port}/api'
+    with pytest.raises(ValueError) as error:
+        api_url(endpoint)
+    assert endpoint not in str(error.value)
+    assert port not in str(error.value)
+    target = deepcopy(TARGET)
+    target['connection']['endpoint_url'] = endpoint
+    with pytest.raises(ValueError):
+        AgentCreateRequest.model_validate(target)
+
+
+@pytest.mark.parametrize('endpoint', [
+    'https://waylo.test/api', 'https://waylo.test:443/api',
+    'https://waylo.test:8443/api', 'http://localhost:8880/api',
+    'http://127.0.0.1:8880/api', 'http://[::1]:8880/api',
+])
+def test_valid_url_ports_remain_supported(endpoint):
+    target = deepcopy(TARGET)
+    target['connection']['endpoint_url'] = endpoint
+    assert AgentCreateRequest.model_validate(target).connection.endpoint_url == endpoint
 
 
 def test_bootstrap_retry_reuses_idempotency_and_keeps_tokens_memory_only():
@@ -186,6 +210,35 @@ def test_native_credentials_and_opaque_encoded_credentials_redacted():
              'signed_link': 'https://example.test/path?X-Amz-Signature=secret', 'headers': {'custom': 'hidden'}}
     rendered = json.dumps(clean_native(value, ('top-secret-api-key',)))
     for forbidden in ('top-secret-api-key', 'participantToken', 'Authorization', 'X-Amz-Signature', 'hidden', '"credential"', 'username'):
+        assert forbidden not in rendered
+    assert 'White Potatoes' in rendered
+
+
+@pytest.mark.parametrize('encoded', [False, True])
+def test_native_secret_object_keys_dropped_recursively_without_collisions(encoded):
+    secrets = ('opaque-access-value', 'opaque-api-value', '')
+    native = {
+        secrets[0]: 'private-entry',
+        'nested': [{f'prefix-{secrets[1]}-suffix': 'private-nested-entry',
+                    'product': 'White Potatoes', 'quantity': 5, 'unit': 'bags'}],
+        '[redacted]': 'legitimate-entry',
+        'message': f'echo {secrets[0]}',
+        'password': 'generic-password',
+    }
+    original = deepcopy(native)
+    cleaned = clean_native(json.dumps(native) if encoded else native, secrets)
+    if encoded:
+        cleaned = json.loads(cleaned)
+    assert cleaned == {
+        'nested': [{'product': 'White Potatoes', 'quantity': 5, 'unit': 'bags'}],
+        '[redacted]': 'legitimate-entry', 'message': 'echo [redacted]',
+    }
+    assert native == original
+    # The encoded form can also occur inside a native tool payload.
+    export = project_capture(clean_native(captured(events=[native_event(
+        1, 'result', payload={'result': json.dumps(native) if encoded else native})]), secrets))
+    rendered = json.dumps(export)
+    for forbidden in (*secrets[:2], 'private-entry', 'private-nested-entry', 'generic-password'):
         assert forbidden not in rendered
     assert 'White Potatoes' in rendered
 
