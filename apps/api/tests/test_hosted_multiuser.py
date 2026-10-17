@@ -27,6 +27,7 @@ def hosted_app(monkeypatch, tmp_path):
         if getattr(module, '__name__', '').startswith('app.') and hasattr(module, 'SessionLocal'):
             monkeypatch.setattr(module, 'SessionLocal', factory)
     monkeypatch.setenv('CAE_AUTH_MODE', 'firebase')
+    monkeypatch.setenv('APP_ENV', 'staging')
     monkeypatch.setenv('CAE_PUBLIC_ORIGIN', 'https://staging.example')
     monkeypatch.setenv('CAE_CREDENTIAL_ENCRYPTION_KEY', Fernet.generate_key().decode())
     monkeypatch.setenv('CAE_REQUEST_RATE_PER_MINUTE', '1000')
