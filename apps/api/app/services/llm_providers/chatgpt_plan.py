@@ -129,6 +129,10 @@ class ChatGPTPlanProvider:
 
     def status(self) -> dict:
         """Read only: no token refresh, network request, credential import, or inference."""
+        from app.security import hosted
+        if hosted():
+            return {'enabled': False, 'status': 'disabled', 'profiles': [], 'judge_model': None,
+                    'message': 'Hosted mode uses your API key; local ChatGPT connections are disabled.'}
         if not local_enabled():
             return {'enabled': False, 'status': 'disabled', 'profiles': [], 'judge_model': self.selected_model(),
                     'message': 'Enable CHATGPT_PLAN_LOCAL_ENABLED=1 on a loopback-only local CAE deployment.'}
@@ -165,6 +169,8 @@ class ChatGPTPlanProvider:
         return cls._active(value).get('judge_model') or MODEL_PREFIX + 'select-model'
 
     def selected_model(self) -> str | None:
+        from app.security import hosted
+        if hosted(): return None
         # Disabling plan execution does not authorize a change of billing mode.
         # Avoid creating storage at all on installations without a saved choice.
         if not self.path.exists():

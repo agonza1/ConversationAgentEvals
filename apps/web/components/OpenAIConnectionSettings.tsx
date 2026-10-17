@@ -1,12 +1,16 @@
 'use client';
 
 import { useOpenAIConnection } from './useOpenAIConnection';
+import { useHostedAuth } from './AuthGate';
 
 export function OpenAIConnectionSettings() {
-  return <OpenAIConnectionPanel connection={useOpenAIConnection()} />;
+  const { enabled } = useHostedAuth();
+  return <OpenAIConnectionPanel connection={useOpenAIConnection(!enabled)} />;
 }
 
 export function OpenAIConnectionPanel({ connection }: { connection: ReturnType<typeof useOpenAIConnection> }) {
+  const { enabled } = useHostedAuth();
+  if (enabled) return <section className="card settings-card"><h2>Your OpenAI connection</h2><p>AI operations use only your API key.</p><a href="/settings#agent-execution">Manage your API key in Settings</a></section>;
   const { provider, message, connecting, disconnecting, failed, connect, disconnect } = connection;
   const connected = provider?.status === 'connected';
   const checking = !provider && !message;

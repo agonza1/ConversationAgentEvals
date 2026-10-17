@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -7,7 +8,11 @@ from sqlalchemy import inspect, text
 
 # Load the repository .env before app.db.database constructs its engine.
 from app.config import settings as _settings
+from app.hosted_middleware import HostedBoundary, validate_hosted_configuration
+from app.security import hosted
+validate_hosted_configuration()
 from app.db.database import Base, engine
+from app.models import hosted as _hosted_models
 from app.integrations.assert_runtime import ensure_expected_version
 from app.services.benchmark_catalog_extensions import register_builtin_benchmark_extensions
 from app.services.user_scenario_store import ensure_user_scenarios_registered
@@ -17,7 +22,8 @@ from app.services.user_scenario_store import ensure_user_scenarios_registered
 # while keeping it outside the core suite's default coverage denominator.
 register_builtin_benchmark_extensions()
 # File-backed user-created scenarios merge into the same catalog (_SUITES_BY_ID).
-ensure_user_scenarios_registered()
+if not hosted():
+    ensure_user_scenarios_registered()
 
 from app.routes.assert_judge import router as assert_judge_router
 from app.routes.chatgpt_plan import router as chatgpt_plan_router
@@ -34,10 +40,19 @@ from app.routes.specs import router as specs_router
 from app.routes.waylo_connection import router as waylo_connection_router
 from app.services.agent_store import ensure_seeded as ensure_agents_seeded
 
-ensure_agents_seeded()
+if not hosted():
+    ensure_agents_seeded()
 ensure_expected_version()
 
 Base.metadata.create_all(bind=engine)
+
+# Existing local rows remain unowned. A hosted login never inherits operator data.
+with engine.begin() as connection:
+    inspector = inspect(connection)
+    for table in Base.metadata.sorted_tables:
+        columns = {column['name'] for column in inspector.get_columns(table.name)}
+        if 'tenant_id' not in columns:
+            connection.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN tenant_id VARCHAR(128)'))
 
 
 def _ensure_session_columns() -> None:
@@ -112,15 +127,33 @@ _ensure_product_project_columns()
 _ensure_product_project_indexes()
 
 app = FastAPI(title='ConversationAgentEvals API', version='0.1.0')
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.responses import JSONResponse
+
+
+@app.exception_handler(RequestValidationError)
+async def private_validation_errors(request, exc):
+    if hosted():
+        # Pydantic's default input echo can expose malformed API keys or ID tokens.
+        return JSONResponse(status_code=422, content={'detail': [
+            {key: error[key] for key in ('loc', 'msg', 'type')} for error in exc.errors()
+        ]})
+    return await request_validation_exception_handler(request, exc)
+
+
+app.add_middleware(HostedBoundary, router=app.router)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=['*'],
+    allow_origins=[os.environ['CAE_PUBLIC_ORIGIN']] if hosted() else ['*'],
     allow_credentials=True,
     allow_methods=['*'],
     allow_headers=['*'],
 )
 
 app.include_router(assert_judge_router)
+from app.routes.auth import router as auth_router
+app.include_router(auth_router)
 app.include_router(chatgpt_plan_router)
 app.include_router(decks_router)
 app.include_router(sessions_router)

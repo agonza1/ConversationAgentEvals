@@ -346,6 +346,8 @@ def configured_reference_completion_provider(model_name: str | None = None) -> C
     configured execution destination without probing it. Runtime readiness is
     still enforced by ``resolve_reference_completion_provider``.
     """
+    from app.security import hosted
+    if hosted(): return get_provider('openai')
     if _ollama_model_name(model_name) is not None:
         return OllamaCompletionProvider()
     api_key_provider = OpenAICompatibleApiKeyProvider()

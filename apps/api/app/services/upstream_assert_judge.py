@@ -11,6 +11,8 @@ from copy import deepcopy
 from pathlib import Path
 from threading import Lock
 from typing import Any, Iterator
+from app.security import hosted
+from app.services.user_credentials import provider_environment
 
 import yaml
 
@@ -111,7 +113,7 @@ def run_upstream_assert_judge(
         executable = cli_executable()
     except AssertRuntimeUnavailable as exc:
         raise UpstreamAssertJudgeUnavailable(str(exc)) from exc
-    environment = os.environ.copy()
+    environment = provider_environment()
     if model.startswith('openai/') and not environment.get('OPENAI_API_KEY') and environment.get('LLM_JUDGE_API_KEY'):
         environment['OPENAI_API_KEY'] = environment['LLM_JUDGE_API_KEY']
     _require_provider_credentials(model, environment)
@@ -522,6 +524,8 @@ def _resolve_model(model_name: str | None, *, configured_model: str | None = Non
 
 
 def _configured_judge_model() -> str:
+    if hosted():
+        return (os.getenv('ASSERT_JUDGE_MODEL') or DEFAULT_ASSERT_JUDGE_MODEL).strip()
     from app.services.llm_providers.chatgpt_plan import ChatGPTPlanError, get_chatgpt_provider
     try:
         selected = get_chatgpt_provider().selected_model()
@@ -533,6 +537,8 @@ def _configured_judge_model() -> str:
 
 def _require_provider_credentials(model: str, environment: dict[str, str]) -> None:
     """Validate configuration locally; never make a probe or select a fallback model."""
+    if hosted() and not model.startswith('openai/'):
+        raise UpstreamAssertJudgeUnavailable('Hosted judging supports only your OpenAI API key.')
     if model.startswith('chatgpt_plan/'):
         from app.services.llm_providers.chatgpt_plan import ChatGPTPlanError, get_chatgpt_provider
         provider = get_chatgpt_provider()
@@ -582,7 +588,7 @@ def assert_judge_readiness() -> dict[str, Any]:
         blockers.append(str(exc))
     try:
         _resolve_model(model)
-        environment = dict(os.environ)
+        environment = provider_environment()
         if not environment.get('OPENAI_API_KEY') and environment.get('LLM_JUDGE_API_KEY'):
             environment['OPENAI_API_KEY'] = environment['LLM_JUDGE_API_KEY']
         _require_provider_credentials(model, environment)

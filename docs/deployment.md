@@ -1,5 +1,10 @@
 # Deployment
 
+For public Google signup, private user accounts, rate limiting, and user-supplied
+OpenAI keys, follow [Firebase staging](firebase-staging.md). Its hosted-mode security
+boundary replaces the local actor-ID behavior described below; voice and local-only
+integrations stay disabled in that staging slice.
+
 The default production shape uses separate API, web, and Pipecat services so each has one
 port, health check, and scaling policy. Deploy only the services a target path needs;
 the deterministic benchmark and saved-evidence paths do not require Pipecat.

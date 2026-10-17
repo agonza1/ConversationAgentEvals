@@ -2,8 +2,10 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { getDraftModelOptions, getSpecGenerationSettings, saveSpecGenerationSettings, type SpecGenerationSettings as Settings } from '@/lib/api';
+import { useHostedAuth } from './AuthGate';
 
 export function SpecGenerationSettings() {
+  const { enabled: hosted } = useHostedAuth();
   const [settings, setSettings] = useState<Settings | null>(null);
   const [model, setModel] = useState('');
   const [ids, setIds] = useState<string[]>([]);
@@ -33,6 +35,11 @@ export function SpecGenerationSettings() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const refresh = () => { void load(true); };
+    window.addEventListener('cae:credentials-changed', refresh);
+    return () => window.removeEventListener('cae:credentials-changed', refresh);
+  }, [load]);
 
   async function save(selection = model.trim() || null) {
     setBusy(true);
@@ -43,7 +50,7 @@ export function SpecGenerationSettings() {
       setSettings(next);
       setModel(next.model || '');
       setLoaded(true);
-      setMessage(next.available ? `Saved. Next draft will use ${next.effective_model}.` : `Saved model selection: ${next.effective_model}. Connect Codex or configure an OpenAI API key before generating drafts.`);
+      setMessage(next.available ? `Saved. Next draft will use ${next.effective_model}.` : hosted ? `Saved model selection: ${next.effective_model}. Add your API key above before generating drafts.` : `Saved model selection: ${next.effective_model}. Connect Codex or configure an OpenAI API key before generating drafts.`);
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not save settings.'); }
     finally { setBusy(false); }
   }
@@ -70,7 +77,7 @@ export function SpecGenerationSettings() {
       <input aria-label="Custom draft model ID" disabled={busy || !loaded} maxLength={160} placeholder="Enter a model supported by your account" value={model === '__custom__' ? '' : model} onChange={(event) => { setMessage(null); setModel(event.target.value || '__custom__'); }} />
     </label> : null}
     {changed ? <p className="settings-help settings-unsaved">Unsaved selection · the active model stays unchanged until you save.</p> : null}
-    {settings && !settings.available ? <p className="settings-help">No generation provider is connected. <a href="#agent-execution">Connect OpenAI for agent execution</a>, or configure an API key on the server.</p> : null}
+    {settings && !settings.available ? <p className="settings-help">{hosted ? <>Add <a href="#agent-execution">your OpenAI API key</a> before generating drafts.</> : <>No generation provider is connected. <a href="#agent-execution">Connect OpenAI for agent execution</a>, or configure an API key on the server.</>}</p> : null}
     <div className="settings-actions">
       <button type="button" className="primary-link" disabled={busy || !loaded || model === '__custom__'} onClick={() => void save()}>{busy ? 'Working…' : 'Save draft model'}</button>
       <button type="button" className="secondary-link" disabled={busy} onClick={() => void load(loaded)}>Refresh model list</button>

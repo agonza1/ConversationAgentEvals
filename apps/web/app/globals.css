@@ -4219,3 +4219,6 @@ select {
   .settings-actions button { flex: 1 1 160px; }
   .settings-summary { padding: 12px; gap: 16px; }
 }
+/* Account controls remain outside the workspace navigation. */
+.auth-shell { max-width: 640px; padding-top: 12vh; }
+.auth-account { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 1rem; padding: .65rem 1.5rem; border-bottom: 1px solid #ddd; font-size: .875rem; overflow-wrap: anywhere; }

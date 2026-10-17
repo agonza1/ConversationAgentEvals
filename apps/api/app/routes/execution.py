@@ -211,6 +211,9 @@ def create_execution_run(
     from app.routes.agents import _browser_waylo_lease
     from app.services.waylo_connection import bind_run, WayloConnectionError
     agent = get_agent(payload.agent_id) if payload.agent_id else None
+    from app.security import hosted
+    if hosted() and agent and agent['target'] not in {'mock_agent', 'openai_codex'}:
+        raise HTTPException(403, 'This target is not enabled in hosted staging.')
     lease = _browser_waylo_lease(request, agent) if agent else None
     queued = None
     try:

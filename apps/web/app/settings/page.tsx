@@ -1,9 +1,6 @@
 import { SiteNav } from '@/components/SiteNav';
-import { OpenAIConnectionSettings } from '@/components/OpenAIConnectionSettings';
-import { SpecGenerationSettings } from '@/components/SpecGenerationSettings';
-import { ChatGPTJudgeSettings } from '@/components/ChatGPTJudgeSettings';
+import { SettingsConnections } from '@/components/SettingsConnections';
 import { ApiAwareLink } from '@/components/ApiAwareLink';
-import { SpeechProviderSettings } from '@/components/SpeechProviderSettings';
 
 export default function SettingsPage() {
   return <main className="page-shell settings-shell">
@@ -33,11 +30,7 @@ export default function SettingsPage() {
           <strong>Separate jobs, separate settings</strong>
           <p>Your agent connection does not activate the evaluation judge. Draft and judge models are selected independently.</p>
         </div>
-        <OpenAIConnectionSettings />
-        <SpeechProviderSettings />
-        <SpecGenerationSettings />
-        <ChatGPTJudgeSettings />
-        <p className="settings-footnote">These settings apply to this CAE deployment. Choosing or saving a model does not run an evaluation.</p>
+        <SettingsConnections />
       </div>
     </div>
   </main>;

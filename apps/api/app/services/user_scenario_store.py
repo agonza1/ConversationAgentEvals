@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from app.services import benchmark_service
+from app.security import PrivateDocuments, hosted
 
 USER_SCENARIOS_SUITE_ID = 'user-scenarios'
 USER_SCENARIOS_SUITE_NAME = 'User Scenarios'
@@ -38,7 +39,7 @@ _DEFAULT_STORE_PATH = default_store_path()
 
 _LOCK = threading.Lock()
 _STORE_PATH = _DEFAULT_STORE_PATH
-_RECORDS: dict[str, dict[str, Any]] = {}
+_RECORDS = PrivateDocuments('scenarios')
 _LOADED = False
 
 
@@ -154,6 +155,7 @@ def ensure_user_scenarios_registered() -> None:
 
 
 def _ensure_loaded() -> None:
+    if hosted(): return
     global _LOADED
     with _LOCK:
         if _LOADED:
@@ -188,6 +190,7 @@ def _maybe_migrate_legacy_store_unlocked() -> None:
 
 
 def _persist_unlocked() -> None:
+    if hosted(): return
     _STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         'version': STORE_VERSION,

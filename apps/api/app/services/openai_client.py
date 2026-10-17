@@ -14,9 +14,19 @@ class OpenAIClient:
 
     @property
     def enabled(self) -> bool:
+        from app.security import hosted
+        if hosted():
+            from app.services.user_credentials import openai_key
+            return bool(openai_key())
         return bool(settings.openai_api_key)
 
     def _headers(self) -> dict[str, str]:
+        from app.security import hosted
+        if hosted():
+            from app.services.user_credentials import openai_key
+            key = openai_key()
+            if not key: raise RuntimeError('Add your OpenAI API key in Settings.')
+            return {'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'}
         if not settings.openai_api_key:
             raise RuntimeError('OPENAI_API_KEY is missing')
         return {
