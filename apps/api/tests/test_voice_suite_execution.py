@@ -201,3 +201,37 @@ def test_voice_transport_is_closed_when_a_case_raises(monkeypatch, cleanup_fails
             suite_id='reviewed-voice-suite', scenario_id='case-1', payload=voice_request(),
         ))
     assert events[-1] == ('disconnect', 'exec-test-case-1-1', 'runner_error')
+
+
+@pytest.mark.parametrize('executor', ['cae_local_audio_loop', 'pipecat_public_daily', 'signalwire_public_webrtc'])
+def test_queued_speech_survives_settings_changes_and_disk_reload(monkeypatch, tmp_path, executor):
+    from app.services import speech_settings
+    monkeypatch.setattr(speech_settings, 'settings_path', lambda: tmp_path / 'speech.json')
+    original = speech_settings.SpeechSelection(tts_provider='deepgram', tts_model='aura-2',
+        tester_voice='aura-2-asteria-en', target_voice='aura-2-orion-en')
+    speech_settings.save_speech_selection(original)
+    monkeypatch.setenv(execution_runner.SIGNALWIRE_PUBLIC_GATE_ENV, '1')
+    monkeypatch.setattr(execution_runner, '_preflight_signalwire_caller_tts_runtime', lambda payload: None)
+    monkeypatch.setattr(execution_runner, '_preflight_signalwire_followup_runtime', lambda payload: None)
+    payload = voice_request(executor_id=executor, iterations=2)
+    queued = execution_runner.start_execution_run(payload)
+    assert queued['execution_snapshot']['speech'] == original.model_dump()
+    speech_settings.save_speech_selection(speech_settings.SpeechSelection())
+    execution_run_store.reset_execution_runs_for_tests()
+    observed = []
+
+    async def fake_voice_call(**kwargs):
+        actual = execution_runner._reference_runtime_config(kwargs['payload']).speech
+        observed.append(actual)
+        speech_settings.save_speech_selection(speech_settings.SpeechSelection(
+            tester_voice='am_michael', target_voice='af_sky'))
+        return {'turns': [], 'verdict': 'needs_review'}
+
+    monkeypatch.setattr(execution_runner, '_execute_pipecat_webrtc', fake_voice_call)
+    monkeypatch.setattr(execution_runner, '_execute_public_pipecat_daily',
+        lambda **kwargs: asyncio.run(fake_voice_call(**kwargs)))
+    monkeypatch.setattr(execution_runner, '_execute_signalwire_holyguacamole_webrtc',
+        lambda **kwargs: asyncio.run(fake_voice_call(**kwargs)))
+    completed = execution_runner.execute_execution_run(queued['execution_run_id'], payload)
+    assert completed['status'] == 'needs_review'
+    assert observed == [original] * 6

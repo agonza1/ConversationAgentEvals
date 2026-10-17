@@ -165,6 +165,7 @@ def run_signalwire_holyguacamole_call(
     tester_model_name: str | None = None,
     tester_noise: dict[str, Any] | None = None,
     target_url: str = DEFAULT_SIGNALWIRE_TARGET_URL,
+    config: ReferenceRuntimeConfig | None = None,
 ) -> dict[str, Any]:
     if os.getenv(SIGNALWIRE_PUBLIC_GATE_ENV, '').strip().lower() not in {'1', 'true', 'yes'}:
         raise RuntimeError(
@@ -173,7 +174,7 @@ def run_signalwire_holyguacamole_call(
 
     repo_root = Path(__file__).resolve().parents[4]
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    runtime = ReferenceRuntimeConfig()
+    runtime = config or ReferenceRuntimeConfig()
     if runtime.speech.tts_provider == 'kokoro' and not runtime.kokoro_base_url:
         raise RuntimeError(
             'Holy Guacamole SignalWire execution uses CAE tester media and requires '

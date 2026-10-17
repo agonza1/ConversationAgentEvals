@@ -8,6 +8,7 @@ import uuid
 import httpx
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -123,6 +124,8 @@ def _compact_evaluation_findings(report: Any) -> dict[str, Any]:
 def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool = False, waylo_lease=None) -> dict[str, Any]:
     register_builtin_benchmark_extensions()
     resolved = _resolve_agent_payload(payload)
+    if resolved.mode == 'pipecat_webrtc':
+        resolved._speech_selection = _reference_runtime_config(resolved).speech.model_copy(deep=True)
     if (
         resolved.mode == 'text_callable'
         and resolved.text_callable in {'openai_codex', 'http_endpoint'}
@@ -233,6 +236,8 @@ def start_execution_run(payload: ExecutionRunCreateRequest, *, preflight: bool =
         execution_snapshot={
             'request': resolved.model_dump(mode='json'),
             'agent': agent,
+            **({'speech': resolved._speech_selection.model_dump(mode='json')}
+               if resolved._speech_selection is not None else {}),
             'provenance': provenance.model_dump(mode='json'),
             **({'evaluation_contracts': {
                 ident: freeze_contract({'scenario_contract': _selected_waylo_scenario(resolved, resolved.suite_id, ident)},
@@ -776,7 +781,8 @@ async def _execute_waylo(*, execution_run_id, conversation_id, suite_id, scenari
     # A one-exchange transport smoke test must not require an unrelated LLM login.
     provider = None if scenario.get('caller_steps') or payload.audio_plan_path or payload.max_exchanges == 1 else resolve_reference_completion_provider(model)
     used_tester_model = None
-    config = ReferenceRuntimeConfig(tester_llm_model=model)
+    config = _reference_runtime_config(payload)
+    config = replace(config, tester_llm_model=model)
     fixture_audio = []
     if payload.audio_plan_path:
         import hashlib
@@ -926,6 +932,7 @@ def _execute_public_pipecat_daily(
         scenario=scenario,
         max_exchanges=payload.max_exchanges,
         tester_model_name=payload.tester_model_name,
+        config=_reference_runtime_config(payload),
         **({'tester_noise': payload.tester_noise.model_dump()} if payload.tester_noise else {}),
         event_observer=event_observer,
     )
@@ -1105,6 +1112,7 @@ def _execute_signalwire_holyguacamole_webrtc(
         scenario=scenario,
         max_exchanges=payload.max_exchanges,
         tester_model_name=payload.tester_model_name,
+        config=_reference_runtime_config(payload),
         **({'tester_noise': payload.tester_noise.model_dump()} if payload.tester_noise else {}),
     )
     transcription = result['transcription_turns']
@@ -1341,7 +1349,9 @@ def _execute_signalwire_holyguacamole_webrtc(
 
 
 def _reference_runtime_config(payload: ExecutionRunCreateRequest) -> ReferenceRuntimeConfig:
-    updates: dict[str, str] = {}
+    updates: dict[str, Any] = {}
+    if payload._speech_selection is not None:
+        updates['speech'] = payload._speech_selection.model_copy(deep=True)
     if payload.model_name:
         updates['llm_model'] = payload.model_name
     if payload.tester_model_name:
@@ -1374,11 +1384,17 @@ def _preflight_signalwire_caller_tts_runtime(payload: ExecutionRunCreateRequest)
     """Verify required caller speech synthesis before queueing a public call."""
     config = _reference_runtime_config(payload)
     if config.speech.tts_provider != 'kokoro':
-        with httpx.Client(timeout=min(10.0, config.timeout_seconds)) as client:
-            response = client.post(f'{config.pipecat_service_url}/reference-tester/speech-readiness',
-                json=config.speech.model_dump(), headers={'x-cae-reference-token': config.internal_token})
-            if response.status_code >= 400 or not response.json().get('ready'):
-                raise ValueError('Selected caller TTS is unavailable; check speech provider readiness.')
+        error = 'Selected caller TTS is unavailable; check speech provider readiness.'
+        try:
+            with httpx.Client(timeout=min(10.0, config.timeout_seconds)) as client:
+                response = client.post(f'{config.pipecat_service_url}/reference-tester/speech-readiness',
+                    json=config.speech.model_dump(), headers={'x-cae-reference-token': config.internal_token})
+                response.raise_for_status()
+                status = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise ValueError(error) from exc
+        if not isinstance(status, dict) or status.get('ready') is not True:
+            raise ValueError(error)
         return
     service_url = str(config.kokoro_base_url or '').rstrip('/')
     if not service_url:
@@ -1539,6 +1555,9 @@ def _queued_execution_context(
     snapshot = run.get('execution_snapshot')
     if isinstance(snapshot, dict) and isinstance(snapshot.get('request'), dict):
         request = ExecutionRunCreateRequest.model_validate(snapshot['request'])
+        if snapshot.get('speech') is not None:
+            from app.services.speech_settings import SpeechSelection
+            request._speech_selection = SpeechSelection.model_validate(snapshot['speech'])
         agent = snapshot.get('agent')
         return request, agent if isinstance(agent, dict) else None
     # Compatibility for a run queued before snapshots existed.

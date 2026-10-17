@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import Any, Literal
 import secrets
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
+from app.services.speech_settings import SpeechSelection
 from app.services.run_provenance import ExecutionRunProvenance, ExecutorId, TesterId
 
 
@@ -31,6 +32,9 @@ class TesterNoiseCondition(BaseModel):
 
 class ExecutionRunCreateRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
+
+    # Server-owned queue context, excluded from the public request schema.
+    _speech_selection: SpeechSelection | None = PrivateAttr(default=None)
 
     suite_id: str = Field(default='call-center-voice-ai', min_length=1)
     scenario_ids: list[str] = Field(default_factory=list)
