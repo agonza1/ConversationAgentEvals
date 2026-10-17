@@ -193,6 +193,37 @@ def test_parallel_rate_admission_never_exceeds_limit(hosted_app):
     assert sum(decisions) == 4
 
 
+def test_concurrent_http_executions_keep_background_credentials_private(hosted_app, monkeypatch):
+    client, _ = hosted_app
+    import httpx
+    sent = []
+    def fake_post(url, **kwargs):
+        uid = identity.get()
+        assert uid in {'alice', 'bob'}
+        assert kwargs['headers']['Authorization'] == f'Bearer sk-{uid}-private-key'
+        sent.append(uid)
+        return httpx.Response(200, request=httpx.Request('POST', url), json={
+            'output': [{'type': 'message', 'content': [{'type': 'output_text', 'text': 'Please verify your account before an address change.'}]}]})
+    monkeypatch.setattr(httpx, 'post', fake_post)
+    for uid in ('alice', 'bob'):
+        assert client(uid).put('/api/auth/openai-key', json={'api_key': f'sk-{uid}-private-key'}).status_code == 200
+        assert client(uid).post('/api/agents', json={'id': 'live-agent', 'name': f'{uid} agent', 'target': 'openai_codex'}).status_code == 200
+    def execute(uid):
+        response = client(uid).post('/api/execution/runs', json={
+            'suite_id': 'call-center-voice-ai', 'scenario_ids': ['billing-address-change'],
+            'agent_id': 'live-agent', 'text_callable': 'openai_codex', 'max_exchanges': 1,
+            'model_name': 'gpt-4.1-mini', 'user_id': 'forged-other-user',
+        })
+        assert response.status_code == 200, response.text
+        saved = client(uid).get(f"/api/execution/runs/{response.json()['execution_run_id']}")
+        assert saved.status_code == 200, saved.text
+        assert saved.json()['user_id'] == uid
+        assert saved.json()['status'] not in {'queued', 'running', 'failed'}, saved.text
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(execute, ['alice', 'bob']))
+    assert sorted(sent) == ['alice', 'bob']
+
+
 def test_hosted_startup_rejects_operator_keys_and_unsafe_configuration(hosted_app, monkeypatch):
     from app.hosted_middleware import validate_hosted_configuration
     for name in ('FIREBASE_PROJECT_ID', 'FIREBASE_WEB_API_KEY', 'FIREBASE_AUTH_DOMAIN', 'FIREBASE_WEB_APP_ID'):
