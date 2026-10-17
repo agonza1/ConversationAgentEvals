@@ -139,7 +139,9 @@ class HostedBoundary:
                     if len(body) > int(os.getenv('CAE_MAX_REQUEST_BYTES', '5242880')):
                         return await reject(413, 'Request is too large.')
                     more = message.get('more_body', False)
-                if body and 'application/json' in headers.get('content-type', ''):
+                media_type = headers.get('content-type', '').split(';', 1)[0].strip().lower()
+                is_json = not media_type or media_type == 'application/json' or (media_type.startswith('application/') and media_type.endswith('+json'))
+                if body and is_json:
                     try: payload = json.loads(body)
                     except ValueError: return await reject(400, 'Invalid JSON request.')
                     if isinstance(payload, dict) and dependant:
@@ -150,7 +152,7 @@ class HostedBoundary:
                             payload[name] = uid
                         if 'plan' in names: payload['plan'] = 'free'
                         if path == '/api/execution/runs':
-                            if payload.get('mode', 'text_callable') != 'text_callable' or payload.get('text_callable') not in {None, 'mock_agent', 'openai_codex'}:
+                            if payload.get('mode', 'text_callable') != 'text_callable' or payload.get('text_callable') not in (None, 'mock_agent', 'openai_codex'):
                                 return await reject(403, 'Hosted staging currently supports sample text and your OpenAI API key. Voice and external executors are disabled.')
                             if payload.get('voice_fixture_path') or payload.get('audio_plan_path'):
                                 return await reject(403, 'Server file inputs are unavailable in hosted mode.')
@@ -159,7 +161,7 @@ class HostedBoundary:
                                 or isinstance(payload.get('scenario_ids'), list) and len(payload['scenario_ids']) > 10):
                                 return await reject(422, 'Use at most 3 iterations and 10 scenarios per run.')
                         if path.startswith('/api/agents') and method in {'POST', 'PATCH'}:
-                            if payload.get('target') not in {None, 'mock_agent', 'openai_codex'}:
+                            if payload.get('target') not in (None, 'mock_agent', 'openai_codex'):
                                 return await reject(403, 'Only sample and OpenAI text agents are enabled in hosted staging.')
                             if isinstance(payload.get('connection'), dict) and payload['connection'].get('secret_ref'):
                                 return await reject(403, 'Deployment credentials are unavailable in hosted mode.')

@@ -19,6 +19,7 @@ test('authenticated settings save and remove only the user key and hide local OA
   let saved = false;
   const writes: Array<{ path: string; method: string }> = [];
   await page.route('**/api/**', (route) => {
+    expect(route.request().url()).not.toContain('untrusted.example');
     const path = new URL(route.request().url()).pathname;
     const method = route.request().method();
     if (method !== 'GET') writes.push({ path, method });

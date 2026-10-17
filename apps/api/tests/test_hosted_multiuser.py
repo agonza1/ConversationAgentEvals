@@ -78,6 +78,12 @@ def test_private_projects_agents_scenarios_settings_and_catalog(hosted_app):
     project = alice.post('/api/product/projects', json={'user_id': 'bob', 'project_id': 'private', 'name': 'Alice private'} )
     assert project.status_code == 200, project.text
     assert project.json()['user_id'] == 'alice'
+    for content_type in (None, 'application/vnd.cae+json'):
+        headers = {'Content-Type': content_type} if content_type else {}
+        bound = alice.post('/api/product/projects', headers=headers,
+                          content=json.dumps({'user_id': 'bob', 'project_id': 'alternate-content-type', 'name': 'Still Alice'}))
+        assert bound.status_code == 200, bound.text
+        assert bound.json()['user_id'] == 'alice'
     assert bob.get('/api/product/projects?user_id=alice').json() == []
     agent = alice.post('/api/agents', json={'id': 'same-id', 'name': 'Alice agent', 'target': 'openai_codex'})
     assert agent.status_code == 200, agent.text
