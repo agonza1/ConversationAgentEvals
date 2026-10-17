@@ -58,7 +58,7 @@ export function SpeechProviderSummary() {
   }, []);
   const models = selection ? modelLabels(selection) : null;
   return <section className={`card ${styles.summary}`} aria-label="Speech settings summary">
-    <strong>Built-in voice speech</strong>
+    <strong>Tester and built-in voice speech</strong>
     <p>{selection && models
       ? <>STT: {selection.stt_provider} · {models.stt} · TTS: {selection.tts_provider} · {models.tts}</>
       : error ? 'Speech settings unavailable.' : 'Loading speech settings…'}</p>
@@ -102,7 +102,7 @@ export function SpeechProviderSettings() {
       }
       const next = parseSettings(data);
       setSettings(next); setSelection(next.selection);
-      setMessage('Saved for new built-in voice runs. Existing runs and remote agents are unchanged.');
+      setMessage('Saved for new voice runs. Existing runs and remote agents are unchanged.');
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not save speech settings.'); }
     finally { setSaving(false); }
   }
@@ -110,11 +110,11 @@ export function SpeechProviderSettings() {
   const models = settings ? modelLabels(settings.selection) : null;
   return <section id="speech" className="card settings-card" aria-label="Speech provider settings" aria-busy={busy}>
     <header className="settings-card-header">
-      <div><p className="eyebrow">Built-in voice runs</p><h2>Speech recognition and synthesis</h2></div>
+      <div><p className="eyebrow">Voice runs</p><h2>Speech recognition and synthesis</h2></div>
       <span className="settings-badge" data-tone="neutral">{loading ? 'Loading…' : settings ? 'Configured' : 'Unavailable'}</span>
     </header>
-    <p className="settings-description">Choose speech-to-text (STT) and text-to-speech (TTS) independently for CAE’s built-in caller and reference voice agent. These deployment-wide defaults apply to new built-in voice runs, including the ASSERT case queue.</p>
-    <p className="settings-help">This does not change Steven/Waylo, Daily, SignalWire, SIP or other remote targets, or their local capture adapters.</p>
+    <p className="settings-description">Choose local or cloud speech for CAE. TTS controls the tester’s generated voice for built-in, Steven/Waylo, Daily and SignalWire tests, including follow-up turns. Switch between Local · Kokoro and Cloud · Deepgram here.</p>
+    <p className="settings-help">Remote agents keep their own voices. STT and the agent voice below apply only to built-in voice runs; external-target audio capture still uses local rtc-asr. Uploaded audio fixtures are unchanged.</p>
     {settings && models ? <dl className="settings-summary">
       <div><dt>Configured STT</dt><dd>{settings.selection.stt_provider} · {models.stt}</dd></div>
       <div><dt>Configured TTS</dt><dd>{settings.selection.tts_provider} · {models.tts}</dd></div>
@@ -134,7 +134,7 @@ export function SpeechProviderSettings() {
           const values = settings.defaults[provider === 'kokoro' ? 'local' : provider];
           patch({ tts_provider: provider, tts_model: values.tts_model, tester_voice: values.tester_voice, target_voice: values.target_voice });
         }}>
-        <option value="kokoro">Local · Kokoro</option><option value="deepgram">Deepgram</option><option value="cartesia">Cartesia</option>
+        <option value="kokoro">Local · Kokoro</option><option value="deepgram">Cloud · Deepgram</option><option value="cartesia">Cloud · Cartesia</option>
       </select></label>
       <label>STT model<input aria-label="STT model" disabled={selection.stt_provider === 'rtc-asr'} value={selection.stt_provider === 'rtc-asr' ? 'Managed by rtc-asr service' : selection.stt_model} onChange={(event) => patch({ stt_model: event.target.value })} /></label>
       {selection.tts_provider !== 'deepgram' ? <label>TTS model<input aria-label="TTS model" value={selection.tts_model} onChange={(event) => patch({ tts_model: event.target.value })} /></label> : null}
@@ -146,7 +146,7 @@ export function SpeechProviderSettings() {
     {selection?.tts_provider === 'deepgram' ? <p className="settings-help">Deepgram’s Aura voice ID selects the TTS model; choose different caller and agent models/voices.</p> : null}
     {selection && (selection.stt_provider === 'deepgram' || selection.tts_provider === 'deepgram') ? <p className="settings-help">Deepgram requires <code>DEEPGRAM_API_KEY</code> in the Pipecat worker’s server environment.</p> : null}
     {selection && (selection.stt_provider === 'cartesia' || selection.tts_provider === 'cartesia') ? <p className="settings-help">Cartesia requires <code>CARTESIA_API_KEY</code> in the Pipecat worker’s server environment and voice IDs from your account’s voice library.</p> : null}
-    <p className="settings-help">Saving does not verify provider access, credits or service health. <ApiAwareLink href="/runs">Check voice readiness in Run agent</ApiAwareLink> before queueing a built-in voice run; saving here never starts a call.</p>
+    <p className="settings-help">Saving does not verify provider access, credits or service health. <ApiAwareLink href="/runs">Check voice readiness in Run agent</ApiAwareLink> before queueing a voice run; saving here never starts a call. Cloud speech sends tester text to the selected provider and may incur usage charges.</p>
     {dirty ? <p className="settings-help settings-unsaved">Unsaved selection · new runs keep the saved settings until you save.</p> : null}
     <div className="settings-actions">
       <button type="button" className="primary-link" disabled={busy || !dirty} onClick={() => void save()}>{saving ? 'Saving…' : 'Save speech settings'}</button>

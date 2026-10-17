@@ -327,6 +327,7 @@ class ReferenceAgentTurnRequest(BaseModel):
 
 
 class ReferenceTesterTurnRequest(BaseModel):
+    speech: dict[str, Any] | None = None
     scenario_instruction: str
     act_id: str
     act_objective: str
@@ -337,6 +338,7 @@ class ReferenceTesterTurnRequest(BaseModel):
 
 
 class PublicPipecatRunRequest(BaseModel):
+    speech: dict[str, Any] | None = None
     caller_text: str = Field(min_length=1, max_length=2_000)
     agent: str = Field(default='10-gradium', min_length=1, max_length=120)
     timeout_seconds: int = Field(default=90, ge=30, le=300)
@@ -966,10 +968,11 @@ if PIPECAT_RUNTIME_AVAILABLE:
             await self.push_frame(_AgentTextFrame(text), direction)
 
     class _ReferenceKokoroProcessor(FrameProcessor):
-        def __init__(self, voice: str, *, graph_started_at: float, speed: float = 1.0):
+        def __init__(self, voice: str, *, graph_started_at: float, speed: float = 1.0, speech=None):
             super().__init__()
             self.voice = voice
             self.speed = speed
+            self.speech = speech
             self.graph_started_at = graph_started_at
             self.first_audio_byte_latency_ms: float | None = None
 
@@ -980,16 +983,17 @@ if PIPECAT_RUNTIME_AVAILABLE:
                 return
             async with httpx.AsyncClient(timeout=60) as client:
                 chunks: list[bytes] = []
+                if self.speech is not None:
+                    from tester_speech import tester_tts_request
+                    request = tester_tts_request(self.speech, frame.text,
+                        kokoro_url=KOKORO_BASE_URL, voice=self.voice, speed=self.speed)
+                else:
+                    request = {'url': f'{KOKORO_BASE_URL}/v1/audio/speech', 'json': {
+                        'model': KOKORO_MODEL, 'voice': self.voice, 'input': frame.text,
+                        'speed': self.speed, 'response_format': 'wav'}}
                 async with client.stream(
                     'POST',
-                    f'{KOKORO_BASE_URL}/v1/audio/speech',
-                    json={
-                        'model': KOKORO_MODEL,
-                        'voice': self.voice,
-                        'input': frame.text,
-                        'speed': self.speed,
-                        'response_format': 'wav',
-                    },
+                    **request,
                 ) as response:
                     response.raise_for_status()
                     async for chunk in response.aiter_bytes():
@@ -1425,6 +1429,7 @@ async def _run_reference_graph(
     *,
     voice: str,
     speed: float = 1.0,
+    speech=None,
 ) -> tuple[Any, Any]:
     """Run one bounded turn through an actual Pipecat ASR -> LLM -> TTS graph."""
     graph_started_at = time.perf_counter()
@@ -1434,6 +1439,7 @@ async def _run_reference_graph(
         voice,
         graph_started_at=graph_started_at,
         speed=speed,
+        speech=speech,
     )
     pipeline = Pipeline([
         asr_processor,
@@ -1844,8 +1850,9 @@ async def public_pipecat_run(
 ):
     """Join the public demo's Daily room directly as a Pipecat tester participant."""
     _require_reference_token(x_cae_reference_token)
-    if not KOKORO_BASE_URL or not RTC_ASR_BASE_URL:
-        raise HTTPException(status_code=503, detail='Public Pipecat execution requires Kokoro and RTC_ASR_BASE_URL.')
+    payload.speech = _require_tester_speech(payload.speech).model_dump()
+    if not RTC_ASR_BASE_URL:
+        raise HTTPException(status_code=503, detail='Public Pipecat execution requires RTC_ASR_BASE_URL.')
     try:
         from public_daily_target import (
             PublicDailyTargetError,
@@ -1859,11 +1866,12 @@ async def public_pipecat_run(
         ) from exc
     try:
         return await run_public_daily_target(
-            PublicDailyTargetRequest(**payload.model_dump()),
+            PublicDailyTargetRequest(**payload.model_dump(exclude={'speech'})),
             kokoro_base_url=KOKORO_BASE_URL,
             kokoro_model=KOKORO_MODEL,
             kokoro_voice=KOKORO_TESTER_VOICE,
             rtc_asr_base_url=RTC_ASR_BASE_URL,
+            speech=payload.speech,
         )
     except HTTPException:
         raise
@@ -2024,13 +2032,16 @@ async def _public_pipecat_duplex_events(
             model_name=payload.tester_model_name,
         )
         try:
+            from tester_speech import tester_selection
+            selected = tester_selection(payload.speech)
             # Audio was independently transcribed before this callback. Reuse
             # that received-audio transcript without a second ASR request.
             _asr, collector = await _run_reference_graph(
                 TextFrame(target_text),
                 _ReferenceTesterLlmProcessor(request),
-                voice=KOKORO_TESTER_VOICE,
+                voice=selected.tester_voice,
                 speed=KOKORO_TESTER_SPEED,
+                speech=selected,
             )
         except Exception as exc:
             from public_daily_target import PublicDailyTargetError
@@ -2063,6 +2074,7 @@ async def _public_pipecat_duplex_events(
                 next_turn=next_turn,
                 event_callback=publish,
                 audio_frame_callback=publish_audio_frame,
+                speech=payload.speech,
             )
             result['media'].update(await finish_recording(partial=False))
             if payload.tester_noise:
@@ -2111,10 +2123,11 @@ async def public_pipecat_duplex(
 ):
     """Stream a multi-turn CAE tester session through one public Daily room."""
     _require_reference_token(x_cae_reference_token)
-    if not PIPECAT_RUNTIME_AVAILABLE or not KOKORO_BASE_URL or not RTC_ASR_BASE_URL:
+    payload.speech = _require_tester_speech(payload.speech).model_dump()
+    if not PIPECAT_RUNTIME_AVAILABLE or not RTC_ASR_BASE_URL:
         raise HTTPException(
             status_code=503,
-            detail='Public Pipecat duplex requires Pipecat, Kokoro, and RTC_ASR_BASE_URL.',
+            detail='Public Pipecat duplex requires Pipecat and RTC_ASR_BASE_URL.',
         )
     return StreamingResponse(
         _public_pipecat_duplex_events(payload),
@@ -2410,17 +2423,55 @@ async def reference_agent_turn(
         raise HTTPException(status_code=502, detail=f'Reference Pipecat pipeline failed: {exc}') from exc
 
 
+def _require_tester_speech(speech):
+    from tester_speech import tester_selection, tester_tts_issues
+    try:
+        selected = tester_selection(speech)
+    except ValueError:
+        raise HTTPException(status_code=422, detail='Invalid tester speech selection.') from None
+    issues = tester_tts_issues(selected, KOKORO_BASE_URL)
+    if issues:
+        raise HTTPException(status_code=503, detail=' '.join(issues))
+    return selected
+
+
+class TesterSpeechRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=10000)
+    speech: dict[str, Any] | None = None
+    voice: str | None = None
+
+
+@app.post('/reference-tester/speech-readiness')
+async def tester_speech_readiness(payload: dict[str, Any], x_cae_reference_token: str | None = Header(default=None)):
+    _require_reference_token(x_cae_reference_token)
+    selected = _require_tester_speech(payload)
+    return {'ready': True, 'provider': selected.tts_provider}
+
+
+@app.post('/reference-tester/synthesize')
+async def tester_synthesize(payload: TesterSpeechRequest, x_cae_reference_token: str | None = Header(default=None)):
+    _require_reference_token(x_cae_reference_token)
+    selected = _require_tester_speech(payload.speech)
+    from tester_speech import synthesize_tester
+    try:
+        audio = await synthesize_tester(payload.text, selected, kokoro_url=KOKORO_BASE_URL, voice=payload.voice)
+        return {'audio_wav_base64': base64.b64encode(audio).decode('ascii'), 'provider': selected.tts_provider}
+    except Exception:
+        raise HTTPException(status_code=502, detail=f'{selected.tts_provider} tester speech synthesis failed; check provider readiness.') from None
+
+
 @app.post('/reference-tester/turn')
 async def reference_tester_turn(
     payload: ReferenceTesterTurnRequest,
     x_cae_reference_token: str | None = Header(default=None),
 ):
-    """Run tester ASR, LLM, and Kokoro through a real Pipecat Pipeline."""
+    """Run tester ASR, LLM, and selected TTS through a real Pipecat Pipeline."""
     _require_reference_token(x_cae_reference_token)
     if not PIPECAT_RUNTIME_AVAILABLE:
         raise HTTPException(status_code=503, detail='Pipecat runtime is unavailable.')
-    if not RTC_ASR_BASE_URL or not KOKORO_BASE_URL:
-        raise HTTPException(status_code=503, detail='Reference tester requires rtc-asr and Kokoro.')
+    selected = _require_tester_speech(payload.speech)
+    if not RTC_ASR_BASE_URL:
+        raise HTTPException(status_code=503, detail='Reference tester requires rtc-asr.')
     try:
         if payload.target_audio_wav_base64:
             wav_payload = base64.b64decode(payload.target_audio_wav_base64, validate=True)
@@ -2431,15 +2482,16 @@ async def reference_tester_turn(
         asr_processor, collector = await _run_reference_graph(
             first_frame,
             _ReferenceTesterLlmProcessor(payload),
-            voice=KOKORO_TESTER_VOICE,
+            voice=selected.tester_voice,
             speed=KOKORO_TESTER_SPEED,
+            speech=selected,
         )
         output_wav = _pcm_to_wav(collector.audio, collector.sample_rate, collector.channels)
         return {
             'tester_asr_receipt': asr_processor.transcript or None,
             'tester_text': collector.agent_text,
             'tester_audio_wav_base64': base64.b64encode(output_wav).decode('ascii'),
-            'pipeline': {'provider': 'pipecat', 'processors': ['rtc-asr', 'llm', 'kokoro'], 'current_run': True},
+            'pipeline': {'provider': 'pipecat', 'processors': ['rtc-asr', 'llm', selected.tts_provider], 'current_run': True},
         }
     except HTTPException:
         raise

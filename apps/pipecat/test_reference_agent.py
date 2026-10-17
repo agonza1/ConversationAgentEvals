@@ -424,13 +424,24 @@ def test_reference_turn_runs_real_pipecat_pipeline(monkeypatch):
     assert _AsyncClient.speech_speeds == [1.0]
 
 
-def test_reference_tester_turn_runs_real_pipecat_pipeline(monkeypatch):
+@pytest.mark.parametrize('tts_provider', ['kokoro', 'deepgram'])
+def test_reference_tester_turn_runs_real_pipecat_pipeline(monkeypatch, tts_provider):
     _AsyncClient.speech_voices.clear()
     _AsyncClient.speech_speeds.clear()
     monkeypatch.setattr(server, 'RTC_ASR_BASE_URL', 'http://rtc-asr.test')
     monkeypatch.setattr(server, 'KOKORO_BASE_URL', 'http://kokoro.test')
     monkeypatch.setattr(server, 'REFERENCE_AGENT_INTERNAL_TOKEN', 'test-token')
-    monkeypatch.setattr(server.httpx, 'AsyncClient', _AsyncClient)
+    class SelectedClient(_AsyncClient):
+        def stream(self, method, url, **kwargs):
+            if tts_provider == 'deepgram':
+                assert url == 'https://api.deepgram.com/v1/speak'
+                assert kwargs['params']['model'] == 'aura-2-asteria-en'
+                assert kwargs['json'] == {'text': 'Of course.'}
+                assert kwargs['headers']['Authorization'] == 'Token fake-deepgram-key'
+                return _Response(content=_wav())
+            return super().stream(method, url, **kwargs)
+    monkeypatch.setenv('DEEPGRAM_API_KEY', 'fake-deepgram-key')
+    monkeypatch.setattr(server.httpx, 'AsyncClient', SelectedClient)
     client = TestClient(server.app)
 
     response = client.post(
@@ -441,6 +452,8 @@ def test_reference_tester_turn_runs_real_pipecat_pipeline(monkeypatch):
             'act_id': 'request_cancellation',
             'act_objective': 'Ask to cancel.',
             'example_utterance': 'Please cancel.',
+            **({'speech': {'tts_provider': 'deepgram', 'tts_model': 'aura-2',
+                'tester_voice': 'aura-2-asteria-en', 'target_voice': 'aura-2-orion-en'}} if tts_provider == 'deepgram' else {}),
             'target_audio_wav_base64': base64.b64encode(_wav()).decode('ascii'),
         },
     )
@@ -449,10 +462,10 @@ def test_reference_tester_turn_runs_real_pipecat_pipeline(monkeypatch):
     payload = response.json()
     assert payload['tester_asr_receipt'] == 'Please help me.'
     assert payload['tester_text'] == 'Of course.'
-    assert payload['pipeline']['processors'] == ['rtc-asr', 'llm', 'kokoro']
+    assert payload['pipeline']['processors'] == ['rtc-asr', 'llm', tts_provider]
     assert base64.b64decode(payload['tester_audio_wav_base64']).startswith(b'RIFF')
-    assert _AsyncClient.speech_voices == ['af_heart']
-    assert _AsyncClient.speech_speeds == [1.2]
+    assert _AsyncClient.speech_voices == (['af_heart'] if tts_provider == 'kokoro' else [])
+    assert _AsyncClient.speech_speeds == ([1.2] if tts_provider == 'kokoro' else [])
 
 
 @pytest.mark.parametrize('receiver_protocol', ['local-stt.v1', 'deepgram-listen-v1', 'cartesia-stt-websocket'])

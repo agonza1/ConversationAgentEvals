@@ -35,6 +35,36 @@ def test_console_persists_selection_without_credentials(monkeypatch):
     assert ReferenceRuntimeConfig().speech == cloud_selection()
 
 
+def test_external_tester_cloud_tts_runs_in_worker_not_api():
+    import base64
+    import io
+    import wave
+    output = io.BytesIO()
+    with wave.open(output, 'wb') as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(24000)
+        wav.writeframes(b'\x01\x00' * 2400)
+    audio = output.getvalue()
+    config = settings.SpeechSelection(tts_provider='deepgram', tts_model='aura-2',
+        tester_voice='aura-2-asteria-en', target_voice='aura-2-orion-en')
+    requests = []
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, json={'audio_wav_base64': base64.b64encode(audio).decode()})
+    media = ReferenceMediaServices(ReferenceRuntimeConfig(speech=config, pipecat_service_url='http://worker',
+        internal_token='worker-test-token', kokoro_base_url=''), client=httpx.Client(transport=httpx.MockTransport(respond)))
+    assert media.synthesize('Hello') == audio
+    assert len(requests) == 1
+    request = requests[0]
+    assert str(request.url) == 'http://worker/reference-tester/synthesize'
+    payload = json.loads(request.content)
+    assert payload['speech'] == config.model_dump()
+    assert payload['voice'] == config.tester_voice
+    assert request.headers['x-cae-reference-token'] == 'worker-test-token'
+    assert 'DEEPGRAM_API_KEY' not in request.content.decode()
+
+
 @pytest.mark.parametrize('update', [
     {'stt_provider': 'unknown'}, {'tts_provider': 'unknown'}, {'target_voice': 'caller-id'},
     {'stt_model': 'https://untrusted'}, {'api_key': 'untrusted'}, {'cartesia_version': 'latest'},
@@ -138,3 +168,68 @@ def test_model_aware_voice_launch_preserves_cloud_graphs_and_voices(tmp_path, st
         assert processors[0]['model'] == selected.stt_model
         assert processors[2]['model'] == selected.tts_model
         assert processors[2]['voice'] == voice
+
+
+@pytest.mark.parametrize('failure', ['connect', 'timeout', 'non-json', 'list', 'null', 'http', 'not-ready'])
+def test_cloud_caller_readiness_failures_are_validation_errors(monkeypatch, failure):
+    from app.services import execution_runner
+    from app.schemas.execution import ExecutionRunCreateRequest
+    settings.save_speech_selection(cloud_selection())
+    original_client = httpx.Client
+
+    def respond(request):
+        if failure == 'connect':
+            raise httpx.ConnectError('worker unreachable', request=request)
+        if failure == 'timeout':
+            raise httpx.ReadTimeout('worker timed out', request=request)
+        if failure == 'non-json':
+            return httpx.Response(200, text='<html>proxy error</html>')
+        if failure == 'http':
+            return httpx.Response(503, text='unavailable')
+        return httpx.Response(200, json={'list': [], 'null': None, 'not-ready': {'ready': False}}[failure])
+
+    monkeypatch.setattr(execution_runner.httpx, 'Client',
+        lambda **kwargs: original_client(transport=httpx.MockTransport(respond), **kwargs))
+    with pytest.raises(ValueError, match='Selected caller TTS is unavailable; check speech provider readiness'):
+        execution_runner._preflight_signalwire_caller_tts_runtime(ExecutionRunCreateRequest())
+
+
+@pytest.mark.parametrize('executor', ['pipecat_public_daily', 'signalwire_public_webrtc', 'waylo_livekit'])
+def test_external_adapters_receive_queued_speech(monkeypatch, tmp_path, executor):
+    import asyncio
+    from app.services import execution_runner
+    from app.schemas.execution import ExecutionRunCreateRequest
+    selected = cloud_selection()
+    payload = ExecutionRunCreateRequest(mode='pipecat_webrtc', executor_id=executor,
+        scenario_ids=['case'], max_exchanges=1)
+    payload._speech_selection = selected
+    settings.save_speech_selection(settings.SpeechSelection())
+    monkeypatch.setattr(execution_runner, 'REPO_ROOT', tmp_path)
+    monkeypatch.setattr(execution_runner, '_scenario_definition', lambda *_: {'id': 'case', 'user_opener': 'Hello'})
+    monkeypatch.setattr(execution_runner, '_selected_waylo_scenario', lambda *_: {'id': 'case', 'caller_steps': ['Hello']})
+
+    class CapturedConfig(Exception):
+        pass
+
+    def capture(**kwargs):
+        assert kwargs['config'].speech == selected
+        raise CapturedConfig
+
+    monkeypatch.setattr(execution_runner, 'run_public_pipecat_call', capture)
+    monkeypatch.setattr(execution_runner, 'run_signalwire_holyguacamole_call', capture)
+
+    def capture_media(config):
+        assert config.speech == selected
+        raise CapturedConfig
+
+    monkeypatch.setattr(execution_runner, 'ReferenceMediaServices', capture_media)
+    kwargs = dict(execution_run_id='test', conversation_id='conversation', suite_id='suite',
+        scenario_id='case', payload=payload)
+    with pytest.raises(CapturedConfig):
+        if executor == 'waylo_livekit':
+            asyncio.run(execution_runner._execute_waylo(**kwargs, event_observer=None,
+                agent_snapshot={'connection': {'auth_type': 'secret_ref'}}))
+        elif executor == 'pipecat_public_daily':
+            execution_runner._execute_public_pipecat_daily(**kwargs)
+        else:
+            execution_runner._execute_signalwire_holyguacamole_webrtc(**kwargs)

@@ -49,7 +49,7 @@ test('Speech section is discoverable, scoped and read-only on load at all viewpo
     const panel = page.getByRole('region', { name: 'Speech provider settings' });
     await expect(panel.getByLabel('STT model', { exact: true })).toHaveValue('Managed by rtc-asr service');
     await expect(panel.getByLabel('STT model', { exact: true })).toBeDisabled();
-    await expect(panel).toContainText('does not change Steven/Waylo');
+    await expect(panel).toContainText('Remote agents keep their own voices');
     await expect(panel.getByRole('button', { name: 'Save speech settings' })).toBeDisabled();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
     if (width === 1440 || width === 320) await page.screenshot({ path: `/tmp/speech-settings-${width}.png`, fullPage: true });
@@ -111,7 +111,7 @@ test('Load failures recover and failed saves retain edits without claiming readi
   await expect(panel).toContainText('Saving does not verify provider access');
 });
 
-test('Built-in run shows a read-only summary linking to the same backend; remote run has no selector', async ({ page }) => {
+test('Built-in and remote voice runs share a read-only speech summary, not a second selector', async ({ page }) => {
   const { writes } = await mockSpeech(page);
   await page.goto('/runs?agent_id=built-in-voice&api_base=http%3A%2F%2Fapi.example.test');
   const summary = page.getByRole('region', { name: 'Speech settings summary' });
@@ -119,7 +119,7 @@ test('Built-in run shows a read-only summary linking to the same backend; remote
   await expect(summary.getByRole('link', { name: 'Configure speech in Settings →' })).toHaveAttribute('href', '/settings?api_base=http%3A%2F%2Fapi.example.test#speech');
   await expect(page.getByLabel('TTS provider')).toHaveCount(0);
   await page.getByLabel('Execution agent target').selectOption('remote-voice');
-  await expect(summary).toHaveCount(0);
+  await expect(summary).toContainText('kokoro');
   expect(writes).toEqual([]);
 });
 

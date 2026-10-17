@@ -14,6 +14,7 @@ from typing import Callable
 
 from app.services.waylo_target import WayloClient, WayloError, clean_native, project_capture, validate_items
 from app.services.live_audio_monitor import LiveAudioMonitor
+from app.services.waylo_call_policy import CLOSING_TEXT, caller_has_closed, closing_due, closing_reserve_seconds
 
 
 def pcm_wav(pcm: bytes, rate: int = 24000) -> bytes:
@@ -86,6 +87,23 @@ def _record_transcription(peer, key: tuple, event: dict) -> None:
             'received_at_ms': event['received_at_ms'],
             'track': event.get('transcribed_track_id') or (previous.get('track') if previous else None)}
     peer.events.append(event)
+    if key[0] == 'remote':
+        peer.last_remote_transcript = time.monotonic()
+    elif event['final'] and getattr(peer, 'sent_references', None) and not getattr(peer, 'consent_alert', False):
+        from app.services.waylo_consent import approval_integrity
+        receipts = {}
+        for receipt in peer.events:
+            if (receipt.get('speaker') == 'caller' and receipt.get('final')
+                    and not receipt.get('duplicate_of_segment_id')):
+                receipts[receipt.get('canonical_segment_id') or receipt.get('segment_id') or receipt['event_id']] = {
+                    'id': receipt['event_id'], 'text': receipt.get('text', '')}
+        integrity = approval_integrity(list(peer.sent_references.values()), list(receipts.values()))
+        if integrity['status'] == 'critical_mismatch':
+            peer.consent_alert = True
+            peer.error = 'Critical purchase-consent ASR mismatch; call stopped for review.'
+            peer.events.append({'event_id': 'tester/consent-integrity-alert',
+                'event_type': 'tester.consent_integrity_alert', 'source': 'cae_reference_vs_asr',
+                'diagnostic': integrity, 'remote_action_prevention': 'not_proven'})
 
 
 class LiveKitVoicePeer:
@@ -102,6 +120,12 @@ class LiveKitVoicePeer:
         self.remote_pcm = bytearray()
         self.remote_chunks = []
         self.last_speech = 0.0
+        self.last_remote_transcript = 0.0
+        self.agent_state = None
+        self.agent_state_updated = 0.0
+        self.pending_remote_transcripts = 0
+        self.sent_references = {}
+        self.consent_alert = False
         self.speech_count = 0
         self.ready = asyncio.Event()
         self.remote_identity = None
@@ -126,6 +150,7 @@ class LiveKitVoicePeer:
                 self.error = 'Multiple remote audio publishers; target identity is ambiguous.'
                 return
             self.remote_identity = participant.identity  # memory only
+            self._observe_agent_state(getattr(participant, 'attributes', {}), participant)
             task = asyncio.create_task(self._receive(track))
             self.tasks.add(task)
             self.ready.set()
@@ -147,6 +172,10 @@ class LiveKitVoicePeer:
                     event['transcribed_track_id'] = publication.sid
                 _record_transcription(self, key, event)
 
+        @self.room.on('participant_attributes_changed')
+        def attributes_changed(changed, participant):
+            self._observe_agent_state(changed, participant)
+
         for kind in ('reconnecting', 'reconnected', 'disconnected'):
             self.room.on(kind, lambda *args, event_kind=kind: self.events.append({
                 'event_id': f'livekit/{event_kind}/{len(self.events)}', 'event_type': f'transport.{event_kind}',
@@ -154,6 +183,18 @@ class LiveKitVoicePeer:
 
     def now_ms(self):
         return round((time.monotonic() - self.origin) * 1000, 3)
+
+    def _observe_agent_state(self, attributes, participant):
+        if participant.identity != self.remote_identity:
+            return
+        state = attributes.get('lk.agent.state')
+        if state not in {'initializing', 'idle', 'listening', 'thinking', 'speaking'}:
+            return
+        self.agent_state = state
+        self.agent_state_updated = time.monotonic()
+        self.events.append({'event_id': f'livekit/agent-state/{len(self.events)}',
+            'event_type': 'target.agent_state', 'state': state, 'source': 'livekit.participant_attributes',
+            'timestamp_ms': self.now_ms(), 'clock_origin': 'cae_monotonic_since_transport_creation'})
 
     def _monitor_audio(self, direction, pcm, rate, *, media_activity=True):
         if self.monitor:
@@ -174,12 +215,18 @@ class LiveKitVoicePeer:
         local = bool(track_id and track_id in local_tracks)
         if not local and participant_identity != self.remote_identity:
             return  # Unidentified publisher is not target evidence.
+        if not local:
+            self.pending_remote_transcripts = getattr(self, 'pending_remote_transcripts', 0) + 1
         try:
-            text = await asyncio.wait_for(reader.read_all(), 15)
+            remaining = getattr(self, 'response_deadline', time.monotonic() + 45) - time.monotonic()
+            text = await asyncio.wait_for(reader.read_all(), max(.1, min(45, remaining)))
         except Exception:
             self.events.append({'event_id': f'livekit/stream-error/{len(self.events)}',
                 'event_type': 'transcript.incomplete', 'source': 'livekit.lk.transcription'})
             return
+        finally:
+            if not local:
+                self.pending_remote_transcripts -= 1
         if len(text) > 32_000:
             self.error = 'LiveKit transcript exceeded capture limit.'
             return
@@ -255,6 +302,9 @@ class LiveKitVoicePeer:
             await stream.aclose()
 
     async def send(self, audio: bytes, *, turn_id: str, reference: str, artifact_dir: Path):
+        if not hasattr(self, 'sent_references'):
+            self.sent_references = {}
+        self.sent_references[turn_id] = {'turn_id': turn_id, 'reference_text': reference}
         if getattr(self, 'continuous_caller', None) is not None:
             return await self._send_continuous(audio, turn_id=turn_id, reference=reference, artifact_dir=artifact_dir)
         self.transcript_turn_id = turn_id
@@ -341,28 +391,61 @@ class LiveKitVoicePeer:
             raise WayloError('Tester audio send failed; accepted samples were retained for review.')
         return observation, sent_wav
 
-    async def wait_response(self, previous_speech: int, *, timeout: float = 25):
+    async def wait_response(self, previous_speech: int, *, timeout: float = 45):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self.error:
                 raise WayloError(self.error)
-            if self.speech_count > previous_speech and time.monotonic() - self.last_speech > 1.2:
-                return
+            now = time.monotonic()
+            if self.speech_count > previous_speech:
+                state = getattr(self, 'agent_state', None)
+                # Speaking/thinking may include gaps between synthesized clauses.
+                # A stale listening state is not proof the new reply has ended.
+                fresh_listening = state in {'listening', 'idle'} and getattr(self, 'agent_state_updated', 0) >= self.last_speech
+                quiet_window = 1.2 if fresh_listening else 2.5
+                if (state not in {'speaking', 'thinking', 'initializing'}
+                        and now - self.last_speech >= quiet_window
+                        and now - getattr(self, 'last_remote_transcript', 0) >= .5
+                        and not getattr(self, 'pending_remote_transcripts', 0)):
+                    return
             await asyncio.sleep(.05)
         raise WayloError('Target response speech/silence boundary was not observed before timeout.')
 
+    async def wait_caller_slot(self, *, timeout=45):
+        # Generation/TTS can take seconds after the preceding boundary. Recheck
+        # immediately before sending rather than talking over a resumed clause.
+        deadline = time.monotonic() + timeout
+        while not self.speech_count and getattr(self, 'agent_state', None) in {'speaking', 'thinking', 'initializing'}:
+            if self.error:
+                raise WayloError(self.error)
+            if time.monotonic() >= deadline:
+                raise WayloError('Target did not become ready for caller speech before timeout.')
+            await asyncio.sleep(.05)
+        if self.speech_count:
+            await self.wait_response(max(0, self.speech_count - 1), timeout=max(.1, deadline - time.monotonic()))
+
     async def close(self):
-        if getattr(self, 'continuous_caller', None) is not None:
-            await self.continuous_caller.close()
-            self.events.append({'event_id': 'caller/background-noise', 'event_type': 'tester.background_noise.sent',
-                'source': 'livekit.AudioSource', 'audio_condition': self.continuous_caller.metadata(),
-                'clock_origin': 'cae_monotonic_since_transport_creation', 'clock_origin_utc': self.origin_utc})
-        for task in self.tasks:
-            task.cancel()
-        await asyncio.gather(*self.tasks, return_exceptions=True)
-        if self.source:
-            await self.source.aclose()
-        await self.room.disconnect()
+        try:
+            if getattr(self, 'continuous_caller', None) is not None:
+                await self.continuous_caller.close()
+                self.events.append({'event_id': 'caller/background-noise', 'event_type': 'tester.background_noise.sent',
+                    'source': 'livekit.AudioSource', 'audio_condition': self.continuous_caller.metadata(),
+                    'clock_origin': 'cae_monotonic_since_transport_creation', 'clock_origin_utc': self.origin_utc})
+        finally:
+            try:
+                if self.source:
+                    await self.source.aclose()
+            finally:
+                try:
+                    # AudioStream.aclose waits for the SDK's receive task/EOS.
+                    # Disconnect first so cancelling/joining our readers cannot
+                    # wait on a room disconnect scheduled after that same join.
+                    await asyncio.wait_for(self.room.disconnect(), 5)
+                finally:
+                    tasks = tuple(self.tasks)
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), 2)
 
 
 async def run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, suite_id: str,
@@ -454,6 +537,13 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
     prepared = {}
     pending_response = None
     steps = scenario.get('caller_steps')
+    adaptive_closing = not steps and max_exchanges > 1
+    closing_audio = None
+    termination_reason = None
+    scheduled_closing_reason = None
+    hard_deadline = time.monotonic() + timeout_seconds
+    peer.response_deadline = hard_deadline
+    closing_reserve = closing_reserve_seconds(timeout_seconds)
     if local_evidence is not None:
         local_evidence.update(peer=peer, turns=turns, audio_tracks=audio_tracks,
                               after_items=after_items, item_read_errors=item_read_errors, references={})
@@ -483,6 +573,13 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
             utterance = await next_utterance([], 1)
             audio = await synthesize(utterance, 1)
             first_rate, _ = read_wav(audio[0] if isinstance(audio, tuple) else audio)
+            if adaptive_closing:
+                # Prepare a truthful, non-transactional goodbye before starting
+                # a remote call; the final seconds must not depend on an LLM.
+                closing_audio = await synthesize(CLOSING_TEXT, max_exchanges)
+                close_rate, _ = read_wav(closing_audio[0] if isinstance(closing_audio, tuple) else closing_audio)
+                if close_rate != first_rate:
+                    raise WayloError('Closing audio sample rate differs; no call started.')
             # All fixed caller turns are available before the remote write. Validate
             # even later fixtures now, rather than discovering a broken file mid-call.
             for step_index in range(2, max_exchanges + 1) if steps else []:
@@ -531,9 +628,12 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
             except WayloError:
                 if peer.error:
                     raise
-                if peer.speech_count:
+                if peer.speech_count or getattr(peer, 'agent_state', None) in {'speaking', 'thinking', 'initializing'}:
                     # No greeting is optional; a greeting already in flight is not.
-                    await peer.wait_response(0, timeout=25)
+                    if not peer.speech_count and callable(getattr(peer, 'wait_caller_slot', None)):
+                        await peer.wait_caller_slot(timeout=45)
+                    else:
+                        await peer.wait_response(0, timeout=45)
             if peer.speech_count:
                 greeting = pcm_wav(bytes(peer.remote_pcm))
                 artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -548,6 +648,19 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                 turns.append({'speaker': 'Agent', 'text': greeting_text or '[Greeting audio; transcript pending]',
                     'turn_index': 1, 'direction': 'target_to_tester', 'frame_metadata': {'greeting': True}})
             for index in range(1, max_exchanges + 1):
+                closing_reason, scheduled_closing_reason = scheduled_closing_reason, None
+                if closing_reason:
+                    utterance, audio = CLOSING_TEXT, closing_audio
+                elif adaptive_closing and closing_due(index, max_exchanges, hard_deadline - time.monotonic(), closing_reserve):
+                    utterance, audio = CLOSING_TEXT, closing_audio
+                    closing_reason = 'exchange_budget_goodbye' if index >= max_exchanges else 'time_budget_goodbye'
+                elif adaptive_closing and caller_has_closed(utterance):
+                    closing_reason = 'caller_goodbye'
+                if index != barge_turn and callable(getattr(peer, 'wait_caller_slot', None)):
+                    await peer.wait_caller_slot(timeout=min(45, max(.1, hard_deadline - time.monotonic())))
+                if (adaptive_closing and not closing_reason
+                        and closing_due(index, max_exchanges, hard_deadline - time.monotonic(), closing_reserve)):
+                    utterance, audio, closing_reason = CLOSING_TEXT, closing_audio, 'time_budget_goodbye'
                 turn_id = f'caller-{index}'
                 previous = peer.speech_count
                 offset = pending_response['offset'] if pending_response else len(peer.remote_pcm)
@@ -572,7 +685,8 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                                     'frame_metadata': {'listener_media_key': media_key(index, 'tester_to_target')}})
                 turns.append({'speaker': 'Caller', 'text': safe_utterance, 'turn_index': len(turns) + 1,
                               'direction': 'tester_to_target', 'frame_metadata': {'source_text': safe_utterance,
-                              'duration_ms': observation['duration_ms'], 'audio_sha256': observation['audio_sha256']}})
+                              'duration_ms': observation['duration_ms'], 'audio_sha256': observation['audio_sha256'],
+                              **({'caller_closing': closing_reason} if closing_reason else {})}})
                 if index < max_exchanges and barge_turn == index + 1:
                     # Start the next caller turn during observed target speech,
                     # not after the usual observer-side silence boundary.
@@ -626,12 +740,6 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                                                  'response_to_turn_ids': response_to, 'overlapping_response_window': bool(pending_response),
                                                  'transcript_source': 'livekit_remote_transcription'}})
                 pending_response = None
-                if index < max_exchanges:
-                    if index + 1 in prepared:
-                        utterance, audio = prepared[index + 1]
-                    else:
-                        utterance = await next_utterance(turns, index + 1)
-                        audio = await synthesize(utterance, index + 1)
                 # Do not delay a scheduled interruption with an HTTP read.
                 if index + 1 != barge_turn:
                     try:
@@ -640,17 +748,52 @@ async def _run_waylo_call(*, target: dict, correlation_id: str, scenario: dict, 
                                             'observed_at': datetime.now(UTC).isoformat()})
                     except WayloError:
                         item_read_errors[f'items_after_caller-{index}'] = 'Per-turn items unavailable or invalid; no snapshot retained for this read.'
+                if closing_reason:
+                    termination_reason = closing_reason
+                    break
+                if index < max_exchanges:
+                    if adaptive_closing and closing_due(index + 1, max_exchanges, hard_deadline - time.monotonic(), closing_reserve):
+                        utterance, audio = CLOSING_TEXT, closing_audio
+                    elif index + 1 in prepared:
+                        utterance, audio = prepared[index + 1]
+                    else:
+                        if adaptive_closing:
+                            generation_budget = max(.001, min(30, hard_deadline - time.monotonic() - closing_reserve))
+                            budget = asyncio.timeout(generation_budget)
+                            try:
+                                async with budget:
+                                    utterance = await next_utterance(turns, index + 1)
+                                    audio = await synthesize(utterance, index + 1)
+                            except TimeoutError:
+                                if not budget.expired():
+                                    raise  # Do not disguise a provider failure as a normal goodbye.
+                                utterance, audio = CLOSING_TEXT, closing_audio
+                                scheduled_closing_reason = 'generation_budget_goodbye'
+                        else:
+                            utterance = await next_utterance(turns, index + 1)
+                            audio = await synthesize(utterance, index + 1)
     except asyncio.CancelledError:
         error = 'Waylo call cancelled; partial local audio retained.'
         raise
     except Exception as exc:
         # SDK/provider errors can embed URLs/tokens. Export only a safe class/adapter message.
         error = str(exc) if isinstance(exc, WayloError) else f'Waylo call interrupted ({type(exc).__name__}).'
+        termination_reason = 'hard_timeout' if isinstance(exc, TimeoutError) else 'execution_error'
     finally:
         try:
             await asyncio.wait_for(peer.close(), 10)
         except Exception:
             error = error or 'LiveKit cleanup failed; capture needs review.'
+        # Transcription callbacks may finish during disconnect. A late safety
+        # alert must not leave a normal-goodbye verdict on an unsafe receipt.
+        if getattr(peer, 'error', None):
+            error = error or peer.error
+            termination_reason = 'execution_error'
+        if bootstrap and hasattr(peer, 'events'):
+            peer.events.append({'event_id': 'tester/call-ended', 'event_type': 'tester.call_ended',
+                'source': 'cae_controlled_tester', 'reason': termination_reason or 'script_or_exchange_cap',
+                'business_completion': 'not_inferred', 'timestamp_ms': peer.now_ms(),
+                'clock_origin': 'cae_monotonic_since_transport_creation'})
         continuous = getattr(peer, 'continuous_caller', None)
         if continuous is not None and continuous.error:
             error = error or continuous.error
