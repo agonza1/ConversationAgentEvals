@@ -16,8 +16,8 @@ from app.security import identity, request_maps, request_db
 from app.services import firebase_auth
 
 
-@pytest.fixture
-def hosted_app(monkeypatch, tmp_path):
+@pytest.fixture(params=['firebase', 'auto'])
+def hosted_app(monkeypatch, tmp_path, request):
     database_url = os.getenv('CAE_TEST_POSTGRES_URL')
     engine = create_engine(database_url) if database_url else create_engine(f'sqlite:///{tmp_path}/hosted.db', connect_args={'check_same_thread': False})
     if database_url: database.Base.metadata.drop_all(engine)
@@ -26,7 +26,13 @@ def hosted_app(monkeypatch, tmp_path):
     for module in list(sys.modules.values()):
         if getattr(module, '__name__', '').startswith('app.') and hasattr(module, 'SessionLocal'):
             monkeypatch.setattr(module, 'SessionLocal', factory)
-    monkeypatch.setenv('CAE_AUTH_MODE', 'firebase')
+    if request.param == 'firebase':
+        monkeypatch.setenv('CAE_AUTH_MODE', 'firebase')
+    else:
+        monkeypatch.delenv('CAE_AUTH_MODE', raising=False)
+    from app.security import FIREBASE_CONFIG_VARS
+    for name in FIREBASE_CONFIG_VARS:
+        monkeypatch.setenv(name, 'synthetic')
     monkeypatch.setenv('APP_ENV', 'staging')
     monkeypatch.setenv('CAE_PUBLIC_ORIGIN', 'https://staging.example')
     monkeypatch.setenv('CAE_CREDENTIAL_ENCRYPTION_KEY', Fernet.generate_key().decode())
@@ -274,6 +280,8 @@ def test_hosted_startup_rejects_operator_keys_and_unsafe_configuration(hosted_ap
         if name.endswith(('_API_KEY', '_AUTH_TOKEN')) and not name.startswith('FIREBASE_'):
             monkeypatch.delenv(name)
     validate_hosted_configuration()
+    monkeypatch.delenv('CAE_AUTH_MODE', raising=False)
+    validate_hosted_configuration()  # Firebase configuration also enables auth without a mode flag.
     monkeypatch.setenv('OPENAI_API_KEY', 'sk-never-share')
     with pytest.raises(RuntimeError, match='provider credentials'): validate_hosted_configuration()
     monkeypatch.delenv('OPENAI_API_KEY')
@@ -281,4 +289,50 @@ def test_hosted_startup_rejects_operator_keys_and_unsafe_configuration(hosted_ap
     with pytest.raises(RuntimeError, match='emulator'): validate_hosted_configuration()
     monkeypatch.delenv('FIREBASE_AUTH_EMULATOR_HOST')
     monkeypatch.setenv('CAE_AUTH_MODE', 'local')
-    with pytest.raises(RuntimeError, match='require'): validate_hosted_configuration()
+    validate_hosted_configuration()
+    assert TestClient(app).get('/api/auth/config').json() == {'enabled': False, 'firebase': None}
+
+
+@pytest.mark.parametrize('app_env', ['development', 'staging', 'production'])
+@pytest.mark.parametrize('mode', [None, '', 'local'])
+def test_no_firebase_preserves_legacy_access(monkeypatch, app_env, mode):
+    from app.hosted_middleware import validate_hosted_configuration
+    from app.security import FIREBASE_CONFIG_VARS, hosted
+    for name in FIREBASE_CONFIG_VARS:
+        monkeypatch.delenv(name, raising=False)
+    if mode is None:
+        monkeypatch.delenv('CAE_AUTH_MODE', raising=False)
+    else:
+        monkeypatch.setenv('CAE_AUTH_MODE', mode)
+    monkeypatch.setenv('APP_ENV', app_env)
+    monkeypatch.setenv('K_SERVICE', 'legacy-deployment')
+    # Existing provider connections remain permitted in legacy mode.
+    monkeypatch.setenv('OPENAI_API_KEY', 'synthetic-legacy-key')
+    assert not hosted()
+    validate_hosted_configuration()
+    client = TestClient(app)
+    assert client.get('/api/auth/config').json() == {'enabled': False, 'firebase': None}
+    assert client.get('/api/agents').status_code == 200
+
+
+@pytest.mark.parametrize('configured_var', [
+    'FIREBASE_PROJECT_ID', 'FIREBASE_WEB_API_KEY', 'FIREBASE_AUTH_DOMAIN', 'FIREBASE_WEB_APP_ID',
+    'CAE_AUTH_MODE',
+])
+def test_incomplete_firebase_never_falls_back_to_legacy(monkeypatch, configured_var):
+    from app.hosted_middleware import validate_hosted_configuration
+    from app.security import FIREBASE_CONFIG_VARS, hosted
+    for name in (*FIREBASE_CONFIG_VARS, 'CAE_AUTH_MODE'):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(configured_var, 'firebase' if configured_var == 'CAE_AUTH_MODE' else 'synthetic')
+    assert hosted()
+    with pytest.raises(RuntimeError, match='configuration is incomplete'):
+        validate_hosted_configuration()
+
+
+def test_empty_firebase_values_do_not_enable_auth(monkeypatch):
+    from app.security import FIREBASE_CONFIG_VARS, hosted
+    monkeypatch.delenv('CAE_AUTH_MODE', raising=False)
+    for name in FIREBASE_CONFIG_VARS:
+        monkeypatch.setenv(name, '')
+    assert not hosted()

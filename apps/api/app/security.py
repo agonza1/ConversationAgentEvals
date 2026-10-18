@@ -13,8 +13,17 @@ request_maps: ContextVar[dict | None] = ContextVar('cae_request_maps', default=N
 request_db: ContextVar[Any] = ContextVar('cae_request_db', default=None)
 
 
+FIREBASE_CONFIG_VARS = (
+    'FIREBASE_PROJECT_ID', 'FIREBASE_WEB_API_KEY', 'FIREBASE_AUTH_DOMAIN', 'FIREBASE_WEB_APP_ID',
+)
+
+
 def hosted() -> bool:
-    return os.getenv('CAE_AUTH_MODE', '').lower() == 'firebase'
+    mode = os.getenv('CAE_AUTH_MODE', '')
+    if mode:
+        return mode == 'firebase'
+    # Any partial configuration must enter validation, never silently disable auth.
+    return any(os.getenv(name) for name in FIREBASE_CONFIG_VARS)
 
 
 def user_id() -> str:
