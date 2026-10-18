@@ -18,6 +18,20 @@ jobs:
 
   api-and-web:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: cae_test_hosted
+          POSTGRES_USER: cae
+          POSTGRES_PASSWORD: cae_test_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cae -d cae_test_hosted"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -36,6 +50,11 @@ jobs:
       - run: python -m venv apps/api/.venv
       - run: apps/api/.venv/bin/python -m pip install -r apps/api/requirements.txt
       - run: apps/api/.venv/bin/python -m pip check
+      - name: Verify Firebase isolation and concurrent BYOK execution on PostgreSQL
+        env:
+          CAE_TEST_POSTGRES_URL: postgresql://cae:cae_test_only@127.0.0.1:5432/cae_test_hosted
+          PYTHONPATH: apps/api
+        run: apps/api/.venv/bin/python -m pytest apps/api/tests/test_hosted_multiuser.py -q
       - run: npm run test:api
       - name: Verify continuous audio mixer without a live voice stack
         run: |

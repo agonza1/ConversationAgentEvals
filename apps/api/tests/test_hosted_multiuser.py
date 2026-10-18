@@ -207,6 +207,8 @@ def test_parallel_rate_admission_never_exceeds_limit(hosted_app):
 
 
 def test_concurrent_http_executions_keep_background_credentials_private(hosted_app, monkeypatch):
+    if not os.getenv('CAE_TEST_POSTGRES_URL'):
+        pytest.skip('Concurrent hosted execution requires PostgreSQL; CI runs this against its PostgreSQL service.')
     client, _ = hosted_app
     import httpx
     sent = []
