@@ -31,7 +31,7 @@ def login(payload: SessionRequest, response: Response):
         cookie, claims = firebase_auth.create_session(payload.id_token.get_secret_value())
     except Exception:
         raise HTTPException(401, 'Google sign-in could not be verified. Sign in again.') from None
-    response.set_cookie(COOKIE, cookie, httponly=True, secure=os.getenv('APP_ENV') != 'development',
+    response.set_cookie(COOKIE, cookie, httponly=True, secure=os.environ['CAE_PUBLIC_ORIGIN'].startswith('https://'),
                         samesite='lax', max_age=5 * 86400, path='/')
     response.headers['Cache-Control'] = 'no-store'
     return {'uid': claims['sub'], 'email': claims.get('email')}
@@ -39,7 +39,7 @@ def login(payload: SessionRequest, response: Response):
 
 @router.delete('/session')
 def logout(response: Response):
-    response.delete_cookie(COOKIE, path='/', secure=os.getenv('APP_ENV') != 'development', httponly=True, samesite='lax')
+    response.delete_cookie(COOKIE, path='/', secure=os.environ['CAE_PUBLIC_ORIGIN'].startswith('https://'), httponly=True, samesite='lax')
     return {'signed_out': True}
 
 

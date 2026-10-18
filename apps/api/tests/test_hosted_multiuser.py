@@ -104,6 +104,18 @@ def test_private_projects_agents_scenarios_settings_and_catalog(hosted_app):
     assert alice.get('/api/specs/generation-settings').json()['model'] == 'gpt-4.1'
 
 
+def test_https_cookie_stays_secure_with_development_image_default(hosted_app, monkeypatch):
+    client, _ = hosted_app
+    monkeypatch.setenv('APP_ENV', 'development')
+    response = client().post('/api/auth/session', json={'id_token': 'alice'})
+    assert response.status_code == 200
+    assert 'secure' in response.headers['set-cookie'].lower()
+    monkeypatch.setenv('CAE_PUBLIC_ORIGIN', 'http://127.0.0.1:3012')
+    local = client().post('/api/auth/session', headers={'Origin': 'http://127.0.0.1:3012'}, json={'id_token': 'alice'})
+    assert local.status_code == 200
+    assert 'secure' not in local.headers['set-cookie'].lower()
+
+
 def test_keys_encrypted_no_fallback_and_concurrent_provider_identity(hosted_app, monkeypatch):
     client, factory = hosted_app
     from app.models.hosted import PrivateDocument
