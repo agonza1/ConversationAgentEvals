@@ -116,10 +116,11 @@ def create_agent(payload: AgentCreateRequest):
 
 @router.get('/options')
 def list_agent_options():
+    from app.security import hosted
     return {
-        'targets': [_target_option(target) for target in _TARGET_OPTIONS],
-        'testers': _tester_options(),
-        'executors': _executor_options(),
+        'targets': [_target_option(target) for target in _TARGET_OPTIONS if not hosted() or target in {'mock_agent', 'openai_codex'}],
+        'testers': [item for item in _tester_options() if not hosted() or item['id'] == 'scenario_simulator'],
+        'executors': [item for item in _executor_options() if not hosted() or item['id'] == 'local_async_runner'],
     }
 
 

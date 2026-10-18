@@ -24,8 +24,12 @@ def persist_assert_run_artifacts(report: dict[str, Any]) -> dict[str, Any]:
         created_at=now,
     )
     encoded = _stable_json(canonical_manifest)
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(encoded, encoding='utf-8')
+    from app.security import document_put, hosted
+    if hosted():
+        document_put('assert_manifests', manifest_location, canonical_manifest)
+    else:
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(encoded, encoding='utf-8')
 
     pointer = {
         'artifact_id': 'assert-canonical-run-manifest',
@@ -47,6 +51,8 @@ def persist_assert_run_artifacts(report: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_assert_run_artifact_manifest(location: str) -> dict[str, Any] | None:
+    from app.security import document_get, hosted
+    if hosted(): return document_get('assert_manifests', location)
     path = _path_from_location(location)
     if path is None or not path.exists():
         return None

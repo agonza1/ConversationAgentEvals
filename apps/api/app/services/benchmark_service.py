@@ -314,13 +314,17 @@ _SUITES: tuple[BenchmarkSuite, ...] = (
 from app.services.waylo_mike_cases import WAYLO_MIKE_SUITE
 
 _SUITES = (*_SUITES, WAYLO_MIKE_SUITE)
-_SUITES_BY_ID = {suite['id']: suite for suite in _SUITES}
-_SCENARIOS_BY_ID = {
+from app.security import ScopedCatalog, hosted
+_SUITES_BY_ID = ScopedCatalog('suites', {suite['id']: suite for suite in _SUITES})
+_SCENARIOS_BY_ID = ScopedCatalog('scenarios', {
     (suite['id'], scenario['id']): scenario for suite in _SUITES for scenario in suite['scenarios']
-}
+})
 
 
 def list_suites() -> list[BenchmarkSuite]:
+    if hosted():
+        from app.services.user_scenario_store import sync_catalog
+        sync_catalog()
     from app.services.spec_scenario_authoring import refresh_published_catalog
     refresh_published_catalog()
     summaries = [
@@ -376,6 +380,9 @@ def list_suites() -> list[BenchmarkSuite]:
 
 
 def get_suite(suite_id: str, *, refresh: bool = True) -> BenchmarkSuite | None:
+    if hosted() and suite_id == 'user-scenarios':
+        from app.services.user_scenario_store import sync_catalog
+        sync_catalog()
     if refresh:
         _refresh_spec_suite(suite_id)
     suite = _SUITES_BY_ID.get(suite_id)
@@ -1732,6 +1739,9 @@ def _run_metadata(payload: dict[str, Any]) -> dict[str, str]:
         'product_project_id': _first_string(payload, 'product_project_id') or _string_from_metadata(metadata, 'product_project_id'),
         'retention_days': _string_from_metadata(metadata, 'retention_days'),
     }
+    if hosted():
+        from app.security import user_id
+        normalized['user_id'] = user_id()
     return {key: value for key, value in normalized.items() if value}
 
 
@@ -1929,6 +1939,9 @@ def _scenario_contract(scenario: BenchmarkScenario) -> dict[str, Any]:
 
 
 def _refresh_spec_suite(suite_id: str) -> None:
+    if hosted() and suite_id == 'user-scenarios':
+        from app.services.user_scenario_store import sync_catalog
+        sync_catalog()
     if suite_id.startswith('spec-suite-'):
         from app.services.spec_scenario_authoring import refresh_published_catalog
         refresh_published_catalog()

@@ -84,6 +84,10 @@ def settings_path() -> Path:
 
 
 def speech_selection() -> SpeechSelection:
+    from app.security import document_get, hosted
+    if hosted():
+        saved = document_get('settings', 'speech')
+        return SpeechSelection.model_validate(saved) if saved else deployment_speech_selection()
     path = settings_path()
     if path.exists():
         return SpeechSelection.model_validate_json(path.read_text(encoding='utf-8'))
@@ -91,6 +95,10 @@ def speech_selection() -> SpeechSelection:
 
 
 def save_speech_selection(selection: SpeechSelection) -> None:
+    from app.security import document_put, hosted
+    if hosted():
+        document_put('settings', 'speech', selection.model_dump(mode='json'))
+        return
     path = settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f'.{path.name}.{uuid.uuid4().hex}.tmp')

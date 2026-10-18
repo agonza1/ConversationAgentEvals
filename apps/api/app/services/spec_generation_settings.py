@@ -9,6 +9,7 @@ from pathlib import Path
 
 from app.services.llm_providers import get_provider
 from app.services.llm_providers.openai_codex import OpenAICodexProvider, default_token_path, effective_codex_model_name
+from app.security import document_get, document_put, hosted
 
 DEFAULT_SPEC_GENERATION_MODEL = 'gpt-5.4-mini'
 
@@ -30,7 +31,7 @@ def validate_model(model: str | None) -> str | None:
 
 def generation_settings() -> dict:
     path = settings_path()
-    stored = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+    stored = (document_get('settings', 'generation') or {}) if hosted() else (json.loads(path.read_text(encoding='utf-8')) if path.exists() else {})
     if not isinstance(stored, dict):
         raise ValueError('Invalid draft-generation settings.')
     selected = validate_model(stored.get('model'))
@@ -39,18 +40,22 @@ def generation_settings() -> dict:
     provider = get_provider('openai')
     connected = provider.status().get('status') == 'connected'
     api_key_configured = bool((os.getenv('LLM_JUDGE_API_KEY') or os.getenv('OPENAI_API_KEY') or '').strip())
+    if hosted(): api_key_configured = connected
     effective = effective_codex_model_name(requested) if connected and isinstance(provider, OpenAICodexProvider) else requested
     return {
         'model': selected, 'default_model': default, 'effective_model': effective,
         'source': 'console' if selected else 'deployment',
-        'provider': 'openai_codex' if connected else 'openai_api_key' if api_key_configured else 'unconfigured',
+        'provider': 'openai_api_key' if hosted() and connected else 'openai_codex' if connected else 'openai_api_key' if api_key_configured else 'unconfigured',
         'available': connected or api_key_configured,
-        'scope': 'deployment',
+        'scope': 'user' if hosted() else 'deployment',
     }
 
 
 def save_generation_settings(model: str | None) -> dict:
     model = validate_model(model)
+    if hosted():
+        document_put('settings', 'generation', {'model': model})
+        return generation_settings()
     path = settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f'.{path.name}.{uuid.uuid4().hex}.tmp')

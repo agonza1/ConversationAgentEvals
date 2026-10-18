@@ -11,6 +11,12 @@ _PROVIDERS: dict[str, Any] = {
 
 
 def get_provider(provider_id: str = 'openai') -> Any:
+    from app.security import hosted
+    if hosted():
+        if provider_id not in {'openai', 'openai_codex', 'codex'}:
+            raise ValueError('Only user-supplied OpenAI credentials are enabled in hosted mode.')
+        from app.services.llm_providers.user_openai import UserOpenAIProvider
+        return UserOpenAIProvider()
     key = (provider_id or 'openai').strip().lower()
     if key in {'openai', 'openai_codex', 'codex'}:
         key = 'openai'

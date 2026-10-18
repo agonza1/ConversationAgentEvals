@@ -1059,7 +1059,7 @@ def reset_saved_runs_for_tests() -> None:
 
 def _firebase_auth_config() -> FirebaseAuthConfig:
     project_id = os.getenv('FIREBASE_PROJECT_ID') or os.getenv('NEXT_PUBLIC_FIREBASE_PROJECT_ID')
-    api_key = os.getenv('FIREBASE_API_KEY') or os.getenv('NEXT_PUBLIC_FIREBASE_API_KEY')
+    api_key = os.getenv('FIREBASE_WEB_API_KEY') or os.getenv('FIREBASE_API_KEY') or os.getenv('NEXT_PUBLIC_FIREBASE_API_KEY')
     configured = bool(project_id and api_key)
     return FirebaseAuthConfig(
         enabled=True,

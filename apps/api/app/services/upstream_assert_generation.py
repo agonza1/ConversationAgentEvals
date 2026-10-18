@@ -109,7 +109,8 @@ def generate_assert_case_drafts(spec: EditableAssertSpec, *, selected: list[str]
             request_path = root / 'request.json'
             request_path.write_text(json.dumps(request, ensure_ascii=False, indent=2), encoding='utf-8')
             (root / 'taxonomy.json').write_text(json.dumps(taxonomy, ensure_ascii=False, indent=2), encoding='utf-8')
-            environment = os.environ.copy()
+            from app.services.user_credentials import provider_environment
+            environment = provider_environment()
             environment['PYTHONPATH'] = str(REPO_ROOT / 'apps' / 'api') + os.pathsep + environment.get('PYTHONPATH', '')
             command = [executable, '-m', 'app.integrations.cae_assert_generation_cli', str(request_path)]
             try:

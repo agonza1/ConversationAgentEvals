@@ -83,7 +83,7 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
 
 test('run error offers retry and empty active runs explain what happens next', async ({ page }) => {
   let fail = true;
-  await page.route('**/api/**', route => route.fulfill(fail ? { status: 503, json: { detail: 'Temporarily unavailable' } } : { json: { ...fixture, status: 'running', conversations: [], progress: { completed_conversations: 0, total_conversations: 2 } } }));
+  await page.route('**/api/execution/runs/exec-layout**', route => route.fulfill(fail ? { status: 503, json: { detail: 'Temporarily unavailable' } } : { json: { ...fixture, status: 'running', conversations: [], progress: { completed_conversations: 0, total_conversations: 2 } } }));
   await page.goto('/runs/exec-layout');
   await expect(page.getByRole('alert').filter({ hasText: 'Could not load this run' })).toContainText('Temporarily unavailable');
   fail = false;

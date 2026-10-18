@@ -10,13 +10,14 @@ from pathlib import Path
 from typing import Any
 
 from app.schemas.agents import AgentCreateRequest, AgentRecord, AgentUpdateRequest
+from app.security import PrivateDocuments, hosted, identity
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 AGENTS_DIR = REPO_ROOT / 'artifacts' / 'agents'
 
 _LOCK = threading.Lock()
-_AGENTS: dict[str, dict[str, Any]] = {}
+_AGENTS = PrivateDocuments('agents')
 _LOADED = False
 
 
@@ -114,6 +115,8 @@ def ensure_seeded() -> None:
     with _LOCK:
         now = _now()
         for seed in SEED_AGENTS:
+            if hosted() and seed['target'] != 'mock_agent':
+                continue
             current = _AGENTS.get(str(seed['id']))
             if current is not None:
                 changed = False
@@ -214,12 +217,14 @@ def delete_agent(agent_id: str) -> bool:
         if safe_id not in _AGENTS:
             return False
         del _AGENTS[safe_id]
-        path = AGENTS_DIR / f'{safe_id}.json'
-        path.unlink(missing_ok=True)
+        if not hosted():
+            path = AGENTS_DIR / f'{safe_id}.json'
+            path.unlink(missing_ok=True)
         return True
 
 
 def _ensure_loaded() -> None:
+    if hosted(): return
     global _LOADED
     with _LOCK:
         if _LOADED:
@@ -242,6 +247,9 @@ def _ensure_loaded() -> None:
 
 def _persist_unlocked(record: dict[str, Any]) -> None:
     agent_id = _validate_agent_id(str(record.get('id') or ''))
+    if hosted():
+        _AGENTS[agent_id] = record
+        return
     AGENTS_DIR.mkdir(parents=True, exist_ok=True)
     path = AGENTS_DIR / f'{agent_id}.json'
     path.write_text(json.dumps(record, indent=2, sort_keys=True) + '\n', encoding='utf-8')

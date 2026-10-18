@@ -23,6 +23,11 @@ def _reset_judge_spend_for_tests() -> None:
 
 
 def _load_judge_spend() -> dict[str, Any]:
+    from app.security import document_get, hosted
+    if hosted():
+        today = datetime.now(UTC).date().isoformat()
+        payload = document_get('settings', 'judge_spend', independent=True) or {}
+        return payload if payload.get('date') == today else {'date': today, 'spent': 0}
     path = _judge_spend_path()
     today = datetime.now(UTC).date().isoformat()
     if not path.exists():
@@ -41,6 +46,12 @@ def _load_judge_spend() -> dict[str, Any]:
 
 
 def _save_judge_spend(payload: dict[str, Any]) -> None:
+    from app.security import document_put, hosted
+    if hosted():
+        # Commit reservations before inference. A failing request must be able to
+        # refund without waiting on another request blocked behind its transaction.
+        document_put('settings', 'judge_spend', payload, independent=True)
+        return
     path = _judge_spend_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f'{path.name}.tmp')

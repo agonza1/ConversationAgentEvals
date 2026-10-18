@@ -8,6 +8,7 @@ from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from app.security import PrivateDocuments, hosted
 
 from app.schemas.execution import (
     ConversationRecord,
@@ -22,7 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 RUNS_DIR = REPO_ROOT / 'artifacts' / 'execution-runs'
 
 _LOCK = threading.Lock()
-_RUNS: dict[str, dict[str, Any]] = {}
+_RUNS = PrivateDocuments('execution_runs')
 
 
 def reset_execution_runs_for_tests() -> None:
@@ -745,6 +746,9 @@ def _persist_unlocked(run: dict[str, Any]) -> None:
     execution_run_id = str(run.get('execution_run_id') or '')
     if not execution_run_id:
         return
+    if hosted():
+        _RUNS[execution_run_id] = run
+        return
     output_dir = RUNS_DIR / execution_run_id
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / 'run.json'
@@ -753,6 +757,7 @@ def _persist_unlocked(run: dict[str, Any]) -> None:
 
 
 def _load_from_disk(execution_run_id: str) -> dict[str, Any] | None:
+    if hosted(): return _RUNS.get(execution_run_id)
     path = RUNS_DIR / execution_run_id / 'run.json'
     try:
         payload = json.loads(path.read_text(encoding='utf-8'))
@@ -762,6 +767,7 @@ def _load_from_disk(execution_run_id: str) -> dict[str, Any] | None:
 
 
 def _hydrate_from_disk() -> None:
+    if hosted(): return
     if not RUNS_DIR.exists():
         return
     with _LOCK:
