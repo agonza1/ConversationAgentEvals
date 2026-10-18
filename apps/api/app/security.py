@@ -81,23 +81,25 @@ class PrivateDocuments(MutableMapping):
     def __len__(self): return len(list(iter(self)))
 
 
-def document_get(kind: str, key: str) -> Any:
+def document_get(kind: str, key: str, *, independent: bool = False) -> Any:
     import json
     from app.db.database import SessionLocal
     from app.models.hosted import PrivateDocument
-    with nullcontext(request_db.get()) if request_db.get() is not None else SessionLocal() as db:
+    session = None if independent else request_db.get()
+    with nullcontext(session) if session is not None else SessionLocal() as db:
         row = db.query(PrivateDocument).filter_by(kind=kind, key=key).first()
         return json.loads(row.value) if row else None
 
 
-def document_put(kind: str, key: str, value: Any) -> None:
+def document_put(kind: str, key: str, value: Any, *, independent: bool = False) -> None:
     import json
     from app.db.database import SessionLocal
     from app.models.hosted import PrivateDocument
     from sqlalchemy.dialects.postgresql import insert as pg_insert
     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-    with nullcontext(request_db.get()) if request_db.get() is not None else SessionLocal() as db:
+    session = None if independent else request_db.get()
+    with nullcontext(session) if session is not None else SessionLocal() as db:
         insert = pg_insert if db.bind.dialect.name == 'postgresql' else sqlite_insert
         statement = insert(PrivateDocument).values(tenant_id=user_id(), kind=kind, key=key, value=json.dumps(value))
         db.execute(statement.on_conflict_do_update(index_elements=['tenant_id', 'kind', 'key'], set_={'value': statement.excluded.value}))
-        if request_db.get() is None: db.commit()
+        if session is None: db.commit()

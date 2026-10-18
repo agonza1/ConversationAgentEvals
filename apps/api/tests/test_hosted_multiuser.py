@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.main import app
 from app.db import database
-from app.security import identity, request_maps
+from app.security import identity, request_maps, request_db
 from app.services import firebase_auth
 
 
@@ -204,6 +204,31 @@ def test_parallel_rate_admission_never_exceeds_limit(hosted_app):
     with ThreadPoolExecutor(max_workers=8) as pool:
         decisions = list(pool.map(lambda _: admit('synthetic', 'parallel', 4), range(20)))
     assert sum(decisions) == 4
+
+
+def test_judge_reservation_commits_before_inference_and_refunds_independently(hosted_app):
+    _, factory = hosted_app
+    from app.models.hosted import PrivateDocument
+    from app.services.judge_budget import _judge_spend_control, _reserve_judge_credits, _refund_judge_credits
+    token = identity.set('alice')
+    session = factory()
+    db_token = request_db.set(session)
+    try:
+        admitted, spend = _reserve_judge_credits(_judge_spend_control(), credits=10)
+        assert admitted
+        with factory() as observer:
+            value = observer.execute(select(PrivateDocument.__table__.c.value).where(
+                PrivateDocument.__table__.c.tenant_id == 'alice', PrivateDocument.__table__.c.key == 'judge_spend')).scalar_one()
+            assert json.loads(value)['spent'] == 10
+        # Rolling back unrelated request work must not release an admitted model call.
+        session.rollback()
+        assert _judge_spend_control()['spent_daily_credits'] == 10
+        _refund_judge_credits(spend, credits=10)
+        assert _judge_spend_control()['spent_daily_credits'] == 0
+    finally:
+        request_db.reset(db_token)
+        session.close()
+        identity.reset(token)
 
 
 def test_concurrent_http_executions_keep_background_credentials_private(hosted_app, monkeypatch):
