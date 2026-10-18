@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 from starlette.responses import JSONResponse
 from starlette.routing import Match
 from starlette.concurrency import run_in_threadpool
-from app.security import hosted, identity, request_maps, request_db
+from app.security import FIREBASE_CONFIG_VARS, hosted, identity, request_maps, request_db
 from app.services import firebase_auth
 from app.services.rate_limit import admit
 
@@ -20,11 +20,8 @@ def validate_hosted_configuration():
     mode = os.getenv('CAE_AUTH_MODE', '')
     if mode not in {'', 'local', 'firebase'}:
         raise RuntimeError('CAE_AUTH_MODE must be local or firebase.')
-    if (os.getenv('APP_ENV') in {'production', 'staging'} or os.getenv('K_SERVICE')) and not hosted():
-        raise RuntimeError('Hosted deployments require CAE_AUTH_MODE=firebase.')
     if not hosted(): return
-    required = ['FIREBASE_PROJECT_ID', 'FIREBASE_WEB_API_KEY', 'FIREBASE_AUTH_DOMAIN',
-                'FIREBASE_WEB_APP_ID', 'CAE_PUBLIC_ORIGIN', 'CAE_CREDENTIAL_ENCRYPTION_KEY', 'DATABASE_URL']
+    required = [*FIREBASE_CONFIG_VARS, 'CAE_PUBLIC_ORIGIN', 'CAE_CREDENTIAL_ENCRYPTION_KEY', 'DATABASE_URL']
     if any(not os.getenv(name) for name in required):
         raise RuntimeError('Firebase hosted configuration is incomplete: ' + ', '.join(required))
     if os.getenv('APP_ENV') != 'development' and not os.environ['CAE_PUBLIC_ORIGIN'].startswith('https://'):

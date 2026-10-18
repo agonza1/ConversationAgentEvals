@@ -5,6 +5,20 @@ per-user workspaces. Google login identifies the user; an OpenAI API key separat
 enables model use. No ChatGPT subscription, local Codex login, deployment API key,
 speech credential, or silent provider fallback is used.
 
+Firebase is optional. With `CAE_AUTH_MODE` unset and all four Firebase web variables
+unset or empty (`FIREBASE_PROJECT_ID`, `FIREBASE_WEB_API_KEY`, `FIREBASE_AUTH_DOMAIN`,
+`FIREBASE_WEB_APP_ID`), the app retains its original local behavior, including existing
+provider connections. This also applies when `APP_ENV=staging` or `production`, or
+on Cloud Run; those environment names alone do not enable authentication.
+
+Setting any of those Firebase variables automatically enables Firebase mode. Startup
+then requires the complete Firebase, database, public-origin, and encryption settings
+below; partial configuration fails instead of opening access. `CAE_AUTH_MODE=firebase`
+explicitly enables the same mode and validation. `CAE_AUTH_MODE=local` explicitly
+retains the original behavior even when Firebase variables are present. Use Firebase
+mode for public multi-user staging with isolation, rate limits, and user-owned keys;
+legacy local mode retains the original shared workspace and provider behavior.
+
 ## Configure Firebase
 
 1. Create or select a Firebase project. Enable **Authentication → Sign-in method → Google**.

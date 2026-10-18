@@ -1,5 +1,14 @@
 import { expect, test } from '@playwright/test';
 
+test('without Firebase the original workspace and provider connections remain accessible', async ({ page }) => {
+  await page.route('**/api/auth/config', (route) => route.fulfill({ json: { enabled: false, firebase: null } }));
+  await page.goto('/settings');
+  await expect(page.getByRole('navigation', { name: 'Primary', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Connect OpenAI', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeHidden();
+  await expect(page.getByLabel('OpenAI API key', { exact: true })).toBeHidden();
+});
+
 test('hosted login gates private screens without starting model calls', async ({ page }) => {
   const writes: string[] = [];
   await page.route('**/api/**', (route) => {
