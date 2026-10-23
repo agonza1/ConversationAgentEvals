@@ -1,5 +1,45 @@
+import pytest
+
 from app.services.execution_metrics import build_metrics_and_timeline
 from app.services.word_error_rate import calculate_word_error_rate
+
+
+@pytest.mark.parametrize('reference', ['', ' \t\n', '.,!?—…‘’'])
+@pytest.mark.parametrize('hypothesis', ['', 'unexpected recognized words'])
+def test_word_error_rate_returns_no_score_without_reference_words(reference, hypothesis):
+    assert calculate_word_error_rate(reference, hypothesis) is None
+
+
+@pytest.mark.parametrize(
+    ('reference', 'hypothesis'),
+    [
+        ('Caf\u00e9 Bogot\u00e1', 'Cafe\u0301 Bogota\u0301'),
+        ('Cafe\u0301 Bogota\u0301', 'Caf\u00e9 Bogot\u00e1'),
+    ],
+)
+def test_word_error_rate_normalizes_composed_and_decomposed_unicode(reference, hypothesis):
+    result = calculate_word_error_rate(reference, hypothesis)
+
+    assert result is not None
+    assert result.reference_words == 2
+    assert result.errors == 0
+    assert result.rate == 0.0
+
+
+def test_word_error_rate_can_exceed_one_hundred_percent_with_insertions():
+    result = calculate_word_error_rate('hello', 'hello there my friend')
+
+    assert result is not None
+    assert result.rate == 3.0
+    assert result.as_dict() == {
+        'rate': 3.0,
+        'percent': 300.0,
+        'errors': 3,
+        'reference_words': 1,
+        'substitutions': 0,
+        'deletions': 0,
+        'insertions': 3,
+    }
 
 
 def test_word_error_rate_ignores_case_punctuation_and_smart_apostrophes():
